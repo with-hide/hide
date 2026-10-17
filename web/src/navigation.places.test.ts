@@ -15,7 +15,7 @@ const local = [
   project("hide", true, [checkout("main", "main", "hide", ["p1"]), checkout("wt", "feat/sidebar", "sidebar", ["p2"])]),
   project("notes", false, [checkout("notes", null, "notes", ["p3"])]),
 ];
-const devices = [{ id: "studio", label: "Studio Mac" }] as Device[];
+const devices = [{ id: "studio", label: "Studio Mac", kind: "remote" }] as Device[];
 const remote = (state: string) =>
   [{ target_id: "studio", state, session: { workspaces: [project("app", true, [checkout("r", "main", "app", ["remote:studio:pane:1"])])] } }] as unknown as RemoteStatus[];
 

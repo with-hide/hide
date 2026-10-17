@@ -5,8 +5,8 @@ import { checklistView as checklistViewIn, codeCountdown, exposureLine as exposu
 // Korean is the wording Settings > Mobile shipped with; the rules read the same under it.
 const t = initializeInterfaceI18n("ko").getFixedT(null, "translation");
 const english = initializeInterfaceI18n("en").getFixedT(null, "translation");
-const checklistView = (value: MobileState) => checklistViewIn(value, t);
-const exposureLine = (value: MobileState) => exposureLineIn(value, t);
+const checklistView = (value: MobileState) => checklistViewIn(value, "이 Mac", t);
+const exposureLine = (value: MobileState) => exposureLineIn(value, "이 Mac", t);
 const phoneLine = (phone: PhoneRow, nowMs: number) => phoneLineIn(phone, nowMs, t, "ko");
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -59,6 +59,17 @@ describe("checklistView", () => {
   });
 });
 
+describe("the machine the phone pairs with", () => {
+  // The core's machine, which runs Tailscale for the phone; a window on another machine names it rather than calling it this Mac.
+  it("names the core's machine in the Tailscale steps and the serve entry line", () => {
+    const missing = checklistViewIn(state({ checklist: { installed: "failed", logged_in: "waiting", https: "waiting", host_name: null } }), "Mac mini", english);
+    expect(missing.kind === "failed" && missing.steps[0]?.title).toBe("Tailscale isn't installed on Mac mini");
+    expect(exposureLineIn(state({ exposure: "foreign", foreign_target: "http://127.0.0.1:3000" }), "Mac mini", english)?.text).toBe("Not exposed · tailscale serve HTTPS 443 on Mac mini has an entry hide didn't create: http://127.0.0.1:3000. hide will not change it.");
+    const here = checklistViewIn(state({ checklist: { installed: "failed", logged_in: "waiting", https: "waiting", host_name: null } }), "이 Mac", t);
+    expect(here.kind === "failed" && here.steps[0]?.title).toBe("이 Mac에 Tailscale이 설치돼 있지 않아요");
+  });
+});
+
 describe("exposureLine", () => {
   it("names the foreign entry hide will not touch and the failed serve command", () => {
     expect(exposureLine(state({ exposure: "foreign", foreign_target: "http://127.0.0.1:3000" }))?.text).toContain("http://127.0.0.1:3000");
@@ -101,10 +112,10 @@ describe("in English", () => {
   const phone: PhoneRow = { id: "p", name: "iPhone", last_seen_ms: 0, connected: false, notifications: "on", revoke_at_ms: 7 * DAY };
 
   it("words the failing step, the foreign entry and the phone row without Korean", () => {
-    const view = checklistViewIn(state({}), english);
+    const view = checklistViewIn(state({}), "This Mac", english);
     expect(view.kind === "failed" && view.steps.map((step) => step.title)).toEqual(["Not signed in to Tailscale"]);
-    expect(exposureLineIn(state({ exposure: "foreign", foreign_target: null }), english)?.text).toBe(
-      "Not exposed · tailscale serve HTTPS 443 on this Mac has an entry hide didn't create: Unknown target. hide will not change it.",
+    expect(exposureLineIn(state({ exposure: "foreign", foreign_target: null }), "This Mac", english)?.text).toBe(
+      "Not exposed · tailscale serve HTTPS 443 on This Mac has an entry hide didn't create: Unknown target. hide will not change it.",
     );
     expect(phoneLineIn(phone, 3 * DAY, english, "en")).toBe("3 days ago · Receiving notifications · Automatically revoked in 4 days");
     expect(phoneLineIn({ ...phone, connected: true, notifications: "off" }, 3 * DAY, english, "en")).toBe("Just now · Notifications off");

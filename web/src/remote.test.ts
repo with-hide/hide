@@ -1,5 +1,5 @@
 import { emptyScope, legacyRest } from "../test/legacyAgentScope";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { deviceCatalogLine, herdrPaneId, remoteTabView, remoteTargetOfPane, remoteView, supportsRemotePurpose } from "./remote";
@@ -325,7 +325,17 @@ describe("deviceCatalogLine", () => {
     session,
     catalog,
   });
-  const line = (value: RemoteStatus | null) => deviceCatalogLine({ device, status: value, session: value?.session ?? null }, english);
+  const line = (value: RemoteStatus | null) => deviceCatalogLine({ device, status: value, session: value?.session ?? null }, [device], english);
+
+  it("names the window's own machine This Mac in a window on a node whose core runs elsewhere", () => {
+    vi.stubGlobal("window", { location: { hash: "#token=t&node=studio" } });
+    vi.stubGlobal("navigator", { platform: "MacIntel" });
+    try {
+      expect(line(null)?.text).toBe(english("devices.catalog.loading", { device: "This Mac" }));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 
   it("tells loading, failure, a kept stale list and an empty host apart", () => {
     expect(line(null)?.state).toBe("loading");
@@ -345,8 +355,8 @@ describe("deviceCatalogLine", () => {
     const refused = (count: number) => status("connected", session(), { state: "ready", message: null, refused: Array.from({ length: count }, (_, index) => ({ path: `/gone${index}`, message: "missing" })) });
     expect(line(refused(1))?.text).toBe("1 folder on Studio could not be read and is listed by workspace.");
     expect(line(refused(2))?.text).toBe("2 folders on Studio could not be read and are listed by workspace.");
-    expect(deviceCatalogLine({ device, status: refused(2), session: session() }, korean)?.text).toBe("Studio의 폴더 2개를 읽지 못해 워크스페이스별로 표시합니다.");
-    expect(deviceCatalogLine({ device, status: null, session: null }, korean)?.text).toBe("Studio에서 프로젝트를 읽는 중…");
+    expect(deviceCatalogLine({ device, status: refused(2), session: session() }, [device], korean)?.text).toBe("Studio의 폴더 2개를 읽지 못해 워크스페이스별로 표시합니다.");
+    expect(deviceCatalogLine({ device, status: null, session: null }, [device], korean)?.text).toBe("Studio에서 프로젝트를 읽는 중…");
   });
 });
 

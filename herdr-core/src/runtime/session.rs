@@ -765,7 +765,7 @@ impl Runtime {
         self.snapshot.navigator.devices = workspace::devices(
             &self.node,
             self.machine_name.as_deref(),
-            &self.snapshot.ui_state.device_registrations,
+            &self.snapshot.ui_state,
         );
         self.refresh_device_snapshots();
         // An agent belongs to the device whose project holds its pane. The
@@ -5392,7 +5392,7 @@ impl Runtime {
         self.snapshot.navigator.devices = workspace::devices(
             &self.node,
             self.machine_name.as_deref(),
-            &self.snapshot.ui_state.device_registrations,
+            &self.snapshot.ui_state,
         );
         self.refresh_device_snapshots();
         self.resync_navigator_focus();

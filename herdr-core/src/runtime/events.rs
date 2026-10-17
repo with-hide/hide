@@ -4095,6 +4095,8 @@ impl Runtime {
                     device_registrations: payload
                         .device_registrations
                         .unwrap_or(current.device_registrations),
+                    // The name a move kept for this machine is the core's own, never a shell's.
+                    machine_label: current.machine_label,
                     accent_hex: payload.accent_hex.unwrap_or(current.accent_hex),
                     // `theme_set` owns the theme; a shared UI-state save carries it through.
                     theme: current.theme,

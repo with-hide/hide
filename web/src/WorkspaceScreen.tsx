@@ -7,8 +7,8 @@ import { Hint } from "./components/ui/tooltip";
 import { RemotePaneCanvas } from "./PaneGrid";
 import { remoteTabView, remoteView } from "./remote";
 import { canRetryDevice, deviceLine } from "./settings";
-import { catalogWorkspaces, focusedRemoteDevice, frontCheckout, localDeviceId, type Checkout } from "./snapshot";
-import { registeredName } from "./screenMachine";
+import { catalogWorkspaces, focusedRemoteDevice, frontCheckout, type Checkout } from "./snapshot";
+import { awayDevice, machineName, windowDeviceId } from "./screenMachine";
 import { useShellStore } from "./store";
 import { focusTerminal } from "./terminals";
 import { AgentAreas } from "./AgentAreas";
@@ -245,7 +245,9 @@ export function WorkspaceTitle({ actions }: { actions: Actions }) {
 function WorkspaceTitleBar({ checkout, view, actions }: { checkout: Checkout; view: WorkspaceView; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const project = useShellStore((s) => catalogWorkspaces(s.rest).find((row) => row.checkouts.some((candidate) => candidate.id === checkout.id)) ?? null);
-  const device = useShellStore((s) => focusedRemoteDevice(s.rest));
+  // The band marks a Workspace on another machine than this window's, the core's included; the window's own has none.
+  const device = useShellStore((s) => awayDevice(s.rest));
+  const deviceName = useShellStore((s) => (device ? machineName(s.rest?.navigator?.devices, device.id, t) : null));
   // The menu says what the body draws now (PRD right-lane B20).
   const drawn = useUiStore((s) => s.drawnLane);
   const up = laneUp(drawn.mode);
@@ -264,17 +266,17 @@ function WorkspaceTitleBar({ checkout, view, actions }: { checkout: Checkout; vi
   return (
     <div className="flex h-full min-w-0 flex-1 items-center gap-sm pr-sm text-caption" data-workspace-toolbar="true">
       {device ? (
-        // The front thing is a remote device's: its color and name lead the path, and the pane border wears the same color (PRD home-device-rail D-15).
+        // The front thing is another machine's: its color and name lead the path, and the pane border wears the same color (PRD home-device-rail D-15).
         <span className="flex h-full max-w-(--size-recent-location-max) shrink-0 items-center gap-xs bg-device-remote px-sm font-medium text-primary-foreground" data-device-band={device.id}>
           <ServerIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-          <span className="min-w-0 truncate">{registeredName(device)}</span>
+          <span className="min-w-0 truncate">{deviceName}</span>
         </span>
       ) : null}
       <EntryContextMenu label={t("panes.workspace.aria", { name })} items={menuItems} onSelect={select} className={cn("flex min-w-0 flex-1 self-stretch items-center", !device && "pl-sm")} data-workspace-menu="true">
         <nav aria-label={t("panes.workspace.location")} className="flex min-w-0 items-center gap-xs">
           {project && !home ? (
             <>
-              <Hint label={`${project.label} · ${project.path}${device ? ` · ${registeredName(device)}` : ""}`}>
+              <Hint label={`${project.label} · ${project.path}${deviceName ? ` · ${deviceName}` : ""}`}>
                 <button
                   type="button"
                   className="min-w-0 max-w-(--size-recent-location-max) shrink truncate rounded-xs px-xs text-subtle-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:bg-accent"
@@ -334,10 +336,12 @@ function RemoteAgentArea({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const device = useShellStore((s) => focusedRemoteDevice(s.rest));
   const status = useShellStore((s) => (device ? (s.rest?.status?.remote?.find((row) => row.target_id === device.id) ?? null) : null));
+  const name = useShellStore((s) => (device ? machineName(s.rest?.navigator?.devices, device.id, t) : ""));
+  // The machine this window runs on, which "Show this machine" brings forward; on a node it is not the core's.
+  const own = useShellStore((s) => windowDeviceId(s.rest?.navigator?.devices));
   const session = status?.session ?? null;
   const view = useMemo(() => remoteView(session), [session]);
   if (!device) return null;
-  const name = registeredName(device);
   const connected = status?.state === "connected";
   if (!view) {
     const line = deviceLine(device, status ?? undefined, t);
@@ -353,9 +357,11 @@ function RemoteAgentArea({ actions }: { actions: Actions }) {
               {t("common.retry")}
             </Button>
           ) : null}
-          <Button variant="ghost" onClick={() => actions.focusDevice(localDeviceId(useShellStore.getState().rest))} data-use-local-device="true">
-            {t("panes.workspace.showThisMachine")}
-          </Button>
+          {device.id === own ? null : (
+            <Button variant="ghost" onClick={() => actions.focusDevice(own)} data-use-local-device="true">
+              {t("panes.workspace.showThisMachine")}
+            </Button>
+          )}
         </div>
       </div>
     );

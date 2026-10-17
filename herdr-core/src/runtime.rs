@@ -1869,7 +1869,7 @@ impl Runtime {
         snapshot.navigator.devices = workspace::devices(
             &options.node_id,
             options.machine_name.as_deref(),
-            &snapshot.ui_state.device_registrations,
+            &snapshot.ui_state,
         );
         // This machine's row names the root a device consent would name, so
         // the add form can show it before the first device exists.

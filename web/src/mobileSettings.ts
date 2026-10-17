@@ -63,11 +63,12 @@ export type FailedStep = {
  */
 export type ChecklistView = { kind: "ready" } | { kind: "failed"; steps: FailedStep[] } | { kind: "pending" };
 
-export function checklistView(state: MobileState, t: TFunction<"translation">): ChecklistView {
+/** `machine`: the core's machine as this window names it, which runs Tailscale for the phone (`coreMachineName`). */
+export function checklistView(state: MobileState, machine: string, t: TFunction<"translation">): ChecklistView {
   const steps = state.checklist ?? { installed: "waiting", logged_in: "waiting", https: "waiting", host_name: null };
   const failed: FailedStep[] = [];
   if (steps.installed === "failed") {
-    failed.push({ id: "installed", title: t("mobileSetup.installMissing"), action: t("mobileSetup.installAction"), link: { label: t("mobileSetup.download"), href: state.download_url } });
+    failed.push({ id: "installed", title: t("mobileSetup.installMissing", { machine }), action: t("mobileSetup.installAction"), link: { label: t("mobileSetup.download"), href: state.download_url } });
   }
   if (steps.logged_in === "failed") {
     failed.push({ id: "logged_in", title: t("mobileSetup.loginMissing"), action: t("mobileSetup.loginAction"), link: null });
@@ -80,12 +81,12 @@ export function checklistView(state: MobileState, t: TFunction<"translation">): 
 }
 
 /** The one line beside the checks when hide itself has something to say about the serve entry, or null. */
-export function exposureLine(state: MobileState, t: TFunction<"translation">): { tone: "pending" | "warn" | "error"; text: string } | null {
+export function exposureLine(state: MobileState, machine: string, t: TFunction<"translation">): { tone: "pending" | "warn" | "error"; text: string } | null {
   switch (state.exposure) {
     case "checking":
       return { tone: "pending", text: t("mobileSetup.checking") };
     case "foreign":
-      return { tone: "warn", text: t("mobileSetup.foreign", { target: state.foreign_target ?? t("mobileSetup.unknownTarget") }) };
+      return { tone: "warn", text: t("mobileSetup.foreign", { machine, target: state.foreign_target ?? t("mobileSetup.unknownTarget") }) };
     case "failed":
       return { tone: "error", text: t("mobileSetup.failed", { step: t(failureStep(state.failure?.step)), message: state.failure?.message ?? "" }).trim() };
     default:

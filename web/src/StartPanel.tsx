@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectSeparator, Select
 import { startAnswer, startRequestId } from "./startAnswer";
 import { useStartPanel, startFailure } from "./startDraft";
 import { resolveTarget, startTargets, type StartTarget } from "./startTargets";
-import { localDeviceId } from "./snapshot";
+import { windowDeviceId } from "./screenMachine";
 import { useShellStore } from "./store";
 import { restoreFocus } from "./terminals";
 import { useUiStore } from "./ui";
@@ -105,9 +105,10 @@ export function StartPanelHost({ actions }: { actions: Actions }) {
   return open ? <StartPanel actions={actions} /> : null;
 }
 
-function TargetIcon({ target, node }: { target: StartTarget; node: string }) {
+/** A Home is this window's own machine's (the house) or another machine's (the server), the core's included on a node's window. */
+function TargetIcon({ target, own }: { target: StartTarget; own: string }) {
   if (target.kind !== "home") return <FolderIcon aria-hidden="true" />;
-  return target.deviceId === node ? <HomeIcon aria-hidden="true" /> : <ServerIcon aria-hidden="true" />;
+  return target.deviceId === own ? <HomeIcon aria-hidden="true" /> : <ServerIcon aria-hidden="true" />;
 }
 
 function StartPanel({ actions }: { actions: Actions }) {
@@ -226,7 +227,7 @@ function StartPanel({ actions }: { actions: Actions }) {
                 {index > 0 ? <SelectSeparator className="bg-secondary" /> : null}
                 {group.items.map((item) => (
                   <SelectItem key={item.key} value={item.key} disabled={item.disabled !== null} data-start-target-option={item.key}>
-                    <TargetIcon target={item} node={localDeviceId(rest)} />
+                    <TargetIcon target={item} own={windowDeviceId(rest?.navigator?.devices)} />
                     <span className="flex min-w-0 flex-col">
                       <span className="truncate">{item.label}</span>
                       {item.disabled ? <span className="text-caption text-muted-foreground">{t("devices.rail.notConnected")}</span> : null}

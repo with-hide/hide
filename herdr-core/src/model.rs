@@ -3567,6 +3567,13 @@ pub struct UiStateSnapshot {
     pub workspace_registrations: Vec<WorkspaceRegistration>,
     #[serde(default)]
     pub device_registrations: Vec<DeviceRegistration>,
+    /// The name the operator registered this machine under while a core on
+    /// another machine dialed it, kept when that core moved here, since a
+    /// core does not register its own machine (`node_migration::reown`); the
+    /// core's own device row carries it as its label, so the machine keeps
+    /// its name across the move. None on a machine never registered so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_label: Option<String>,
     #[serde(default = "default_accent_hex")]
     pub accent_hex: String,
     /// The web shell's mode (Light, Dark or System).
@@ -4334,6 +4341,7 @@ impl Default for UiStateSnapshot {
             focused_checkout_id: None,
             workspace_registrations: Vec::new(),
             device_registrations: Vec::new(),
+            machine_label: None,
             accent_hex: default_accent_hex(),
             theme: ThemePreference::Dark,
             agent_logo_mode: AgentLogoMode::Hidden,
@@ -5904,6 +5912,7 @@ impl Snapshot {
                 devices: vec![crate::workspace::local_device(
                     &options.node_id,
                     options.machine_name.as_deref(),
+                    None,
                 )],
                 workspaces: Vec::new(),
                 inactive_projects: Vec::new(),

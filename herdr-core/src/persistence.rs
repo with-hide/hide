@@ -107,6 +107,8 @@ struct StoredUiState {
     /// store unreadable.
     #[serde(default, deserialize_with = "readable_device_registrations")]
     device_registrations: Vec<DeviceRegistration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    machine_label: Option<String>,
     #[serde(default = "default_accent_hex")]
     accent_hex: String,
     /// Kept as text so a value this build does not know loads as Dark with a
@@ -461,6 +463,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             focused_checkout_id: stored.focused_checkout_id,
             workspace_registrations: stored.workspace_registrations,
             device_registrations: stored.device_registrations,
+            machine_label: stored.machine_label,
             accent_hex: stored.accent_hex,
             theme,
             agent_logo_mode,
@@ -586,6 +589,7 @@ pub fn save(
         focused_checkout_id: state.focused_checkout_id.clone(),
         workspace_registrations: state.workspace_registrations.clone(),
         device_registrations: state.device_registrations.clone(),
+        machine_label: state.machine_label.clone(),
         accent_hex: state.accent_hex.clone(),
         theme: Some(state.theme.as_str().to_owned()),
         agent_logo_mode: Some(state.agent_logo_mode.as_str().to_owned()),

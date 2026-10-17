@@ -68,7 +68,7 @@ fn a_task_is_its_root_and_every_descendant_with_their_projects_and_devices() {
     );
     assert!(!runtime.refresh_agent_scopes());
 
-    let mut remote_device = crate::workspace::local_device(&crate::node::test_node(), None);
+    let mut remote_device = crate::workspace::local_device(&crate::node::test_node(), None, None);
     remote_device.id = "other-device".into();
     remote_device.label = Some("mini".into());
     remote_device.kind = "remote".into();
@@ -529,7 +529,7 @@ fn disconnected_devices_zero_the_physical_tile_but_keep_overview_members_from_th
     let mut runtime = runtime();
     runtime.snapshot.navigator.agents.clear();
     runtime.snapshot.navigator.workspaces.clear();
-    let mut device = crate::workspace::local_device(&crate::node::test_node(), None);
+    let mut device = crate::workspace::local_device(&crate::node::test_node(), None, None);
     device.id = "mini".into();
     device.kind = "remote".into();
     runtime.snapshot.navigator.devices.push(device);

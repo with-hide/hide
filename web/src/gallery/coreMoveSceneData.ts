@@ -35,7 +35,8 @@ export function coreMoveRest(side: CoreMoveSide, content: SceneContent, nowMs: n
   const scene = sidebarScene(content, { ...REFERENCE_FOLDS, frontDevice: side === "node" ? NODE_DEVICE : "local" }, nowMs, "two");
   const navigator = scene.rest.navigator!;
   const devices = (navigator.devices ?? []).map((device): Device => {
-    if (device.kind !== "remote") return side === "core" ? { ...device, machine_name: "MacBook Pro", kit: quietKit } : { ...device, machine_name: "Mac mini", kit: quietKit, host: host("macos-arm64") };
+    // The core's own row has no label of its own; the mini keeps the one it was registered under before the core moved there.
+    if (device.kind !== "remote") return side === "core" ? { ...device, label: null, machine_name: "MacBook-Pro.local", kit: quietKit } : { ...device, label: "Mac mini", machine_name: "Mac-mini.local", kit: quietKit, host: host("macos-arm64") };
     // The scene's remote device stands for Mac mini on the core's side and for the MacBook otherwise.
     if (device.id === NODE_DEVICE) {
       return side === "core"

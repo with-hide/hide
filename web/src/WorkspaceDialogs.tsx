@@ -24,6 +24,7 @@ import { StartIssueDialog } from "./IssueDialogs";
 import { PrDelegateDialog, PrLinkDialog, PrNewIssueDialog } from "./PrDialogs";
 import { translate, useInterfaceTranslation } from "./i18n/client";
 import { localDeviceId, type Checkout, type Workspace } from "./snapshot";
+import { machineName, windowDeviceId } from "./screenMachine";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import {
@@ -57,11 +58,11 @@ function findTarget(workspaceId: string, checkoutId?: string): { workspace: Work
   return { workspace, checkout: checkoutId ? (workspace.checkouts.find((row) => row.id === checkoutId) ?? null) : null };
 }
 
-/** The device a workspace belongs to, by its label, or null for the core's own node. */
+/** The machine a workspace belongs to, as this window names it, or null for the window's own. */
 function deviceLabel(workspace: Workspace): string | null {
-  const device = workspace.remote_target_id ?? (workspace.device_id === localDeviceId(useShellStore.getState().rest) ? null : workspace.device_id);
-  if (!device) return null;
-  return useShellStore.getState().rest?.navigator?.devices?.find((row) => row.id === device)?.label ?? device;
+  const devices = useShellStore.getState().rest?.navigator?.devices;
+  const device = workspace.remote_target_id ?? workspace.device_id;
+  return device === windowDeviceId(devices) ? null : machineName(devices, device, translate);
 }
 
 export function WorkspaceDialogs({ actions }: { actions: Actions }) {

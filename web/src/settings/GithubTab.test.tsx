@@ -18,7 +18,7 @@ const signedOut = () => ({
   rest: {
     navigator: {
       devices: [
-        { id: "local", kind: "local", label: "This Mac", machine_name: "Mac mini" },
+        { id: "local", kind: "local", label: null, machine_name: "Mac mini" },
         { id: "mbp", kind: "remote", label: "MacBook Pro", dials_in: true },
       ],
       workspaces: [

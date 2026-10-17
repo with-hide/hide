@@ -24,6 +24,7 @@ import {
   type FailedStep,
   type MobileState,
 } from "./mobileSettings";
+import { coreMachineName } from "./screenMachine";
 import { useShellStore } from "./store";
 
 export function MobileTab({ actions }: { actions: Actions }) {
@@ -64,7 +65,9 @@ export function MobileTab({ actions }: { actions: Actions }) {
 /** One ready line when Tailscale is set up, otherwise only the steps that need the operator (B57). */
 function Checks({ state }: { state: MobileState }) {
   const { t } = useInterfaceTranslation();
-  const view = checklistView(state, t);
+  // Tailscale runs on the core's machine, which a window on another machine names rather than calling it this Mac.
+  const machine = useShellStore((s) => coreMachineName(s.rest?.navigator?.devices, t));
+  const view = checklistView(state, machine, t);
   if (view.kind === "ready") {
     return (
       <Row label={<Status tone="ok">{t("mobileSetup.ready")}</Status>} data-mobile-ready="true" />
@@ -144,7 +147,8 @@ function QrCode({ text, expired }: { text: string; expired: boolean }) {
 function Pairing({ state, actions }: { state: MobileState; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const since = useSinceFrame(state, 1000, state.code_expires_at_ms !== null);
-  const line = exposureLine(state, t);
+  const machine = useShellStore((s) => coreMachineName(s.rest?.navigator?.devices, t));
+  const line = exposureLine(state, machine, t);
   if (line) {
     return (
       <div className="flex items-start gap-md px-md py-sm" data-mobile-pairing="waiting">

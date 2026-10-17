@@ -27,7 +27,7 @@ const remote = (id: string, over: Partial<Device> = {}): Device => ({ agent_scop
 const state = (devices: Device[]) => ({
   connection: "live" as const,
   rest: {
-    navigator: { focused_device_id: "local", devices: [{ agent_scope: emptyScope(), id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit: kit([part("cli", "installed")]) }, ...devices] },
+    navigator: { focused_device_id: "local", devices: [{ agent_scope: emptyScope(), id: "local", label: null, kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit: kit([part("cli", "installed")]) }, ...devices] },
     status: { remote: devices.map((device) => ({ target_id: device.id, state: "connected", message: null, herdr_version: "0.9.1" })) },
     ui_state: {},
   },

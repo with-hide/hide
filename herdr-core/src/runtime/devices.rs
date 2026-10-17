@@ -354,7 +354,7 @@ impl Runtime {
         let mut devices = workspace::devices(
             &self.node,
             self.machine_name.as_deref(),
-            &self.snapshot.ui_state.device_registrations,
+            &self.snapshot.ui_state,
         );
         for device in &mut devices {
             if let Some(count) = counts.get(&device.id) {

@@ -437,7 +437,7 @@ function useFocusRowPane(): string | null {
 function DisconnectedDevice({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const deviceId = useShellStore((s) => frontDeviceId(s.rest));
-  const label = useShellStore((s) => s.rest?.navigator?.devices?.find((device) => device.id === frontDeviceId(s.rest))?.label ?? frontDeviceId(s.rest));
+  const label = useShellStore((s) => machineName(s.rest?.navigator?.devices, frontDeviceId(s.rest), t));
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-sm px-md text-center" data-device-disconnected={deviceId}>
       <ServerIcon aria-hidden="true" className="size-(--size-icon-lg) text-subtle-foreground" />
@@ -479,7 +479,7 @@ function ListLoading() {
 
 function catalogLineOf(rest: SnapshotRest | null, t: TFunction<"translation">) {
   const context = remoteContext(rest);
-  return context ? deviceCatalogLine(context, t) : null;
+  return context ? deviceCatalogLine(context, rest?.navigator?.devices, t) : null;
 }
 
 /**

@@ -15,8 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { MobileTab } from "./MobileTab";
-import { frontDeviceId } from "./devices";
-import { registeredName, thisMachineKey } from "./screenMachine";
+import { awayDevice, coreMachineName, machineName } from "./screenMachine";
 import { SETTINGS_GROUPS, type SettingsTab } from "./settings";
 import { AboutTab } from "./settings/AboutTab";
 import { AgentsTab } from "./settings/AgentsTab";
@@ -54,11 +53,13 @@ function SettingsSheet({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const close = () => useUiStore.getState().closeOverlay("settings");
   const [tab, setTab] = useState<SettingsTab>(() => useUiStore.getState().settingsTab);
-  const selected = useShellStore((s) => {
-    const id = frontDeviceId(s.rest);
-    return s.rest?.navigator?.devices?.find((device) => device.id === id) ?? null;
-  });
-  const groupName = (id: (typeof SETTINGS_GROUPS)[number]["id"]) => (id === "app" ? t("settings.groups.app") : t(thisMachineKey(null)));
+  // The device in front when this window does not run on it, the core's machine included on a node's window.
+  const selectedId = useShellStore((s) => awayDevice(s.rest)?.id ?? null);
+  const selectedName = useShellStore((s) => (selectedId ? machineName(s.rest?.navigator?.devices, selectedId, t) : ""));
+  const selected = selectedId ? { id: selectedId, name: selectedName } : null;
+  // Hide AI, Mobile and GitHub are the core's machine's, which a window on another machine names by its name.
+  const machineGroup = useShellStore((s) => coreMachineName(s.rest?.navigator?.devices, t));
+  const groupName = (id: (typeof SETTINGS_GROUPS)[number]["id"]) => (id === "app" ? t("settings.groups.app") : machineGroup);
   return (
     <Dialog open onOpenChange={(next) => { if (!next) close(); }}>
       {/* A Shortcuts chip that is recording owns Escape: it cancels the recording, not the sheet (B61).
@@ -96,11 +97,11 @@ function SettingsSheet({ actions }: { actions: Actions }) {
             <header className="flex items-center gap-sm px-xl pb-lg pt-lg">
               <div className="flex min-w-0 flex-1 items-center gap-sm">
                 <h2 className="truncate text-headline font-semibold" data-settings-page-title={tab}>{t(`settings.tabs.${tab}`)}</h2>
-                {/* A remote device's name shows only while it is the selected device (B6), beside the page title (B4). */}
-                {selected?.kind === "remote" ? (
-                  <Hint label={t("settings.ownerRemote", { device: registeredName(selected) })}>
+                {/* Another machine's name shows only while it is the selected device (B6), beside the page title (B4). */}
+                {selected ? (
+                  <Hint label={t("settings.ownerRemote", { device: selected.name })}>
                     <span className="inline-block min-w-0 max-w-full truncate rounded-sm border border-border px-xs text-caption text-muted-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring" tabIndex={0} data-settings-device={selected.id}>
-                      {registeredName(selected)}
+                      {selected.name}
                     </span>
                   </Hint>
                 ) : null}

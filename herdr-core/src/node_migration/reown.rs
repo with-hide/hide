@@ -461,10 +461,29 @@ impl Mapper<'_> {
 
     /// The old owner gets the registration the change carries; the new
     /// owner's own registration goes, since a core does not register its own
-    /// machine.
+    /// machine, and the name the operator gave it there stays as the core's
+    /// `machine_label`. A node that dialed in was registered by its host
+    /// name, no name of the operator's, so a move to it keeps none.
     fn device_registrations(&mut self, value: &mut Value) -> Result<(), String> {
         let Some(object) = value.as_object_mut() else {
             return Ok(());
+        };
+        let label = object
+            .get("device_registrations")
+            .and_then(Value::as_array)
+            .and_then(|rows| {
+                rows.iter().find(|row| {
+                    row.get("id").and_then(Value::as_str)
+                        == Some(self.change.new_owner_was.as_str())
+                })
+            })
+            .filter(|row| row.get("ssh_alias").is_some_and(Value::is_string))
+            .and_then(|row| row.get("label"))
+            .filter(|label| label.is_string())
+            .cloned();
+        match label {
+            Some(label) => object.insert("machine_label".to_owned(), label),
+            None => object.remove("machine_label"),
         };
         let registrations = object
             .entry("device_registrations")
@@ -2138,6 +2157,59 @@ mod tests {
                 .map(|issue| (issue.number, issue.title.as_str()))
                 .collect::<Vec<_>>(),
             vec![(1, "on the mini"), (2, "made on the mini's core")]
+        );
+    }
+
+    /// The machine taking the core keeps the name the operator registered it
+    /// under while the old core dialed it: the new core reads it from its
+    /// store and its own device row carries it, so a window on the machine
+    /// the core left names it as it did before the move. A move back to a
+    /// machine that dialed in, registered only by its host name, keeps none.
+    #[test]
+    fn the_machine_taking_the_core_keeps_the_name_it_was_registered_under() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CORE_STATE);
+        let marker = |node: &str| {
+            std::fs::write(
+                dir.path().join(MARKER_FILE),
+                serde_json::to_vec(&json!({"version": 1, "node": node})).unwrap(),
+            )
+            .unwrap();
+        };
+        let before = crate::model::UiStateSnapshot {
+            device_registrations: serde_json::from_value(json!([
+                mini_registration(),
+                {"id": X, "label": "Studio", "ssh_alias": "studio"},
+            ]))
+            .unwrap(),
+            ..Default::default()
+        };
+        crate::persistence::save(&path, &before, &Default::default()).unwrap();
+        marker(M);
+
+        reown(dir.path(), &forward(), &IdTable::default()).unwrap();
+        let (moved, _, _) = crate::persistence::load(&path);
+        assert_eq!(moved.machine_label.as_deref(), Some("Mac mini"));
+        let node = NodeId::parse(C).unwrap();
+        let rows = crate::workspace::devices(&node, Some("Mac-mini.local"), &moved);
+        assert_eq!(
+            (
+                rows[0].id.as_str(),
+                rows[0].label.as_deref(),
+                rows[0].machine_name.as_deref()
+            ),
+            (C, Some("Mac mini"), Some("Mac-mini.local"))
+        );
+
+        crate::persistence::save(&path, &moved, &Default::default()).unwrap();
+        marker(C);
+        reown(dir.path(), &back(), &IdTable::default()).unwrap();
+        let (back_home, _, _) = crate::persistence::load(&path);
+        assert_eq!(back_home.machine_label, None);
+        let node = NodeId::parse(M).unwrap();
+        assert_eq!(
+            crate::workspace::devices(&node, Some("MacBook-Pro.local"), &back_home)[0].label,
+            None
         );
     }
 
