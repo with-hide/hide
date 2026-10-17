@@ -344,6 +344,47 @@ pub(crate) fn opencode_database(home: &std::path::Path, sessions: &[(&str, Optio
     }
 }
 
+/// An OpenCode 2.0.29 database in `home` holding `sessions` as
+/// `(id, parent_id, directory)`, each with one operator message: the shape
+/// its own `session_v2` and `session_message` tables have.
+#[cfg(test)]
+pub(crate) fn opencode_2_database(home: &std::path::Path, sessions: &[(&str, Option<&str>, &str)]) {
+    let folder = home.join(".local/share/opencode");
+    std::fs::create_dir_all(&folder).unwrap();
+    let database = rusqlite::Connection::open(folder.join("opencode.db")).unwrap();
+    database
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS session_v2 (id text PRIMARY KEY, project_id text NOT NULL, \
+             parent_id text, slug text NOT NULL, directory text NOT NULL, title text, \
+             version text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL);
+             CREATE TABLE IF NOT EXISTS session_message (id text PRIMARY KEY, session_id text NOT NULL, \
+             type text NOT NULL, seq integer NOT NULL, time_created integer NOT NULL, \
+             time_updated integer NOT NULL, data text NOT NULL);",
+        )
+        .unwrap();
+    for (index, (id, parent, directory)) in sessions.iter().enumerate() {
+        let at = 1_790_989_200_000_i64 + index as i64;
+        database
+            .execute(
+                "INSERT INTO session_v2 VALUES (?1, 'prj_1', ?2, 'slug', ?3, 'OpenCode title', \
+                 '2.0.29', ?4, ?4)",
+                rusqlite::params![id, parent, directory, at],
+            )
+            .unwrap();
+        database
+            .execute(
+                "INSERT INTO session_message VALUES (?1, ?2, 'user', 1, ?3, ?3, ?4)",
+                rusqlite::params![
+                    format!("msg_{id}"),
+                    id,
+                    at,
+                    format!(r#"{{"time":{{"created":{at}}},"text":"OpenCode request"}}"#)
+                ],
+            )
+            .unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

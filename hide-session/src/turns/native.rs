@@ -357,12 +357,45 @@ pub(crate) fn opencode_part(part: &Value) -> Result<Option<ToolTurnMark>, SkipRe
     }
 }
 
-/// The question marks of one OpenCode message's parts, bounded like a
+/// OpenCode 2.x keeps a `question` tool call as one content item of its
+/// assistant message, named by `id` and `name`: `streaming` while its input is
+/// written, `running` while it asks, then `completed` or `error`.
+pub(crate) fn opencode_2_part(part: &Value) -> Result<Option<ToolTurnMark>, SkipReason> {
+    if part.get("type").and_then(Value::as_str) != Some("tool")
+        || part.get("name").and_then(Value::as_str) != Some("question")
+    {
+        return Ok(None);
+    }
+    let call = id(part.get("id"))?.ok_or(SkipReason::UserTurnInvalid)?;
+    match part.pointer("/state/status").and_then(Value::as_str) {
+        Some("streaming") => Ok(None),
+        Some("running") => Ok(Some(ToolTurnMark::Asked {
+            call,
+            content: part.pointer("/state/input").and_then(question_content),
+        })),
+        Some("completed" | "error") => Ok(Some(ToolTurnMark::Answered { call })),
+        _ => Err(SkipReason::UserTurnInvalid),
+    }
+}
+
+/// The question marks of one OpenCode 1.x message's parts, bounded like a
 /// native record's tool marks.
 pub(crate) fn opencode_marks(parts: &[Value]) -> Result<Vec<ToolTurnMark>, SkipReason> {
+    marks_of(parts, opencode_part)
+}
+
+/// The question marks of one OpenCode 2.x message's content items.
+pub(crate) fn opencode_2_marks(parts: &[Value]) -> Result<Vec<ToolTurnMark>, SkipReason> {
+    marks_of(parts, opencode_2_part)
+}
+
+fn marks_of(
+    parts: &[Value],
+    mark: fn(&Value) -> Result<Option<ToolTurnMark>, SkipReason>,
+) -> Result<Vec<ToolTurnMark>, SkipReason> {
     let mut marks = Vec::new();
     for part in parts {
-        if let Some(mark) = opencode_part(part)? {
+        if let Some(mark) = mark(part)? {
             if marks.len() == TOOL_MARK_LIMIT {
                 return Err(SkipReason::UserTurnCapacity);
             }

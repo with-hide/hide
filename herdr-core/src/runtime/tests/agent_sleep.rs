@@ -270,10 +270,31 @@ fn an_opencode_dormant_journey_refuses_a_changed_route_before_close_wake_or_star
     }
 }
 
+/// The same proof over OpenCode 2.0's tables: Herdr reports the session's id,
+/// and Hide proves it from `session_v2`, so sleep is not refused for want of
+/// a conversation.
+#[test]
+#[cfg(unix)]
+fn an_opencode_2_dormant_journey_refuses_a_changed_route_before_close_wake_or_start() {
+    for phase in [
+        "none",
+        "before-close",
+        "before-wake",
+        "before-start",
+        "missing-source-before-close",
+        "missing-source-before-wake",
+        "missing-source-before-start",
+    ] {
+        durable_dormant_journey_in("opencode", phase, true);
+    }
+}
+
 /// What a journey's interference does to the native record its proof reads.
 #[cfg(unix)]
 struct NativeRecord {
     kind: &'static str,
+    /// OpenCode's 2.x tables hold the session, not its 1.x ones.
+    opencode_2: bool,
     path: std::path::PathBuf,
     folder: std::path::PathBuf,
     before: Vec<u8>,
@@ -287,7 +308,17 @@ impl NativeRecord {
     fn duplicate(&self) {
         if self.kind == "opencode" {
             self.database()
-                .execute("UPDATE session SET directory = '/elsewhere/app'", [])
+                .execute(
+                    &format!(
+                        "UPDATE {} SET directory = '/elsewhere/app'",
+                        if self.opencode_2 {
+                            "session_v2"
+                        } else {
+                            "session"
+                        }
+                    ),
+                    [],
+                )
                 .unwrap();
         } else {
             std::fs::copy(&self.path, self.folder.join("duplicate.jsonl")).unwrap();
@@ -297,7 +328,11 @@ impl NativeRecord {
     fn remove(&self) {
         if self.kind == "opencode" {
             self.database()
-                .execute_batch("DELETE FROM part; DELETE FROM message; DELETE FROM session;")
+                .execute_batch(if self.opencode_2 {
+                    "DELETE FROM session_message; DELETE FROM session_v2;"
+                } else {
+                    "DELETE FROM part; DELETE FROM message; DELETE FROM session;"
+                })
                 .unwrap();
         } else {
             std::fs::write(self.folder.join("other.jsonl"), &self.other).unwrap();
@@ -314,7 +349,15 @@ impl NativeRecord {
         if self.kind == "opencode" {
             let rows: i64 = self
                 .database()
-                .query_row("SELECT count(*) FROM message", [], |row| row.get(0))
+                .query_row(
+                    if self.opencode_2 {
+                        "SELECT count(*) FROM session_message"
+                    } else {
+                        "SELECT count(*) FROM message"
+                    },
+                    [],
+                    |row| row.get(0),
+                )
                 .unwrap();
             assert_eq!(rows, i64::from(!interference.starts_with("missing-source")));
             return;
@@ -349,6 +392,12 @@ fn a_factory_workers_sleep_is_no_operator_close_and_keeps_its_way_back_until_bou
 
 #[cfg(unix)]
 fn durable_dormant_journey(kind: &'static str, interference: &'static str) {
+    durable_dormant_journey_in(kind, interference, false);
+}
+
+/// The journey of `kind`; `opencode_2` puts an OpenCode session in the 2.x tables.
+#[cfg(unix)]
+fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, opencode_2: bool) {
     use crate::agent_sleep::DormantPhase;
     let folder = tempfile::Builder::new()
         .prefix(if interference == "hashed-before-close" {
@@ -369,10 +418,16 @@ fn durable_dormant_journey(kind: &'static str, interference: &'static str) {
     let home = tempfile::tempdir().unwrap();
     let native_id = "11111111-2222-3333-4444-555555555555";
     let native = if kind == "opencode" {
-        crate::fixture::opencode_database(home.path(), &[(native_id, None, cwd.as_str())]);
+        let sessions = [(native_id, None, cwd.as_str())];
+        if opencode_2 {
+            crate::fixture::opencode_2_database(home.path(), &sessions);
+        } else {
+            crate::fixture::opencode_database(home.path(), &sessions);
+        }
         let path = home.path().join(".local/share/opencode/opencode.db");
         NativeRecord {
             kind,
+            opencode_2,
             folder: path.parent().unwrap().to_path_buf(),
             before: Vec::new(),
             other: Vec::new(),
@@ -404,6 +459,7 @@ fn durable_dormant_journey(kind: &'static str, interference: &'static str) {
         let other_before = [native_before.as_slice(), b"{\"type\":\"message\",\"id\":\"other-message\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"different history\"}]}}\n"].concat();
         NativeRecord {
             kind,
+            opencode_2: false,
             path: native_path,
             folder: native_folder,
             before: native_before,

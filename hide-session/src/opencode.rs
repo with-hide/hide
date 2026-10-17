@@ -1,11 +1,16 @@
 //! OpenCode's sessions, read from its SQLite database (PRD
 //! overview-request-view D-16, B28).
 //!
-//! OpenCode keeps every session in `~/.local/share/opencode/opencode.db`: a
+//! OpenCode keeps every session in `opencode.db` under `$XDG_DATA_HOME/opencode`,
+//! or `~/.local/share/opencode` when that is unset: a
 //! `session` row, its `message` rows in order, and each message's `part`
-//! rows (text, attached files, tool calls with their output). The database
-//! is opened read-only with a short busy wait, so a read never holds OpenCode
-//! back; a locked database is a read skipped until the next state change.
+//! rows (text, attached files, tool calls with their output). OpenCode 2.x
+//! keeps them in `session_v2` and `session_message` instead, a message's
+//! whole content in its one row ([`v2`]). Every read names the schema its
+//! database holds once ([`Schema::detect`]) and runs that schema's queries;
+//! the rules below hold for both. The database is opened read-only with a
+//! short busy wait, so a read never holds OpenCode back; a locked database is
+//! a read skipped until the next state change.
 //!
 //! A session's messages are only appended, so the checkpoint is the number
 //! of messages already read, and an event's offset is its message's index.
@@ -32,6 +37,9 @@
 //! waits for the operator, so the read folds that unfinished message's
 //! question parts without settling it ([`TurnTracker::fold_unsettled`]).
 
+mod schema;
+mod v2;
+
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -48,6 +56,7 @@ use crate::{
     SESSION_INCREMENT_READ_LIMIT_BYTES, SESSION_LINE_LIMIT_BYTES, SkipReason,
     label_reference_token, pull_request_addresses,
 };
+pub(crate) use schema::{Legacy, SCHEMA_UNKNOWN, Schema};
 
 /// How long a read waits for OpenCode's own write to finish.
 /// The most messages one read takes; a longer session is read over several.
@@ -72,16 +81,65 @@ const TITLE_LIMIT_CHARS: i64 = 512;
 /// The longest `directory` a session row may name; a longer one is no checkout.
 const DIRECTORY_LIMIT_BYTES: i64 = 4096;
 
-pub(crate) fn database_path(home: &Path) -> PathBuf {
-    home.join(".local/share/opencode/opencode.db")
+/// Where OpenCode keeps its data: a folder under a root Hide confines every
+/// read to. OpenCode takes its data folder from `XDG_DATA_HOME` when that is
+/// set (`xdg-basedir`, in 1.x and 2.x; proven live on 2.0.29), so that is the
+/// node's own value ([`crate::environment`]); otherwise it is under `home`.
+struct Place {
+    root: PathBuf,
+    folder: &'static str,
 }
 
-/// One bounded read of OpenCode's database ([`crate::sqlite::with_read`]).
-pub(crate) fn with_read<T>(home: &Path, read: impl FnOnce(&Connection) -> T) -> Result<T, String> {
+fn place(home: &Path) -> Result<Place, String> {
+    match crate::environment::data_home() {
+        Err(reason) => Err(reason.to_owned()),
+        Ok(Some(data)) => Ok(Place {
+            root: data.to_owned(),
+            folder: "opencode",
+        }),
+        Ok(None) => Ok(Place {
+            root: home.to_owned(),
+            folder: ".local/share/opencode",
+        }),
+    }
+}
+
+/// OpenCode's database, or why it cannot be named.
+pub(crate) fn database_path(home: &Path) -> Result<PathBuf, String> {
+    let place = place(home)?;
+    Ok(place.root.join(place.folder).join("opencode.db"))
+}
+
+/// One bounded read of OpenCode's database ([`crate::sqlite::with_read`]),
+/// handed the schema the database holds. A database that holds neither is
+/// refused here, before `read` runs.
+pub(crate) fn with_read<T>(
+    home: &Path,
+    read: impl FnOnce(&Connection, Schema) -> T,
+) -> Result<T, String> {
+    with_read_legacy(home, |connection, schema, _| read(connection, schema))
+}
+
+/// [`with_read`], also handed what a 2.x database holds of the 1.x tables.
+pub(crate) fn with_read_legacy<T>(
+    home: &Path,
+    read: impl FnOnce(&Connection, Schema, Legacy) -> T,
+) -> Result<T, String> {
+    with_unchecked_read(home, |connection| {
+        Schema::detect(connection).map(|(schema, legacy)| read(connection, schema, legacy))
+    })?
+}
+
+/// One bounded read of the database file, whatever tables it holds.
+pub(crate) fn with_unchecked_read<T>(
+    home: &Path,
+    read: impl FnOnce(&Connection) -> T,
+) -> Result<T, String> {
+    let place = place(home)?;
     crate::sqlite::with_read(
-        home,
-        ".local/share/opencode",
-        &database_path(home),
+        &place.root,
+        place.folder,
+        &place.root.join(place.folder).join("opencode.db"),
         &REASONS,
         SQL_STEPS_PER_READ,
         read,
@@ -123,18 +181,26 @@ pub(crate) enum Owner<'a> {
 }
 
 /// Proves that `id` names the session `owner` requires.
-pub(crate) fn prove(connection: &Connection, id: &str, owner: Owner<'_>) -> Result<Proven, String> {
+pub(crate) fn prove(
+    connection: &Connection,
+    schema: Schema,
+    id: &str,
+    owner: Owner<'_>,
+) -> Result<Proven, String> {
     if !crate::label_owner::valid_native_id(id) {
         return Err("label_session_id_invalid".to_owned());
     }
     let (title, created, updated, directory, (parent, child)) = connection
         .query_row(
-            "SELECT CASE WHEN typeof(title) = 'text' AND octet_length(title) <= ?2 * 4 \
-             THEN substr(title, 1, ?2) END, time_created, time_updated, \
-             CASE WHEN typeof(directory) = 'text' AND octet_length(directory) <= ?3 \
-             THEN directory END, \
-             CASE WHEN typeof(parent_id) = 'text' AND octet_length(parent_id) <= ?3 \
-             THEN parent_id END, parent_id IS NOT NULL FROM session WHERE id = ?1",
+            &format!(
+                "SELECT CASE WHEN typeof(title) = 'text' AND octet_length(title) <= ?2 * 4 \
+                 THEN substr(title, 1, ?2) END, time_created, time_updated, \
+                 CASE WHEN typeof(directory) = 'text' AND octet_length(directory) <= ?3 \
+                 THEN directory END, \
+                 CASE WHEN typeof(parent_id) = 'text' AND octet_length(parent_id) <= ?3 \
+                 THEN parent_id END, parent_id IS NOT NULL FROM {} WHERE id = ?1",
+                schema.sessions()
+            ),
             params![id, TITLE_LIMIT_CHARS, DIRECTORY_LIMIT_BYTES],
             |row| {
                 Ok((
@@ -163,7 +229,10 @@ pub(crate) fn prove(connection: &Connection, id: &str, owner: Owner<'_>) -> Resu
     }
     let messages: i64 = connection
         .query_row(
-            "SELECT count(*) FROM message WHERE session_id = ?1",
+            &format!(
+                "SELECT count(*) FROM {} WHERE session_id = ?1",
+                schema.messages()
+            ),
             params![id],
             |row| row.get(0),
         )
@@ -220,13 +289,15 @@ pub fn message_checkpoint(
     cwd: &str,
     index: u64,
 ) -> Result<(ConversationCheckpoint, ConfirmedLabelSession), String> {
-    with_read(home, |connection| {
-        let proven = prove(connection, id, Owner::Root { cwd: Some(cwd) })?;
+    with_read(home, |connection, schema| {
+        let proven = prove(connection, schema, id, Owner::Root { cwd: Some(cwd) })?;
         if index > proven.messages {
             return Err("label_session_read_changed".to_owned());
         }
         let previous = match index.checked_sub(1) {
-            Some(last) => message_at(connection, id, last)?.map(|message| witness(&message)),
+            Some(last) => {
+                message_at(connection, schema, id, last)?.map(|message| witness(&message))
+            }
             None => None,
         };
         Ok((
@@ -270,26 +341,35 @@ pub(crate) fn activity(
     {
         return Err("session_route_owner_changed".to_owned());
     }
-    with_read(home, |connection| {
+    with_read(home, |connection, schema| {
         let proven = prove(
             connection,
+            schema,
             id,
             Owner::Root {
                 cwd: request.cwd.as_deref(),
             },
         )?;
         Ok(crate::session_activity::SessionActivity {
-            modified_at_unix_ms: newest_write(connection, id, &proven)?,
+            modified_at_unix_ms: newest_write(connection, schema, id, &proven)?,
             bytes: proven.messages,
         })
     })?
 }
 
 /// When the session or any of its messages was last written.
-fn newest_write(connection: &Connection, id: &str, proven: &Proven) -> Result<u64, String> {
+fn newest_write(
+    connection: &Connection,
+    schema: Schema,
+    id: &str,
+    proven: &Proven,
+) -> Result<u64, String> {
     let newest: Option<i64> = connection
         .query_row(
-            "SELECT max(time_updated) FROM message WHERE session_id = ?1",
+            &format!(
+                "SELECT max(time_updated) FROM {} WHERE session_id = ?1",
+                schema.messages()
+            ),
             params![id],
             |row| row.get(0),
         )
@@ -320,26 +400,31 @@ pub(crate) fn catalog(
 ) -> Result<Result<Vec<crate::ProjectSession>, String>, crate::SessionCatalogError> {
     // Only an answer that the file is not there is no OpenCode; a folder
     // Hide may not look into is a store it could not read.
-    if std::fs::symlink_metadata(database_path(home))
+    let database = match database_path(home) {
+        Ok(database) => database,
+        Err(reason) => return Ok(Err(reason)),
+    };
+    if std::fs::symlink_metadata(database)
         .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
     {
         return Ok(Ok(Vec::new()));
     }
-    with_read(home, |connection| {
-        catalog_connection(connection, device_id, project, visited, limit)
+    with_read(home, |connection, schema| {
+        catalog_connection(connection, schema, device_id, project, visited, limit)
     })
     .unwrap_or_else(|reason| Ok(Err(reason)))
 }
 
 fn catalog_connection(
     connection: &Connection,
+    schema: Schema,
     device_id: &str,
     project: &hide_project::ProjectIdentity,
     visited: &mut usize,
     limit: usize,
 ) -> Result<Result<Vec<crate::ProjectSession>, String>, crate::SessionCatalogError> {
     let remaining = limit.saturating_sub(*visited);
-    let rows = match root_sessions(connection, remaining) {
+    let rows = match root_sessions(connection, schema, remaining) {
         Ok(rows) => rows,
         Err(reason) => return Ok(Err(reason)),
     };
@@ -365,12 +450,13 @@ fn catalog_connection(
         work_budget(connection);
         let read = prove(
             connection,
+            schema,
             &id,
             Owner::Root {
                 cwd: Some(&directory),
             },
         )
-        .and_then(|proven| Ok((first_request(connection, &id)?, proven)));
+        .and_then(|proven| Ok((first_request(connection, schema, &id)?, proven)));
         let mut session = crate::ProjectSession {
             locator: PathBuf::from(format!("{}{id}", crate::links::OPENCODE_PREFIX)),
             agent: crate::Agent::OpenCode,
@@ -406,14 +492,16 @@ fn catalog_connection(
 /// updated)`; one past `remaining` proves the catalog's cap was crossed.
 fn root_sessions(
     connection: &Connection,
+    schema: Schema,
     remaining: usize,
 ) -> Result<Vec<(String, String, u64)>, String> {
     let mut statement = connection
-        .prepare(
-            "SELECT id, directory, time_updated FROM session WHERE parent_id IS NULL \
+        .prepare(&format!(
+            "SELECT id, directory, time_updated FROM {} WHERE parent_id IS NULL \
              AND typeof(directory) = 'text' AND octet_length(directory) <= ?1 \
              AND octet_length(id) <= ?1 ORDER BY time_updated DESC, id LIMIT ?2",
-        )
+            schema.sessions()
+        ))
         .map_err(|error| refusal(&error))?;
     statement
         .query_map(
@@ -434,7 +522,14 @@ fn root_sessions(
 /// The operator's first request in a session and when it was sent: the
 /// first text part of its first person's message that OpenCode or Hide did
 /// not add itself, read within the row limit.
-fn first_request(connection: &Connection, id: &str) -> Result<Option<(String, u64)>, String> {
+fn first_request(
+    connection: &Connection,
+    schema: Schema,
+    id: &str,
+) -> Result<Option<(String, u64)>, String> {
+    if schema == Schema::V2 {
+        return v2::first_request(connection, id);
+    }
     connection
         .query_row(
             "SELECT json_extract(part.data, '$.text'), message.time_created \
@@ -461,11 +556,20 @@ fn witness(message_id: &str) -> u64 {
 }
 
 /// The id of the message at `index` in reading order.
-fn message_at(connection: &Connection, id: &str, index: u64) -> Result<Option<String>, String> {
+fn message_at(
+    connection: &Connection,
+    schema: Schema,
+    id: &str,
+    index: u64,
+) -> Result<Option<String>, String> {
     connection
         .query_row(
-            "SELECT CASE WHEN octet_length(id) <= ?3 THEN id END FROM message \
-             WHERE session_id = ?1 ORDER BY time_created, id LIMIT 1 OFFSET ?2",
+            &format!(
+                "SELECT CASE WHEN octet_length(id) <= ?3 THEN id END FROM {} \
+                 WHERE session_id = ?1 ORDER BY {} LIMIT 1 OFFSET ?2",
+                schema.messages(),
+                schema.message_order()
+            ),
             params![id, index as i64, MESSAGE_LIMIT_BYTES],
             |row| row.get::<_, Option<String>>(0),
         )
@@ -494,8 +598,9 @@ pub(crate) fn read_as(
     request: &LabelTranscriptRequest,
     owner: Owner<'_>,
 ) -> Result<(LabelTranscript, Proven), String> {
-    with_read(home, |connection| {
-        read_connection(connection, request, owner).map(|page| (page.transcript, page.proven))
+    with_read(home, |connection, schema| {
+        read_connection(connection, schema, request, owner)
+            .map(|page| (page.transcript, page.proven))
     })?
 }
 
@@ -521,9 +626,10 @@ pub fn read_conversation(
         subagents: Default::default(),
         turns: None,
     };
-    let page = with_read(home, |connection| {
+    let page = with_read(home, |connection, schema| {
         read_connection(
             connection,
+            schema,
             &request,
             Owner::Root {
                 cwd: Some(&scope.cwd),
@@ -601,6 +707,7 @@ impl Page {
 
 fn read_connection(
     connection: &Connection,
+    schema: Schema,
     request: &LabelTranscriptRequest,
     owner: Owner<'_>,
 ) -> Result<Page, String> {
@@ -608,7 +715,7 @@ fn read_connection(
         return Err("session_kind_unsupported".to_owned());
     }
     let session_id = request.reference_value.as_str();
-    let proven = prove(connection, session_id, owner)?;
+    let proven = prove(connection, schema, session_id, owner)?;
     let count = proven.messages;
     let mut start = request
         .checkpoint
@@ -626,7 +733,7 @@ fn read_connection(
             .as_ref()
             .and_then(ConversationCheckpoint::message_witness)
         && (created != proven.created
-            || message_at(connection, session_id, start - 1)?
+            || message_at(connection, schema, session_id, start - 1)?
                 .as_deref()
                 .map(witness)
                 != Some(last))
@@ -636,10 +743,150 @@ fn read_connection(
     if rescanned.is_some() {
         start = 0;
     }
-    let mut turns = match (&request.checkpoint, &rescanned) {
+    let turns = match (&request.checkpoint, &rescanned) {
         (Some(_), None) => request.turns.clone().unwrap_or_default(),
         _ => TurnTracker::default(),
     };
+    let transcript = Read {
+        events: Vec::new(),
+        sightings: Vec::new(),
+        issue_sightings: Vec::new(),
+        receipts: Vec::new(),
+        receipt_times: Vec::new(),
+        skipped: std::collections::BTreeMap::new(),
+        turn_error: None,
+    };
+    // The witness of the message before the next one read: the checkpoint's
+    // own (verified above) until this read passes a message.
+    let previous = request
+        .checkpoint
+        .as_ref()
+        .filter(|_| rescanned.is_none())
+        .and_then(ConversationCheckpoint::message_witness)
+        .map(|(_, last)| last);
+    let walk = Walk {
+        transcript,
+        turns,
+        previous,
+        anchor: None,
+        next: start,
+        unfinished: None,
+        over_budget: false,
+        spent: 0,
+        visited: 0,
+        part_work: 0,
+    };
+    let Walk {
+        mut transcript,
+        mut turns,
+        previous,
+        anchor,
+        next,
+        unfinished,
+        mut over_budget,
+        spent,
+        visited,
+        ..
+    } = match schema {
+        Schema::V1 => walk_v1(connection, session_id, start, proven.created, walk)?,
+        Schema::V2 => v2::walk(connection, session_id, start, proven.created, walk)?,
+    };
+    if let Some(reason) = transcript.turn_error {
+        return Err(reason.as_str().to_owned());
+    }
+    // The unfinished message is the session's newest: its question parts are
+    // what OpenCode waits on now. They are folded unsettled, so the same
+    // message folds again once OpenCode completes it.
+    if let Some(message_id) = unfinished.as_deref() {
+        let budget = READ_BUDGET_BYTES.saturating_sub(spent);
+        match match schema {
+            Schema::V1 => unfinished_questions(connection, message_id, budget, &mut transcript),
+            Schema::V2 => v2::unfinished_questions(connection, message_id, budget, &mut transcript),
+        }? {
+            None if next == start => {
+                return Err(SkipReason::UserTurnCapacity.as_str().to_owned());
+            }
+            None => over_budget = true,
+            Some(marks) if !marks.is_empty() => {
+                turns.fold_unsettled(next, &TurnMark::Tools(marks));
+            }
+            Some(_) => {}
+        }
+    }
+    let has_more = over_budget || (unfinished.is_none() && visited == MESSAGES_PER_READ);
+    let skipped_lines = transcript.skipped.values().sum();
+    let skipped_reasons = transcript
+        .skipped
+        .into_iter()
+        .map(|(reason, count)| (reason.to_owned(), count))
+        .collect();
+    let receipt_times = transcript.receipt_times;
+    let transcript = LabelTranscript {
+        confirmed: proven.confirmed(session_id)?,
+        events: transcript.events,
+        checkpoint: ConversationCheckpoint::at_message(next, proven.created, previous),
+        anchor,
+        has_more,
+        rescanned,
+        skipped_lines,
+        skipped_reasons,
+        title: proven.title.clone(),
+        custom_title: None,
+        pr_sightings: transcript.sightings,
+        issue_sightings: transcript.issue_sightings,
+        memory_receipts: transcript.receipts,
+        subagents: Default::default(),
+        turns: Some(turns),
+    };
+    Ok(Page {
+        transcript,
+        proven,
+        read_bytes: spent,
+        receipt_times,
+    })
+}
+
+/// What a read of a session's messages carries from page to page, whatever
+/// the schema it reads them from.
+struct Walk {
+    transcript: Read,
+    turns: TurnTracker,
+    /// The witness of the message before the next one.
+    previous: Option<u64>,
+    /// Where the last person's message of this read began.
+    anchor: Option<ConversationCheckpoint>,
+    /// The index of the next message.
+    next: u64,
+    /// The id of the assistant message OpenCode is still writing.
+    unfinished: Option<String>,
+    over_budget: bool,
+    /// The row bytes the read admitted.
+    spent: u64,
+    visited: i64,
+    part_work: i64,
+}
+
+/// Reads one page of an OpenCode 1.x session's messages from `start`: each
+/// `message` row, then its `part` rows.
+fn walk_v1(
+    connection: &Connection,
+    session_id: &str,
+    start: u64,
+    created: u64,
+    walk: Walk,
+) -> Result<Walk, String> {
+    let Walk {
+        mut transcript,
+        mut turns,
+        mut previous,
+        mut anchor,
+        mut next,
+        mut unfinished,
+        mut over_budget,
+        mut spent,
+        mut visited,
+        mut part_work,
+    } = walk;
     let mut statement = connection
         .prepare(
             "SELECT rowid, typeof(data) = 'text', octet_length(data), octet_length(id), \
@@ -679,30 +926,6 @@ fn read_connection(
     let mut part_data = connection
         .prepare("SELECT data FROM part WHERE rowid = ?1")
         .map_err(|error| refusal(&error))?;
-    let mut transcript = Read {
-        events: Vec::new(),
-        sightings: Vec::new(),
-        issue_sightings: Vec::new(),
-        receipts: Vec::new(),
-        receipt_times: Vec::new(),
-        skipped: std::collections::BTreeMap::new(),
-        turn_error: None,
-    };
-    // The witness of the message before the next one read: the checkpoint's
-    // own (verified above) until this read passes a message.
-    let mut previous = request
-        .checkpoint
-        .as_ref()
-        .filter(|_| rescanned.is_none())
-        .and_then(ConversationCheckpoint::message_witness)
-        .map(|(_, last)| last);
-    let mut anchor = None;
-    let mut next = start;
-    let mut unfinished = None;
-    let mut over_budget = false;
-    let mut spent = 0_u64;
-    let mut visited = 0_i64;
-    let mut part_work = 0_i64;
     while let Some(row) = rows.next().map_err(|error| refusal(&error))? {
         if part_work >= PARTS_PER_READ {
             over_budget = true;
@@ -810,11 +1033,7 @@ fn read_connection(
         }
         let (human, marks) = transcript.message(role, at, next, &part_rows);
         if human {
-            anchor = Some(ConversationCheckpoint::at_message(
-                next,
-                proven.created,
-                previous,
-            ));
+            anchor = Some(ConversationCheckpoint::at_message(next, created, previous));
             turns.fold(next, &TurnMark::HumanTurn);
         }
         if !marks.is_empty() {
@@ -824,59 +1043,17 @@ fn read_connection(
         next += 1;
     }
     drop(rows);
-    if let Some(reason) = transcript.turn_error {
-        return Err(reason.as_str().to_owned());
-    }
-    // The unfinished message is the session's newest: its question parts are
-    // what OpenCode waits on now. They are folded unsettled, so the same
-    // message folds again once OpenCode completes it.
-    if let Some(message_id) = unfinished.as_deref() {
-        match unfinished_questions(
-            connection,
-            message_id,
-            READ_BUDGET_BYTES.saturating_sub(spent),
-            &mut transcript,
-        )? {
-            None if next == start => {
-                return Err(SkipReason::UserTurnCapacity.as_str().to_owned());
-            }
-            None => over_budget = true,
-            Some(marks) if !marks.is_empty() => {
-                turns.fold_unsettled(next, &TurnMark::Tools(marks));
-            }
-            Some(_) => {}
-        }
-    }
-    let has_more = over_budget || (unfinished.is_none() && visited == MESSAGES_PER_READ);
-    let skipped_lines = transcript.skipped.values().sum();
-    let skipped_reasons = transcript
-        .skipped
-        .into_iter()
-        .map(|(reason, count)| (reason.to_owned(), count))
-        .collect();
-    let receipt_times = transcript.receipt_times;
-    let transcript = LabelTranscript {
-        confirmed: proven.confirmed(session_id)?,
-        events: transcript.events,
-        checkpoint: ConversationCheckpoint::at_message(next, proven.created, previous),
-        anchor,
-        has_more,
-        rescanned,
-        skipped_lines,
-        skipped_reasons,
-        title: proven.title.clone(),
-        custom_title: None,
-        pr_sightings: transcript.sightings,
-        issue_sightings: transcript.issue_sightings,
-        memory_receipts: transcript.receipts,
-        subagents: Default::default(),
-        turns: Some(turns),
-    };
-    Ok(Page {
+    Ok(Walk {
         transcript,
-        proven,
-        read_bytes: spent,
-        receipt_times,
+        turns,
+        previous,
+        anchor,
+        next,
+        unfinished,
+        over_budget,
+        spent,
+        visited,
+        part_work,
     })
 }
 
@@ -1026,6 +1203,21 @@ impl Read {
                 _ => {}
             }
         }
+        self.event(role, text, images, at, offset, questions)
+    }
+
+    /// The event a message's words make, and its question marks: a person's
+    /// message with words or images is a human turn, an assistant's with
+    /// words a reply.
+    fn event(
+        &mut self,
+        role: Option<&str>,
+        text: Vec<String>,
+        images: u32,
+        at: u64,
+        offset: u64,
+        questions: Vec<ToolTurnMark>,
+    ) -> (bool, Vec<ToolTurnMark>) {
         if questions.len() > crate::turns::native::TOOL_MARK_LIMIT {
             self.turn_error.get_or_insert(SkipReason::UserTurnCapacity);
         }
@@ -1063,6 +1255,11 @@ impl Read {
             .pointer("/state/time/end")
             .and_then(Value::as_u64)
             .unwrap_or(message_at);
+        self.note_sightings(output, at);
+    }
+
+    /// The pull requests and issues a tool's output printed, as of `at`.
+    fn note_sightings(&mut self, output: &str, at: u64) {
         for (repository, number) in pull_request_addresses(output) {
             if self.sightings.len() >= MAX_SIGHTINGS_PER_OUTPUT * 4 {
                 self.skip("pr_sighting_capacity");

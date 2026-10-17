@@ -19,9 +19,9 @@ use hide_session::turns::{Waiting, WakeLoss};
 use hide_session::{Agent, PrSighting};
 
 /// 2026-10-03T01:00:00Z, when every fixture's conversation starts.
-const START: u64 = 1_790_989_200_000;
+pub(crate) const START: u64 = 1_790_989_200_000;
 
-fn fixtures() -> PathBuf {
+pub(crate) fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/adapters")
 }
 
@@ -68,7 +68,7 @@ fn home(agent: Agent) -> tempfile::TempDir {
     home
 }
 
-fn request(agent: Agent) -> LabelTranscriptRequest {
+pub(crate) fn request(agent: Agent) -> LabelTranscriptRequest {
     let id = match agent {
         Agent::Claude => "a1b2c3d4-0000-4000-8000-000000000001",
         Agent::Codex => "0199a000-0000-7000-8000-000000000002",
@@ -91,7 +91,7 @@ fn request(agent: Agent) -> LabelTranscriptRequest {
 }
 
 /// Reads until nothing is left, as the label worker does.
-fn read_whole(home: &Path, agent: Agent) -> LabelTranscript {
+pub(crate) fn read_whole(home: &Path, agent: Agent) -> LabelTranscript {
     let mut request = request(agent);
     let mut whole = read(home, &request).unwrap();
     while whole.has_more {
@@ -110,7 +110,7 @@ fn read_whole(home: &Path, agent: Agent) -> LabelTranscript {
     whole
 }
 
-fn sighted(transcript: &LabelTranscript, number: u64) -> Option<&PrSighting> {
+pub(crate) fn sighted(transcript: &LabelTranscript, number: u64) -> Option<&PrSighting> {
     transcript
         .pr_sightings
         .iter()
@@ -944,63 +944,66 @@ mod wake_devices {
 fn every_agent_reads_to_the_same_facts() {
     for agent in [Agent::Claude, Agent::Codex, Agent::OpenCode] {
         let home = home(agent);
-        let transcript = read_whole(home.path(), agent);
-
-        assert_eq!(
-            transcript.title.as_deref(),
-            Some("요청 보기 만들기"),
-            "{agent:?} title"
-        );
-
-        let people: Vec<_> = transcript
-            .events
-            .iter()
-            .filter(|event| event.kind == LabelEventKind::Human)
-            .collect();
-        assert_eq!(
-            people.len(),
-            3,
-            "{agent:?}: injected text is no one's request"
-        );
-        assert_eq!(people[0].text, "요청 보기를 만들어줘\n긴 요청의 둘째 줄");
-        assert_eq!(people[0].at_unix_ms, START, "{agent:?}");
-        assert_eq!(people[0].sender, None);
-        assert_eq!(people[1].sender.as_deref(), Some("ci-lead"), "{agent:?}");
-        assert_eq!(
-            people[1].text.trim(),
-            "Hide letter letter-1 from ci-lead (claude) [request]\nCI 다시 봐줘\nFull letter: hide request show letter-1",
-            "{agent:?}: the current delivery header and body stay readable"
-        );
-        assert_eq!(
-            (people[2].text.trim(), people[2].images),
-            ("", 1),
-            "{agent:?}: an image sent alone, without what the agent wrapped it in"
-        );
-
-        let reply = transcript
-            .events
-            .iter()
-            .rev()
-            .find(|event| event.kind == LabelEventKind::Assistant)
-            .unwrap();
-        assert!(
-            reply
-                .text
-                .starts_with("PR을 열었습니다: https://github.com/acme/app/pull/12"),
-            "{agent:?}"
-        );
-
-        let created = sighted(&transcript, 12).unwrap_or_else(|| panic!("{agent:?} sighting"));
-        assert_eq!(
-            created.at_unix_ms,
-            START + 30_000,
-            "{agent:?}: when the tool printed it"
-        );
-        assert!(
-            sighted(&transcript, 99).is_none(),
-            "{agent:?}: a reply's mention is not a tool's output"
-        );
+        assert_same_facts(&format!("{agent:?}"), &read_whole(home.path(), agent));
     }
+}
+
+/// The facts every fixture's conversation reads to, whatever its format.
+pub(crate) fn assert_same_facts(agent: &str, transcript: &LabelTranscript) {
+    assert_eq!(
+        transcript.title.as_deref(),
+        Some("요청 보기 만들기"),
+        "{agent} title"
+    );
+
+    let people: Vec<_> = transcript
+        .events
+        .iter()
+        .filter(|event| event.kind == LabelEventKind::Human)
+        .collect();
+    assert_eq!(
+        people.len(),
+        3,
+        "{agent}: injected text is no one's request"
+    );
+    assert_eq!(people[0].text, "요청 보기를 만들어줘\n긴 요청의 둘째 줄");
+    assert_eq!(people[0].at_unix_ms, START, "{agent}");
+    assert_eq!(people[0].sender, None);
+    assert_eq!(people[1].sender.as_deref(), Some("ci-lead"), "{agent}");
+    assert_eq!(
+        people[1].text.trim(),
+        "Hide letter letter-1 from ci-lead (claude) [request]\nCI 다시 봐줘\nFull letter: hide request show letter-1",
+        "{agent}: the current delivery header and body stay readable"
+    );
+    assert_eq!(
+        (people[2].text.trim(), people[2].images),
+        ("", 1),
+        "{agent}: an image sent alone, without what the agent wrapped it in"
+    );
+
+    let reply = transcript
+        .events
+        .iter()
+        .rev()
+        .find(|event| event.kind == LabelEventKind::Assistant)
+        .unwrap();
+    assert!(
+        reply
+            .text
+            .starts_with("PR을 열었습니다: https://github.com/acme/app/pull/12"),
+        "{agent}"
+    );
+
+    let created = sighted(transcript, 12).unwrap_or_else(|| panic!("{agent} sighting"));
+    assert_eq!(
+        created.at_unix_ms,
+        START + 30_000,
+        "{agent}: when the tool printed it"
+    );
+    assert!(
+        sighted(transcript, 99).is_none(),
+        "{agent}: a reply's mention is not a tool's output"
+    );
 }
 
 /// A conversation page reaches the core as JSON over the node link
@@ -3684,7 +3687,7 @@ fn a_claude_hook_attachment_receipt_is_reported_and_a_quoted_one_is_not() {
     );
 }
 
-const OPENCODE_ROOT: &str = "ses_0a1b2c3d4e5f60718293a4b5c6";
+pub(crate) const OPENCODE_ROOT: &str = "ses_0a1b2c3d4e5f60718293a4b5c6";
 
 fn opencode_writer(home: &Path) -> rusqlite::Connection {
     rusqlite::Connection::open(home.join(".local/share/opencode/opencode.db")).unwrap()
