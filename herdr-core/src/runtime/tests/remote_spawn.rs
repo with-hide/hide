@@ -69,6 +69,13 @@ impl NodeLink for Node {
                 self.trusted.lock().unwrap().push((agent, path));
                 Value::Null
             }
+            // The catalog's reads of the device's folders, which a session
+            // pass of the device asks for, are no part of a spawn.
+            Call::Project { .. } | Call::Worktrees { .. } => {
+                return Err(LinkError::NotConnected(
+                    "this node answers only the spawn's checks".to_owned(),
+                ));
+            }
             other => panic!("unexpected call {other:?}"),
         }))
     }
@@ -492,6 +499,87 @@ fn a_spawn_starts_the_agent_with_its_choice_ahead_of_the_prompt() {
         ("codex", "worker")
     );
     assert_eq!(kept.choice, launch);
+}
+
+/// An agent that reports its session only at its first turn keeps its
+/// launch choice: the pane's record is written before the spawn waits for
+/// the session, and binds to it on the device's pass that shows it.
+#[test]
+fn a_spawn_whose_session_comes_late_keeps_its_choice_and_binds_it_on_arrival() {
+    let spawner = spawner();
+    *spawner.session.lock().unwrap() = None;
+    let launch = hide_agent_adapter::LaunchChoice {
+        model: Some("gpt-6-luna".into()),
+        effort: Some("low".into()),
+    };
+    let error = spawner
+        .spawn_with(
+            Some("here"),
+            Some(DEVICE),
+            "late",
+            launch.clone(),
+            Vec::new(),
+        )
+        .expect_err("the agent has not reported its session");
+    assert_eq!(error, "native_identity_unavailable");
+    let pane_id = "remote:mini:pane:w2:p1";
+    let kept = spawner
+        .runtime
+        .lock()
+        .unwrap()
+        .snapshot
+        .ui_state
+        .pane_launches[pane_id]
+        .clone();
+    assert_eq!(
+        (kept.name.as_str(), &kept.choice, kept.session.as_deref()),
+        ("worker", &launch, None)
+    );
+    // The device's next pass shows the agent with its session.
+    let mut device_checkout = checkout(
+        "remote:mini:workspace:w2",
+        "remote:mini:checkout:w2",
+        WORKTREE,
+        Some(pane(pane_id, WORKTREE)),
+    );
+    device_checkout.tabs[0].id = Some("remote:mini:tab:w2:t1".to_owned());
+    let mut device_workspace = workspace(
+        "remote:mini:workspace:w2",
+        "repo",
+        WORKTREE,
+        vec![device_checkout],
+    );
+    device_workspace.remote_target_id = Some(DEVICE.to_owned());
+    device_workspace.device_id = DEVICE.to_owned();
+    let session = RemoteSessionSnapshot {
+        workspaces: vec![device_workspace],
+        agents: project_agents(
+            serde_json::from_value(json!({"agents": [{
+                "pane_id": pane_id, "agent": "codex", "name": "worker",
+                "agent_status": "idle", "state_change_seq": 2, "cwd": WORKTREE,
+                "agent_session": {"kind": "id", "value": "device-child-session"},
+            }]}))
+            .unwrap(),
+        )
+        .agents,
+        active_tab_ids: Default::default(),
+        focused_workspace_id: None,
+        focused_checkout_id: None,
+        focused_tab_id: None,
+        focused_pane_id: None,
+        pane_layouts: Vec::new(),
+        pane_hook_tokens: Default::default(),
+        issue_tokens: Default::default(),
+        issue_links: Default::default(),
+        herdr_version: None,
+    };
+    let mut runtime = spawner.runtime.lock().unwrap();
+    runtime.ingest_remote_session(DEVICE, Ok(session));
+    let bound = &runtime.snapshot.ui_state.pane_launches[pane_id];
+    assert_eq!(
+        (bound.name.as_str(), &bound.choice, bound.session.as_deref()),
+        ("worker", &launch, Some("device-child-session"))
+    );
 }
 
 /// A model or effort the agent does not take is refused with its reason

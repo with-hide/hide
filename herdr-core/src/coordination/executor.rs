@@ -967,6 +967,22 @@ fn spawn(
             )?)
             .map_err(|_| "spawn_unavailable")?;
         }
+        // The child's pane keeps its launch choice for the restarts Hide
+        // makes of it, under the id the core knows the pane by and the name
+        // it was started under. It is kept before the agent shows its
+        // session, which an agent that reports it only at its first turn
+        // does later, so the record binds to that session when it arrives.
+        if let Some(runtime) = client.runtime.upgrade() {
+            let pane_id = if on_node {
+                pane.to_owned()
+            } else {
+                crate::session_sync::remote_pane_id(&child_device, pane)
+            };
+            runtime
+                .lock()
+                .map_err(|_| "delivery_unavailable")?
+                .record_pane_launch(&pane_id, kind, name, &reserved.launch, None);
+        }
         let native = wait_native_identity(connector.as_ref(), pane, Some(name), kind)?;
         let session = native
             .agent_session
@@ -978,19 +994,6 @@ fn spawn(
             // closed rather than left running with nothing tracking it.
             close_refused_pane(connector.as_ref(), &reserved, pane, reason);
             return Err(reason.into());
-        }
-        // The child's pane keeps its launch choice for the restarts Hide
-        // makes of it, under the id the core knows the pane by.
-        if let Some(runtime) = client.runtime.upgrade() {
-            let pane_id = if on_node {
-                pane.to_owned()
-            } else {
-                crate::session_sync::remote_pane_id(&child_device, pane)
-            };
-            runtime
-                .lock()
-                .map_err(|_| "delivery_unavailable")?
-                .record_pane_launch(&pane_id, kind, name, &reserved.launch, None);
         }
         let mut child = record(
             &native,
