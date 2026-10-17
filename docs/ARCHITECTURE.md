@@ -413,7 +413,7 @@ It ends in four ways, and its row, reason included, is deleted with it (D-08, B1
 
 A report needs a card a prompt gave the session, so it reaches the agents with a Memory hook (Claude Code, Codex, OpenCode, Pi, omp and agy); Grok and Cursor are given no card by a prompt, and their report is refused like any other session's without a receipt.
 An OpenCode report's place is the session's message count, which includes the step still being written that ran the command, so analysis passes it only once that step is finished and a later message is read; a pass that stops at the unfinished step leaves the card held.
-OpenCode 2.0 keeps its sessions in tables Hide's reader does not read and refuses Hide's plugin, so no prompt gives it a card to report; [INSTALL.md](INSTALL.md#what-each-system-supports) keeps that gap.
+OpenCode 2's prompt gets its card from the terminal half of Hide's plugin ([agent-hooks.md](agent-hooks.md#opencode-2)), in the pane that shows the session, but OpenCode 2 keeps its sessions in tables Hide's reader does not read, so Memory never analyzes past the report and the card stays held; [INSTALL.md](INSTALL.md#what-each-system-supports) keeps that gap.
 The reason is masked, folded to one line with no control character and its markup escaped before it is stored, and `show` prints it quoted as the reporting agent's unchecked words, since another agent reads it back.
 A report never changes the conflict rule, and the reason is never a card's source (B8).
 The pass, the command and the release write `stale.held`, `stale.refused`, `stale.released`, `stale.hint_left_out` and `stale.offset_unavailable` records with the card number, session and a reason code, never the reason's text (B16).

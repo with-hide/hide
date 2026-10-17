@@ -210,7 +210,7 @@ fn remove_guidance(target: &KitTarget, agent: GuidanceAgent) -> RemoveOutcome {
 // --- OpenCode's plugin, Pi's and omp's extension ---------------------------------
 
 fn remove_plugin(target: &KitTarget, dialect: PluginDialect) -> RemoveOutcome {
-    match plugin::file(dialect).remove(&target.home) {
+    match plugin::of(dialect).remove(&target.home) {
         Ok(true) => RemoveOutcome::Removed,
         Ok(false) => RemoveOutcome::Absent,
         Err(reason) => RemoveOutcome::Failed { reason },
@@ -224,13 +224,13 @@ fn plugin_state(
     dialect: PluginDialect,
     recorded: bool,
 ) -> (ComponentState, Option<String>) {
-    let file = plugin::file(dialect);
-    let noun = file.noun;
+    let file = plugin::of(dialect);
+    let noun = file.noun();
     let helper = helper(target);
     let observed = file.observe(&target.home, &helper);
     if !matches!(
         observed,
-        PluginObserved::Current | PluginObserved::ConfigAbsent | PluginObserved::Foreign
+        PluginObserved::Current | PluginObserved::ConfigAbsent | PluginObserved::Foreign(_)
     ) && !helper.is_file()
     {
         return (
@@ -263,11 +263,10 @@ fn plugin_state(
                 file.config_directory(&target.home).display()
             )),
         ),
-        PluginObserved::Foreign => (
+        PluginObserved::Foreign(name) => (
             ComponentState::Absent,
             Some(format!(
-                "a {noun} named {} that Hide did not write is already there; Hide left it alone",
-                file.file_name
+                "a {noun} named {name} that Hide did not write is already there; Hide left it alone"
             )),
         ),
         PluginObserved::Unreadable(reason) => (ComponentState::Failed, Some(reason)),
@@ -283,7 +282,7 @@ fn plugin_piece(
     detection: &Detection,
     failures: Option<&AgentFailures>,
 ) -> PieceReport {
-    let file = plugin::file(dialect);
+    let file = plugin::of(dialect);
     let location = Some(file.path(&target.home).display().to_string());
     let failure = failures.and_then(|failures| failures.hook.get(adapter.id).cloned());
     let (state, reason) = if !on {
@@ -299,7 +298,7 @@ fn plugin_piece(
             .then(|| {
                 format!(
                     "Hide's {} is still in place; switch the agent on and off again to remove it",
-                    file.noun
+                    file.noun()
                 )
             })
         });
@@ -863,7 +862,7 @@ pub(crate) fn apply(
         let HookSupport::Plugin(dialect) = adapter.hook else {
             continue;
         };
-        let file = plugin::file(dialect);
+        let file = plugin::of(dialect);
         let code = hook_code(adapter);
         if !enabled(record, scope, adapter) {
             if scope.agent_off.contains(adapter.id) {

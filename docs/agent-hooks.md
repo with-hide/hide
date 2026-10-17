@@ -14,7 +14,7 @@ This is the only part of the tree Hide cannot read from the session snapshot, an
 | --- | --- |
 | Claude Code | `~/.claude/settings.json` |
 | Codex | `~/.codex/hooks.json` |
-| OpenCode | `~/.config/opencode/plugins/hide.js` (see [OpenCode: Hide's plugin](#opencode-hides-plugin)) |
+| OpenCode | `~/.config/opencode/plugins/hide.js` and `~/.config/opencode/plugins/hide-opencode/` (see [OpenCode: Hide's plugin](#opencode-hides-plugin)) |
 | Pi | `~/.pi/agent/extensions/hide.ts` (see [Pi and omp: Hide's extension](#pi-and-omp-hides-extension)) |
 | omp | `~/.omp/agent/extensions/hide.ts` (same section) |
 | Grok | `~/.grok/hooks/hide.json`, Hide's own file ([Grok's and Cursor's own hooks](#groks-and-cursors-own-hooks)) |
@@ -400,6 +400,7 @@ The payload each runtime sends, observed on the versions Hide installs into (`hi
 | Cursor 2026.10.14 | `Read` | `Write`, an edit included, and `Delete` (`file_path`) | `Shell` |
 | Grok 1.0.52 | `read_file`, `Read` | `search_replace`, `write`, `Edit`, `Write` | `Bash` |
 | OpenCode 1.18.30 | `read` | `edit`, `write`, `apply_patch`, `multiedit` (`filePath`, `patchText`) | `bash` |
+| OpenCode 2.0.29 | `read` | `edit`, `write`, `patch` (`path`, `patchText`) | `shell` |
 | Pi 1.0.4, omp 18.7.0 | `read` | `edit`, `write` (`path`) | `bash` |
 
 A key another version renames reads as no path, and the call runs.
@@ -411,12 +412,13 @@ A command hook pays one policy read per call and parses the payload only when so
 ## OpenCode: Hide's plugin
 
 OpenCode has no command hook; its official extension point is a JavaScript plugin whose hooks the SDK types (`@opencode-ai/plugin`) declare ([plugins](https://opencode.ai/docs/plugins/)).
-Hide writes one plugin file, `hide.js`, into OpenCode's global plugin folder `~/.config/opencode/plugins/`, beside Herdr's `herdr-agent-state.js`, and nothing else of OpenCode's.
-`hide-agent-hooks/src/opencode.rs` declares it and `hide-agent-hooks/src/plugin.rs`, the owned script file it shares with Pi's and omp's extension, writes, judges and removes it; its source is `hide-agent-hooks/src/opencode/plugin.js` with this build's helper path filled in.
-The first line, `// hide-opencode-plugin@<version> sha256=<hash of the rest>`, proves the file is Hide's, carries its version and shows whether it was edited; the body holds `const HELPER = "<absolute path of this build's hide-agent-hooks>";`.
-OpenCode's configuration folder is never created: with no `~/.config/opencode` the row reads Absent and says OpenCode has not created it yet, and only the `plugins/` folder inside an existing one is made.
+Hide writes into OpenCode's global plugin folder `~/.config/opencode/plugins/`, beside Herdr's `herdr-agent-state.js`, and nothing else of OpenCode's: `hide.js`, the plugin OpenCode 1.x loads, and the folder `hide-opencode/` with `server.js` and `tui.js`, the plugin OpenCode 2 loads ([OpenCode 2](#opencode-2)).
+OpenCode 1.x loads only the files of the folder, so it never sees `hide-opencode/`, and OpenCode 2 loads `hide.js` as a plugin that does nothing.
+`hide-agent-hooks/src/opencode.rs` declares the three files and `hide-agent-hooks/src/plugin.rs`, the owned script files they share with Pi's and omp's extension, writes, judges and removes them together; their sources are `hide-agent-hooks/src/opencode/{plugin,server,tui}.js` with this build's helper path filled in.
+Each file's first line, `// <hide-opencode-plugin|hide-opencode-server|hide-opencode-tui>@<version> sha256=<hash of the rest>`, proves the file is Hide's, carries its version and shows whether it was edited; `hide.js` and `server.js` hold `const HELPER = "<absolute path of this build's hide-agent-hooks>";`, and `tui.js` takes it from `server.js`.
+OpenCode's configuration folder is never created: with no `~/.config/opencode` the row reads Absent and says OpenCode has not created it yet, and only the `plugins/` folder inside an existing one and Hide's `hide-opencode/` inside that are made.
 
-The plugin does nothing outside a pane Hide manages: with no `HERDR_ENV=1`, `HERDR_PANE_ID` and `HERDR_SOCKET_PATH`, or no helper at its path, it registers no hook and starts no process, so OpenCode in an ordinary terminal runs as if the file were not there.
+On OpenCode 1.x the plugin does nothing outside a pane Hide manages: with no `HERDR_ENV=1`, `HERDR_PANE_ID` and `HERDR_SOCKET_PATH`, or no helper at its path, it registers no hook and starts no process, so OpenCode in an ordinary terminal runs as if the file were not there.
 Inside one it uses three hooks, each calling `hide-agent-hooks opencode <start|prompt|confirm|tool|subagents>` with one JSON object on stdin and one answered on stdout; the helper always exits 0 and a failure answers `{}`:
 
 - `chat.message` adds Hide's text to a root session's prompt as one synthetic text part wrapped in `<system-reminder>`: the session guidance (the same text the `SessionStart` hook gives, read once when OpenCode loads the plugin) on the session's first prompt, then Project Memory under Claude Code's rules (the session-start index with the first prompt's cards on the first prompt, the prompt's cards after), then the pane's waiting letters ([docs/delivery.md](delivery.md)).
@@ -434,15 +436,35 @@ Each hook has a budget: 1.85 seconds for a prompt (the Claude Code prompt hook's
 OpenCode waits on a hook without a limit, so the plugin enforces them: past the budget the helper is killed, the prompt goes on unchanged and the tool call runs.
 At most eight helpers run at once; a call skipped at that cap or given up on is counted and passed on the next call, which records it in the private delivery diagnostic (cause `plugin`), since the plugin has no log of its own and a hook's output reaches nobody who could act on it.
 
+### OpenCode 2
+
+OpenCode 2 (2.0.29) refuses a plugin module without a default definition (`{ id, setup }`), and runs its plugins in one shared server that every terminal attached to it talks to, so a plugin there is no pane's: the server carries the environment of whichever terminal started it.
+`hide.js` exports one default definition both versions read: OpenCode 1.x runs its `server`, the plugin above, and OpenCode 2 finds a `setup` that does nothing.
+OpenCode 2 loads `hide-opencode/` as one plugin of two halves, which talk over OpenCode's plugin RPC (`hide.opencode`: the methods `attach`, `detach` and `answer`, and the event `ask`):
+
+- `server.js`, in the server, holds the hooks (the session's `prompt` hook, the tool's `execute.before` and `execute.after`, and OpenCode's event stream) and runs no helper for a pane: it asks the terminal half and waits for the answer within the hook's budget.
+- `tui.js`, in the terminal, carries its pane's environment: it attaches to the root session the terminal shows (the last one it showed; the home screen and a subagent's session keep it), answers each question by running the helper in its pane, and keeps the pane's subagent counts from OpenCode's events as 1.x's `event` does.
+  Outside a pane Hide manages it attaches nothing.
+
+OpenCode 2 runs one instance of the server half per project folder and sends a plugin call to the instance of the folder it names, so the terminal half attaches and answers at the folder of the session (`location`); an answer sent without it would reach no question.
+
+- A root session's prompt asks the terminal attached to it, or any terminal now showing it (the prompt that opens a session reaches the plugin before the terminal's route is read again), and writes the answer, the guidance on the session's first prompt, Memory and the letters due, as one synthetic message (`session.synthetic`) inside `<system-reminder>`, which OpenCode admits ahead of the prompt and the operator's screen leaves out; its letters are confirmed once `session.inbox.delivered` names that message.
+- An attached root's completed tool result asks for the letters due while it works, appends them to the result's content, and confirms them once `session.tool.success` reports the result stored with them; a result stored without them leaves them pending in Hide, as in 1.x.
+- A tool call asks the attached terminal for the spawn guard (a `shell` call whose command mentions `herdr` or `HERDR_BIN_PATH`), the Factory question guard (`question`, asked as its root session's) and, while some project has a protection on, the [project guardrails](#project-guardrails) for `shell`, `read`, `edit`, `write` and `patch` (only `path` and a patch's `*** ` lines); the deny reason is thrown, as in 1.x.
+  With no terminal attached, or one that missed its answer, the server half runs the guardrails alone (`guard_only`), with the pane variables it inherited removed, so a protected project stays protected in `opencode run` and outside Herdr.
+  A terminal that missed an answer is asked no more until it attaches again, which it does every 15 seconds and on each move to another session.
+
+The budgets and the cap of eight running helpers are 1.x's: the server half's wait spends the hook's budget, and the terminal half keeps 150 ms of it for the answer's way back.
+
 No bell rings for OpenCode: on 2026-10-07 its previous-session picker read `done` and a bell's Enter there opened another session, so its letters ride its next prompt instead and are confirmed only once OpenCode stored that prompt ([docs/delivery.md](delivery.md#safe-intake-and-manual-fallback)); while it works they ride a tool result (above).
 Claude Code's hook run inside OpenCode, through an operator plugin that bridges `~/.claude/settings.json`, ends silently (`ForeignOrigin::OpenCode`), so letters and counts are never taken twice.
 
-The kit row reads the plugin as Claude Code's hook part is read: Installed when the file is this build's and unedited; Outdated with the reason when it is another build's, names a helper that is gone, is an older version or was edited; Removed when it was installed and taken out; Off when OpenCode is switched off.
-An older or another build's unedited plugin is replaced by the next pass; an edited one is replaced only by Reinstall, and a switch-off removes only an unedited file that carries Hide's marker.
-A `hide.js` without the marker is not Hide's and is never replaced or removed.
+The kit row reads the plugin as Claude Code's hook part is read: Installed when every file is this build's and unedited; Outdated with the reason when one is another build's, names a helper that is gone, is an older version or was edited; Removed when it was installed and taken out; Off when OpenCode is switched off.
+The three files are judged, written and removed together, so a pass never leaves one version's half beside another's: the row reads as its worst file, an older or another build's unedited plugin is replaced by the next pass (a `hide.js` an earlier build wrote alone gets the `hide-opencode/` folder beside it), an edit in any file keeps all three until Reinstall, and a switch-off removes the unedited files and then `hide-opencode/` unless something else is in it.
+A file without Hide's marker at one of the three paths is not Hide's: it is never replaced or removed, and Hide writes none of the other two beside it.
 The plugin is written on Windows too, where OpenCode runs on Bun as it does elsewhere.
 On a `windows-latest` runner on 2026-10-11, OpenCode 1.18.35 (Bun 1.3.14) loaded a plugin from `%USERPROFILE%\.config\opencode\plugins`, and the plugin's own call, `spawn` of an absolute `.exe` path with no shell, wrote its stdin, read its stdout and killed it with `SIGKILL` there.
-`hide-agent-hooks/tests/it/windows_scripts.rs` runs this build's plugin in Node on Windows against the real helper in a folder whose name has a space, a quote, brackets and a `$`, requires the session guidance to reach the first prompt, and runs a tool result through it: the helper's `letters` ask reaches for the `hide` beside it, records in the home's delivery diagnostics that none is there, and the result goes on unchanged; a letter reaching a result is proved by the Unix fake-host test, since no daemon runs on the runner.
+`hide-agent-hooks/tests/it/windows_scripts.rs` runs this build's plugin, `hide.js` and OpenCode 2's two halves with one terminal, in Node on Windows against the real helper in a folder whose name has a space, a quote, brackets and a `$`, requires the session guidance to reach the first prompt, and runs a tool result through it: the helper's `letters` ask reaches for the `hide` beside it, records in the home's delivery diagnostics that none is there, and the result goes on unchanged; a letter reaching a result is proved by the Unix fake-host test, since no daemon runs on the runner.
 Memory receipts are read back from the OpenCode session's synthetic user parts by the conversation read (`hide-session`, `LabelTranscript.memory_receipts`): the label worker's for a session a live pane holds, the Memory pass's for any other (the same read shaped as a conversation page, where each is a provider-injected event at its message's index), and recorded off the core lock by the one function the Claude and Codex transcripts' go through.
 
 ## Pi and omp: Hide's extension
@@ -894,8 +916,9 @@ The operator's real `~/.claude/settings.json`, `~/.claude.json`, `~/.codex/hooks
 Every test in this crate builds its own `HOME` fixture and asserts against that.
 
 OpenCode's plugin is tested at three layers, none of which runs the operator's OpenCode.
-`hide-agent-hooks/src/opencode/tests.rs` writes, judges and removes the file in a fixture `HOME`, and `tests/it/opencode_helper.rs` runs the built helper beside a stand-in `hide` that records each call.
-`tests/it/opencode_plugin.rs` runs `tests/opencode/plugin.test.mjs` in Node 22, which loads the generated plugin as OpenCode does and calls its hooks with OpenCode 1.18.30's event and hook shapes (`tests/fixtures/opencode/events-1.18.30.json`) against a stand-in helper; the rust lane installs Node for it.
+`hide-agent-hooks/src/plugin/tests.rs` writes, judges and removes the files in a fixture `HOME`, and `tests/it/opencode_helper.rs` runs the built helper beside a stand-in `hide` that records each call.
+`tests/it/opencode_plugin.rs` runs `tests/opencode/plugin.test.mjs` in Node 22, which loads the generated `hide.js` as OpenCode 1.x does and calls its hooks with OpenCode 1.18.30's event and hook shapes (`tests/fixtures/opencode/events-1.18.30.json`) against a stand-in helper; the rust lane installs Node for it.
+It runs `tests/opencode/plugin2.test.mjs` the same way, which loads the generated `hide-opencode/` halves on a stand-in for OpenCode 2.0.29's shared server, with the hook and event shapes a 2.0.29 capture showed: an instance per folder with a call routed by the folder it names, every event to every instance, and terminals in two panes; it checks that each prompt, guard and letter is answered in the pane showing its session, a letter's confirmation once OpenCode delivered or stored it, the guardrails alone with no terminal or a vanished one, and the counts of the pane showing a subagent's root.
 `web/e2e/opencode-plugin.spec.ts` lets the kit write the plugin into a private `HOME`, runs a small OpenCode stand-in (`web/e2e/opencode-host.ts`) that loads it in two panes of the pinned Herdr, reports itself the way Herdr's OpenCode integration does, and checks a letter on the next prompt and its confirmation once stored, the spawn guard's refusal, and the subagent counts Herdr receives.
 
 Pi's and omp's extension is tested at the same three layers, none of which runs the operator's Pi or omp.

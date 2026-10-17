@@ -931,6 +931,28 @@ fn the_scripts_tools_read_as_their_actions() {
         action("read", serde_json::json!({"filePath": ".env"})),
         Some(Action::Read(vec![".env".into()]))
     );
+    // OpenCode 2.0.29.
+    assert_eq!(
+        action(
+            "patch",
+            serde_json::json!({"patchText": "*** Begin Patch\n*** Update File: /r/a.txt\n@@\n-a\n+b\n*** End Patch"})
+        ),
+        Some(Action::Write(vec!["/r/a.txt".into()]))
+    );
+    assert_eq!(
+        action(
+            "edit",
+            serde_json::json!({"path": "/r/a.txt", "oldString": "a", "newString": "b"})
+        ),
+        Some(Action::Write(vec!["/r/a.txt".into()]))
+    );
+    assert_eq!(
+        action(
+            "shell",
+            serde_json::json!({"command": "git push", "workdir": "/r", "timeout": 1000})
+        ),
+        Some(Action::Shell("git push".into()))
+    );
     // Pi 1.0.4 and omp 18.7.0.
     assert_eq!(
         action(

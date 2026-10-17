@@ -172,37 +172,42 @@ fn confirm_confirms_exactly_the_letters_the_plugin_saw_stored() {
 
 #[test]
 fn a_shell_call_that_starts_an_agent_through_herdr_is_refused_with_the_spawn_guards_reason() {
-    let machine = Machine::new();
-    let answer = machine.run(
-        "tool",
-        &json!({"session_id": "ses_root", "tool": "bash",
-                "command": "herdr agent start --kind claude --name helper", "cwd": machine.home}),
-        true,
-    );
-    let reason = answer["deny"].as_str().unwrap();
-    assert!(
-        reason.contains("hide agent spawn --parent here"),
-        "{reason}"
-    );
-    assert!(reason.contains("--kind claude"), "{reason}");
-    assert_eq!(machine.calls(), ["workspace bootstrap"]);
-    let log =
-        std::fs::read_to_string(machine.home.join(".hide/agent-hooks/spawn-guard.log")).unwrap();
-    assert!(log.contains("\"runtime\":\"opencode\""), "{log}");
-    assert!(
-        !log.contains("--name helper"),
-        "the command is never logged"
-    );
+    // OpenCode 1.x's shell tool and 2.x's.
+    for shell in ["bash", "shell"] {
+        let machine = Machine::new();
+        let answer = machine.run(
+            "tool",
+            &json!({"session_id": "ses_root", "tool": shell,
+                    "command": "herdr agent start --kind claude --name helper", "cwd": machine.home}),
+            true,
+        );
+        let reason = answer["deny"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{shell}: {answer}"));
+        assert!(
+            reason.contains("hide agent spawn --parent here"),
+            "{reason}"
+        );
+        assert!(reason.contains("--kind claude"), "{reason}");
+        assert_eq!(machine.calls(), ["workspace bootstrap"]);
+        let log = std::fs::read_to_string(machine.home.join(".hide/agent-hooks/spawn-guard.log"))
+            .unwrap();
+        assert!(log.contains("\"runtime\":\"opencode\""), "{log}");
+        assert!(
+            !log.contains("--name helper"),
+            "the command is never logged"
+        );
 
-    // Any other shell call runs without asking.
-    let machine = Machine::new();
-    let answer = machine.run(
-        "tool",
-        &json!({"session_id": "ses_root", "tool": "bash", "command": "cargo test"}),
-        true,
-    );
-    assert_eq!(answer, json!({}));
-    assert!(machine.calls().is_empty());
+        // Any other shell call runs without asking.
+        let machine = Machine::new();
+        let answer = machine.run(
+            "tool",
+            &json!({"session_id": "ses_root", "tool": shell, "command": "cargo test"}),
+            true,
+        );
+        assert_eq!(answer, json!({}));
+        assert!(machine.calls().is_empty());
+    }
 }
 
 #[test]
@@ -220,20 +225,19 @@ fn a_file_tool_on_a_protected_path_is_refused_for_opencode_pi_and_omp() {
     )
     .unwrap();
     let env = project.join(".env");
-    for (agent, args) in [
-        ("opencode", json!({"filePath": env})),
-        (
-            "opencode",
-            json!({"patchText": format!("*** Begin Patch\n*** Update File: {}\n*** End Patch", env.display())}),
-        ),
-        ("pi", json!({"path": env})),
-        ("omp", json!({"path": env})),
+    let patch = format!(
+        "*** Begin Patch\n*** Update File: {}\n*** End Patch",
+        env.display()
+    );
+    // OpenCode 1.x's file tools, 2.x's, Pi's and omp's.
+    for (agent, tool, args) in [
+        ("opencode", "write", json!({"filePath": env})),
+        ("opencode", "apply_patch", json!({"patchText": patch})),
+        ("opencode", "edit", json!({"path": env})),
+        ("opencode", "patch", json!({"patchText": patch})),
+        ("pi", "write", json!({"path": env})),
+        ("omp", "write", json!({"path": env})),
     ] {
-        let tool = if args.get("patchText").is_some() {
-            "apply_patch"
-        } else {
-            "write"
-        };
         let answer = machine.run_as(
             agent,
             "tool",

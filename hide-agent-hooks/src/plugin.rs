@@ -1,4 +1,4 @@
-//! A script file Hide owns in an agent's own extension folder: OpenCode's
+//! The script files Hide owns in an agent's own extension folder: OpenCode's
 //! plugin (`crate::opencode`), and the one extension Pi and omp share
 //! (`crate::pi_extension`).
 //!
@@ -14,6 +14,11 @@
 //! it was edited by the operator, and stays until Reinstall. Hide never
 //! creates the agent's own folder: the extension folder is made only inside
 //! one the agent (or the operator) already made.
+//!
+//! An agent's plugin can be more than one file (`Plugin`): OpenCode's is its
+//! 1.x file and its 2.x folder's two halves. They are judged, written and
+//! taken out together, so a pass never leaves one version's half beside
+//! another's.
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -44,7 +49,10 @@ pub struct PluginFile {
     pub config: &'static [&'static str],
     /// The folder inside it the agent loads scripts from, which Hide may create.
     pub folder: &'static str,
-    /// The file's name inside that folder.
+    /// Hide's own folder inside that one, for a plugin the agent loads as a
+    /// folder: made with its first file and taken out with its last.
+    pub own_folder: Option<&'static str>,
+    /// The file's name inside its folder.
     pub file_name: &'static str,
     /// The script, with `__HIDE_HELPER__` where the helper's path goes.
     pub template: &'static str,
@@ -52,12 +60,19 @@ pub struct PluginFile {
     pub constants: &'static [(&'static str, &'static str)],
 }
 
-/// The file `dialect` names.
-pub fn file(dialect: PluginDialect) -> &'static PluginFile {
+/// An agent's plugin as the kit keeps it: every file Hide writes for it, the
+/// first the one Settings names.
+#[derive(Debug)]
+pub struct Plugin {
+    pub files: &'static [PluginFile],
+}
+
+/// The plugin `dialect` names.
+pub fn of(dialect: PluginDialect) -> &'static Plugin {
     match dialect {
         PluginDialect::OpenCode => &crate::opencode::PLUGIN,
-        PluginDialect::Pi => &crate::pi_extension::PI,
-        PluginDialect::Omp => &crate::pi_extension::OMP,
+        PluginDialect::Pi => &crate::pi_extension::PI_PLUGIN,
+        PluginDialect::Omp => &crate::pi_extension::OMP_PLUGIN,
     }
 }
 
@@ -83,9 +98,123 @@ pub enum PluginObserved {
     /// Hide's marker over a body that no longer hashes to it: the operator
     /// edited it. A pass leaves it and only Reinstall puts Hide's back.
     Edited,
-    /// A file there that Hide did not write; it is left as it is.
-    Foreign,
+    /// A file there that Hide did not write, by its name inside the agent's
+    /// folder; it is left as it is.
+    Foreign(String),
     Unreadable(String),
+}
+
+impl PluginObserved {
+    /// How much a file's state decides its plugin's: the plugin reads as its
+    /// worst file, so one Hide may not touch holds every file back, an edit
+    /// waits for Reinstall, and an old or missing file is put right by a pass.
+    fn weight(&self) -> u8 {
+        match self {
+            Self::Current => 0,
+            Self::Missing => 1,
+            Self::Stale(_) => 2,
+            Self::Edited => 3,
+            Self::Foreign(_) => 4,
+            Self::Unreadable(_) => 5,
+            Self::ConfigAbsent => 6,
+        }
+    }
+}
+
+impl Plugin {
+    /// The file Settings names: the one the agent's own listing shows.
+    pub fn entry(&self) -> &'static PluginFile {
+        &self.files[0]
+    }
+
+    pub fn agent(&self) -> &'static str {
+        self.entry().agent
+    }
+
+    pub fn noun(&self) -> &'static str {
+        self.entry().noun
+    }
+
+    pub fn config_directory(&self, home: &Path) -> PathBuf {
+        self.entry().config_directory(home)
+    }
+
+    pub fn path(&self, home: &Path) -> PathBuf {
+        self.entry().path(home)
+    }
+
+    /// Judges the plugin by its worst file.
+    pub fn observe(&self, home: &Path, helper: &Path) -> PluginObserved {
+        self.files
+            .iter()
+            .map(|file| file.observe(home, helper))
+            .max_by_key(PluginObserved::weight)
+            .expect("a plugin has a file")
+    }
+
+    /// Writes this build's files once none of them refuses: a file Hide did
+    /// not write anywhere in the plugin leaves every file as it was. True
+    /// when a file changed.
+    pub fn install(&self, home: &Path, helper: &Path) -> Result<bool, String> {
+        for file in self.files {
+            file.refusal(home, &file.observe(home, helper))?;
+        }
+        let mut changed = false;
+        for file in self.files {
+            changed |= file.install(home, helper)?;
+        }
+        Ok(changed)
+    }
+
+    /// Takes Hide's unedited files out, and Hide's own folder once nothing is
+    /// left in it. An edit makes the plugin the operator's, so every file of
+    /// it stays and no half is left without the other; a file Hide did not
+    /// write stays too, and so does the folder that holds it. True when a
+    /// file went.
+    pub fn remove(&self, home: &Path) -> Result<bool, String> {
+        for file in self.files {
+            if file.owner(home)? == Owner::Edited {
+                return Ok(false);
+            }
+        }
+        let mut removed = false;
+        for file in self.files {
+            removed |= file.remove(home)?;
+        }
+        for file in self.files {
+            if let Some(own) = file.own_folder {
+                remove_if_empty(&file.config_directory(home).join(file.folder).join(own))?;
+            }
+        }
+        Ok(removed)
+    }
+}
+
+/// Whose the file at a plugin file's path is, read without judging its
+/// version or helper.
+#[derive(Debug, Eq, PartialEq)]
+enum Owner {
+    Absent,
+    /// Hide's, as Hide wrote it.
+    Hide,
+    /// Hide's marker over a body that no longer hashes to it.
+    Edited,
+    Other,
+}
+
+/// Removes `folder` when it holds nothing.
+fn remove_if_empty(folder: &Path) -> Result<(), String> {
+    match std::fs::read_dir(folder) {
+        Ok(mut entries) => {
+            if entries.next().is_some() {
+                return Ok(());
+            }
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("{} could not be read: {error}", folder.display())),
+    }
+    std::fs::remove_dir(folder)
+        .map_err(|error| format!("{} could not be removed: {error}", folder.display()))
 }
 
 impl PluginFile {
@@ -97,9 +226,18 @@ impl PluginFile {
     }
 
     pub fn path(&self, home: &Path) -> PathBuf {
-        self.config_directory(home)
-            .join(self.folder)
+        let folder = self.config_directory(home).join(self.folder);
+        self.own_folder
+            .map_or(folder.clone(), |own| folder.join(own))
             .join(self.file_name)
+    }
+
+    /// The file's name inside the agent's folder, as a sentence names it.
+    pub fn name(&self) -> String {
+        self.own_folder.map_or_else(
+            || self.file_name.to_owned(),
+            |own| format!("{own}/{}", self.file_name),
+        )
     }
 
     fn body(&self, helper: &Path) -> String {
@@ -136,7 +274,7 @@ impl PluginFile {
     }
 
     /// Judges the file against the one `helper` would be named in.
-    pub fn observe(&self, home: &Path, helper: &Path) -> PluginObserved {
+    fn observe(&self, home: &Path, helper: &Path) -> PluginObserved {
         if !self.config_directory(home).is_dir() {
             return PluginObserved::ConfigAbsent;
         }
@@ -153,7 +291,7 @@ impl PluginFile {
         };
         let (first, body) = text.split_once('\n').unwrap_or((text.as_str(), ""));
         let Some((version, hash)) = self.marker(first) else {
-            return PluginObserved::Foreign;
+            return PluginObserved::Foreign(self.name());
         };
         if !digest(body).eq_ignore_ascii_case(hash) {
             return PluginObserved::Edited;
@@ -178,35 +316,48 @@ impl PluginFile {
         })
     }
 
+    /// Why the file may not be written over what is there, if it may not.
+    fn refusal(&self, home: &Path, observed: &PluginObserved) -> Result<(), String> {
+        match observed {
+            PluginObserved::ConfigAbsent => Err(format!(
+                "{} does not exist; the {} is put in once {} has made it",
+                self.config_directory(home).display(),
+                self.noun,
+                self.agent
+            )),
+            PluginObserved::Foreign(_) => Err(format!(
+                "{} is a file Hide did not write; Hide left it alone",
+                self.path(home).display()
+            )),
+            PluginObserved::Unreadable(reason) => Err(reason.clone()),
+            PluginObserved::Current
+            | PluginObserved::Missing
+            | PluginObserved::Stale(_)
+            | PluginObserved::Edited => Ok(()),
+        }
+    }
+
     /// Writes this build's file. A file Hide did not write is never replaced,
     /// and the agent's own folder is never created. Writing the same bytes
     /// twice writes nothing; true when the file changed.
-    pub fn install(&self, home: &Path, helper: &Path) -> Result<bool, String> {
+    fn install(&self, home: &Path, helper: &Path) -> Result<bool, String> {
         let path = self.path(home);
-        match self.observe(home, helper) {
-            PluginObserved::Current => return Ok(false),
-            PluginObserved::ConfigAbsent => {
-                return Err(format!(
-                    "{} does not exist; the {} is put in once {} has made it",
-                    self.config_directory(home).display(),
-                    self.noun,
-                    self.agent
-                ));
-            }
-            PluginObserved::Foreign => {
-                return Err(format!(
-                    "{} is a file Hide did not write; Hide left it alone",
-                    path.display()
-                ));
-            }
-            PluginObserved::Unreadable(reason) => return Err(reason),
-            PluginObserved::Missing | PluginObserved::Stale(_) | PluginObserved::Edited => {}
+        let observed = self.observe(home, helper);
+        self.refusal(home, &observed)?;
+        if observed == PluginObserved::Current {
+            return Ok(false);
         }
-        let folder = path.parent().expect("the file has a folder");
-        match std::fs::create_dir(folder) {
-            Ok(()) => {}
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(format!("{} could not be made: {error}", folder.display())),
+        let folder = self.config_directory(home).join(self.folder);
+        for folder in
+            std::iter::once(folder.clone()).chain(self.own_folder.map(|own| folder.join(own)))
+        {
+            match std::fs::create_dir(&folder) {
+                Ok(()) => {}
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    return Err(format!("{} could not be made: {error}", folder.display()));
+                }
+            }
         }
         hide_platform::fs::atomic::write_file(
             &path,
@@ -217,21 +368,29 @@ impl PluginFile {
         .map_err(|error| format!("{} could not be written: {error}", path.display()))
     }
 
-    /// Takes Hide's unedited file out; an edited one carries the operator's
-    /// changes and stays, as does a file Hide did not write. True when a file
-    /// went.
-    pub fn remove(&self, home: &Path) -> Result<bool, String> {
+    fn owner(&self, home: &Path) -> Result<Owner, String> {
         let path = self.path(home);
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Owner::Absent),
             Err(error) => return Err(format!("{} could not be read: {error}", path.display())),
         };
         let (first, body) = text.split_once('\n').unwrap_or((text.as_str(), ""));
-        match self.marker(first) {
-            Some((_, hash)) if digest(body).eq_ignore_ascii_case(hash) => {}
-            _ => return Ok(false),
+        Ok(match self.marker(first) {
+            Some((_, hash)) if digest(body).eq_ignore_ascii_case(hash) => Owner::Hide,
+            Some(_) => Owner::Edited,
+            None => Owner::Other,
+        })
+    }
+
+    /// Takes Hide's unedited file out; an edited one carries the operator's
+    /// changes and stays, as does a file Hide did not write. True when a file
+    /// went.
+    fn remove(&self, home: &Path) -> Result<bool, String> {
+        if self.owner(home)? != Owner::Hide {
+            return Ok(false);
         }
+        let path = self.path(home);
         std::fs::remove_file(&path)
             .map(|()| true)
             .map_err(|error| format!("{} could not be removed: {error}", path.display()))

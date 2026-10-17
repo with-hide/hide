@@ -1,16 +1,16 @@
-// Hide's OpenCode plugin and its Pi and omp extension as this build writes
-// them, loaded on Windows the way each host loads them and run against the
-// real helper, so the path the file names, the spawn with no shell, stdin and
-// stdout all cross Windows as they will on an operator's machine.
+// Hide's OpenCode plugin (the 1.x file, and OpenCode 2's server and terminal halves) and its Pi and omp extension
+// as this build writes them, loaded on Windows the way each host loads them and run against the real helper, so the
+// path the file names, the spawn with no shell, stdin and stdout all cross Windows as they will on an operator's
+// machine.
 //
-// `tests/it/windows_scripts.rs` writes the file and runs this once per agent
-// with HIDE_SCRIPT and HIDE_SCRIPT_AGENT set; it prints one JSON line for the
+// `tests/it/windows_scripts.rs` writes the file (for OpenCode 2 its folder, HIDE_SCRIPT naming the server half) and
+// runs this once per agent with HIDE_SCRIPT and HIDE_SCRIPT_AGENT set; it prints one JSON line for the
 // test to read: the texts the script added to its session's prompts, and the
 // tool result it answered while the session worked, which asks the helper for
 // the letters due and goes on unchanged when the ask brings none.
 
 import { readFileSync } from "node:fs";
-import { win32 } from "node:path";
+import path, { win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const AGENT = process.env.HIDE_SCRIPT_AGENT;
@@ -32,7 +32,7 @@ async function opencode() {
       status: async () => ({ data: {} }),
     },
   };
-  const hooks = await module.HidePlugin({ client, directory: process.cwd() });
+  const hooks = await module.default.server({ client, directory: process.cwd() });
   await hooks.event({ event: sample("session.created") });
   const added = [];
   for (let attempt = 0; attempt < PROMPTS; attempt += 1) {
@@ -45,6 +45,88 @@ async function opencode() {
   await hooks["tool.execute.after"]({ tool: "bash", sessionID: root.id, callID: "call_1" }, result);
   await hooks.dispose();
   return { prompts: added, tool_result: result.output };
+}
+
+/** OpenCode 2's shared server with the server half's one instance, and one terminal showing the session. */
+async function opencode2() {
+  const { default: tui } = await import(pathToFileURL(path.join(path.dirname(process.env.HIDE_SCRIPT), "tui.js")).href);
+  const location = { directory: process.cwd() };
+  const session = { id: "ses_root", location };
+  const asks = new Set();
+  const hooks = {};
+  const synthetic = [];
+  let handlers;
+  const closeServer = await module.default.setup({
+    location,
+    rpc: {
+      register: async (definition, registered) => {
+        handlers = registered;
+        return {
+          events: {
+            emit: async (name, data) => {
+              for (const listener of asks) void listener({ type: `rpc.${definition.id}.${name}`, data, location });
+            },
+          },
+        };
+      },
+    },
+    session: {
+      hook: async (name, hook) => {
+        hooks[name] = hook;
+      },
+      synthetic: async (input) => {
+        synthetic.push(input.text);
+        return { id: `inb_${synthetic.length}`, sessionID: input.sessionID, type: "synthetic" };
+      },
+      get: async ({ sessionID }) => (sessionID === session.id ? session : undefined),
+    },
+    tool: {
+      hook: async (name, hook) => {
+        hooks[`tool.${name}`] = hook;
+      },
+    },
+    event: {
+      subscribe: ({ signal }) =>
+        (async function* () {
+          await new Promise((resolve) => signal.addEventListener("abort", resolve));
+        })(),
+    },
+  });
+  const closeTerminal = tui.setup({
+    client: {
+      rpc: () => ({
+        attach: async (input) => handlers.attach(input),
+        detach: async (input) => handlers.detach(input),
+        answer: async (input) => handlers.answer(input),
+        events: {
+          on: (name, handler) => {
+            asks.add(handler);
+            return () => asks.delete(handler);
+          },
+        },
+      }),
+    },
+    ui: { router: { current: () => ({ type: "session", sessionID: session.id }) } },
+    data: {
+      session: { get: (id) => (id === session.id ? session : undefined), root: (id) => id, status: () => "idle" },
+      listen: () => () => {},
+    },
+  });
+  for (let attempt = 0; attempt < PROMPTS; attempt += 1) {
+    await hooks.prompt({ sessionID: session.id, messageID: "msg_1", prompt: { text: "fix the bug", files: [] }, metadata: {}, delivery: "queue" });
+    await sleep(1000);
+  }
+  const event = {
+    tool: "shell",
+    sessionID: session.id,
+    id: "call_1",
+    status: "completed",
+    result: { output: "RESULT", content: [{ type: "text", text: "RESULT" }], metadata: {} },
+  };
+  await hooks["tool.execute.after"](event);
+  closeTerminal?.();
+  closeServer?.();
+  return { prompts: synthetic, tool_result: event.result.content.map((item) => item.text).join("") };
 }
 
 async function extension() {
@@ -88,6 +170,6 @@ async function extension() {
   return { prompts: added, tool_result: result === undefined ? tool.content[0].text : JSON.stringify(result) };
 }
 
-const answered = AGENT === "opencode" ? await opencode() : await extension();
+const answered = AGENT === "opencode" ? await opencode() : AGENT === "opencode2" ? await opencode2() : await extension();
 // A helper call the script gave up on may still be closing; the answer is complete without it.
 process.stdout.write(`${JSON.stringify(answered)}\n`, () => process.exit(0));
