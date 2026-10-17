@@ -283,6 +283,25 @@ def failed_test(path, line, name, error="boom"):
     return {"title": "Failed test", "path": path, "start_line": line, "message": f"{name}\n{error}"}
 
 
+# A failed job's log as the runner writes it (run 38958746826, macOS agy job):
+# every step echoes its command in color, and a test may print any byte (an
+# OSC title, a NUL, a byte that is not UTF-8).
+JOB_LOG = (
+    b"2026-10-16T20:25:19.3493170Z ##[group]Run bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS\n"
+    b"2026-10-16T20:25:19.3494430Z \x1b[36;1mbash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS\x1b[0m\n"
+    b"2026-10-16T20:25:19.3655790Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}\n"
+    b"2026-10-16T20:25:19.3656820Z ##[endgroup]\n"
+    b"2026-10-16T20:29:27.0950000Z \x1b]0;unterminated title\n"
+    b"2026-10-16T20:29:27.0960000Z Compiling a\rCompiling b\x7f\xc2\x9b31m\x1bPq#0;2\x1b\\\n"
+    b"2026-10-16T20:29:28.0947990Z      Summary [ 248.007s] 2 tests run: 1 passed, 1 failed, 105 skipped\n"
+    b"2026-10-16T20:29:28.0948760Z   TRY 2 FAIL [ 105.471s] (1/2) hide-agent-hooks::it agy_binary::a_signed_in_agy_turn_fires_hide_s_hooks\n"
+    b"2026-10-16T20:29:28.1043050Z \x1b]0;agy\x07error: test run failed \xff\x00\r\n"
+    b"2026-10-16T20:29:28.1255500Z ##[error]Process completed with exit code 100.\n"
+    b"2026-10-16T20:29:28.1471320Z Post job cleanup.\n"
+)
+CONTROL_CHARACTER = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
 class FakeGitHub:
     """GitHub's REST answers for one nightly run; every write is recorded, none is sent."""
 
@@ -469,6 +488,22 @@ class NightlyFailures(unittest.TestCase):
         self.assertNotIn("later", issue["body"])
         self.assertEqual(issue["labels"], ["nightly-failure"])
 
+    def test_an_excerpt_carries_no_terminal_control_from_a_log_or_an_annotation(self):
+        # gh hands a JSON body over with its controls in caret notation, but a lane
+        # writes its annotations from its tool's own report, which carries them raw.
+        github = FakeGitHub(
+            [job(1, "agy contract / agy signed in (macos)", "failure", [("The real agy runs one turn", "failure")]),
+             job(2, PACKAGE, "failure")],
+            logs={1: JOB_LOG.decode("utf-8", "replace")},
+            annotations={2: [failed_test("desktop/e2e/s.spec.ts", 29, "server picker", "\x1b[31mExpected\x1b[0m \x1b]8;;x\x07a\x1b]8;;\x07\x00")]},
+        )
+        opened = nightly(github).opened()
+        self.assertEqual(len(opened), 2)
+        for issue in opened:
+            self.assertIsNone(CONTROL_CHARACTER.search(issue["body"]), issue["body"])
+        self.assertIn("error: test run failed \ufffd\n##[error]Process completed with exit code 100.", opened[0]["body"])
+        self.assertIn("Expected a", opened[1]["body"])
+
     def test_a_failure_while_preparing_the_runner_is_infra(self):
         cases = (("Fetch the pinned Herdr runtime", True), ("Run actions/checkout@v7", True), ("Install dependencies", True),
                  ("Build the desktop app's daemon and kit binaries", False), ("Desktop suite", False))
@@ -563,6 +598,58 @@ class Gh(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stdout.strip(), ascii([{"title": "탭"}]))
 
+
+    def test_a_job_log_is_read_whatever_bytes_it_carries(self):
+        # gh 2.97 and later refuse a raw body carrying a terminal escape unless told
+        # --allow-escape-sequences, and every job log carries one: the nightly report of
+        # run 38958746826 died on it and filed nothing. The stand-in answers as such a gh.
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "log").write_bytes(JOB_LOG)
+            fake = Path(tmp) / "gh"
+            fake.write_text(
+                '#!/bin/sh\ncase " $* " in\n'
+                '  " --version ") echo "gh version 2.97.0 (2026-07-31)" ;;\n'
+                '  *" --allow-escape-sequences "*) cat "$(dirname "$0")/log" ;;\n'
+                '  *) echo "the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway" >&2; exit 1 ;;\n'
+                'esac\n'
+            )
+            fake.chmod(0o755)
+            self.use_gh(tmp)
+            text = r.gh(["repos/o/r/actions/jobs/117168142601/logs"], raw=True)
+        self.assertIsNone(CONTROL_CHARACTER.search(text), repr(text))
+        self.assertIn("Z bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS\n", text)
+        # An unterminated string ends with its line, and a carriage return breaks one.
+        self.assertIn("0950000Z \n2026-10-16T20:29:27.0960000Z Compiling a\nCompiling b\n", text)
+        self.assertTrue(r.log_excerpt(text).endswith(
+            "TRY 2 FAIL [ 105.471s] (1/2) hide-agent-hooks::it agy_binary::a_signed_in_agy_turn_fires_hide_s_hooks\n"
+            "error: test run failed \ufffd\n##[error]Process completed with exit code 100."))
+
+    def test_a_gh_too_old_to_read_a_job_log_is_refused_before_it_is_asked_for_one(self):
+        # gh 2.76.2 does not know --allow-escape-sequences: asked for a log, it answers
+        # `unknown flag` and its usage, which says nothing of the version the report needs.
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "gh"
+            fake.write_text(
+                '#!/bin/sh\necho "$*" >> "$(dirname "$0")/asked"\ncase "$1" in\n'
+                '  --version) printf "gh version 2.76.2 (2025-07-30)\\nhttps://github.com/cli/cli/releases/tag/v2.76.2\\n" ;;\n'
+                '  *) echo "unknown flag: --allow-escape-sequences" >&2; exit 1 ;;\n'
+                'esac\n'
+            )
+            fake.chmod(0o755)
+            self.use_gh(tmp)
+            with self.assertRaises(RuntimeError) as refused:
+                r.gh(["repos/o/r/actions/jobs/117168142601/logs"], raw=True)
+            asked = (Path(tmp) / "asked").read_text()
+        self.assertEqual(str(refused.exception), "needs gh 2.97 or newer to read job logs (found 2.76.2); upgrade gh")
+        self.assertEqual(asked, "--version\n")
+
+    def use_gh(self, folder):
+        """Put the stand-in `gh` in `folder` first on PATH and forget the version read from another."""
+        saved = os.environ["PATH"]
+        os.environ["PATH"] = f"{folder}{os.pathsep}{saved}"
+        self.addCleanup(os.environ.__setitem__, "PATH", saved)
+        r.gh_reads_logs.cache_clear()
+        self.addCleanup(r.gh_reads_logs.cache_clear)
 
     def test_a_test_name_outside_the_runner_code_page_is_filed_and_printed(self):
         # A Windows runner writes stdout as cp1252; the ⌘ in a test name raised

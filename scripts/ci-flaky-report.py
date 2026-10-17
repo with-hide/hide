@@ -43,12 +43,14 @@ It talks to GitHub through `gh` (GH_TOKEN, GITHUB_REPOSITORY and the run's
 GITHUB_* variables come from Actions). A lane's step needs `issues: write` and
 must not fail the lane: the flaky run already passed, and the report is a
 notice, so a GitHub error costs one missed issue the next flaky run files. The
-report job needs `actions: read`, `checks: read`, `pull-requests: read` and
+nightly report reads job logs, which needs gh 2.97 or newer, and refuses an
+older gh before the first log read. The report job needs `actions: read`, `checks: read`, `pull-requests: read` and
 `issues: write`, and fails when GitHub does, so a failure it could not file is
 a red job rather than a silence.
 """
 import argparse
 from datetime import date, timedelta
+import functools
 import json
 import os
 from pathlib import Path
@@ -62,7 +64,18 @@ EXPIRY_DAYS = 7
 # A run with more flaky tests than this is a broken environment, not flakiness;
 # the rest are counted in the log, not filed.
 MAX_PER_RUN = 20
-ANSI = re.compile(r"\x1b\[[0-9;]*m")
+# The oldest gh that hands over a job log: `gh_reads_logs`.
+GH_FOR_LOGS = (2, 97)
+# Terminal control in text read from a job log or bound for a public page:
+# ECMA-48 escape sequences (CSI, such as the color the runner puts around each
+# step's command in every job log; the OSC, DCS, SOS, PM and APC strings, each
+# to its terminator or the end of its line; and the shorter forms) and every
+# other C0 and C1 control but tab and newline. A carriage return ends a line
+# (`plain`), as a terminal shows it.
+CONTROL = re.compile(
+    r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|\x1b(?:[\]PX^_][^\x07\x1b\n]*(?:\x07|\x1b\\)?|[ -/]*[0-~])?"
+    r"|[\x00-\x08\x0b-\x1f\x7f-\x9f]"
+)
 # Hand-written issues quote a title cut short ("Agent tabs shrink in stages...").
 MATCH_PREFIX = 20
 # A home folder in a quoted path names the account that ran it; an excerpt
@@ -180,8 +193,13 @@ def nextest_failed(root):
     return found
 
 
+def plain(text):
+    """`text` with its line breaks as newlines and no terminal control."""
+    return CONTROL.sub("", re.sub(r"\r\n?", "\n", text))
+
+
 def clean(text):
-    text = HOME.sub(r"\1~", ANSI.sub("", text))
+    text = HOME.sub(r"\1~", plain(text))
     return TOKEN.sub("***", text).strip()[:600] or "(no message)"
 
 
@@ -255,19 +273,49 @@ def comment(test, system, facts, expired):
     )
 
 
+@functools.cache
+def gh_reads_logs():
+    """Refuse a gh too old to read a job log, before the first one is read.
+
+    gh 2.97 and later refuse a raw body that carries a terminal escape, as every
+    job log does, unless told `--allow-escape-sequences`, which an older gh does
+    not know: it would answer `unknown flag` and print its usage.
+    """
+    try:
+        done = subprocess.run(["gh", "--version"], capture_output=True)
+    except OSError as error:
+        raise RuntimeError(f"gh could not run: {error}") from error
+    said = done.stdout.decode("utf-8", "replace")
+    version = re.match(r"gh version ((\d+)\.(\d+)\S*)", said)
+    if done.returncode or not version:
+        raise RuntimeError(f"gh --version did not say a version: {(said or done.stderr.decode('utf-8', 'replace')).strip()}")
+    if (int(version[2]), int(version[3])) < GH_FOR_LOGS:
+        raise RuntimeError(
+            f"needs gh {'.'.join(map(str, GH_FOR_LOGS))} or newer to read job logs (found {version[1]}); upgrade gh"
+        )
+
+
 def gh(args, body=None, raw=False):
+    """`gh api`'s JSON answer, or with `raw` a body's text with its terminal control removed.
+
+    A raw body, such as a job log, is the bytes the job wrote, terminal escapes
+    and all (`gh_reads_logs`), and a job may have written bytes that are not UTF-8.
+    """
+    if raw:
+        gh_reads_logs()
     try:
         done = subprocess.run(
-            # gh speaks UTF-8; without a named encoding a Windows runner reads it as cp1252.
-            ["gh", "api", *args], input=None if body is None else json.dumps(body), capture_output=True, encoding="utf-8",
+            ["gh", "api", *(["--allow-escape-sequences"] if raw else []), *args],
+            input=None if body is None else json.dumps(body).encode("utf-8"), capture_output=True,
         )
     except OSError as error:
         raise RuntimeError(f"gh could not run: {error}") from error
+    # gh speaks UTF-8; a named encoding keeps a Windows runner from reading it as cp1252.
     if done.returncode:
-        raise RuntimeError(f"gh api {' '.join(args)}: {done.stderr.strip()}")
+        raise RuntimeError(f"gh api {' '.join(args)}: {done.stderr.decode('utf-8', 'replace').strip()}")
     if raw:
-        return done.stdout
-    return json.loads(done.stdout) if done.stdout.strip() else None
+        return plain(done.stdout.decode("utf-8", "replace"))
+    return json.loads(done.stdout.decode("utf-8")) if done.stdout.strip() else None
 
 
 def open_issues(repo, call=gh):
@@ -706,7 +754,7 @@ def main(argv=None):
     source.add_argument("--junit", type=Path, nargs="+", help="cargo-nextest JUnit reports (a lane writes one per nextest run)")
     source.add_argument("--measurement", type=Path, help="a performance lane's record, whose failures are annotated")
     parser.add_argument("--system", default=os.environ.get("RUNNER_OS", "unknown"))
-    parser.add_argument("--nightly", action="store_true", help="the nightly report job: file, comment on and close nightly-failure issues")
+    parser.add_argument("--nightly", action="store_true", help="the nightly report job: file, comment on and close nightly-failure issues (needs gh 2.97 or newer)")
     parser.add_argument("--repo", help="OWNER/REPO (default: GITHUB_REPOSITORY)")
     parser.add_argument("--run", help="the nightly run to report (default: this run)")
     parser.add_argument("--attempt", help="its attempt (default: this attempt, or the run's latest)")
@@ -714,7 +762,12 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true", help="print what the nightly report would write, and write nothing")
     args = parser.parse_args(argv)
     if args.nightly:
-        return nightly(args, os.environ)
+        try:
+            return nightly(args, os.environ)
+        except RuntimeError as error:
+            # A GitHub or gh failure is the job's red, said in one line.
+            print(f"nightly report: {error}", file=sys.stderr)
+            return 1
     if args.measurement:
         return measurement(args.measurement)
     if not args.suite or not (args.playwright or args.junit):
