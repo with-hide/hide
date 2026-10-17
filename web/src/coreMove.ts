@@ -35,6 +35,7 @@ export type CheckId =
   | "sleep"
   | "build"
   | "ai"
+  | "ai_setup"
   | "dormant";
 
 export type MoveStep = "check" | "stop_core" | "copy" | "start_target" | "reattach";
@@ -129,6 +130,15 @@ export function checkCommand(check: CheckId): string | null {
 
 /** The machines a move names: the one whose core stops and the one that takes it. */
 export type MoveMachines = { from: string; to: string };
+
+/**
+ * The machine a failing check is about: Hide AI's own setting is the moving
+ * core's, so its row names the machine whose core stops; every other check is
+ * about the machine taking the core.
+ */
+export function checkMachine(check: CheckId, machines: MoveMachines): string {
+  return check === "ai_setup" ? machines.from : machines.to;
+}
 
 /** The interpolation values a move's copy takes. */
 export type MoveCopy = { from: string; to: string };

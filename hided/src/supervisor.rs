@@ -702,11 +702,13 @@ async fn prepare(
             detail: "this machine has no Herdr server".to_owned(),
         });
     }
+    // This machine's own setting, which moves with the core: not a login
+    // of the machine taking it.
     let asks = match herdr_core::hide_ai_asks(&env.home) {
         Ok(asks) => asks,
         Err(detail) => {
             failed.push(FailedCheck {
-                check: CheckId::Ai,
+                check: CheckId::AiSetup,
                 detail,
             });
             Vec::new()

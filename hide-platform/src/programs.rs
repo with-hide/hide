@@ -1,5 +1,6 @@
-//! Where the programs an agent runs are looked for, and the one lookup every
-//! crate uses to say whether an agent's CLI is installed.
+//! Where the programs an agent runs are looked for, the one lookup every
+//! crate uses to say whether an agent's CLI is installed, and the command a
+//! node starts any program it names by ([`command`]).
 //!
 //! The search is the folders the account's login shell puts on its `PATH`,
 //! then this process's own `PATH`, then the folders installers put a CLI in
@@ -21,6 +22,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
@@ -228,6 +230,34 @@ pub fn account_path() -> Option<OsString> {
 /// The program `name` on [`account_path`].
 pub fn find_cli(name: &str) -> Option<PathBuf> {
     host::find_program(&account_path()?, name)
+}
+
+/// A command that runs `program` the way the account's own terminal would:
+/// a bare name is found on [`account_path`], and the program is run with
+/// that `PATH`, so what it starts by name in turn (git's hooks, filters and
+/// credential helpers, a script's interpreter, a check's tools) is found the
+/// same way. A daemon an SSH exec or a login item started has the system's
+/// folders alone on its own `PATH`, which miss what the account installed.
+/// Every program a node starts by name is started this way.
+pub fn command(program: impl AsRef<Path>) -> Command {
+    command_on(account_path().as_deref(), program)
+}
+
+/// [`command`] with `search` as the `PATH` `program` is found on and run
+/// with. A path is run as given, with the same `PATH`; a name found nowhere
+/// is left as named, so its start fails as not found. `None` (no home to
+/// search from) leaves both to this process's own `PATH`.
+pub fn command_on(search: Option<&OsStr>, program: impl AsRef<Path>) -> Command {
+    let named = program.as_ref();
+    let Some(search) = search else {
+        return Command::new(named);
+    };
+    let found = (named.components().count() == 1)
+        .then(|| host::find_program(search, named.to_str()?))
+        .flatten();
+    let mut command = Command::new(found.as_deref().unwrap_or(named));
+    command.env("PATH", search);
+    command
 }
 
 /// [`find_cli`] for a given home and login shell.

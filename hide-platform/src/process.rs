@@ -29,6 +29,8 @@
 //!   memory, reading the kernel's tables and forking nothing.
 //! - [`run_to_end`] answers a child's exit code and capped output, or ends the
 //!   child's whole tree when its deadline passes or the caller stops waiting.
+//! - [`set_output_aside`] keeps this process's own output, when the system
+//!   appends it to a file, to that file and the one set aside before it.
 //! - A pid that names no process a caller may signal (0 and 1) is refused with
 //!   `InvalidInput` by every function that ends a process, so a damaged pid
 //!   file cannot reach the caller's own group or the init process.
@@ -38,7 +40,7 @@
 //! group to signal, no polite termination, and no identity of its image file.
 
 use std::io::{self, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus};
 use std::time::{Duration, Instant};
 
@@ -1048,6 +1050,22 @@ pub fn descendants(root: u32) -> io::Result<Vec<u32>> {
         level = next;
     }
     Ok(found)
+}
+
+/// Sets this process's own output aside once it has grown past `limit`
+/// bytes: when its standard error is the file at `log`, as a login agent's
+/// is when the system appends the agent's output there, that file is renamed
+/// to `aside`, replacing the one before, and standard error, and standard
+/// output where it went to the same file, go on in a new private file at
+/// `log`. Answers whether it did. Output that is not that file (a terminal, a
+/// pipe, another file) is left alone, whatever `log` holds.
+///
+/// The system opens the file once, when it starts the process, so a rename
+/// alone would leave this process writing on under the new name; asked again
+/// and again while the process runs, this keeps it to two files. `Unsupported`
+/// on Windows, which starts no login agent with its output appended to a file.
+pub fn set_output_aside(log: &Path, aside: &Path, limit: u64) -> io::Result<bool> {
+    sys::set_output_aside(log, aside, limit)
 }
 
 #[cfg(unix)]
@@ -2198,6 +2216,47 @@ mod sys {
         Ok(pages.saturating_mul(u64::try_from(page).unwrap_or(4096)))
     }
 
+    pub(super) fn set_output_aside(log: &Path, aside: &Path, limit: u64) -> io::Result<bool> {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        use crate::fs::identity::{file_id, file_id_of};
+
+        let error_output = crate::fs::duplicate(&io::stderr())?;
+        let written = error_output.metadata()?;
+        if !written.is_file() || written.len() <= limit {
+            return Ok(false);
+        }
+        let at_log = match file_id(log) {
+            Ok(id) => id,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        if file_id_of(&error_output)? != at_log {
+            return Ok(false);
+        }
+        let output_too = file_id_of(&io::stdout()).is_ok_and(|id| id == at_log);
+        std::fs::rename(log, aside)?;
+        let fresh = std::fs::OpenOptions::new()
+            .append(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(log)?;
+        let mut onto = vec![libc::STDERR_FILENO];
+        if output_too {
+            onto.push(libc::STDOUT_FILENO);
+        }
+        for descriptor in onto {
+            // SAFETY: `fresh` is open for the call, and `descriptor` is a
+            // standard stream this process holds; `dup2` replaces it in one
+            // step, so a write from another thread goes to one file or the
+            // other.
+            if unsafe { libc::dup2(fresh.as_raw_fd(), descriptor) } < 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok(true)
+    }
+
     /// Every pid `/proc` lists now.
     #[cfg(target_os = "linux")]
     pub(super) fn all_pids() -> io::Result<Vec<u32>> {
@@ -2818,6 +2877,13 @@ mod sys {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "Windows names a process's image by the path it started from, not by its file",
+        ))
+    }
+
+    pub(super) fn set_output_aside(_: &Path, _: &Path, _: u64) -> io::Result<bool> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Windows starts no login agent with its output appended to a file",
         ))
     }
 

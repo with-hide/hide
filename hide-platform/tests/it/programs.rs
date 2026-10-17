@@ -70,6 +70,53 @@ fn a_program_in_an_install_folder_the_daemons_path_misses_is_found() {
     );
 }
 
+/// A program only the login shell's `PATH` reaches is started, and with that
+/// `PATH`: a script it is finds what it starts by name (its interpreter, a
+/// hook) where the account installed it, as a daemon whose own `PATH` is the
+/// system's folders could not.
+#[test]
+fn a_command_runs_what_the_login_shell_finds_with_the_path_it_was_found_on() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let installed = root.path().join("installer-bin");
+    fs::create_dir_all(&installed).unwrap();
+    crate::stand_ins::program(
+        &installed.join("hide-fixture-helper"),
+        "#!/bin/sh\necho helper ran\n",
+    );
+    crate::stand_ins::program(
+        &installed.join("hide-fixture-tool"),
+        "#!/bin/sh\nexec hide-fixture-helper\n",
+    );
+    let shell = shell_adding_installer_bin(root.path());
+    let search = programs::search_path(&home, Some(&shell), &AtomicBool::new(false));
+
+    let output = programs::command_on(search.as_deref(), "hide-fixture-tool")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "helper ran\n");
+
+    // A program named by its path runs as given, with the same `PATH`.
+    let output = programs::command_on(search.as_deref(), installed.join("hide-fixture-tool"))
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "helper ran\n");
+}
+
+/// A program the search does not reach fails to start as not found, the
+/// answer a caller reads as not installed.
+#[test]
+fn a_command_for_a_program_found_nowhere_fails_to_start_as_not_found() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let search = programs::search_path(&home, None, &AtomicBool::new(false));
+    let error = programs::command_on(search.as_deref(), "hide-fixture-absent")
+        .output()
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+}
+
 /// A stand-in login shell that records each time it is started, one line per
 /// start in `starts` beside the home it is asked for.
 fn counting_shell(folder: &Path) -> PathBuf {

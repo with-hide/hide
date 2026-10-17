@@ -546,8 +546,8 @@ fn a_failing_check_changes_nothing() -> Result<()> {
         fixture.event("core_move", json!({"action": "start", "device": DEVICE_ID}))?;
         let failed = fixture.logged(&fixture.source, "checks.failed")?;
         ensure!(failed["checks"] == json!(["target_state"]), "{failed}");
-        // Every check ran, so the window counts the ten that passed.
-        ensure!(failed["checked"] == 11, "{failed}");
+        // Every check ran, so the window counts the eleven that passed.
+        ensure!(failed["checked"] == 12, "{failed}");
         let detail = failed["failed"][0]["detail"].as_str().unwrap_or_default();
         ensure!(
             detail.contains("core-state.json") && detail.contains("Hide AI settings"),
@@ -2574,6 +2574,7 @@ fn a_pending_core_does_nothing_outside_until_its_link_commits() -> Result<()> {
             home: home.clone(),
             herdr_socket_path: None,
             herdr_bin_path: None,
+            login_shell: None,
             state_dir: state.clone(),
             legacy_state_dir: None,
             account_state_folder: false,

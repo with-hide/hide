@@ -92,7 +92,8 @@ impl Programs {
     }
 }
 
-/// Where this machine's Herdr is, as its daemon resolves it.
+/// Where this machine's Herdr is, as its daemon resolves it
+/// (`Env::herdr_program`).
 pub struct Herdr<'a> {
     pub bin: Option<&'a Path>,
     pub socket: Option<&'a str>,
@@ -312,7 +313,7 @@ fn run(
 fn herdr_running(home: &Path, herdr: &Herdr<'_>, stop: &AtomicBool) -> Result<(), String> {
     let bin = herdr
         .bin
-        .ok_or("no herdr on this machine: neither HERDR_BIN_PATH nor PATH names one")?;
+        .ok_or("no herdr on this machine: HERDR_BIN_PATH names none, this build brought none, and the account's search finds none")?;
     let mut command = Command::new(bin);
     command
         .args(["status", "server", "--json"])

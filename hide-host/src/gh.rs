@@ -62,7 +62,10 @@ pub fn run(cwd: Option<&Path>, repository: Option<&str>, arguments: &[&str]) -> 
             reason: "Unsupported gh repository".to_owned(),
         };
     }
-    match run_gh_for(Path::new("gh"), cwd, repository, arguments, COMMAND_TIMEOUT) {
+    // Found and run on the account's own search: a core a login item runs
+    // has the system's folders alone on its `PATH`.
+    let gh = hide_platform::programs::command("gh");
+    match run_gh_for(gh, cwd, repository, arguments, COMMAND_TIMEOUT) {
         Ok(stdout) => GhAnswer::Output { stdout },
         Err(failure) => GhAnswer::Failed {
             category: failure.category,
@@ -78,14 +81,14 @@ fn run_gh(
     arguments: &[&str],
     timeout: Duration,
 ) -> Result<String, GhFailure> {
-    run_gh_for(binary, cwd, None, arguments, timeout)
+    run_gh_for(Command::new(binary), cwd, None, arguments, timeout)
 }
 
 /// Runs one allowed `gh` command; `repository` is the repository a command
 /// that reads it from its folder works on (`GH_REPO`).
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
 fn run_gh_for(
-    binary: &Path,
+    mut command: Command,
     cwd: Option<&Path>,
     repository: Option<&str>,
     arguments: &[&str],
@@ -94,7 +97,6 @@ fn run_gh_for(
     if !allowed(arguments) {
         return Err(GhFailure::network("Unsupported gh command".to_owned()));
     }
-    let mut command = Command::new(binary);
     command
         .args(arguments)
         .env("GH_PROMPT_DISABLED", "1")

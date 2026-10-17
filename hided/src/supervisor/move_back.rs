@@ -257,11 +257,11 @@ pub(super) async fn prepare_back(
     match &inspected.ai {
         Ok(Some(_)) => {}
         Ok(None) => failed.push(FailedCheck {
-            check: CheckId::Ai,
+            check: CheckId::AiSetup,
             detail: "the core's machine holds no Hide AI settings".to_owned(),
         }),
         Err(reason) => failed.push(FailedCheck {
-            check: CheckId::Ai,
+            check: CheckId::AiSetup,
             detail: reason.clone(),
         }),
     }

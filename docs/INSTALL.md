@@ -402,7 +402,7 @@ What the move leaves on each machine:
 | The machine giving the core | `~/.hide/state/core-move-abandoned.json` | The moves you stopped waiting for whose other machine has not been reached yet to stop or retire its core, at most 8; present only while one is left |
 | The core machine | `~/.hide/state/core-handover.json` | Whether its core waits for the move's first link, runs, or stopped or retired for a move back |
 | The core machine | `~/Library/LaunchAgents/dev.withhide.core.plist` | The login item that runs `hided core-login` at login and keeps the core running |
-| The core machine | `~/.hide/state/Logs/core.log` | What the login item's core prints, set aside as `core.log.1` at a start once it passes 1 MiB, replacing the one before |
+| The core machine | `~/.hide/state/Logs/core.log` | What the login item's core prints, set aside as `core.log.1` once it passes 1 MiB, replacing the one before; the running core looks at its size every minute and goes on in a new file |
 | The core machine | `~/.hide/state/move-incoming/` | A copy being received; empty once the move ends |
 | The core machine | `~/.hide/state/moved-out/<move>/` | The state of the core of a move you stopped waiting for, set aside there when this Mac reached it |
 
@@ -482,7 +482,7 @@ Read the host log at `<profile>/logs/desktop.log` (the profile is `~/Library/App
 If the app connects but no workspace, terminal, or agent can start, no `herdr server` is running on the socket hided uses.
 The packaged app starts one on launch, Retry, a second launch or a Dock click; the host log records `herdr.server_started`, or `herdr.status_failed` or `herdr.server_start_failed` with the reason it could not.
 A development host, or a launch with `HERDR_BIN_PATH` set as an explicit override, starts none; run that Herdr once to start its server.
-The daemon logs `herdr_bin.missing` when it cannot find a herdr binary at all: check `HERDR_BIN_PATH`, then PATH.
+The daemon logs `herdr_bin.missing` when it cannot find a herdr binary at all: check `HERDR_BIN_PATH`, then that `herdr` runs from a new terminal of the same account, whose login shell's `PATH` the daemon searches too.
 When `HERDR_BIN_PATH` names a file that no longer exists, `hide connect` and the daemon refuse to start and print that path: the Herdr server was started from an app bundle that has since been replaced, and every pane it opens still carries the old path.
 The packaged app replaces that pane value with its own bundled `herdr`, but the `hide` CLI run directly in such a pane, and an unpackaged development host, still inherit it; unset `HERDR_BIN_PATH` there, or hand the server off to the new bundle's `herdr`.
 

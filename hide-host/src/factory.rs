@@ -147,7 +147,9 @@ fn run(
     cwd: Option<&Path>,
     progress: &mut dyn FnMut(Value) -> bool,
 ) -> RunAnswer {
-    let mut command = Command::new(program);
+    // Found and run on the account's own search, so a check's tools and
+    // git's hooks are found where the account installed them.
+    let mut command = hide_platform::programs::command(program);
     command.args(args);
     // A pager or a prompt would wait forever for a person.
     command
@@ -467,7 +469,7 @@ impl VerifyQueue {
         };
         let command_text = job.commands[index].clone();
         let (shell, flag) = shell();
-        let mut command = Command::new(shell);
+        let mut command = hide_platform::programs::command(shell);
         command
             .arg(flag)
             .arg(&command_text)

@@ -1008,12 +1008,10 @@ fn merged_into(path: &Path, base: &str, until: Instant) -> Option<bool> {
             return None;
         }
         let output = output_within(
-            Command::new("git").arg("-C").arg(path).args([
-                "merge-base",
-                "--is-ancestor",
-                "HEAD",
-                &candidate,
-            ]),
+            hide_platform::programs::command("git")
+                .arg("-C")
+                .arg(path)
+                .args(["merge-base", "--is-ancestor", "HEAD", &candidate]),
             left.min(GIT_DEADLINE),
         )
         .ok()??;
@@ -1189,7 +1187,7 @@ fn git_within(cwd: &Path, arguments: &[&str], deadline: Duration) -> Result<Stri
         calls.push((cwd.to_owned(), arguments.first().unwrap_or(&"").to_string()));
     }
     let output = output_within(
-        Command::new("git")
+        hide_platform::programs::command("git")
             .arg("--no-optional-locks")
             .arg("-C")
             .arg(cwd)
@@ -1574,7 +1572,7 @@ pub fn check_new_branch(repository_root: &Path, branch: &str) -> HostResult<()> 
     if branch.starts_with('-') {
         return Err(invalid());
     }
-    let checked = Command::new("git")
+    let checked = hide_platform::programs::command("git")
         .arg("--no-optional-locks")
         .arg("-C")
         .arg(repository_root)
@@ -1585,7 +1583,7 @@ pub fn check_new_branch(repository_root: &Path, branch: &str) -> HostResult<()> 
         return Err(invalid());
     }
     let reference = format!("refs/heads/{branch}");
-    let exists = Command::new("git")
+    let exists = hide_platform::programs::command("git")
         .arg("--no-optional-locks")
         .arg("-C")
         .arg(repository_root)
@@ -1609,7 +1607,7 @@ pub fn check_new_branch(repository_root: &Path, branch: &str) -> HostResult<()> 
     }
     // Ask Git itself for the branch-exists diagnostic. This command is
     // side-effect free because the branch was proven to exist above.
-    let refusal = Command::new("git")
+    let refusal = hide_platform::programs::command("git")
         .arg("--no-optional-locks")
         .arg("-C")
         .arg(repository_root)

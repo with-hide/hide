@@ -217,6 +217,18 @@ it("walks the move dialog through the supervisor's frames: failing checks with t
   await unmount();
 });
 
+it("names the moving core's own machine when its Hide AI is not set up, and the machine taking it for that machine's sign-ins", async () => {
+  const { q, unmount } = await mount(state([remote("mini")]));
+  await openMenu(q, "mini");
+  await act(async () => { (document.querySelector('[data-device-move="mini"]') as HTMLElement).click(); });
+  const dialog = () => document.querySelector("[data-core-move-dialog]") as HTMLElement;
+  const failed = [{ check: "ai_setup", detail: "Hide AI is not set up: no agent is chosen" }, { check: "ai", detail: "codex: logged_out" }];
+  await act(async () => { useShellStore.setState({ coreMove: frame({ state: "checks_failed", checked: 12, failed }) as never }); });
+  expect(dialog().querySelector('[data-core-move-check="ai_setup"]')?.textContent).toBe("× Hide AI on This computerTurn it on and choose an agent in Settings › Hide AI");
+  expect(dialog().querySelector('[data-core-move-check="ai"]')?.textContent).toBe("× Hide AI sign-inSign in to Hide AI's agents on Mac mini");
+  await unmount();
+});
+
 it("gives up a move's wait only from its confirm, which the strip's action opens, and shows what is left (amendment 4)", async () => {
   const { events, unmount } = await mount(state([remote("mini")]));
   const dialog = () => document.querySelector("[data-core-move-dialog]") as HTMLElement | null;

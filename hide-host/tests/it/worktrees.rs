@@ -71,7 +71,10 @@ fn a_public_read_spends_one_deadline_on_discovery_metadata_and_measurement() {
         .expect("fixture requires a real Git executable");
     // The only generated executable is inside this checkout's build tree.
     // A native Rust stand-in works on Windows too, without a shell or a
-    // product-only test hook. PATH changes only in the isolated child.
+    // product-only test hook. PATH changes only in the isolated child, which
+    // has no login shell to ask: a node finds Git on its account's search,
+    // the login shell's `PATH` first, and macOS's puts the system's Git
+    // ahead of any folder the child was handed.
     let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../target");
     std::fs::create_dir_all(&target).unwrap();
     let fixture = tempfile::tempdir_in(target).unwrap();
@@ -125,7 +128,8 @@ fn a_public_read_spends_one_deadline_on_discovery_metadata_and_measurement() {
             ])
             .env(CHILD_ROOT, repository.path())
             .env("HIDE_TEST_REAL_GIT", real_git)
-            .env("PATH", path),
+            .env("PATH", path)
+            .env_remove("SHELL"),
         Duration::from_secs(90),
     )
     .unwrap()

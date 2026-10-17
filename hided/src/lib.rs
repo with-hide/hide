@@ -281,6 +281,15 @@ pub(crate) fn record_daemon(
 }
 
 /// The core role on `seat`, which already holds the instance lock.
+/// [`Env::herdr_program`] off the async runtime: the account's search can
+/// wait on its login shell.
+async fn herdr_program(env: &Env) -> Result<Option<std::path::PathBuf>, String> {
+    let env = env.clone();
+    tokio::task::spawn_blocking(move || env.herdr_program())
+        .await
+        .map_err(|error| format!("the herdr search did not finish: {error}"))
+}
+
 pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningDaemon, String> {
     // This machine's name in every key that names it. A machine Hide cannot
     // name refuses to start rather than guess one (PRD core-host-node D-28).
@@ -337,7 +346,8 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         .map_err(|error| format!("the daemon host id could not be read or written: {error}"))?;
     let token = seat.token.clone();
     let port = seat.port;
-    match env.herdr_bin_path.as_ref() {
+    let herdr_bin = herdr_program(&env).await?;
+    match herdr_bin.as_ref() {
         Some(path) => eprintln!(
             "{}",
             serde_json::json!({
@@ -351,7 +361,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             serde_json::json!({
                 "component": "hided",
                 "kind": "herdr_bin.missing",
-                "message": "no herdr binary: HERDR_BIN_PATH is unset and PATH has none; pane terminals cannot attach",
+                "message": "no herdr binary: HERDR_BIN_PATH is unset and neither this build's pinned copy nor the account's search has one; pane terminals cannot attach",
             })
         ),
     }
@@ -365,10 +375,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             .then(|| env.home.display().to_string()),
         node_id: node.clone(),
         herdr_socket_path: env.herdr_socket_path.clone(),
-        herdr_bin_path: env
-            .herdr_bin_path
-            .as_ref()
-            .map(|path| path.display().to_string()),
+        herdr_bin_path: herdr_bin.as_ref().map(|path| path.display().to_string()),
         app_state_path: env.state_dir.join("core-state.json").display().to_string(),
         host_helper_root: env.host_helper_root.clone(),
         host_cli_dir: env.host_cli_dir.clone(),
@@ -530,7 +537,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
                 .unwrap_or_else(|_| "0".into()),
             "state_dir": env.state_dir.display().to_string(),
             "core_state_path": env.state_dir.join("core-state.json").display().to_string(),
-            "herdr_bin_path": env.herdr_bin_path.as_ref().map(|path| path.display().to_string()),
+            "herdr_bin_path": herdr_bin.as_ref().map(|path| path.display().to_string()),
             "herdr_socket_path": env.herdr_socket_path.clone(),
             "keep_alive": env.keep_alive,
             "idle_secs": env.idle_secs,
@@ -666,9 +673,8 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
             build: build.clone(),
             release: crate::build_order::Release::of_this_build(),
             herdr_socket: std::path::PathBuf::from(&herdr_socket),
-            herdr_bin: env
-                .herdr_bin_path
-                .clone()
+            herdr_bin: herdr_program(&env)
+                .await?
                 .ok_or("the node role needs this machine's Herdr binary")?,
             worktree_facts: Some(hide_kit::layout::worktree_facts(&env.state_dir)),
         },

@@ -186,19 +186,23 @@ pub enum CheckId {
     Sleep,
     /// The `hided` the move runs there is this build.
     Build,
-    /// Hide AI is set up and every agent it asks answers on the machine
-    /// taking the core.
+    /// Every agent Hide AI asks answers on the machine taking the core, with
+    /// that machine's logins.
     Ai,
+    /// Hide AI is on and has an agent chosen on the machine whose core
+    /// moves: its own setting, which moves with the core.
+    AiSetup,
     /// No agent of this machine is asleep with its pane closed: a node
     /// cannot wake it.
     Dormant,
 }
 
 /// The checks of a move toward a device, each once.
-pub const FORWARD_CHECKS: [CheckId; 11] = [
+pub const FORWARD_CHECKS: [CheckId; 12] = [
     CheckId::Connection,
     CheckId::OtherNode,
     CheckId::Herdr,
+    CheckId::AiSetup,
     CheckId::Ai,
     CheckId::Identity,
     CheckId::Build,
@@ -217,7 +221,7 @@ pub const BACK_CHECKS: [CheckId; 7] = [
     CheckId::Connection,
     CheckId::Identity,
     CheckId::TargetState,
-    CheckId::Ai,
+    CheckId::AiSetup,
 ];
 
 /// How many of `checks` ran when `failed` came back, or none when some

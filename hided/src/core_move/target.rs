@@ -173,11 +173,12 @@ fn inspect(state_dir: &Path, ai: Option<&str>) -> Answered {
     // The Herdr this machine's core would own, as its daemon resolves it.
     let env = crate::env::load()
         .map_err(|errors| plain(format!("{} environment errors", errors.len())))?;
+    let herdr_bin = env.herdr_program();
     let failed = super::preflight::failing(
         &env.home,
         state_dir,
         &super::preflight::Herdr {
-            bin: env.herdr_bin_path.as_deref(),
+            bin: herdr_bin.as_deref(),
             socket: env.herdr_socket_path.as_deref(),
         },
         ai,

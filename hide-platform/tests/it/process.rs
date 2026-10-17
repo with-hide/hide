@@ -20,7 +20,7 @@ use hide_platform::process::{
     CaptureFailureKind, MAX_CAPTURE_BYTES, OWNER_LAUNCH_KEYS, OwnedChild, OwnerWatch,
     RUN_OUTPUT_CAP, RunFailure, cwd_of, descendants, descends_from, detach, image_of, is_alive,
     kill_tree, measure_tree, name_of, parent_of, restrict_to_login_environment, run_to_end,
-    running, start_time, terminate, terminate_group,
+    running, set_output_aside, start_time, terminate, terminate_group,
 };
 
 const ROLE: &str = "HIDE_PLATFORM_PROC_ROLE";
@@ -36,6 +36,10 @@ const PIPE_OWNER: &str = "HIDE_PLATFORM_PROC_PIPE_OWNER";
 /// Where the `sleep` role writes its pid once it runs, for a test that cannot
 /// read the child's output before the call that started it returns.
 const READY_FILE: &str = "HIDE_PLATFORM_PROC_READY_FILE";
+
+/// The file the `output_aside` role's output is set aside from, and its limit.
+const OUTPUT_LOG: &str = "HIDE_PLATFORM_PROC_OUTPUT_LOG";
+const OUTPUT_LIMIT: u64 = 64;
 
 /// Windows hands a freed pid to the next process that starts, so a test that
 /// asks about a pid it has finished with must not run beside one that starts
@@ -267,6 +271,21 @@ fn child_role() {
                 .output()
                 .unwrap();
             std::io::stdout().write_all(&output.stdout).unwrap();
+        }
+        // A process the system started with its output appended to a file,
+        // as a login agent's is: it sets that output aside past a limit and
+        // goes on writing.
+        "output_aside" => {
+            let log = PathBuf::from(std::env::var_os(OUTPUT_LOG).unwrap());
+            let aside = log.with_extension("log.1");
+            let set = set_output_aside(&log, &aside, OUTPUT_LIMIT).unwrap();
+            println!("SET {set}");
+            eprintln!("AFTER-ERROR");
+            println!("AFTER-OUTPUT");
+            println!(
+                "AGAIN {}",
+                set_output_aside(&log, &aside, OUTPUT_LIMIT).unwrap()
+            );
         }
         "login_env" => {
             for (key, _) in std::env::vars_os() {
@@ -1650,4 +1669,71 @@ mod line_input {
 fn a_windows_console_enforces_no_line_length() {
     use hide_platform::process::{LineInput, line_input};
     assert_eq!(line_input(std::process::id()).unwrap(), LineInput::Console);
+}
+
+/// A process whose output the system appends to a file sets that file aside
+/// once it has passed the limit and writes on, both streams, into a new
+/// private file at the same name; a second ask finds the new file under the
+/// limit. The process itself does it, so the file it writes now is capped,
+/// not only the one the next start would open.
+#[cfg(unix)]
+#[test]
+fn output_appended_to_a_file_is_set_aside_past_its_limit_and_goes_on_in_a_new_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("core.log");
+    let aside = dir.path().join("core.log.1");
+    std::fs::write(&aside, "the one before").unwrap();
+    std::fs::write(&log, vec![b'~'; OUTPUT_LIMIT as usize + 1]).unwrap();
+    let appended = || std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+    let status = role_command("output_aside")
+        .env(OUTPUT_LOG, &log)
+        .stdout(appended())
+        .stderr(appended())
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let before = std::fs::read_to_string(&aside).unwrap();
+    assert!(
+        before.starts_with(&"~".repeat(OUTPUT_LIMIT as usize + 1)),
+        "{before}"
+    );
+    assert!(!before.contains("AFTER"), "{before}");
+    let now = std::fs::read_to_string(&log).unwrap();
+    for line in ["SET true", "AFTER-ERROR", "AFTER-OUTPUT", "AGAIN false"] {
+        assert!(now.contains(line), "{line} in {now}");
+    }
+    assert!(!now.contains('~'), "{now}");
+    assert!(hide_platform::fs::private::is_private(&log).unwrap());
+}
+
+/// Output that is not appended to that file, such as a pipe, is left where
+/// it goes, and so is the file, whatever its size.
+#[cfg(unix)]
+#[test]
+fn output_that_is_not_the_file_is_left_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("core.log");
+    let grown = vec![b'~'; OUTPUT_LIMIT as usize + 1];
+    std::fs::write(&log, &grown).unwrap();
+    let finished = role_command("output_aside")
+        .env(OUTPUT_LOG, &log)
+        .output()
+        .unwrap();
+    assert!(finished.status.success());
+    let said = String::from_utf8_lossy(&finished.stdout);
+    assert!(said.contains("SET false"), "{said}");
+    assert_eq!(std::fs::read(&log).unwrap(), grown);
+    assert!(!dir.path().join("core.log.1").exists());
+}
+
+/// Windows starts no login agent with its output appended to a file, and
+/// answers why.
+#[cfg(windows)]
+#[test]
+fn windows_sets_no_output_aside() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("core.log");
+    let error = set_output_aside(&log, &log.with_extension("log.1"), OUTPUT_LIMIT).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Unsupported, "{error}");
 }
