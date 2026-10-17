@@ -14,6 +14,7 @@ import json
 
 from agent_live_check.protection import private_directory, write_private
 
+from . import opencode_service
 from .fake_model import MODEL
 
 # Not a secret: the fake model takes any key, and a CLI needs one to start.
@@ -120,7 +121,22 @@ def agy(home, url, root, local):
     return {"GEMINI_API_KEY": KEY, "GOOGLE_GEMINI_BASE_URL": url}
 
 
-PROVIDERS = {"claude": claude, "codex": codex, "grok": grok, "pi": pi, "omp": omp, "agy": agy}
+def opencode(home, url, root, local):
+    """OpenCode 2.0.29's custom provider and default model in its global
+    `opencode.json` (opencode.ai/v2/docs/providers), its key read from the
+    variable `env` names, and no update check."""
+    del root, local
+    folder = home / opencode_service.CONFIG
+    private_directory(folder)
+    write_private(folder / "opencode.json", json.dumps({
+        "model": f"{PROVIDER}/{MODEL}", "update": "disable",
+        "providers": {PROVIDER: {"name": "Journey", "env": ["JOURNEY_FAKE_KEY"],
+                                 "package": "@opencode/ai/providers/openai-compatible",
+                                 "settings": {"baseURL": f"{url}/v1"}, "models": {MODEL: {"name": "Journey"}}}}}).encode())
+    return {"JOURNEY_FAKE_KEY": KEY}
+
+
+PROVIDERS = {"claude": claude, "codex": codex, "grok": grok, "pi": pi, "omp": omp, "agy": agy, "opencode": opencode}
 
 
 def configure(kind, home, url, root, local):

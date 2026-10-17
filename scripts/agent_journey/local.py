@@ -10,9 +10,9 @@ the private daemon home as on a new machine. Claude keeps the operator's HOME
 for its keychain login and reads only the candidate's settings. Every other
 agent keeps the operator's HOME too and is pointed at its own folder in the
 private daemon home by the variable it documents for that (CODEX_HOME,
-GROK_HOME, PI_CODING_AGENT_DIR), which holds the candidate's hooks or
-extension and a copy of the operator's login; agy has no such variable, so it
-is not measured here.
+GROK_HOME, PI_CODING_AGENT_DIR, OpenCode's XDG folders), which holds the
+candidate's hooks or extension and a copy of the operator's login; agy has no
+such variable, so it is not measured here.
 """
 
 import datetime
@@ -29,7 +29,7 @@ import tomllib
 from agent_live_check.protection import ProtectionError, private_directory, write_private
 from agent_live_check.system import WINDOWS
 
-from . import omp_state
+from . import omp_state, opencode_service
 
 # A Codex login copy older than this is not used: a refresh inside the copy
 # would rotate the operator's token (PRD D-32; Codex was seen refreshing every
@@ -127,6 +127,26 @@ ROUTES = {
         # Its run state stays in the operator's ~/.omp (omp_state.py).
         "busy": lambda: omp_state.busy_refusal(omp_state.running()),
         "operator_state": "omp writes ~/.omp/run and ~/.omp/logs in the operator's HOME; the run removes its own part",
+    },
+    "opencode": {
+        "args": lambda home: [],
+        # OpenCode 2.0.29 reads its configuration and plugins, its login and
+        # sessions, its state and its cache from the XDG folders
+        # (xdg-basedir): the probe's, where Hide's reader reads them too; the
+        # mark names the background server it starts as the run's
+        # (opencode_service.py).
+        "env": opencode_service.environment,
+        "unset": ["OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT"],
+        "sessions": lambda operator, home: home,
+        "known": [".config/opencode/opencode.json", ".config/opencode/service.json"],
+        "shared": {},
+        "roots": [".config/opencode", ".local/share/opencode"],
+        "untrusted": None,
+        "config": str(opencode_service.DATA),
+        "copies": [[".local/share/opencode/auth.json", "auth.json"]],
+        "provenance": "Private XDG folders holding a copy of the login, the operator's model choice and a private "
+                      "server port; a refresh stays in the copy.",
+        "login": lambda root, status: opencode_login_refusal(root / "auth.json"),
     },
     "agy": {
         # agy 1.4.0 has no variable or flag for its configuration folder and
@@ -261,6 +281,35 @@ def pi_login_refusal(auth, now=None):
     if expiries is None:
         return "not logged in: sign in with /login in pi yourself; the journey never logs in"
     return expiry_refusal("pi", expiries, now)
+
+
+def opencode_login_refusal(auth, now=None):
+    """OpenCode keeps one entry per provider: an API key, which never
+    refreshes, or an OAuth login with `expires` in ms."""
+    if not auth.is_file():
+        return "not logged in: run opencode auth login yourself; the journey never logs in"
+    try:
+        entries = [entry for entry in json.loads(auth.read_text()).values() if isinstance(entry, dict)]
+    except (OSError, ValueError, AttributeError):
+        return expiry_refusal("opencode", [], now)
+    if not entries:
+        return "not logged in: run opencode auth login yourself; the journey never logs in"
+    if all(entry.get("type") == "api" for entry in entries):
+        return None
+    return expiry_refusal("opencode", json_expiries(auth, "expires", 1000), now)
+
+
+def opencode_model(operator, folder):
+    """The private `opencode.json`: only the operator's model choice and
+    provider settings, so their MCP servers and permissions stay theirs, and
+    no update check."""
+    try:
+        chosen = json.loads((operator / ".config/opencode/opencode.json").read_text())
+    except (OSError, ValueError):
+        chosen = {}
+    keep = {key: chosen[key] for key in ("model", "small_model", "provider", "providers") if key in chosen}
+    private_directory(folder)
+    write_private(folder / "opencode.json", json.dumps({**keep, "update": "disable"}).encode())
 
 
 def omp_login_refusal(database, now=None):

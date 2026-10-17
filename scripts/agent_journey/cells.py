@@ -14,7 +14,7 @@ CELLS = ("start", "start_untrusted", "reply", "integration", "guidance_memory", 
          "sleep_wake", "resume", "fork", "title", "usage")
 # What this cycle measures (PRD agent-journey-check D-20); every other declared
 # cell reads "not built in this cycle" until a later change builds it.
-BUILT_AGENTS = ("claude-code", "codex", "grok", "pi", "omp", "antigravity")
+BUILT_AGENTS = ("claude-code", "codex", "grok", "opencode", "pi", "omp", "antigravity")
 BUILT_CELLS = ("start", "start_untrusted", "reply", "letter", "sleep_wake", "resume")
 # A cell that cannot be measured until another one passed.
 PREREQUISITE = {"reply": "start", "letter": "start", "sleep_wake": "start", "resume": "sleep_wake"}

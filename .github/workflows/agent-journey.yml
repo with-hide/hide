@@ -21,11 +21,11 @@
 # With `live`, the `login` job runs the real CLIs, pinned the same way, in the
 # runner's disposable HOME, signed in with the CI account's keys
 # (`HIDE_CLAUDE_API_KEY`, `HIDE_CODEX_API_KEY`, `HIDE_AGY_API_KEY`,
-# `HIDE_GROK_API_KEY`, `HIDE_PI_API_KEY`, `HIDE_OMP_API_KEY`). An agent
-# without its key reads "not configured" and leaves a notice, a provider
-# quota refusal leaves a warning; neither fails the job. A failed cell, an
-# isolation or cleanup failure, a request budget overrun, or a refused login
-# or missing CLI with the key set does. agy's key has 20 requests a day for
+# `HIDE_GROK_API_KEY`, `HIDE_OPENCODE_API_KEY`, `HIDE_PI_API_KEY`,
+# `HIDE_OMP_API_KEY`). An agent without its key reads "not configured" and
+# leaves a notice, a provider quota refusal leaves a warning; neither fails
+# the job. A failed cell, an isolation or cleanup failure, a request budget
+# overrun, or a refused login or missing CLI with the key set does. agy's key has 20 requests a day for
 # its model across the CI account (agy-contract.yml spends 4 of them a
 # night), so agy is measured only on the system `agy` names, or the night's
 # system of its rotation, and reads "not measured" with that reason
@@ -86,6 +86,8 @@ on:
       HIDE_AGY_API_KEY:
         required: false
       HIDE_GROK_API_KEY:
+        required: false
+      HIDE_OPENCODE_API_KEY:
         required: false
       HIDE_PI_API_KEY:
         required: false
@@ -228,7 +230,7 @@ jobs:
         run: sudo apt-get install -y --no-install-recommends zsh
       - name: Install the pinned agent CLIs
         timeout-minutes: 10
-        run: '"$PYTHON" scripts/install-agent-clis.py claude codex grok pi omp agy'
+        run: '"$PYTHON" scripts/install-agent-clis.py claude codex grok opencode pi omp agy'
       - name: Build hided, hide, the hooks and Hide's conversation reader
         timeout-minutes: 25
         run: |
@@ -248,7 +250,7 @@ jobs:
         timeout-minutes: 40
         run: |
           set +e
-          "$PYTHON" scripts/agent-journey-check.py --mode ci --fake-model --agents claude-code,codex,grok,pi,omp,antigravity \
+          "$PYTHON" scripts/agent-journey-check.py --mode ci --fake-model --agents claude-code,codex,grok,opencode,pi,omp,antigravity \
             --herdr-bin "${{ steps.herdr.outputs.bin }}" --run-dir "$RUN_DIR"
           echo "journey exit $?"
       - name: The lane's verdict
@@ -283,11 +285,11 @@ jobs:
       RUN_DIR: agents/runs/agent-journey-login-${{ matrix.system }}
       # The journey needs Python 3.12; Windows names it python.
       PYTHON: ${{ matrix.system == 'windows' && 'python' || 'python3' }}
-      HAS_KEYS: ${{ secrets.HIDE_CLAUDE_API_KEY != '' || secrets.HIDE_CODEX_API_KEY != '' || secrets.HIDE_AGY_API_KEY != '' || secrets.HIDE_GROK_API_KEY != '' || secrets.HIDE_PI_API_KEY != '' || secrets.HIDE_OMP_API_KEY != '' }}
+      HAS_KEYS: ${{ secrets.HIDE_CLAUDE_API_KEY != '' || secrets.HIDE_CODEX_API_KEY != '' || secrets.HIDE_AGY_API_KEY != '' || secrets.HIDE_GROK_API_KEY != '' || secrets.HIDE_OPENCODE_API_KEY != '' || secrets.HIDE_PI_API_KEY != '' || secrets.HIDE_OMP_API_KEY != '' }}
     steps:
       - name: Not configured without the CI account's keys
         if: ${{ env.HAS_KEYS != 'true' }}
-        run: echo "::notice title=agent journey signed in::not configured (no HIDE_CLAUDE_API_KEY, HIDE_CODEX_API_KEY, HIDE_AGY_API_KEY, HIDE_GROK_API_KEY, HIDE_PI_API_KEY or HIDE_OMP_API_KEY secret); the signed-in journey stays unproven"
+        run: echo "::notice title=agent journey signed in::not configured (no HIDE_CLAUDE_API_KEY, HIDE_CODEX_API_KEY, HIDE_AGY_API_KEY, HIDE_GROK_API_KEY, HIDE_OPENCODE_API_KEY, HIDE_PI_API_KEY or HIDE_OMP_API_KEY secret); the signed-in journey stays unproven"
       - name: Choose the agents this leg signs in
         # Each agent whose key is set, at its pinned version; agy only on the
         # systems its daily quota measures tonight.
@@ -298,13 +300,14 @@ jobs:
           HAS_CODEX: ${{ secrets.HIDE_CODEX_API_KEY != '' }}
           HAS_AGY: ${{ secrets.HIDE_AGY_API_KEY != '' }}
           HAS_GROK: ${{ secrets.HIDE_GROK_API_KEY != '' }}
+          HAS_OPENCODE: ${{ secrets.HIDE_OPENCODE_API_KEY != '' }}
           HAS_PI: ${{ secrets.HIDE_PI_API_KEY != '' }}
           HAS_OMP: ${{ secrets.HIDE_OMP_API_KEY != '' }}
           AGY_PLAN: ${{ inputs.agy }}
           SYSTEM: ${{ matrix.system }}
         run: |
           kinds=()
-          for pair in claude:$HAS_CLAUDE codex:$HAS_CODEX grok:$HAS_GROK pi:$HAS_PI omp:$HAS_OMP; do
+          for pair in claude:$HAS_CLAUDE codex:$HAS_CODEX grok:$HAS_GROK opencode:$HAS_OPENCODE pi:$HAS_PI omp:$HAS_OMP; do
             [[ "${pair#*:}" == true ]] && kinds+=("${pair%%:*}")
           done
           rotation=(linux macos windows)
@@ -388,6 +391,7 @@ jobs:
           HIDE_CODEX_API_KEY: ${{ secrets.HIDE_CODEX_API_KEY }}
           HIDE_AGY_API_KEY: ${{ secrets.HIDE_AGY_API_KEY }}
           HIDE_GROK_API_KEY: ${{ secrets.HIDE_GROK_API_KEY }}
+          HIDE_OPENCODE_API_KEY: ${{ secrets.HIDE_OPENCODE_API_KEY }}
           HIDE_PI_API_KEY: ${{ secrets.HIDE_PI_API_KEY }}
           HIDE_OMP_API_KEY: ${{ secrets.HIDE_OMP_API_KEY }}
           AGY_UNMEASURED: ${{ steps.agents.outputs.agy }}

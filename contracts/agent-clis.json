@@ -17,9 +17,10 @@
       "installer": "grok"
     },
     "opencode": {
-      "version": "1.18.35",
+      "version": "2.0.29",
       "installer": "npm",
-      "package": "opencode-ai"
+      "package": "@opencode/cli",
+      "program": "node_modules/@opencode/cli/bin/opencode.exe"
     },
     "pi": {
       "version": "1.0.4",

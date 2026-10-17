@@ -30,12 +30,12 @@ from agent_live_check.runtime import Runtime, clean_env
 from agent_live_check.sandbox import WriteSandbox
 from agent_live_check.system import STOP_SIGNALS, WINDOWS, exe, git as git_program, launcher
 
-from . import ci, clis, cells, fake_lane, fake_model, omp_state, quota
+from . import ci, clis, cells, fake_lane, fake_model, omp_state, opencode_service, quota
 from .controller import Controller
 from .daemon import Daemon
 from .journey import Journey
 from .local import (ROUTES, TRUST, allow_one_shot_references, claude_session_folders, disable_hide_ai,
-                    operator_trust, route, wrapper)
+                    opencode_model, operator_trust, route, wrapper)
 from .report import save, table_lines
 
 KIT_SECONDS = 90
@@ -244,7 +244,7 @@ def wait_kit(daemon, ids):
     return daemon.wait(report, KIT_SECONDS, "the kit to install each agent's hook and Herdr integration")["failed"]
 
 
-def prepare_local(runtime, report, table, rows, measured, operator, root, fake):
+def prepare_local(runtime, report, table, rows, measured, operator, root, fake, services):
     """Local mode's guard, write sandbox and each agent's route; the agents
     ready to measure. With `fake` (each agent's fake model URL) no login is
     read or copied: each agent's private folder points it at the fake."""
@@ -287,9 +287,14 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake):
         extra = fake_lane.configure(kind, runtime.home, fake[key], root, local=True) if fake else None
         if extra is not None:
             agent["fake_env"] = sorted(extra)
+        elif kind == "opencode":
+            opencode_model(operator, runtime.home / opencode_service.CONFIG)
         launch = wrapper(runtime.bin, executables[key], operator, runtime.state, kind, runtime.home, sandbox,
                          os.environ.get("PATH", ""), extra)
         environment = {**clean_env(), "HOME": str(operator), "TMPDIR": str(run / "agent-tmp")}
+        if kind == "opencode":
+            agent["service_port"] = opencode_service.configure(runtime.home / opencode_service.CONFIG)
+            services[key] = (launch, environment, agent["service_port"])
         _, version, _ = owner.run([str(launch), "--version"], env=environment, check=False)
         agent["version"] = version.strip()[:120]
         agent["pin"] = clis.pin(kind, agent["version"])
@@ -332,7 +337,7 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake):
     return sandbox, guard, ready
 
 
-def prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, fake):
+def prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, fake, services):
     """CI mode's agents in the disposable HOME, signed in with the lane's keys,
     pointed at the fake model (`fake`, each agent's URL) or replaced by the
     fixture stand-ins; the agents ready to measure."""
@@ -361,6 +366,9 @@ def prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, fake):
         launch = ci.wrapper(runtime, program, kind, os.environ.get("PATH", ""),
                             runtime.probe / f"fixture-{kind}.config" if fixture_bin else None, fake_env)
         environment = {**clean_env(), "HOME": str(runtime.home), "TMPDIR": runtime.env["TMPDIR"]}
+        if kind == "opencode":
+            agent["service_port"] = opencode_service.configure(runtime.home / opencode_service.CONFIG)
+            services[key] = (launch, environment, agent["service_port"])
         _, version, _ = runtime.owner.run([str(launch), "--version"], env=environment, check=False)
         agent["version"] = version.strip()[:120]
         agent["pin"] = None if fixture_bin else clis.pin(kind, agent["version"])
@@ -479,6 +487,8 @@ def main(argv=None):
     runtime = guard = daemon = None
     # One fake model per agent, so each one's log counts that agent's requests alone.
     servers = {}
+    # Each OpenCode agent's program, environment and private server port, whose server the run ends.
+    services = {}
     try:
         runtime = Runtime(checkout, run, operator, owner, herdr_bin=herdr,
                           home=run / "probe/daemon-home")
@@ -500,9 +510,10 @@ def main(argv=None):
             # Before hided starts, which reads the file once.
             disable_hide_ai(runtime.home)
         if local:
-            sandbox, guard, ready = prepare_local(runtime, report, table, rows, measured, operator, root, urls)
+            sandbox, guard, ready = prepare_local(runtime, report, table, rows, measured, operator, root, urls, services)
         else:
-            sandbox, ready = None, prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, urls)
+            sandbox, ready = None, prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, urls,
+                                              services)
         report["herdr"] = runtime.start()
         if sandbox:
             allow_hook_route(sandbox, runtime)
@@ -541,6 +552,13 @@ def main(argv=None):
                                   quota=quota_rows)
                 for step in ("start", "letter", "sleep_wake", "resume"):
                     journey.step(step)
+                if key in services:
+                    # Its pane closed at Sleep and opened again at Wake: one server must still serve it.
+                    running = opencode_service.ours(str(runtime.home))
+                    agent["opencode_servers_after_wake"] = running
+                    if running is not None and len(running) > 1:
+                        report.setdefault("product_findings", []).append(
+                            f"{len(running)} OpenCode servers of the run ran after Sleep and Wake: {running}")
                 untrusted_reason = (ROUTES[rows[key]["herdr_kind"]]["untrusted"] if local and not fake else
                                     ci.FIXTURE_UNTRUSTED if fixture_bin else None)
                 if untrusted_reason:
@@ -567,6 +585,17 @@ def main(argv=None):
             server.server_close()
         if daemon:
             daemon.close()
+        for key, (launch, environment, port) in services.items():
+            # Before the owner closes: the server outlives every terminal, and the run started it.
+            agent = next(row for row in report["agents"] if row["id"] == key)
+            try:
+                agent["opencode_service"] = opencode_service.stop(launch, environment, port, str(runtime.home),
+                                                                  runtime.owner)
+            except Exception as error:
+                agent["opencode_service"] = {"port": port, "left": [f"stop failed: {error}"]}
+            if agent["opencode_service"]["left"]:
+                report["failures"].append({"type": "CleanupError", "reason": "opencode_server_left: "
+                                           + json.dumps(agent["opencode_service"]["left"])})
         if runtime:
             # Herdr's own log lives in the private home the cleanup removes.
             log = runtime.home / "config/herdr/herdr-server.log"

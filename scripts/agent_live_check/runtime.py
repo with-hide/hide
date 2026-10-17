@@ -26,6 +26,12 @@ PROVIDER_KEYS = ("ANTHROPIC_AUTH_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "AWS_
                  "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")
 
 
+# The XDG folders under the probe's home that every process it starts reads,
+# the daemon and Hide's reader included.
+XDG_FOLDERS = {"XDG_CONFIG_HOME": "config", "XDG_STATE_HOME": "state", "XDG_DATA_HOME": "data",
+               "XDG_CACHE_HOME": "cache"}
+
+
 def clean_env() -> dict[str, str]:
     return {key: value for key, value in os.environ.items()
             if not key.startswith(("HERDR_", "HIDE_", "HCOORD_"))
@@ -131,10 +137,7 @@ class Runtime:
             self.expected_version = manifest["version"]
             base = clean_env()
             base.update(**home_env(self.home), **self.shell.environment(self.home),
-                        XDG_CONFIG_HOME=str(self.home / "config"),
-                        XDG_STATE_HOME=str(self.home / "state"),
-                        XDG_DATA_HOME=str(self.home / "data"),
-                        XDG_CACHE_HOME=str(self.home / "cache"),
+                        **{name: str(self.home / folder) for name, folder in XDG_FOLDERS.items()},
                         HERDR_SOCKET_PATH=str(self.socket), HERDR_BIN_PATH=str(self.herdr_bin),
                         HERDR_CONFIG_PATH=str(run / "herdr.toml"),
                         HERDR_SESSION_PATH=str(run / "herdr-session.json"),

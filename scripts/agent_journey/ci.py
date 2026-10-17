@@ -14,10 +14,10 @@ from pathlib import Path
 import shutil
 
 from agent_live_check.protection import ProtectionError, private_directory, write_private
-from agent_live_check.runtime import clean_env
+from agent_live_check.runtime import XDG_FOLDERS, clean_env
 from agent_live_check.system import WINDOWS, home_env, launcher, temp_env
 
-from . import cells
+from . import cells, opencode_service
 from .local import QUIET
 
 LOGINS = {
@@ -39,6 +39,13 @@ LOGINS = {
     # variable (`pi --help`, `omp --help`); OpenAI's is OPENAI_API_KEY.
     "pi": {"secret": "HIDE_PI_API_KEY", "key_env": "OPENAI_API_KEY", "env": {}},
     "omp": {"secret": "HIDE_OMP_API_KEY", "key_env": "OPENAI_API_KEY", "env": {}},
+    # OpenCode 2.0.29 reads a provider's key from its environment variable;
+    # its XDG folders are the probe's, named for every command so a `service
+    # stop` run outside the pane stays in them, and the mark names the server
+    # it starts as the run's (opencode_service.py).
+    "opencode": {"secret": "HIDE_OPENCODE_API_KEY", "key_env": "OPENAI_API_KEY",
+                 "env": {**XDG_FOLDERS, "XDG_CONFIG_HOME": str(opencode_service.CONFIG.parent),
+                         opencode_service.MARK: "."}},
 }
 
 # A stand-in asks no folder question, so its start anywhere says nothing of one.

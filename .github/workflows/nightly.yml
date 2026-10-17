@@ -146,6 +146,7 @@ jobs:
       HIDE_CODEX_API_KEY: ${{ secrets.HIDE_CODEX_API_KEY }}
       HIDE_AGY_API_KEY: ${{ secrets.HIDE_AGY_API_KEY }}
       HIDE_GROK_API_KEY: ${{ secrets.HIDE_GROK_API_KEY }}
+      HIDE_OPENCODE_API_KEY: ${{ secrets.HIDE_OPENCODE_API_KEY }}
       HIDE_PI_API_KEY: ${{ secrets.HIDE_PI_API_KEY }}
       HIDE_OMP_API_KEY: ${{ secrets.HIDE_OMP_API_KEY }}
 
