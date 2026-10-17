@@ -9,6 +9,14 @@
 # for it (`keep-screenshots`), so a reviewer can see what the app drew on a
 # system no maintainer has at hand; a run whose suite passed without one fails
 # that step. Every run keeps its logs when a test failed or was flaky.
+#
+# The whole macOS suite outgrew one job: 1048 to 1166 s of its 1200 s step
+# cap on main (2026-10-17), and pull request #1306's run was ended at the cap
+# with every test it reached passing. A caller with more than one shard deals
+# the tests out as `web-e2e.yml` does, by this suite's own macOS recording,
+# `desktop/e2e/shard-durations.json` (`scripts/e2e-shard.py`). Each shard
+# builds in place: a `build` job would be one more macOS job ahead of two, for
+# about two minutes of cargo it saves each.
 name: desktop e2e lane
 
 on:
@@ -25,6 +33,10 @@ on:
       herdr-platform:
         description: The pinned Herdr asset to run, as `fetch-herdr-runtime.sh --platform` names it.
         type: string
+        required: true
+      shards:
+        description: How many shards deal the tests out.
+        type: number
         required: true
       grep:
         description: Playwright `--grep` filter; empty runs every test.
@@ -43,12 +55,19 @@ permissions:
 
 jobs:
   e2e:
-    name: desktop e2e ${{ inputs.lane }}
+    name: desktop e2e ${{ inputs.lane }} ${{ matrix.shard }}/${{ inputs.shards }}
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 45
     defaults:
       run:
         shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        # Picked by index as in web-e2e.yml. The organization runs five macOS
+        # jobs at once across every repository, so no lane asks for more than
+        # four; a count outside 1 to 4 has no entry and fails the lane.
+        shard: ${{ fromJSON('[[], [1], [1,2], [1,2,3], [1,2,3,4]]')[inputs.shards] }}
     steps:
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false
@@ -64,7 +83,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # The shards build the same thing; one of them saves it.
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.shard == 1 }}
       - name: Install zsh and the virtual display on Linux
         if: runner.os == 'Linux'
         timeout-minutes: 5
@@ -106,15 +126,40 @@ jobs:
         run: python3 scripts/check-herdr-schema.py --herdr-bin "${{ steps.herdr.outputs.bin }}"
       - name: Desktop app end-to-end
         id: suite
+        # A cap, not a target: a shard that plans more than 720 s of tests
+        # (60 % of it) warns on its first shard's step, and the answer is
+        # another shard (docs/TESTING.md, "Balancing the e2e shards").
         timeout-minutes: 20
         env:
           HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
           HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
           GREP: ${{ inputs.grep }}
+          SHARD: ${{ matrix.shard }}/${{ inputs.shards }}
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
           args=()
           if [ -n "$GREP" ]; then args+=(--grep "$GREP"); fi
+          if [ "${SHARD#*/}" -gt 1 ]; then
+            # Dealt and checked as in web-e2e.yml. `--no-deps`: Playwright runs
+            # a project's dependencies whole, so a shard holding one
+            # `@needs-focus` test would run every background test. Without it
+            # the config's order still runs a shard's background tests, their
+            # retries included, before its focus tests: one worker, and
+            # `background` listed first (desktop/playwright.config.ts).
+            args+=(--no-deps)
+            table=desktop/e2e/shard-durations.json
+            list="$RUNNER_TEMP/desktop-e2e-list.txt"
+            shard_file="$RUNNER_TEMP/desktop-e2e-shard.txt"
+            bash scripts/verify-web.sh desktop e2e --list --reporter=list "${args[@]}" > "$list"
+            python3 scripts/e2e-shard.py split --table "$table" --budget 720 --shard "$SHARD" "$list" > "$shard_file"
+            if [ ! -s "$shard_file" ]; then
+              echo "shard $SHARD is dealt no test: fewer tests than shards"
+              exit 0
+            fi
+            bash scripts/verify-web.sh desktop e2e --list --reporter=list --test-list "$shard_file" "${args[@]}" > "$RUNNER_TEMP/desktop-e2e-shard-list.txt"
+            python3 scripts/e2e-shard.py check --table "$table" --shard "$SHARD" "$list" "$RUNNER_TEMP/desktop-e2e-shard-list.txt"
+            args+=(--test-list "$shard_file")
+          fi
           if [ "$RUNNER_OS" = Linux ]; then
             xvfb-run -a bash scripts/verify-web.sh desktop e2e "${args[@]}"
           else
@@ -135,7 +180,7 @@ jobs:
         if: ${{ inputs.keep-screenshots && steps.suite.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: hide-desktop-screenshots-${{ inputs.lane }}
+          name: hide-desktop-screenshots-${{ inputs.lane }}-${{ matrix.shard }}
           path: ${{ runner.temp }}/hide-e2e/*.png
           if-no-files-found: error
       - name: Keep the e2e run's logs
@@ -143,7 +188,7 @@ jobs:
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
         with:
-          name: hide-desktop-e2e-logs-${{ inputs.lane }}
+          name: hide-desktop-e2e-logs-${{ inputs.lane }}-${{ matrix.shard }}
           path: |
             ${{ runner.temp }}/hide-e2e
             desktop/test-results

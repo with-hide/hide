@@ -588,6 +588,12 @@ jobs:
       lane: macos
       runner: macos-15
       herdr-platform: macos-aarch64
+      # Two shards: the suite is about 17 minutes of tests (1008 s recorded,
+      # 2026-10-17) and one job ran it in 1048 to 1166 s of its 20-minute
+      # step cap. Two plan about 504 s each, under half the cap, for one more
+      # job of about 4.5 minutes of setup on the five macOS runners; a third
+      # would hold three of the five for the same suite (docs/TESTING.md).
+      shards: 2
 
   # The Electron app on Windows: the desktop tests tagged `@platform` (what
   # the host does differently there: `hide connect` starting hided, the
@@ -607,6 +613,7 @@ jobs:
       lane: windows
       runner: windows-latest
       herdr-platform: windows-x86_64
+      shards: 1
       grep: "@platform"
       keep-screenshots: true
 

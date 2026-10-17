@@ -1,4 +1,4 @@
-"""How `scripts/web-e2e-shard.py` deals the web end-to-end tests out to shards."""
+"""How `scripts/e2e-shard.py` deals the web and desktop end-to-end tests out to shards."""
 import importlib.util
 import json
 import os
@@ -10,8 +10,8 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).parents[2]
-SCRIPT = ROOT / "scripts/web-e2e-shard.py"
-SPEC = importlib.util.spec_from_file_location("web_e2e_shard", SCRIPT)
+SCRIPT = ROOT / "scripts/e2e-shard.py"
+SPEC = importlib.util.spec_from_file_location("e2e_shard", SCRIPT)
 shard = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(shard)
 
@@ -42,6 +42,14 @@ class Listing(unittest.TestCase):
             shard.listed_tests("  a.spec.ts:1:1 › x\n  a.spec.ts:9:1 › x\n")
         self.assertEqual(shard.listed_tests("Total: 0 tests in 0 files\n", allow_none=True), [])
 
+    def test_a_named_project_does_not_change_how_a_test_is_named(self):
+        # The desktop config's `background` and `needs-focus` projects hold
+        # each test once, and a shard file without the project matches it.
+        listing = "  [background] › a.spec.ts:10:1 › one\n  [needs-focus] › b.spec.ts:7:1 › focus @needs-focus\n"
+        self.assertEqual(shard.listed_tests(listing), ["a.spec.ts › one", "b.spec.ts › focus @needs-focus"])
+        with self.assertRaises(shard.Refused):
+            shard.listed_tests("  [background] › a.spec.ts:1:1 › x\n  [needs-focus] › a.spec.ts:1:1 › x\n")
+
 
 class Splitting(unittest.TestCase):
     def test_fills_the_lightest_shard_with_the_longest_test_first(self):
@@ -71,23 +79,31 @@ class Splitting(unittest.TestCase):
         self.assertEqual(shard.split(TESTS, table, 3), shard.split(list(TESTS), dict(table), 3))
 
     def test_a_plan_reports_tests_the_table_lacks_and_a_heavy_shard_but_does_not_fail(self):
-        self.assertEqual(shard.drift(["a", "b"], {"a": 5.0, "b": 5.0}, [5.0, 5.0]), [])
-        notes = shard.drift(["a", "b", "c"], {"a": 5.0, "b": 5.0}, [5.0, 5.0])
+        self.assertEqual(shard.drift(["a", "b"], {"a": 5.0, "b": 5.0}, [5.0, 5.0], "t.json"), [])
+        notes = shard.drift(["a", "b", "c"], {"a": 5.0, "b": 5.0}, [5.0, 5.0], "t.json")
         self.assertEqual(len(notes), 1)
-        self.assertIn("1 of 3 listed tests are not in shard-durations.json", notes[0])
-        notes = shard.drift(["a", "b"], {"a": 30.0, "b": 5.0}, [30.0, 5.0])
-        self.assertIn("the heaviest shard plans 30 s against a mean of 18 s", notes[0])
+        self.assertIn("1 of 3 listed tests are not in t.json", notes[0])
+        notes = shard.drift(["a", "b"], {"a": 30.0, "b": 5.0}, [30.0, 5.0], "t.json")
+        self.assertIn("the heaviest shard plans 30 s against a mean of 18 s; refresh t.json", notes[0])
 
-    def test_the_committed_table_names_only_whole_tests_of_existing_specs(self):
-        table = json.loads((ROOT / "web/e2e/shard-durations.json").read_text(encoding="utf-8"))
-        self.assertGreater(len(table), 100)
-        for key, seconds in table.items():
-            with self.subTest(key=key):
-                match = re.fullmatch(r"([\w.-]+\.spec\.ts) › (.+)", key)
-                self.assertTrue(match, "not `file › title`")
-                self.assertTrue((ROOT / "web/e2e" / match[1]).is_file(), "no such spec")
-                self.assertNotRegex(match[2], r"@[\w-]+$|\(retry #\d+\)$", "a tag or retry mark in the title")
-                self.assertGreaterEqual(seconds, 0)
+    def test_a_plan_past_the_lanes_budget_asks_for_another_shard(self):
+        tests, table = ["a", "b"], {"a": 20.0, "b": 20.0}
+        self.assertEqual(shard.drift(tests, table, [20.0, 20.0], "t.json", budget=20), [])
+        notes = shard.drift(tests, table, [20.0, 21.0], "t.json", budget=20)
+        self.assertEqual(notes, ['the heaviest of 2 shards plans 21 s, over the 20 s this lane sizes a shard for; '
+                                 'add a shard (docs/TESTING.md, "Balancing the e2e shards")'])
+
+    def test_the_committed_tables_name_only_whole_tests_of_existing_specs(self):
+        for suite in ("web/e2e", "desktop/e2e"):
+            table = json.loads((ROOT / suite / "shard-durations.json").read_text(encoding="utf-8"))
+            self.assertGreater(len(table), 100)
+            for key, seconds in table.items():
+                with self.subTest(suite=suite, key=key):
+                    match = re.fullmatch(r"([\w.-]+\.spec\.ts) › (.+)", key)
+                    self.assertTrue(match, "not `file › title`")
+                    self.assertTrue((ROOT / suite / match[1]).is_file(), "no such spec")
+                    self.assertNotRegex(match[2], r"\(retry #\d+\)$", "a retry mark in the title")
+                    self.assertGreaterEqual(seconds, 0)
 
 
 class Command(unittest.TestCase):
@@ -141,13 +157,26 @@ class Command(unittest.TestCase):
             with self.subTest(stderr=result.stderr):
                 self.assertEqual(result.returncode, 1)
                 self.assertNotIn(b"Traceback", result.stderr)
-                self.assertTrue(result.stderr.startswith(b"web-e2e-shard: "))
+                self.assertTrue(result.stderr.startswith(b"e2e-shard: "))
                 self.assertEqual(len(result.stderr.splitlines()), 1)
 
     def test_a_shard_outside_the_total_is_refused(self):
         for value in ("0/4", "5/4", "4", "a/b"):
             with self.subTest(value=value):
-                self.assertNotEqual(run("split", "--shard", value, "unused").returncode, 0)
+                self.assertNotEqual(run("split", "--shard", value, "--table", str(self.table), "unused").returncode, 0)
+
+    def test_a_plan_names_its_table_because_each_suite_records_its_own(self):
+        result = run("split", "--shard", "1/2", self.file("list.txt", LIST))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b"--table", result.stderr)
+
+    def test_only_the_first_shard_warns_of_a_plan_past_the_budget(self):
+        first = run("split", "--shard", "1/2", "--table", str(self.table), "--budget", "60", self.file("list.txt", LIST))
+        second = run("split", "--shard", "2/2", "--table", str(self.table), "--budget", "60", self.file("list.txt", LIST))
+        self.assertEqual((first.returncode, second.returncode), (0, 0))
+        # The table's 50, 30 and 20, and its median 30 for the two it lacks: 80 s a shard.
+        self.assertIn("::warning::the heaviest of 2 shards plans 80 s, over the 60 s", first.stderr.decode())
+        self.assertNotIn("::warning::", second.stderr.decode())
 
     def check(self, current, total, listed):
         planned = self.split(current, total)
@@ -218,6 +247,25 @@ class Durations(unittest.TestCase):
         listed = shard.listed_tests("  s3.spec.ts:262:1 › editing a document\n")
         self.assertEqual(list(shard.durations([self.LOG], listed)), listed)
 
+    def test_a_title_that_ends_in_a_tag_of_its_own_keeps_it(self):
+        log = "  ✓  99 [needs-focus] › e2e/view.spec.ts:213:5 › gives it back @needs-focus (retry #1) (7.5s)\n"
+        self.assertEqual(shard.durations([log], ["view.spec.ts › gives it back @needs-focus"]),
+                         {"view.spec.ts › gives it back @needs-focus": 7.5})
+
+    def test_a_desktop_runs_project_and_a_skipped_test_are_read(self):
+        # A desktop run names the project; a test it only skipped (one that
+        # needs a packaged app) costs the lane nothing, while one that passed
+        # anywhere keeps its passing median.
+        log = (
+            "2026-10-17T12:30:27.7652520Z   ✓    1 [background] › e2e/add.spec.ts:37:5 › picks a folder @platform (21.8s)\n"
+            "2026-10-17T12:37:19.8049500Z   -   42 [background] › e2e/kit.spec.ts:101:5 › a device's Home\n"
+            "2026-10-17T12:37:19.8049500Z   -   43 [background] › e2e/add.spec.ts:37:5 › picks a folder @platform\n"
+        )
+        self.assertEqual(
+            shard.durations([log], ["add.spec.ts › picks a folder", "kit.spec.ts › a device's Home", "x.spec.ts › never"]),
+            {"add.spec.ts › picks a folder": 21.8, "kit.spec.ts › a device's Home": 0.0},
+        )
+
     def test_the_command_writes_utf8_and_names_the_tests_it_found_no_line_for(self):
         with tempfile.TemporaryDirectory() as directory:
             listing = Path(directory) / "list.txt"
@@ -228,7 +276,7 @@ class Durations(unittest.TestCase):
             result = run("durations", "--list", str(listing), str(log), env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout.decode("utf-8")), {"a.spec.ts › one": 4.0})
-        self.assertIn("1 of 2 listed tests have no passing line", result.stderr.decode())
+        self.assertIn("1 of 2 listed tests have no passing or skipped line", result.stderr.decode())
 
 
 if __name__ == "__main__":

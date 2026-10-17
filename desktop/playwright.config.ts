@@ -16,6 +16,9 @@ export default defineConfig({
   // machine with no other app in front, a CI runner, macOS then activates the
   // next app that opens, and every background test after it would fail the
   // focus guard. The background tests run first, and the focus tests after.
+  // A CI shard runs with `--no-deps`, since a dependency runs whole in every
+  // shard that holds a dependent test, and keeps that order through this
+  // list's order and the one worker (.github/workflows/desktop-e2e.yml).
   projects: [
     { name: "background", grepInvert: /@needs-focus/ },
     { name: "needs-focus", grep: /@needs-focus/, dependencies: ["background"] },

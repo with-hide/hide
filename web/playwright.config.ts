@@ -9,7 +9,7 @@ export default defineConfig({
   // them in parallel makes them contend for the runner's cores, and a timing
   // assertion that fails under load reads as a product failure. One worker
   // keeps a runner deterministic; CI deals the tests out across runners
-  // (scripts/web-e2e-shard.py), which is where the suite's parallelism lives.
+  // (scripts/e2e-shard.py), which is where the suite's parallelism lives.
   workers: 1,
   // Every test is its own unit: each starts and stops its own stack, so none
   // depends on the one before it. Saying so lets the CI shards deal out tests

@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
-"""Deal the web end-to-end tests out to CI shards by how long each one takes.
+"""Deal an end-to-end suite's tests out to CI shards by how long each one takes.
 
 Playwright's own `--shard` cuts the tests in file order into runs of equal
-count, and the suite's tests range from 1 second to a minute, so one shard held
-11 minutes of work while another held 6. `split` reads the tests Playwright
-lists (`playwright test --list`) and `web/e2e/shard-durations.json`, gives each
+count, and a suite's tests range from 1 second to a minute, so one web shard
+held 11 minutes of work while another held 6. `split` reads the tests
+Playwright lists (`playwright test --list`) and the suite's own duration table
+(`--table`: `web/e2e/shard-durations.json` from the Linux web lane,
+`desktop/e2e/shard-durations.json` from the macOS desktop lane), gives each
 test its recorded seconds (a test the table does not know gets the table's
 median), and fills the shards longest test first, each into the shard with the
 least work so far. The same list and table always give the same shards, and
 every listed test lands in exactly one shard. The output is a file for
-`playwright test --test-list`.
+`playwright test --test-list`. With `--budget`, a plan whose heaviest shard
+holds more seconds than the lane sized its shards for says so: the suite has
+outgrown its shards, and the answer is another shard, not a longer timeout.
 
 `check` compares what Playwright lists for that file with what `split` planned,
 because Playwright treats a `--test-list` that matches nothing as a pass.
-`durations` writes the table from the job logs of earlier runs: the median
-seconds of each test's passing line in the list reporter's output, for the tests
-a `--list` output names. docs/TESTING.md, "Balancing the web e2e shards", says
-when and how to refresh it.
+`durations` writes a table from the job logs of earlier runs: the median
+seconds of each test's passing line in the list reporter's output, and 0 for a
+test those runs only skipped, for the tests a `--list` output names.
+docs/TESTING.md, "Balancing the e2e shards", says when and how to refresh it.
 
 Everything is read and written as UTF-8 (a title holds `›` and other characters
 the locale encoding of a Windows runner cannot write), and a problem with the
@@ -30,23 +34,27 @@ import statistics
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-TABLE = ROOT / "web/e2e/shard-durations.json"
 # A shard whose planned work is this much over the mean of the shards is
 # reported, not failed: the table is a recording, and a refresh fixes it.
 SPREAD_WARNING = 1.15
 
-# `playwright test --list`: "  file.spec.ts:45:1 › [describe › ]title"; a run's
-# list reporter adds the `e2e/` directory and a leading mark, number and
+# `playwright test --list`: "  [project] › file.spec.ts:45:1 › [describe › ]title",
+# the project only in a config that names one (the desktop suite's `background`
+# and `needs-focus`); a test is in one project, so `file › title` names it. A
+# run's list reporter adds the `e2e/` directory and a leading mark, number and
 # duration, and a test's tags and retry mark after its title:
-# "✓   1 e2e/file.spec.ts:45:1 › title @platform (retry #1) (4.9s)".
-# A Windows runner's list reporter prints `ok` where the others print `✓`.
-LISTED = re.compile(r"^\s+(?:e2e/)?(?P<file>[^\s:]+\.spec\.ts):\d+:\d+ › (?P<title>.+?)\s*$")
-PASSED = re.compile(
-    r"(?:^|\s)(?:✓|ok)\s+\d+\s+(?:e2e/)?(?P<file>[^\s:]+\.spec\.ts):\d+:\d+ › "
-    r"(?P<title>.+?)(?:\s+(?:@[\w-]+|\(retry #\d+\)))* "
-    r"\((?P<value>\d+(?:\.\d+)?)(?P<unit>ms|s|m)\)\s*$"
-)
+# "✓   1 e2e/file.spec.ts:45:1 › title @platform (retry #1) (4.9s)", and a
+# skipped test's line has `-` and no duration. A Windows runner's list
+# reporter prints `ok` where the others print `✓`.
+PROJECT = r"(?:\[[^\]]+\] › )?"
+LISTED = re.compile(r"^\s+" + PROJECT + r"(?:e2e/)?(?P<file>[^\s:]+\.spec\.ts):\d+:\d+ › (?P<title>.+?)\s*$")
+RUN_LINE = r"\s+\d+\s+" + PROJECT + r"(?:e2e/)?(?P<file>[^\s:]+\.spec\.ts):\d+:\d+ › "
+PASSED = re.compile(r"(?:^|\s)(?:✓|ok)" + RUN_LINE + r"(?P<title>.+) \((?P<value>\d+(?:\.\d+)?)(?P<unit>ms|s|m)\)\s*$")
+SKIPPED = re.compile(r"(?:^|\s)-" + RUN_LINE + r"(?P<title>.+?)\s*$")
+# What a run prints after a title and `--list` does not; a title may end in a
+# tag of its own (`... gives it back @needs-focus`), so each is taken off only
+# while the title is not yet one the list names.
+TRAILING_MARK = re.compile(r"\s+(?:@[\w-]+|\(retry #\d+\))$")
 UNITS = {"ms": 0.001, "s": 1.0, "m": 60.0}
 
 
@@ -89,18 +97,23 @@ def shard_tests(tests, table, current, total):
     return [test for test in tests if assigned[test] == current - 1], load
 
 
-def drift(tests, table, load):
-    """What a reader of the plan should know: tests the table lacks, and a heavy shard."""
+def drift(tests, table, load, name, budget=None):
+    """What a reader of the plan should know: tests the table `name` lacks, a heavy shard, a suite past its budget."""
     notes = []
     missing = [test for test in tests if test not in table]
     if missing:
         notes.append(
-            f"{len(missing)} of {len(tests)} listed tests are not in shard-durations.json and weigh its median "
+            f"{len(missing)} of {len(tests)} listed tests are not in {name} and weigh its median "
             f"({', '.join(missing[:3])}{', ...' if len(missing) > 3 else ''}); refresh it"
         )
     mean = sum(load) / len(load)
     if mean and max(load) > mean * SPREAD_WARNING:
-        notes.append(f"the heaviest shard plans {max(load):.0f} s against a mean of {mean:.0f} s; refresh shard-durations.json")
+        notes.append(f"the heaviest shard plans {max(load):.0f} s against a mean of {mean:.0f} s; refresh {name}")
+    if budget is not None and max(load) > budget:
+        notes.append(
+            f"the heaviest of {len(load)} shards plans {max(load):.0f} s, over the {budget:.0f} s this lane sizes a shard for; "
+            "add a shard (docs/TESTING.md, \"Balancing the e2e shards\")"
+        )
     return notes
 
 
@@ -111,16 +124,40 @@ def parse_shard(value):
     return int(match[1]), int(match[2])
 
 
+def listed_key(file, title, listed):
+    """The listed test a run's line names, or None: the title less the marks a run adds after it."""
+    while True:
+        key = f"{file} › {title}"
+        if key in listed:
+            return key
+        shorter = TRAILING_MARK.sub("", title)
+        if shorter == title:
+            return None
+        title = shorter
+
+
 def durations(logs, listed):
-    """Median seconds per listed test across the passing lines of the given logs."""
+    """Median seconds per listed test across the passing lines of the given logs; 0 for one they only skipped."""
+    listed = set(listed)
     seen = {}
+    skipped = set()
     for text in logs:
         for line in text.splitlines():
             match = PASSED.search(line)
             if match:
-                key = f"{match['file']} › {match['title']}"
-                seen.setdefault(key, []).append(float(match["value"]) * UNITS[match["unit"]])
-    return {key: round(statistics.median(seen[key]), 1) for key in sorted(listed) if key in seen}
+                key = listed_key(match["file"], match["title"], listed)
+                if key:
+                    seen.setdefault(key, []).append(float(match["value"]) * UNITS[match["unit"]])
+                continue
+            match = SKIPPED.search(line)
+            if match:
+                key = listed_key(match["file"], match["title"], listed)
+                if key:
+                    skipped.add(key)
+    # A test a lane skips (one that needs a packaged app or a device) costs
+    # that lane nothing; weighing the median would plan seconds it never runs.
+    return {key: round(statistics.median(seen[key]), 1) if key in seen else 0.0
+            for key in sorted(listed) if key in seen or key in skipped}
 
 
 def read(path):
@@ -153,7 +190,7 @@ def run(arguments):
             raise Refused("no passing line of a listed test in the logs")
         lacking = [test for test in listed if test not in table]
         if lacking:
-            print(f"{len(lacking)} of {len(listed)} listed tests have no passing line in the logs and keep the median: "
+            print(f"{len(lacking)} of {len(listed)} listed tests have no passing or skipped line in the logs and keep the median: "
                   + ", ".join(lacking[:5]), file=sys.stderr)
         emit(json.dumps(table, ensure_ascii=False, indent=2) + "\n")
         return
@@ -176,7 +213,7 @@ def run(arguments):
             file=sys.stderr,
         )
         if current == 1:
-            for note in drift(tests, table, load):
+            for note in drift(tests, table, load, arguments.table.name, arguments.budget):
                 print(f"::warning::{note}", file=sys.stderr)
         emit("".join(f"{test}\n" for test in mine))
         return
@@ -201,11 +238,12 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     cut = commands.add_parser("split", help="print the tests of one shard, one per line")
     cut.add_argument("--shard", type=parse_shard, required=True, help="CURRENT/TOTAL, one-based")
-    cut.add_argument("--table", type=Path, default=TABLE)
+    cut.add_argument("--table", type=Path, required=True, help="the suite's own duration table")
+    cut.add_argument("--budget", type=float, help="seconds a shard is sized for; a heavier plan warns")
     cut.add_argument("list", type=Path, help="the output of `playwright test --list --reporter=list`")
     verify = commands.add_parser("check", help="fail unless Playwright lists exactly the planned tests for the shard file")
     verify.add_argument("--shard", type=parse_shard, required=True, help="CURRENT/TOTAL, one-based")
-    verify.add_argument("--table", type=Path, default=TABLE)
+    verify.add_argument("--table", type=Path, required=True, help="the table `split` read")
     verify.add_argument("list", type=Path, help="the full list that `split` read")
     verify.add_argument("shard_list", type=Path, help="`playwright test --list --test-list <shard file>` output")
     refresh = commands.add_parser("durations", help="print the duration table of the listed tests from job logs")
@@ -214,7 +252,7 @@ def main(argv=None):
     try:
         run(parser.parse_args(argv))
     except Refused as error:
-        print(f"web-e2e-shard: {error}", file=sys.stderr)
+        print(f"e2e-shard: {error}", file=sys.stderr)
         return 1
     return 0
 

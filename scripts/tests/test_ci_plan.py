@@ -520,6 +520,9 @@ def runner_jobs(block):
         shards = int(re.search(r"\n      shards: (\d+)", block).group(1))
         # With more than one shard a `build` job precedes them.
         return shards + (1 if shards > 1 else 0)
+    if "uses: ./.github/workflows/desktop-e2e.yml" in block:
+        # Each shard builds in place.
+        return int(re.search(r"\n      shards: (\d+)", block).group(1))
     if "uses: ./.github/workflows/os-contract.yml" in block or "uses: ./.github/workflows/agy-contract.yml" in block:
         return len(json.loads(re.search(r"systems: '(\[[^']*\])'", block).group(1)))
     if "uses: ./.github/workflows/package.yml" in block:
@@ -609,7 +612,10 @@ class Workflows(unittest.TestCase):
     def test_the_most_a_pull_request_starts_is_the_count_testing_md_states(self):
         jobs = pr_jobs()
         most = 2 + sum(runner_jobs(jobs[lane]) for lane in ci.LANES)
-        self.assertLess(most, 23, "the run before the macOS and merge work started 23 jobs")
+        # The 2026-10-05 run started 23 jobs; the macOS desktop suite's second
+        # shard took back one of the jobs saved since, because one job no longer
+        # ran the suite inside its step cap (docs/TESTING.md).
+        self.assertLessEqual(most, 23, "the run before the macOS and merge work started 23 jobs")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 
