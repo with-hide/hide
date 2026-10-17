@@ -817,14 +817,6 @@ impl Runtime {
     /// and the work runs when it does; its row is busy only while the work
     /// can actually run.
     pub(super) fn queue_device_kit(&mut self, device_id: &str, job: KitJob) {
-        // A node that dials this core is a machine with Hide's own install,
-        // whose kit its own hided keeps.
-        if self
-            .link_origin(device_id)
-            .is_some_and(|origin| !origin.takes_kit())
-        {
-            return;
-        }
         let merged = match self.device_kit_pending.remove(device_id) {
             Some(before) => before.merge(job),
             None => job,
@@ -912,8 +904,8 @@ impl Runtime {
             }));
             Err(reason)
         };
-        if !registration.origin.takes_kit() {
-            return left("the machine keeps its own kit; it connects to the core itself");
+        if !registration.origin.removes_kit() {
+            return left("the machine runs Hide itself and connects to the core again");
         }
         if self.registration_sharing_account(registration).is_some() {
             return left("another registered device reaches the same account on that machine");
@@ -996,10 +988,15 @@ impl Runtime {
             self.device_kit_running.remove(device_id);
             return None;
         };
-        let cli_dir = registration
-            .host_consent
-            .and_then(|consent| consent.cli_dir)
-            .unwrap_or_else(|| self.host_cli_dir.clone());
+        // A node that dials in links `hide` where this machine's own kit
+        // does, in its own home; a device where its consent says.
+        let cli_dir = match registration.origin {
+            crate::model::LinkOrigin::Inbound => crate::kit::LOCAL_CLI_DIR.to_owned(),
+            crate::model::LinkOrigin::Dialed { .. } => registration
+                .host_consent
+                .and_then(|consent| consent.cli_dir)
+                .unwrap_or_else(|| self.host_cli_dir.clone()),
+        };
         let daemon_off_run =
             matches!(&job, KitJob::Apply(scope) if scope.codex_daemon_off).then(|| {
                 self.codex_daemon_off_runs += 1;

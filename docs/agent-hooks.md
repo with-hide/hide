@@ -825,7 +825,7 @@ A device where Hide may not install, or whose platform this build does not carry
 
 ## Installing
 
-Hide's hooks are one part of its install kit (`hide-kit`; [ARCHITECTURE.md, The install kit](ARCHITECTURE.md#the-install-kit)), which installs the same set on this machine at every launch of the packaged app and on every device at every helper connection, without asking: the operator agreed to it once, by installing the app or by adding the device.
+Hide's hooks are one part of its install kit (`hide-kit`; [ARCHITECTURE.md, The install kit](ARCHITECTURE.md#the-install-kit)), which installs the same set on this machine at every launch of the packaged app and on every device at every helper connection, without asking: the operator agreed to it once, by installing the app or by adding the device; after a core move it does so on the core's machine at every start of its core and on the machine the core moved off at every link.
 Every entry's command is guarded, so a session whose app or helper was moved or deleted carries on without a hook error (PRD device-parity B3), and it is written in the form its runtime runs a hook on that system:
 
 | System | Runtime | Entry |
@@ -857,10 +857,10 @@ The marker is looked for in an entry's `command` and in each of its `args`, wher
 The marker stays at version 6: the macOS and Linux bytes are the ones version 6 wrote (`the_posix_entry_is_exactly_what_macos_and_linux_have_installed` pins them), and no earlier build installed anything on Windows.
 `hide-agent-hooks/tests/it/windows_hook_command.rs` runs the Windows entries the way their runtimes start them, under Windows PowerShell and PowerShell 7, with the real helper in a folder whose name has a space, a quote, brackets and a `$`, in the `windows check` lane: Claude Code's and Codex's prove stdin reached the helper by the Memory request only the session it read makes (with no `hide` beside it, recorded as `memory_unavailable`), and Grok's and Cursor's by the spawn guard's `daemon.unreachable` line, which the helper writes only after reading a launch from the event; Cursor's runs inside the script its CLI writes, and its answers parse as JSON.
 Version 6 is the first guarded command, so an older entry reads outdated and the next launch or connection replaces it.
-The kit folder is a path that survives a rebuild: the installed app bundle's `Contents/Resources` on macOS, the unpacked package's `resources` on Windows/Linux, and the helper root's `current` link on a device, which each new build of the helper points at itself.
+The kit folder is a path that survives a rebuild: the installed app bundle's `Contents/Resources` on macOS, the unpacked package's `resources` on Windows/Linux, and the helper root's `current` link on a device, which each new build of the helper points at itself, as a moved core does at the build it runs.
 
-A `hided` outside a desktop package installs nothing, and This machine's row in Settings says the packaged app is where the kit comes from.
-`hide_kit::bundled_kit_dir` decides that from the layout: macOS `*.app/Contents/Resources`, or Windows/Linux `resources` with `app.asar` inside and Electron `hide[.exe]` in its parent folder.
+A `hided` outside a desktop package and outside a build Hide placed under a helper root installs nothing, and This machine's row in Settings says the packaged app is where the kit comes from.
+`hide_kit::bundled_kit_dir` decides the package from the layout: macOS `*.app/Contents/Resources`, or Windows/Linux `resources` with `app.asar` inside and Electron `hide[.exe]` in its parent folder; a build is `<root>/<16 hex>/hided`, the folder a device install, a core move and a core update make (`KitPlace::of_program`, held by `a_core_installs_from_its_package_or_a_placed_build_and_never_from_a_build_directory`).
 A folder merely named `resources` grants no install authority.
 The rule exists because a hook command outlives the process that wrote it.
 It is a path stored in the operator's own configuration file and run by every future session of that agent, so the only path worth writing is one that survives a rebuild.

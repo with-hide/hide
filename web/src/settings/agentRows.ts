@@ -83,25 +83,46 @@ export type AgentMachine = {
    * words are the Devices tab's own (`deviceState`), so the tabs cannot disagree.
    */
   blocked: "unreachable" | "connecting" | "disabled" | "unavailable" | null;
-  /** The kit has not answered for this machine yet. */
+  /** The kit has not answered for this machine yet, or a read the core asked is under way. */
   unread: boolean;
+  /**
+   * The machine's kit answered and no read runs, but it listed no agent: a
+   * pass that could not run (an account another Hide held, a retirement it
+   * refused) says nothing about them, so the tab says so and offers Check
+   * again rather than wait for a read nobody asked.
+   */
+  unlisted: boolean;
 };
 
+/**
+ * The machines of the switch, `devices` in the order the tab shows them. A
+ * machine that dials in to the core is listed only while it is linked or
+ * linking: the core reaches its kit through that link alone and never dials
+ * it, so nothing on this tab could reach it otherwise, and a machine the core
+ * still keeps under an earlier node id is not listed twice (its row stays in
+ * Devices, where it is removed).
+ */
 export function agentMachines(devices: readonly Device[], remote?: readonly RemoteStatus[]): AgentMachine[] {
-  return devices
-    .map((device) => {
-      const agents = supportedAgents(device.kit?.agents);
-      // A device that is not ready answers nothing, so its last list is not a fact to act on (B11).
-      const { state } = deviceState(device, remote?.find((row) => row.target_id === device.id));
-      const gone = state === "connecting" || state === "disabled" ? state : state === "unavailable" ? "unreachable" : null;
-      return {
+  return devices.flatMap((device) => {
+    const kit = device.kit;
+    const agents = supportedAgents(kit?.agents);
+    // A device that is not ready answers nothing, so its last list is not a fact to act on (B11).
+    const { state } = deviceState(device, remote?.find((row) => row.target_id === device.id));
+    if (device.dials_in === true && state === "unavailable") return [];
+    const gone = state === "connecting" || state === "disabled" ? state : state === "unavailable" ? "unreachable" : null;
+    const silent = agents.length === 0 && !kit?.unavailable;
+    const reading = kit?.busy === true || kit?.checking === true || (kit?.components.length ?? 0) === 0;
+    return [
+      {
         device,
         installed: agents.filter(agentInstalled),
         notInstalled: agents.filter((agent) => !agentInstalled(agent)),
-        blocked: gone ?? (device.kit?.unavailable ? "unavailable" : null),
-        unread: agents.length === 0 && !device.kit?.unavailable,
-      };
-    });
+        blocked: gone ?? (kit?.unavailable ? "unavailable" : null),
+        unread: silent && reading,
+        unlisted: silent && !reading,
+      },
+    ];
+  });
 }
 
 /**

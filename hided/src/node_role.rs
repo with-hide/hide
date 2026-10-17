@@ -1255,6 +1255,12 @@ fn serve(
             browser,
             factory: true,
             worktree_facts: identity.worktree_facts.clone(),
+            // The core keeps this machine's kit through the link, from the
+            // app or the build this node runs (a development build
+            // installs nothing).
+            kit: std::env::current_exe().map_or(hide_host::serve::KitPlace::Standalone, |exe| {
+                hide_host::serve::KitPlace::of_program(&exe)
+            }),
         },
     )
     .map(|()| "link_closed".to_owned())

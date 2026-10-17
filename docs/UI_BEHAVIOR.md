@@ -2197,7 +2197,7 @@ Installed is ✓, not on this machine is –, turned off is ○, outdated, not i
 A healthy kit is on no row.
 A line grows under a device only when something needs the operator: a refused connection with the step and what to do, a helper that is not running (Retry helper) or not allowed (Allow and install…) while the connection is fine, a part of Hide's kit that failed or was removed, outdated or never installed, as one line naming it with Reinstall, or the result of a test they asked for.
 Reinstall repairs only the parts the line names, reads Reinstalling… while the machine's kit work runs (B8), and the line goes when the parts are whole again; nothing else on the screen reacts, and the detail of every install goes to the diagnostic log (B18).
-A machine whose kit does not run says why in that place: a daemon outside the installed app, a device not allowed yet, a device that must be allowed again, or a platform this build does not carry (B11, B17, B21).
+A machine whose kit does not run says why in that place: a daemon run from neither the installed app nor a build Hide placed (a moved core runs from one), a device not allowed yet, a device that must be allowed again, or a platform this build does not carry (B11, B17, B21).
 The first install reads Installing Hide's kit… under the device; the tab reads every machine once when it opens.
 The add form has one Add button and lists, once, what the kit puts on the device and where (B12); a device registered earlier without the helper offers Allow and install… in its menu, with the same list.
 Removing a device asks once, names in one line what comes off that device (with its helper folder, `~/.hide/host-helper` by default) and that the records in `~/.hide` stay, or, when its helper is not connected, that the kit stays there; no button is focused when the confirmation opens (B22).
@@ -2227,6 +2227,8 @@ In Korean the particle after the machine's name follows its last sound, as Korea
 
 Settings > Agents shows the eight agents Hide supports, Claude Code, Codex, Grok, OpenCode, Pi, omp, Cursor and Antigravity, in that order, for one machine at a time (PRD settings-cleanup B8 to B20, B67).
 With a device registered, a switch at the top chooses This Mac or a device and the list below is that machine's; with none there is no switch.
+This Mac comes first, as in Devices, and a machine that dials in to the core is listed while it is linked or linking, since the core reaches its kit only through that link: a machine the core keeps under an earlier node id is listed once, and its old row stays in Devices to remove.
+`Checking this machine's agents…` shows only while a read runs or before the machine's first answer; a machine whose kit answered without listing an agent (another Hide held its account, a retirement it refused) says `Hide couldn't read this machine's agents.` with Check again.
 A device that cannot be reached shows one line and Try again in place of its list; a machine whose kit cannot run says why above a list it may still have.
 `Installed N` lists the agents whose program is found on the machine ([agent-hooks.md: Installed means the program is found](agent-hooks.md#installed-means-the-program-is-found)), or that are on and whose program went away, so they can still be switched off; a folder an agent creates does not count.
 An agent installed where Hide has nothing to attach to on that machine's system yet is listed here too, with `Not on Windows yet` (that system's name) in place of its switch (PRD first-run-onboarding D-25, B49).

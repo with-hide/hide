@@ -4433,10 +4433,11 @@ impl LinkOrigin {
         matches!(self, Self::Dialed { .. })
     }
 
-    /// Whether the core installs and keeps Hide's kit there; a node that
-    /// dials in is a machine with Hide's own install, whose kit its own
-    /// hided keeps.
-    pub fn takes_kit(&self) -> bool {
+    /// Whether removing the registration takes Hide's kit off the machine:
+    /// a device the core dials, where its helper put it. A node that dials
+    /// in runs Hide itself and registers again on its next link, so the kit
+    /// the core keeps there through that link stays.
+    pub fn removes_kit(&self) -> bool {
         matches!(self, Self::Dialed { .. })
     }
 

@@ -1,9 +1,10 @@
 //! Machines whose node dials this core (PRD core-host-node-remote-core D-04,
 //! D-10): the screen machine of a core that runs elsewhere. The operator's
-//! own SSH login opened the link, so the core asks no consent, installs no
-//! kit and never dials one; it takes the link the node brought and treats
-//! the node as a device from there on, keyed by its node id. A link that
-//! ends is replaced only by the node dialing again.
+//! own SSH login opened the link, so the core asks no consent, uploads no
+//! helper and never dials one; it takes the link the node brought and treats
+//! the node as a device from there on, keyed by its node id, its kit
+//! included, which the node installs from the app it runs. A link that ends
+//! is replaced only by the node dialing again.
 
 use std::sync::Arc;
 

@@ -332,7 +332,7 @@ Each agent Hide knows also has a switch on that row, and Claude Code and Codex a
 An agent that is on gets a `hide-browser` skill stub in the folder it reads skills from, and, where its documentation supports one, a `SessionStart` hook entry; every other agent is off until you switch it on, and an agent that is not installed on the machine has no switch there.
 An agent is installed when Hide finds its program where your terminal would: on your login shell's `PATH` and in the usual install folders; a folder the agent creates does not count.
 Switching an agent off takes out only the entries and stubs Hide wrote, and [agent-hooks.md](agent-hooks.md#other-agents-skill-and-guidance-hook) lists every agent, its skill folder, and why a hook is or is not written for it.
-A `hided` run outside the installed app, such as a development build, installs nothing on this Mac and says so there.
+A `hided` run from neither the installed app nor a build Hide placed in `~/.hide/host-helper` (which a moved core runs from), such as a development build, installs nothing on this Mac and says so there.
 Agent labels are made by hide's own daemon, so there is no labels part to install.
 A machine that still has the old agent labels Herdr plugin, `hide.agent-context-labels`, loses it on the first kit pass after an update: the plugin is unlinked from Herdr (a copy installed from GitHub through `herdr plugin uninstall`), any watcher process holding its lock is stopped, and its copy under `~/.hide/kit/plugins/` and its state folder `~/.local/state/hide.agent-context-labels` are removed.
 On this Mac the first launch reads that state folder once, before it is removed, so a pane whose session the plugin had already labeled keeps that label.
@@ -390,6 +390,7 @@ A move back whose copy has not reached this Mac yet only waits: while the core's
 A move back that fails waits the same way until the core's machine says its core runs again, keeping the copy it placed here; when that machine answers but cannot start its core, the window shows Waiting with the reason, and the move back goes on once that reason is fixed.
 A machine the core moved back from runs no hided afterwards: its `core-handover.json` says the core retired there, so every start of its state folder, by the login item, a window or `hide connect`, ends at once and successfully.
 From then on this Mac is a node of that core: its panes, files and terminals stay here, and the rail marks the core's machine with a crown.
+Hide keeps its kit current on both machines as before: on the core's machine from the build the move placed in `~/.hide/host-helper`, at every start of its core, and on this Mac from this app, every time it links to the core; each machine's row in Settings > Devices shows its kit with Reinstall, and Settings > Agents lists both.
 This Mac's own `⋯` menu moves the core back, or disconnects from the core: while disconnected the core refuses this Mac's panes, files and browser, and **Reconnect** in the window's strip restores them.
 
 What the move leaves on each machine:

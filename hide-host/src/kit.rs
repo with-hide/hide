@@ -19,31 +19,24 @@
 //! (PRD device-herdr-update D-07). A copy is removed only once no process on
 //! the device runs it (D-09).
 //!
-//! When the SSH channel closes, [`stop`] raises the kit's stop flag, which
-//! ends a child the kit is waiting on, so the helper does not outlive its
-//! connection by more than one bounded step (engineering rule 14).
+//! A core or a node that runs a build Hide placed under a helper root (a
+//! moved core's login item runs one) keeps its kit from that root too, but
+//! leaves the builds where the move and the core update put them
+//! (`KitPlace::Build`).
+//!
+//! When the link closes, the serving loop raises its [`Env`]'s stop flag,
+//! which ends a child the kit is waiting on, so the helper does not outlive
+//! its connection by more than one bounded step (engineering rule 14).
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use serde_json::Value;
 
 use crate::error::{ErrorCode, HostError, HostResult};
 use crate::protocol::{KitAction, KitRemoved};
 use crate::serve::{Env, KitPlace};
-
-static STOP: LazyLock<Arc<AtomicBool>> = LazyLock::new(|| Arc::new(AtomicBool::new(false)));
-
-/// The helper's input ended: a kit step still running stops.
-pub(crate) fn stop() {
-    STOP.store(true, Ordering::Relaxed);
-}
-
-/// The flag [`stop`] raises, which a helper's [`Env`] carries.
-pub(crate) fn process_stop() -> Arc<AtomicBool> {
-    Arc::clone(&STOP)
-}
 
 use hide_kit::device_herdr::{self, HerdrUpdate};
 pub use hide_kit::is_build_name;
@@ -63,8 +56,8 @@ pub fn set_herdr_updater(updater: HerdrUpdater) {
 }
 
 /// Answers one `kit` request for the node `env` describes: the helper root
-/// the running helper was installed under, or the desktop package the core's
-/// own node runs from.
+/// the running helper was installed under, the build a core or node runs
+/// from, or the desktop package it runs from.
 pub fn handle(
     action: KitAction,
     cli_dir: &str,
@@ -74,6 +67,26 @@ pub fn handle(
 ) -> HostResult<Value> {
     match &env.kit {
         KitPlace::Installed => {}
+        KitPlace::Build { root, version } => {
+            let home = env.home.clone().ok_or_else(|| {
+                HostError::new(
+                    ErrorCode::Unsupported,
+                    "HOME is not set, so Hide cannot tell where to install",
+                )
+            })?;
+            return run_build(
+                &Placement {
+                    root: root.clone(),
+                    version: version.clone(),
+                    home,
+                },
+                action,
+                cli_dir,
+                herdr_socket,
+                retirement_projects,
+                Arc::clone(&env.stop),
+            );
+        }
         KitPlace::Bundled(kit_dir) => {
             return bundled(
                 kit_dir,
@@ -146,10 +159,52 @@ fn bundled(
             to_value(hide_kit::apply(&target, &scope_of(action)))
         }
         KitAction::Status => to_value(hide_kit::status(&target)),
-        KitAction::Remove => Err(HostError::new(
-            ErrorCode::Unsupported,
-            "The core's own machine is not removed from Hide",
-        )),
+        KitAction::Remove => Err(not_removed()),
+    }
+}
+
+/// A machine that runs Hide itself, as the core or as a node that dials
+/// it, keeps its kit when its row goes: it registers again on its next
+/// link.
+fn not_removed() -> HostError {
+    HostError::new(
+        ErrorCode::Unsupported,
+        "A machine that runs Hide itself is not removed from Hide",
+    )
+}
+
+/// The kit of a core or node that runs a build Hide placed: it installs
+/// from the root's `current`, which it points at this build first so the
+/// hooks and the `hide` link name the build that runs, and it removes no
+/// build and points no Herdr copy, since the move and the core update own
+/// both (`adopt_build`). Public for the core's tests, which place a build
+/// folder without a device.
+pub fn run_build(
+    placement: &Placement,
+    action: KitAction,
+    cli_dir: &str,
+    herdr_socket: Option<&str>,
+    retirement_projects: &[String],
+    stop: Arc<AtomicBool>,
+) -> HostResult<Value> {
+    let home = &placement.home;
+    let Inputs {
+        projects,
+        cli_dir,
+        herdr_socket,
+    } = Inputs::read(home, cli_dir, herdr_socket, retirement_projects)?;
+    let mut target = hide_kit::device_target(&placement.root, home, &cli_dir, &herdr_socket, stop);
+    target.retirement_projects = projects;
+    match action {
+        KitAction::Apply | KitAction::Reinstall { .. } => {
+            if let Err(reason) = hide_kit::retirement_preflight(&target) {
+                return to_value(hide_kit::retirement_blocked(&target, reason));
+            }
+            point_current(&placement.root, &placement.version)?;
+            to_value(hide_kit::apply(&target, &scope_of(action)))
+        }
+        KitAction::Status => to_value(hide_kit::status(&target)),
+        KitAction::Remove => Err(not_removed()),
     }
 }
 
@@ -165,7 +220,7 @@ pub struct Placement {
 /// `<root>/<16 hex>/hided`; any other copy, such as one a
 /// developer started by hand, runs no kit.
 fn install_layout(executable: &Path) -> HostResult<(PathBuf, String)> {
-    let refused = || {
+    build_layout(executable).ok_or_else(|| {
         HostError::new(
             ErrorCode::Unsupported,
             format!(
@@ -173,15 +228,19 @@ fn install_layout(executable: &Path) -> HostResult<(PathBuf, String)> {
                 executable.display()
             ),
         )
-    };
-    let version_dir = executable.parent().ok_or_else(refused)?;
+    })
+}
+
+/// The root and build of a program at `<root>/<16 hex>/<program>`, the
+/// folder every install of a build into a helper root makes.
+pub(crate) fn build_layout(executable: &Path) -> Option<(PathBuf, String)> {
+    let version_dir = executable.parent()?;
     let version = version_dir
         .file_name()
         .and_then(|name| name.to_str())
-        .filter(|name| is_build_name(name))
-        .ok_or_else(refused)?;
-    let root = version_dir.parent().ok_or_else(refused)?;
-    Ok((root.to_path_buf(), version.to_owned()))
+        .filter(|name| is_build_name(name))?;
+    let root = version_dir.parent()?;
+    Some((root.to_path_buf(), version.to_owned()))
 }
 
 /// Runs `action` for a helper placed at `placement`. Public for the core's
@@ -581,6 +640,107 @@ mod tests {
             let refused = install_layout(Path::new(elsewhere)).unwrap_err();
             assert_eq!(refused.code, ErrorCode::Unsupported, "{elsewhere}");
         }
+    }
+
+    /// A core or a node installs the kit only from a program Hide put on
+    /// the machine: the app's package, or a build placed under a helper
+    /// root, which a moved core's login item runs. A development build has
+    /// no kit place, whatever folder it sits in.
+    #[test]
+    fn a_core_installs_from_its_package_or_a_placed_build_and_never_from_a_build_directory() {
+        assert_eq!(
+            KitPlace::of_program(Path::new("/Applications/hide.app/Contents/Resources/hided")),
+            KitPlace::Bundled(PathBuf::from("/Applications/hide.app/Contents/Resources"))
+        );
+        assert_eq!(
+            KitPlace::of_program(Path::new(
+                "/Users/me/.hide/host-helper/0123456789abcdef/hided"
+            )),
+            KitPlace::Build {
+                root: PathBuf::from("/Users/me/.hide/host-helper"),
+                version: "0123456789abcdef".to_owned(),
+            }
+        );
+        for elsewhere in [
+            "/work/hide/target/debug/hided",
+            "/work/hide/target/release/hided",
+            "/Users/me/.hide/host-helper/current/hided",
+        ] {
+            assert_eq!(
+                KitPlace::of_program(Path::new(elsewhere)),
+                KitPlace::Standalone,
+                "{elsewhere}"
+            );
+        }
+    }
+
+    /// A moved core's pass installs from the build it runs and keeps the
+    /// build a core update may go back to (`adopt_build`): `current` leads
+    /// to the running build before anything is installed, and no other
+    /// build is removed. Another kit holds the account and the core is
+    /// quitting, so the pass ends there, before any part or child.
+    #[test]
+    fn a_core_s_kit_points_current_at_its_build_and_removes_no_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let previous = placed(dir.path(), "aaaaaaaaaaaaaaaa");
+        let placement = placed(dir.path(), "bbbbbbbbbbbbbbbb");
+        hide_platform::fs::link::create_link(
+            Path::new(&previous.version),
+            &placement.root.join("current"),
+        )
+        .unwrap();
+        let kit_folder = placement.home.join(".hide/kit");
+        hide_platform::fs::private::create_dir_all(&kit_folder).unwrap();
+        let held = hide_platform::fs::lock::lock_file(
+            hide_platform::fs::private::open_or_create_file(&kit_folder.join(".lock")).unwrap(),
+            hide_platform::fs::lock::Mode::Exclusive,
+            std::time::Duration::from_secs(5),
+            &|| false,
+        )
+        .unwrap();
+
+        let report = run_build(
+            &placement,
+            KitAction::Apply,
+            "~/.local/bin",
+            Some("~/private-herdr.sock"),
+            &[],
+            Arc::new(AtomicBool::new(true)),
+        )
+        .unwrap();
+        drop(held);
+        let report: hide_kit::KitReport = serde_json::from_value(report).unwrap();
+        assert!(
+            report.components.iter().all(|part| {
+                part.state == hide_kit::ComponentState::Failed
+                    && part.reason.as_deref() == Some("Hide is quitting")
+            }),
+            "{report:?}"
+        );
+        assert!(hide_platform::fs::link::is_link_to(
+            &placement.root.join("current"),
+            Path::new(&placement.version)
+        ));
+        assert!(
+            placement
+                .root
+                .join(&previous.version)
+                .join("hided")
+                .is_file()
+        );
+        assert!(!placement.home.join(".local/bin").exists());
+
+        let refused = run_build(
+            &placement,
+            KitAction::Remove,
+            "~/.local/bin",
+            None,
+            &[],
+            Arc::default(),
+        )
+        .unwrap_err();
+        assert_eq!(refused.code, ErrorCode::Unsupported);
+        assert!(placement.root.join(&placement.version).is_dir());
     }
 
     #[test]

@@ -757,14 +757,13 @@ fn owner_loop(
     own_node = own_node
         .keeping_worktree_facts_in(hide_kit::layout::worktree_facts(&state_dir))
         .keeping_feedback_in(state_dir);
-    // The install kit's parts ship beside this binary in the app bundle; a
-    // daemon anywhere else installs nothing (PRD device-parity D-19).
-    if let Some(kit_dir) = std::env::current_exe()
-        .ok()
-        .as_deref()
-        .and_then(hide_kit::bundled_kit_dir)
-    {
-        own_node = own_node.bundled(kit_dir);
+    // The install kit's parts ship beside this binary: in the app bundle, or
+    // in the build folder a move or a core update placed under the helper
+    // root, which a moved core's login item runs. A daemon anywhere else, a
+    // development build among them, installs nothing (PRD device-parity
+    // D-19).
+    if let Ok(executable) = std::env::current_exe() {
+        own_node = own_node.with_kit(hide_host::serve::KitPlace::of_program(&executable));
     }
     let own_herdr = options
         .herdr_socket_path

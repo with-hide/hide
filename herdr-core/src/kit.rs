@@ -12,8 +12,9 @@
 //! The core closes its own node when it stops, which ends a child the kit is
 //! waiting on; dropping the pump then joins the thread (engineering rule 14).
 //!
-//! A device's kit runs on its helper (`hide_host::kit`); a worker per device
-//! makes those calls while the device has kit work queued.
+//! A device's kit runs on its helper (`hide_host::kit`), and a node's that
+//! dials this core on that node, through its link; a worker per device makes
+//! those calls while the device has kit work queued.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak, mpsc};
@@ -32,8 +33,9 @@ const PUMP_TICK: Duration = Duration::from_millis(250);
 /// removal, plugin uninstall and the remaining kit components.
 const KIT_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// Where the core's own machine links `hide`, under its node's home.
-const LOCAL_CLI_DIR: &str = "~/.local/bin";
+/// Where the core's own machine, and a node that dials it, links `hide`,
+/// under that node's home.
+pub(crate) const LOCAL_CLI_DIR: &str = "~/.local/bin";
 
 /// The hook diagnosis is two small file reads.
 const HOOK_DIAGNOSIS_TIMEOUT: Duration = Duration::from_secs(10);

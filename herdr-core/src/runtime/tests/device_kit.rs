@@ -42,7 +42,7 @@ impl KitDevice {
         (device, release)
     }
 
-    fn calls(&self) -> Vec<(KitAction, String, Option<String>)> {
+    pub(super) fn calls(&self) -> Vec<(KitAction, String, Option<String>)> {
         self.calls.lock().unwrap().clone()
     }
 }
@@ -95,7 +95,7 @@ impl NodeLink for KitDevice {
     }
 }
 
-fn report(states: &[(ComponentId, ComponentState)]) -> KitReport {
+pub(super) fn report(states: &[(ComponentId, ComponentState)]) -> KitReport {
     KitReport {
         components: states
             .iter()

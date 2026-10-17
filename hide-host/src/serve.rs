@@ -87,6 +87,7 @@ pub fn serve_with_terminals(
                     Path::new(&home),
                 ))
             }),
+            kit: KitPlace::Installed,
         },
     )
 }
@@ -127,6 +128,10 @@ pub struct Services<'a> {
     /// that restarted or linked again measures only the worktrees that
     /// moved; none keeps them for this link only.
     pub worktree_facts: Option<PathBuf>,
+    /// Where the node's install kit takes its parts from: a device's helper
+    /// is installed under its helper root, and a node that dialed its core
+    /// runs from the program its machine has (`KitPlace::of_program`).
+    pub kit: KitPlace,
 }
 
 /// The checkout roots a node's core opened on it over one link, which are
@@ -194,6 +199,7 @@ impl Services<'_> {
             browser: None,
             factory: false,
             worktree_facts: None,
+            kit: KitPlace::Installed,
         }
     }
 }
@@ -213,6 +219,13 @@ fn serve_in(
     env: Env,
     services: Services<'_>,
 ) -> io::Result<()> {
+    // A kit step still running when this link ends stops with it, and so
+    // does none of the next link's (a node that dials its core again).
+    let env = Env {
+        kit: services.kit,
+        stop: Arc::default(),
+        ..env
+    };
     let env = match services.worktree_facts {
         Some(folder) => Env {
             worktrees: Arc::new(worktrees::Measured::kept_in(folder)),
@@ -354,6 +367,25 @@ fn serve_in(
                                 )
                             },
                         ),
+                        // A core that names no server installs against the
+                        // one this link bridges: a node that dialed its core
+                        // knows its own Herdr, which the core does not.
+                        Call::Kit {
+                            action,
+                            cli_dir,
+                            herdr_socket: None,
+                            retirement_projects,
+                        } if link.herdr_socket().is_some() => handle_in(
+                            Call::Kit {
+                                action,
+                                cli_dir,
+                                herdr_socket: link
+                                    .herdr_socket()
+                                    .map(|own| own.to_string_lossy().into_owned()),
+                                retirement_projects,
+                            },
+                            env,
+                        ),
                         Call::RootOpen { root } => {
                             let opened = handle_in(Call::RootOpen { root: root.clone() }, env);
                             if opened.is_ok()
@@ -431,7 +463,7 @@ fn serve_in(
         // The connection is gone: a kit step still running ends its child
         // rather than keep the helper alive after it, and the pane service
         // ends its listener and streams so the scope can close.
-        crate::kit::stop();
+        env.stop.store(true, std::sync::atomic::Ordering::Relaxed);
         panes.stop();
         result
     });
@@ -802,15 +834,41 @@ fn process_ai() -> Arc<crate::ai::Backends> {
 /// target it installs into.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum KitPlace {
-    /// A helper Hide installed under a helper root: the root the running
-    /// executable sits in (`kit::handle`).
+    /// A device's helper Hide installed under a helper root: the root the
+    /// running executable sits in (`kit::handle`). Each connection's pass
+    /// points `current` at its build and removes the others, since the
+    /// connection placed them.
     Installed,
+    /// A build Hide placed under a helper root that runs as a core or a
+    /// node, as a moved core's login item runs it (`<root>/<16 hex>/hided`):
+    /// the kit installs from `<root>/current`, which it points at this
+    /// build, and removes no build, since the core update keeps the one it
+    /// may go back to (`kit::adopt_build`).
+    Build { root: PathBuf, version: String },
     /// The resources folder of the desktop package the node runs from
     /// (`hide_kit::bundled_kit_dir`).
     Bundled(PathBuf),
     /// A development or standalone daemon, which installs nothing
     /// (`hide_kit::STANDALONE_REASON`).
     Standalone,
+}
+
+impl KitPlace {
+    /// Where the kit of a core's own node, or of a node that dialed its
+    /// core, takes its parts from, read from the program it runs: a desktop
+    /// package, or a build Hide placed under a helper root. Any other copy,
+    /// a Cargo build directory among them, installs nothing, because a hook
+    /// that names a folder the next build deletes fails every session after
+    /// it (the 2026-09-10 hook incident).
+    pub fn of_program(executable: &Path) -> Self {
+        if let Some(kit_dir) = hide_kit::bundled_kit_dir(executable) {
+            return Self::Bundled(kit_dir);
+        }
+        match crate::kit::build_layout(executable) {
+            Some((root, version)) => Self::Build { root, version },
+            None => Self::Standalone,
+        }
+    }
 }
 
 impl Env {
@@ -820,7 +878,7 @@ impl Env {
             home: std::env::var_os("HOME").map(PathBuf::from),
             kit: KitPlace::Installed,
             shell: crate::shell_integration::UserShell::of_process(),
-            stop: crate::kit::process_stop(),
+            stop: Arc::default(),
             ai: process_ai(),
             factory: Arc::default(),
             label_locks: Arc::default(),
