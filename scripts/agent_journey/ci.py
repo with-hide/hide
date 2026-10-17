@@ -55,7 +55,13 @@ FIXTURE_UNTRUSTED = "not measured: a stand-in has no folder question; the login 
 FIXTURE_AGENTS = ("claude-code", "codex")
 # Why the stand-in lane leaves every other agent unstarted.
 FIXTURE_ONLY = "a stand-in imitates Claude Code and Codex only; the fake model lane measures this agent"
-FIXTURE_CELLS = tuple(name for name in cells.BUILT_CELLS if name != "start_untrusted")
+# Cells the C stand-in does not imitate: it answers no question from its
+# start's context, forks nothing, writes no title and no token usage. The
+# keyless lane measures them once it runs the pinned CLIs on a fake model.
+FIXTURE_UNIMITATED = {cell: "the C stand-in does not imitate it; the signed-in lane measures it"
+                      for cell in ("guidance_memory", "fork", "title", "usage")}
+FIXTURE_CELLS = tuple(name for name in cells.BUILT_CELLS
+                      if name != "start_untrusted" and name not in FIXTURE_UNIMITATED)
 
 # What a fixture stand-in cannot show, said in its report (PRD B27).
 FIXTURE_LIMITS = [

@@ -74,7 +74,7 @@ impl NodeLink for Node {
     }
 }
 
-fn agent_row(session: bool, shows: bool) -> Value {
+fn agent_row(session: Option<&str>, shows: bool) -> Value {
     let mut row = json!({"pane_id": "w2:p1", "workspace_id": "w2", "tab_id": "w2:t1",
         "terminal_id": "device-terminal", "revision": 1, "focused": false,
         "agent_status": "idle", "agent": "codex", "name": "worker"});
@@ -84,22 +84,23 @@ fn agent_row(session: bool, shows: bool) -> Value {
         row["launch_pending"] = json!(true);
         return row;
     }
-    if session {
+    if let Some(session) = session {
         row["agent_session"] = json!({"source": "herdr:codex", "agent": "codex",
-            "kind": "id", "value": "device-child-session"});
+            "kind": "id", "value": session});
     }
     row
 }
 
 /// The device's Herdr: no worktree yet, one created on request, an agent that
-/// exists once it is started, unless `shows` is false. A start whose agent
+/// exists once it is started, unless `shows` is false, and reports `session`
+/// once it has one; closing its pane ends it. A start whose agent
 /// does not show holds its name (`held`) until the test says Herdr's deadline
 /// passed; `agent.get` then answers the name is gone. The pane shows its
 /// shell's first-prompt mark once `unmarked` reads of it have passed, and
 /// `refused` makes Herdr refuse the next start before typing anything.
 fn device_herdr(
     started: Arc<AtomicBool>,
-    identified: Arc<AtomicBool>,
+    session: Arc<Mutex<Option<String>>>,
     shows: Arc<AtomicBool>,
     held: Arc<AtomicBool>,
     unmarked: Arc<AtomicUsize>,
@@ -147,13 +148,13 @@ fn device_herdr(
             "agent.start" => {
                 started.store(true, Ordering::SeqCst);
                 held.store(true, Ordering::SeqCst);
-                json!({"type": "agent_started", "argv": [], "agent": agent_row(false, true)})
+                json!({"type": "agent_started", "argv": [], "agent": agent_row(None, true)})
             }
             "agent.list" => {
                 let shows = shows.load(Ordering::SeqCst);
                 json!({"type": "agent_list", "agents":
                 if started.load(Ordering::SeqCst) && (shows || held.load(Ordering::SeqCst)) {
-                    vec![agent_row(identified.load(Ordering::SeqCst), shows)]
+                    vec![agent_row(session.lock().unwrap().as_deref(), shows)]
                 } else {
                     Vec::new()
                 }})
@@ -164,7 +165,11 @@ fn device_herdr(
                     "agent target worker not found".into(),
                 ));
             }
-            "agent.get" => json!({"type": "agent_info", "agent": agent_row(false, false)}),
+            "agent.get" => json!({"type": "agent_info", "agent": agent_row(None, false)}),
+            "pane.close" => {
+                started.store(false, Ordering::SeqCst);
+                json!({"type": "ok"})
+            }
             "pane.report_metadata" => json!({"type": "ok"}),
             other => panic!("unexpected {other}"),
         })
@@ -177,8 +182,8 @@ struct Spawner {
     runtime: Arc<Mutex<Runtime>>,
     actor: Actor,
     node: Arc<Node>,
-    /// Whether the device's agent has reported its native session yet.
-    identified: Arc<AtomicBool>,
+    /// The native session the device's agent reports; none until it has one.
+    session: Arc<Mutex<Option<String>>>,
     /// Whether the device's agent shows at all once its start is typed.
     shows: Arc<AtomicBool>,
     /// Whether Herdr still holds the name of a start whose agent did not show.
@@ -214,14 +219,14 @@ fn spawner() -> Spawner {
         .unwrap()
         .observe_delivery(crate::node::TEST_NODE, &payload, None, None);
     let started = Arc::new(AtomicBool::new(false));
-    let identified = Arc::new(AtomicBool::new(true));
+    let session = Arc::new(Mutex::new(Some("device-child-session".to_owned())));
     let shows = Arc::new(AtomicBool::new(true));
     let held = Arc::new(AtomicBool::new(false));
     let unmarked = Arc::new(AtomicUsize::new(0));
     let refused = Arc::new(AtomicBool::new(false));
     let herdr = device_herdr(
         started,
-        identified.clone(),
+        session.clone(),
         shows.clone(),
         held.clone(),
         unmarked.clone(),
@@ -335,7 +340,7 @@ fn spawner() -> Spawner {
         runtime,
         actor,
         node,
-        identified,
+        session,
         shows,
         held,
         unmarked,
@@ -559,7 +564,7 @@ fn the_callers_own_machine_is_no_machine() {
 #[test]
 fn a_spawn_that_stopped_after_its_pane_resumes_without_the_device_checks() {
     let spawner = spawner();
-    spawner.identified.store(false, Ordering::SeqCst);
+    *spawner.session.lock().unwrap() = None;
     let error = spawner
         .spawn(Some("here"), Some(DEVICE), "resume")
         .expect_err("the agent never reported its session");
@@ -571,7 +576,7 @@ fn a_spawn_that_stopped_after_its_pane_resumes_without_the_device_checks() {
     // does not ask the node about them again.
     spawner.node.repository.store(false, Ordering::SeqCst);
     spawner.node.installed.store(false, Ordering::SeqCst);
-    spawner.identified.store(true, Ordering::SeqCst);
+    *spawner.session.lock().unwrap() = Some("device-child-session".to_owned());
     let answer = spawner
         .spawn(Some("here"), Some(DEVICE), "resume")
         .expect("the retry finishes the same spawn");
@@ -810,4 +815,100 @@ fn a_device_herdr_that_refuses_keeps_its_own_failure() {
         .expect_err("the device Herdr refuses");
     assert_ne!(error, "machine_unavailable");
     assert!(error.contains("repository_busy"), "{error}");
+}
+
+/// Pi and omp name a session by its file path, which a deep checkout makes
+/// longer than 256 bytes: the child is spawned and kept in a ledger that reads
+/// back, up to Herdr's own 4096-byte bound for a session path.
+#[test]
+fn a_child_whose_session_passes_256_bytes_is_spawned_and_kept() {
+    for bytes in [300, crate::delivery::SESSION_LIMIT] {
+        let spawner = spawner();
+        let session = format!("/{}.jsonl", "s".repeat(bytes - 7));
+        *spawner.session.lock().unwrap() = Some(session.clone());
+        let child = spawner
+            .spawn(Some("here"), Some(DEVICE), "long-session")
+            .unwrap_or_else(|error| panic!("{bytes} bytes: {error}"));
+        assert_eq!(child["session"], session.as_str(), "{bytes}");
+        assert!(
+            spawner
+                .ledger()
+                .agents
+                .iter()
+                .any(|record| record.session == session),
+            "{bytes}"
+        );
+        assert_eq!(spawner.count("pane.close"), 0, "{bytes}");
+    }
+}
+
+/// A session past what a registration keeps is refused by its own reason,
+/// never as an unavailable ledger, and the pane the spawn made is closed
+/// rather than left running with nothing tracking its agent.
+#[test]
+fn a_child_whose_session_cannot_be_kept_is_refused_and_its_pane_closed() {
+    let spawner = spawner();
+    let past = format!("/{}", "s".repeat(crate::delivery::SESSION_LIMIT));
+    *spawner.session.lock().unwrap() = Some(past);
+    let error = spawner
+        .spawn(Some("here"), Some(DEVICE), "too-long")
+        .unwrap_err();
+    assert_eq!(split_refusal(&error).0, "session_too_long");
+    assert_eq!(spawner.count("pane.close"), 1);
+    let ledger = spawner.ledger();
+    assert_eq!(ledger.agents.len(), 1, "only the caller is registered");
+    assert!(ledger.spawns[0].child.is_none());
+}
+
+/// `hide agent register` keeps a session past 256 bytes as a spawn does,
+/// and refuses one past Herdr's bound by the same reason before it asks
+/// Herdr anything.
+#[test]
+fn an_explicit_registration_keeps_a_session_past_256_bytes() {
+    let spawner = spawner();
+    let session = format!("/{}.jsonl", "s".repeat(300));
+    let reported = session.clone();
+    let local = FakeHerdr::start("register-long-session", move |method, _| match method {
+        "agent.list" => json!({"type": "agent_list", "agents": [{
+            "pane_id": "w5:p1", "workspace_id": "w5", "tab_id": "w5:t1",
+            "terminal_id": "local-terminal", "revision": 1, "focused": false,
+            "agent_status": "idle", "agent": "pi", "name": "pi-child",
+            "agent_session": {"source": "herdr:pi", "agent": "pi",
+                "kind": "path", "value": reported}}]}),
+        "pane.report_metadata" => json!({"type": "ok"}),
+        other => panic!("unexpected {other}"),
+    });
+    crate::runtime::delivery::tests::set_live(&mut spawner.runtime.lock().unwrap(), Some(&local));
+    let register = |session: String| {
+        crate::coordination::run(
+            spawner.client.clone(),
+            authority(&spawner.actor),
+            spawner.actor.clone(),
+            Command::Register {
+                check: false,
+                machine: None,
+                host_scope: local.socket_path().to_str().unwrap().to_owned(),
+                session,
+                instance: "w5:p1".into(),
+                name: "pi-child".into(),
+                pane: "w5:p1".into(),
+                parent: Some("here".into()),
+                project: None,
+            },
+        )
+    };
+    let child = register(session.clone()).unwrap();
+    assert_eq!(child["session"], session.as_str());
+    assert_eq!(child["parent"], "agent-1");
+    assert!(
+        spawner
+            .ledger()
+            .agents
+            .iter()
+            .any(|record| record.session == session)
+    );
+    let asked = local.methods().len();
+    let past = format!("/{}", "s".repeat(crate::delivery::SESSION_LIMIT));
+    assert_eq!(register(past).unwrap_err(), "session_too_long");
+    assert_eq!(local.methods().len(), asked);
 }

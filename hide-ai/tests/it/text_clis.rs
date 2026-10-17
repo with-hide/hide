@@ -18,8 +18,9 @@ use hide_ai::{
 };
 use serde_json::{Value, json};
 
-/// The stand-in: records what it was started with, then answers the first
-/// rule whose `when` words are all among its arguments.
+/// The stand-in: records what it was started with, appends a line to the
+/// file each `append_args` flag names (as a CLI writes its log), then answers
+/// the first rule whose `when` words are all among its arguments.
 const SCRIPT: &str = r#"#!/usr/bin/env python3
 import json, os, sys, time
 SCRIPT = json.loads(r'''__SCRIPT__''')
@@ -32,6 +33,10 @@ for flag in SCRIPT.get("file_args", []):
         with open(path, encoding="utf-8") as handle:
             files[flag] = {"text": handle.read(), "mode": oct(os.stat(path).st_mode & 0o777),
                            "dir_mode": oct(os.stat(os.path.dirname(path)).st_mode & 0o777)}
+for flag in SCRIPT.get("append_args", []):
+    if flag in argv:
+        with open(argv[argv.index(flag) + 1], "a", encoding="utf-8") as handle:
+            handle.write(" ".join(argv) + "\n")
 for name in SCRIPT.get("file_env", []):
     path = os.environ.get(name)
     if path:
@@ -588,7 +593,8 @@ fn agy_fake(rules: Value) -> Fake {
     let python = String::from_utf8(found.stdout).unwrap().trim().to_owned();
     let fake = Fake::new(
         "agy",
-        json!({"rules": rules, "env_keys": ["PATH", "AGY_CLI_DISABLE_AUTO_UPDATE", "HOME"]}),
+        json!({"rules": rules, "env_keys": ["PATH", "AGY_CLI_DISABLE_AUTO_UPDATE", "HOME"],
+            "append_args": ["--log-file"]}),
     );
     let body = std::fs::read_to_string(&fake.binary).unwrap().replacen(
         "#!/usr/bin/env python3",
@@ -705,6 +711,85 @@ fn agy_is_not_started_until_its_folder_is_trusted_and_a_tool_that_ran_refuses_th
             .unwrap_err(),
         AiError::InvalidOutput("antigravity_tool_ran".to_owned())
     );
+}
+
+#[test]
+fn each_kind_of_agy_child_keeps_only_its_last_log_in_hides_folder() {
+    // agy keeps one log file per process in its own folder and never removes
+    // any, and appends to a file it is given, so every child is handed its
+    // kind's file in Hide's folder and that file holds the last run alone.
+    let usage = json!({"status": "SUCCESS", "response": "", "command": {"name": "usage", "data": {"groups": []}}}).to_string();
+    let fake = agy_fake(json!([
+        { "when": ["stream-json"], "stdout": agy_stream("{\"summary\":\"ok\"}", None) },
+        { "when": ["models"], "stdout": "Fetching available models...\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)\n" },
+        { "when": ["/usage"], "stdout": usage },
+    ]));
+    let (home, _) = agy_home(true);
+    let backend =
+        hide_ai::AntigravityCliBackend::with_home(fake.config(""), Some(home.path().to_path_buf()));
+    for _ in 0..2 {
+        backend.execute(&request(), &CancelToken::new()).unwrap();
+        assert_eq!(backend.availability(), Availability::Ready);
+        backend.usage_text(&CancelToken::new()).unwrap();
+    }
+
+    let folder = home.path().join(".hide/ai/antigravity-logs");
+    assert!(hide_platform::fs::private::is_private(&folder).unwrap());
+    let starts = fake.starts();
+    assert_eq!(starts.len(), 6);
+    for (kind, word) in [
+        ("request.log", "stream-json"),
+        ("models.log", "models"),
+        ("usage.log", "/usage"),
+    ] {
+        let log = folder.join(kind);
+        for start in starts
+            .iter()
+            .filter(|start| argv(start).iter().any(|a| a == word))
+        {
+            let args = argv(start);
+            assert!(
+                args.windows(2)
+                    .any(|p| p[0] == "--log-file" && Path::new(&p[1]) == log),
+                "{args:?}"
+            );
+        }
+        let lines = std::fs::read_to_string(&log).unwrap().lines().count();
+        assert_eq!(lines, 1, "{kind} holds the last run's log only");
+    }
+}
+
+#[test]
+fn no_agy_child_starts_while_its_log_file_cannot_be_emptied() {
+    // Something that is not a folder where Hide keeps agy's logs: running
+    // agy anyway would put its log back in agy's own folder, unbounded.
+    let fake = agy_fake(json!([{ "stdout": "{}" }]));
+    let (home, _) = agy_home(true);
+    std::fs::create_dir_all(home.path().join(".hide/ai")).unwrap();
+    std::fs::write(
+        home.path().join(".hide/ai/antigravity-logs"),
+        "not a folder",
+    )
+    .unwrap();
+    let backend =
+        hide_ai::AntigravityCliBackend::with_home(fake.config(""), Some(home.path().to_path_buf()));
+
+    let request = backend.execute(&request(), &CancelToken::new());
+    assert!(
+        matches!(&request, Err(AiError::ProviderUnavailable(code)) if code.starts_with("antigravity_log_unavailable:")),
+        "{request:?}"
+    );
+    let models = backend.availability();
+    assert!(
+        matches!(&models, Availability::Unavailable { reason } if reason.starts_with("antigravity_models_log_unavailable:")),
+        "{models:?}"
+    );
+    let usage = backend.usage_text(&CancelToken::new());
+    assert!(
+        matches!(&usage, Err(hide_ai::UsageError::Failed(code)) if code.starts_with("antigravity_usage_log_unavailable:")),
+        "{usage:?}"
+    );
+    assert!(fake.starts().is_empty(), "no agy child was started");
 }
 
 #[test]

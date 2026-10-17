@@ -1278,6 +1278,9 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "shell_starting" => {
             "The new pane's shell had not finished starting; answer what its startup files ask in that pane, then spawn with a new intent"
         }
+        "session_too_long" => {
+            "The agent names its session by a file path longer than 4096 bytes; spawn it with a new intent in a checkout with a shorter path"
+        }
         _ => "Check the current agent pane and retry the same intent",
     }
 }
@@ -4463,6 +4466,7 @@ mod tests {
             "agent_not_started",
             "worktree_unconfirmed",
             "shell_starting",
+            "session_too_long",
         ] {
             let (reason, next) = refusal_answer(code.to_owned(), delivery_next_action(code));
             assert_eq!(reason, code);

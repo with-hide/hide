@@ -104,25 +104,31 @@ class Requests(unittest.TestCase):
         path = session({"type": "assistant", "message": {"id": "a"}}, {"type": "assistant", "message": {"id": "a"}},
                        {"type": "assistant", "message": {"id": "b"}}, {"type": "user", "message": {"id": "c"}},
                        {"type": "assistant", "isApiErrorMessage": True, "message": {"id": "d"}})
-        self.assertEqual(model_requests("claude", path), 2)
+        self.assertEqual(model_requests("claude", [path]), 2)
+
+    def test_a_claude_fork_counts_the_responses_it_copied_once(self):
+        source = session({"type": "assistant", "message": {"id": "a"}}, {"type": "assistant", "message": {"id": "b"}})
+        fork = session({"type": "assistant", "message": {"id": "a"}}, {"type": "assistant", "message": {"id": "b"}},
+                       {"type": "assistant", "message": {"id": "c"}})
+        self.assertEqual(model_requests("claude", [source, fork]), 3)
 
     def test_grok_pi_omp_and_agy_count_their_own_response_records(self):
         grok = session({"params": {"update": {"sessionUpdate": "turn_completed", "prompt_id": "p1", "usage": {"modelCalls": 2}}}},
                        {"params": {"update": {"sessionUpdate": "turn_completed", "prompt_id": "p1", "usage": {"modelCalls": 2}}}},
                        {"params": {"update": {"sessionUpdate": "turn_completed", "prompt_id": "p2", "usage": {"modelCalls": 1}}}},
                        {"params": {"update": {"sessionUpdate": "agent_message_chunk"}}})
-        self.assertEqual(model_requests("grok", grok), 3)
+        self.assertEqual(model_requests("grok", [grok]), 3)
         pi = session({"type": "message", "message": {"role": "assistant"}}, {"type": "message", "message": {"role": "user"}},
                      {"type": "message", "message": {"role": "assistant"}}, {"type": "session"})
-        self.assertEqual(model_requests("pi", pi), 2)
-        self.assertEqual(model_requests("omp", pi), 2)
+        self.assertEqual(model_requests("pi", [pi]), 2)
+        self.assertEqual(model_requests("omp", [pi]), 2)
         agy = session({"type": "USER_INPUT"}, {"type": "PLANNER_RESPONSE"}, {"type": "SYSTEM_MESSAGE"}, {"type": "PLANNER_RESPONSE"})
-        self.assertEqual(model_requests("agy", agy), 2)
+        self.assertEqual(model_requests("agy", [agy]), 2)
 
     def test_codex_counts_token_count_events(self):
         path = session(*([{"type": "event_msg", "payload": {"type": "token_count"}}] * 3),
                        {"type": "event_msg", "payload": {"type": "agent_message"}})
-        self.assertEqual(model_requests("codex", path), 3)
+        self.assertEqual(model_requests("codex", [path, path]), 6)
 
 
 if __name__ == "__main__":

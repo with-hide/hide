@@ -133,6 +133,7 @@ jobs:
         run: |
           bash scripts/verify-cargo.sh cli
           bash scripts/verify-cargo.sh build -p hide-session --example journey_conversation
+          bash scripts/verify-cargo.sh build -p hide-memory --example journey_memory
       - name: Fetch the pinned Herdr runtime
         id: herdr
         timeout-minutes: 5
@@ -368,6 +369,7 @@ jobs:
         run: |
           bash scripts/verify-cargo.sh cli
           bash scripts/verify-cargo.sh build -p hide-session --example journey_conversation
+          bash scripts/verify-cargo.sh build -p hide-memory --example journey_memory
       - name: Fetch the pinned Herdr runtime
         if: ${{ steps.agents.outputs.kinds != '' }}
         id: herdr

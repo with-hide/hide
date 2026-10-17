@@ -17,7 +17,7 @@ from agent_live_check.processes import ProcessError
 from agent_live_check.protection import write_private
 from agent_live_check.system import git
 
-from . import cells
+from . import cells, fork, kit, memory, title, usage
 from .ci import redact
 from .quota import model_requests, spent_quota
 
@@ -43,6 +43,12 @@ TOOL_LETTER = ("this agent takes a letter only at a tool call its model makes wh
                "allowing UserPromptSubmit hook prints)")
 LETTER_BODY = "Reply with exactly the token on the next line of this letter.\n"
 LETTER_PROMPT = "Reply with exactly the token on the second line of the letter attached to this prompt."
+# The cells each measured by a module of its own, judging what Hide shows.
+MEASURES = {module.CELL: module.measure for module in (kit, memory, fork, title, usage)}
+# The steps of one agent's journey in order, each from the state the last
+# left: the cells that only read what Hide shows come where that state is,
+# the fork before Sleep so its source still runs the session it copies.
+STEPS = ("start", "integration", "guidance_memory", "letter", "fork", "sleep_wake", "resume", "title", "usage")
 
 
 def created_branch(runtime, repository, branch, worktree):
@@ -86,6 +92,8 @@ class Journey:
         self.id, self.kind = contract_row["id"], contract_row["herdr_kind"]
         self.run = runtime.run
         self.pane = self.agent = self.session = self.reference = self.checkout = None
+        # Every pane this journey's spawns and fork opened, which close() ends.
+        self.opened = []
         # A model reaches the agent only through the product's own model flag.
         self.model_args = [part.replace("{}", model) for part in contract_row["model_flag"]] if model else []
 
@@ -188,11 +196,14 @@ class Journey:
         """Runs one step; a transport failure or a bound it reached fails the
         step's open cell with that reason, and cancellation stops the run."""
         try:
-            getattr(self, name)(*args)
+            if name in MEASURES:
+                MEASURES[name](self, *args)
+            else:
+                getattr(self, name)(*args)
         except ProcessError as error:
             if self.runtime.owner.cancelled.is_set():
                 raise
-            for cell in self.STEP_CELLS[name]:
+            for cell in self.STEP_CELLS.get(name, (name,)):
                 if self.table[self.id][cell]["status"] == cells.PENDING:
                     self.settle(cell, (cells.FAIL, str(error)))
                     break
@@ -234,6 +245,7 @@ class Journey:
         spawned = cells.spawn_verdict(answer)
         view = answer.get("value") or {}
         self.pane, self.agent, self.session = view.get("pane"), view.get("id"), view.get("session")
+        self.opened.append(self.pane)
         self.checkout = worktree.resolve()
         evidence = self.evidence("spawn", self.record["spawn"])
         if spawned[0] != cells.PASS:
@@ -518,6 +530,23 @@ class Journey:
         self.daemon.dispatch("key", {"pane_id": self.pane, "bytes_base64": base64.b64encode(b"\r").decode()})
         return True
 
+    def turn_in(self, pane, record):
+        """Types a prompt into `pane`, another agent pane this journey
+        opened, as the operator does, and waits for its answer there. Returns
+        (verdict, read, token); the journey's own pane is unchanged after."""
+        saved = self.pane, self.session, self.reference
+        self.pane, self.session, self.reference = pane, None, None
+        try:
+            value = record["token"] = token()
+            since = self.daemon.mark(pane)
+            if not self.type_prompt(record, prompt(value)):
+                return (cells.FAIL, "the pane's terminal never took this screen's keys (transport "
+                        + " -> ".join(map(str, record["terminal"])) + ")"), {}, value
+            turn, read, record["activities"] = self.wait_turn(since, value)
+            return turn, read, value
+        finally:
+            self.pane, self.session, self.reference = saved
+
     def wait_ready(self):
         """Herdr reads the woken agent ready for input."""
         try:
@@ -544,6 +573,7 @@ class Journey:
         spawned = cells.spawn_verdict(answer)
         saved_pane, saved = self.pane, (self.agent, self.session, self.reference, self.checkout)
         self.pane = (answer.get("value") or {}).get("pane") or self.pane_of(answer)
+        self.opened.append(self.pane)
         try:
             if spawned[0] != cells.PASS:
                 self.settle("start_untrusted", spawned, self.evidence("start-untrusted", record))
@@ -561,9 +591,25 @@ class Journey:
             self.pane = saved_pane
             self.agent, self.session, self.reference, self.checkout = saved
 
+    def close(self):
+        """Ends the panes this journey opened once its cells are settled. The
+        run's guardian caps the private Herdr's processes at 2 GiB together,
+        and each finished agent would otherwise keep its share beside the
+        next agent's; a pane that does not close is named, and the run's
+        teardown ends it."""
+        closed = self.record["closed"] = {}
+        for pane in dict.fromkeys(pane for pane in self.opened if pane):
+            try:
+                code, _, err = self.runtime.command(["pane", "close", pane], check=False)
+            except ProcessError as error:
+                if self.runtime.owner.cancelled.is_set():
+                    raise
+                code, err = 1, str(error)
+            closed[pane] = "closed" if not code else err.strip()[:300] or f"exit {code}"
+
     def requests(self):
         """Model requests the run's sessions of this agent made."""
-        return sum(model_requests(self.kind, path) for path in self.paths)
+        return model_requests(self.kind, self.paths)
 
     def herdr_view(self, worktree):
         """What Herdr holds for a refused spawn: its workspaces and the

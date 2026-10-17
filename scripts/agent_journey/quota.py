@@ -131,34 +131,40 @@ def records(path):
     return found
 
 
-def model_requests(kind, path):
-    """Model requests one session made: Claude Code writes one assistant
-    record per response, several for one response sharing its message id;
-    Codex writes one token count event per response; Grok counts its model
-    calls on each prompt's `turn_completed` usage; Pi and omp write one
-    assistant message per response; agy one `PLANNER_RESPONSE` step."""
+def model_requests(kind, paths):
+    """Model requests an agent's sessions made: Claude Code writes one
+    assistant record per response, several for one response sharing its
+    message id, and a forked session repeats the responses it copied under
+    their ids, so each id counts once across `paths`; Codex writes one token
+    count event per response, and a forked rollout repeats none of its
+    source's; Grok counts its model calls on each prompt's `turn_completed`
+    usage, each prompt once across `paths`; Pi and omp write one assistant
+    message per response; agy one `PLANNER_RESPONSE` step."""
     if kind == "grok":
         calls = {}
-        for record in records(path):
-            update = (record.get("params") or {}).get("update") if isinstance(record.get("params"), dict) else None
-            if isinstance(update, dict) and update.get("sessionUpdate") == "turn_completed":
-                usage = update.get("usage") if isinstance(update.get("usage"), dict) else {}
-                if isinstance(usage.get("modelCalls"), int):
-                    calls[update.get("prompt_id")] = usage["modelCalls"]
+        for path in paths:
+            for record in records(path):
+                params = record.get("params") if isinstance(record.get("params"), dict) else {}
+                update = params.get("update")
+                if isinstance(update, dict) and update.get("sessionUpdate") == "turn_completed":
+                    usage = update.get("usage") if isinstance(update.get("usage"), dict) else {}
+                    if isinstance(usage.get("modelCalls"), int):
+                        calls[update.get("prompt_id")] = usage["modelCalls"]
         return sum(calls.values())
     if kind in ("pi", "omp"):
-        return sum(1 for record in records(path) if record.get("type") == "message"
+        return sum(1 for path in paths for record in records(path) if record.get("type") == "message"
                    and isinstance(record.get("message"), dict) and record["message"].get("role") == "assistant")
     if kind == "agy":
-        return sum(1 for record in records(path) if record.get("type") == "PLANNER_RESPONSE")
+        return sum(1 for path in paths for record in records(path) if record.get("type") == "PLANNER_RESPONSE")
     if kind == "claude":
         ids = set()
-        for record in records(path):
-            message = record.get("message") if isinstance(record.get("message"), dict) else {}
-            if record.get("type") == "assistant" and record.get("isApiErrorMessage") is not True and message.get("id"):
-                ids.add(message["id"])
+        for path in paths:
+            for record in records(path):
+                message = record.get("message") if isinstance(record.get("message"), dict) else {}
+                if record.get("type") == "assistant" and record.get("isApiErrorMessage") is not True and message.get("id"):
+                    ids.add(message["id"])
         return len(ids)
     if kind == "codex":
-        return sum(1 for record in records(path) if record.get("type") == "event_msg"
+        return sum(1 for path in paths for record in records(path) if record.get("type") == "event_msg"
                    and isinstance(record.get("payload"), dict) and record["payload"].get("type") == "token_count")
     raise ValueError("no_request_count_for:" + kind)

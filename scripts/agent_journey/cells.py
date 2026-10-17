@@ -15,9 +15,12 @@ CELLS = ("start", "start_untrusted", "reply", "integration", "guidance_memory", 
 # What this cycle measures (PRD agent-journey-check D-20); every other declared
 # cell reads "not built in this cycle" until a later change builds it.
 BUILT_AGENTS = ("claude-code", "codex", "grok", "opencode", "pi", "omp", "antigravity")
-BUILT_CELLS = ("start", "start_untrusted", "reply", "letter", "sleep_wake", "resume")
-# A cell that cannot be measured until another one passed.
-PREREQUISITE = {"reply": "start", "letter": "start", "sleep_wake": "start", "resume": "sleep_wake"}
+BUILT_CELLS = ("start", "start_untrusted", "reply", "integration", "guidance_memory", "letter", "sleep_wake",
+               "resume", "fork", "title", "usage")
+# A cell that cannot be measured until another one passed: a fork, a title
+# and usage need a conversation with an answer in it.
+PREREQUISITE = {"reply": "start", "integration": "start", "guidance_memory": "start", "letter": "start",
+                "sleep_wake": "start", "resume": "sleep_wake", "fork": "reply", "title": "reply", "usage": "reply"}
 
 NOT_BUILT = "not built in this cycle"
 # Agents the operator took out of the journey (PRD D-45): every cell reads

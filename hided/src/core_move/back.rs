@@ -99,9 +99,13 @@ pub fn write_export(state_dir: &Path, export: &Export) -> Result<(), String> {
         hide_platform::fs::private::create_dir_all(folder).map_err(|error| error.to_string())?;
     }
     let bytes = serde_json::to_vec(export).map_err(|error| error.to_string())?;
-    hide_platform::fs::atomic::write_file_durable(&path, &bytes, hide_platform::fs::Access::Private)
-        .map(|_| ())
-        .map_err(|error| format!("{}: {error}", path.display()))
+    hide_platform::fs::atomic::write_file_durable(
+        &path,
+        &bytes,
+        hide_platform::fs::atomic::DurableAccess::Private,
+    )
+    .map(|_| ())
+    .map_err(|error| format!("{}: {error}", path.display()))
 }
 
 pub fn read_export(state_dir: &Path, intent: &str) -> Result<Export, String> {

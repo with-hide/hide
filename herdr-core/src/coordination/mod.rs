@@ -530,6 +530,27 @@ fn key(value: &str) -> bool {
     crate::delivery::valid_key(value)
 }
 
+/// Whether a registration can keep `value` as its pane's native session, as
+/// Herdr reports it: an id, or for Pi and omp the session file's path, which a
+/// deep checkout makes longer than a key. Herdr keeps a path of up to
+/// `SESSION_LIMIT` bytes, and so does the ledger. The one rule for a
+/// registration's session, asked when the record is made and again when the
+/// ledger is saved or read.
+pub(crate) fn kept_session(value: &str) -> Result<(), &'static str> {
+    if value.len() > crate::delivery::SESSION_LIMIT {
+        return Err(SESSION_TOO_LONG);
+    }
+    if value.is_empty() || value.chars().any(char::is_control) {
+        return Err("invalid_registration");
+    }
+    Ok(())
+}
+
+/// The refusal of a registration whose pane reports a session past what the
+/// ledger keeps, given when the record is made rather than when the whole
+/// ledger fails to save.
+pub(crate) const SESSION_TOO_LONG: &str = "session_too_long";
+
 pub(crate) fn validate_records(ledger: &Ledger) -> Result<(), String> {
     if ledger.agents.len() > AGENT_LIMIT || ledger.spawns.len() > SPAWN_LIMIT {
         return Err("capacity".into());
@@ -544,12 +565,12 @@ pub(crate) fn validate_records(ledger: &Ledger) -> Result<(), String> {
                 &record.machine,
                 &record.host_scope,
                 &record.native_machine,
-                &record.session,
                 &record.instance,
                 &record.pane,
             ]
             .into_iter()
             .all(|s| key(s))
+            || kept_session(&record.session).is_err()
             || !record.actor.valid()
             || record.actor.device_id != record.machine
             || record.actor.session != crate::wire::session_digest(&record.session)
@@ -1974,6 +1995,58 @@ mod tests {
                 assert_eq!(replay["kind"], requested);
                 assert_eq!(ledger.spawns.len(), 1);
             }
+        }
+    }
+
+    /// Pi and omp name a session by its file, in a folder named after the
+    /// checkout's path, so a child in a deep checkout reports a session far
+    /// past a key's 256 bytes; it binds and reads back like any other, up to
+    /// Herdr's own 4096-byte bound for a session path.
+    #[test]
+    fn a_child_whose_session_is_a_deep_session_file_binds_and_reads_back() {
+        let file = "2026-10-18T00-00-00-000Z_0199f0aa-1111-7222-8333-444455556666.jsonl";
+        let folder = "--fixture-home-projects-a-very-deep-checkout-path--";
+        let deep = format!("/fixture/home/.pi/agent/sessions/{folder}/{file}");
+        let longest = format!(
+            "/{}/{file}",
+            "x".repeat(crate::delivery::SESSION_LIMIT - file.len() - 2)
+        );
+        for session in [
+            deep.clone(),
+            format!("{}{deep}", "/deep".repeat(60)),
+            longest,
+        ] {
+            let (mut ledger, caller, parent, spawn, mut child) = pending_spawn();
+            ledger.spawns[0].kind = "pi".into();
+            child.session = session.clone();
+            child.actor.kind = "pi".into();
+            child.actor.session = crate::wire::session_digest(&session);
+            let bound = apply(
+                &mut ledger,
+                &caller,
+                &Mutation::BindChild {
+                    id: spawn,
+                    record: child,
+                },
+                3,
+            )
+            .unwrap_or_else(|error| panic!("{} bytes: {error}", session.len()));
+            let bytes = ledger
+                .bytes()
+                .unwrap_or_else(|error| panic!("{} bytes: {error}", session.len()));
+            let mut read: Ledger = serde_json::from_slice(&bytes).unwrap();
+            read.validate().unwrap();
+            let registered = read
+                .agents
+                .iter_mut()
+                .find(|record| Some(record.id.as_str()) == bound["child"].as_str())
+                .unwrap();
+            assert_eq!(registered.session, session);
+            assert_eq!(registered.parent.as_ref(), Some(&parent));
+            let past = format!("{session}{}", "x".repeat(crate::delivery::SESSION_LIMIT));
+            registered.session = past[..=crate::delivery::SESSION_LIMIT].to_owned();
+            registered.actor.session = crate::wire::session_digest(&registered.session);
+            assert!(read.bytes().is_err());
         }
     }
 

@@ -388,7 +388,8 @@ class NamedPaths(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(self.lanes(path), {"policy", "checks", "web-e2e", "windows-e2e", "desktop-e2e",
                                                     "windows-desktop", "windows-check", "agent-journey"})
-        for path in ("hide-session/examples/journey_conversation.rs", "hide-agent-hooks/tests/fixtures/fake-codex.py"):
+        for path in ("hide-session/examples/journey_conversation.rs", "hide-memory/examples/journey_memory.rs",
+                     "hide-agent-hooks/tests/fixtures/fake-codex.py"):
             with self.subTest(path=path):
                 self.assertIn("agent-journey", self.lanes(path))
                 self.assertIn("rust", self.lanes(path))

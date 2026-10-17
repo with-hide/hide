@@ -168,7 +168,6 @@ fn dormant_wire_session(cwd: &str, tabs: &[&str]) -> serde_json::Value {
         })).collect::<Vec<_>>(),"agents":[]})
 }
 
-#[cfg(unix)]
 fn persisted_dormant(path: &Path, id: &crate::agent_sleep::SleepId) -> serde_json::Value {
     let state: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     state["agent_sleep"]["dormant"][id.as_str()].clone()
@@ -1332,6 +1331,21 @@ fn a_failed_actual_state_write_never_sends_a_dormant_close() {
     );
     assert_eq!(row(&runtime)["pane_id"], SLEEPER);
     assert!(runtime.snapshot.navigator.sleeping_sessions.is_empty());
+}
+
+/// The record of an agent the sleep closes is saved before its close, and
+/// the save stands on the state folder's directory barrier, which every
+/// system gives; Windows refused this save while the barrier was missing
+/// there, so the sleep could never close an agent.
+#[test]
+fn a_dormant_intent_is_saved_through_the_state_folders_barrier() {
+    let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
+    runtime.ingest_session(Ok(session(Some(4))));
+    let id = dormant_intent(&mut runtime);
+
+    runtime.write_ui_state().unwrap();
+
+    assert!(!persisted_dormant(&runtime.state_path, &id)["phase"].is_null());
 }
 
 #[test]

@@ -235,8 +235,9 @@ DESKTOP_E2E_LANES = {"checks", "desktop-e2e", "windows-desktop", "windows-check"
 # (`agent-journey.yml`); the stand-ins' sources are also the e2e's.
 JOURNEY_LANES = {"agent-journey"}
 # Files inside a crate the journey runs as its own tools: Hide's conversation
-# reader and Codex's app-server stand-in.
-JOURNEY_CRATE_FILES = ("hide-session/examples/journey_conversation.rs", "hide-agent-hooks/tests/fixtures/fake-codex.py")
+# reader, its Project Memory card writer and Codex's app-server stand-in.
+JOURNEY_CRATE_FILES = ("hide-session/examples/journey_conversation.rs", "hide-memory/examples/journey_memory.rs",
+                       "hide-agent-hooks/tests/fixtures/fake-codex.py")
 # The live check's code, which the journey runs and `agent-live-check.spec.ts`
 # drives in the web e2e; its unit tests are `policy`'s.
 LIVE_CHECK_LANES = {"web-e2e"} | JOURNEY_LANES

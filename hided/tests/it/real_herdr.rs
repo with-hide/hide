@@ -351,6 +351,17 @@ async fn assert_private_pane_input() -> tempfile::TempDir {
         control_attempt(&herdr, &pane),
         std::fs::read_to_string(&herdr.log).unwrap_or_default()
     );
+    // The core opened its letters' ledger on this system: startup writes it
+    // back through the durable folder chain, and refuses it otherwise.
+    let state = root.path().join("state");
+    let ledger = std::fs::read(hide_kit::layout::delivery_ledger(&state))
+        .expect("the daemon saved its delivery ledger at startup");
+    serde_json::from_slice::<Value>(&ledger).expect("the saved ledger is JSON");
+    let log = std::fs::read_to_string(state.join("Logs/core.jsonl")).unwrap_or_default();
+    assert!(
+        !log.contains("\"ledger.load_failed\""),
+        "the daemon refused its ledger: {log}"
+    );
     drop(socket);
     running.stop();
     drop(running);

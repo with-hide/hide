@@ -2,7 +2,9 @@
 
 One connection, standard library only. The handshake asks for no snapshot
 format, so every snapshot and delta carries the whole rest and the newest one
-is the state. Events go out as the shell sends them (contracts/hided-ws.schema.json).
+is the state; the usage section rides beside it with a revision of its own,
+so a frame without it keeps the last one. Events go out as the shell sends
+them (contracts/hided-ws.schema.json).
 """
 
 import base64
@@ -71,6 +73,7 @@ class Daemon:
         self.cancelled = cancelled
         self.lock = threading.Condition()
         self.rest = None
+        self.usage = None
         self.revision = 0
         self.errors = []
         # Every activity each pane's row read, with when this client saw it,
@@ -126,6 +129,8 @@ class Daemon:
                     continue
                 frame = json.loads(payload)
                 with self.lock:
+                    if frame.get("type") in ("snapshot", "delta") and isinstance(frame["payload"].get("usage"), dict):
+                        self.usage = frame["payload"]["usage"]
                     if frame.get("type") in ("snapshot", "delta") and isinstance(frame["payload"].get("rest"), dict):
                         rest = frame["payload"]["rest"]
                         # A schema-2 delta carries each changed section whole
@@ -195,6 +200,11 @@ class Daemon:
     def snapshot(self):
         with self.lock:
             return self.rest
+
+    def usage_section(self):
+        """The usage the core published last (`usageSnapshot`), or None."""
+        with self.lock:
+            return self.usage
 
     def row(self, pane):
         rest = self.snapshot() or {}

@@ -24,6 +24,8 @@ junction = "=2.1.0"
 trash = { version = "=5.2.9", default-features = false, features = ["coinit_apartmentthreaded"] }
 widestring = "=1.2.1"
 windows-sys = { version = "=0.61.2", features = [
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
     "Wdk_System_SystemInformation",
     "Win32_Foundation",
     "Win32_NetworkManagement_IpHelper",

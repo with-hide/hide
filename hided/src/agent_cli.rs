@@ -92,6 +92,12 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Delivery,
         "register" => {
             let host_scope = take("--host-scope")?;
             let session = take("--session")?;
+            if !herdr_core::delivery::valid_session(&session) {
+                return Err(format!(
+                    "--session takes a native session id or session file path of at most {} bytes that does not start with -",
+                    herdr_core::delivery::SESSION_LIMIT
+                ));
+            }
             let instance = take("--instance")?;
             let name = take("--name")?;
             let pane = take("--pane")?;

@@ -533,6 +533,8 @@ mod usage {
         assert_eq!(args, ClaudeCliBackend::usage_arguments());
         assert_eq!(args[..2], ["-p", "/usage"]);
         assert!(args.iter().any(|arg| arg == "--no-session-persistence"));
+        // The operator's hooks would leave a `session-env` folder per read.
+        assert!(args.windows(2).any(|p| p == ["--setting-sources", ""]));
 
         // The fixture's own interpreter shim adds variables of its own
         // (`PWD`, `PYENV_*`), so the assertion is on the three planted keys

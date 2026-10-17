@@ -55,13 +55,13 @@ class Plan(unittest.TestCase):
         self.assertEqual(cells.exit_code({"codex": passed, "cursor": table["cursor"]}, ["codex", "cursor"],
                                          setup_failed=False), 0)
 
-    def test_unbuilt_cells_and_unselected_agents_are_not_measured_with_the_reason(self):
-        table = cells.plan(contract(), ["codex"])
-        declared = next(row for row in contract() if row["id"] == "codex")["cells"]
-        unbuilt = [name for name in cells.CELLS if declared[name] and name not in cells.BUILT_CELLS]
-        self.assertTrue(unbuilt)
-        for name in unbuilt:
-            self.assertEqual(table["codex"][name], cells.cell(cells.NOT_MEASURED, cells.NOT_BUILT))
+    def test_unbuilt_agents_and_unselected_agents_are_not_measured_with_the_reason(self):
+        codex = next(row for row in contract() if row["id"] == "codex")
+        unbuilt = {**codex, "id": "an-agent-not-built-yet"}
+        table = cells.plan([*contract(), unbuilt], ["codex", unbuilt["id"]])
+        for name in cells.CELLS:
+            self.assertEqual(table[unbuilt["id"]][name], cells.cell(cells.NOT_MEASURED, cells.NOT_BUILT))
+            self.assertEqual(table["codex"][name]["status"], cells.PENDING)
         self.assertEqual(table["claude-code"]["start"]["reason"], "not selected (--agents)")
 
 
@@ -91,10 +91,10 @@ class ExitCodes(unittest.TestCase):
     def test_codes(self):
         table = measured_table(*cells.BUILT_CELLS)
         self.assertEqual(cells.exit_code(table, ["codex"], setup_failed=True), 2)
-        # Every built cell passed; the cells this cycle does not build keep it at 3.
+        self.assertEqual(cells.exit_code(table, ["codex"], setup_failed=False), 0)
+        # One cell not measured, the others passed.
+        table["codex"]["usage"] = cells.cell(cells.NOT_MEASURED, "the agent writes its sessions elsewhere")
         self.assertEqual(cells.exit_code(table, ["codex"], setup_failed=False), 3)
-        passed = {name: cells.cell(cells.PASS, "fixture") for name in cells.CELLS}
-        self.assertEqual(cells.exit_code({"codex": passed}, ["codex"], setup_failed=False), 0)
         open_table = measured_table()
         with self.assertRaises(ValueError):
             cells.exit_code(open_table, ["codex"], setup_failed=False)

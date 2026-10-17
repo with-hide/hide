@@ -7,12 +7,14 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_journey import ci
+from agent_journey.journey import Journey
 from agent_journey.cli import budget_failures, claude_trusts, hide_ai_requests, leftover_copies, measured_clone
 from agent_journey.local import claude_session_folders, disable_hide_ai, wrapper
 from agent_journey.report import markdown
@@ -111,6 +113,24 @@ class LocalStarts(unittest.TestCase):
             '{"component":"kit","kind":"apply.completed"}', "not json"]) + "\n")
         self.assertEqual(hide_ai_requests(log), {"claude": 2})
         self.assertEqual(hide_ai_requests(self.base / "missing.log"), {})
+
+
+class FinishedAgent(unittest.TestCase):
+    def test_each_pane_the_journey_opened_is_closed_once_and_one_that_stays_is_named(self):
+        calls = []
+
+        def command(argv, check=True):
+            calls.append(argv)
+            return (1, "", "pane_not_found\n") if argv[-1] == "w5:p1" else (0, "", "")
+        runtime = SimpleNamespace(run=Path("/run"), command=command,
+                                  owner=SimpleNamespace(cancelled=threading.Event()))
+        record = {}
+        journey = Journey(runtime, None, None, {}, {"id": "codex", "herdr_kind": "codex", "model_flag": []},
+                          Path("/repo"), record, None, branch="b", created=[], sessions=Path("/h"), route={})
+        journey.opened += ["w4:p2", "w4:p3", "w4:p2", None, "w5:p1"]
+        journey.close()
+        self.assertEqual(calls, [["pane", "close", pane] for pane in ("w4:p2", "w4:p3", "w5:p1")])
+        self.assertEqual(record["closed"], {"w4:p2": "closed", "w4:p3": "closed", "w5:p1": "pane_not_found"})
 
 
 class LeftoversAndReport(unittest.TestCase):

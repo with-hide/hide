@@ -17,6 +17,9 @@ pub struct JourneyAdapter {
     /// How the start command takes a model, `{}` replaced by the value;
     /// empty when the agent takes none.
     pub model_flag: &'static [&'static str],
+    /// The name a row shows for the agent while it has no task title, which
+    /// the `title` cell must see replaced (`sidebar::provider_name`).
+    pub untitled: &'static str,
     /// Every journey cell, `true` when the adapter declares what it measures;
     /// an undeclared cell reads N/A, never a failure.
     pub cells: JourneyCells,
@@ -104,11 +107,23 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             usage: start && matches!(row.usage.tokens, super::usage::Support::Supported(_)),
         };
         // The turns a run starts: the first prompt in the trusted and the
-        // never-trusted start, the letter and the prompt typed after Wake.
-        let turns = [start, cells.start_untrusted, cells.letter, cells.resume]
-            .into_iter()
-            .filter(|&turn| turn)
-            .count() as u32;
+        // never-trusted start, the question about the Memory card the start
+        // gave, the letter, the prompt typed into the fork (an agent that
+        // tells its session only at its first turn, as Codex does, is
+        // registered as a fork only then, and the operator types into a fork
+        // to use it) and the prompt typed after Wake. The other cells judge
+        // what Hide shows of those turns and start none.
+        let turns = [
+            start,
+            cells.start_untrusted,
+            cells.guidance_memory,
+            cells.letter,
+            cells.fork,
+            cells.resume,
+        ]
+        .into_iter()
+        .filter(|&turn| turn)
+        .count() as u32;
         let letter = cells.letter.then(|| {
             if row.bell {
                 JourneyLetter::Bell
@@ -128,6 +143,7 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             home_folder: row.herdr.folder,
             prompt_flag: row.start.map(|start| start.prompt_flag()),
             model_flag: row.start.map_or(&[], |start| start.options().model),
+            untitled: row.sidebar_label.unwrap_or(row.herdr.name),
             cells,
             request_budget: start.then_some(turns * REQUESTS_PER_TURN),
             letter,

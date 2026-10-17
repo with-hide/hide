@@ -378,6 +378,16 @@ jobs:
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(=links::store::ledger::tests::native_node_paths_identify_fresh_original_work_but_not_history_or_a_sibling)'
+      - name: Letters and agent sleep on the state folder's durable files
+        # The ledger opens from a real state folder, making a missing chain
+        # through the platform's directory flushes, and a letter goes from
+        # one registered agent to the other's inbox and back from disk; the
+        # record of an agent the sleep closes saves through the same barrier.
+        # Windows refused both before hide-platform flushed folders there;
+        # `real_herdr` below checks the daemon itself.
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 5
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & (test(=delivery::ledger::tests::validated_startup_reestablishes_the_installed_version_without_repairing_corruption) | test(=delivery::ledger::tests::startup_bootstraps_private_sibling_state_and_preserves_refused_or_corrupt_bytes) | test(=runtime::delivery::tests::agents_register_and_a_letter_reaches_the_inbox_through_the_saved_ledger) | test(=runtime::tests::agent_sleep::a_dormant_intent_is_saved_through_the_state_folders_barrier) | test(=persistence::tests::a_save_makes_its_folders_chain_durable_once_until_the_folder_is_replaced))'
       - name: Public repository read deadline
         # Execute the delayed native Git fixture, including Windows child
         # cleanup; compiling the public-boundary regression is not proof.
