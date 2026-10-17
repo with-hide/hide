@@ -1495,7 +1495,8 @@ impl HelperPackages {
     /// A file already there is kept only when its bytes are this build's;
     /// any other is replaced whole. Answers where the build's `hided` is.
     pub fn install_here(&self, root: &Path) -> Result<PathBuf, String> {
-        use hide_platform::fs::{Access, atomic, private};
+        use hide_platform::fs::atomic::{self, DurableAccess};
+        use hide_platform::fs::private;
         let payload = self
             .payload(std::env::consts::OS, std::env::consts::ARCH)
             .map_err(|error| error.to_string())?
@@ -1519,9 +1520,9 @@ impl HelperPackages {
                 continue;
             }
             let access = if file.executable {
-                Access::PrivateExecutable
+                DurableAccess::PrivateExecutable
             } else {
-                Access::Private
+                DurableAccess::Private
             };
             atomic::write_file_durable(&path, &file.bytes, access)
                 .map_err(|error| format!("{} could not be written: {error}", path.display()))?;

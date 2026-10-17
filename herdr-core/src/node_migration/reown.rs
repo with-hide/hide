@@ -1978,7 +1978,7 @@ mod tests {
         hide_platform::fs::atomic::write_file_durable(
             path,
             &serde_json::to_vec(&value).unwrap(),
-            hide_platform::fs::Access::Private,
+            hide_platform::fs::atomic::DurableAccess::Private,
         )
         .unwrap();
     }
@@ -2107,7 +2107,7 @@ mod tests {
             hide_platform::fs::atomic::write_file_durable(
                 &state.join(file),
                 &serde_json::to_vec(&saved).unwrap(),
-                hide_platform::fs::Access::Private,
+                hide_platform::fs::atomic::DurableAccess::Private,
             )
             .unwrap();
         }
@@ -2124,7 +2124,7 @@ mod tests {
                 hide_platform::fs::atomic::write_file_durable(
                     &state.join(file),
                     &serde_json::to_vec(&saved).unwrap(),
-                    hide_platform::fs::Access::Private,
+                    hide_platform::fs::atomic::DurableAccess::Private,
                 )
                 .unwrap();
             }

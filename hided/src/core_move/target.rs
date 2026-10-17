@@ -599,7 +599,7 @@ fn release(state_dir: &Path, intent: &str, target: &str) -> Answered {
     hide_platform::fs::atomic::write_file_durable(
         &path,
         &bytes,
-        hide_platform::fs::Access::Private,
+        hide_platform::fs::atomic::DurableAccess::Private,
     )
     .map_err(|error| plain(format!("{}: {error}", path.display())))?;
     Ok(StepAnswer::Staged {

@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
+use std::sync::Mutex;
+
+use hide_platform::fs::identity::{self, FileId};
 
 use serde::{Deserialize, Serialize};
 
@@ -535,6 +538,44 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
     )
 }
 
+/// The folders whose chain of folders from the volume's root this process has
+/// made durable, by the folder's file identity. That chain is a fact about
+/// the folder, not about one save, so a save reaches it again only for a
+/// folder it has not seen, a replaced one included; every save still flushes
+/// its file and the file's folder.
+static DURABLE_FOLDERS: Mutex<Vec<FileId>> = Mutex::new(Vec::new());
+
+/// More folders than a process keeps its UI state in; past it the oldest is
+/// forgotten and made durable again on its next save.
+const DURABLE_FOLDER_LIMIT: usize = 8;
+
+fn establish_folder_once(folder: &Path) -> std::io::Result<()> {
+    let id = identity::file_id(folder)?;
+    let known = |folders: &Vec<FileId>| folders.contains(&id);
+    if known(&DURABLE_FOLDERS.lock().unwrap_or_else(|e| e.into_inner())) {
+        return Ok(());
+    }
+    let canonical = hide_platform::fs::private::establish_dir_durability(folder)
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    #[cfg(test)]
+    tests::CHAINS_ESTABLISHED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(id);
+    // A folder replaced while its chain was made durable is not the one
+    // recorded, and its next save makes its own chain durable.
+    if identity::file_id(&canonical)? == id {
+        let mut folders = DURABLE_FOLDERS.lock().unwrap_or_else(|e| e.into_inner());
+        if !known(&folders) {
+            if folders.len() == DURABLE_FOLDER_LIMIT {
+                folders.remove(0);
+            }
+            folders.push(id);
+        }
+    }
+    Ok(())
+}
+
 pub fn save(
     path: &Path,
     state: &UiStateSnapshot,
@@ -546,9 +587,9 @@ pub fn save(
         .ok_or_else(|| "UI state path has no parent directory".to_owned())?;
     // Existence alone cannot authorize a destructive close. Reuse the
     // platform's checked ancestor barriers, outside the runtime lock.
-    // An unsupported platform or an untrusted directory refuses the receipt.
+    // An untrusted directory refuses the receipt.
     if !state.agent_sleep.dormant.is_empty() {
-        hide_platform::fs::private::establish_dir_durability(parent).map_err(|_| {
+        establish_folder_once(parent).map_err(|_| {
             "UI state directory persistence could not be confirmed; no new close or start was sent"
                 .to_owned()
         })?;
@@ -632,32 +673,74 @@ pub fn save(
     };
     let bytes = serde_json::to_vec_pretty(&stored)
         .map_err(|_| "UI state could not be encoded".to_owned())?;
-    hide_platform::fs::atomic::write_file_durable(path, &bytes, hide_platform::fs::Access::Private)
-        .map(|_| ())
-        .map_err(|error| {
-            let phase = match error {
-                hide_platform::fs::atomic::DurableWriteError::BeforeReplace { .. } => {
-                    "before_replace"
-                }
-                hide_platform::fs::atomic::DurableWriteError::ReplacementUncertain { .. } => {
-                    "replacement_uncertain"
-                }
-                hide_platform::fs::atomic::DurableWriteError::ReplacedNotDurable { .. } => {
-                    "replaced_not_durable"
-                }
-            };
-            crate::diagnostic!(serde_json::json!({
-                "component": "ui_state",
-                "kind": "ui_state.durable_save_failed",
-                "phase": phase,
-            }));
-            "UI state persistence could not be confirmed".to_owned()
-        })
+    hide_platform::fs::atomic::write_file_durable(
+        path,
+        &bytes,
+        hide_platform::fs::atomic::DurableAccess::Private,
+    )
+    .map(|_| ())
+    .map_err(|error| {
+        let phase = match error {
+            hide_platform::fs::atomic::DurableWriteError::BeforeReplace { .. } => "before_replace",
+            hide_platform::fs::atomic::DurableWriteError::ReplacementUncertain { .. } => {
+                "replacement_uncertain"
+            }
+            hide_platform::fs::atomic::DurableWriteError::ReplacedNotDurable { .. } => {
+                "replaced_not_durable"
+            }
+        };
+        crate::diagnostic!(serde_json::json!({
+            "component": "ui_state",
+            "kind": "ui_state.durable_save_failed",
+            "phase": phase,
+        }));
+        "UI state persistence could not be confirmed".to_owned()
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each folder whose whole chain a save made durable, once per time.
+    pub(super) static CHAINS_ESTABLISHED: Mutex<Vec<FileId>> = Mutex::new(Vec::new());
+
+    fn chains_established(folder: &Path) -> usize {
+        let id = identity::file_id(folder).unwrap();
+        CHAINS_ESTABLISHED
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|established| **established == id)
+            .count()
+    }
+
+    #[test]
+    fn a_save_makes_its_folders_chain_durable_once_until_the_folder_is_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("state");
+        hide_platform::fs::private::create_dir(&folder).unwrap();
+        let path = folder.join("ui-state.json");
+        let mut state = UiStateSnapshot::default();
+        state.agent_sleep.dormant.insert(
+            crate::agent_sleep::SleepId::new().unwrap(),
+            crate::agent_sleep::fixture_record("w1:p1"),
+        );
+
+        save(&path, &state, &BTreeMap::new()).unwrap();
+        save(&path, &state, &BTreeMap::new()).unwrap();
+        assert_eq!(chains_established(&folder), 1);
+
+        let earlier = root.path().join("earlier");
+        fs::rename(&folder, &earlier).unwrap();
+        hide_platform::fs::private::create_dir(&folder).unwrap();
+        save(&path, &state, &BTreeMap::new()).unwrap();
+        save(&path, &state, &BTreeMap::new()).unwrap();
+
+        assert_eq!(chains_established(&folder), 1);
+        assert_eq!(chains_established(&earlier), 1);
+        assert_eq!(load(&path).0.agent_sleep.dormant.len(), 1);
+    }
 
     #[test]
     fn retired_git_panel_restores_overview_without_losing_other_ui_state() {

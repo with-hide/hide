@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use hide_platform::fs::Access;
+use hide_platform::fs::atomic::DurableAccess;
 use serde::{Deserialize, Serialize};
 
 use super::journal::Peer;
@@ -95,7 +95,7 @@ fn write(state_dir: &Path, moves: Vec<Abandoned>) -> Result<(), String> {
         moves,
     })
     .map_err(|error| error.to_string())?;
-    hide_platform::fs::atomic::write_file_durable(&path, &bytes, Access::Private)
+    hide_platform::fs::atomic::write_file_durable(&path, &bytes, DurableAccess::Private)
         .map(|_| ())
         .map_err(|error| format!("{}: {error}", path.display()))
 }

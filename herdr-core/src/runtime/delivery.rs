@@ -3158,4 +3158,109 @@ pub(crate) mod tests {
         );
         assert_eq!(verdict_for_recipient(&runtime), Ok(()));
     }
+
+    /// Letters stand on the state folder's durable files on every system:
+    /// the core opens its ledger from a real folder, two agents register,
+    /// one sends and the other finds the letter in its inbox, and the ledger
+    /// read back from disk holds both agents and the letter. The Windows
+    /// check runs it, where the ledger once refused to open (`Unsupported`).
+    #[test]
+    fn agents_register_and_a_letter_reaches_the_inbox_through_the_saved_ledger() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, sender, _, path) = fixture(root.path());
+        assert!(runtime.lock().unwrap().delivery_ledger.is_ok());
+        let native = |pane: &str, session: &str| {
+            json!({"pane_id":pane,"workspace_id":"workspace","tab_id":"tab",
+                "terminal_id":format!("terminal-{pane}"),"revision":1,"focused":false,
+                "agent_status":"working","agent":"codex",
+                "agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":session}})
+        };
+        let herdr =
+            crate::fake_herdr::FakeHerdr::start("delivery-register-send-read", move |method, _| {
+                assert_eq!(method, "agent.list");
+                json!({"type":"agent_list","agents":[
+                native("sender", "writer-session"), native("recipient", "reader-session")]})
+            });
+        let (worker, client) = Worker::spawn(
+            Arc::downgrade(&runtime),
+            ChangeNotifier::noop(),
+            path.clone(),
+        )
+        .unwrap();
+        {
+            let mut guard = runtime.lock().unwrap();
+            guard.install_delivery_client(client);
+            set_live(&mut guard, Some(&herdr));
+            let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+                {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,
+                    "lineage_session":crate::wire::session_digest("writer-session")},
+                {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,
+                    "lineage_session":crate::wire::session_digest("reader-session")},
+            ]})).unwrap();
+            guard.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+        }
+        let context = authority(&sender).context;
+        let run = |pane: &str, command: Command| {
+            let prepared = runtime.lock().unwrap().prepare_delivery(
+                crate::node::TEST_NODE,
+                pane,
+                &context,
+                None,
+                command,
+            )?;
+            prepared.run(Duration::from_secs(5))
+        };
+        let scope = herdr.socket_path().to_str().unwrap().to_owned();
+        for (pane, name, session) in [
+            ("sender", "writer", "writer-session"),
+            ("recipient", "reader", "reader-session"),
+        ] {
+            let registered = run(
+                pane,
+                Command::Agents {
+                    command: crate::coordination::Command::Register {
+                        check: false,
+                        machine: None,
+                        host_scope: scope.clone(),
+                        session: session.into(),
+                        instance: format!("terminal-{pane}"),
+                        name: name.into(),
+                        pane: pane.into(),
+                        parent: None,
+                        project: None,
+                    },
+                },
+            )
+            .unwrap();
+            assert_eq!(registered["pane"], pane);
+        }
+
+        let letter = run(
+            "sender",
+            Command::Send {
+                target: "reader".into(),
+                intent: "durable-letter".into(),
+                body: "read me after a restart".into(),
+                kind: "request".into(),
+                now: false,
+            },
+        )
+        .unwrap();
+        let inbox = run("recipient", Command::Inbox).unwrap();
+        assert_eq!(inbox.as_array().map(Vec::len), Some(1), "{inbox}");
+        assert_eq!(inbox[0]["id"], letter["id"]);
+        assert_eq!(inbox[0]["body"], "read me after a restart");
+        drop(worker);
+
+        let saved = crate::delivery::ledger::recover(&path).unwrap();
+        let mut names: Vec<_> = saved
+            .agents
+            .iter()
+            .filter_map(|agent| agent.name.clone())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["reader", "writer"]);
+        assert_eq!(saved.letters.len(), 1);
+        assert_eq!(saved.letters[0].body, "read me after a restart");
+    }
 }

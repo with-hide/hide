@@ -15,7 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use hide_platform::fs::Access;
-use hide_platform::fs::atomic::{self, EXCHANGE_IS_ATOMIC};
+use hide_platform::fs::atomic::{self, DurableAccess, EXCHANGE_IS_ATOMIC};
 use hide_platform::fs::identity::{self, FileId};
 use hide_platform::fs::link;
 use hide_platform::fs::lock::{self, Mode, Waited};
@@ -30,7 +30,6 @@ fn folder() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
 }
 
-#[cfg(unix)]
 #[test]
 fn an_existing_private_anchor_establishes_sibling_home_and_state_chains() {
     let outer = folder();
@@ -55,7 +54,6 @@ fn an_existing_private_anchor_establishes_sibling_home_and_state_chains() {
     assert_eq!(names(&anchor), ["home", "state"]);
 }
 
-#[cfg(unix)]
 #[test]
 fn an_existing_anchor_refuses_links_files_and_modifiable_leaves_without_mutation() {
     let outer = folder();
@@ -75,20 +73,362 @@ fn an_existing_anchor_refuses_links_files_and_modifiable_leaves_without_mutation
     assert!(names(&anchor).is_empty());
 }
 
+/// Windows flushes a folder only through a handle that may add an entry to
+/// it. An ancestor the account neither owns nor may add an entry to holds no
+/// entry the account made, so the barrier passes over it (`C:\Users` for a
+/// standard account); a folder the account owns is flushed whatever its
+/// access list says, and a refused flush there is the answer. Unix syncs
+/// every folder it can open, so both chains stand there.
+#[test]
+fn an_ancestor_is_passed_over_only_when_the_account_neither_owns_nor_may_add_to_it() {
+    let outer = folder();
+
+    // Handing a folder to the system takes an administrator, which the
+    // Windows runner's account is.
+    #[cfg(windows)]
+    {
+        let given = outer.path().join("given");
+        fs::create_dir(&given).unwrap();
+        let anchor = given.join("anchor");
+        private::create_dir(&anchor).unwrap();
+        icacls(&given, &["/setowner", "*S-1-5-18"]);
+        read_only(&given);
+        assert!(!private::owned_by_current_user(&given).unwrap());
+        assert!(!may_add_to(&given), "{}", access_list(&given));
+
+        let canonical = private::establish_dir_durability(&anchor).unwrap();
+
+        assert_eq!(
+            identity::file_id(&canonical).unwrap(),
+            identity::file_id(&anchor).unwrap()
+        );
+        assert!(names(&anchor).is_empty());
+    }
+
+    let closed = outer.path().join("closed");
+    fs::create_dir(&closed).unwrap();
+    let anchor = closed.join("anchor");
+    private::create_dir(&anchor).unwrap();
+    let _closed = Closed::own(&closed);
+    #[cfg(windows)]
+    assert!(!may_add_to(&closed), "{}", access_list(&closed));
+
+    let synced = atomic::sync_dir(&open_dir(&closed));
+    let established = private::establish_dir_durability(&anchor);
+    if cfg!(windows) {
+        assert_eq!(synced.unwrap_err().kind(), ErrorKind::PermissionDenied);
+        let closed = fs::canonicalize(&closed).unwrap();
+        assert!(matches!(
+            established,
+            Err(private::DirectoryDurabilityError::Uncertain { path, source, .. })
+                if path == closed && source.kind() == ErrorKind::PermissionDenied
+        ));
+    } else {
+        synced.unwrap();
+        assert_eq!(
+            identity::file_id(&established.unwrap()).unwrap(),
+            identity::file_id(&anchor).unwrap()
+        );
+    }
+    assert!(names(&anchor).is_empty());
+}
+
+/// A standard account is how most people run Hide, and the Windows runner's
+/// account is an administrator, so the chain is made again on a thread that
+/// acts with the account's token filtered the way UAC filters a standard
+/// session. From the volume's root down to new folders in the profile, every
+/// ancestor that account may add to is flushed and every other passed over.
 #[cfg(windows)]
 #[test]
-fn an_existing_anchor_reports_unsupported_without_changing_the_namespace() {
+fn a_standard_account_makes_and_establishes_a_durable_chain() {
     let outer = folder();
-    let anchor = outer.path().join("anchor");
-    private::create_dir(&anchor).unwrap();
-    let before = identity::file_id(&anchor).unwrap();
-    assert!(matches!(
-        private::establish_dir_durability(&anchor),
-        Err(private::DirectoryDurabilityError::BeforeCreate { source })
-            if source.kind() == ErrorKind::Unsupported
-    ));
-    assert_eq!(identity::file_id(&anchor).unwrap(), before);
-    assert!(names(&anchor).is_empty());
+    let deepest = outer.path().join("state").join("ledger");
+
+    let standard = Standard::act();
+    assert!(!standard.is_administrator());
+    let made = private::create_dir_all_durable(&deepest, outer.path());
+    let established = private::establish_dir_durability(&deepest);
+    drop(standard);
+
+    made.unwrap();
+    assert_eq!(
+        identity::file_id(&established.unwrap()).unwrap(),
+        identity::file_id(&deepest).unwrap()
+    );
+}
+
+/// The calling thread acting with the account's `LUA_TOKEN`, the filtered
+/// token of a standard session: the Administrators group only denies and
+/// the administrator's privileges are gone. Dropping it ends the act on
+/// every exit, a failed assertion included; it never leaves its thread.
+#[cfg(windows)]
+struct Standard(std::marker::PhantomData<*const ()>);
+
+#[cfg(windows)]
+impl Standard {
+    fn act() -> Self {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::Security::{
+            CreateRestrictedToken, ImpersonateLoggedOnUser, LUA_TOKEN, TOKEN_ASSIGN_PRIMARY,
+            TOKEN_DUPLICATE, TOKEN_QUERY,
+        };
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        let mut process = std::ptr::null_mut();
+        // SAFETY: the current-process pseudo handle is always valid.
+        let opened = unsafe {
+            OpenProcessToken(
+                GetCurrentProcess(),
+                TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE | TOKEN_QUERY,
+                &mut process,
+            )
+        };
+        assert_ne!(opened, 0, "{}", std::io::Error::last_os_error());
+        let mut filtered = std::ptr::null_mut();
+        // SAFETY: `process` is an open token; nothing else is disabled,
+        // deleted or restricted, so every list is empty.
+        let made = unsafe {
+            CreateRestrictedToken(
+                process,
+                LUA_TOKEN,
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                &mut filtered,
+            )
+        };
+        let made_error = std::io::Error::last_os_error();
+        // SAFETY: the handle is open and owned here.
+        unsafe { CloseHandle(process) };
+        assert_ne!(made, 0, "{made_error}");
+        // SAFETY: `filtered` is an open primary token; the thread keeps its
+        // own reference, so this one is closed either way.
+        let acting = unsafe { ImpersonateLoggedOnUser(filtered) };
+        let acting_error = std::io::Error::last_os_error();
+        unsafe { CloseHandle(filtered) };
+        assert_ne!(acting, 0, "{acting_error}");
+        Self(std::marker::PhantomData)
+    }
+
+    /// Whether the token this thread acts with is in the Administrators
+    /// group, which is what the act has to have taken away.
+    fn is_administrator(&self) -> bool {
+        use windows_sys::Win32::Security::{
+            CheckTokenMembership, CreateWellKnownSid, SECURITY_MAX_SID_SIZE,
+            WinBuiltinAdministratorsSid,
+        };
+        let mut sid = [0u8; SECURITY_MAX_SID_SIZE as usize];
+        let mut size = sid.len() as u32;
+        // SAFETY: `sid` holds `size` writable bytes.
+        let made = unsafe {
+            CreateWellKnownSid(
+                WinBuiltinAdministratorsSid,
+                std::ptr::null_mut(),
+                sid.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        assert_ne!(made, 0, "{}", std::io::Error::last_os_error());
+        let mut member = 0;
+        // SAFETY: a null token checks the thread's impersonation token, and
+        // `sid` is the SID just made.
+        let checked = unsafe {
+            CheckTokenMembership(std::ptr::null_mut(), sid.as_mut_ptr().cast(), &mut member)
+        };
+        assert_ne!(checked, 0, "{}", std::io::Error::last_os_error());
+        member != 0
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Standard {
+    fn drop(&mut self) {
+        use windows_sys::Win32::Security::RevertToSelf;
+        // SAFETY: ends this thread's impersonation, which `act` began.
+        if unsafe { RevertToSelf() } == 0 && !thread::panicking() {
+            panic!("{}", std::io::Error::last_os_error());
+        }
+    }
+}
+
+/// A folder of the account's that it can read and enter but add nothing
+/// to, made private again when the test is done with it so it can go.
+struct Closed(PathBuf);
+
+impl Closed {
+    fn own(path: &Path) -> Self {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o500)).unwrap();
+        }
+        // The owner's implied right to change the access list puts it back.
+        #[cfg(windows)]
+        read_only(path);
+        Self(path.to_path_buf())
+    }
+}
+
+impl Drop for Closed {
+    fn drop(&mut self) {
+        private::restrict_to_owner(&self.0).unwrap();
+    }
+}
+
+/// Replaces the access list of `folder` with one that lets signed-in
+/// accounts read and enter it and nobody add to it, and inherits nothing.
+/// `icacls /inheritance:r` in one call with a grant kept what was inherited.
+#[cfg(windows)]
+fn read_only(folder: &Path) {
+    set_access(folder, "D:P(A;;FRFX;;;AU)");
+}
+
+/// Replaces the access list of `folder` with the one an access-list string
+/// spells, as given.
+#[cfg(windows)]
+fn set_access(folder: &Path, list: &str) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LocalFree};
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1, SE_FILE_OBJECT,
+        SetNamedSecurityInfoW,
+    };
+    use windows_sys::Win32::Security::{
+        DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, PROTECTED_DACL_SECURITY_INFORMATION,
+    };
+    let text: Vec<u16> = list.encode_utf16().chain([0]).collect();
+    let name: Vec<u16> = folder.as_os_str().encode_wide().chain([0]).collect();
+    let mut descriptor = std::ptr::null_mut();
+    // SAFETY: `text` is NUL-terminated and `descriptor` receives a
+    // LocalAlloc buffer freed below.
+    let made = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            text.as_ptr(),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_ne!(made, 0, "{}", std::io::Error::last_os_error());
+    let (mut present, mut defaulted) = (0, 0);
+    let mut acl = std::ptr::null_mut();
+    // SAFETY: `descriptor` is the one just made, and the list it returns
+    // lies inside it.
+    let read =
+        unsafe { GetSecurityDescriptorDacl(descriptor, &mut present, &mut acl, &mut defaulted) };
+    let read_error = std::io::Error::last_os_error();
+    // SAFETY: `name` is NUL-terminated and `acl` lives until the free below.
+    let status = unsafe {
+        SetNamedSecurityInfoW(
+            name.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            acl,
+            std::ptr::null(),
+        )
+    };
+    // SAFETY: the buffer came from the conversion above and nothing uses it
+    // after this.
+    unsafe { LocalFree(descriptor) };
+    assert!(read != 0 && present != 0, "{read_error}");
+    assert_eq!(
+        status,
+        ERROR_SUCCESS,
+        "{}",
+        std::io::Error::from_raw_os_error(status as i32)
+    );
+}
+
+/// Whether the system lets the account open `folder` to add a file or a
+/// folder to it. It asks without backup intent, as the barrier does: the
+/// runner's account holds the backup and restore privileges, and those open
+/// anything for a caller that asks with it.
+#[cfg(windows)]
+fn may_add_to(folder: &Path) -> bool {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
+    use windows_sys::Wdk::Storage::FileSystem::{
+        FILE_DIRECTORY_FILE, FILE_OPEN, FILE_SYNCHRONOUS_IO_NONALERT, NtCreateFile,
+    };
+    use windows_sys::Win32::Foundation::{RtlNtStatusToDosError, UNICODE_STRING};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        SYNCHRONIZE,
+    };
+    use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
+    let read = open_dir(folder);
+    // The folder itself: an empty name relative to its open handle.
+    let name = UNICODE_STRING {
+        Length: 0,
+        MaximumLength: 0,
+        Buffer: std::ptr::null_mut(),
+    };
+    let attributes = OBJECT_ATTRIBUTES {
+        Length: std::mem::size_of::<OBJECT_ATTRIBUTES>() as u32,
+        RootDirectory: read.as_raw_handle(),
+        ObjectName: &name,
+        ..Default::default()
+    };
+    [FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY]
+        .into_iter()
+        .any(|access| {
+            let mut handle = std::ptr::null_mut();
+            let mut status_block = IO_STATUS_BLOCK::default();
+            // SAFETY: the root handle is open for the call and every pointer
+            // is to a local that outlives it.
+            let status = unsafe {
+                NtCreateFile(
+                    &mut handle,
+                    access | SYNCHRONIZE,
+                    &attributes,
+                    &mut status_block,
+                    std::ptr::null(),
+                    0,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    FILE_OPEN,
+                    FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
+                    std::ptr::null(),
+                    0,
+                )
+            };
+            if status >= 0 {
+                // SAFETY: the call returned a new handle that nothing else owns.
+                drop(unsafe { OwnedHandle::from_raw_handle(handle) });
+                return true;
+            }
+            // SAFETY: the conversion reads only its argument.
+            let error =
+                std::io::Error::from_raw_os_error(unsafe { RtlNtStatusToDosError(status) } as i32);
+            assert_eq!(
+                error.kind(),
+                ErrorKind::PermissionDenied,
+                "opening {} to add to it: {error}",
+                folder.display()
+            );
+            false
+        })
+}
+
+/// The access list of `path` as `icacls` prints it, for a failure message.
+#[cfg(windows)]
+fn access_list(path: &Path) -> String {
+    let output = Command::new("icacls").arg(path).output().unwrap();
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+#[cfg(windows)]
+fn icacls(path: &Path, arguments: &[&str]) {
+    let status = Command::new("icacls")
+        .arg(path)
+        .args(arguments)
+        .stdout(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success(), "icacls {arguments:?} failed: {status}");
 }
 
 /// An open folder, the way a caller that holds folders (not names) has one.
@@ -208,6 +548,82 @@ fn inspection_accepts_sticky_system_directories_and_reports_system_alias_targets
         );
     }
     assert_eq!(fs::symlink_metadata("/tmp").unwrap().uid(), metadata.uid());
+}
+
+/// The sticky rule: others may add entries of their own to a system folder
+/// above Hide's state, as anyone may to `/tmp` and every signed-in account
+/// may to a Windows drive's root, but a folder that lets them delete,
+/// rename or re-permission what is in it is refused. A drive's root also
+/// hands every signed-in account the right to change a folder made in it,
+/// so such a folder is refused, while Hide's own private folder there,
+/// which inherits nothing, is not.
+#[test]
+fn inspection_lets_others_add_to_a_system_folder_but_not_delete_from_it() {
+    use private::InspectionDirectory::Real;
+
+    #[cfg(unix)]
+    {
+        // `/private/tmp` on macOS, where `/tmp` is the system's alias.
+        let sticky = fs::canonicalize("/tmp").unwrap();
+        assert_eq!(private::inspect_directory_entry(&sticky).unwrap(), Real);
+    }
+    #[cfg(windows)]
+    {
+        let root = PathBuf::from(format!("{}\\", std::env::var("SystemDrive").unwrap()));
+        assert_eq!(
+            private::inspect_directory_entry(&root).unwrap(),
+            Real,
+            "{}",
+            access_list(&root)
+        );
+
+        // A drive's root in small: the system's, every signed-in account
+        // may read it and add a folder, and what is made in it inherits
+        // their right to change it. Handing a folder to the system takes an
+        // administrator, which the Windows runner's account is.
+        let outer = folder();
+        let added = outer.path().join("added");
+        fs::create_dir(&added).unwrap();
+        icacls(&added, &["/setowner", "*S-1-5-18"]);
+        set_access(
+            &added,
+            "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;FRFX;;;AU)(A;;0x4;;;AU)(A;OICIIO;0x1301bf;;;AU)",
+        );
+        let deleted = outer.path().join("deleted");
+        fs::create_dir(&deleted).unwrap();
+        icacls(&deleted, &["/setowner", "*S-1-5-18"]);
+        set_access(
+            &deleted,
+            "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;FRFX;;;AU)(A;;0x44;;;AU)",
+        );
+        let handed = added.join("handed");
+        fs::create_dir(&handed).unwrap();
+        let own = added.join("own");
+        private::create_dir(&own).unwrap();
+
+        assert_eq!(
+            private::inspect_directory_entry(&added).unwrap(),
+            Real,
+            "{}",
+            access_list(&added)
+        );
+        assert!(
+            private::inspect_directory_entry(&deleted).is_err(),
+            "{}",
+            access_list(&deleted)
+        );
+        assert!(
+            private::inspect_directory_entry(&handed).is_err(),
+            "{}",
+            access_list(&handed)
+        );
+        assert_eq!(
+            private::inspect_directory_entry(&own).unwrap(),
+            Real,
+            "{}",
+            access_list(&own)
+        );
+    }
 }
 
 #[test]
@@ -354,7 +770,6 @@ fn durable_bootstrap_refuses_escape_and_over_budget_paths_before_creation() {
     ));
 }
 
-#[cfg(unix)]
 #[test]
 fn durable_bootstrap_creates_a_private_chain_up_to_its_bound_and_rechecks_it() {
     let outer = folder();
@@ -375,7 +790,6 @@ fn durable_bootstrap_creates_a_private_chain_up_to_its_bound_and_rechecks_it() {
     private::create_dir_all_durable(outer.path(), outer.path()).unwrap();
 }
 
-#[cfg(unix)]
 #[test]
 fn durable_bootstrap_preserves_existing_permissions_and_refuses_untrusted_directories() {
     use private::DirectoryDurabilityError;
@@ -400,7 +814,6 @@ fn durable_bootstrap_preserves_existing_permissions_and_refuses_untrusted_direct
     assert!(private::others_can_modify(&writable).unwrap());
 }
 
-#[cfg(unix)]
 #[test]
 fn durable_bootstrap_never_follows_a_link_or_removes_existing_entries_on_failure() {
     use private::DirectoryDurabilityError;
@@ -435,30 +848,6 @@ fn durable_bootstrap_never_follows_a_link_or_removes_existing_entries_on_failure
         Err(DirectoryDurabilityError::BeforeCreate { source })
             if source.kind() == ErrorKind::PermissionDenied
     ));
-}
-
-#[cfg(windows)]
-#[test]
-fn windows_durable_bootstrap_reports_unsupported_without_creating_a_chain() {
-    use private::DirectoryDurabilityError;
-
-    let outer = folder();
-    let end = outer.path().join("first").join("second");
-    assert!(matches!(
-        private::create_dir_all_durable(&end, outer.path()),
-        Err(DirectoryDurabilityError::BeforeCreate { source })
-            if source.kind() == ErrorKind::Unsupported
-    ));
-    assert!(names(outer.path()).is_empty());
-    private::create_dir_all(&end).unwrap();
-    let kept = end.join("kept");
-    fs::write(&kept, "kept").unwrap();
-    assert!(matches!(
-        private::create_dir_all_durable(&end, outer.path()),
-        Err(DirectoryDurabilityError::BeforeCreate { source })
-            if source.kind() == ErrorKind::Unsupported
-    ));
-    assert_eq!(read(&kept), "kept");
 }
 
 #[test]
@@ -876,13 +1265,14 @@ fn a_durable_private_write_acknowledges_whole_bytes_and_the_installed_identity()
     let path = outer.path().join("ledger.json");
     // This contract observes the file operation's OS acknowledgement, not
     // power-loss persistence of the test's newly created ancestor chain.
-    let first = atomic::write_file_durable(&path, b"first intent", Access::Private).unwrap();
+    let first = atomic::write_file_durable(&path, b"first intent", DurableAccess::Private).unwrap();
     assert_eq!(read(&path), "first intent");
     assert_eq!(first, identity::file_id(&path).unwrap());
     assert!(private::is_private(&path).unwrap());
     assert!(private::owned_by_current_user(&path).unwrap());
 
-    let second = atomic::write_file_durable(&path, b"second intent", Access::Private).unwrap();
+    let second =
+        atomic::write_file_durable(&path, b"second intent", DurableAccess::Private).unwrap();
     assert_eq!(read(&path), "second intent");
     assert_eq!(second, identity::file_id(&path).unwrap());
     assert_ne!(first, second);
@@ -897,7 +1287,7 @@ fn a_durable_write_with_no_parent_fails_before_replacement_without_making_state(
     fs::write(&old, b"old").unwrap();
     let path = outer.path().join("missing").join("ledger.json");
 
-    let error = atomic::write_file_durable(&path, b"new", Access::Private).unwrap_err();
+    let error = atomic::write_file_durable(&path, b"new", DurableAccess::Private).unwrap_err();
 
     match error {
         atomic::DurableWriteError::BeforeReplace { source, cleanup } => {
@@ -918,7 +1308,7 @@ fn a_real_failed_durable_replacement_reports_uncertainty_and_cleans_only_its_tem
     fs::create_dir(&target).unwrap();
     fs::write(target.join("keep"), b"existing child").unwrap();
 
-    let error = atomic::write_file_durable(&target, b"new", Access::Private).unwrap_err();
+    let error = atomic::write_file_durable(&target, b"new", DurableAccess::Private).unwrap_err();
 
     match error {
         atomic::DurableWriteError::ReplacementUncertain { source, cleanup } => {
@@ -931,70 +1321,35 @@ fn a_real_failed_durable_replacement_reports_uncertainty_and_cleans_only_its_tem
     assert_eq!(names(outer.path()), ["directory"]);
 }
 
-#[cfg(windows)]
+/// A durable write never keeps the access of the file it replaces: what it
+/// installs is the account's alone, and a program is runnable by its owner
+/// on Unix (Windows runs a file by its extension).
 #[test]
-fn unsupported_durable_access_preserves_existing_bytes_acl_and_the_namespace() {
+fn a_durable_program_replaces_a_shared_file_with_a_private_one() {
     let outer = folder();
-    let path = outer.path().join("kept");
-    fs::write(&path, b"old").unwrap();
-    widen(&path, false);
-    let before = Permissions::of(&File::open(&path).unwrap()).unwrap();
-    let before_id = identity::file_id(&path).unwrap();
-
-    for access in [Access::KeepOrPrivate, Access::PrivateExecutable] {
-        let error = atomic::write_file_durable(&path, b"new", access).unwrap_err();
-        match error {
-            atomic::DurableWriteError::BeforeReplace { source, cleanup } => {
-                assert_eq!(source.kind(), ErrorKind::Unsupported);
-                assert!(cleanup.is_none());
-            }
-            other => panic!("expected unsupported access before mutation: {other}"),
-        }
-        assert_eq!(read(&path), "old");
-        assert_eq!(identity::file_id(&path).unwrap(), before_id);
-        assert_eq!(
-            Permissions::of(&File::open(&path).unwrap()).unwrap(),
-            before
-        );
-    }
-    let fresh = outer.path().join("fresh");
-    assert!(matches!(
-        atomic::write_file_durable(&fresh, b"new", Access::KeepOrPrivate),
-        Err(atomic::DurableWriteError::BeforeReplace { source, cleanup: None })
-            if source.kind() == ErrorKind::Unsupported
-    ));
-    assert!(!fresh.exists());
-    assert_eq!(names(outer.path()), ["kept"]);
-}
-
-#[cfg(unix)]
-#[test]
-fn a_durable_unix_write_preserves_kept_permissions_and_private_executable_access() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let outer = folder();
-    let path = outer.path().join("kept");
-    fs::write(&path, b"old").unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
-    let before = Permissions::of(&File::open(&path).unwrap()).unwrap();
-
-    atomic::write_file_durable(&path, b"new", Access::KeepOrPrivate).unwrap();
-
-    assert_eq!(read(&path), "new");
-    assert_eq!(
-        Permissions::of(&File::open(&path).unwrap()).unwrap(),
-        before
-    );
     let program = outer.path().join("program");
-    atomic::write_file_durable(&program, b"private program", Access::PrivateExecutable).unwrap();
+    fs::write(&program, b"old").unwrap();
+    widen(&program, false);
+    assert!(!private::is_private(&program).unwrap());
+
+    let installed = atomic::write_file_durable(
+        &program,
+        b"private program",
+        DurableAccess::PrivateExecutable,
+    )
+    .unwrap();
+
     assert_eq!(read(&program), "private program");
+    assert_eq!(identity::file_id(&program).unwrap(), installed);
+    assert!(private::is_private(&program).unwrap());
+    #[cfg(unix)]
     assert_eq!(
         Permissions::of(&File::open(&program).unwrap())
             .unwrap()
             .unix_mode(),
         Some(0o700)
     );
-    assert_eq!(names(outer.path()), ["kept", "program"]);
+    assert_eq!(names(outer.path()), ["program"]);
 }
 
 #[test]

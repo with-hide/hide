@@ -666,8 +666,12 @@ pub fn save(path: &Path, ledger: &Ledger) -> Result<(), SaveError> {
     let bytes = ledger.bytes().map_err(SaveError::Validation)?;
     // The parent and its durable ancestry are established by initialization,
     // never opportunistically created by a transaction after admission.
-    hide_platform::fs::atomic::write_file_durable(path, &bytes, hide_platform::fs::Access::Private)
-        .map_err(SaveError::Persistence)?;
+    hide_platform::fs::atomic::write_file_durable(
+        path,
+        &bytes,
+        hide_platform::fs::atomic::DurableAccess::Private,
+    )
+    .map_err(SaveError::Persistence)?;
     Ok(())
 }
 
