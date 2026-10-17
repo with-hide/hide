@@ -409,6 +409,53 @@ fn running_checks_are_read_again_once_a_minute_only_while_the_view_is_shown() {
     assert_eq!(generation(&runtime), Some(1), "the view was left");
 }
 
+/// work-tab-pr-lens B44 on a node's project (PRD core-host-node-move D-29):
+/// its pull request with running checks is on the Work list as this
+/// machine's are, so it is read again once a minute while the view is shown,
+/// through the node's read and never this machine's.
+#[test]
+fn a_nodes_running_checks_are_read_again_once_a_minute_while_the_view_is_shown() {
+    let mut runtime = runtime();
+    let pending: crate::model::PullRequestSnapshot = serde_json::from_value(serde_json::json!({
+        "number": 7, "title": "Node", "url": "https://github.com/acme/app/pull/7",
+        "head_branch": "feature", "base_branch": "main", "badge": "open", "checks": "pending",
+        "is_draft": false, "closing_issues": []
+    }))
+    .unwrap();
+    let mut project = workspace("remote:mbp:project:1", "App", "/node/app", Vec::new());
+    project.device_id = "mbp".to_owned();
+    project.pull_requests = vec![pending.clone()];
+    let mut node = super::device_catalog::connected_status("mbp");
+    node.session = Some(super::device_catalog::session(vec![project]));
+    runtime.snapshot.status.remote.push(node);
+    runtime.device_github.insert(
+        "mbp".to_owned(),
+        crate::model::GithubSnapshot {
+            projects: vec![crate::model::GithubProjectSnapshot {
+                root_path: "/node/app".to_owned(),
+                pull_requests: vec![pending],
+                pull_requests_read: true,
+                ..Default::default()
+            }],
+        },
+    );
+    let asked = |runtime: &Runtime| {
+        runtime
+            .device_github_reads
+            .get(&("mbp".to_owned(), "/node/app".to_owned()))
+            .map(|read| read.generation)
+    };
+    let start = std::time::Instant::now();
+    runtime.observe_request_view(true, start);
+    runtime.reread_pending_checks(start + std::time::Duration::from_secs(61));
+    assert_eq!(asked(&runtime), Some(1));
+    assert_eq!(
+        runtime.github_generations.get("/node/app"),
+        None,
+        "this machine's reader is not asked for a node's repository"
+    );
+}
+
 /// status-marks D-07, D-08, B11-B13: a row whose pull request has checks
 /// running is in progress and read for once a minute whatever the window
 /// shows; a required check that never reported, or a project whose answer is

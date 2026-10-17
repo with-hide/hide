@@ -48,6 +48,13 @@ impl CreatedTabCheckout {
     }
 }
 
+/// The checkout a `reveal_path` names (`Runtime::reveal_checkout`).
+struct RevealCheckout {
+    path: String,
+    /// The core brings it forward; a device session's checkout it does not.
+    comes_forward: bool,
+}
+
 /// How a path is read before it is compared with a checkout's: this machine's
 /// own paths resolve links and trailing separators on its file system, a
 /// device's are its own strings, which this machine's files cannot speak for.
@@ -5425,19 +5432,35 @@ impl Runtime {
     /// checkout switch, then the panel appear, then the tree move, and a
     /// refusal partway would leave the screen in a state nobody asked for.
     pub(super) fn reveal_path(&mut self, payload: RevealPathPayload) -> bool {
-        if self
-            .reveal_checkout_path(&payload.workspace_id, &payload.checkout_id)
-            .is_none()
-        {
-            self.set_error(
-                "reveal.unknown_checkout",
-                format!(
-                    "Checkout {} is not registered, so {} was not revealed",
-                    payload.checkout_id, payload.path
-                ),
-                false,
-            );
-            return true;
+        match self.reveal_checkout(&payload.workspace_id, &payload.checkout_id) {
+            None => {
+                self.set_error(
+                    "reveal.unknown_checkout",
+                    format!(
+                        "Checkout {} is not registered, so {} was not revealed",
+                        payload.checkout_id, payload.path
+                    ),
+                    false,
+                );
+                return true;
+            }
+            Some(RevealCheckout {
+                comes_forward: false,
+                ..
+            }) if self.front_checkout()
+                != Some((payload.workspace_id.as_str(), payload.checkout_id.as_str())) =>
+            {
+                self.set_error(
+                    "reveal.not_in_front",
+                    format!(
+                        "Checkout {} is not in front on its device, so {} was not revealed",
+                        payload.checkout_id, payload.path
+                    ),
+                    false,
+                );
+                return true;
+            }
+            Some(_) => {}
         }
         if payload.is_directory {
             self.settle_reveal_path(&payload, None);
@@ -5494,19 +5517,23 @@ impl Runtime {
         true
     }
 
-    fn reveal_checkout_path(&self, workspace_id: &str, checkout_id: &str) -> Option<String> {
-        self.snapshot
+    /// The checkout a reveal names, wherever the catalog carries it: one the
+    /// navigator lists comes forward with the reveal (`focus_checkout`); one
+    /// of a device's Herdr session, a node's own checkout among them, is that
+    /// session's to bring forward, so it is revealed only while in front there
+    /// and the reveal moves no focus.
+    fn reveal_checkout(&self, workspace_id: &str, checkout_id: &str) -> Option<RevealCheckout> {
+        let (_, checkout) = self.catalog_checkout(workspace_id, checkout_id)?;
+        let comes_forward = self
+            .snapshot
             .navigator
             .workspaces
             .iter()
-            .find(|workspace| workspace.id == workspace_id)
-            .and_then(|workspace| {
-                workspace
-                    .checkouts
-                    .iter()
-                    .find(|checkout| checkout.id == checkout_id)
-                    .map(|checkout| checkout.path.clone())
-            })
+            .any(|workspace| workspace.id == workspace_id);
+        Some(RevealCheckout {
+            path: checkout.path.clone(),
+            comes_forward,
+        })
     }
 
     /// A revealed file's read landed: the reveal settles now.
@@ -5532,8 +5559,10 @@ impl Runtime {
         payload: &RevealPathPayload,
         prepared: Option<super::editor::PreparedFileTab>,
     ) {
-        let Some(checkout_path) =
-            self.reveal_checkout_path(&payload.workspace_id, &payload.checkout_id)
+        let Some(RevealCheckout {
+            path: checkout_path,
+            comes_forward,
+        }) = self.reveal_checkout(&payload.workspace_id, &payload.checkout_id)
         else {
             self.set_error(
                 "reveal.unknown_checkout",
@@ -5552,8 +5581,9 @@ impl Runtime {
                 .as_ref()
                 == Some(key)
         });
-        if self.snapshot.navigator.focused_checkout_id.as_deref()
-            != Some(payload.checkout_id.as_str())
+        if comes_forward
+            && self.snapshot.navigator.focused_checkout_id.as_deref()
+                != Some(payload.checkout_id.as_str())
         {
             self.focus_checkout(&payload.workspace_id, &payload.checkout_id);
         }

@@ -228,6 +228,26 @@ impl Fixture {
         }
     }
 
+    /// The checkout as a node that dials this core holds it: in the node's
+    /// Herdr session rather than the navigator, in front there while the
+    /// node is the device in front.
+    fn in_node_session(self) -> Self {
+        {
+            let mut runtime = self.shared.lock().unwrap();
+            let project = runtime.snapshot.navigator.workspaces.remove(0);
+            let mut session = super::device_catalog::session(vec![project]);
+            session.focused_workspace_id = Some(WORKSPACE.to_owned());
+            session.focused_checkout_id = Some(self.checkout.clone());
+            let mut node = super::device_catalog::connected_status(DEVICE);
+            node.session = Some(session);
+            runtime.snapshot.status.remote.push(node);
+            runtime.snapshot.navigator.focused_device_id = Some(DEVICE.to_owned());
+            runtime.snapshot.navigator.focused_workspace_id = None;
+            runtime.snapshot.navigator.focused_checkout_id = None;
+        }
+        self
+    }
+
     /// A folder the runtime writes into on its workers. It is the runtime's,
     /// so it goes after they have let go, never under a save still running.
     fn runtime_dir(&self, prefix: &str) -> PathBuf {
@@ -348,6 +368,57 @@ fn a_device_file_is_read_on_a_worker_and_shows_as_a_tab_when_it_arrives() {
     assert_eq!(
         document.revision.as_deref(),
         Some(hide_node_link::document::revision_of(b"old\n").as_str())
+    );
+}
+
+/// A terminal link to a file of a node's own checkout, which a window on
+/// that node prints: the checkout is in the node's session, so the reveal
+/// finds it there, opens the file and moves no focus of the core's, since
+/// the node's Herdr owns that checkout's focus. One not in front on the node
+/// is refused whole, before anything is read.
+#[test]
+fn a_file_of_a_nodes_checkout_in_front_is_revealed_and_one_behind_is_refused() {
+    let f = Fixture::new().in_node_session();
+    std::fs::write(f.root.join("b.txt"), "b\n").unwrap();
+    let reveal = |name: &str| {
+        f.dispatch(
+            "reveal_path",
+            serde_json::json!({
+                "path": f.path(name), "workspace_id": WORKSPACE, "checkout_id": &f.checkout,
+                "is_directory": false, "device_id": DEVICE,
+            }),
+        );
+    };
+    reveal("a.txt");
+    f.wait("the revealed file", |runtime| {
+        runtime.snapshot.editor.document.is_some()
+    });
+    {
+        let runtime = f.shared.lock().unwrap();
+        assert_eq!(runtime.snapshot.status.last_error, None);
+        assert_eq!(
+            runtime.snapshot.ui_state.selected_path.as_deref(),
+            Some(f.path("a.txt").as_str())
+        );
+        assert!(runtime.snapshot.ui_state.right_panel_visible);
+        assert_eq!(runtime.snapshot.navigator.focused_checkout_id, None);
+    }
+
+    f.shared.lock().unwrap().snapshot.status.remote[0]
+        .session
+        .as_mut()
+        .unwrap()
+        .focused_checkout_id = None;
+    reveal("b.txt");
+    assert_eq!(f.last_error().as_deref(), Some("reveal.not_in_front"));
+    let runtime = f.shared.lock().unwrap();
+    assert!(
+        runtime.snapshot.editor.opening.is_empty(),
+        "nothing is read"
+    );
+    assert_eq!(
+        runtime.snapshot.ui_state.selected_path.as_deref(),
+        Some(f.path("a.txt").as_str())
     );
 }
 

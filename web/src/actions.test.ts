@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
+import { clearProbeCache } from "./terminalLinkProvider";
+import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { workspaceKey } from "./viewLayout";
 import type { DispatchFn } from "./ws";
@@ -41,5 +43,44 @@ describe("which pages the keyboard follows", () => {
     actions.openBrowser("https://b.test/", workspace, undefined, "page-1");
     expect(requestIds()).toEqual([undefined, undefined]);
     expect(useUiStore.getState().viewFocusRequest).toBeNull();
+  });
+});
+
+// The MacBook's window after the core moved to the Mac mini: its own checkout
+// is in the node's session, and the path a pane prints is the MacBook's.
+describe("a terminal link to a file of this window's own checkout", () => {
+  const checkout = { id: "remote:mbp:checkout:1", workspace_id: "remote:mbp:project:1", path: "/work/proj-m", exists: true };
+  const rest = {
+    navigator: { devices: [{ id: "core", kind: "local" }, { id: "mbp", kind: "remote", dials_in: true }], workspaces: [] },
+    status: { remote: [{ target_id: "mbp", session: { workspaces: [{ id: checkout.workspace_id, device_id: "mbp", path: checkout.path, checkouts: [checkout] }] } }] },
+  } as never;
+  const revealed = async (hash: string) => {
+    window.location.hash = hash;
+    const sent: Parameters<DispatchFn>[0][] = [];
+    createActions((event) => { sent.push(event); return true; }).openTerminalPath({ real: "/work/proj-m/README.md", kind: "file" }, null, null, false);
+    await vi.waitFor(() => expect(sent.some((event) => event.kind === "reveal_path")).toBe(true));
+    return sent.find((event) => event.kind === "reveal_path")?.payload;
+  };
+
+  afterEach(() => {
+    window.location.hash = "";
+    clearProbeCache();
+    Reflect.deleteProperty(window, "hideHost");
+    useShellStore.setState({ rest: null });
+  });
+
+  it("names the node, so the core's machine never judges the path against its own checkouts", async () => {
+    Object.assign(window, { hideHost: { kind: "electron", probePaths: async (paths: string[]) => paths.map((path) => ({ real: path, kind: "directory" })), openPath: vi.fn() } });
+    useShellStore.setState({ rest });
+    expect(await revealed("#token=t&node=mbp")).toMatchObject({ path: "/work/proj-m/README.md", workspace_id: checkout.workspace_id, checkout_id: checkout.id, device_id: "mbp" });
+  });
+
+  it("names no device for a checkout of the core's own machine", async () => {
+    Object.assign(window, { hideHost: { kind: "electron", probePaths: async (paths: string[]) => paths.map((path) => ({ real: path, kind: "directory" })), openPath: vi.fn() } });
+    const own = { ...checkout, id: "c1", workspace_id: "w1" };
+    useShellStore.setState({ rest: { navigator: { devices: [{ id: "core", kind: "local" }], workspaces: [{ id: "w1", device_id: "core", path: own.path, checkouts: [own] }] }, status: { remote: [] } } as never });
+    const payload = await revealed("#token=t");
+    expect(payload).toMatchObject({ checkout_id: "c1" });
+    expect(payload).not.toHaveProperty("device_id");
   });
 });

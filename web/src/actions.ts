@@ -2644,7 +2644,7 @@ export function createActions(send: DispatchFn) {
     },
 
     /**
-     * A path a terminal link names on this Mac (docs/ARCHITECTURE.md, A
+     * A path a terminal link names on this window's machine (docs/ARCHITECTURE.md, A
      * clicked path is one event). Inside a registered checkout it is one
      * event naming the checkout whose physical root holds it longest:
      * `browser_open` for HTML, `file_open` or `reveal_path` for another file
@@ -2684,18 +2684,20 @@ export function createActions(send: DispatchFn) {
         }
         if (found.kind === "file" && line !== null) requestLine([path, found.real], line, column);
         if (found.kind === "file") followOpen(path, "file", null, here ?? { device_id: deviceId, path: owner.checkout.path });
+        // A node's own checkout is its machine's path: hided leaves it to that node's helper, not the core's roots.
+        const device = deviceField(deviceId, localDeviceId(rest()));
         if (here) {
           dispatch({
             schema_version: 2,
             kind: "file_open",
-            payload: { path, workspace_id: owner.checkout.workspace_id, checkout_id: owner.checkout.id, preview: false, view: here, ...opener },
+            payload: { path, workspace_id: owner.checkout.workspace_id, checkout_id: owner.checkout.id, preview: false, view: here, ...device, ...opener },
           });
           return;
         }
         dispatch({
           schema_version: 2,
           kind: "reveal_path",
-          payload: { path, workspace_id: owner.checkout.workspace_id, checkout_id: owner.checkout.id, is_directory: found.kind === "directory", ...opener },
+          payload: { path, workspace_id: owner.checkout.workspace_id, checkout_id: owner.checkout.id, is_directory: found.kind === "directory", ...device, ...opener },
         });
       });
     },

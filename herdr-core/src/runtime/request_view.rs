@@ -19,19 +19,16 @@ const PENDING_CHECKS_REREAD: std::time::Duration = std::time::Duration::from_sec
 impl Runtime {
     /// The PRs list turns a working agent stalled and a pull request old with
     /// the clock alone (PRD work-tab-pr-lens D-10, D-11), so the projection
-    /// is judged again once a minute while any pull request is listed. The
-    /// scope cache compares what it computes, so a minute that changes
-    /// nothing publishes nothing.
+    /// is judged again once a minute while any pull request is listed, a
+    /// node's project's as this machine's. The scope cache compares what it
+    /// computes, so a minute that changes nothing publishes nothing.
     pub(super) fn tick_work_clock(&mut self, at: u64) -> bool {
         let minute = at / 60_000;
         if minute == self.work_clock_minute {
             return false;
         }
         self.work_clock_minute = minute;
-        self.snapshot
-            .navigator
-            .workspaces
-            .iter()
+        self.catalog_workspaces()
             .any(|workspace| !workspace.pull_requests.is_empty())
             && self.refresh_agent_scopes_at(at)
     }
@@ -196,8 +193,9 @@ impl Runtime {
     }
 
     /// Once a minute while the request view is shown, asks GitHub again for
-    /// each local project a pull request has checks running in, so a finished
-    /// run moves its row without a new turn (D-32, B12, work-tab-pr-lens B44).
+    /// each project a pull request has checks running in, this machine's or a
+    /// node's (`reread_node_github`), so a finished run moves its row without
+    /// a new turn (D-32, B12, work-tab-pr-lens B44).
     /// A project a row waits on running checks in is asked for whatever the
     /// window shows, so the row leaves progress when they end (status-marks
     /// B13); there are at most as many as such rows. Nothing is asked while
@@ -226,26 +224,27 @@ impl Runtime {
         }
         // A pull request the Work list shows (D-25), an agent's or not, with
         // checks running counts: the lens and a card draw them (PRD
-        // work-tab-pr-lens B44). A teammate's pull request nothing reaches is
-        // not read for.
-        let running: BTreeSet<String> = self
-            .snapshot
-            .navigator
-            .workspaces
-            .iter()
-            .filter(|workspace| {
-                self.github
-                    .projects
-                    .iter()
-                    .any(|project| project.root_path == workspace.path)
-                    && workspace.pull_requests.iter().any(|pull_request| {
-                        !pull_request.badge.is_settled()
-                            && pull_request.checks == crate::model::PullRequestChecks::Pending
-                            && crate::agent_state::work::board::listed(pull_request)
-                    })
-            })
-            .map(|workspace| workspace.path.clone())
-            .collect();
+        // work-tab-pr-lens B44), a node's project's as this machine's. A
+        // teammate's pull request nothing reaches is not read for.
+        let mut running = BTreeSet::new();
+        let mut node_running = BTreeSet::new();
+        for workspace in self.catalog_workspaces().filter(|workspace| {
+            self.catalog_github_project(workspace).is_some()
+                && workspace.pull_requests.iter().any(|pull_request| {
+                    !pull_request.badge.is_settled()
+                        && pull_request.checks == crate::model::PullRequestChecks::Pending
+                        && crate::agent_state::work::board::listed(pull_request)
+                })
+        }) {
+            if workspace.device_id == self.node.as_str() {
+                running.insert(workspace.path.clone());
+            } else {
+                node_running.insert((workspace.device_id.clone(), workspace.path.clone()));
+            }
+        }
+        for (node, root) in node_running {
+            self.reread_node_github(&node, &root);
+        }
         // A row of the request view with a pull request of its own checks running.
         let agents: BTreeSet<String> = self
             .snapshot

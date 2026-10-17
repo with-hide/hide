@@ -315,7 +315,7 @@ impl Runtime {
     /// What the project facts are built from, without building them.
     fn link_projects_print(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        for workspace in self.link_lineage_workspaces() {
+        for workspace in self.catalog_workspaces() {
             (&workspace.id, &workspace.path, &workspace.device_id).hash(&mut hasher);
             self.links_work
                 .connection_epochs
@@ -336,7 +336,7 @@ impl Runtime {
                 )
                     .hash(&mut hasher);
             }
-            if let Some(project) = self.link_github_project(workspace) {
+            if let Some(project) = self.catalog_github_project(workspace) {
                 (
                     project.pull_requests_read,
                     project.status.last_success_at_unix_ms,
@@ -352,10 +352,10 @@ impl Runtime {
     }
 
     pub(super) fn link_projects(&self) -> Vec<ProjectFacts> {
-        self.link_lineage_workspaces()
+        self.catalog_workspaces()
             .filter(|workspace| workspace.is_git && !workspace.is_home && !workspace.temporary)
             .map(|workspace| {
-                let project = self.link_github_project(workspace);
+                let project = self.catalog_github_project(workspace);
                 let prs = project
                     .map(|project| {
                         project
@@ -461,7 +461,7 @@ impl Runtime {
             })
             .collect::<HashMap<_, _>>();
         let mut panes = Vec::new();
-        for workspace in self.link_lineage_workspaces() {
+        for workspace in self.catalog_workspaces() {
             for checkout in &workspace.checkouts {
                 for pane in checkout.tabs.iter().flat_map(|tab| tab.panes.iter()) {
                     let Some((kind, session)) = agents.get(pane.id.as_str()) else {
@@ -521,7 +521,7 @@ impl Runtime {
     /// A terminal frame or status-only change does not rebuild its maps.
     pub(super) fn link_parents_print(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        for workspace in self.link_lineage_workspaces() {
+        for workspace in self.catalog_workspaces() {
             workspace.device_id.hash(&mut hasher);
             for checkout in &workspace.checkouts {
                 for tab in &checkout.tabs {
@@ -557,17 +557,6 @@ impl Runtime {
         hasher.finish()
     }
 
-    fn link_lineage_workspaces(&self) -> impl Iterator<Item = &WorkspaceSnapshot> {
-        self.snapshot.navigator.workspaces.iter().chain(
-            self.snapshot
-                .status
-                .remote
-                .iter()
-                .filter_map(|remote| remote.session.as_ref())
-                .flat_map(|session| &session.workspaces),
-        )
-    }
-
     fn link_lineage_agents(&self) -> impl Iterator<Item = &SidebarAgentSnapshot> {
         self.snapshot.navigator.agents.iter().chain(
             self.snapshot
@@ -579,7 +568,10 @@ impl Runtime {
         )
     }
 
-    fn link_github_project(
+    /// What GitHub last answered for a catalog project: this machine's
+    /// reader's for its own, and a node's read (`device_github`) for one of
+    /// a node's; a device this core does not read has none.
+    pub(super) fn catalog_github_project(
         &self,
         workspace: &WorkspaceSnapshot,
     ) -> Option<&crate::model::GithubProjectSnapshot> {
@@ -594,7 +586,7 @@ impl Runtime {
 
     pub(super) fn link_parent_facts(&self) -> Vec<ParentFact> {
         let devices = self
-            .link_lineage_workspaces()
+            .catalog_workspaces()
             .flat_map(|workspace| {
                 workspace.checkouts.iter().flat_map(|checkout| {
                     checkout.tabs.iter().flat_map(|tab| {
@@ -704,7 +696,7 @@ impl Runtime {
             .parent()
             .filter(|directory| !directory.as_os_str().is_empty())?;
         let projects = self
-            .link_lineage_workspaces()
+            .catalog_workspaces()
             .filter(|workspace| workspace.is_git && !workspace.is_home && !workspace.temporary)
             .map(|workspace| crate::links::query::ScopeProject {
                 key: hide_project::project_id(&workspace.device_id, Path::new(&workspace.path)),
@@ -720,7 +712,7 @@ impl Runtime {
             })
             .collect::<Vec<_>>();
         let caller = self
-            .link_lineage_workspaces()
+            .catalog_workspaces()
             .find(|workspace| {
                 workspace.device_id == context.device_id
                     && (workspace.id == context.workspace_id
@@ -746,10 +738,7 @@ impl Runtime {
     /// the failure line's Retry (B25).
     pub(super) fn open_links(&mut self, payload: LinksOpenPayload) -> bool {
         let Some(workspace) = self
-            .snapshot
-            .navigator
-            .workspaces
-            .iter()
+            .catalog_workspaces()
             .find(|workspace| workspace.id == payload.workspace_id)
         else {
             return false;
