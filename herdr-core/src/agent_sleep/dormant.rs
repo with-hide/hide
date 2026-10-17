@@ -121,6 +121,21 @@ pub struct FactoryWorker {
     pub worktree: String,
 }
 
+/// The owner of the sleeping session's checkout, kept when it sleeps, so its
+/// wake opens the checkout from the record rather than from the project list:
+/// the list shows a linked worktree with no open workspace only once a window
+/// has read its repository, and an unregistered project only while one of its
+/// workspaces is open.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DormantOwner {
+    /// The repository's main worktree, which `worktree.open` is asked from;
+    /// for a plain folder, the project folder.
+    pub repository_root: String,
+    pub is_git: bool,
+    /// The name a workspace opened for the checkout takes.
+    pub label: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DormantRecord {
     pub phase: DormantPhase,
@@ -160,6 +175,10 @@ pub struct DormantRecord {
     /// The registration the wake continues; none for a session that held none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registration: Option<DormantRegistration>,
+    /// None in a record an older build saved, whose wake finds the checkout
+    /// in the project list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<DormantOwner>,
 }
 
 impl DormantRecord {
@@ -229,6 +248,12 @@ impl DormantRecord {
             || self.reason.as_ref().is_some_and(|value| value.len() > 4096)
             || self.registration.as_ref().is_some_and(|registration| {
                 !crate::delivery::valid_key(&registration.id) || !registration.actor.valid()
+            })
+            || self.owner.as_ref().is_some_and(|owner| {
+                !std::path::Path::new(&owner.repository_root).is_absolute()
+                    || [owner.repository_root.as_str(), owner.label.as_str()]
+                        .iter()
+                        .any(|value| value.len() > 4096 || value.chars().any(char::is_control))
             })
             || self.factory.as_ref().is_some_and(|worker| {
                 [
@@ -486,6 +511,7 @@ pub(crate) fn fixture_record(pane: &str) -> DormantRecord {
         reason: None,
         factory: None,
         registration: None,
+        owner: None,
     }
 }
 
@@ -519,6 +545,21 @@ mod tests {
                 assert!(restored.dormant[&sleep_id].validate().is_err());
                 assert!(!restored.dormant_snapshots()[0].wake_available);
             }
+        }
+    }
+
+    #[test]
+    fn a_kept_owner_names_its_repository_by_an_absolute_path() {
+        let mut value = record("p1");
+        value.owner = Some(DormantOwner {
+            repository_root: "/fixture/repo".into(),
+            is_git: true,
+            label: "feature".into(),
+        });
+        assert!(value.validate().is_ok());
+        for root in ["", "fixture/repo", "../repo", "/fixture/\nrepo"] {
+            value.owner.as_mut().unwrap().repository_root = root.into();
+            assert!(value.validate().is_err(), "{root:?}");
         }
     }
 

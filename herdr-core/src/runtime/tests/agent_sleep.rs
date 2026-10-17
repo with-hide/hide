@@ -21,12 +21,17 @@ fn event(kind: &str, payload: serde_json::Value) -> Vec<u8> {
 /// The two-tab session with t1 in front, and, when `seq` is given, an
 /// idle Claude agent in t2 that Herdr lists with that state sequence.
 fn session(seq: Option<u64>) -> SessionSnapshotPayload {
-    let mut payload = tab_order_payload(CHECKOUT, &TABS, &TABS, "w-order:t1");
+    session_in(CHECKOUT, seq)
+}
+
+/// `session` with its tabs and agent in the checkout at `path`.
+fn session_in(path: &str, seq: Option<u64>) -> SessionSnapshotPayload {
+    let mut payload = tab_order_payload(path, &TABS, &TABS, "w-order:t1");
     if let Some(seq) = seq {
         let owned: SessionSnapshotPayload =
             crate::sidebar::owned_label_fixture(serde_json::json!({"agents": [{
                 "id": "reviewer", "pane_id": SLEEPER, "agent": "claude",
-                "agent_status": "idle", "state_change_seq": seq, "cwd": CHECKOUT,
+                "agent_status": "idle", "state_change_seq": seq, "cwd": path,
                 "agent_session": {"kind": "id", "value": "11111111-2222-3333-4444-555555555555"},
                 "tokens": {"task": "Review the parser"}
             }]}))
@@ -102,15 +107,7 @@ fn dormant_intent(runtime: &mut Runtime) -> crate::agent_sleep::SleepId {
         .find(|agent| agent.pane_id == SLEEPER)
         .unwrap()
         .clone();
-    let tab = runtime
-        .snapshot
-        .navigator
-        .workspaces
-        .iter()
-        .flat_map(|project| &project.checkouts)
-        .flat_map(|checkout| &checkout.tabs)
-        .find(|tab| tab.panes.iter().any(|pane| pane.id == SLEEPER))
-        .unwrap();
+    let (tab, owner) = runtime.sleep_place(SLEEPER).unwrap();
     let context = runtime.close_context(tab).unwrap();
     let native_session_id = agent.session_id.unwrap();
     runtime
@@ -144,8 +141,37 @@ fn dormant_intent(runtime: &mut Runtime) -> crate::agent_sleep::SleepId {
             transition_started_unix_ms: 1,
             reason: None,
             registration: None,
+            owner: Some(owner),
         })
         .unwrap()
+}
+
+/// Herdr with no workspace open: an unregistered project whose last
+/// workspace closed is no longer listed.
+fn no_workspaces() -> SessionSnapshotPayload {
+    crate::sidebar::owned_label_fixture(serde_json::json!({
+        "agents": [], "workspaces": [], "tabs": [], "panes": [], "layouts": []
+    }))
+    .unwrap()
+}
+
+fn listed(runtime: &Runtime, path: &str) -> bool {
+    runtime
+        .snapshot
+        .navigator
+        .workspaces
+        .iter()
+        .flat_map(|project| &project.checkouts)
+        .any(|checkout| checkout.path == path)
+}
+
+/// The project list stops showing the sleeping session's checkout, as it
+/// does for an unregistered project once its last workspace closes, and for
+/// a linked worktree no window has read since hided started.
+fn unlist(runtime: &mut Runtime, path: &str) {
+    runtime.snapshot.ui_state.workspace_registrations.clear();
+    runtime.ingest_session(Ok(no_workspaces()));
+    assert!(!listed(runtime, path));
 }
 
 /// External Herdr replies use its pinned wire contract, not an owned worker mock.
@@ -783,6 +809,10 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
         if interference == "missing-source-before-wake" {
             native.remove();
         }
+        if interference == "unlisted-before-wake" {
+            unlist(&mut runtime, &cwd);
+            assert!(runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
+        }
         assert!(runtime.request_dormant_wake(&id));
         assert!(!runtime.request_dormant_wake(&id));
     }
@@ -953,6 +983,16 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
     }
 }
 
+/// The wake opens the checkout from the owner its record kept, so it works
+/// while no list shows the checkout: Wake from a phone, with no window
+/// attached since hided restarted, or in an unregistered project whose last
+/// workspace was the sleeping session's.
+#[test]
+#[cfg(unix)]
+fn a_sleeping_session_wakes_in_its_checkout_while_no_list_shows_it() {
+    durable_dormant_journey("claude", "unlisted-before-wake");
+}
+
 fn factory_worker(agent: &str) -> crate::agent_sleep::FactoryWorker {
     crate::agent_sleep::FactoryWorker {
         factory: "f-1".into(),
@@ -1031,6 +1071,246 @@ fn factory_sleep_saves_a_close_pane_agents_intent_bound_to_its_worker() {
             assert!(runtime.factory_worker_probe(SLEEPER).asleep);
         }
     }
+}
+
+/// Case (b) itself: an agent that slept in a linked worktree is woken through
+/// `worktree.open` from its repository's main worktree, and the workspace
+/// Herdr opens takes the worktree's branch name, while the list shows the
+/// repository but not the worktree (no window has read it).
+#[test]
+#[cfg(unix)]
+fn a_sleeping_worktree_session_is_opened_from_its_repository_while_no_list_shows_it() {
+    use crate::agent_sleep::{DormantOwner, DormantPhase};
+    let repo = super::device_worktrees::repo();
+    let (mut runtime, _) = live_tab_order_runtime(&repo.root);
+    runtime.ingest_session(Ok(session_in(&repo.linked, Some(4))));
+    let id = dormant_intent(&mut runtime);
+    {
+        let record = runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .dormant
+            .get_mut(&id)
+            .unwrap();
+        assert_eq!(
+            record.owner,
+            Some(DormantOwner {
+                repository_root: repo.root.clone(),
+                is_git: true,
+                label: "feature".into(),
+            })
+        );
+        record.closed = true;
+        record.phase = DormantPhase::Sleeping;
+    }
+    runtime.refresh_dormant_rows();
+    runtime.ingest_session(Ok(no_workspaces()));
+    assert!(listed(&runtime, &repo.root));
+    assert!(!listed(&runtime, &repo.linked));
+    assert!(runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
+
+    let herdr = FakeHerdr::start_with_errors("dormant-worktree-owner", |method, _| match method {
+        "session.snapshot" => Ok(serde_json::json!({"type": "session_snapshot", "snapshot": {
+            "version": "fixture", "protocol": hide_herdr_client::HERDR_PROTOCOL_REVISION,
+            "workspaces": [], "tabs": [], "panes": [], "layouts": [], "agents": []
+        }})),
+        "worktree.open" => Ok(serde_json::json!({
+            "type": "worktree_opened",
+            "already_open": false,
+            "workspace": {"workspace_id": "w9", "number": 9, "label": "linked", "focused": true, "pane_count": 1, "tab_count": 1, "active_tab_id": "w9:t1", "agent_status": "idle"},
+            "worktree": {"path": "/fixture/linked", "is_bare": false, "is_detached": false, "is_prunable": false, "is_linked_worktree": true, "label": "linked"},
+            "tab": {"tab_id": "w9:t1", "workspace_id": "w9", "number": 1, "label": "1", "focused": true, "pane_count": 1, "agent_status": "idle"},
+            "root_pane": {"pane_id": "w9:p1", "terminal_id": "fixture-terminal", "workspace_id": "w9", "tab_id": "w9:t1", "focused": true, "agent_status": "idle", "revision": 1}
+        })),
+        "workspace.rename" => Ok(serde_json::json!({
+            "type": "workspace_info",
+            "workspace": {"workspace_id": "w9", "number": 9, "label": "feature", "focused": true, "pane_count": 1, "tab_count": 1, "active_tab_id": "w9:t1", "agent_status": "idle"}
+        })),
+        // The owner is open; what follows is the ordinary wake tab.
+        _ => Err((
+            "fixture_end".into(),
+            "the fixture stops after the owner".into(),
+        )),
+    });
+    runtime.live.as_mut().unwrap().api_connector = Arc::new(herdr.connector());
+    let shared = Arc::new(std::sync::Mutex::new(runtime));
+    shared.lock().unwrap().live.as_mut().unwrap().runtime = Arc::downgrade(&shared);
+    shared.lock().unwrap().write_ui_state().unwrap();
+    assert!(shared.lock().unwrap().request_dormant_wake(&id));
+    wait_for("the wake tab's owner", || {
+        herdr
+            .methods()
+            .iter()
+            .any(|method| method == "layout.apply")
+    });
+    let calls = herdr.calls();
+    let params = |wanted: &str| {
+        calls
+            .iter()
+            .find(|(method, _)| method == wanted)
+            .map(|(_, params)| params.clone())
+            .unwrap_or_else(|| panic!("no {wanted} in {calls:?}"))
+    };
+    assert_eq!(
+        params("worktree.open"),
+        serde_json::json!({"cwd": repo.root, "path": repo.linked, "focus": true})
+    );
+    assert_eq!(params("workspace.rename")["label"], "feature");
+}
+
+/// A sleep keeps its checkout's owner as the list names it then, and a Wake
+/// asked once the list no longer shows that checkout begins from the record.
+#[test]
+fn a_sleep_keeps_its_checkouts_owner_for_the_wake() {
+    use crate::agent_sleep::{DormantOwner, DormantPhase};
+    let mut runtime = close_pane_runtime("pi");
+    assert!(runtime.begin_dormant_sleep(SLEEPER, 1));
+    let id = {
+        let (id, record) = runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .dormant
+            .iter_mut()
+            .next()
+            .unwrap();
+        assert_eq!(
+            record.owner,
+            Some(DormantOwner {
+                repository_root: CHECKOUT.into(),
+                is_git: false,
+                label: "order".into(),
+            })
+        );
+        record.closed = true;
+        record.phase = DormantPhase::Sleeping;
+        id.clone()
+    };
+    // The close landed: no close of the pane is still waiting.
+    runtime.close_operations.clear();
+    runtime.refresh_dormant_rows();
+    unlist(&mut runtime, CHECKOUT);
+    assert!(runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
+    assert!(runtime.request_dormant_wake(&id));
+    assert!(runtime.snapshot.status.last_error.is_none());
+    // The wake's intent was saved and its tab is being opened in the
+    // checkout the record names.
+    assert_eq!(
+        runtime.snapshot.ui_state.agent_sleep.dormant[&id].phase,
+        DormantPhase::Creating
+    );
+}
+
+/// A record an older build saved names no owner, so it wakes only while the
+/// list shows its checkout; until then its row offers no Wake and says what
+/// to do, instead of a Wake that is refused.
+#[test]
+fn a_sleeping_session_an_older_build_saved_offers_wake_only_while_its_checkout_is_listed() {
+    use crate::agent_sleep::{DormantPhase, DormantRecord};
+    let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
+    runtime.ingest_session(Ok(session(Some(4))));
+    let id = dormant_intent(&mut runtime);
+    {
+        let record = runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .dormant
+            .get_mut(&id)
+            .unwrap();
+        let mut saved = serde_json::to_value(&*record).unwrap();
+        assert!(saved.as_object_mut().unwrap().remove("owner").is_some());
+        *record = serde_json::from_value::<DormantRecord>(saved).unwrap();
+        assert!(record.owner.is_none());
+        record.closed = true;
+        record.phase = DormantPhase::Sleeping;
+    }
+    let open = || tab_order_payload(CHECKOUT, &TABS[..1], &TABS[..1], "w-order:t1");
+    runtime.ingest_session(Ok(open()));
+    assert!(runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
+
+    // With no workspace open, the registration still lists the checkout;
+    // removing the project takes it off the list, and the row follows at once.
+    runtime.ingest_session(Ok(no_workspaces()));
+    assert!(runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
+    assert!(runtime.retire_workspace_registration("workspace:order"));
+    assert!(!listed(&runtime, CHECKOUT));
+    let row = &runtime.snapshot.navigator.sleeping_sessions[0];
+    assert!(!row.wake_available);
+    let next = "This session's checkout is not listed. Open Hide on this computer and add its project if it is missing; Wake returns once the checkout is listed.";
+    assert_eq!(row.reason.as_deref(), Some(next));
+    assert!(runtime.request_dormant_wake(&id));
+    let error = runtime.snapshot.status.last_error.clone().unwrap();
+    assert_eq!(
+        (error.kind.as_str(), error.message.as_str()),
+        ("agent_sleep.wake_unavailable", next)
+    );
+    assert_eq!(
+        runtime.snapshot.ui_state.agent_sleep.dormant[&id].phase,
+        DormantPhase::Sleeping
+    );
+
+    // A wake that failed keeps saying why it failed.
+    let failed = "The conversation couldn\u{2019}t be resumed.";
+    {
+        let record = runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .dormant
+            .get_mut(&id)
+            .unwrap();
+        record.phase = DormantPhase::Failed;
+        record.reason = Some(failed.into());
+    }
+    runtime.refresh_dormant_rows();
+    let row = &runtime.snapshot.navigator.sleeping_sessions[0];
+    assert!(!row.wake_available);
+    assert_eq!(row.reason.as_deref(), Some(failed));
+
+    // Its workspace open again, the list shows the checkout and Wake returns.
+    runtime.ingest_session(Ok(open()));
+    assert!(listed(&runtime, CHECKOUT));
+    assert!(runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
+}
+
+/// Wake is offered only where the wake can begin: over this machine's
+/// connection to Herdr.
+#[test]
+fn a_sleeping_session_offers_wake_only_over_a_connection() {
+    use crate::agent_sleep::DormantPhase;
+    let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
+    runtime.ingest_session(Ok(session(Some(4))));
+    let id = dormant_intent(&mut runtime);
+    {
+        let record = runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .dormant
+            .get_mut(&id)
+            .unwrap();
+        record.closed = true;
+        record.phase = DormantPhase::Sleeping;
+    }
+    runtime.refresh_dormant_rows();
+    assert!(runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
+
+    let live = runtime.live.take().unwrap();
+    runtime.refresh_dormant_rows();
+    let row = &runtime.snapshot.navigator.sleeping_sessions[0];
+    assert!(!row.wake_available);
+    let unavailable = "This session's reader, checkout or connection is unavailable";
+    assert_eq!(row.reason.as_deref(), Some(unavailable));
+    assert!(runtime.request_dormant_wake(&id));
+    assert_eq!(
+        runtime.snapshot.status.last_error.clone().unwrap().message,
+        unavailable
+    );
+
+    runtime.set_live(live);
+    assert!(runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
 }
 
 /// A close-pane agent the Factory does not sleep is refused before anything

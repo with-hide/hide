@@ -1,11 +1,17 @@
 //! Close-pane sleeping sessions use the existing writer and close owner.
 use super::*;
 use crate::agent_sleep::{
-    AgentSleepStore, DORMANT_BUDGET_SPENT, DormantPhase, DormantRecord, FactoryWorker, SleepId,
+    AgentSleepStore, DORMANT_BUDGET_SPENT, DormantOwner, DormantPhase, DormantRecord,
+    FactoryWorker, SleepId,
 };
 
 /// How long a woken Factory worker may wait for the Factory to bind its pane.
 const WOKEN_BINDING_LIMIT_MS: u64 = 60 * 60 * 1000;
+
+/// What a sleeping session an older build saved, which names no owner, asks
+/// of the operator while the project list does not show its checkout.
+const CHECKOUT_UNLISTED: &str = "This session's checkout is not listed. Open Hide on this computer and add its project if it is missing; Wake returns once the checkout is listed.";
+const WAKE_UNAVAILABLE: &str = "This session's reader, checkout or connection is unavailable";
 
 /// Why a dormant sleep was not admitted: the words and code `set_error`
 /// shows the operator who asked, and whether asking again later can succeed.
@@ -115,16 +121,7 @@ impl Runtime {
         if let Some(reason) = crate::agent_state::rest_refusal(&agent) {
             return Err(SleepRefusal::new("agent_sleep.refused", reason, false).transient());
         }
-        let Some(tab) = self
-            .snapshot
-            .navigator
-            .workspaces
-            .iter()
-            .filter(|workspace| workspace.device_id == self.node.as_str())
-            .flat_map(|workspace| &workspace.checkouts)
-            .flat_map(|checkout| &checkout.tabs)
-            .find(|tab| tab.panes.iter().any(|pane| pane.id == pane_id))
-        else {
+        let Some((tab, owner)) = self.sleep_place(pane_id) else {
             return Err(SleepRefusal::new(
                 "agent_sleep.context_unavailable",
                 "This session has no current local tab",
@@ -181,6 +178,7 @@ impl Runtime {
             transition_started_unix_ms: now,
             reason: None,
             registration: self.delivery_registration_of(pane_id),
+            owner: Some(owner),
         };
         if let Err(reason) = self.snapshot.ui_state.agent_sleep.admit_dormant(record) {
             // The transition budget frees as the pending ones settle; a full
@@ -434,6 +432,22 @@ impl Runtime {
                 .dormant_status_check
                 .as_ref()
                 .is_some_and(|(id, _)| id == &row.sleep_id);
+            // Wake is offered only where it would begin; a failed wake keeps
+            // the reason it failed.
+            if row.wake_available
+                && let Some(blocker) = self
+                    .snapshot
+                    .ui_state
+                    .agent_sleep
+                    .dormant
+                    .get(&row.sleep_id)
+                    .and_then(|record| self.dormant_wake_blocker(record))
+            {
+                row.wake_available = false;
+                if row.reason.is_none() || row.phase == DormantPhase::Sleeping {
+                    row.reason = Some(blocker.into());
+                }
+            }
         }
         if self.snapshot.navigator.sleeping_sessions == rows {
             return false;
@@ -442,6 +456,42 @@ impl Runtime {
         // A project's sleeping fold and No agents membership read these rows.
         self.refresh_inactive_groups();
         true
+    }
+
+    /// Follows a change of the project list into the rows of records an
+    /// older build saved, the only ones whose wake depends on that list.
+    /// The worktree projection, which every session update and project
+    /// removal reaches through the focus resync, calls it; it derives the rows
+    /// only when such a record exists and the local checkout paths changed.
+    pub(in crate::runtime) fn refresh_unowned_dormant_rows(&mut self) -> bool {
+        if !self
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .dormant
+            .values()
+            .any(|record| record.owner.is_none())
+        {
+            return false;
+        }
+        let listing = self
+            .snapshot
+            .navigator
+            .workspaces
+            .iter()
+            .filter(|project| project.device_id == self.node.as_str())
+            .flat_map(|project| &project.checkouts)
+            .fold(0u64, |listing, checkout| {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::hash::DefaultHasher::new();
+                checkout.path.hash(&mut hasher);
+                listing.wrapping_add(hasher.finish())
+            });
+        if self.unowned_dormant_listing == Some(listing) {
+            return false;
+        }
+        self.unowned_dormant_listing = Some(listing);
+        self.refresh_dormant_rows()
     }
 
     /// Called by the one state writer after its actual durability result.
@@ -586,7 +636,55 @@ impl Runtime {
         true
     }
 
+    /// The local tab holding `pane_id`, and the owner of its checkout as the
+    /// project list names it while the pane is open.
+    pub(in crate::runtime) fn sleep_place(
+        &self,
+        pane_id: &str,
+    ) -> Option<(&crate::model::TabSnapshot, DormantOwner)> {
+        self.snapshot
+            .navigator
+            .workspaces
+            .iter()
+            .filter(|project| project.device_id == self.node.as_str())
+            .flat_map(|project| {
+                project
+                    .checkouts
+                    .iter()
+                    .map(move |checkout| (project, checkout))
+            })
+            .find_map(|(project, checkout)| {
+                let tab = checkout
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.panes.iter().any(|pane| pane.id == pane_id))?;
+                Some((
+                    tab,
+                    DormantOwner {
+                        repository_root: project.path.clone(),
+                        is_git: project.is_git,
+                        label: super::super::projects::owner_label(project, checkout).to_owned(),
+                    },
+                ))
+            })
+    }
+
+    /// How the sleeping session's checkout gets its owner opened: from the
+    /// owner its record kept, or, for a record an older build saved, from the
+    /// checkout the project list shows, `None` while it shows none.
     fn dormant_owner(&self, record: &DormantRecord) -> Option<crate::checkout_owner::OwnerOpen> {
+        if let Some(owner) = &record.owner {
+            return Some(
+                crate::checkout_owner::OwnerOpen::for_checkout(
+                    self.node.as_str(),
+                    &record.context.checkout_path,
+                    &owner.repository_root,
+                    owner.is_git,
+                    &owner.label,
+                )
+                .on_node(),
+            );
+        }
         self.snapshot
             .navigator
             .workspaces
@@ -606,6 +704,26 @@ impl Runtime {
                         )
                     })
             })
+    }
+
+    /// Why a closed sleeping session cannot wake now, in the words both its
+    /// row and a refused Wake show, or `None` when it can: the row offers
+    /// Wake exactly when the wake would begin.
+    fn dormant_wake_blocker(&self, record: &DormantRecord) -> Option<&'static str> {
+        let args = crate::recent_closed::resume_arguments(&ClosedAgent {
+            kind: record.kind.clone(),
+            session_id: Some(record.native_session_id.clone()),
+        });
+        if args.is_none()
+            || record.validate().is_err()
+            || record.node_id != self.node.as_str()
+            || self.live.is_none()
+        {
+            return Some(WAKE_UNAVAILABLE);
+        }
+        self.dormant_owner(record)
+            .is_none()
+            .then_some(CHECKOUT_UNLISTED)
     }
 
     pub(in crate::runtime) fn request_dormant_wake(&mut self, id: &SleepId) -> bool {
@@ -654,20 +772,8 @@ impl Runtime {
                 "The session's close has not been confirmed",
             ));
         }
-        let args = crate::recent_closed::resume_arguments(&ClosedAgent {
-            kind: record.kind.clone(),
-            session_id: Some(record.native_session_id.clone()),
-        });
-        if args.is_none()
-            || record.validate().is_err()
-            || self.dormant_owner(&record).is_none()
-            || record.node_id != self.node.as_str()
-            || self.live.is_none()
-        {
-            return Err(refuse(
-                "agent_sleep.wake_unavailable",
-                "This session's reader, checkout or connection is unavailable",
-            ));
+        if let Some(reason) = self.dormant_wake_blocker(&record) {
+            return Err(refuse("agent_sleep.wake_unavailable", reason));
         }
         if let Err(reason) = self
             .snapshot
@@ -872,7 +978,7 @@ impl Runtime {
     fn start_saved_dormant_tab(&mut self, id: &SleepId) {
         let record = self.snapshot.ui_state.agent_sleep.dormant[id].clone();
         let Some(owner) = self.dormant_owner(&record) else {
-            self.fail_dormant(id, "The sleeping session's checkout is no longer available");
+            self.fail_dormant(id, CHECKOUT_UNLISTED);
             return;
         };
         let Some(context) = self.live.clone() else {
