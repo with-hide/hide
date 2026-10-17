@@ -773,7 +773,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let directory = path
         .parent()
         .ok_or_else(|| std::io::Error::other("labels path has no directory"))?;
-    std::fs::create_dir_all(directory)?;
+    hide_platform::fs::private::create_dir_all(directory)?;
     hide_platform::fs::atomic::write_file(path, bytes, hide_platform::fs::Access::Private)
         .map(|_| ())
 }

@@ -310,6 +310,9 @@ Everything Hide owns on a machine is under `~/.hide`:
 | `~/.hide/host-helper` | On a device: the `hided` builds that serve it as a node |
 | `~/.hide/shell-integration` | The zsh and bash startup files a tab Hide makes for an agent starts its shell with, which read your own startup files and then mark the first prompt; one folder per build, another build's removed once unused for an hour |
 
+Every folder Hide makes there is private to your account (0700; on Windows an access list naming only your account).
+The daemon makes its state folder private each time it starts: a folder of your account that an earlier build left open, as a device's helper left `~/.hide/state` at 0755, is closed and the log records `state.made_private`; a state folder that is a link or belongs to another account is refused, no daemon starts on it, and `hide connect` answers `start_failed` naming the folder.
+
 Outside it stay only what another program reads at a place it chose: each agent's hook entry, plugin, extension and skill stub ([agent-hooks.md](agent-hooks.md#what-is-written-and-where)), the `hide` link in `~/.local/bin` (`hide.cmd` and its junction on Windows), and on Windows the Start menu entry and notification registration.
 macOS's own places (`~/Library/Application Support/hide-desktop`, `~/Library/Application Support/hide` with the AI settings), the Home folder `~/hide`, and the label generator lock beside the Herdr socket are not moved.
 

@@ -443,7 +443,7 @@ impl VerifyQueue {
     fn spawn(&mut self, job: VerifyJob, index: usize, started: Instant) {
         let log = log_path(&job);
         let file = (|| -> std::io::Result<(File, File)> {
-            std::fs::create_dir_all(&job.logs)?;
+            hide_platform::fs::private::create_dir_all(Path::new(&job.logs))?;
             let file = OpenOptions::new()
                 .create(true)
                 .append(index > 0)

@@ -267,6 +267,7 @@ The mailbox lives at the state directory's `delivery-ledger.json`, named by `hid
 An admitted mutation is atomically persisted as a private file before the daemon publishes it or returns success.
 Startup establishes the existing trusted ancestor's directory barriers, creates and syncs at most 64 private descendants, validates the actual ledger and reestablishes its file barrier before admitting effects.
 An uncertain replacement disables further delivery effects until a validated restart; corrupt bytes and incomplete directory chains remain available for recovery.
+The ledger refuses a state folder that is a link or that other accounts can read; the daemon makes its own state folder private before the core starts ([ARCHITECTURE.md](ARCHITECTURE.md#hided-and-the-websocket-boundary)), so a folder an earlier build left open, as a device helper's bridge folder did on a machine a core later moved to, still loads its letters.
 The canonical platform boundary currently refuses Windows directory-chain establishment with `Unsupported`; that is an open cross-OS requirement, and delivery does not become ready through a legacy no-op.
 A corrupt, oversized or unsafe existing ledger is preserved, and commands return `ledger_unavailable` with a diagnostic instead of starting an empty ledger.
 Capacity errors retain existing letters and watches.

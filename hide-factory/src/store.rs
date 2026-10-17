@@ -148,10 +148,10 @@ impl Store {
     /// (0700 on Unix); `hide_kit::layout` names both.
     pub fn open(path: &Path, files: &Path) -> Result<Self, StoreError> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            hide_platform::fs::private::create_dir_all(parent)?;
         }
         let files = files.to_owned();
-        fs::create_dir_all(&files)?;
+        hide_platform::fs::private::create_dir_all(&files)?;
         private_dir(&files)?;
         let connection = Connection::open(path)?;
         private_file(path)?;
@@ -382,7 +382,7 @@ impl Store {
     ) -> Result<Attachment, StoreError> {
         let digest = hex(&Sha256::digest(bytes));
         let folder = self.files.join(factory).join(task);
-        fs::create_dir_all(&folder)?;
+        hide_platform::fs::private::create_dir_all(&folder)?;
         private_dir(&folder)?;
         let extension = source
             .extension()

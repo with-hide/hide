@@ -544,7 +544,7 @@ pub fn save(
                 .to_owned()
         })?;
     }
-    fs::create_dir_all(parent)
+    hide_platform::fs::private::create_dir_all(parent)
         .map_err(|_| "UI state directory could not be prepared".to_owned())?;
     let stored = StoredUiState {
         resolved_sessions: state.resolved_sessions.clone(),

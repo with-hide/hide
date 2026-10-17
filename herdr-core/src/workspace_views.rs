@@ -717,7 +717,7 @@ pub fn save(path: &Path, views: &WorkspaceViews) -> Result<(), String> {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .ok_or_else(|| "Workspace view state path has no parent directory".to_owned())?;
-    fs::create_dir_all(parent)
+    hide_platform::fs::private::create_dir_all(parent)
         .map_err(|_| "Workspace view state directory could not be prepared".to_owned())?;
     let stored = StoredWorkspaceViews {
         schema_version: SCHEMA_VERSION,

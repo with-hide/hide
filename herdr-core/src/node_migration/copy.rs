@@ -496,7 +496,8 @@ pub fn place(
 
 fn place_settings(from: &Path, to: &Path) -> Result<bool, Refusal> {
     if let Some(folder) = to.parent() {
-        std::fs::create_dir_all(folder).map_err(|error| refuse(folder, error))?;
+        hide_platform::fs::private::create_dir_all(folder)
+            .map_err(|error| refuse(folder, error))?;
     }
     hide_platform::fs::atomic::rename_no_replace_path(from, to)
         .map_err(|error| refuse(to, error))?;

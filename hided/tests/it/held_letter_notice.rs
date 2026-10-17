@@ -126,6 +126,10 @@ async fn channels_failed(state: &Path) -> Value {
             .filter_map(|line| serde_json::from_str::<Value>(line).ok())
             .filter(|row| row["kind"] == "human.channels_failed")
             .collect::<Vec<_>>();
+        assert!(
+            !text.contains("\"ledger.load_failed\""),
+            "the daemon could not read its ledger: {text}"
+        );
         if let Some(row) = rows.first() {
             assert_eq!(rows.len(), 1, "one notice, one record: {text}");
             assert!(
@@ -153,6 +157,31 @@ async fn without_a_herdr_socket_the_record_names_both_skipped_channels() {
     assert_eq!(row["letter_id"], "letter-7");
     assert_eq!(row["push"], "mode_off");
     assert_eq!(row["herdr"], "no_socket");
+}
+
+/// A machine that was a device before its core moved there has the state
+/// folder its helper's bridge folder made, with the umask's 0755. The
+/// daemon closes it as it starts, so the ledger in it loads and the seeded
+/// letter's notice is tried; before, every letter read as unavailable.
+#[tokio::test]
+async fn a_state_folder_an_earlier_helper_left_open_is_closed_and_its_letters_are_read() {
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("state");
+    seed_undelivered_letters(&state, &["letter-7"]);
+    std::fs::create_dir(state.join("workspace-bridges")).unwrap();
+    std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _daemon = Daemon::start(root.path(), None);
+    let row = channels_failed(&state).await;
+    assert_eq!(row["letter_id"], "letter-7");
+    let mode = std::fs::metadata(&state).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o700, "the state folder is {mode:o}");
+    let log = std::fs::read_to_string(state.join("Logs/core.jsonl")).unwrap();
+    assert!(
+        log.lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .any(|record| record["kind"] == "state.made_private"),
+        "the repair is not logged: {log}"
+    );
 }
 
 #[tokio::test]

@@ -8,6 +8,7 @@ publish = false
 base64 = "=0.23.1"
 hide-agent-adapter = { path = "../hide-agent-adapter" }
 hide-node-link = { path = "../hide-node-link" }
+hide-platform = { path = "../hide-platform" }
 rusqlite = { version = "=0.32.1", features = ["bundled"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
@@ -16,7 +17,6 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 hide-node = { path = "../hide-node" }
-hide-platform = { path = "../hide-platform" }
 tempfile = "=3.27.0"
 
 [lints.rust]

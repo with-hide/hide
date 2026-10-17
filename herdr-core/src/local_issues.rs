@@ -285,7 +285,7 @@ pub fn save(path: &Path, store: &LocalIssueStore) -> Result<(), String> {
     let directory = path
         .parent()
         .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
-    std::fs::create_dir_all(directory)
+    hide_platform::fs::private::create_dir_all(directory)
         .map_err(|error| format!("{}: {error}", directory.display()))?;
     let bytes = serde_json::to_vec_pretty(store).map_err(|error| error.to_string())?;
     let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));

@@ -212,7 +212,7 @@ pub fn record_outcome(
                     .unwrap_or(0),
             };
             if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)?;
+                hide_platform::fs::private::create_dir_all(parent)?;
             }
             fs::write(&path, serde_json::to_vec(&failure)?)
         }

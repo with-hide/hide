@@ -258,3 +258,78 @@ fn a_command_on_the_daemons_whole_configuration_still_refuses_any_invalid_key() 
         );
     }
 }
+
+/// Lets every account read `folder`, as a folder an earlier build made with
+/// the umask's mode was.
+fn open_to_others(folder: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        let status = Command::new("icacls")
+            .arg(folder)
+            .args(["/grant", "Everyone:(R)"])
+            .stdout(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+    assert!(!hide_platform::fs::private::is_private(folder).unwrap());
+}
+
+/// A state folder an earlier build left open to other accounts, as a device
+/// helper's bridge folder left `~/.hide/state`, is closed by the connect
+/// that starts the daemon on it, before any store reads it: the delivery
+/// ledger refuses a folder others can read.
+#[test]
+fn connect_closes_a_state_folder_an_earlier_build_left_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let state = dir.path().join("state");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(state.join("workspace-bridges")).unwrap();
+    open_to_others(&state);
+    let _stop = StopOnDrop {
+        home: &home,
+        state: &state,
+    };
+    let (ok, connected) = json(isolated(&home, &state).arg("connect"));
+    assert!(ok, "hide connect failed: {connected}");
+    assert!(hide_platform::fs::private::is_private(&state).unwrap());
+}
+
+/// A state folder that is a link is refused before anything is written
+/// through it, its log included, so no daemon starts on it, and `hide
+/// connect` names it.
+#[test]
+fn connect_refuses_a_state_folder_that_is_a_link_and_starts_no_daemon() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let target = dir.path().join("elsewhere");
+    let state = dir.path().join("state");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir(&target).unwrap();
+    hide_platform::fs::link::create_link(&target, &state).unwrap();
+    let _stop = StopOnDrop {
+        home: &home,
+        state: &state,
+    };
+    let (ok, refused) = json(isolated(&home, &state).arg("connect"));
+    assert!(!ok, "hide connect started on a link: {refused}");
+    assert_eq!(refused["reason"], "start_failed", "{refused}");
+    assert!(
+        refused["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("is a link or not a folder")),
+        "{refused}"
+    );
+    for name in ["connect.lock", "hided.lock", "hided.json", "Logs"] {
+        assert!(
+            !target.join(name).exists(),
+            "{name} was written through the link"
+        );
+    }
+}

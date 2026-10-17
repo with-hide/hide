@@ -200,7 +200,9 @@ fn inspect(state_dir: &Path, ai: Option<&str>) -> Answered {
 /// goes over SFTP, which makes each folder on the way that is missing and
 /// refuses one that is a link or not a folder, so such a folder would fail
 /// the copy only after the source's core stopped. Names the first, from the
-/// root down; a folder that is missing below it is made by the copy.
+/// root down; a folder that is missing below it is made by the copy. A state
+/// folder another account owns is named too: the moved core could not make
+/// it private, and would not start on it.
 fn path_refused(state_dir: &Path) -> Option<String> {
     let mut folders: Vec<&Path> = state_dir.ancestors().collect();
     folders.reverse();
@@ -220,7 +222,17 @@ fn path_refused(state_dir: &Path) -> Option<String> {
             Err(error) => return Some(format!("{} could not be read: {error}", folder.display())),
         }
     }
-    None
+    match hide_platform::fs::private::owned_by_current_user(state_dir) {
+        Ok(true) => None,
+        Ok(false) => Some(format!(
+            "{} belongs to another account, so the moved core could not keep it private",
+            state_dir.display()
+        )),
+        Err(error) => Some(format!(
+            "{} could not be read: {error}",
+            state_dir.display()
+        )),
+    }
 }
 
 /// The checks of the account's logins, run as a one-shot job in its GUI
