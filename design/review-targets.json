@@ -1643,5 +1643,190 @@
       "Do the feedback row, the Send button (always with its logo) and the ▾ menu (status mark and name; the logo only while the agent logo view mode shows it) match board 6?",
       "Each window is paired with one state; the state cells under it on its board (boards vof-<board>-l/d in the bundle's .pen) carry the rest, including Not delivered, Couldn't send and `Comment deleted · Undo`, and are judged in the state sheets."
     ]
+  },
+  "group-tabs": {
+    "description": "Approved single-row Group tabs, per-group canvas, sidebar hierarchy and grouped or ungrouped start surfaces.",
+    "file": "design/hide-screens.pen",
+    "sheet": "K5WCfv",
+    "scene": "group-tabs",
+    "selector": "[data-gallery-scene=\"group-tabs\"]",
+    "readySelector": "[data-agent-group-selector]",
+    "measurement": "web/e2e/group-tabs-geometry.mjs",
+    "viewportHeight": 741,
+    "frames": [
+      {
+        "node": "lPiH0",
+        "referenceNode": "Z2ybB",
+        "theme": "dark",
+        "width": 1441,
+        "scale": 1,
+        "content": "reference",
+        "state": "group"
+      },
+      {
+        "node": "ANjyt",
+        "referenceNode": "Fr19f",
+        "theme": "dark",
+        "width": 1441,
+        "scale": 1,
+        "content": "reference",
+        "state": "work"
+      },
+      {
+        "node": "yplVd",
+        "referenceNode": "t7v0G",
+        "theme": "dark",
+        "width": 1441,
+        "scale": 1,
+        "content": "reference",
+        "state": "tab"
+      },
+      {
+        "node": "BJcu5",
+        "referenceNode": "BWarj",
+        "theme": "dark",
+        "width": 921,
+        "scale": 1,
+        "content": "reference",
+        "state": "narrow"
+      },
+      {
+        "node": "r1kYcr",
+        "referenceNode": "dRCSN",
+        "theme": "dark",
+        "width": 1441,
+        "scale": 1,
+        "content": "reference",
+        "state": "plain"
+      },
+      {
+        "node": "kvjZr",
+        "referenceNode": "J3Ptq",
+        "theme": "light",
+        "width": 1441,
+        "scale": 1,
+        "content": "reference",
+        "state": "work"
+      },
+      {
+        "node": "uiiPg",
+        "referenceNode": "meEC8",
+        "theme": "light",
+        "width": 1441,
+        "scale": 1,
+        "content": "reference",
+        "state": "group"
+      },
+      {
+        "node": "OLJrZ",
+        "referenceNode": "Jkw9C",
+        "theme": "light",
+        "width": 1441,
+        "scale": 1,
+        "content": "reference",
+        "state": "tab"
+      },
+      {
+        "node": "HREKT",
+        "referenceNode": "VfIf6",
+        "theme": "light",
+        "width": 921,
+        "scale": 1,
+        "content": "reference",
+        "state": "narrow"
+      },
+      {
+        "node": "SGuoz",
+        "referenceNode": "NMYLa",
+        "theme": "light",
+        "width": 1441,
+        "scale": 1,
+        "content": "reference",
+        "state": "plain"
+      },
+      {
+        "node": "ULbW8",
+        "referenceNode": "kgwE4",
+        "theme": "dark",
+        "width": 1441,
+        "scale": 1,
+        "content": "reference",
+        "state": "plain-start"
+      },
+      {
+        "node": "Y7A4t",
+        "referenceNode": "NM2Qu",
+        "theme": "light",
+        "width": 1441,
+        "scale": 1,
+        "content": "reference",
+        "state": "plain-start"
+      }
+    ],
+    "conditions": {
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "widths": [
+        1441,
+        921
+      ],
+      "contents": [
+        "reference",
+        "long"
+      ],
+      "scales": [
+        1,
+        1.3076923076923077
+      ]
+    },
+    "states": {
+      "work": "Named group with live tabs and pane headers.",
+      "group": "Empty named group with the first start form.",
+      "tab": "New draft among named group tabs.",
+      "narrow": "Draft at a 920 px window width.",
+      "plain": "Ungrouped live tabs without a named group.",
+      "plain-start": "Ungrouped draft with terminal start visible."
+    },
+    "urlStates": {
+      "rest": {
+        "state": "group",
+        "lang": "ko"
+      },
+      "work": {
+        "state": "work",
+        "lang": "ko"
+      },
+      "group": {
+        "state": "group",
+        "lang": "ko"
+      },
+      "tab": {
+        "state": "tab",
+        "lang": "ko"
+      },
+      "narrow": {
+        "state": "narrow",
+        "lang": "ko"
+      },
+      "plain": {
+        "state": "plain",
+        "lang": "ko"
+      },
+      "plain-start": {
+        "state": "plain-start",
+        "lang": "ko"
+      }
+    },
+    "rules": {
+      "noOverlap": true,
+      "noSidewaysOverflow": true
+    },
+    "judgment": [
+      "The group selector, actual tabs, New tab and Add agent occupy one bar without a second header.",
+      "Empty groups and grouped or ungrouped drafts keep the prompt, shared picker and terminal start legible in both themes and at narrow widths.",
+      "The sidebar keeps hidden groups, drafts and terminal-only tabs reachable. Fixture terminal bodies do not prove native terminal rendering or start behavior."
+    ]
   }
 }
