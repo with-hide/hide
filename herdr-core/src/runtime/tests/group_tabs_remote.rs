@@ -559,30 +559,44 @@ fn a_global_start_respects_a_later_external_tab_or_pane_visit() {
     for external in ["unchanged", "tab", "pane"] {
         let (mut runtime, _) = live_tab_order_runtime(&t.main);
         let payload = |second: bool| {
-            if external != "pane" {
-                return tab_order_payload(
+            let mut payload = if external != "pane" {
+                tab_order_payload(
                     &t.main,
                     &["w-order:t1", "w-order:t2"],
                     &["w-order:t1", "w-order:t2"],
                     if second { "w-order:t2" } else { "w-order:t1" },
-                );
-            }
-            let ids = [("w1:p1", 6018), ("w1:p2", 6019), ("w1:p3", 6020)];
-            let mut payload = finished_tab_payload(&ids, if second { "w1:p2" } else { "w1:p1" });
-            let pane = tab_order_payload(&t.main, &["w-order:t1"], &["w-order:t1"], "w-order:t1")
-                .panes[0]
-                .clone();
-            payload.panes = ids
-                .iter()
-                .map(|(id, _)| {
-                    let mut pane = pane.clone();
-                    pane.pane_id = (*id).into();
-                    pane
-                })
-                .collect();
+                )
+            } else {
+                let ids = [("w1:p1", 6018), ("w1:p2", 6019), ("w1:p3", 6020)];
+                let mut payload =
+                    finished_tab_payload(&ids, if second { "w1:p2" } else { "w1:p1" });
+                let pane =
+                    tab_order_payload(&t.main, &["w-order:t1"], &["w-order:t1"], "w-order:t1")
+                        .panes[0]
+                        .clone();
+                payload.panes = ids
+                    .iter()
+                    .map(|(id, _)| {
+                        let mut pane = pane.clone();
+                        pane.pane_id = (*id).into();
+                        pane
+                    })
+                    .collect();
+                payload
+            };
+            // An immediate result in this checkout uses its real owner,
+            // rather than an unmarked workspace that still needs discovery.
+            payload.workspaces[0].worktree = Some(crate::domain::WorktreeProjection {
+                repo_key: "repo".into(),
+                repo_name: "main".into(),
+                repo_root: t.main.clone(),
+                checkout_path: t.main.clone(),
+                is_linked_worktree: false,
+            });
             payload
         };
         runtime.ingest_session(Ok(payload(false)));
+        assert!(runtime.owner_workspace_of_path(&t.main).is_some());
         let task = runtime
             .begin_task_operation("agent_start", None, None, None, None)
             .unwrap();
@@ -599,6 +613,10 @@ fn a_global_start_respects_a_later_external_tab_or_pane_visit() {
                 issue_error: None,
                 shell: crate::agent_start::ShellStart::Plain,
             }),
+        );
+        assert_eq!(
+            runtime.created_pane_place("w-order:t3:p"),
+            Some((t.main.as_str(), "w-order:t3"))
         );
         assert_eq!(
             runtime.snapshot.focused.pane_id,
@@ -717,8 +735,8 @@ fn a_first_local_home_catalog_does_not_supersede_its_start_result() {
     runtime.ingest_session_with_catalog(
         Ok(tab_order_payload(
             &t.main,
-            &["w-order:t1"],
-            &["w-order:t1"],
+            &["w-order:t1", "w-order:t4"],
+            &["w-order:t1", "w-order:t4"],
             "w-order:t1",
         )),
         None,
@@ -763,12 +781,20 @@ fn a_global_local_start_brings_its_device_forward_from_a_remote_screen() {
     runtime.rebuild_catalog();
     // A registration alone has no Herdr owner. Publish the local checkout
     // before asking an immediate result to bring it in front of the device.
-    runtime.ingest_session(Ok(tab_order_payload(
-        &t.main,
-        &["w-order:t1"],
-        &["w-order:t1"],
-        "w-order:t1",
-    )));
+    let mut local_session =
+        tab_order_payload(&t.main, &["w-order:t1"], &["w-order:t1"], "w-order:t1");
+    local_session.workspaces[0].worktree = Some(crate::domain::WorktreeProjection {
+        repo_key: "repo".into(),
+        repo_name: "main".into(),
+        repo_root: t.main.clone(),
+        checkout_path: t.main.clone(),
+        is_linked_worktree: false,
+    });
+    runtime.ingest_session(Ok(local_session));
+    assert_eq!(
+        runtime.owner_workspace_of_path(&t.main).as_deref(),
+        Some("w-order")
+    );
     assert_eq!(
         runtime.snapshot.navigator.focused_device_id.as_deref(),
         Some(DEVICE)
@@ -799,6 +825,10 @@ fn a_global_local_start_brings_its_device_forward_from_a_remote_screen() {
         }),
     );
     runtime.sync_workspace_view();
+    assert_eq!(
+        runtime.created_pane_place("w-order:t4:p"),
+        Some((t.main.as_str(), "w-order:t4"))
+    );
     assert_eq!(runtime.snapshot.status.last_error, None);
     assert_eq!(
         runtime.snapshot.navigator.focused_device_id.as_deref(),
