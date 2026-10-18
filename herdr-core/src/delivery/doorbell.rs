@@ -29,6 +29,9 @@ const QUIET_MS: u64 = 30_000;
 pub(crate) const MID_TURN_WAIT_MS: u64 = 5 * 60_000;
 const WORK_PER_PASS: usize = 8;
 const RPC_TIMEOUT: Duration = Duration::from_millis(500);
+/// Prompt submission acknowledges ordered PTY writes, including Herdr's
+/// input-reader boundary. It needs more time than a state read, not a turn wait.
+const PROMPT_TIMEOUT: Duration = Duration::from_secs(5);
 /// A letter refused between its verdict and the input is tried again in the
 /// same pane episode after this long, doubling up to `RETRY_LIMIT_MS`. The
 /// refusal can come from a fact the episode does not carry, such as Herdr's
@@ -674,9 +677,13 @@ fn deliver(
     }
     // The line is the one the reservation saved, so the prompt hook of the
     // turn it opens is recognized by it (`mailbox::rang`).
-    let parameters =
-        wire::delivery_input_params(&observed.raw_pane_id, line).map_err(|_| "herdr_parameters")?;
-    rpc(connector, "pane.send_input", parameters)?;
+    // Herdr owns submission for each input reader, including Windows paste
+    // bursts (herdrdev/herdr#3187). Raw pane input bypasses that contract.
+    let parameters = wire::delivery_prompt_params(&observed.raw_pane_id, line)
+        .map_err(|_| "herdr_parameters")?;
+    let submitted = request_small_response(connector, "agent.prompt", parameters, PROMPT_TIMEOUT)
+        .map_err(|_| "herdr_call_failed")?;
+    wire::delivery_prompted(submitted).map_err(|_| "herdr_format")?;
     // Arrival is not intake. Only a flushed prompt-hook confirmation clears it.
     Ok(Outcome::Rung)
 }
@@ -978,7 +985,7 @@ mod tests {
             let answer = Arc::clone(&flags);
             let herdr =
                 crate::fake_herdr::FakeHerdr::start("doorbell", move |method, _| match method {
-                    "agent.get" => {
+                    "agent.get" | "agent.prompt" => {
                         let mut agent = json!({
                             "pane_id": "recipient", "terminal_id": "terminal",
                             "workspace_id": "w1", "tab_id": "w1:t1", "focused": false,
@@ -990,7 +997,12 @@ mod tests {
                         for (key, value) in answer.lock().unwrap().as_object().unwrap() {
                             agent[key] = value.clone();
                         }
-                        json!({"type": "agent_info", "agent": agent})
+                        let response = if method == "agent.prompt" {
+                            "agent_prompted"
+                        } else {
+                            "agent_info"
+                        };
+                        json!({"type": response, "agent": agent})
                     }
                     "pane.send_input" => json!({"type": "ok"}),
                     other => panic!("unexpected {other}"),
@@ -1101,7 +1113,7 @@ mod tests {
             self.herdr
                 .calls()
                 .into_iter()
-                .filter(|(method, _)| method == "pane.send_input")
+                .filter(|(method, _)| method == "agent.prompt")
                 .map(|(_, params)| params)
                 .collect()
         }
@@ -1262,13 +1274,16 @@ mod tests {
             assert_eq!(held(&records), Vec::<&str>::new(), "{flags}");
             let typed = bell.typed();
             assert_eq!(typed.len(), 1, "{flags}");
-            assert_eq!(typed[0]["pane_id"], "recipient");
+            assert_eq!(typed[0]["target"], "recipient");
             // The recipient is a Codex, so the line names where the letter is.
             assert_eq!(
                 typed[0]["text"], "🔔 Codex 보고: private · hide inbox",
                 "{flags}"
             );
-            assert_eq!(typed[0]["keys"], json!(["enter"]));
+            // Herdr owns each input reader's submission. Hide neither sends
+            // cursor keys nor waits for a turn to finish before confirming it.
+            assert!(typed[0].get("keys").is_none());
+            assert!(typed[0]["wait"].is_null());
             assert_eq!(bell.attempts(), 1, "{flags}");
             // The letter keeps the line it was rung with, which is what
             // recognizes the turn the bell opens.
@@ -1666,7 +1681,8 @@ mod tests {
         let typed = bell.typed();
         assert_eq!(typed.len(), 1);
         assert_eq!(typed[0]["text"], "🔔 Codex 보고: private · hide inbox");
-        assert_eq!(typed[0]["keys"], json!(["enter"]));
+        assert_eq!(typed[0]["target"], "recipient");
+        assert!(typed[0]["wait"].is_null());
         assert_eq!(
             bell.line().as_deref(),
             Some("🔔 Codex 보고: private · hide inbox")

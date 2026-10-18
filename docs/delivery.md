@@ -237,7 +237,13 @@ Whether the line names `hide inbox` is decided per runtime (`bell::names_inbox`)
 Claude Code runs every user-level hook it is given, so its prompt hook hands the turn the letter and its session guidance has already said what `🔔` means; its line ends at the summary.
 Codex runs a user-level hook only once its own trust review approved that exact entry, so another tool's change to `hooks.json` silently stops Hide's, and a Codex attached to its shared app-server daemon runs hooks in the daemon's environment rather than the pane's ([agent-hooks.md](agent-hooks.md)); its bell turn can then arrive with neither the letter nor the guidance, so its line ends with ` · hide inbox`.
 
-The line is typed into a composer and submitted with Enter, so it carries nothing a composer acts on while it is typed.
+The line is submitted to the checked pane through Herdr's `agent.prompt` on every system, so Herdr owns how each agent's input reader finishes a paste and submits it.
+The raw `pane.send_input` path could leave the bell unsent in a Windows input reader that treats the following Enter as part of its paste burst; the prompt API already supplies that reader's boundary ([herdrdev/herdr#3187](https://github.com/herdrdev/herdr/issues/3187)).
+Hide adds no cursor keys or submission delay of its own.
+A manually started agent is eligible once Herdr detects it; missing readiness flags do not exclude it, while an unknown, blocked or still-starting foreground agent is refused before submission.
+The request asks for no turn wait and allows five seconds for Herdr's ordered PTY writes to finish, outside the runtime lock; success is only a bell attempt, and the prompt hook still has to confirm intake.
+The existing draft, identity and readiness checks, three-attempt limit and retry policy remain in force, and arbitrary phone replies retain their own submission contract.
+The line carries nothing a composer acts on while it is typed.
 Control characters become spaces, characters that draw nothing or reorder text are dropped (`display_text::one_line`), and runs of whitespace become one space.
 `@` opens the file picker in Claude Code and Codex and `$` opens Codex's skill picker, and Enter would accept the picker's choice instead of submitting, so both are typed as their full-width forms `＠` and `＄`; a backslash before Enter continues the line in Claude Code, so `\` is typed as `＼`.
 `/`, `!` and `#` act only as a prompt's first character, and the line begins with `🔔`.

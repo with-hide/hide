@@ -1580,6 +1580,21 @@ pub(crate) fn delivery_agent(value: Value) -> Result<DeliveryAgent, String> {
     }
 }
 
+pub(crate) fn delivery_prompt_params(pane: &str, text: &str) -> Result<Value, String> {
+    params(req::AgentPromptParams {
+        target: pane.into(),
+        text: text.into(),
+        wait: None,
+    })
+}
+
+pub(crate) fn delivery_prompted(value: Value) -> Result<(), String> {
+    match response(value, "delivery_prompt_format")? {
+        res::ResponseResult::AgentPrompted { .. } => Ok(()),
+        _ => Err("delivery_prompt_format".into()),
+    }
+}
+
 pub(crate) fn delivery_input_params(pane: &str, text: &str) -> Result<Value, String> {
     params(req::PaneSendInputParams {
         pane_id: pane.into(),
