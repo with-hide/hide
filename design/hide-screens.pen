@@ -212558,7 +212558,7 @@
                                                 {
                                                   "type": "frame",
                                                   "id": "onb-sus-l-owl",
-                                                  "name": "owl-roam",
+                                                  "name": "owl-roam / resting beside the brand",
                                                   "children": [],
                                                   "width": 800,
                                                   "height": 450,
@@ -212567,7 +212567,7 @@
                                                     "url": "./assets/owls/owl-roam.png",
                                                     "mode": "contain"
                                                   },
-                                                  "x": 0,
+                                                  "x": 192,
                                                   "y": 0
                                                 }
                                               ],
@@ -240211,7 +240211,7 @@
                                                 {
                                                   "type": "frame",
                                                   "id": "onb-sus-d-owl",
-                                                  "name": "owl-roam",
+                                                  "name": "owl-roam / resting beside the brand",
                                                   "children": [],
                                                   "width": 800,
                                                   "height": 450,
@@ -240220,7 +240220,7 @@
                                                     "url": "./assets/owls/owl-roam.png",
                                                     "mode": "contain"
                                                   },
-                                                  "x": 0,
+                                                  "x": 192,
                                                   "y": 0
                                                 }
                                               ],

@@ -109,6 +109,7 @@ The connecting desktop status page uses the original `desktop/static/owl-roam.js
 Its lowercase hide wordmark and brand line sit inside the flight path, above a thin indeterminate bar and the host's localized connecting sentence.
 Ready navigation never waits for a loop, and failure hides the decoration and preserves the existing recovery actions.
 The player and bar pause for reduced motion, a hidden document or an offscreen scene, and the document destroys its player and listeners on exit.
+The reduced-motion and failure still rests beside the brand so it cannot cover the words indefinitely.
 The player is MIT licensed; `desktop/static/owl-motion-LICENSE.md` ships beside the status page.
 
 The wizard uses `owl-agents`, `owl-devices` and `owl-ai` for its existing three steps.

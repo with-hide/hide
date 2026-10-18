@@ -95,6 +95,10 @@ main {
   display: block;
 }
 
+/* The original still sits over the brand. Rest it beside the words so a
+   reduced-motion or fallback frame never covers their meaning indefinitely. */
+#owl-still { transform: translateX(24%); }
+
 #preparing {
   display: flex;
   flex-direction: column;

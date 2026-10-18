@@ -405,7 +405,7 @@ export function onboardingBoards(tokens, root, {themedXref, screenButton, screen
       T(`${p}-preparing`, 'Starting Hide…', {size: 'caption', fill: '$--muted-foreground'}),
           ]),
         ]), 0, 0),
-        at(F(`${p}-owl`, 'owl-roam', {width: 800, height: 450, fill: {type: 'image', url: './assets/owls/owl-roam.png', mode: 'contain'}}, []), 0, 0),
+        at(F(`${p}-owl`, 'owl-roam / resting beside the brand', {width: 800, height: 450, fill: {type: 'image', url: './assets/owls/owl-roam.png', mode: 'contain'}}, []), num(tokens, '--size-brand-flight') * 0.24, 0),
       ]),
     ]);
   }
