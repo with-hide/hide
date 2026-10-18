@@ -553,12 +553,13 @@ fn same_path_memo_details_stay_with_the_requested_device() {
     assert!(!detail.comments_loading);
 }
 
-/// Keep real node admission and local stores; only the transcript read at
-/// the device boundary returns fixed words.
+/// Keep real node admission and local stores; session listing and turn
+/// reads at the device boundary belong entirely to the fixture.
 struct OriginNode {
     inner: Arc<dyn NodeLink>,
     turn: hide_session::label_transcript::WorkTurn,
     readers: hide_node_link::sessions::ReaderFeatures,
+    expected_session: &'static str,
 }
 
 impl NodeLink for OriginNode {
@@ -567,12 +568,20 @@ impl NodeLink for OriginNode {
     }
 
     fn call(&self, call: Call, timeout: Duration) -> Result<LinkAnswer, LinkError> {
-        if matches!(call, Call::SessionWorkTurn { .. }) {
-            return Ok(LinkAnswer::Parsed(
-                serde_json::to_value(&self.turn).unwrap(),
-            ));
+        match call {
+            Call::LinkFiles { .. } => Ok(LinkAnswer::Parsed(
+                serde_json::to_value(Vec::<hide_session::links::Candidate>::new()).unwrap(),
+            )),
+            Call::SessionWorkTurn { request } => {
+                assert_eq!(request.session_id, self.expected_session);
+                assert_eq!(request.witness, self.turn.witness());
+                assert_eq!(request.offset, 1);
+                Ok(LinkAnswer::Parsed(
+                    serde_json::to_value(&self.turn).unwrap(),
+                ))
+            }
+            call => self.inner.call(call, timeout),
         }
-        self.inner.call(call, timeout)
     }
 }
 
@@ -598,11 +607,13 @@ fn same_path_memo_origins_and_undo_stay_with_the_admitted_device() {
             inner: FakeDevice::new(),
             turn: b_turn.clone(),
             readers: readers.clone(),
+            expected_session: "origin-b",
         }),
         Arc::new(OriginNode {
             inner: FakeDevice::new(),
             turn: a_turn.clone(),
             readers,
+            expected_session: "origin-a",
         }),
         crate::local_issues::LocalIssueStore::default(),
     );
@@ -636,6 +647,15 @@ fn same_path_memo_origins_and_undo_stay_with_the_admitted_device() {
             agent_summary: true,
             ..Default::default()
         });
+        runtime.rebuild_device_rows();
+        assert!(
+            runtime
+                .snapshot
+                .navigator
+                .devices
+                .iter()
+                .any(|device| { device.id == NODE && device.state == "ready" })
+        );
         runtime.sync_tasks();
         let a = super::backlog::seed_missed_turn(
             &runtime,
