@@ -6,14 +6,14 @@ from pathlib import Path
 import stat
 
 from agent_live_check.protection import MAX_CONFIG_FILES, ProtectionError, stamp, write_private
-from . import database_watch
+from . import claude_watch, database_watch
 
 WATCH = (".claude", ".codex", ".gemini", ".grok", ".omp", ".pi", ".local/share/opencode")
 LINK = ".local/bin/claude"
 # Configuration and login bytes, never session/history append records.
 # Sources and the exact list are kept in docs/VERIFICATION.md.
 CONFIGURATION = (
-    ".claude.json", ".claude/settings.json", ".claude/settings.local.json", ".claude/.credentials.json",
+    ".claude/settings.json", ".claude/settings.local.json", ".claude/.credentials.json",
     ".codex/config.toml", ".codex/auth.json", ".codex/hooks.json", ".codex/.credentials.json",
     ".grok/config.toml", ".grok/auth.json", ".grok/trusted_folders.toml", ".grok/mcp_credentials.json",
     ".pi/agent/settings.json", ".pi/agent/models.json", ".pi/agent/auth.json",
@@ -28,8 +28,8 @@ CONFIGURATION = (
 class OperatorWatch:
     """Read bounded hashes and names; retain no configuration or login bytes."""
 
-    def __init__(self, root, scratch=None):
-        self.root, self.scratch = root, scratch
+    def __init__(self, root, scratch=None, run=None):
+        self.root, self.scratch, self.run = root, scratch, run
         self.copies = []
         self.before = self.snapshot()
 
@@ -62,14 +62,17 @@ class OperatorWatch:
             target = os.readlink(path) if path.is_symlink() else None
             value = stamp(path.resolve())
             result[name] = {"sha256": value.digest, "target": target} if value else None
+        result[".claude.json"] = claude_watch.snapshot(self.root, self.run)
         for name in database_watch.DATABASES:
             result[name] = database_watch.digest(self.root, self.scratch, name, self.copies)
         return result
 
     def compare(self):
         after = self.snapshot()
-        return {"before": self.before, "after": after, "database_copies": self.copies,
-                "changed": [name for name in self.before if self.before[name] != after[name]]}
+        changed = [name for name in self.before if self.before[name] != after[name]]
+        if (after.get(".claude.json") or {}).get("run_projects") and ".claude.json" not in changed:
+            changed.append(".claude.json")
+        return {"before": self.before, "after": after, "database_copies": self.copies, "changed": changed}
 
     def check(self, result=None):
         result = self.compare() if result is None else result

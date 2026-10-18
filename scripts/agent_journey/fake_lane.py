@@ -5,7 +5,7 @@ pointed at the journey's fake model (fake_model.py) instead of a provider
 This table is the lane's only per-agent CLI knowledge: the environment and
 the files under the run's daemon home that send the CLI's model requests to
 `url`, in either mode. CI and guarded local fake runs use that private HOME;
-real local logins keep the operator's HOME. No login is read or copied.
+real local logins keep the operator's HOME. No login is supplied to a fake agent.
 """
 
 import json
@@ -96,6 +96,15 @@ def pi(home, url, root, local):
         "models": [{"id": MODEL, "name": "Journey"}]}}}).encode())
     write_private(folder / "settings.json", json.dumps({"defaultProvider": PROVIDER, "defaultModel": MODEL}).encode())
     return {"JOURNEY_FAKE_KEY": KEY}
+
+
+def pi_trust(home, roots):
+    """The trusted-start fixture; never include the untrusted-start sibling.
+
+    Pi 1.0.4 dist/core/trust-manager.js reads canonical folder -> boolean.
+    """
+    write_private(home / ".pi/agent/trust.json",
+                  json.dumps({str(path.resolve()): True for path in roots}).encode())
 
 
 def omp(home, url, root, local):

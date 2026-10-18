@@ -76,6 +76,44 @@ class PrivateHome(unittest.TestCase):
         with self.assertRaises(ProtectionError):
             watch.check()
 
+    def test_claude_live_state_is_ignored_but_login_and_own_project_paths_are_watched(self):
+        config = self.root / '.claude.json'
+        run = self.root / 'private-run'
+        data = {'oauthAccount': {'accountUuid': 'fixture'}, 'numStartups': 1, 'projects': {}}
+        config.write_text(json.dumps(data))
+        watch = fake_private.OperatorWatch(self.root, run=run)
+        data['numStartups'] = 2
+        data['projects'][str(self.root / 'other')] = {'hasTrustDialogAccepted': True}
+        config.write_text(json.dumps(data))
+        self.assertEqual(watch.check()['changed'], [])
+        data['oauthAccount']['accountUuid'] = 'changed'
+        config.write_text(json.dumps(data))
+        with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: .claude.json'):
+            watch.check()
+        data['oauthAccount']['accountUuid'] = 'fixture'
+        data['projects'][str(run / 'probe/worktrees/pi')] = {}
+        config.write_text(json.dumps(data))
+        with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: .claude.json'):
+            watch.check()
+        # Even a path already present at the start cannot pass the end guard.
+        with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: .claude.json'):
+            fake_private.OperatorWatch(self.root, run=run).check()
+
+    def test_half_written_claude_json_is_not_an_empty_configuration(self):
+        (self.root / '.claude.json').write_text('{"oauthAccount":')
+        with self.assertRaisesRegex(ProtectionError, 'operator_watch_claude_configuration_unreadable'):
+            fake_private.OperatorWatch(self.root)
+
+    def test_private_pi_trust_is_limited_to_the_trusted_start_fixture(self):
+        home = self.root / 'home'
+        (home / '.pi/agent').mkdir(parents=True)
+        measured, trusted = self.root / 'measured', self.root / 'worktrees'
+        fake_lane.pi_trust(home, [measured, trusted])
+        data = json.loads((home / '.pi/agent/trust.json').read_text())
+        self.assertEqual(data, {str(measured): True, str(trusted): True})
+        self.assertNotIn(str(self.root), data)
+        self.assertNotIn(str(self.root / 'worktrees-untrusted'), data)
+
     def test_a_missing_key_update_or_pin_proof_keeps_the_exception(self):
         row = {'fake_home': {'status': 'proven', 'key_env': 'KEY', 'evidence': 'vendor docs',
                             'auto_update': {'kind': 'environment', 'name': 'NO_UPDATE', 'value': '1'}}}

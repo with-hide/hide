@@ -405,7 +405,7 @@ Never run a cargo build or test while it runs: either relinks `target/debug` und
 
 ### The fake model (`--fake-model`)
 
-With `--fake-model`, in either mode, each real CLI with Hide's real kit and Herdr's integration is answered by the journey's fake model (`scripts/agent_journey/fake_model.py`) instead of a provider, and no login is read, copied or used.
+With `--fake-model`, in either mode, each real CLI with Hide's real kit and Herdr's integration is answered by the journey's fake model (`scripts/agent_journey/fake_model.py`) instead of a provider, and no login is supplied to an agent or a provider.
 It speaks OpenAI Chat Completions and Responses, Anthropic Messages and Gemini `generateContent`, streamed or whole, with usage in each provider's shape, and answers a turn with the last token of what the request sends after the model's own last turn, a token inside Hide's Project Memory blocks left out, or with the token of the Project Memory index the session started with when the turn carries none; a request that asks for JSON of a schema, as Claude Code's and Codex's title requests do, is answered with an object of that schema.
 `scripts/agent_journey/fake_lane.py` writes each CLI's provider configuration into the run's daemon home, and each agent gets its own server, so its log counts that agent's model requests exactly.
 Local fake mode uses a private HOME only for an adapter whose four guards can be enforced; real-login mode always keeps the operator's HOME.
@@ -442,12 +442,23 @@ The exact configuration/login paths, relative to the operator's HOME, are:
 
 | Agent | Configuration and login paths | Source for the file boundary |
 | --- | --- | --- |
-| Claude Code | `.claude.json`, `.claude/settings.json`, `.claude/settings.local.json`, `.claude/.credentials.json` | [Official settings guide](https://code.claude.com/docs/en/settings), configuration files and authentication storage; the macOS keychain is denied by the sandbox. |
+| Claude Code | selected login/install keys and run-project paths in `.claude.json`; `.claude/settings.json`, `.claude/settings.local.json`, `.claude/.credentials.json` | [Official settings guide](https://code.claude.com/docs/en/settings), configuration files and authentication storage; the macOS keychain is denied by the sandbox. |
 | Codex | `.codex/config.toml`, `.codex/auth.json`, `.codex/hooks.json`, `.codex/.credentials.json` | [Pinned core sources](https://github.com/openai/codex/tree/rust-v0.163.0/codex-rs/core/src), config, auth storage and hooks. |
 | Grok | `.grok/config.toml`, `.grok/auth.json`, `.grok/trusted_folders.toml`, `.grok/mcp_credentials.json` | [Official settings reference](https://docs.x.ai/build/settings/reference) and [published authentication source](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-login); the public source is 1.0.45, without a tag for the selected 1.0.52 CLI pin. |
 | Pi | `.pi/agent/settings.json`, `models.json`, `auth.json`, `oauth.json`, `mcp-auth.json`, `keybindings.json`, `trust.json`, `mcp.json` in the same folder | [Pinned package](https://www.npmjs.com/package/@earendil-works/pi-coding-agent/v/1.0.4), `dist/migrations.js`, `dist/core/auth-storage.js` and `dist/extensions/mcp/oauth.js`; startup can migrate the legacy OAuth and keybinding files. |
 | omp | `.omp/agent/config.yml`, `.omp/agent/config.yaml`, `.omp/agent/models.yml`, `.omp/agent/settings.json`, `.omp/agent/secrets.yml`, `.omp/agent/secret-placeholder.key`; credential and settings rows of `.omp/agent/agent.db`, read from a private copy | [Pinned paths](https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/utils/src/dirs.ts), [settings storage](https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/coding-agent/src/session/agent-storage.ts) and [credential storage](https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/ai/src/auth/sqlite-credential-store.ts). |
 | OpenCode | `.config/opencode/opencode.json`, `opencode.jsonc`, `tui.json`, `cli.json`, `service.json` in the same folder; credential rows of `.local/share/opencode/opencode.db`, read from a private copy | [Pinned credential schema](https://github.com/anomalyco/opencode/blob/v2.0.29/packages/core/src/credential/sql.ts), [database path](https://github.com/anomalyco/opencode/blob/v2.0.29/packages/cli/src/database-path.ts), [configuration migration](https://github.com/anomalyco/opencode/blob/v2.0.29/packages/cli/src/config/migrate.ts); v2 reads the old `auth.json` only for migration. |
+
+Claude Code's mixed global file is compared by this approved refinement of (b):
+
+> (i) the hash of the login and install keys only (the account/OAuth key, the API key and the answers about it, installMethod, autoUpdates, the onboarding-complete keys; pick the exact names from the pinned version and write them in docs);
+> (ii) at the end, no key in projects is a path inside this run's folders (the run folder, its worktrees and its private HOME). A run whose HOME leaked writes its own cwd there, so this catches a write by the run itself exactly, and other sessions' entries don't matter.
+> Counters, caches and other projects' entries are live session state and stay out, like omp's usage counters. JSON that is half written or cannot be read counts as a change: exit 2.
+
+The selected keys are `oauthAccount`, `primaryApiKey`, `customApiKeyResponses`, `installMethod`, `autoUpdates`, `hasCompletedOnboarding` and `lastOnboardingVersion`.
+The whole selected object is hashed canonically, including the absence of a key; no selected value is retained in evidence.
+Claude Code is closed source: these names follow its configuration/onboarding format, while its official settings documentation is live rather than version-pinned.
+Every absolute `projects` key is checked against the run directory, which contains the private HOME and both worktree roots; any such key at the end fails even if it was already present at the start.
 
 OpenCode is also covered: the top-level entry names of `~/.local/share/opencode` join (c), and its configuration/login rows join (b).
 The six original roots, including `~/.gemini`, remain watched.
@@ -470,6 +481,7 @@ agy keeps the local exception and is not started: its installer cannot select th
 Cursor remains excluded by operator decision.
 A missing key or update declaration, or a non-version-selecting installer, keeps an adapter on its existing local fake route with the operator HOME, and the report names the exception.
 This preserves existing coverage: a route already measured still runs, while an existing local limitation such as agy remains `not measured`.
+The private Pi fixture trusts only the measured repository and its trusted-start worktree root in `.pi/agent/trust.json`; the sibling untrusted-start root is never pre-trusted.
 The candidate's Hide AI is off in both fake modes, and native titles are what the title cell reads.
 `scripts/tests/test_agent_journey_private_home.py` exercises content, top-level entry and link changes on fake watch roots, concurrent SQLite copies, unchanged source bytes, missing proof, cache refusal and authenticated requests; no test watches or changes the operator's folders.
 The report is marked as a fake model run with what a fake model cannot show: it proves the CLI, Hide's kit and Herdr's integration, never a provider, a login or a quota, and its rows are kept apart from a signed-in run's.

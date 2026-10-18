@@ -397,6 +397,8 @@ def prepare_fake_local(runtime, report, table, rows, measured, operator, root, u
         declaration = row["fake_home"]
         private_directory(runtime.home.joinpath(*row["home_folder"]))
         extra = fake_lane.configure(kind, runtime.home, urls[key], root, local=False)
+        if kind == "pi":
+            fake_lane.pi_trust(runtime.home, [root, runtime.probe / "worktrees"])
         if not extra.get(declaration["key_env"]):
             refuse("fake_api_key_environment_missing: " + kind)
         # Installation runs under its own private HOME and write sandbox too.
@@ -594,10 +596,9 @@ def main(argv=None):
         runtime = Runtime(checkout, run, operator, owner, herdr_bin=herdr, home=home,
                           state=None if local else home / ".hide/state")
         if local and fake:
-            # Registered before the first copy, so even unconfirmed process
-            # cleanup removes any private login bytes left by a failed read.
-            runtime.credential_roots.add(run / "watch-private")
-            watch = fake_private.OperatorWatch(operator, run / "watch-private")
+            # Copies live outside the agent-readable probe and are removed
+            # by their context and the unconditional watch cleanup below.
+            watch = fake_private.OperatorWatch(operator, run / "watch-private", run)
         report["package"] = str(package(runtime))
         if fake:
             for key in measured:
@@ -813,15 +814,17 @@ def main(argv=None):
                 watch.check(report["operator_watch"])
             except Exception as error:
                 report["failures"].append({"type": "ProtectionError", "reason": str(error)})
-            finally:
-                # The final comparison follows Runtime.close, which already
-                # removed the start copy; remove its new empty scratch too.
-                try:
-                    shutil.rmtree(run / "watch-private", ignore_errors=False)
-                except FileNotFoundError:
-                    pass
-                except OSError as error:
-                    report["failures"].append({"type": "CleanupError", "reason": str(error)})
+        if local and fake:
+            # Runs even if the initial snapshot failed before assigning watch.
+            try:
+                shutil.rmtree(run / "watch-private", ignore_errors=False)
+                report["cleanup"]["watch_copies_removed"] = True
+            except FileNotFoundError:
+                report["cleanup"]["watch_copies_removed"] = True
+            except OSError as error:
+                report["cleanup"]["confirmed"] = False
+                report["cleanup"]["watch_copies_removed"] = False
+                report["failures"].append({"type": "CleanupError", "reason": str(error)})
         if runtime and getattr(runtime, "journey_cache", None):
             try:
                 report["cli_cache"]["bytes_after"] = runtime.journey_cache.check()
