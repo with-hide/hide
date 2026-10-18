@@ -14,27 +14,47 @@ export type OverviewGraphModel = {
 
 export const graphProjectId = (project: BoardProject) => `project:${JSON.stringify([project.workspace.device_id, project.workspace.id])}`;
 const partyKey = (party: OverviewGraphParty) => JSON.stringify([party.device_id, party.pane_id, party.session]);
-const paneKey = (deviceId: string, paneId: string) => JSON.stringify([deviceId, paneId]);
+
+/** Core-qualified parents can cross devices; reused plain pane IDs need one device match. */
+function lineageParents(agents: readonly GraphAgent[]): ReadonlyMap<string, GraphAgent> {
+  const byPane = new Map<string, GraphAgent | null>();
+  const byDevicePane = new Map<string, GraphAgent | null>();
+  for (const row of agents) {
+    const pane = row.agent.pane_id;
+    const key = JSON.stringify([row.deviceId, pane]);
+    byPane.set(pane, byPane.has(pane) ? null : row);
+    byDevicePane.set(key, byDevicePane.has(key) ? null : row);
+  }
+  const parents = new Map<string, GraphAgent>();
+  for (const child of agents) {
+    const pane = child.agent.lineage_parent_pane_id;
+    if (!pane) continue;
+    const exact = byPane.get(pane);
+    const parent = exact === null && !pane.startsWith("remote:") ? byDevicePane.get(JSON.stringify([child.deviceId, pane])) : exact;
+    if (parent && parent.id !== child.id) parents.set(child.id, parent);
+  }
+  return parents;
+}
 
 /** Count current, core-verified relationships, including children outside the visible-node budget. */
 export function overviewGraphFamily(row: GraphAgent, agents: readonly GraphAgent[]): { direct: number; descendants: number } {
   const children = new Map<string, GraphAgent[]>();
+  const parents = lineageParents(agents);
   for (const child of agents) {
-    const parent = child.agent.lineage_parent_pane_id;
+    const parent = parents.get(child.id);
     if (!parent) continue;
-    const key = paneKey(child.deviceId, parent);
-    const siblings = children.get(key) ?? [];
+    const siblings = children.get(parent.id) ?? [];
     siblings.push(child);
-    children.set(key, siblings);
+    children.set(parent.id, siblings);
   }
-  const direct = children.get(paneKey(row.deviceId, row.agent.pane_id)) ?? [];
+  const direct = children.get(row.id) ?? [];
   const seen = new Set([row.id]);
   const pending = [...direct];
   while (pending.length > 0) {
     const child = pending.pop()!;
     if (seen.has(child.id)) continue;
     seen.add(child.id);
-    pending.push(...(children.get(paneKey(child.deviceId, child.agent.pane_id)) ?? []));
+    pending.push(...(children.get(child.id) ?? []));
   }
   return { direct: direct.filter((child) => child.id !== row.id).length, descendants: seen.size - 1 };
 }
@@ -56,8 +76,8 @@ function projectSessions(projects: readonly BoardProject[], metadata: OverviewGr
       return [{ ...row, id: agentId, projectId: id, deviceId, digest, launchModel: session?.launch_model ?? null }];
     });
     agents.sort((a, b) => a.id.localeCompare(b.id));
-    const panes = new Set(agents.map((row) => row.agent.pane_id));
-    return { id, project, agents, roots: agents.filter((row) => !row.agent.lineage_parent_pane_id || !panes.has(row.agent.lineage_parent_pane_id)).length };
+    const parents = lineageParents(agents);
+    return { id, project, agents, roots: agents.filter((row) => !parents.has(row.id)).length };
   });
 }
 
@@ -85,11 +105,11 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
   const admitted = new Set(groups.map((group) => group.id));
   const visible = groups.flatMap((group) => group.expanded ? group.agents : []);
   const visibleIds = new Set(visible.map((row) => row.id));
-  const byPane = new Map(agents.map((row) => [paneKey(row.deviceId, row.agent.pane_id), row]));
+  const parents = lineageParents(agents);
   const endpoint = new Map<string, string>();
   for (const row of agents) if (row.digest && admitted.has(row.projectId)) endpoint.set(partyKey({ device_id: row.deviceId, pane_id: row.agent.pane_id, session: row.digest }), visibleIds.has(row.id) ? row.id : row.projectId);
   const lineage = visible.flatMap((row) => {
-    const parent = row.agent.lineage_parent_pane_id ? byPane.get(paneKey(row.deviceId, row.agent.lineage_parent_pane_id)) : undefined;
+    const parent = parents.get(row.id);
     return parent && visibleIds.has(parent.id) ? [{ from: parent.id, to: row.id }] : [];
   }).sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
   const bundles = new Map<string, Communication>();

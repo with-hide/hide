@@ -68,6 +68,7 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
   // Esc closes the panel before the Overview (B16).
   useEscapeLayer(panel !== null, () => useUiStore.getState().setOverview({ panel: null }));
   const unavailable = availability.state === "unavailable" && section ? section.device : null;
+  const needsLiveDevice = view !== "usage" && view !== "history";
   // A Home with no project says what to do first in the backlog's and the Projects' place (sidebar-task-lens B42).
   const noProject = availability.state === "ready" && projects.length === 0;
   const counts: Record<MainView, ReactNode> = {
@@ -83,7 +84,7 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
       <OpeningStatus actions={actions} />
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-md border-b border-border px-lg py-xs" data-overview-navigation="true">
         <Tabs className="min-w-0 overflow-x-auto" value={view} onValueChange={(value) => { setView(value as MainView); useUiStore.getState().setOverview({ panel: null }); }}>
-          <TabsList aria-label={t("overview.viewLabel")} className={cn("gap-md rounded-none bg-transparent p-0", unavailable && view !== "usage" && "opacity-(--opacity-dimmed)")}>
+          <TabsList aria-label={t("overview.viewLabel")} className={cn("gap-md rounded-none bg-transparent p-0", unavailable && needsLiveDevice && "opacity-(--opacity-dimmed)")}>
             {MAIN_VIEWS.map((choice) => (
               <TabsTrigger key={choice} value={choice} data-main-tab={choice} className="h-auto rounded-none border-b-2 border-transparent px-xs py-sm data-[state=active]:border-primary data-[state=active]:bg-transparent">
                 {t(TAB_LABEL[choice])}
@@ -94,7 +95,7 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
         </Tabs>
         {view !== "usage" ? <ProjectChip projects={projects.map(({ workspace }) => workspace)} /> : null}
       </div>
-      {unavailable && view !== "usage" ? (
+      {unavailable && needsLiveDevice ? (
         <DeviceUnanswered device={unavailable} availability={availability} actions={actions} />
       ) : (
         <div className="relative flex min-h-0 flex-1">

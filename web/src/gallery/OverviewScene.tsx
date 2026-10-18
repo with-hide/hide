@@ -61,11 +61,12 @@ export function OverviewScene({ state, theme, palette, language, scale }: Overvi
   // This adapter only serves invented gallery data. Runtime policy is tested
   // against the isolated daemon; no external write is made by this scene.
   const actions = useMemo(() => createActions((event) => {
-    const payload = event.payload as { task_key?: string; query?: string; options?: SessionSearchOptions; session?: WorkSession };
+    const payload = event.payload as { workspace_id?: string; task_key?: string; query?: string; options?: SessionSearchOptions; session?: WorkSession };
     if (event.kind === "issue_detail_request") {
-      const task = world.rest.navigator?.workspaces?.flatMap((p) => p.tasks?.tasks ?? []).find((row) => row.key === payload.task_key);
-      if (task) useShellStore.setState((store) => ({ rest: { ...store.rest, issue_work: { ...store.rest!.issue_work!, detail: {
-        task_key: task.key, phase: "ready", body: "## 목표\n\n긴 한국어와 English issue titles를 같은 목록에서 읽을 수 있어야 합니다.\n\n- [x] 제목과 메타데이터 비교\n- [ ] 좁은 화면에서 키보드 검토\n\n```ts\nconst visible = items.filter(matches);\n```\n\n### 검토 사항\n\n필터를 바꾼 뒤에도 원래 항목과 위치로 돌아옵니다.", message: null,
+      const workspace = world.rest.navigator?.workspaces?.find((row) => row.id === payload.workspace_id);
+      const task = workspace?.tasks?.tasks.find((row) => row.key === payload.task_key);
+      if (workspace && task) useShellStore.setState((store) => ({ rest: { ...store.rest, issue_work: { ...store.rest!.issue_work!, detail: {
+        workspace_id: workspace.id, device_id: workspace.device_id ?? "local", task_key: task.key, phase: "ready", body: "## 목표\n\n긴 한국어와 English issue titles를 같은 목록에서 읽을 수 있어야 합니다.\n\n- [x] 제목과 메타데이터 비교\n- [ ] 좁은 화면에서 키보드 검토\n\n```ts\nconst visible = items.filter(matches);\n```\n\n### 검토 사항\n\n필터를 바꾼 뒤에도 원래 항목과 위치로 돌아옵니다.", message: null,
         labels: task.labels ?? [], author: task.author ?? "jules", created_at_unix_ms: task.created_at_unix_ms ?? null,
         assignees: task.assignees ?? [], comment_count: 2, comments_cursor: null, comments_has_more: false, comments_limited: false, comments_loading: false,
         comments: [{ author: "mira", created_at_unix_ms: Date.now() - 60_000, body: "**검토 완료**: 본문과 활동을 함께 읽을 수 있습니다." }, { author: "jules", created_at_unix_ms: Date.now(), body: "키보드와 좁은 화면도 확인하겠습니다." }],
@@ -118,7 +119,7 @@ export function OverviewScene({ state, theme, palette, language, scale }: Overvi
     }
     const usage: NodeUsage = ledgerScene({ node: "local", agents: AGENT_ADAPTERS.map((adapter) => ({ agent: adapter.herdr_kind, limits: { state: "unsupported" }, consumption: { state: "unsupported" } })), history: null }, "reference");
     if (usage.history) usage.history.models = usage.agents.flatMap((row) => row.consumption.state === "reading" ? row.consumption.value.year.days.map((day) => ({ date: day.date, agent: row.agent, model: row.agent === "claude" ? "model-a" : "model-c", hide_ai: false, amount: day.amount })) : []);
-    useShellStore.setState({ rest, usage: { nodes: [usage] }, agents: world.agents, connection: "live", sessionRecord });
+    useShellStore.setState({ rest, usage: { nodes: [usage] }, agents: world.agents, linkSummaries: world.linkSummaries, connection: "live", sessionRecord });
     useUiStore.setState({
       screen: state === "record" ? { kind: "workspace" } : { kind: "main" },
       overviewOpen: false,

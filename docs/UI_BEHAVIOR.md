@@ -816,7 +816,8 @@ Its head is the title `Overview` and the device switch: every connected device a
 With This Mac alone there is no switch, since there is nothing to choose.
 Choosing a device changes only what the Overview shows; the rail, the sidebar and the Workspace in front stay, and a project chip that was set clears.
 The tab row shows Work, Projects, Backlog, History and Usage, with counts derived from the same scoped records each view shows.
-A device that does not answer dims the non-Usage tabs, and their body holds `<device>가 응답하지 않는다 · <언제부터>` and `다시 연결`; the age is the core's `unreachable_since_unix_ms`, and the diagnostic reason stays in the line's tooltip.
+A device that does not answer dims the live Work, Projects and Backlog tabs, and their body holds `<device>가 응답하지 않는다 · <언제부터>` and `다시 연결`; the age is the core's `unreachable_since_unix_ms`, and the diagnostic reason stays in the line's tooltip.
+History keeps searching the core's retained requests for that device and marks its disconnected state in the view.
 Usage stays available because choosing a different device does not change the core machine that owns its ledger.
 The project chip at the row's right filters the four device views; changing the device clears it.
 Usage replaces the project choice with one global account scope line naming the actual core machine.
@@ -886,8 +887,8 @@ With no open missed item, or with summaries off, the line is not drawn.
 A section identifies its project, source-qualified items and open or started counts.
 Status, source, author, assignee, labels and literal title search filter before the initial fifty visible rows; Load more increases the visible bound.
 The add control opens the shared quick add, whose explicit destination and repository disclosure apply here too.
-Enter makes the item at once with no form: a memo stands as an `L-N` row at the top right away, and a GitHub project shows a dimmed `만드는 중` row at the top that becomes the `#N` row once the issue exists (B29).
-The input empties and keeps the keyboard for the next title; an empty or blank Enter does nothing, a title stops at 256 characters, and the characters left show at the input's end as it nears the limit.
+Enter submits the title through that quick add: a memo stands as an `L-N` row, and an explicit GitHub destination shows a dimmed `만드는 중` row that becomes the `#N` row once the issue exists (B29).
+The input locks during creation, then shows its success line and closes as described below; an empty or blank Enter does nothing, and a title stops at 256 characters.
 A GitHub issue made here, by the quick add or by `백로그로` carries the title alone: no request, answer or body leaves the device.
 A failed GitHub create keeps its row with one line of why (`gh가 없음`, `GitHub에 로그인 안 됨`, `GitHub 원격 없음`, `네트워크 또는 사용량 제한`), `다시 시도` and `지우기` (B30).
 A failure no retry can change (an add the core refused, or a repository that moved) offers `지우기` alone; the core keeps at most eight such rows, the oldest leaving first.
@@ -917,7 +918,8 @@ Starting creates the worktree, writes the link into it, starts the agent with th
 `백로그에 추가` (⇧⌘M; Alt+Shift+M on Windows and Linux; ⌥⇧M in a browser tab, where Chrome keeps ⇧⌘M) opens one input at the top center of any screen, even while a terminal holds the keyboard, and takes the keyboard; ⌘K or the find bar closes first (B37).
 A second press closes it.
 Above the input stand the project it will go to and why it was chosen: `고른 일감의 프로젝트` (the project of the record, item or project the Overview's panel shows), `걸러 보는 프로젝트` (the Overview's project chip), `앞에 있는 체크아웃`, or `백로그가 있는 첫 프로젝트` when none of them keeps a backlog (B38).
-Tab and Shift+Tab walk the projects of that device that keep a backlog; a project of a device the core dials has none and is never offered, and with no project to offer the input reads `백로그를 둘 프로젝트가 없음` and Enter does nothing.
+Tab from the title walks the projects of that device that keep a backlog, resetting the destination to Local; Shift+Tab moves focus back to the explicit destination controls.
+A project of a device the core dials has none and is never offered, and with no project to offer the input reads `백로그를 둘 프로젝트가 없음` and Enter does nothing.
 Quick add defaults to Local, independently of the project's older Issue source preference.
 GitHub requires an explicit destination choice, with the canonical repository and public, private or unknown visibility shown before Enter.
 Only the typed title is sent to GitHub; neither the session request nor its answer or body is copied there.

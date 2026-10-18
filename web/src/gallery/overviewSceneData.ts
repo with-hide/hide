@@ -4,7 +4,7 @@
 // volume, and one session's record. Every value is made up; the core's
 // projections are fixed here as data, never recomputed.
 import type { AgentScope, TaskCardScope } from "../agentScope";
-import type { AgentPullRequest, AgentRow, AgentState, BacklogItem, RowMark, Checkout, IssueWork, ProjectDisk, SessionRecord, SnapshotRest, Task, TaskSource, WorkSession, Workspace, WorktreeDisk } from "../snapshot";
+import type { AgentPullRequest, AgentRow, AgentState, BacklogItem, RowMark, Checkout, IssueWork, LinkSummaries, ProjectDisk, SessionRecord, SnapshotRest, Task, TaskSource, WorkSession, Workspace, WorktreeDisk } from "../snapshot";
 import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
 import states from "./agentStates.json";
 import { checkout, REFERENCE_FOLDS, workspace } from "./sceneData";
@@ -120,7 +120,7 @@ function merged(row: Checkout, number: number, title: string, now: number, build
   return { ...row, pull_request: { url: `https://example.invalid/pull/${number}`, review: null, badge: "merged", is_draft: false, number, title, state: "merged" }, worktree: { ...row.worktree!, merged: true, disk: mergedDisk(row.path, buildCache, dependencies, now) } };
 }
 
-export type OverviewWorld = { rest: SnapshotRest; agents: AgentRow[]; record: SessionRecord; recordSession: WorkSession; recordPane: string };
+export type OverviewWorld = { rest: SnapshotRest; agents: AgentRow[]; record: SessionRecord; recordSession: WorkSession; recordPane: string; linkSummaries: LinkSummaries };
 
 export function overviewWorld(now: number): OverviewWorld {
   const s = Math.floor(now / 1000);
@@ -138,7 +138,7 @@ export function overviewWorld(now: number): OverviewWorld {
     agent({ pane: "h-a1c3", title: "긴 한국어와 English title wrapping 검토", look: "working", ago: 3 * MINUTE, parent: "h-a1", kind: "codex" }, now),
     agent({ pane: "h-a1c4", title: "키보드 이동 확인", look: "idle", ago: 15 * MINUTE, parent: "h-a1" }, now),
     agent({ pane: "h-a1g1", title: "모바일 표 너비 조정", look: "working", ago: 2 * MINUTE, parent: "h-a1c1" }, now),
-    agent({ pane: "h-e1", title: "단축키 설정 화면 연결", look: "working", ago: 4 * MINUTE, kind: "codex" }, now),
+    agent({ pane: "h-e1", title: "키보드 단축키와 English 화면 연결 검증", look: "working", ago: 4 * MINUTE, kind: "codex" }, now),
     agent({ pane: "h-q2", title: "검색 팔레트", look: "idle", ago: 3 * 60 * MINUTE, pulls: [{ pr: hidePrs.search, state: "merged" }] }, now),
     agent({ pane: "h-r1", title: "릴리스 노트 초안", look: "idle", ago: 26 * 60 * MINUTE }, now),
     agent({ pane: "h-r2", title: "의존성 업데이트 검토", look: "idle", ago: 2 * 24 * 60 * MINUTE }, now),
@@ -296,5 +296,13 @@ export function overviewWorld(now: number): OverviewWorld {
     ],
     children: [child("h-a1c1", "컴포넌트 구조 정리"), child("h-a1c2", "한글 가독성 확인")],
   };
-  return { rest, agents, record, recordSession, recordPane: "h-a1" };
+  // Explicit invented task records exercise the graph's largest caption stack.
+  const linkSummaries: LinkSummaries = {
+    projects: {}, filling: false,
+    progress: ["h-a1c3", "h-e1"].map((pane) => ({
+      session: { device_id: "local", agent: "codex", session_id: `session-${pane}` },
+      done: 1, total: 2, tasks: [task(`${pane}-1`, "줄바꿈 확인", "done", true, 2 * MINUTE), task(`${pane}-2`, "키보드 이동 확인", "working", false, MINUTE)], outputs: [], children: null,
+    })),
+  };
+  return { rest, agents, record, recordSession, recordPane: "h-a1", linkSummaries };
 }

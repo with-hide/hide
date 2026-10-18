@@ -27,6 +27,7 @@
 .overview-graph .og-session .react-flow__handle-left { left: calc(50% - var(--og-orb-size) / 2); top: calc(var(--og-orb-size) / 2); }
 .overview-graph .og-session .react-flow__handle-right { right: calc(50% - var(--og-orb-size) / 2); top: calc(var(--og-orb-size) / 2); }
 .og-session-target { display: flex; width: 100%; height: 100%; flex-direction: column; align-items: center; gap: var(--spacing-xxs); padding: 0 var(--spacing-xs); background: transparent; color: var(--foreground); border: 0; border-radius: var(--radius-sm); text-align: center; cursor: pointer; pointer-events: auto; }
+.og-session-target > * { flex-shrink: 0; }
 .og-session-target:hover, .og-session[data-selected="true"] .og-session-target { background: color-mix(in srgb, var(--accent) 48%, transparent); }
 .og-project-heading:focus-visible, .og-session-target:focus-visible, .og-letter-label:focus-visible, .og-list > button:focus-visible { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
 .og-orb { display: flex; align-items: center; justify-content: center; position: relative; flex-shrink: 0; width: var(--size-overview-graph-child-orb); height: var(--size-overview-graph-child-orb); margin-bottom: var(--spacing-xs); border: var(--size-hairline) solid var(--border); border-radius: 50%; background: var(--secondary); }

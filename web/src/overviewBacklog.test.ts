@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { english } from "./i18n/catalogs";
+import { visibleBacklogProjects } from "./BacklogTab";
 import { BACKLOG_FILTERS, BACKLOG_SHOWN, BACKLOG_TITLE_LIMIT, backlogIntent, backlogLabels, backlogOf, backlogTitle, destinationOf, filterRows, pendingItems, titleLeft, undoRetryable } from "./overviewBacklog";
 import type { BoardProject } from "./projectBoard";
 import type { BacklogFailure, BacklogItem, Task, TaskSource, Workspace } from "./snapshot";
@@ -117,6 +118,32 @@ describe("mixed source filters before the 50-row page", () => {
     const filtered = filterRows(rows, "#1", [], { ...BACKLOG_FILTERS, author: "mira", assignee: "sam" });
     expect(filtered.map((row) => row.token).sort()).toEqual(["#1", ...Array.from({ length: 10 }, (_, index) => `#${index + 10}`)].sort());
     expect(filterRows(rows, "", [], BACKLOG_FILTERS).slice(0, BACKLOG_SHOWN)).toHaveLength(50);
+  });
+});
+
+describe("empty source states in all-project scope (B18, B25)", () => {
+  const failed = workspace("failed", []);
+  failed.tasks!.sources = [{ ...failed.tasks!.source!, failure: "GitHub is offline" }];
+  const reading = workspace("reading", []);
+  reading.tasks!.sources = [{ ...reading.tasks!.source!, reading: true }];
+  const healthyEmpty = workspace("empty", []);
+  const memo = workspace("memo", [task("local:/memo#1", "L-1")]);
+  memo.tasks!.source = { ...memo.tasks!.source!, kind: "local", label: "Local", name: null };
+  const pending = workspace("pending", []);
+  const projects = [failed, reading, healthyEmpty, memo, pending];
+  const making = [item("creating", "creating", 1, { workspace_id: "pending" })];
+
+  it("keeps failed and loading sources beside another project's healthy memo, omitting healthy empty bands", () => {
+    expect(visibleBacklogProjects(projects, "", [], BACKLOG_FILTERS, making).map((project) => project.id)).toEqual(["failed", "reading", "memo", "pending"]);
+  });
+
+  it("keeps GitHub failure and loading states through the GitHub filter, but not the memo filter", () => {
+    expect(visibleBacklogProjects(projects, "", [], { ...BACKLOG_FILTERS, source: "github" }, undefined).map((project) => project.id)).toEqual(["failed", "reading"]);
+    expect(visibleBacklogProjects(projects, "", [], { ...BACKLOG_FILTERS, source: "local" }, undefined).map((project) => project.id)).toEqual(["memo"]);
+  });
+
+  it("preserves source states and pending operations when item filters match nothing", () => {
+    expect(visibleBacklogProjects(projects, "missing", ["unknown"], { ...BACKLOG_FILTERS, status: "closed" }, making).map((project) => project.id)).toEqual(["failed", "reading", "pending"]);
   });
 });
 

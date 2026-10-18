@@ -4,7 +4,16 @@ use super::*;
 pub(super) struct IssueDetailWork {
     running: bool,
     generation: u64,
-    pending: Option<(u64, IssueDetailRequestPayload)>,
+    pending: Option<(u64, IssueDetailRead)>,
+}
+
+/// Core-resolved identity retained while a detail read waits or runs.
+#[derive(Clone)]
+struct IssueDetailRead {
+    workspace_id: String,
+    device_id: String,
+    task_key: String,
+    after: Option<String>,
 }
 use crate::issues::{ISSUE_LIMIT, IssueCandidate, IssueLinkSnapshot, IssueReference};
 
@@ -948,7 +957,10 @@ impl Runtime {
                 .issue_work
                 .detail
                 .as_ref()
-                .is_some_and(|slot| slot.task_key == *key && slot.phase == "reading")
+                .is_some_and(|slot| {
+                    slot.matches(&workspace.id, &workspace.device_id, key)
+                        && slot.phase == "reading"
+                })
         {
             return false;
         }
@@ -959,7 +971,8 @@ impl Runtime {
                 .detail
                 .as_ref()
                 .is_some_and(|slot| {
-                    slot.task_key == *key
+                    slot.matches(&workspace.id, &workspace.device_id, key)
+                        && slot.phase == "ready"
                         && !slot.comments_loading
                         && slot.comments_has_more
                         && slot.comments_cursor.as_ref() == Some(after)
@@ -975,6 +988,8 @@ impl Runtime {
         if key.starts_with("local:") {
             let answer = local_issue_detail(&self.local_issues, node.as_deref(), key);
             self.snapshot.issue_work.detail = Some(crate::model::IssueDetailSnapshot::answered(
+                workspace.id,
+                workspace.device_id,
                 key.clone(),
                 answer,
             ));
@@ -986,47 +1001,54 @@ impl Runtime {
                 slot.message = None;
             }
         } else {
-            self.snapshot.issue_work.detail =
-                Some(crate::model::IssueDetailSnapshot::reading(key.clone()));
+            self.snapshot.issue_work.detail = Some(crate::model::IssueDetailSnapshot::reading(
+                workspace.id.clone(),
+                workspace.device_id.clone(),
+                key.clone(),
+            ));
         }
         // One worker and one latest pending request across windows; switching
         // items never accumulates subprocesses or applies an old response.
+        let read = IssueDetailRead {
+            workspace_id: workspace.id,
+            device_id: workspace.device_id,
+            task_key: payload.task_key,
+            after: payload.comments_after,
+        };
         if self.issue_detail_work.running {
-            self.issue_detail_work.pending = Some((generation, payload));
+            self.issue_detail_work.pending = Some((generation, read));
         } else {
-            self.start_issue_detail_read(generation, payload);
+            self.start_issue_detail_read(generation, read);
         }
         true
     }
 
-    fn start_issue_detail_read(
-        &mut self,
-        generation: u64,
-        payload: IssueDetailRequestPayload,
-    ) -> bool {
+    fn start_issue_detail_read(&mut self, generation: u64, read: IssueDetailRead) -> bool {
         self.issue_detail_work.running = true;
         let place = self
-            .issue_project(&payload.workspace_id)
+            .issue_project(&read.workspace_id)
+            .filter(|(_, workspace)| {
+                workspace.device_id == read.device_id
+                    && workspace
+                        .tasks
+                        .tasks
+                        .iter()
+                        .any(|task| task.key == read.task_key)
+            })
             .ok_or_else(|| "The project is no longer available".to_owned())
             .and_then(|(node, workspace)| self.github_place(node.as_deref(), &workspace.path));
-        let reference = crate::tasks::parse_github_key(&payload.task_key)
+        let reference = crate::tasks::parse_github_key(&read.task_key)
             .ok_or_else(|| "The item is not a GitHub issue".to_owned());
         let (place, reference) =
             match place.and_then(|place| reference.map(|reference| (place, reference))) {
                 Ok(value) => value,
                 Err(message) => {
-                    return self.finish_issue_detail(
-                        generation,
-                        payload.task_key,
-                        payload.comments_after,
-                        Err(message),
-                    );
+                    return self.finish_issue_detail(generation, read, Err(message));
                 }
             };
         let own = self.own_node();
-        let key = payload.task_key.clone();
-        let after = payload.comments_after.clone();
-        let worker_after = after.clone();
+        let worker_after = read.after.clone();
+        let failed_read = read.clone();
         if let Err(message) = self.spawn_issue_worker(
             "issue-detail",
             move || {
@@ -1040,14 +1062,9 @@ impl Runtime {
                 }))
                 .unwrap_or_else(|_| Err("The issue detail reader stopped".to_owned()))
             },
-            move |runtime, result| runtime.finish_issue_detail(generation, key, after, result),
+            move |runtime, result| runtime.finish_issue_detail(generation, read, result),
         ) {
-            return self.finish_issue_detail(
-                generation,
-                payload.task_key,
-                payload.comments_after,
-                Err(message),
-            );
+            return self.finish_issue_detail(generation, failed_read, Err(message));
         }
         false
     }
@@ -1055,13 +1072,18 @@ impl Runtime {
     fn finish_issue_detail(
         &mut self,
         generation: u64,
-        key: String,
-        after: Option<String>,
+        read: IssueDetailRead,
         result: Result<crate::tasks::TaskDetail, String>,
     ) -> bool {
         self.issue_detail_work.running = false;
         let mut changed = if generation == self.issue_detail_work.generation {
-            self.ingest_issue_detail_page(&key, after.as_deref(), result)
+            self.ingest_issue_detail_page(
+                &read.workspace_id,
+                &read.device_id,
+                &read.task_key,
+                read.after.as_deref(),
+                result,
+            )
         } else {
             false
         };
@@ -1074,20 +1096,41 @@ impl Runtime {
     #[cfg(test)]
     pub(crate) fn ingest_issue_detail(
         &mut self,
+        workspace_id: &str,
+        device_id: &str,
         key: &str,
         result: Result<crate::tasks::TaskDetail, String>,
     ) -> bool {
-        self.ingest_issue_detail_page(key, None, result)
+        self.ingest_issue_detail_page(workspace_id, device_id, key, None, result)
     }
 
     pub(super) fn ingest_issue_detail_page(
         &mut self,
+        workspace_id: &str,
+        device_id: &str,
         key: &str,
         after: Option<&str>,
         result: Result<crate::tasks::TaskDetail, String>,
     ) -> bool {
+        if !self
+            .issue_project(workspace_id)
+            .is_some_and(|(_, workspace)| {
+                workspace.device_id == device_id
+                    && workspace.tasks.tasks.iter().any(|task| task.key == key)
+            })
+        {
+            return false;
+        }
         let Some(slot) = self.snapshot.issue_work.detail.as_mut().filter(|slot| {
-            slot.task_key == key && (slot.phase == "reading" || slot.comments_loading)
+            slot.matches(workspace_id, device_id, key)
+                && match after {
+                    Some(cursor) => {
+                        slot.phase == "ready"
+                            && slot.comments_loading
+                            && slot.comments_cursor.as_deref() == Some(cursor)
+                    }
+                    None => slot.phase == "reading",
+                }
         }) else {
             return false;
         };
@@ -1121,7 +1164,12 @@ impl Runtime {
                 }
             }
         } else {
-            *slot = crate::model::IssueDetailSnapshot::answered(key.to_owned(), result);
+            *slot = crate::model::IssueDetailSnapshot::answered(
+                workspace_id.to_owned(),
+                device_id.to_owned(),
+                key.to_owned(),
+                result,
+            );
         }
         true
     }

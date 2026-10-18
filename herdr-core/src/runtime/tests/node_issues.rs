@@ -423,6 +423,134 @@ fn a_local_issue_key_is_applied_only_to_the_project_the_request_names() {
     );
 }
 
+/// Identical path/number keys on two devices carry different private
+/// bodies; every read identifies the project and the device that answered.
+#[test]
+fn same_path_memo_details_stay_with_the_requested_device() {
+    let repo = repo(None, "feature");
+    let mut store = crate::local_issues::LocalIssueStore::default();
+    let mut own = local_project(&[(1, "Own memo")]);
+    own.issues[0].body = "Private body on the core's machine".into();
+    store.projects.insert(repo.root.clone(), own);
+    let mut node = local_project(&[(1, "Node memo")]);
+    node.issues[0].body = "Private body on the node".into();
+    store
+        .devices
+        .entry(NODE.into())
+        .or_default()
+        .insert(repo.root.clone(), node);
+    let shared = node_runtime(&repo, FakeDevice::new(), Recording::of(None), store);
+    let node_workspace = node_project(&shared.lock().unwrap()).unwrap().id.clone();
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime.snapshot.navigator.workspaces.push(workspace(
+            "same-path-on-core",
+            "Own project",
+            &repo.root,
+            vec![checkout(
+                "same-path-on-core",
+                "same-path-checkout",
+                &repo.root,
+                None,
+            )],
+        ));
+        runtime.sync_tasks();
+    }
+    let key = crate::tasks::local_key(&repo.root, 1);
+    for (workspace_id, device_id, body) in [
+        (
+            "same-path-on-core",
+            crate::node::TEST_NODE,
+            "Private body on the core's machine",
+        ),
+        (node_workspace.as_str(), NODE, "Private body on the node"),
+        (
+            "same-path-on-core",
+            crate::node::TEST_NODE,
+            "Private body on the core's machine",
+        ),
+    ] {
+        dispatch(
+            &shared,
+            "issue_detail_request",
+            serde_json::json!({"workspace_id": workspace_id, "task_key": key}),
+        );
+        let runtime = shared.lock().unwrap();
+        let detail = runtime.snapshot.issue_work.detail.as_ref().unwrap();
+        assert!(detail.matches(workspace_id, device_id, &key));
+        assert_eq!(detail.phase, "ready");
+        assert_eq!(detail.body.as_deref(), Some(body));
+    }
+
+    let mut runtime = shared.lock().unwrap();
+    // Both owners above are admitted and contain this key. While B awaits
+    // an answer, a late A result must fail on owner identity, not phase or
+    // the absence of A from the catalog.
+    runtime.snapshot.issue_work.detail = Some(crate::model::IssueDetailSnapshot::reading(
+        node_workspace.clone(),
+        NODE.into(),
+        key.clone(),
+    ));
+    assert!(!runtime.ingest_issue_detail(
+        "same-path-on-core",
+        crate::node::TEST_NODE,
+        &key,
+        Ok(crate::tasks::TaskDetail {
+            body: "Late private body on the core's machine".into(),
+            ..Default::default()
+        }),
+    ));
+    let detail = runtime.snapshot.issue_work.detail.as_ref().unwrap();
+    assert!(detail.matches(&node_workspace, NODE, &key));
+    assert_eq!(detail.phase, "reading");
+    assert_eq!(detail.body, None);
+    assert!(runtime.ingest_issue_detail(
+        &node_workspace,
+        NODE,
+        &key,
+        Ok(crate::tasks::TaskDetail {
+            body: "Private body on the node".into(),
+            ..Default::default()
+        }),
+    ));
+    assert_eq!(
+        runtime
+            .snapshot
+            .issue_work
+            .detail
+            .as_ref()
+            .unwrap()
+            .body
+            .as_deref(),
+        Some("Private body on the node"),
+    );
+
+    // A cursor in an admitted owner's slot cannot authorize the other
+    // owner, even with the identical item key and cursor text.
+    runtime.snapshot.issue_work.detail = Some(crate::model::IssueDetailSnapshot::answered(
+        "same-path-on-core".into(),
+        crate::node::TEST_NODE.into(),
+        key.clone(),
+        Ok(crate::tasks::TaskDetail {
+            body: "Private body on the core's machine".into(),
+            comments_has_more: true,
+            comments_cursor: Some("same-owner-cursor".into()),
+            ..Default::default()
+        }),
+    ));
+    assert!(!runtime.dispatch_json(&event(
+        "issue_detail_request",
+        serde_json::json!({"workspace_id": node_workspace, "task_key": key, "comments_after": "same-owner-cursor"}),
+    )));
+    let detail = runtime.snapshot.issue_work.detail.as_ref().unwrap();
+    assert!(detail.matches("same-path-on-core", crate::node::TEST_NODE, &key));
+    assert_eq!(
+        detail.body.as_deref(),
+        Some("Private body on the core's machine")
+    );
+    assert!(!detail.comments_loading);
+}
+
 fn github_issue(repository: &str, number: u32, title: &str) -> crate::issues::IssueSnapshot {
     crate::issues::IssueSnapshot {
         reference: crate::issues::IssueReference {

@@ -161,7 +161,7 @@ function SessionPreview({ row, family, progress, actions, openRecord, close }: {
     <p className="og-context">{agentProductName(row.agent.agent_kind)}{row.launchModel ? ` · ${t("overviewGraph.launchModel", { model: row.launchModel })}` : ""}</p>
     {progress && progress.total > 0 ? <p>{t("overviewGraph.progress", { done: progress.done, total: progress.total })}</p> : null}
     <div className="og-children"><strong>{t("overviewGraph.children")}</strong><p>{t("overviewGraph.childSummary", family)}</p>{children && Object.values(children).some((value) => value > 0) ? <p>{t("overviewGraph.childStates", { working: children.working, turn: children.error + children.approval + children.question, done: children.done })}</p> : null}</div>
-    <div className="og-details-actions"><Button variant="outline" size="sm" onClick={() => actions.focusPane(row.agent.pane_id)}>{t("overviewGraph.openSession")}</Button>{session ? <Button variant="secondary" size="sm" onClick={() => openRecord(session)}>{t("overviewGraph.openRecord")}</Button> : null}</div>
+    <div className="og-details-actions"><Button variant="outline" size="sm" onClick={() => actions.openAgent(row.agent.pane_id)}>{t("overviewGraph.openSession")}</Button>{session ? <Button variant="secondary" size="sm" onClick={() => openRecord(session)}>{t("overviewGraph.openRecord")}</Button> : null}</div>
   </aside>;
 }
 

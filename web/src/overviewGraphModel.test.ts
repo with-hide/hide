@@ -21,6 +21,28 @@ function metadata(parties: OverviewGraphParty[], letters: OverviewGraphMetadata[
 }
 
 describe("current sessions in the Overview graph", () => {
+  it("keeps core-verified lineage in both cross-device directions and counts descendants by current session", () => {
+    const local = project("local", [agent("local-parent"), agent("local-child", { lineage_parent_pane_id: "remote:mini:pane:parent" }), agent("local-grandchild", { lineage_parent_pane_id: "remote:mini:pane:child" })]);
+    const remote = project("remote", [agent("remote:mini:pane:parent", { device_id: "mini" }), agent("remote:mini:pane:child", { device_id: "mini", lineage_parent_pane_id: "local-parent" }), agent("remote:mini:pane:fork", { device_id: "mini", forked_from: { pane_id: "local-parent", label: "source" } })], "mini");
+    const graph = overviewGraphModel([local, remote], undefined, new Set([graphProjectId(local), graphProjectId(remote)]), null);
+    const edges = graph.lineage.map((edge) => [graph.agents.find((row) => row.id === edge.from)!.agent.pane_id, graph.agents.find((row) => row.id === edge.to)!.agent.pane_id]);
+    expect(edges).toEqual(expect.arrayContaining([["local-parent", "remote:mini:pane:child"], ["remote:mini:pane:parent", "local-child"], ["remote:mini:pane:child", "local-grandchild"]]));
+    expect(edges).toHaveLength(3);
+    const family = (pane: string) => overviewGraphFamily(graph.agents.find((row) => row.agent.pane_id === pane)!, graph.agents);
+    expect(family("local-parent")).toEqual({ direct: 1, descendants: 2 });
+    expect(family("remote:mini:pane:parent")).toEqual({ direct: 1, descendants: 1 });
+    expect(family("remote:mini:pane:child")).toEqual({ direct: 1, descendants: 1 });
+  });
+
+  it.each(["another-device", "duplicate-native-sessions"])("rejects ambiguous plain parents: %s", (ambiguity) => {
+    const first = project("first", [agent("parent")]);
+    const second = project("second", [agent("parent", { device_id: ambiguity === "another-device" ? "mini" : "local", session_id: "other-native-session" })], ambiguity === "another-device" ? "mini" : "local");
+    const child = project("child", [agent("child", { device_id: ambiguity === "another-device" ? "third" : "local", lineage_parent_pane_id: "parent" })], ambiguity === "another-device" ? "third" : "local");
+    const graph = overviewGraphModel([first, second, child], undefined, new Set([first, second, child].map(graphProjectId)), null);
+    expect(graph.lineage).toEqual([]);
+    for (const row of graph.agents) expect(overviewGraphFamily(row, graph.agents)).toEqual({ direct: 0, descendants: 0 });
+  });
+
   it("summarizes direct children and all current descendants without forks or another device's reused pane", () => {
     const p = project("family", [agent("parent"), ...["a", "b", "c", "d"].map((pane) => agent(pane, { lineage_parent_pane_id: "parent" })), agent("grandchild", { lineage_parent_pane_id: "a" }), agent("fork", { forked_from: { pane_id: "parent", label: "source" } })]);
     const other = project("remote", [agent("parent", { device_id: "remote" }), agent("remote-child", { device_id: "remote", lineage_parent_pane_id: "parent" })], "remote");

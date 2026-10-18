@@ -28,6 +28,16 @@ import { useUiStore, type OverviewPanel } from "./ui";
 
 const LINK = "inline-flex whitespace-nowrap items-center gap-xxs rounded-xs px-xxs text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring";
 
+function matchingSources(project: Workspace, source: BacklogFilters["source"]) {
+  const sources = project.tasks?.sources ?? (project.tasks?.source ? [project.tasks.source] : []);
+  return sources.filter((item) => source === "all" || item.kind === source);
+}
+
+/** Unread or failed sources stay actionable even before they have a row. */
+export function visibleBacklogProjects(projects: readonly Workspace[], query: string, labels: readonly string[], filters: BacklogFilters, made: readonly BacklogItem[] | undefined): Workspace[] {
+  return projects.filter((project) => filterRows(backlogOf(project, true).rows, query, labels, filters).length || pendingItems(made, project).length || matchingSources(project, filters.source).some((source) => source.failure || source.reading));
+}
+
 /** Mixed, source-qualified rows. Filters run before each project's 50-row page. */
 export function OverviewBacklog({ projects, actions }: { projects: readonly BoardProject[]; deviceId: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -43,7 +53,7 @@ export function OverviewBacklog({ projects, actions }: { projects: readonly Boar
   const counted = filterRows(rows, query, labels, { ...filters, status: "all" });
   const counts = { open: counted.filter((row) => row.open && !row.started).length, started: counted.filter((row) => row.open && row.started).length, all: counted.length };
   const matching = filterRows(rows, query, labels, filters);
-  const visible = order.filter((project) => only || filterRows(backlogOf(project, true).rows, query, labels, filters).length || pendingItems(made, project).length);
+  const visible = only ? order : visibleBacklogProjects(order, query, labels, filters, made);
   return <div className="flex min-w-0 flex-col gap-lg px-xxl py-xl overview-narrow:px-md" data-overview-backlog="true">
     <div className="flex flex-wrap items-center gap-sm"><h2 className="text-headline font-semibold">{t("overviewTasks.backlogTab")}</h2><span className="rounded-sm border border-border px-sm font-mono text-body text-muted-foreground">{matching.length}</span></div>
     <MissedGroup projects={scoped} actions={actions} />
@@ -106,7 +116,7 @@ function BacklogSection({ project, actions, filters, selected }: { project: Work
   const rows = useMemo(() => filterRows(backlog.rows, query, labels, filters), [backlog.rows, query, labels, filters]);
   useEffect(() => setPages(1), [query, labels, filters]);
   const shown = rows.slice(0, pages * BACKLOG_SHOWN);
-  const sources = project.tasks?.sources ?? (backlog.source ? [backlog.source] : []);
+  const sources = matchingSources(project, filters.source);
   return <tbody aria-label={project.label} data-backlog-section={project.id}>
     <tr className="border-b border-border bg-muted/30"><td colSpan={6} className="px-lg py-sm">
       <h3 className="flex min-w-0 flex-wrap items-center gap-sm">
@@ -115,7 +125,7 @@ function BacklogSection({ project, actions, filters, selected }: { project: Work
         <span className="ml-auto text-micro text-muted-foreground">{t("backlogView.counts", { github: rows.filter((row) => !row.local).length, local: rows.filter((row) => row.local).length })}</span>
       </h3>
     </td></tr>
-    {sources.filter((source) => filters.source === "all" || source.kind === filters.source).map((source) => source.failure || source.reading ? <tr key={source.kind}><td colSpan={6} className="px-lg py-xs">{source.failure ? <p role="status" className="flex flex-wrap items-center gap-xs text-caption text-warning" data-backlog-read-failed={source.kind}><TriangleAlertIcon aria-hidden="true" className="size-(--size-icon-sm)" /><span>{source.label} · {t("backlog.readFailed", { reason: source.failure })}</span>{source.kind === "github" ? <button type="button" className={cn(LINK, "underline")} onClick={() => actions.openSettings("github")}>{t("backlog.readFix")}</button> : null}</p> : <p role="status" className="text-caption text-muted-foreground">{source.label} · {t("backlogView.reading")}</p>}</td></tr> : null)}
+    {sources.map((source) => source.failure || source.reading ? <tr key={source.kind}><td colSpan={6} className="px-lg py-xs">{source.failure ? <p role="status" className="flex flex-wrap items-center gap-xs text-caption text-warning" data-backlog-read-failed={source.kind}><TriangleAlertIcon aria-hidden="true" className="size-(--size-icon-sm)" /><span>{source.label} · {t("backlog.readFailed", { reason: source.failure })}</span>{source.kind === "github" ? <button type="button" className={cn(LINK, "underline")} onClick={() => actions.openSettings("github")}>{t("backlog.readFix")}</button> : null}</p> : <p role="status" className="text-caption text-muted-foreground">{source.label} · {t("backlogView.reading")}</p>}</td></tr> : null)}
     {!folded ? <>
       {pending.length ? <tr><td colSpan={6} className="px-sm py-xs"><ul>{pending.map((item) => <PendingRow key={item.intent} item={item} project={project} actions={actions} />)}</ul></td></tr> : null}
       {shown.map((row) => <ItemRow key={row.key} row={row} project={project} actions={actions} />)}
@@ -219,7 +229,7 @@ export function BacklogItemPanel({ panel, projects, actions }: { panel: Extract<
   const { t, i18n } = useInterfaceTranslation();
   const project = projects.find(({ workspace }) => workspace.id === panel.workspaceId)?.workspace ?? null;
   const task = project?.tasks?.tasks.find((row) => row.key === panel.taskKey) ?? null;
-  const detail = useIssueDetail(actions, panel.workspaceId, panel.taskKey);
+  const detail = useIssueDetail(actions, project, panel.taskKey);
   const origin = useShellStore((s) => originOf(s.rest, panel.taskKey));
   const undo = useShellStore((s) => s.rest?.issue_work?.undo?.task_key === panel.taskKey ? s.rest.issue_work.undo : null);
   const madeByHide = useShellStore((s) => s.rest?.issue_work?.made_keys?.some((key) => key.toLowerCase() === panel.taskKey.toLowerCase()) ?? false);

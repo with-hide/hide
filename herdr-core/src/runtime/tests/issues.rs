@@ -752,6 +752,8 @@ fn a_github_issue_panel_read_settles_only_the_issue_it_asked_for() {
     assert!(detail.message.unwrap().contains("No worker"));
 
     runtime.snapshot.issue_work.detail = Some(crate::model::IssueDetailSnapshot::reading(
+        "w".into(),
+        crate::node::TEST_NODE.into(),
         "github:acme/project#2".into(),
     ));
     let answer = crate::tasks::TaskDetail {
@@ -760,8 +762,30 @@ fn a_github_issue_panel_read_settles_only_the_issue_it_asked_for() {
         comment_count: Some(0),
         ..Default::default()
     };
-    assert!(!runtime.ingest_issue_detail("github:acme/project#1", Ok(answer.clone())));
-    assert!(runtime.ingest_issue_detail("github:acme/project#2", Ok(answer)));
+    assert!(!runtime.ingest_issue_detail(
+        "w",
+        crate::node::TEST_NODE,
+        "github:acme/project#1",
+        Ok(answer.clone())
+    ));
+    assert!(!runtime.ingest_issue_detail(
+        "w",
+        "another-node",
+        "github:acme/project#2",
+        Ok(answer.clone())
+    ));
+    assert!(!runtime.ingest_issue_detail(
+        "another-project",
+        crate::node::TEST_NODE,
+        "github:acme/project#2",
+        Ok(answer.clone())
+    ));
+    assert!(runtime.ingest_issue_detail(
+        "w",
+        crate::node::TEST_NODE,
+        "github:acme/project#2",
+        Ok(answer)
+    ));
     let detail = runtime.snapshot().issue_work.detail.clone().unwrap();
     assert_eq!(
         (
@@ -771,7 +795,65 @@ fn a_github_issue_panel_read_settles_only_the_issue_it_asked_for() {
         ),
         ("ready", Some("본문"), Some("example"))
     );
-    assert!(!runtime.ingest_issue_detail("github:acme/project#2", Err("late".into())));
+    assert!(!runtime.ingest_issue_detail(
+        "w",
+        crate::node::TEST_NODE,
+        "github:acme/project#2",
+        Err("late".into())
+    ));
+}
+
+/// A same-key read from another device cannot be joined as this project's
+/// in-flight read, and its cursor cannot authorize this project's page.
+#[test]
+fn same_key_detail_requests_require_the_project_and_device_context() {
+    let mut runtime = issue_runtime_with_github_read();
+    runtime.apply_pull_requests();
+    let key = "github:acme/project#2";
+    for (workspace_id, device_id) in [
+        ("other-project", crate::node::TEST_NODE),
+        ("w", "other-node"),
+    ] {
+        runtime.snapshot.issue_work.detail = Some(crate::model::IssueDetailSnapshot::reading(
+            workspace_id.into(),
+            device_id.into(),
+            key.into(),
+        ));
+        assert!(runtime.dispatch_json(&event(
+            "issue_detail_request",
+            serde_json::json!({"workspace_id": "w", "task_key": key})
+        )));
+        let detail = runtime.snapshot.issue_work.detail.as_ref().unwrap();
+        assert!(detail.matches("w", crate::node::TEST_NODE, key));
+        assert_eq!(
+            detail.phase, "failed",
+            "the absent worker answers this request instead of joining another device"
+        );
+
+        runtime.snapshot.issue_work.detail = Some(crate::model::IssueDetailSnapshot::answered(
+            workspace_id.into(),
+            device_id.into(),
+            key.into(),
+            Ok(crate::tasks::TaskDetail {
+                body: "Other device's body".into(),
+                comments_has_more: true,
+                comments_cursor: Some("shared-cursor".into()),
+                ..Default::default()
+            }),
+        ));
+        assert!(!runtime.dispatch_json(&event("issue_detail_request", serde_json::json!({"workspace_id": "w", "task_key": key, "comments_after": "shared-cursor"}))));
+        assert_eq!(
+            runtime
+                .snapshot
+                .issue_work
+                .detail
+                .as_ref()
+                .unwrap()
+                .body
+                .as_deref(),
+            Some("Other device's body")
+        );
+    }
 }
 
 /// B14: a failed later page retains the body and comments already read,
@@ -787,6 +869,8 @@ fn detail_paging_keeps_cached_content_on_failure_and_reports_the_cap() {
         body: format!("Comment {n}"),
     };
     runtime.snapshot.issue_work.detail = Some(crate::model::IssueDetailSnapshot::answered(
+        "w".into(),
+        crate::node::TEST_NODE.into(),
         key.into(),
         Ok(crate::tasks::TaskDetail {
             body: "Full original body".into(),
@@ -829,7 +913,23 @@ fn detail_paging_keeps_cached_content_on_failure_and_reports_the_cap() {
         .as_mut()
         .unwrap()
         .comments_loading = true;
+    assert!(!runtime.ingest_issue_detail_page(
+        "w",
+        "another-node",
+        key,
+        Some("page-1"),
+        Ok(Default::default())
+    ));
+    assert!(!runtime.ingest_issue_detail_page(
+        "w",
+        crate::node::TEST_NODE,
+        key,
+        Some("older-cursor"),
+        Ok(Default::default())
+    ));
     assert!(runtime.ingest_issue_detail_page(
+        "w",
+        crate::node::TEST_NODE,
         key,
         Some("page-1"),
         Ok(crate::tasks::TaskDetail {

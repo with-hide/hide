@@ -511,6 +511,8 @@ export type IssueComment = { author: string | null; created_at_unix_ms: number |
  * comments. The fields past `message` are empty until `ready`.
  */
 export type IssueDetail = {
+  workspace_id: string;
+  device_id: string;
   task_key: string;
   phase: "reading" | "ready" | "failed";
   body: string | null;

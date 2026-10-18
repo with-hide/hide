@@ -4162,6 +4162,8 @@ impl GithubSearchSnapshot {
 /// empty until `ready`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IssueDetailSnapshot {
+    pub workspace_id: String,
+    pub device_id: String,
     pub task_key: String,
     /// `reading`, `ready` or `failed`.
     pub phase: String,
@@ -4180,25 +4182,44 @@ pub struct IssueDetailSnapshot {
 }
 
 impl IssueDetailSnapshot {
-    pub fn reading(task_key: String) -> Self {
-        Self::settled(task_key, "reading", None)
+    pub fn reading(workspace_id: String, device_id: String, task_key: String) -> Self {
+        Self::settled(workspace_id, device_id, task_key, "reading", None)
     }
 
     /// The answer to a read: `ready` with what it read, or `failed` with why.
-    pub fn answered(task_key: String, answer: Result<crate::tasks::TaskDetail, String>) -> Self {
+    pub fn answered(
+        workspace_id: String,
+        device_id: String,
+        task_key: String,
+        answer: Result<crate::tasks::TaskDetail, String>,
+    ) -> Self {
         match answer {
-            Ok(detail) => Self::settled(task_key, "ready", Some(detail)),
+            Ok(detail) => Self::settled(workspace_id, device_id, task_key, "ready", Some(detail)),
             Err(message) => Self {
                 message: Some(message),
-                ..Self::settled(task_key, "failed", None)
+                ..Self::settled(workspace_id, device_id, task_key, "failed", None)
             },
         }
     }
 
-    fn settled(task_key: String, phase: &str, detail: Option<crate::tasks::TaskDetail>) -> Self {
+    pub fn matches(&self, workspace_id: &str, device_id: &str, task_key: &str) -> bool {
+        self.workspace_id == workspace_id
+            && self.device_id == device_id
+            && self.task_key == task_key
+    }
+
+    fn settled(
+        workspace_id: String,
+        device_id: String,
+        task_key: String,
+        phase: &str,
+        detail: Option<crate::tasks::TaskDetail>,
+    ) -> Self {
         let read = detail.is_some();
         let detail = detail.unwrap_or_default();
         Self {
+            workspace_id,
+            device_id,
             task_key,
             phase: phase.into(),
             body: read.then_some(detail.body),

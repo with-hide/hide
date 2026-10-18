@@ -133,7 +133,7 @@ export function StartIssueDialog({ actions, workspace, task, onClose }: { action
   const [agent, setAgent] = useState<AgentSelection>(() => rememberedSelection(useShellStore.getState().rest?.ui_state?.agent_start));
   const [prompt, setPrompt] = useState(() => firstPrompt(task, null, settings.closes_instruction, t));
   const promptEdited = useRef(false);
-  const detail = useIssueDetail(actions, workspace.id, task.key);
+  const detail = useIssueDetail(actions, workspace, task.key);
   const origin = useShellStore((s) => originOf(s.rest, task.key));
   const nameAnswer = useShellStore((s) => (s.rest?.issue_work?.name?.request_id === requestId ? s.rest.issue_work.name : null));
   const asked = useRef(false);

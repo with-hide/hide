@@ -72208,7 +72208,7 @@
     },
     "--size-overview-graph-child-height": {
       "type": "number",
-      "value": 120
+      "value": 160
     },
     "--size-overview-graph-child-orb": {
       "type": "number",
@@ -72244,7 +72244,7 @@
     },
     "--size-overview-graph-root-height": {
       "type": "number",
-      "value": 184
+      "value": 200
     },
     "--size-overview-graph-root-orb": {
       "type": "number",
