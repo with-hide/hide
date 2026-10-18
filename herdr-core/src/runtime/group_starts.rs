@@ -869,8 +869,10 @@ impl Runtime {
             .filter(|focus| focus.task == task);
         let global_current = origin.is_none_or(|focus| {
             focus.global_focus.as_ref().is_some_and(|origin| {
+                // Catalog restoration may replace the selected tab of an
+                // empty checkout. Only an accepted visit supersedes this
+                // permission, through the serial or explicit invalidation.
                 origin.serial == self.last_view_intent_serial
-                    && (origin.workspace.is_none() || *origin == self.start_focus())
             })
         });
         let Some(active) = self

@@ -1499,6 +1499,7 @@ export function createActions(send: DispatchFn) {
       resumeSessionId?: string;
       resumeSessionPath?: string;
     }) {
+      if (!request.tabTarget && request.requestId) beginOpening({ startRequestId: request.requestId });
       dispatch({
         schema_version: 2,
         kind: "agent_start_in_checkout",
@@ -1730,7 +1731,7 @@ export function createActions(send: DispatchFn) {
       const target = state.overlay === "search" ? state.searchReturnFocus : document.activeElement instanceof HTMLElement ? document.activeElement : null;
       if (view) state.setMainView(view);
       state.setOverview({ deviceId, projectId: null, panel: null, ...patch });
-      useUiStore.setState({ overviewOpen: modal || state.overviewOpen, overviewReturnFocus: state.overviewOpen ? state.overviewReturnFocus : target, overlay: "none", ...(!modal && !state.overviewOpen ? { screen: { kind: "main" as const, deviceId } } : {}) });
+      useUiStore.setState({ opening: null, overviewOpen: modal || state.overviewOpen, overviewReturnFocus: state.overviewOpen ? state.overviewReturnFocus : target, overlay: "none", ...(!modal && !state.overviewOpen ? { screen: { kind: "main" as const, deviceId } } : {}) });
     },
 
     /** A project's panel on the Overview's Projects (PRD sidebar-task-lens B41): a breadcrumb's project, a cross-project chip, a Recent Panels project. */

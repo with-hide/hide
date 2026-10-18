@@ -443,6 +443,91 @@ fn a_first_local_home_result_waits_for_its_catalog_and_respects_a_newer_visit() 
 }
 
 #[test]
+fn a_local_start_from_an_empty_checkout_keeps_its_visit_through_catalog_restore() {
+    for boundary in ["catalog", "newer-visit", "reconnect"] {
+        let t = tree();
+        let (mut runtime, _) = live_tab_order_runtime(&t.main);
+        let saved = tempfile::tempdir().unwrap();
+        runtime.workspace_views =
+            Some(WorkspaceViewStore::open(saved.path().join("views.json"), Default::default()).0);
+        runtime.ingest_session_with_catalog(
+            Ok(tab_order_payload(
+                &t.main,
+                &["w-order:t1"],
+                &["w-order:t1"],
+                "w-order:t1",
+            )),
+            None,
+        );
+        let mut empty = tab_order_payload(&t.main, &[], &[], "w-order:t1");
+        empty.workspaces.clear();
+        empty.focused_workspace_id = None;
+        empty.focused_pane_id = None;
+        runtime.ingest_session_with_catalog(Ok(empty), None);
+        assert!(runtime.snapshot.focused.pane_id.is_none());
+        let task = runtime
+            .begin_task_operation("agent_start", None, None, None, None)
+            .unwrap();
+        runtime.ingest_task_operation_result(
+            task,
+            Ok(live::WorktreeTaskOutcome {
+                path: t.main.clone(),
+                pane_id: "w-order:t4:p".into(),
+                created_tab_id: Some("w-order:t4".into()),
+                purpose_error: None,
+                unconfirmed_purpose_token: None,
+                issue_error: None,
+                shell: crate::agent_start::ShellStart::Plain,
+            }),
+        );
+        assert!(runtime.pending_start_focus());
+        match boundary {
+            "newer-visit" => dispatch(
+                &mut runtime,
+                "focus_device",
+                json!({"device_id":crate::node::TEST_NODE}),
+            ),
+            "reconnect" => runtime.live_generation += 1,
+            _ => {}
+        }
+        // A new owner's seed tab arrives before the start's exact pane.
+        // Restoring that tab is catalog progress, not another operator visit.
+        runtime.ingest_session_with_catalog(
+            Ok(tab_order_payload(
+                &t.main,
+                &["w-order:t3"],
+                &["w-order:t3"],
+                "w-order:t3",
+            )),
+            None,
+        );
+        assert_eq!(
+            runtime.pending_start_focus(),
+            boundary == "catalog",
+            "{boundary} keeps the pending follow until the exact pane is listed"
+        );
+        runtime.ingest_session_with_catalog(
+            Ok(tab_order_payload(
+                &t.main,
+                &["w-order:t3", "w-order:t4"],
+                &["w-order:t3", "w-order:t4"],
+                "w-order:t3",
+            )),
+            None,
+        );
+        assert_eq!(
+            runtime
+                .pending_pane_focus
+                .as_ref()
+                .map(|pending| pending.target_id.as_str()),
+            (boundary == "catalog").then_some("w-order:t4:p"),
+            "{boundary}"
+        );
+        assert_eq!(runtime.snapshot.status.last_error, None, "{boundary}");
+    }
+}
+
+#[test]
 fn a_first_local_home_catalog_does_not_supersede_its_start_result() {
     let t = tree();
     let mut runtime = runtime();

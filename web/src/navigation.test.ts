@@ -255,6 +255,20 @@ describe("an open from Main or an Overview", () => {
     expect(openingProgress(rest("c2"), toPane)).toBe("landed");
   });
 
+  it("presents a start only after its correlated pane is selected and listed", () => {
+    const opening = { target: { startRequestId: "mine" }, errorBefore: null, failure: null };
+    const ready = { ...rest("c2"), focused: { pane_id: "p2" }, task_operation: {
+      id: 7, request_id: "mine", kind: "agent_start", phase: "ready", pane_id: "p2", agent_phase: "starting",
+    } } as SnapshotRest;
+    expect(openingProgress(ready, opening)).toBe("landed");
+    expect(openingProgress({ ...ready, navigator: rest("c1").navigator }, opening)).toBeNull();
+    expect(openingProgress({ ...ready, focused: { ...ready.focused, pane_id: "p1" } }, opening)).toBeNull();
+    expect(openingProgress({ ...ready, task_operation: { ...ready.task_operation!, request_id: "another" } }, opening)).toBeNull();
+    expect(openingProgress({ ...ready, task_operation: { ...ready.task_operation!, phase: "working" } }, opening)).toBeNull();
+    expect(openingProgress({ ...ready, task_operation: { ...ready.task_operation!, phase: "failed" } }, opening)).toBe("cancelled");
+    expect(openingProgress({ ...ready, status: { ...ready.status, last_error: { request_id: "mine", message: "refused" } } } as SnapshotRest, opening)).toBe("cancelled");
+  });
+
   it("waits for focus and disclosure together when returning from Overview", () => {
     const opening = { target: { workspaceId: "w", checkoutId: "c2", deviceId: "local", path: "/w2", expanded: true }, errorBefore: null, failure: null };
     // Focus can already match while Overview is visible; the old folded snapshot cannot land.
