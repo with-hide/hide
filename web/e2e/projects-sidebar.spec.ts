@@ -262,6 +262,18 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     await expect(feature.locator("[data-checkout-status]")).toHaveCount(0);
     await expect(feature.locator("[data-purpose]")).toHaveCount(0);
     await expect(feature.locator("[data-checkout-age]")).toBeVisible();
+    // Indent D (sidebar-quiet-mark-indent B10-B12): a project with checkouts
+    // draws no glyph, so its name and its checkouts' glyphs share one column;
+    // a checkout's name and its agents' marks share the next, and a title
+    // follows its mark by the mark and one gap.
+    await expect(project.locator("[data-project-row] svg")).toHaveCount(0);
+    const left = async (part: Locator) => (await part.boundingBox())!.x;
+    const projectName = await left(project.locator("[data-project-row] [data-row-name]"));
+    const checkoutGlyph = await left(feature.locator("[data-checkout-glyph]"));
+    const checkoutName = await left(feature.locator("[data-checkout-menu] [data-row-name]"));
+    const agentMark = await left(feature.locator(`[data-pane="${rowsPane}"] [data-agent-status-mark]`));
+    const agentTitle = await left(feature.locator(`[data-pane="${rowsPane}"] [data-agent-title]`));
+    expect([checkoutGlyph - projectName, checkoutName - checkoutGlyph, agentMark - checkoutName, agentTitle - agentMark]).toEqual([0, 18, 0, 16]);
     expect((await featureButton.boundingBox())!.height).toBe(await featureButton.evaluate((node) => parseFloat(getComputedStyle(node).getPropertyValue("--size-checkout-row"))));
     await screenshot(page, "projects-sidebar-open");
 

@@ -182,7 +182,7 @@ pub(crate) fn row_state(agent: &SidebarAgentSnapshot) -> RowState {
         RowMark::Done => "success",
         RowMark::Unread => "news",
         RowMark::Quiet if asking => "warning",
-        RowMark::Quiet | RowMark::Asleep => "subtle",
+        RowMark::Quiet | RowMark::Unknown | RowMark::Asleep => "subtle",
     };
     let bright = needs_you || agent.escalation.is_some();
     let chip_tone = Tone {
@@ -190,7 +190,10 @@ pub(crate) fn row_state(agent: &SidebarAgentSnapshot) -> RowState {
         read: asking && !bright && !agent.emphasized,
     };
     let mark_tone = Tone {
-        kind: if matches!(agent.mark, RowMark::Quiet | RowMark::Asleep) {
+        kind: if matches!(
+            agent.mark,
+            RowMark::Quiet | RowMark::Unknown | RowMark::Asleep
+        ) {
             "subtle"
         } else {
             chip_kind
@@ -1436,6 +1439,36 @@ mod row_tests {
             .and_then(|listed| listed.line.clone())
             .expect("the ask's line on the phone");
         assert_eq!((line.mode.as_str(), line.tone), ("request", "warning"));
+    }
+
+    /// sidebar-quiet-mark-indent D-04, B5: an agent whose activity Hide cannot
+    /// read draws the unknown mark, not the resting one, and counts on no
+    /// badge; one that also asks the operator draws their turn.
+    #[test]
+    fn an_unreadable_activity_draws_unknown_and_a_resting_agent_quiet() {
+        let mut agent = row();
+        agent.activity = "stopped".into();
+        agent.unread = false;
+        derive_from_axes(&mut agent);
+        assert_eq!(
+            (agent.mark, agent.status_code),
+            (RowMark::Quiet, AgentStatusCode::Idle)
+        );
+
+        agent.activity = "unknown".into();
+        derive_from_axes(&mut agent);
+        assert_eq!(
+            (agent.mark, agent.status_code),
+            (RowMark::Unknown, AgentStatusCode::Unknown)
+        );
+        let mut counts = crate::model::MarkCountsSnapshot::default();
+        agent.mark.count_into(&mut counts);
+        assert_eq!(counts, crate::model::MarkCountsSnapshot::default());
+
+        agent.demand = "question".into();
+        agent.unread = true;
+        derive_from_axes(&mut agent);
+        assert_eq!(agent.mark, RowMark::Turn);
     }
 
     /// status-marks B16, B31: a waking, a failed and an unknown row keep a
