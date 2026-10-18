@@ -154,13 +154,17 @@ fn bundled(
         hide_kit::local_target(kit_dir, &home, &inputs.herdr_socket, Arc::clone(&env.stop));
     target.cli_dir = inputs.cli_dir;
     target.retirement_projects = inputs.projects;
-    match action {
+    let mut report = match action {
         KitAction::Apply | KitAction::Reinstall { .. } => {
-            to_value(hide_kit::apply(&target, &scope_of(action)))
+            hide_kit::apply(&target, &scope_of(action))
         }
-        KitAction::Status => to_value(hide_kit::status(&target)),
-        KitAction::Remove => Err(not_removed()),
+        KitAction::Status => hide_kit::status(&target),
+        KitAction::Remove => return Err(not_removed()),
+    };
+    if let Some(refusal) = report.refused.as_mut() {
+        refusal.name_stop(kit_dir, &hide_kit::layout::state_dir_from_process(&home));
     }
+    to_value(report)
 }
 
 /// A machine that runs Hide itself, as the core or as a node that dials
@@ -197,8 +201,8 @@ pub fn run_build(
     target.retirement_projects = projects;
     match action {
         KitAction::Apply | KitAction::Reinstall { .. } => {
-            if let Err(reason) = hide_kit::retirement_preflight(&target) {
-                return to_value(hide_kit::retirement_blocked(&target, reason));
+            if let Err(refusal) = hide_kit::retirement_preflight(&target) {
+                return to_value(hide_kit::KitReport::refused(refusal));
             }
             point_current(&placement.root, &placement.version)?;
             to_value(hide_kit::apply(&target, &scope_of(action)))
@@ -306,9 +310,8 @@ fn run_for_projects(
     };
     match action {
         KitAction::Apply | KitAction::Reinstall { .. } => {
-            let preflight_target = target();
-            if let Err(reason) = hide_kit::retirement_preflight(&preflight_target) {
-                return to_value(hide_kit::retirement_blocked(&preflight_target, reason));
+            if let Err(refusal) = hide_kit::retirement_preflight(&target()) {
+                return to_value(hide_kit::KitReport::refused(refusal));
             }
             point_current(&placement.root, &placement.version)?;
             remove_other_builds(&placement.root, &placement.version);
@@ -848,13 +851,9 @@ mod tests {
         )
         .unwrap();
         let report: hide_kit::KitReport = serde_json::from_value(report).unwrap();
-        assert_eq!(
-            report
-                .component(hide_kit::ComponentId::CoordinationRetirement)
-                .unwrap()
-                .state,
-            hide_kit::ComponentState::Failed
-        );
+        let refusal = report.refused.expect("the pass stops before anything");
+        assert_eq!(refusal.cause, hide_kit::RefusalCause::Record);
+        assert_eq!(refusal.path.as_deref(), ledger.to_str());
         assert!(hide_platform::fs::link::is_link_to(
             &placement.root.join("current"),
             Path::new(&older.version)

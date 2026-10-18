@@ -875,6 +875,35 @@ pub struct KitSnapshot {
     /// Why this machine's last read failed, until a read lands; the report
     /// the machine last gave stays as it was (B10).
     pub check_failed: Option<KitCheckFailure>,
+    /// The machine's last pass or read stopped before changing anything:
+    /// what stopped it, for one line with Try again. The parts and agents
+    /// are then empty, and the kit's own words are in the log.
+    pub refused: Option<KitRefusalSnapshot>,
+}
+
+/// Why a machine's kit pass stopped, as the screen words it (`hide_kit::KitRefusal`
+/// without its detail, which stays in the log).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct KitRefusalSnapshot {
+    pub cause: hide_kit::RefusalCause,
+    /// The folder or file at fault, as that machine spells it.
+    pub path: Option<String>,
+    /// The variable that chose Hide's state folder at fault, by name.
+    pub variable: Option<hide_kit::layout::StateVariable>,
+    /// The command that stops this machine's background service, so the
+    /// next launch reads `variable` again.
+    pub stop: Option<String>,
+}
+
+impl From<&hide_kit::KitRefusal> for KitRefusalSnapshot {
+    fn from(refusal: &hide_kit::KitRefusal) -> Self {
+        Self {
+            cause: refusal.cause,
+            path: refusal.path.clone(),
+            variable: refusal.variable,
+            stop: refusal.stop.clone(),
+        }
+    }
 }
 
 /// Why a kit read did not come back with a report. A code, never the call's
@@ -1059,6 +1088,7 @@ impl KitSnapshot {
                 }),
             checking: false,
             check_failed: None,
+            refused: report.refused.as_deref().map(Into::into),
         }
     }
 
@@ -7172,6 +7202,38 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "kit_check_failure", &check_failures);
         checked.insert("kit_check_failure");
+
+        let refusal_causes = [
+            hide_kit::RefusalCause::Unsafe,
+            hide_kit::RefusalCause::Record,
+            hide_kit::RefusalCause::Busy,
+            hide_kit::RefusalCause::Projects,
+            hide_kit::RefusalCause::Other,
+        ];
+        for variant in refusal_causes {
+            match variant {
+                hide_kit::RefusalCause::Unsafe
+                | hide_kit::RefusalCause::Record
+                | hide_kit::RefusalCause::Busy
+                | hide_kit::RefusalCause::Projects
+                | hide_kit::RefusalCause::Other => {}
+            }
+        }
+        assert_wire(&contract, "kit_refusal_cause", &refusal_causes);
+        checked.insert("kit_refusal_cause");
+
+        let state_variables = [
+            hide_kit::layout::StateVariable::HideStateDir,
+            hide_kit::layout::StateVariable::XdgStateHome,
+        ];
+        for variant in state_variables {
+            match variant {
+                hide_kit::layout::StateVariable::HideStateDir
+                | hide_kit::layout::StateVariable::XdgStateHome => {}
+            }
+        }
+        assert_wire(&contract, "kit_state_variable", &state_variables);
+        checked.insert("kit_state_variable");
         use crate::links::{FileState, IssueSource, LinkTarget, SessionRole};
         let files = [FileState::Present, FileState::Missing, FileState::Unknown];
         for variant in files {

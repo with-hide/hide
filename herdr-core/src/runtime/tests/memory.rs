@@ -558,6 +558,7 @@ fn turning_memory_on_updates_the_hooks_first_and_then_turns_it_on() {
             codex_capability_unread: None,
             codex_daemon_off: None,
             herdr: None,
+            refused: None,
         },
     );
     let pending = |runtime: &Runtime| opened(runtime).and_then(|project| project.pending_action);
