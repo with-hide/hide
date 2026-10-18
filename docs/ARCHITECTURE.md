@@ -585,6 +585,8 @@ Pending receipts, including those loaded after restart, recover by inspection on
 A definite failure may retry its stable intent, and a definite agent failure retries the existing pane; an unknown launch is not blindly repeated.
 The answer fills its original group even when hidden, but a late answer does not take focus from a group the operator has since selected.
 The inline form keeps prompt and picker edits in page memory across navigation and failures, while the durable receipt lets a new page inspect the original effect without recovering or replaying the prompt.
+Tab-bound input uses the stable tab identity rather than group membership; only a definite failed receipt can be retired after its authoritative target changes, allowing a new decision at the current target.
+Pending or unknown starts retain their original intent and target for read-only recovery.
 A start may also carry `stay_behind` (the phone's, see The mobile companion): its tab is made without moving the desktop's visible tab or keyboard focus.
 A first prompt goes as the CLI's own argument: `--prompt <text>` for OpenCode, whose positional argument is a project path, and a positional prompt after `--` for Claude Code, Codex, Grok, Pi, omp and Cursor.
 Nothing is ever typed into the pane, where a startup question would take it.
@@ -2564,6 +2566,7 @@ The same schema-3 entry keeps its original `agent_layout` as the ungrouped tree 
 `agent_groups.rs` owns at most 32 named collections, their independent area trees, the selected collection and explicit Hide draft identities; an older entry loads with every existing tab and its original split tree ungrouped, without converting tab names into groups.
 Names are trimmed to 1 to 80 Unicode characters, reject controls and line breaks, and must be exactly distinct within the checkout.
 Create, rename, move, dissolve and undo are one core event (`runtime/agent_groups.rs`); they change membership without moving or restarting Herdr PTYs.
+An ordinary selection clears its area's delegated canvas override; moving a lineage root prunes only overrides whose canonical group ownership changed, and explicit child navigation reveals its root's current group.
 Dissolve appends the group's ordered tabs to the ungrouped active area and retains one session-local undo record, invalidated by the next group mutation or unloading the checkout's saved state and never serialized.
 The selected group's layout is projected for local, inbound-node and outbound-SSH checkouts; outbound SSH keeps one area and depth zero per group, while local and inbound-node groups keep six areas and depth three.
 The core retains the explicit remote checkout choice independently of a device's raw Herdr focus, so selecting an empty group or draft can navigate without creating or focusing a PTY.

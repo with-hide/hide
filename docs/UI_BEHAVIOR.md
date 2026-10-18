@@ -178,6 +178,8 @@ The first start fills that draft's position with the live tab; Add agent on a li
 The picker uses the same supported kinds, model validation and remembered defaults as the [Start panel](#start-panel), with no effort choice.
 Pending starts keep the submitted inputs, prevent another submission, and show their progress or actionable failure where the start was requested.
 An uncertain result offers Check status for the original intent, never a fresh start merely because an answer was lost; a definite failure can retry that intent.
+If a definitely failed start's tab has since moved, the form keeps its inputs and submits a new intent at the tab's current location.
+Unsent input follows the same draft or live tab through moves, ungrouping and Undo.
 The text survives navigation and failure for this page's lifetime, as the start panel's text does, but is not saved across an app restart.
 After restart the saved intent can still be checked without recovering or resending its prompt.
 A disconnected device disables the start controls and sends no start; Enter during IME composition does not submit.
