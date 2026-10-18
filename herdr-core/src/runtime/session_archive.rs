@@ -109,13 +109,22 @@ impl Runtime {
             .to_owned()
     }
 
-    /// The machine is reachable and its panes have been read since.
+    /// The machine is reachable, its panes have been read since, and the
+    /// session those panes and rows come from is loaded: before that every
+    /// pane there would read as gone.
     fn archive_machine_read(&self, machine: &str) -> bool {
         self.archive_device_connected(machine)
             && self
                 .delivery_panes
                 .get(machine)
                 .is_some_and(|read| read.panes.is_some())
+            && (machine == self.node.as_str()
+                || self
+                    .snapshot
+                    .status
+                    .remote
+                    .iter()
+                    .any(|remote| remote.target_id == machine && remote.session.is_some()))
     }
 
     fn archive_device_connected(&self, device: &str) -> bool {
@@ -629,7 +638,7 @@ impl Runtime {
         }
         if record.phase == ArchivePhase::CloseUnknown {
             self.set_error(
-                "archive.status_unknown",
+                "archive.close_unknown",
                 "Hide cannot say whether this session closed; check its status before resuming it",
                 true,
             );
@@ -1011,6 +1020,12 @@ impl Runtime {
                     _ => None,
                 };
                 if let Some(next) = next {
+                    // A tab that would not open may have been refused its
+                    // saved folder, which can be gone: the retry opens at
+                    // the checkout.
+                    if matches!(next, Resume::Failed { pane_id: None, .. }) {
+                        member.cwd = None;
+                    }
                     if let Resume::Failed { reason, .. } = &next {
                         crate::diagnostic!(serde_json::json!({
                             "component": "session_archive", "kind": "session_archive.resume_failed",
@@ -1109,6 +1124,7 @@ impl Runtime {
                 changed = true;
                 self.archive_registration_waits.remove(&registration.id);
                 if released {
+                    self.registration_rebinds.remove(&registration.id);
                     self.release_dormant_hold(&registration.id);
                 }
             }
@@ -1313,6 +1329,8 @@ impl Runtime {
         let ids = members
             .filter_map(|member| member.registration.as_ref())
             .map(|registration| registration.id.clone())
+            // A move to the pane it resumed in finishes on its own.
+            .filter(|id| !self.registration_rebinds.contains_key(id))
             .collect::<Vec<_>>();
         for id in ids {
             self.release_dormant_hold(&id);
@@ -1387,7 +1405,14 @@ impl Runtime {
                     .filter(|record| !record.phase.in_flight())
                     .map(|record| record.root())
                     .is_some_and(|root| {
-                        self.archive_device_connected(&root.machine)
+                        // A root row whose conversation is not reported yet
+                        // still holds its pane.
+                        self.archive_machine_read(&root.machine)
+                            && !self.pane_listed(&root.pane_id)
+                            && !root
+                                .resume
+                                .made_pane()
+                                .is_some_and(|pane| self.pane_listed(pane))
                             && !live
                                 .iter()
                                 .any(|(machine, kind, session, _)| root.is(machine, kind, session))

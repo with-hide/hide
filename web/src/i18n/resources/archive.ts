@@ -38,6 +38,7 @@ export const archiveEnglish = {
   "archive.notice.delegated": "A delegated session is archived with its root session.",
   "archive.notice.notOffered": "This session belongs to Hide AI or a Factory, so it can't be archived.",
   "archive.notice.tooMany": "A session with more than 64 agents can't be archived at once; nothing was closed.",
+  "archive.notice.closeUnknown": "Hide can't tell whether this session closed. Check its status before resuming it.",
 } as const;
 
 type Messages = Catalog<typeof archiveEnglish>;
@@ -78,6 +79,7 @@ const ko: Messages = {
   "archive.notice.delegated": "맡긴 세션은 루트 세션과 함께 보관돼요.",
   "archive.notice.notOffered": "Hide AI나 Factory의 세션이라 보관할 수 없어요.",
   "archive.notice.tooMany": "에이전트가 64명을 넘는 세션은 한 번에 보관할 수 없어요. 아무것도 닫지 않았어요.",
+  "archive.notice.closeUnknown": "이 세션이 닫혔는지 알 수 없어요. 상태를 확인한 뒤 이어가 주세요.",
 };
 
 const zh: Messages = {
@@ -116,6 +118,7 @@ const zh: Messages = {
   "archive.notice.delegated": "委派的会话会随根会话一起归档。",
   "archive.notice.notOffered": "该会话属于 Hide AI 或 Factory，无法归档。",
   "archive.notice.tooMany": "超过 64 个智能体的会话无法一次归档；没有关闭任何内容。",
+  "archive.notice.closeUnknown": "无法确定该会话是否已关闭。请先检查状态，再继续。",
 };
 
 const ja: Messages = {
@@ -154,6 +157,7 @@ const ja: Messages = {
   "archive.notice.delegated": "委任したセッションはルートセッションと一緒にアーカイブされます。",
   "archive.notice.notOffered": "Hide AI または Factory のセッションのため、アーカイブできません。",
   "archive.notice.tooMany": "64 を超えるエージェントのセッションは一度にアーカイブできません。何も閉じていません。",
+  "archive.notice.closeUnknown": "このセッションが閉じたかどうか分かりません。状態を確認してから再開してください。",
 };
 
 export const archiveCatalogs = { en: archiveEnglish, ko, "zh-CN": zh, ja } satisfies Catalogs<typeof archiveEnglish>;

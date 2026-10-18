@@ -93,6 +93,8 @@ export function archiveNotice(kind: string, t: TFunction<"translation"> = transl
       return t("archive.notice.unknownSession");
     case "archive.status_unknown":
       return t("archive.notice.statusUnknown");
+    case "archive.close_unknown":
+      return t("archive.notice.closeUnknown");
     case "archive.busy":
       return t("archive.notice.busy");
     case "archive.target_unknown":

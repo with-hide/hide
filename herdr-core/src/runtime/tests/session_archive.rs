@@ -519,10 +519,67 @@ fn a_partial_close_keeps_what_closed_and_lists_it_once_the_root_is_gone() {
     let loaded: crate::session_archive::SessionArchive = serde_json::from_value(stored).unwrap();
     assert_eq!(loaded.records.len(), 1, "the record still loads");
 
-    // The root closes some other way: the record is no longer hidden.
+    // A root whose row has not reported its conversation yet still holds
+    // its pane, so the record stays in the root's record.
+    let node = runtime.node.as_str().to_owned();
+    runtime.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::Ledger::default()));
+    runtime.observe_delivery(
+        &node,
+        &super::agent_sleep::delivery_panes(Vec::new()),
+        Some("scope"),
+        None,
+    );
+    for row in &mut runtime.snapshot.navigator.agents {
+        row.session_id = None;
+    }
+    runtime.refresh_archived_rows();
+    assert!(!runtime.snapshot.navigator.archived_sessions[0].listed);
+
+    // The root closes some other way: the record stands in 보관됨 once the
+    // machine's panes are read again, never before.
     leave(&mut runtime, &[]);
+    runtime.delivery_panes.remove(&node);
+    runtime.advance_session_archive();
+    assert!(!runtime.snapshot.navigator.archived_sessions[0].listed);
+    runtime.observe_delivery(
+        &node,
+        &super::agent_sleep::delivery_panes(Vec::new()),
+        Some("scope"),
+        None,
+    );
     runtime.advance_session_archive();
     assert!(runtime.snapshot.navigator.archived_sessions[0].listed);
+}
+
+/// A resume whose tab would not open in the saved folder retries at the
+/// checkout, so a folder removed since the archive cannot fail every retry.
+#[test]
+fn a_resume_whose_tab_did_not_open_forgets_the_saved_folder() {
+    let (mut runtime, id) = archived_tree();
+    let parsed = crate::session_archive::ArchiveId::parse(&id).unwrap();
+    runtime
+        .snapshot
+        .ui_state
+        .session_archive
+        .records
+        .get_mut(&parsed)
+        .unwrap()
+        .members[0]
+        .cwd = Some(format!("{A}/gone"));
+    send(
+        &mut runtime,
+        "archive_resume",
+        serde_json::json!({"archive_id": id}),
+    );
+    let operation = runtime.snapshot.task_operation.clone().expect("a start");
+    runtime.ingest_task_operation_result(operation.id, Err("no such folder".into()));
+    runtime.advance_session_archive();
+    let (_, held) = record(&runtime).unwrap();
+    assert!(matches!(
+        held.members[0].resume,
+        Resume::Failed { pane_id: None, .. }
+    ));
+    assert_eq!(held.members[0].cwd, None);
 }
 
 /// B34: a close a restart left unknown is settled only from a fresh read of
