@@ -84,8 +84,11 @@ test("an empty group and draft survive navigation and restart without creating a
     await expect(blank(page).getByRole("textbox")).toHaveValue("아직 보내지 않은 작업");
     expect(topology(herdr)).toEqual(original);
     await screenshot(page, "group-tabs-blank-terminal-action");
+    const evidence = process.env.HIDE_E2E_SCREENSHOT_DIR;
+    if (evidence) fs.copyFileSync(path.join(daemon.stateDir, "workspace-views.json"), path.join(evidence, "group-restart-before.json"));
     await page.goto("about:blank");
     daemon = await daemon.restart();
+    if (evidence) fs.copyFileSync(path.join(daemon.stateDir, "workspace-views.json"), path.join(evidence, "group-restart-after-launch.json"));
     await open(page, daemon);
     await expect(selector(page)).toHaveAttribute("data-agent-group-selector", group);
     await expect(blank(page)).toHaveAttribute("data-agent-tab-start", draft!);
@@ -195,6 +198,8 @@ test("a committed start with its answer lost across restart adopts the original 
     await page.goto("about:blank");
     // The gate forwards to real Herdr after the old daemon has stopped. Its
     // exact effect exists, but the caller cannot receive the acknowledgement.
+    process.kill(daemon.pid, "SIGKILL");
+    await expect.poll(() => { try { process.kill(daemon!.pid, 0); return true; } catch { return false; } }).toBe(false);
     daemon = await daemon.restart(async () => { await gate.release(); });
     expect(topology(herdr)).toHaveLength(original.length + 1);
     await open(page, daemon);
