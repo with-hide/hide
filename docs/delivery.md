@@ -17,6 +17,11 @@ Each queued command revalidates the caller's pane against the prepared Workspace
 Mailbox callers and new recipients require a positive native-session binding; a missing binding returns `native_identity_required`.
 Two missing native references in the same pane never authorize retained mail.
 Target names and pane IDs resolve against the daemon's current observations.
+Herdr numbers panes per machine, and an agent learns the numbers from its own machine's Herdr, so a bare pane ID (`w1:p2`) names the pane on the caller's own machine: a device agent's `w1:p2` is that device's pane, and the core's own agent's `w1:p2` is the core's.
+A bare pane ID never reaches a pane on another machine, even when only that machine has the number: the command is refused `target_unavailable`.
+A pane on another machine is reached by the agent's name or registration ID, or by the full address of a device's pane, `remote:<device>:pane:<id>`.
+The same reading applies to the pane IDs of `--actor` and `--observer`.
+A name that two machines share, such as the default `hide-claude-w1-p2`, is refused `target_ambiguous`.
 A connected device recipient uses its node's pane service over that device's existing SSH link; the credential fixes its device, link, pane, sender and kind, and losing the link revokes that credential immediately.
 The only ledger remains on the controlling daemon.
 A disconnected device hook finishes within its two-second budget with no letters, leaving them pending in that ledger.

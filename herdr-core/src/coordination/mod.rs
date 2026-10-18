@@ -448,13 +448,28 @@ pub(crate) fn named(ledger: &Ledger, actor: &Actor) -> Actor {
 }
 
 pub fn resolve_actor<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a Actor> {
-    let mut found = ledger.agents.iter().filter(|record| {
-        !record.ended
-            && (record.id == key
-                || record.name.as_deref() == Some(key)
-                || record.actor.pane_id == key
-                || record.pane == key)
-    });
+    resolve_by(ledger, |record| {
+        record.id == key
+            || record.name.as_deref() == Some(key)
+            || record.actor.pane_id == key
+            || record.pane == key
+    })
+}
+
+/// The live registration whose registration id or name is `key`, never one
+/// that only sits in a pane called `key`: a pane id is per machine, so a
+/// caller that names a pane resolves it against its own machine's panes.
+pub(crate) fn resolve_registered<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a Actor> {
+    resolve_by(ledger, |record| {
+        record.id == key || record.name.as_deref() == Some(key)
+    })
+}
+
+fn resolve_by(ledger: &Ledger, is: impl Fn(&AgentRecord) -> bool) -> Option<&Actor> {
+    let mut found = ledger
+        .agents
+        .iter()
+        .filter(|record| !record.ended && is(record));
     let first = found.next()?;
     found.next().is_none().then_some(&first.actor)
 }
