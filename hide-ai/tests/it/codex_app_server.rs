@@ -227,6 +227,98 @@ fn a_non_json_message_is_invalid_output() {
     });
 }
 
+/// The label END schema's shape: a `oneOf` of task kinds with unique ids,
+/// which the API's strict mode refuses.
+fn one_of_schema() -> serde_json::Value {
+    json!({
+        "type": "object", "additionalProperties": false, "required": ["task"],
+        "properties": {"task": {"oneOf": [
+            {"type": "object", "additionalProperties": false, "required": ["kind", "ids"],
+             "properties": {"kind": {"const": "continue"},
+                            "ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}}},
+            {"type": "object", "additionalProperties": false, "required": ["kind"],
+             "properties": {"kind": {"const": "none"}}}
+        ]}}
+    })
+}
+
+/// `PlainJson` names the schema in the thread's instructions and sends no
+/// `outputSchema`, so a schema strict mode refuses still gets an answer, read
+/// from a fenced message and checked against the schema by the router.
+#[test]
+fn a_plain_json_request_carries_its_schema_in_the_instructions_and_not_as_output_schema() {
+    with_mode("ok", || {
+        let instructions =
+            std::env::temp_dir().join(format!("hide-ai-plain-instr-{}.txt", std::process::id()));
+        let turn =
+            std::env::temp_dir().join(format!("hide-ai-plain-turn-{}.json", std::process::id()));
+        unsafe {
+            std::env::set_var("FAKE_INSTRUCTIONS_FILE", &instructions);
+            std::env::set_var("FAKE_TURN_FILE", &turn);
+            std::env::set_var("FAKE_REPLY", "```json\n{\"task\":{\"kind\":\"none\"}}\n```");
+        }
+        let router = AiRouter::new(
+            vec![Arc::new(backend())],
+            RouterConfig {
+                priority: vec![ProviderId::CODEX],
+                ..RouterConfig::default()
+            },
+            Arc::new(NoopLogSink),
+        );
+        let request = AiRequest {
+            output_schema: one_of_schema(),
+            answer: hide_ai::AnswerMode::PlainJson,
+            ..request(Duration::from_secs(10))
+        };
+        let outcome = router.execute(&request, &CancelToken::new());
+        unsafe {
+            std::env::remove_var("FAKE_INSTRUCTIONS_FILE");
+            std::env::remove_var("FAKE_TURN_FILE");
+            std::env::remove_var("FAKE_REPLY");
+        }
+        let sent = std::fs::read_to_string(&instructions).unwrap();
+        let params: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&turn).unwrap()).unwrap();
+        let _ = std::fs::remove_file(&instructions);
+        let _ = std::fs::remove_file(&turn);
+        assert_eq!(outcome.unwrap().value, json!({"task": {"kind": "none"}}));
+        assert!(params.get("outputSchema").is_none(), "{params}");
+        assert!(sent.starts_with("Answer as JSON."), "{sent}");
+        assert!(sent.contains(&one_of_schema().to_string()), "{sent}");
+    });
+}
+
+/// A request the API refuses (strict mode's 400 for a `oneOf` schema) is a
+/// refusal with a code of its own, not an unknown completion: nothing ran,
+/// so it spends no unknown call.
+#[test]
+fn a_schema_the_api_refuses_is_a_refused_request_with_its_code() {
+    with_mode("ok", || {
+        let attempts = Arc::new(Attempts::default());
+        let router = AiRouter::new(
+            vec![Arc::new(backend())],
+            RouterConfig {
+                priority: vec![ProviderId::CODEX],
+                backoff_base: Duration::ZERO,
+                usage_sink: Some(attempts.clone()),
+                ..RouterConfig::default()
+            },
+            attempts.clone(),
+        );
+        let request = AiRequest {
+            output_schema: one_of_schema(),
+            answer: hide_ai::AnswerMode::Schema,
+            ..request(Duration::from_secs(10))
+        };
+        let error = router.execute(&request, &CancelToken::new()).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid_output:codex_request_refused:http_400:invalid_json_schema"
+        );
+        assert!(attempts.calls.lock().unwrap().is_empty());
+    });
+}
+
 #[derive(Debug, Default)]
 struct Attempts {
     calls: Mutex<Vec<Vec<ModelTokens>>>,

@@ -10,12 +10,16 @@ child process on every thread/start and answers the turn normally, and it ends
 all of those children when its stdin reaches EOF (the owner's shutdown signal)
 so a killed owner leaves no survivors. FAKE_ARGS_FILE records the argument
 vector when set, FAKE_INSTRUCTIONS_FILE the base instructions of the last
-thread/start, and FAKE_STARTED_FILE is created once a slow turn has
+thread/start, FAKE_TURN_FILE the parameters of the last turn/start, and
+FAKE_STARTED_FILE is created once a slow turn has
 started and is waiting.
 interrupted_after_usage, stream_disconnected and stream_disconnected_500 end
 an already-started turn after it reported tokens without a usable answer.
 generic_failure and unknown_failure do the same with missing or unfamiliar
 error information; bad_request and connection_failed refuse before usage.
+In every mode an `outputSchema` that uses a keyword the Responses API's strict
+mode refuses fails the turn the way codex-cli 0.163.0 was measured to: an
+`other` error whose message is the API's own 400 body.
 """
 import atexit
 import json
@@ -63,6 +67,28 @@ def notify(method, params):
     send({"jsonrpc": "2.0", "method": method, "params": params})
 
 
+STRICT_REFUSED = ("oneOf", "uniqueItems")
+
+
+def strict_refusal(schema):
+    """The first keyword strict mode refuses, as the API names its place."""
+    def walk(node, place):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in STRICT_REFUSED:
+                    return f"{place}.{key}"
+                found = walk(value, f"{place}.{key}")
+                if found:
+                    return found
+        elif isinstance(node, list):
+            for item in node:
+                found = walk(item, place)
+                if found:
+                    return found
+        return None
+    return walk(schema, "schema") if schema is not None else None
+
+
 active_turn = None
 for raw in sys.stdin:
     raw = raw.strip()
@@ -97,10 +123,20 @@ for raw in sys.stdin:
     elif method == "turn/start":
         if MODE == "exit":
             sys.exit(3)
-        assert params.get("clientUserMessageId") and params.get("outputSchema")
+        assert params.get("clientUserMessageId")
+        if path := os.environ.get("FAKE_TURN_FILE"):
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(params, f)
         active_turn = "turn-1"
         result(rid, {"turn": {"id": active_turn, "status": "inProgress", "items": []}})
         notify("turn/started", {"threadId": "thread-1", "turn": {"id": active_turn, "status": "inProgress", "items": []}})
+        if refused := strict_refusal(params.get("outputSchema")):
+            body = {"type": "error", "status": 400, "error": {
+                "message": f"Invalid schema for response_format 'codex_output_schema': '{refused}' is not permitted when strict is true.",
+                "type": "invalid_request_error", "param": "text.format.schema", "code": "invalid_json_schema"}}
+            notify("turn/completed", {"threadId": "thread-1", "turn": {"id": active_turn, "status": "failed", "items": [],
+                    "error": {"message": json.dumps(body), "codexErrorInfo": "other"}}})
+            continue
         if MODE == "exit_after_turn_start":
             sys.exit(4)
         if MODE == "slow":

@@ -7,7 +7,7 @@
 
 use super::analysis::{
     Analysis, AnalysisPhase, LabelEnd, LabelLimits, MIN_GOAL_CHARS, normalize_goal,
-    normalize_text_field,
+    normalize_text_field, truncate_phrase,
 };
 use crate::links::ledger::{MISSED_CHARS, NEW_TASK_LIMIT, TaskDecision};
 use anyhow::{Context, Result, anyhow};
@@ -299,12 +299,13 @@ pub(crate) fn parse(
         return Err(anyhow!("provider_invalid_goal_change"));
     }
     // Every surface draws it in one line, so the prompt's length rule is
-    // enforced here whatever the model did with it.
-    let line = normalize_text_field(&line, true)
-        .ok_or_else(|| anyhow!("provider_invalid_line"))?
-        .chars()
-        .take(limits.line)
-        .collect::<String>();
+    // enforced here whatever the model did with it: a longer line is cut
+    // between words and ends in `…`, never refused or emptied, so a question
+    // stays a question.
+    let line = truncate_phrase(
+        &normalize_text_field(&line, true).ok_or_else(|| anyhow!("provider_invalid_line"))?,
+        limits.line,
+    );
     // A question with no statable action is a surface-pattern match
     // (greeting, courtesy offer), not a real request. A block with no
     // statable cause is a stop without a stated reason, the unfinished turn

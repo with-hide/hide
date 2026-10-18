@@ -57,6 +57,10 @@ const FOLLOW_UP_READ: Duration = Duration::from_secs(3);
 pub(crate) const START_DELAY: Duration = Duration::from_secs(15);
 /// A cold context is read by the links worker; retry without spending a call.
 const CONTEXT_READ_RETRY: Duration = Duration::from_millis(250);
+/// How long a turn's end waits for its context from the first time it found
+/// none. Past it the turn is recorded unjudged (PRD label-judgment-fixes
+/// D-08): a context the links worker could not read is not retried forever.
+const CONTEXT_WAIT_LIMIT: Duration = Duration::from_secs(30);
 /// How long a read the machine could not answer (a device whose helper is
 /// not connected) waits before it is tried again, so the pane catches up
 /// after a reconnect without waiting for its next state change (B14).
@@ -215,6 +219,9 @@ struct AnalysisMeta {
     /// The turn began with the operator's request, so it may move the goal
     /// (D-09).
     operator_turn: bool,
+    /// The turn's end is asked without its start having been asked (it ended
+    /// within the start delay), so this one call names the goal too.
+    start_skipped: bool,
     context_chars: usize,
 }
 
@@ -267,6 +274,9 @@ struct PaneState {
     claimed_submit: Option<Submit>,
     /// The turn whose end already had its one retry after a timeout (D-33).
     end_retried: Option<u64>,
+    /// The turn whose end waits for its ledger context, and since when; see
+    /// [`CONTEXT_WAIT_LIMIT`].
+    context_wait: Option<(u64, Instant)>,
     /// The skip reasons already logged, so a cap that holds on every read
     /// (more subagent files than one read takes) is logged once.
     skip_reasons_logged: std::collections::BTreeSet<String>,
@@ -496,6 +506,7 @@ impl LabelWorker {
                             input_observed_since_unix_ms: now_unix_ms,
                             claimed_submit: None,
                             end_retried: None,
+                            context_wait: None,
                             skip_reasons_logged: Default::default(),
                         },
                     );
@@ -1435,14 +1446,18 @@ impl LabelWorker {
             .iter()
             .rfind(|event| event.kind == LabelEventKind::Human)
             .is_some_and(operator);
+        let start_skipped =
+            phase == AnalysisPhase::TurnEnd && record.analysis_turn_start != Some(turn);
         let mut context = if initial_context {
             analysis_context(events, &operator)
         } else {
             let mut delta = new_human_turns(events, record.task_input_cursor);
             delta.retain(operator);
+            // An end whose start was never asked sees the requests the
+            // start would have, so it can tell a new job from a follow-up.
             rolling_analysis_context(
                 record.goal.as_deref().unwrap_or_default(),
-                if phase == AnalysisPhase::TurnStart {
+                if phase == AnalysisPhase::TurnStart || start_skipped {
                     &delta
                 } else {
                     &[]
@@ -1485,15 +1500,60 @@ impl LabelWorker {
                 .and_then(|client| client.context(session))
         });
         if phase == AnalysisPhase::TurnEnd
-            && ledger_session.is_some()
-            && ledger_client.is_some()
+            && let Some(session) = ledger_session.as_ref()
+            && let Some(client) = ledger_client.as_ref()
             && ledger.is_none()
         {
             // The link worker will fill a cold/evicted context. Never settle
             // the turn with a fabricated root author or empty open work.
-            pane.next_analysis_at = Some(now + CONTEXT_READ_RETRY);
-            return false;
+            let since = match pane.context_wait {
+                Some((waiting, since)) if waiting == turn => since,
+                _ => {
+                    pane.context_wait = Some((turn, now));
+                    now
+                }
+            };
+            let waited = now.saturating_duration_since(since);
+            if waited < CONTEXT_WAIT_LIMIT {
+                pane.next_analysis_at = Some(now + CONTEXT_READ_RETRY);
+                return false;
+            }
+            // It never came: the turn is a failure like any other, its line
+            // and end cleared rather than the last turn's left standing.
+            pane.context_wait = None;
+            pane.next_analysis_at = None;
+            let cleared = record.end.is_some() || !record.line.is_empty();
+            record.end = None;
+            record.line.clear();
+            record.analysis_turn_start = Some(turn);
+            record.analysis_turn_end = Some(turn);
+            self.dirty = true;
+            if let Some(offset) = events
+                .iter()
+                .rfind(|event| event.kind == LabelEventKind::Human)
+                .map(|event| event.offset)
+                && let Err(code) = client.ledger(LedgerUpdate::Unjudged {
+                    session: session.clone(),
+                    offsets: vec![offset],
+                })
+            {
+                crate::diagnostic!(
+                    json!({"component":"labels","kind":"ledger.enqueue_failed","pane_id":pane_id,"code":code})
+                );
+            }
+            crate::diagnostic!(json!({
+                "component": "labels",
+                "kind": "analysis.context_unavailable",
+                "target": self.target,
+                "pane_id": pane_id,
+                "session_id": session.session_id,
+                "generation": pane.generation,
+                "turn": format!("{turn:016x}"),
+                "waited_ms": waited.as_millis() as u64,
+            }));
+            return cleared;
         }
+        pane.context_wait = None;
         let ledger = ledger.unwrap_or_default();
         let work_author = events
             .iter()
@@ -1547,6 +1607,7 @@ impl LabelWorker {
             task_input_cursor: task_input_cursor(events),
             initial_context,
             operator_turn,
+            start_skipped,
             context_chars: context.chars().count(),
         };
         self.analysis_in_flight = Some(pane_id.to_owned());
@@ -1606,10 +1667,14 @@ impl LabelWorker {
                 let record = self.records.get_mut(pane_id).expect("checked above");
                 let previous_goal = record.goal.clone();
                 // A first goal or the start of a turn the operator asked
-                // for may move the goal (D-09). With goal_changed false,
-                // the provider's goal value is ignored, including null.
+                // for may move the goal (D-09), and so may the end of one
+                // whose start was never asked (label-judgment-fixes D-04).
+                // With goal_changed false, the provider's goal value is
+                // ignored, including null.
                 let may_update_goal = previous_goal.is_none()
-                    || ((outcome.initial_context || outcome.phase == AnalysisPhase::TurnStart)
+                    || ((outcome.initial_context
+                        || outcome.phase == AnalysisPhase::TurnStart
+                        || outcome.start_skipped)
                         && outcome.operator_turn
                         && analysis.goal_changed);
                 let goal_changed = may_update_goal && previous_goal != analysis.goal;

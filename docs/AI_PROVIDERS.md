@@ -77,7 +77,7 @@ The backends run on the core's own node, never inside the core: the core's route
 The node keeps one real backend per core instance in a registry capped at 64 (a few routers, each with one backend per registered provider) (`hide-host/src/ai.rs`), refuses the next, and drops an instance when the core's `NodeBackend` is dropped, so a router rebuilt for a changed model choice ends the old child.
 A request reports progress once a second while it runs, and a cancel in the core stops the node's request through that report.
 
-- `codex`: `codex app-server --listen stdio://`, the official JSON-RPC surface of the Codex CLI, driven with an ephemeral read-only thread, the feature's system prompt as the base instructions, every optional feature disabled, and the feature's output schema attached to the turn.
+- `codex`: `codex app-server --listen stdio://`, the official JSON-RPC surface of the Codex CLI, driven with an ephemeral read-only thread, the feature's system prompt as the base instructions, every optional feature disabled, and the feature's output schema attached to the turn as `outputSchema` in `Schema` mode or named in the base instructions in `PlainJson` mode (see the answer modes below).
   The default model is `gpt-5.6-luna`.
   Availability is read from `account/read`; the thread leaves nothing in `~/.codex/sessions`.
   `codex exec` is not used.
@@ -127,7 +127,11 @@ A request reports progress once a second while it runs, and a cancel in the core
   Measured on claude 2.1.301 with the same label-style input, `Schema` made two API turns, wrote 2,826 cache tokens and printed 184 output tokens on sonnet, and `PlainJson` made one turn, wrote 2,264 and printed 84.
   The schema rides in the system prompt, which is an argument of the child, so `PlainJson` is for short schemas only.
   Agent summaries, pull request summaries and worktree names ask `PlainJson`, because their answers are a few short fields; Project Memory and the Factory keep `Schema`, whose answers are long and strictly shaped.
-  Codex has its own `outputSchema` and the text-mode CLIs have no schema surface, so the mode changes nothing for them.
+  The mode is one contract for every provider that has a schema surface, not a Claude setting: Codex honours it the same way.
+  In `Schema` mode Codex attaches the schema to the turn as `outputSchema`, which the Responses API enforces in strict mode; in `PlainJson` mode it names the schema in the thread's base instructions, sends no `outputSchema`, and reads the object from the agent message with the same reader.
+  Strict mode is why: measured on codex-cli 0.163.0, a schema that uses `oneOf` or `uniqueItems` (the agent summary's turn-end schema uses both) fails every turn with HTTP 400 `invalid_json_schema`, so a `PlainJson` feature that sent its schema there never got an answer from Codex.
+  The router's validation of the answer against the full schema is what stands in for strict mode, and an answer that fails it is `InvalidOutput`, never drawn.
+  The text-mode CLIs have no schema surface, so the mode changes nothing for them.
 
   One child per request, never a persistent one: a second request to a live child reuses its `session_id` and the conversation accumulates.
   A cancelled or expired request kills the child, which is safe because print mode holds no state worth draining.
@@ -459,8 +463,9 @@ What counts is the attempt, not the request:
   Each is its own attempt: the second of two `InvalidOutput` attempts is a second dispatch, told once more.
   A Codex turn that reports `interrupted` is `Cancelled`, and `responseStreamDisconnected` is `CompletionUnknown` regardless of its optional HTTP status: both may follow model work, count once, and are never retried automatically.
   After `turn/start`, a failed turn with missing or unfamiliar `codexErrorInfo` is also `CompletionUnknown`; only a typed refusal or a failure to establish the HTTP/response-stream connection can remain retryable without an unknown call.
+  The one exception is an `other` failure whose `message` is the Responses API's own error body as JSON with a 4xx `status` (codex-cli 0.163.0 forwards it that way): the API refused the request before any model work, so it is `Rejected(codex_request_refused:http_<status>[:<code>])`, with the body's `error.code` kept only when it is a short identifier such as `invalid_json_schema`; a 401, 403 or 429 there is `NotAuthenticated` or `UsageLimited` as a typed one is, and the body's prose is never read.
 - A response that arrives without usage (Gemini CLI, Pi, Grok today) is also an unknown call.
-- A refusal before the prompt went out (`ProviderUnavailable`, `NotAuthenticated`, `UsageLimited`, `Unsupported`, `Transient`, `OverBudget`) and a `Rejected` request (the provider refused the request itself: an HTTP 4xx, a prompt that does not fit, a Gemini input error, a Codex bad request or full context window) are not told: they did no model work.
+- A refusal before the prompt went out (`ProviderUnavailable`, `NotAuthenticated`, `UsageLimited`, `Unsupported`, `Transient`, `OverBudget`) and a `Rejected` request (the provider refused the request itself: an HTTP 4xx, a prompt that does not fit, a Gemini input error, a Codex bad request, full context window or API-refused request) are not told: they did no model work.
   Neither is a cancel that returns before a backend is asked, nor a caller joined onto another's flight that gives up, since neither dispatched anything.
 - A schema failure of an answer that did arrive is the answer's own attempt, told once with its usage; the failure adds nothing.
 
