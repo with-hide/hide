@@ -423,9 +423,12 @@ class Journey:
         self.daemon.dispatch("wake_sleeping_session", {"sleep_id": found["sleep_id"]})
         record["waking"] = []
 
-        # Running again: the sleeping session is gone, its registration moved,
-        # and a new pane of this agent hosts the session it slept in.
-        def awake(rest):
+        # Running again: the sleeping session is gone, and Hide moved the
+        # agent's registration to the pane Wake opened, which hosts the session
+        # it slept in. The registration names that pane whatever the session is
+        # called: a row carries no session id for a session recorded as a path,
+        # such as Pi's (NavigatorAgent::session_id).
+        def woken(rest):
             entry = next((entry for entry in sleeping(rest) if entry.get("sleep_id") == found["sleep_id"]), None)
             if entry:
                 if not record["waking"] or record["waking"][-1] != entry.get("phase"):
@@ -441,16 +444,36 @@ class Journey:
                                          "checkouts": paths[:64]}
                     return {"failed": "refused: " + entry["reason"]}
                 return None
-            agents = (rest.get("navigator") or {}).get("agents", [])
-            row = next((agent for agent in agents if agent.get("session_id") == self.session
-                        and agent.get("pane_id") != old), None)
+            return {"gone": True}
+
+        def registered():
+            listing = self.controller.hide(["agent", "list"])
+            item = next((item for item in (listing.get("value") or {}).get("items") or []
+                         if item.get("id") == self.agent), None)
+            pane = (item or {}).get("pane")
+            return pane if pane and pane != old else None
+
+        def running(rest):
+            row = next((agent for agent in (rest.get("navigator") or {}).get("agents", [])
+                        if agent.get("pane_id") == record["registered_pane"]), None)
             if not row:
                 return None
             if not record["awake"] or record["awake"][-1] != row.get("activity"):
                 record["awake"].append(row.get("activity"))
             return row if row.get("activity") in ("working", "stopped") else None
+        end = time.monotonic() + WAKE_SECONDS
         try:
-            woke = self.daemon.wait(awake, WAKE_SECONDS, "the woken session's pane")
+            woke = self.daemon.wait(woken, WAKE_SECONDS, "the sleeping session to wake")
+            if "failed" not in woke:
+                try:
+                    # Outside the snapshot lock: the listing is a command the controller runs.
+                    record["registered_pane"] = self.runtime.wait(registered, max(1, end - time.monotonic()))
+                except ProcessError as error:
+                    if self.runtime.owner.cancelled.is_set():
+                        raise
+                    raise ProcessError(f"timeout after {WAKE_SECONDS:.0f}s waiting for Hide's registration of "
+                                       f"{self.agent} to name a pane other than {old}") from error
+                woke = self.daemon.wait(running, max(1, end - time.monotonic()), "the woken session's pane")
         except ProcessError as error:
             if self.runtime.owner.cancelled.is_set():
                 raise
