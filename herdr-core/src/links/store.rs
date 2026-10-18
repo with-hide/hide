@@ -84,6 +84,17 @@ pub enum Opened {
 
 pub struct LinkStore {
     connection: Connection,
+    /// What the delivery registry says of each child the last lineage facts
+    /// named: the name its letters carry and its newest report to its
+    /// parent. Memory only; the runtime sends the facts again after a start.
+    lineage: BTreeMap<SessionIdentity, ChildLineage>,
+}
+
+/// A child's delivery facts (PRD task-continuation D-02, D-08).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ChildLineage {
+    pub(crate) name: String,
+    pub(crate) reported_at_unix_ms: Option<u64>,
 }
 
 enum OpenFailure {
@@ -222,7 +233,10 @@ impl LinkStore {
         connection
             .execute("DELETE FROM ledger_project_connections", [])
             .map_err(classify)?;
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            lineage: BTreeMap::new(),
+        })
     }
 
     /// A reader's connection: the panel and `hide links` never write.
@@ -244,7 +258,10 @@ impl LinkStore {
         if version != SCHEMA_VERSION {
             return Err("links_store_unavailable".to_owned());
         }
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            lineage: BTreeMap::new(),
+        })
     }
 
     pub fn meta(&self, key: &str) -> Result<Option<String>, String> {
@@ -924,6 +941,7 @@ impl LinkStore {
     ) -> Result<Vec<SessionIdentity>, String> {
         let tx = self.connection.transaction().map_err(failed)?;
         let mut children = Vec::with_capacity(parents.len());
+        let mut lineage = BTreeMap::new();
         for parent in parents {
             let child = SessionIdentity {
                 device_id: parent.device_id.clone(),
@@ -947,9 +965,17 @@ impl LinkStore {
                 name: parent.parent_name.clone(),
             };
             record_parent(&tx, &child, &named)?;
+            lineage.insert(
+                child.clone(),
+                ChildLineage {
+                    name: parent.name.clone(),
+                    reported_at_unix_ms: parent.reported_at_unix_ms,
+                },
+            );
             children.push(child);
         }
         tx.commit().map_err(failed)?;
+        self.lineage = lineage;
         Ok(children)
     }
 

@@ -710,6 +710,7 @@ fn the_end_request_names_the_finished_tasks_a_re_request_may_continue() {
                 last_at_unix_ms: 2,
                 end: super::analysis::LabelEnd::Done,
                 done: true,
+                unjudged: false,
             }],
             ..Default::default()
         },
@@ -3951,4 +3952,122 @@ fn a_pane_with_no_goal_is_still_analyzed_after_a_restart() {
         task(shown(&worker, &idle)).as_deref(),
         Some("README 섹션 안내")
     );
+}
+
+/// PRD task-continuation D-02, D-03, D-09: a turn a letter woke tells the
+/// ledger who sent it and when it arrived, and a watch alert's failed turn
+/// leaves no unknown behind.
+#[test]
+fn a_letter_turn_end_names_its_sender_and_start_and_a_failed_watch_turn_stays_unrecorded() {
+    use crate::links::ledger::{LedgerContext, LedgerUpdate, SessionIdentity};
+    let harness = Harness::new();
+    let store = harness.store();
+    let client = crate::links::worker::LinkClient::open_mailbox_for_test();
+    let node: Arc<dyn crate::node_access::NodeLink> = Arc::new(hide_node::Local::new(Some(
+        harness.home.path().to_path_buf(),
+    )));
+    let (mut worker, woken) = harness.spawn_with_ledger(
+        Arc::clone(&store),
+        LOCAL_TARGET,
+        "local.sock",
+        Arc::new(NodeTranscripts::new(Box::new(move || {
+            Ok(Arc::clone(&node))
+        }))),
+        Arc::new(Mutex::new(Some(client.clone()))),
+    );
+    client.prime_context_for_test(
+        SessionIdentity {
+            device_id: LOCAL_TARGET.into(),
+            agent: "claude".into(),
+            session_id: "native-a".into(),
+        },
+        LedgerContext::default(),
+    );
+    let mut lines = vec![
+        ("user", "두 일을 자식에게 맡기고 머지까지 해줘"),
+        ("assistant", "자식 둘을 띄웠습니다"),
+        (
+            "user",
+            "Hide letter letter-1 from impl-a (claude) [report]\n끝났어요",
+        ),
+        ("assistant", "PR을 머지했습니다"),
+    ];
+    let path = later_session(&harness, &lines);
+    harness
+        .backend
+        .answer("사이드바 두 화면 개선 작업", "waiting", "");
+    observe(&mut worker, &agent(&path, "idle", 3));
+    settle(&mut worker, &woken);
+    let turn_ends = || {
+        client
+            .ledger_updates_for_test()
+            .into_iter()
+            .filter_map(|update| match update {
+                LedgerUpdate::TurnEnd {
+                    letter,
+                    work_author,
+                    started_at_unix_ms,
+                    at_unix_ms,
+                    ..
+                } => Some((
+                    letter,
+                    work_author,
+                    started_at_unix_ms <= at_unix_ms && started_at_unix_ms > 0,
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(turn_ends(), [(Some("impl-a".to_owned()), false, true)]);
+    let unjudged = || {
+        client
+            .ledger_updates_for_test()
+            .into_iter()
+            .filter(|update| matches!(update, LedgerUpdate::Unjudged { offsets, .. } if !offsets.is_empty()))
+            .count()
+    };
+    let before = unjudged();
+    lines.extend([
+        (
+            "user",
+            "Hide letter letter-2 from observer (claude) [watch]\nNo activity for 20 minutes",
+        ),
+        ("assistant", "확인했습니다"),
+    ]);
+    later_session(&harness, &lines);
+    harness.backend.time_out(2);
+    observe(&mut worker, &agent(&path, "idle", 5));
+    settle(&mut worker, &woken);
+    worker.tick(Instant::now() + Duration::from_secs(1));
+    settle(&mut worker, &woken);
+    assert_eq!(
+        unjudged(),
+        before,
+        "a watch turn's failure records no unknown"
+    );
+    lines.extend([
+        (
+            "user",
+            "Hide letter letter-3 from impl-b (claude) [progress]\n진행 중",
+        ),
+        ("assistant", "기다립니다"),
+    ]);
+    later_session(&harness, &lines);
+    harness.backend.time_out(2);
+    observe(&mut worker, &agent(&path, "idle", 7));
+    settle(&mut worker, &woken);
+    worker.tick(Instant::now() + Duration::from_secs(1));
+    settle(&mut worker, &woken);
+    assert_eq!(unjudged(), before + 1, "a descendant letter's failure does");
+}
+
+/// `Harness::session` with turns dated after the worker switched summaries
+/// on, so the ledger takes their judgments.
+fn later_session(harness: &Harness, turns: &[(&str, &str)]) -> PathBuf {
+    let path = harness.session("a", "native-a", turns);
+    let dated = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("\"2026-10-01T00:00:", "\"2099-10-01T00:00:");
+    std::fs::write(&path, dated).unwrap();
+    path
 }

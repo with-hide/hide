@@ -201,6 +201,8 @@ enum WorkerResult {
 struct AnalysisMeta {
     ledger_session: Option<SessionIdentity>,
     work_author: bool,
+    /// The letter that woke the turn, by its envelope: sender and kind.
+    letter: Option<(String, String)>,
     turn_witness: Option<String>,
     offset: Option<u64>,
     at_unix_ms: u64,
@@ -1504,6 +1506,10 @@ impl LabelWorker {
             .rfind(|event| event.kind == LabelEventKind::Human)
             .and_then(|event| hide_session::label_transcript::work_turn(events, event.offset))
             .map(|turn| turn.witness());
+        let letter = events
+            .iter()
+            .rfind(|event| event.kind == LabelEventKind::Human)
+            .and_then(|event| hide_session::envelope_header(&event.text));
         if phase == AnalysisPhase::TurnEnd {
             context.push_str(&super::analysis::work_context(work_author, &ledger));
         }
@@ -1529,6 +1535,7 @@ impl LabelWorker {
         let meta = AnalysisMeta {
             ledger_session,
             work_author,
+            letter,
             turn_witness,
             offset: events
                 .iter()
@@ -1640,9 +1647,20 @@ impl LabelWorker {
                         && let Err(code) = client.ledger(LedgerUpdate::TurnEnd {
                             session,
                             offset,
+                            started_at_unix_ms: outcome.request_at_unix_ms,
                             at_unix_ms: outcome.at_unix_ms,
                             end: analysis.end,
                             work_author: outcome.work_author,
+                            // Only a descendant's report, progress or block
+                            // continues its task; the ledger checks the
+                            // lineage (PRD task-continuation D-02).
+                            letter: outcome
+                                .letter
+                                .as_ref()
+                                .filter(|(_, kind)| {
+                                    matches!(kind.as_str(), "report" | "progress" | "block")
+                                })
+                                .map(|(sender, _)| sender.clone()),
                             turn_witness: outcome.turn_witness.clone(),
                             judgment,
                         })
@@ -1710,7 +1728,13 @@ impl LabelWorker {
                     self.log_failure(pane_id, "analysis.retried", &failure.detail());
                     return cleared;
                 }
+                // A watch alert's turn moves no task (B4), so its failed
+                // judgment leaves no unknown on one either (D-09).
                 if outcome.phase == AnalysisPhase::TurnEnd
+                    && outcome
+                        .letter
+                        .as_ref()
+                        .is_none_or(|(_, kind)| kind != "watch")
                     && let Some(session) = outcome.ledger_session.clone()
                     && let Some(offset) = outcome.offset
                     && let Some(client) = self.ledger.lock().ok().and_then(|client| client.clone())

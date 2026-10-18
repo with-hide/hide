@@ -211,6 +211,11 @@ pub struct WorkTask {
     pub last_at_unix_ms: u64,
     pub end: LabelEnd,
     pub done: bool,
+    /// The session's newest turn went unjudged and the task is not done:
+    /// its END is an earlier turn's, so no word is drawn for it (PRD
+    /// task-continuation D-09).
+    #[serde(default)]
+    pub unjudged: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -327,9 +332,17 @@ pub enum LedgerUpdate {
     TurnEnd {
         session: SessionIdentity,
         offset: u64,
+        /// When the input that woke the turn arrived: a request, a letter, an
+        /// answer or an alert. A turn with no recorded request starts here,
+        /// so what it makes falls inside it (PRD task-continuation D-03).
+        started_at_unix_ms: u64,
         at_unix_ms: u64,
         end: LabelEnd,
         work_author: bool,
+        /// The sender's name when a report, progress or block letter woke
+        /// the turn: the ledger records the turn against the task that
+        /// spawned that descendant (D-02), never one the model picks.
+        letter: Option<String>,
         turn_witness: Option<String>,
         judgment: TurnJudgment,
     },
@@ -388,18 +401,21 @@ pub struct SessionRecord {
     pub children: Vec<SessionRecord>,
     /// How its direct children stand; absent without children.
     pub child_progress: Option<ChildProgress>,
+    /// For a child, the task group of the parent's turn that spawned it;
+    /// its outputs belong there and so does the child (B7).
+    pub spawn_task: Option<String>,
 }
 
-/// How one direct child stands for its parent's `자식 일` (PRD
-/// task-split-checklist D-04). A child counts done by its own tasks, all done
-/// by the task rule, or, with no task, by its last END being Done.
+/// How one direct child stands for its parent's `맡긴 일` (PRD
+/// task-split-checklist D-04, task-continuation D-08, D-09).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChildWork {
     Done,
     Working,
     Other,
-    /// Neither a task nor an END: no judgment says how it stands.
+    /// No judgment says how it stands: none was ever made, or its newest
+    /// turn went unjudged.
     Unjudged,
 }
 
@@ -411,19 +427,41 @@ pub struct ChildProgress {
     pub done: Option<usize>,
 }
 
+/// What the ledger reads about a child beside its record.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ChildFacts {
+    /// It sent its parent a report letter and started no turn after it.
+    pub reported_idle: bool,
+    /// Its newest turn went unjudged.
+    pub latest_unjudged: bool,
+}
+
 impl ChildWork {
-    pub fn of(child: &SessionRecord) -> Self {
+    pub fn of(child: &SessionRecord, facts: ChildFacts) -> Self {
         // A child at work is not done, whatever an earlier turn finished: its
         // new request has no END yet (B8). Its state is what the label worker
         // last read from its live pane. One never judged stays unjudged.
         let judged = !child.tasks.is_empty() || child.last_end.is_some();
-        if judged && child.state.as_deref() == Some("working") {
+        let working = child.state.as_deref() == Some("working");
+        if judged && working {
             return Self::Working;
         }
+        // Facts finish a resting child before any judgment does: its report
+        // to the parent, or merged pull requests with none still open.
+        let prs = child.outputs.iter().filter(|output| output.kind == "pr");
+        let merged = prs.clone().any(|output| output.state == "merged");
+        let open = prs.clone().any(|output| pr_open(&output.state));
+        if !working && (facts.reported_idle || (merged && !open)) {
+            return Self::Done;
+        }
+        if !child.tasks.is_empty() && child.tasks.iter().all(|task| task.done) {
+            return Self::Done;
+        }
+        if facts.latest_unjudged {
+            return Self::Unjudged;
+        }
         if !child.tasks.is_empty() {
-            return if child.tasks.iter().all(|task| task.done) {
-                Self::Done
-            } else if child
+            return if child
                 .tasks
                 .iter()
                 .any(|task| matches!(task.end, LabelEnd::Working | LabelEnd::Waiting))
@@ -443,11 +481,10 @@ impl ChildWork {
 }
 
 impl ChildProgress {
-    pub fn of(children: &[SessionRecord]) -> Option<Self> {
+    pub fn of(children: Vec<ChildWork>) -> Option<Self> {
         if children.is_empty() {
             return None;
         }
-        let children = children.iter().map(ChildWork::of).collect::<Vec<_>>();
         let done = (!children.contains(&ChildWork::Unjudged)).then(|| {
             children
                 .iter()
@@ -456,6 +493,30 @@ impl ChildProgress {
         });
         Some(Self { children, done })
     }
+}
+
+/// A pull request still in play: neither merged nor closed unmerged.
+pub fn pr_open(state: &str) -> bool {
+    state != "merged" && state != "closed"
+}
+
+/// Whether a task group is finished (PRD task-continuation D-05, D-06): with
+/// a merged pull request and none still open, unless its last END says work
+/// is left or blocked; with no pull request that counts (a closed unmerged
+/// one does not), only when its last END is Done.
+pub fn task_done<'a>(end: LabelEnd, prs: impl Iterator<Item = &'a WorkOutput>) -> bool {
+    let (mut merged, mut open) = (false, false);
+    for pr in prs {
+        merged |= pr.state == "merged";
+        open |= pr_open(&pr.state);
+    }
+    if open {
+        return false;
+    }
+    if merged {
+        return !matches!(end, LabelEnd::Unfinished | LabelEnd::Blocked);
+    }
+    end == LabelEnd::Done
 }
 
 /// What a live pane's chip and checklist popover draw: its session's tasks

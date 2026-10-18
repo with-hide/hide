@@ -19,7 +19,7 @@ use std::time::Duration;
 pub(crate) const FEATURE_ID: &str = "context_label";
 /// Bumped whenever a prompt or a schema changes, so a log line can be read
 /// against the pair that produced it.
-pub(crate) const SCHEMA_VERSION: &str = "context_label.v14";
+pub(crate) const SCHEMA_VERSION: &str = "context_label.v15";
 /// Long enough for a provider that has to start a child process, short
 /// enough that a stuck turn does not hold the pane's slot for a whole event
 /// cycle series.
@@ -105,9 +105,10 @@ fn end_prompt(limits: LabelLimits) -> String {
         "work is {\"task\":{\"kind\":\"new\",\"names\":[\"task name\"]}|{\"kind\":\"continue\",\"ids\":[\"task-id\"]}|{\"kind\":\"none\"},\"missed\":[],\"resolved\":[],\"output_task_id\":null}. ",
         "Judge this human request as a task only when <work-author>true</work-author>: it is the request of the operator or of the parent that delegated the session, and letters from other agents are excluded. ",
         "If a concrete new deliverable was asked for, new with names holding one task name of at most 80 characters per deliverable; if it continues existing work in <open-tasks>, continue with at most 2 real IDs; questions, explanations and progress checks are none. ",
+        "A reply that answers, approves or chooses what the assistant asked or proposed at the end of its previous message (\"yes, do that\", \"the second one\", \"go ahead\") continues the task that message was working on: continue with its real ID from <open-tasks>, or from <finished-tasks> when the reply has the agent carry out more of that work. ",
         "Task IDs that share the part before the first dot (task-12, task-12.2) are the tasks of one request: one of its IDs continues or reopens all of them, so name one ID per request. ",
         "<finished-tasks> are the newest finished tasks. A request that orders the agent to carry out the work of one of them again (run it again, redo, measure again, reinstall) is a task, never none: continue with that task's real ID, which reopens it. ",
-        "A remark, a complaint, a doubt (\"this is confusing\", \"still slow\"), a question, an opinion, a proposal to discuss, an approval or a progress check is none even when it is about a finished task, and a different deliverable is new. ",
+        "A remark, a complaint, a doubt (\"this is confusing\", \"still slow\"), a question, an opinion, a proposal to discuss or a progress check is none even when it is about a finished task, and never reopens it; a different deliverable is new. ",
         "If work-author is false, task is none. Verifying, fixing bugs in, merging or installing the same work continues the existing task, open or finished. ",
         "When one request asks for several independent deliverables (a numbered list or separate bullets that each have their own result), names holds one name per deliverable, at most 6, bundling any extras into the last name. ",
         "Sub-steps, checks and details of the same deliverable are not separate tasks, and a request for one deliverable has exactly one name. ",

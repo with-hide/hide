@@ -542,6 +542,9 @@ impl Runtime {
                 .hash(&mut hasher);
         }
         if let Ok(ledger) = self.delivery_ledger.as_ref() {
+            // A new letter may be a child's report (`link_parent_facts`);
+            // every letter takes an id, so the next one moves the print.
+            ledger.next_id.hash(&mut hasher);
             for record in &ledger.agents {
                 (
                     &record.id,
@@ -631,6 +634,8 @@ impl Runtime {
                     parent_agent: session_agent(&parent.agent_kind)?.to_owned(),
                     parent_session_id: parent.session_id.clone()?,
                     parent_name: wire_name(parent, devices.get(parent.pane_id.as_str())?),
+                    name: wire_name(agent, devices.get(agent.pane_id.as_str())?),
+                    reported_at_unix_ms: None,
                 })
             })
             .map(|parent| {
@@ -652,6 +657,27 @@ impl Runtime {
             .iter()
             .map(|record| (record.id.as_str(), record))
             .collect::<HashMap<_, _>>();
+        // A child's report to its parent counts it finished while it rests
+        // (PRD task-continuation D-08); the ledger keeps a bounded tail of
+        // letters, so an older report is simply not known.
+        let identity = |actor: &crate::delivery::Actor| {
+            (
+                actor.pane_id.clone(),
+                actor.device_id.clone(),
+                actor.session.clone(),
+            )
+        };
+        let mut reports = HashMap::new();
+        for letter in ledger
+            .letters
+            .iter()
+            .filter(|letter| letter.kind == "report")
+        {
+            let at = reports
+                .entry((identity(&letter.sender), identity(&letter.recipient)))
+                .or_insert(letter.created_at_unix_ms);
+            *at = (*at).max(letter.created_at_unix_ms);
+        }
         let registered = ledger
             .agents
             .iter()
@@ -668,6 +694,10 @@ impl Runtime {
                     parent_agent: session_agent(&parent.actor.kind)?.to_owned(),
                     parent_session_id: parent.session.clone(),
                     parent_name: parent.wire_name().to_owned(),
+                    name: record.wire_name().to_owned(),
+                    reported_at_unix_ms: reports
+                        .get(&(identity(&record.actor), identity(&parent.actor)))
+                        .copied(),
                 })
             })
             .collect::<Vec<_>>();

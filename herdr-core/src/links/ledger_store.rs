@@ -1,7 +1,6 @@
 //! The work ledger shares the link writer, version, size cap and retention.
 
 use super::{LinkStore, SessionKey, failed};
-use crate::labels::analysis::LabelEnd;
 use crate::links::ledger::*;
 use crate::links::{CREATED_AFTER_MS, CREATED_BEFORE_MS, SUMMARY_SESSION_LIMIT};
 use rusqlite::{OptionalExtension, Transaction, params};
@@ -753,6 +752,18 @@ impl LinkStore {
     }
 
     pub fn apply_ledger_update(&mut self, update: &LedgerUpdate) -> Result<(), String> {
+        // A descendant's letter continues the task that spawned it, read
+        // before the write starts: the record is the same rule the screen
+        // reads, so a finished task is never reopened by a letter (B5).
+        let letter_task = match update {
+            LedgerUpdate::TurnEnd {
+                session,
+                work_author: false,
+                letter: Some(sender),
+                ..
+            } => self.letter_task(session, sender)?,
+            _ => None,
+        };
         let tx = self.connection.transaction().map_err(failed)?;
         match update {
             LedgerUpdate::Unjudged { session, offsets } => {
@@ -901,9 +912,11 @@ impl LinkStore {
             LedgerUpdate::TurnEnd {
                 session,
                 offset,
+                started_at_unix_ms,
                 at_unix_ms,
                 end,
                 work_author,
+                letter: _,
                 turn_witness,
                 judgment,
             } => {
@@ -961,8 +974,17 @@ impl LinkStore {
                     );
                     return Ok(());
                 }
-                if *work_author {
-                    match &judgment.task {
+                // A turn with no request of its own starts at the input that
+                // woke it (D-03).
+                let start_at = start.unwrap_or(*started_at_unix_ms).min(*at_unix_ms);
+                let lineage = letter_task.map(|group| TaskDecision::Continue { ids: vec![group] });
+                let decision = if *work_author {
+                    Some(&judgment.task)
+                } else {
+                    lineage.as_ref()
+                };
+                if let Some(decision) = decision {
+                    match decision {
                         TaskDecision::New { names } => {
                             let chapter = chapter.as_deref().ok_or("ledger_chapter_missing")?;
                             if names.is_empty() || names.len() > NEW_TASK_LIMIT {
@@ -994,7 +1016,7 @@ impl LinkStore {
                                         task,
                                         chapter,
                                         name,
-                                        start.unwrap_or(*at_unix_ms) as i64,
+                                        start_at as i64,
                                         *at_unix_ms as i64,
                                         encoded(end)?
                                     ],
@@ -1085,7 +1107,7 @@ impl LinkStore {
                         session.agent,
                         session.session_id,
                         *offset as i64,
-                        start.unwrap_or(*at_unix_ms) as i64,
+                        start_at as i64,
                         *at_unix_ms as i64,
                         encoded(end)?,
                         encoded(&tasks)?,
@@ -1128,7 +1150,7 @@ impl LinkStore {
                                     session.agent,
                                     session.session_id,
                                     number as i64,
-                                    start.unwrap_or(*at_unix_ms) as i64,
+                                    start_at as i64,
                                     *at_unix_ms as i64
                                 ],
                                 |row| row.get(0),
@@ -1349,6 +1371,7 @@ impl LinkStore {
                 last_at_unix_ms: last,
                 end: decoded(end)?,
                 done: false,
+                unjudged: false,
             });
         }
         record.missed = self.ledger_missed(session)?;
@@ -1416,11 +1439,14 @@ impl LinkStore {
             .map_err(failed)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(failed)?;
+        let mut child_work = Vec::with_capacity(children.len());
         for child in children {
-            let child =
+            let mut child =
                 self.record_tree(&child, visited, depth + 1, request_budget, include_requests)?;
             let spawn_task: Option<String> = self.connection.query_row("SELECT output_task FROM ledger_turns WHERE device=?1 AND agent=?2 AND id=?3 AND ?4 BETWEEN start_at AND end_at ORDER BY start_at DESC LIMIT 1",
                 params![session.device_id,session.agent,session.session_id,child.started_at_unix_ms.map(|n|n as i64)],|r|r.get(0)).optional().map_err(failed)?.flatten();
+            child.spawn_task = spawn_task.clone();
+            child_work.push(ChildWork::of(&child, self.child_facts(&child.session)?));
             record
                 .outputs
                 .extend(child.outputs.iter().cloned().map(|mut output| {
@@ -1440,21 +1466,116 @@ impl LinkStore {
                 output.number,
             ))
         });
-        // A request's tasks finish together: their shared END is Done and
-        // every pull request assigned to any of them is merged.
+        // A request's tasks finish together: they share every END and every
+        // pull request assigned to any of them (`task_done`). Done is read
+        // from facts and the last judged END; an unjudged newest turn only
+        // takes the word from a task left open (D-09, B19).
+        let latest_unjudged = self.latest_unjudged(session)?;
         for task in &mut record.tasks {
             let group = task_group(&task.id);
-            task.done = task.end == LabelEnd::Done
-                && record
-                    .outputs
-                    .iter()
-                    .filter(|o| {
-                        o.kind == "pr" && o.task_id.as_deref().map(task_group) == Some(group)
-                    })
-                    .all(|o| o.state == "merged");
+            task.done = task_done(
+                task.end,
+                record.outputs.iter().filter(|o| {
+                    o.kind == "pr" && o.task_id.as_deref().map(task_group) == Some(group)
+                }),
+            );
+            task.unjudged = !task.done && latest_unjudged;
         }
-        record.child_progress = ChildProgress::of(&record.children);
+        record.child_progress = ChildProgress::of(child_work);
         Ok(record)
+    }
+
+    /// Whether the session's newest turn went unjudged: its transcript
+    /// offset is past every judged turn's.
+    fn latest_unjudged(&self, session: &SessionIdentity) -> Result<bool, String> {
+        self.connection
+            .query_row(
+                "SELECT COALESCE((SELECT MAX(offset) FROM ledger_unjudged WHERE device=?1 AND agent=?2 AND id=?3),-1) \
+                 > COALESCE((SELECT MAX(offset) FROM ledger_turns WHERE device=?1 AND agent=?2 AND id=?3),-1)",
+                params![session.device_id, session.agent, session.session_id],
+                |row| row.get(0),
+            )
+            .map_err(failed)
+    }
+
+    /// What decides a child beside its record (D-08, D-09): a report to its
+    /// parent with no turn started after it, and an unjudged newest turn.
+    fn child_facts(&self, child: &SessionIdentity) -> Result<ChildFacts, String> {
+        let reported_idle = match self
+            .lineage
+            .get(child)
+            .and_then(|lineage| lineage.reported_at_unix_ms)
+        {
+            Some(at) => !self
+                .connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM ledger_turns WHERE device=?1 AND agent=?2 AND id=?3 AND start_at>?4) \
+                     OR EXISTS(SELECT 1 FROM ledger_requests WHERE device=?1 AND agent=?2 AND id=?3 AND at>?4)",
+                    params![child.device_id, child.agent, child.session_id, at as i64],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(failed)?,
+            None => false,
+        };
+        Ok(ChildFacts {
+            reported_idle,
+            latest_unjudged: self.latest_unjudged(child)?,
+        })
+    }
+
+    /// The task group a letter from `sender` continues (PRD
+    /// task-continuation D-02): the spawn task of the direct child whose
+    /// subtree holds the descendant of that name, while that task is not
+    /// finished. A sender outside the lineage, a name two groups share, or a
+    /// finished task continues nothing.
+    fn letter_task(
+        &self,
+        session: &SessionIdentity,
+        sender: &str,
+    ) -> Result<Option<String>, String> {
+        if self.session(&key(session))?.is_none() {
+            return Ok(None);
+        }
+        let record = self.record_tree(session, &mut BTreeSet::new(), 0, &mut 0, false)?;
+        fn named(
+            record: &SessionRecord,
+            sender: &str,
+            lineage: &BTreeMap<SessionIdentity, super::ChildLineage>,
+        ) -> bool {
+            lineage
+                .get(&record.session)
+                .is_some_and(|child| child.name == sender)
+                || record
+                    .children
+                    .iter()
+                    .any(|child| named(child, sender, lineage))
+        }
+        let groups = record
+            .children
+            .iter()
+            .filter(|child| named(child, sender, &self.lineage))
+            .map(|child| child.spawn_task.clone())
+            .collect::<BTreeSet<_>>();
+        if groups.len() > 1 {
+            crate::diagnostic!(serde_json::json!({
+                "component":"links", "kind":"ledger.letter_sender_ambiguous",
+                "device_id":session.device_id, "session_id":session.session_id,
+                "groups":groups.len(),
+            }));
+            return Ok(None);
+        }
+        let Some(group) = groups.into_iter().next().flatten() else {
+            return Ok(None);
+        };
+        let mut tasks = record
+            .tasks
+            .iter()
+            .filter(|task| task_group(&task.id) == group)
+            .peekable();
+        if tasks.peek().is_none() || tasks.all(|task| task.done) {
+            return Ok(None);
+        }
+        Ok(Some(group))
     }
 
     /// A live pane's chip and checklist: `None` for a session the ledger does

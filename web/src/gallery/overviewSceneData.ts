@@ -255,7 +255,7 @@ export function overviewWorld(now: number): OverviewWorld {
     status: { background_ai: { provider: "claude", providers: [], unavailable_reason: null, enabled: true, chosen: true, agent_summary: true } },
   } as SnapshotRest;
 
-  const task = (id: string, name: string, end: SessionRecord["tasks"][number]["end"], done: boolean, ago: number) => ({ id, chapter_id: "chapter-1", name, end, done, at_unix_ms: now - ago, last_at_unix_ms: now - ago + 1000 });
+  const task = (id: string, name: string, end: SessionRecord["tasks"][number]["end"], done: boolean, ago: number) => ({ id, chapter_id: "chapter-1", name, end, done, at_unix_ms: now - ago, last_at_unix_ms: now - ago + 1000, unjudged: false });
   const request = (offset: number, text: string, taskIds: string[], ago: number) => ({ offset, text, at_unix_ms: now - ago, author: "operator" as const, task_ids: taskIds, chapter_id: "chapter-1", judged: true });
   const child = (pane: string, title: string): SessionRecord => ({
     session: { device_id: "local", agent: pane === "h-a1c1" ? "codex" : "claude", session_id: `session-${pane}` }, title, fallback_title: "Agent", native_title: title, manual_title: null, state: pane === "h-a1c1" ? "working" : "idle", last_end: pane === "h-a1c1" ? null : "done",

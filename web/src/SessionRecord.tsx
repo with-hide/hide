@@ -291,7 +291,7 @@ function TaskRow({ item, mark, actions, children }: { item: ChecklistTask; mark:
   const name = <TaskName state={state} name={task.name} className={state === "done" ? undefined : "font-medium"} data-record-task-name="true" />;
   return <div className="py-xxs" data-record-task={task.id}>
     <div className="flex min-w-0 items-start gap-xs">
-      <TaskMark state={state} live={live} />
+      <TaskMark state={state} live={live} question={task.end === "question"} />
       {item.request ? <Hint label={item.request.text}>{name}</Hint> : name}
       <TaskWord state={state} live={live} prShown={item.prs.length > 0} />
       {item.prs.map((output) => <span key={output.url} data-record-task-pr={output.number}><OutputMark output={output} actions={actions} /></span>)}

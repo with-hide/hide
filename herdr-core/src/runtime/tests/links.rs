@@ -312,9 +312,11 @@ fn native_lineage_reaches_the_ledger_on_remote_and_cross_device_sessions() {
         .apply_ledger_update(&LedgerUpdate::TurnEnd {
             session: owner.clone(),
             offset: 1,
+            started_at_unix_ms: CREATED + 1,
             at_unix_ms: CREATED + 1,
             end: crate::labels::analysis::LabelEnd::Done,
             work_author: true,
+            letter: None,
             turn_witness: None,
             judgment: TurnJudgment {
                 missed: vec![NewMissedWork {
@@ -1623,6 +1625,7 @@ fn a_panes_task_progress_reaches_the_wire_once_and_an_equal_answer_publishes_not
                 last_at_unix_ms: 2,
                 end: LabelEnd::Waiting,
                 done: false,
+                unjudged: false,
             })
             .to_vec(),
         outputs: Vec::new(),
