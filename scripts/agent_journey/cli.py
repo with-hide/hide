@@ -647,6 +647,13 @@ def main(argv=None):
             if log.is_file() and not log.is_symlink():
                 with open(log, "rb") as stream:
                     write_private(run / "herdr-server.log", ci.redact(stream.read(1024 * 1024)))
+            # Why a hook or plugin handed a prompt no letter or Memory: each cause the
+            # helper met (`cli`, `deadline`, ...) and when it last did. HOME is the
+            # private home only in CI mode; locally it stays the operator's.
+            causes = runtime.home / ".hide/agent-hooks/delivery-diagnostics.json"
+            if not local and causes.is_file() and not causes.is_symlink():
+                with open(causes, "rb") as stream:
+                    write_private(run / "delivery-diagnostics.json", ci.redact(stream.read(64 * 1024)))
         if local:
             # Before the cleanup, which removes the trust the candidate recorded with its worktrees.
             check_operator_trust(report, operator, run, "during")
