@@ -15,7 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_journey import ci
 from agent_journey.journey import Journey
-from agent_journey.cli import budget_failures, hide_ai_requests, leftover_copies, remove_created, taken_branches
+from agent_journey.cli import budget_failures, claude_trusts, hide_ai_requests, leftover_copies, measured_clone
 from agent_journey.local import claude_session_folders, disable_hide_ai, wrapper
 from agent_journey.report import markdown
 
@@ -29,80 +29,41 @@ def git(root, *args):
                           capture_output=True, text=True).stdout.strip()
 
 
-# The branch names of a run `r1` that measured these agents.
-BRANCHES = ["journey/r1-claude-code", "journey/r1-codex", "journey/r1-pi"]
+class MeasuredRepository(unittest.TestCase):
+    def test_the_clone_is_the_checkouts_commit_and_the_checkout_gains_nothing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder).resolve()
+            checkout, home = base / "checkout", base / "run/probe/daemon-home"
+            checkout.mkdir()
+            home.mkdir(parents=True)
+            git(checkout, "init", "-q", "-b", "work")
+            git(checkout, "commit", "-q", "--allow-empty", "-m", "base")
+            commit = git(checkout, "rev-parse", "HEAD")
+            before = git(checkout, "for-each-ref")
+            runtime = SimpleNamespace(home=home, env=GIT_ENV, owner=SimpleNamespace(
+                run=lambda argv, env, cwd: subprocess.run(argv, env=env, cwd=cwd, check=True, capture_output=True)))
+            root = measured_clone(runtime, checkout, commit)
+            self.assertTrue(root.is_relative_to(home))
+            self.assertEqual((git(root, "rev-parse", "--abbrev-ref", "HEAD"), git(root, "rev-parse", "HEAD")), ("main", commit))
+            # The run's branches are the clone's; the checkout's refs stay as they were.
+            git(root, "branch", "journey/r1-codex")
+            self.assertEqual(git(checkout, "for-each-ref"), before)
+
+    def test_claude_trust_comes_from_the_folder_or_one_above_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            operator = Path(folder)
+            (operator / ".claude.json").write_text(json.dumps({"projects": {
+                "/work": {"hasTrustDialogAccepted": True}, "/other": {"hasTrustDialogAccepted": False}}}))
+            self.assertTrue(claude_trusts(operator, Path("/work/run/probe/daemon-home/projects/measured")))
+            self.assertFalse(claude_trusts(operator, Path("/other/measured")))
 
 
-class RepositoryCleanup(unittest.TestCase):
-    """The cleanup runs after the run's owner closed, so it takes no owner."""
-
-    def setUp(self):
-        folder = tempfile.TemporaryDirectory()
-        self.addCleanup(folder.cleanup)
-        base = Path(folder.name).resolve()
-        self.root, self.probe, self.elsewhere = base / "repo", base / "run/probe", base / "elsewhere"
-        self.root.mkdir()
-        self.probe.mkdir(parents=True)
-        git(self.root, "init", "-q", "-b", "main")
-        git(self.root, "commit", "-q", "--allow-empty", "-m", "base")
-        self.runtime = SimpleNamespace(env=GIT_ENV, probe=self.probe)
-
-    def worktree(self, branch, path):
-        git(self.root, "worktree", "add", "-q", "-b", branch, str(path))
-        return git(self.root, "rev-parse", branch)
-
-    def branches(self):
-        return git(self.root, "for-each-ref", "--format=%(refname:short)", "refs/heads/").split()
-
-    def test_a_recorded_branch_goes_with_its_worktree(self):
-        start = self.worktree("journey/r1-codex", self.probe / "worktrees/codex")
-        result = remove_created(self.runtime, self.root, [
-            {"branch": "journey/r1-codex", "start": start, "worktree": str(self.probe / "worktrees/codex")}], BRANCHES)
-        self.assertEqual(result["kept"], [])
-        self.assertEqual(self.branches(), ["main"])
-        self.assertNotIn(str(self.probe), git(self.root, "worktree", "list"))
-
-    def test_a_spawn_that_raised_before_its_start_was_read_is_still_removed(self):
-        self.worktree("journey/r1-codex", self.probe / "worktrees/codex")
-        result = remove_created(self.runtime, self.root, [
-            {"branch": "journey/r1-codex", "start": None, "worktree": str(self.probe / "worktrees/codex")}], BRANCHES)
-        self.assertEqual(result["kept"], [])
-        self.assertTrue(result["removed"][0]["start_read_at_cleanup"])
-        self.assertEqual(self.branches(), ["main"])
-
-    def test_a_branch_of_this_run_the_record_lacks_is_swept_and_another_runs_stays(self):
-        self.worktree("journey/r1-claude-code", self.probe / "worktrees/claude-code")
-        git(self.root, "branch", "journey/r2-codex")
-        # A sibling run whose name begins with this one's.
-        git(self.root, "branch", "journey/r1-2-codex")
-        result = remove_created(self.runtime, self.root, [], BRANCHES)
-        self.assertEqual([item["branch"] for item in result["removed"]], ["journey/r1-claude-code"])
-        self.assertTrue(result["removed"][0]["swept"])
-        self.assertEqual(sorted(self.branches()), ["journey/r1-2-codex", "journey/r2-codex", "main"])
-
-    def test_a_moved_branch_and_a_worktree_outside_the_run_are_kept_and_named(self):
-        start = self.worktree("journey/r1-codex", self.probe / "worktrees/codex")
-        git(self.probe / "worktrees/codex", "commit", "-q", "--allow-empty", "-m", "someone else's")
-        self.worktree("journey/r1-pi", self.elsewhere)
-        result = remove_created(self.runtime, self.root, [
-            {"branch": "journey/r1-codex", "start": start, "worktree": str(self.probe / "worktrees/codex")}], BRANCHES)
-        reasons = {item["branch"]: item["reason"] for item in result["kept"]}
-        self.assertEqual(reasons, {"journey/r1-codex": "branch_moved_since_the_run_made_it",
-                                   "journey/r1-pi": "worktree_outside_the_run"})
-        self.assertTrue(self.elsewhere.is_dir())
-
-    def test_a_rerun_finds_a_branch_an_earlier_run_of_the_same_name_left(self):
-        # The run refuses to start on it, so its cleanup never takes it for its own.
-        git(self.root, "branch", "journey/r1-codex")
-        self.assertEqual(taken_branches(self.root, BRANCHES), ["journey/r1-codex"])
-
-    def test_a_worktree_folder_already_gone_with_the_probe_is_still_unregistered(self):
-        start = self.worktree("journey/r1-codex", self.probe / "worktrees/codex")
-        subprocess.run(["/bin/rm", "-r", str(self.probe / "worktrees")], check=True)
-        result = remove_created(self.runtime, self.root, [
-            {"branch": "journey/r1-codex", "start": start, "worktree": str(self.probe / "worktrees/codex")}], BRANCHES)
-        self.assertEqual(result["kept"], [])
-        self.assertEqual(self.branches(), ["main"])
+class ProviderKeys(unittest.TestCase):
+    def test_a_provider_key_in_the_shell_reaches_no_agent(self):
+        from agent_live_check.runtime import clean_env
+        shell = {"GEMINI_API_KEY": "g", "OPENROUTER_API_KEY": "o", "ANTHROPIC_AUTH_TOKEN": "a", "PATH": "/usr/bin"}
+        with mock.patch.dict(os.environ, shell, clear=True):
+            self.assertEqual(clean_env(), {"PATH": "/usr/bin"})
 
 
 class Redaction(unittest.TestCase):
@@ -137,7 +98,9 @@ class LocalStarts(unittest.TestCase):
 
     def test_hide_ai_is_off_in_the_candidates_private_home(self):
         disable_hide_ai(self.base / "home")
-        settings = self.base / "home/Library/Application Support/hide/ai.json"
+        # The system's state folder under a home, as hide_platform::host::state_dir_under names it.
+        state = {"darwin": "Library/Application Support", "win32": "AppData/Local"}.get(sys.platform, ".local/state")
+        settings = self.base / "home" / state / "hide/ai.json"
         self.assertEqual(json.loads(settings.read_text()), {"enabled": False})
         self.assertEqual(settings.stat().st_mode & 0o777, 0o600)
 
@@ -168,6 +131,52 @@ class FinishedAgent(unittest.TestCase):
         journey.close()
         self.assertEqual(calls, [["pane", "close", pane] for pane in ("w4:p2", "w4:p3", "w5:p1")])
         self.assertEqual(record["closed"], {"w4:p2": "closed", "w4:p3": "closed", "w5:p1": "pane_not_found"})
+
+    def test_a_pane_no_later_cell_types_into_closes_after_its_step_and_each_pane_closes_once(self):
+        calls = []
+
+        def command(argv, check=True):
+            calls.append(argv[-1])
+            return 0, "", ""
+        runtime = SimpleNamespace(run=Path("/run"), command=command,
+                                  owner=SimpleNamespace(cancelled=threading.Event()))
+        journey = Journey(runtime, None, None, {}, {"id": "omp", "herdr_kind": "omp", "model_flag": []},
+                          Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={})
+        # The agent's pane, then its fork's: the fork's ends with the fork cell.
+        journey.pane = "w4:p2"
+        journey.opened += ["w4:p2", "w4:p3"]
+        journey.close(keep=journey.pane)
+        self.assertEqual(calls, ["w4:p3"])
+        # Wake moved the agent to a new pane; the untrusted start opens one more.
+        journey.pane = "w4:p4"
+        journey.opened += ["w4:p4"]
+        journey.close(keep=journey.pane)
+        journey.close()
+        journey.opened += ["w5:p2"]
+        journey.close()
+        self.assertEqual(calls, ["w4:p3", "w4:p2", "w4:p4", "w5:p2"])
+
+
+class FailedCellScreen(unittest.TestCase):
+    def test_a_failed_cell_keeps_the_screen_of_the_pane_it_measured(self):
+        with tempfile.TemporaryDirectory() as folder:
+            read = []
+
+            def command(argv, check=True):
+                read.append(argv[2])
+                return 0, f"screen of {argv[2]}\n", ""
+            runtime = SimpleNamespace(run=Path(folder), command=command,
+                                      owner=SimpleNamespace(cancelled=threading.Event()))
+            table = {"opencode": {name: {"status": "pending"} for name in ("fork", "resume")}}
+            journey = Journey(runtime, None, None, table, {"id": "opencode", "herdr_kind": "opencode", "model_flag": []},
+                              Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={})
+            journey.pane = "w3:p1"
+            # A fork is measured in its own pane while the journey's stays the source's.
+            journey.settle("fork", ("fail", "no answer"), pane="w3:p7")
+            journey.settle("resume", ("fail", "no answer"))
+            self.assertEqual(read, ["w3:p7", "w3:p1"])
+            self.assertEqual((Path(folder) / "opencode-fork-pane.txt").read_text(), "screen of w3:p7\n")
+            self.assertEqual(table["opencode"]["fork"]["evidence"], "opencode-fork-pane.txt")
 
 
 class LeftoversAndReport(unittest.TestCase):
@@ -203,6 +212,10 @@ class LeftoversAndReport(unittest.TestCase):
                                     {"id": "claude-code", "requests": 12, "request_budget": 12},
                                     {"id": "pi"}])
         self.assertEqual(failures, ["request_budget_exceeded: codex made 13 model requests, budget 12"])
+        # The fake model answers no more than the budget, so a refusal past it is the overrun.
+        self.assertEqual(budget_failures([{"id": "omp", "requests": 18, "request_budget": 18, "refused_past_budget": 3}]),
+                         ["request_budget_exceeded: omp made 18 model requests, budget 18, "
+                          "and the fake model refused 3 past it"])
 
     def test_an_agent_without_its_secret_is_not_configured_and_a_stand_in_needs_none(self):
         with mock.patch.dict(os.environ, {"HIDE_CODEX_API_KEY": ""}, clear=False):

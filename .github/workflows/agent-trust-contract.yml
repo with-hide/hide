@@ -46,8 +46,6 @@ jobs:
       # One package and target list for every step, so cargo resolves features
       # once and builds the test binaries once.
       TEST_TARGETS: -p hide-agent-hooks -p herdr-core --lib --test it
-      CLAUDE_CODE_VERSION: 2.1.302
-      CODEX_VERSION: 0.163.0
     steps:
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false
@@ -68,22 +66,12 @@ jobs:
         timeout-minutes: 25
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS --no-run
       - name: Install Claude Code and Codex
+        # At the versions contracts/agent-clis.json pins; the outputs are each
+        # program's path (Codex's `.cmd` shim on Windows, Claude Code's native
+        # binary on every system).
         id: agents
         timeout-minutes: 5
-        run: |
-          prefix="$RUNNER_TEMP/agent-clis"
-          npm install --prefix "$prefix" --no-audit --no-fund \
-            "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" "@openai/codex@$CODEX_VERSION"
-          # Codex as an operator's npm install resolves: the `.cmd` shim on
-          # Windows, the script elsewhere. Claude Code's package carries its
-          # native binary under one name on every system.
-          codex="$prefix/node_modules/.bin/codex"
-          if [[ "$RUNNER_OS" == Windows ]]; then codex="$codex.cmd"; fi
-          claude="$prefix/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
-          "$codex" --version
-          "$claude" --version
-          echo "codex=$codex" >> "$GITHUB_OUTPUT"
-          echo "claude=$claude" >> "$GITHUB_OUTPUT"
+        run: python3 scripts/install-agent-clis.py claude codex
       - name: Fetch the pinned Herdr runtime
         id: herdr
         timeout-minutes: 5

@@ -8,7 +8,7 @@ mod declarations;
 mod journey;
 pub mod usage;
 pub use declarations::ADAPTERS;
-pub use journey::{JourneyAdapter, JourneyCells, journey_contract};
+pub use journey::{JourneyAdapter, JourneyCells, JourneyLetter, JourneyWake, journey_contract};
 mod web;
 pub use web::{HookKind, WebAdapter, web_contract};
 
@@ -483,6 +483,14 @@ pub struct HerdrIntegration {
     /// every agent but agy (kind `agy`, target `antigravity-cli`).
     pub target: &'static str,
     pub folder: &'static [&'static str],
+}
+
+impl HerdrIntegration {
+    /// The source the agent's own Herdr integration reports its sessions
+    /// under, named by the integration target (`herdr:antigravity_cli` for agy).
+    pub fn session_source(&self) -> String {
+        format!("herdr:{}", self.target.replace('-', "_"))
+    }
 }
 
 /// These are facts for later Factory consumers, not switches activating them.

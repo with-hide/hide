@@ -179,9 +179,10 @@ Unverified on Windows and Linux (the macOS assumptions below are left as they ar
   Signed in on Windows, agy lists Hide's four events.
   On Linux and macOS one real turn passes (run 38887836027 on 2026-10-16): Hide's hooks fire, a letter reaches the conversation and is confirmed after agy recorded it, and a direct `herdr agent start` ends as agy's tool error with Hide's reason.
   The lane signs agy in on the CI account's key (`HIDE_AGY_API_KEY`, handed to agy as `GEMINI_API_KEY` with `"modelProvider": "gemini"` in its settings, the API-key mode agy 1.4.0's own changelog names; `GEMINI_API_KEY` alone asked for a browser sign-in), runs the turn on `gemini-3.8-flash-medium` (`HIDE_AGY_MODEL` in `agy-contract.yml`), the model the key's free tier serves (agy's API-key default `gemini-3.1-pro` has a quota of 0); the refusal needs that model to make the call it is asked for, so a renamed model or a model that declines reads as a failed nightly, not a Hide fault; that free tier allows 20 requests a day per model across the project, of which a nightly spends 4, so hand runs beside the nightly can spend it, and a turn the provider then answers nothing because of the per-day request quota (agy's `429 RESOURCE_EXHAUSTED`, run 38958746826, macOS; `contracts/provider-quota.json`) still checks the hooks and the letter and reports the refusal in a `Not measured` warning instead of failing ([TESTING.md: A real agent on CI](TESTING.md#a-real-agent-on-ci)); it says "not configured" without the key.
-- An agent in the agent journey on Windows ([VERIFICATION.md: Agent journey](VERIFICATION.md#agent-journey)): the harness runs there, and the journey's `windows forms` job proves its Windows forms on `windows-latest`, but no lane starts an agent there yet.
-  The keyless lane runs on Linux and macOS only, and the signed-in lane, which runs on Windows, starts an agent only when the CI account's key for it is set.
-  It closes when the keyless lane starts its agents on `windows-latest` and passes.
+- An agent in the agent journey on Windows ([VERIFICATION.md: Agent journey](VERIFICATION.md#agent-journey)): the harness runs there, the journey's `windows forms` job proves its Windows forms on `windows-latest`, and the fake model lane installs every agent there at its pin, but no agent has passed a journey there yet.
+  On 2026-10-18 a run with the Windows folder fix (#1329) installed Claude Code, Codex, Grok, Pi and agy and stopped at the first-run question, because the Windows kit refuses a state folder outside HOME.
+  A later run that day (39099935719) started every agent there and passed `start`, `start_untrusted`, `reply`, `integration`, `title` and `usage` for each, but no agent's `guidance_memory` or `letter`, since the start's Project Memory card and a letter never reach the conversation, and Claude Code's, Codex's and agy's `sleep_wake` fails because Hide ends a sleeping agent by its process group, which Windows cannot signal (#1369), and Grok's and agy's `fork` fail; it closes when the fake model lane passes on `windows-latest`.
+  The stand-in lane ends once the fake model lane is green for Claude Code and Codex on every system, so it is not brought to Windows.
 - A notification reaching the screen, on any system: the desktop e2e replaces the system's notification, and a moved Windows folder has not been tried.
 
 ### Make the command available in a new shell
@@ -189,6 +190,7 @@ Unverified on Windows and Linux (the macOS assumptions below are left as they ar
 Hide never changes PATH; on Windows the only registry key is the notification registration the first launch makes ([What differs from the macOS app](#what-differs-from-the-macos-app)).
 On Linux, if your shell does not already include `~/.local/bin`, add `export PATH="$HOME/.local/bin:$PATH"` to your shell's startup file and open a new shell.
 On Windows, add `%USERPROFILE%\.local\bin` to your user Path using **Edit environment variables for your account**, then open a new terminal.
+On Windows a pane takes its PATH from the system Path and your user Path, not from the environment Hide was started in, so put an agent CLI's folder on one of them for a pane to find it.
 Run `hide status --json` to check that the installed command resolves.
 You can also call the command by its full path without changing PATH.
 

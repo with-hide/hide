@@ -6,7 +6,8 @@ the snapshot (`navigator.devices[].kit.agents[]`): its hook and Herdr
 integration pieces, each with a state and a location. The kit reads Herdr's
 own `integration status` for the second, and calls it installed only while
 Herdr lists it current. Herdr names the integration that reported a session
-in the session's source, `herdr:<kind>`. Both together, with both pieces in
+in the session's source, the contract's `herdr_source`
+(`herdr:<integration target>`). Both together, with both pieces in
 the HOME the agent reads its configuration from, say the agent loaded the
 candidate's integration and not one of the operator's.
 """
@@ -34,7 +35,7 @@ def kit_agent(rest, agent):
     return next((row for row in (device.get("kit") or {}).get("agents") or [] if row.get("id") == agent), None)
 
 
-def verdict(row, session, kind, home):
+def verdict(row, session, source, home):
     """`row` the kit's agent row, `session` the pane's session as Herdr
     reports it, `home` where the agent reads its configuration."""
     if not row:
@@ -47,7 +48,7 @@ def verdict(row, session, kind, home):
         location = piece.get("location")
         if not location or not Path(location).resolve().is_relative_to(Path(home).resolve()):
             return cells.FAIL, f"the kit's {name} piece is at {location}, outside the HOME the agent reads"
-    status, reason = cells.emitter_verdict(session, kind)
+    status, reason = cells.emitter_verdict(session, source)
     if status != cells.PASS:
         return status, reason
     return cells.PASS, ("the kit installed Hide's hook and Herdr's current integration in the agent's HOME, "
@@ -75,4 +76,4 @@ def measure(journey):
         record["devices"] = [{"id": device.get("id"), "kind": device.get("kind"), "state": device.get("state"),
                               "agents": [agent.get("id") for agent in (device.get("kit") or {}).get("agents") or []]}
                              for device in ((journey.daemon.snapshot() or {}).get("navigator") or {}).get("devices") or []]
-    journey.settle(CELL, verdict(row, session, journey.kind, journey.runtime.home), journey.evidence(CELL, record))
+    journey.settle(CELL, verdict(row, session, journey.row["herdr_source"], journey.runtime.home), journey.evidence(CELL, record))
