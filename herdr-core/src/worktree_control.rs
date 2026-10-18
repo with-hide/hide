@@ -922,7 +922,7 @@ pub struct CheckoutTabRequest {
     pub focus: bool,
     /// The folder the tab's shell starts in: the checkout, or a folder inside
     /// it where a resumed conversation ran, since a CLI may find its
-    /// conversations by folder.
+    /// conversations by folder; a folder that is gone refuses the start.
     pub cwd: String,
 }
 
@@ -1318,21 +1318,10 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
         node.as_deref(),
         &format!("herdr-core:task:{}:tab", request.id),
     );
-    let at_checkout;
-    let request = if tab_folder(node.as_deref(), request) == request.cwd {
-        request
-    } else {
-        crate::diagnostic!(serde_json::json!({
-            "component": "worktree_control", "kind": "checkout_tab.folder_gone",
-            "task_id": request.id, "cwd": request.cwd,
-        }));
-        at_checkout = CheckoutTabRequest {
-            cwd: request.checkout_path.clone(),
-            ..request.clone()
-        };
-        &at_checkout
-    };
     let result = (|| {
+        if let Some(node) = node.as_deref() {
+            folder_present(node, request)?;
+        }
         if let Some(scope) = request.resume_scope.as_ref() {
             target.check_current(request.id)?;
             let runtime = target.runtime.upgrade().ok_or("runtime stopped")?;
@@ -1390,22 +1379,22 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
     );
 }
 
-/// The folder the tab opens in: its own while that is still a folder on
-/// the machine that runs the tab, else the checkout, so a conversation whose
-/// folder was removed since still resumes. Asked of the node, off the lock.
-fn tab_folder<'a>(
-    node: Option<&dyn crate::node_access::NodeLink>,
-    request: &'a CheckoutTabRequest,
-) -> &'a str {
-    match node {
-        Some(node)
-            if request.cwd != request.checkout_path
-                && !crate::node_access::is_directory(node, &request.cwd) =>
-        {
-            &request.checkout_path
-        }
-        _ => &request.cwd,
+/// A tab asked for a folder inside its checkout opens there or not at all:
+/// a conversation whose folder was removed since is refused with that
+/// reason, as a wake is, and never started somewhere it was not. Asked of
+/// the node of the machine that runs the tab, off the lock.
+fn folder_present(
+    node: &dyn crate::node_access::NodeLink,
+    request: &CheckoutTabRequest,
+) -> Result<(), String> {
+    if request.cwd != request.checkout_path && !crate::node_access::is_directory(node, &request.cwd)
+    {
+        return Err(format!(
+            "The working folder {} no longer exists",
+            request.cwd
+        ));
     }
+    Ok(())
 }
 
 fn task_session_node(
@@ -2288,7 +2277,7 @@ mod tests {
     use std::process::Command;
 
     #[test]
-    fn a_tab_whose_saved_folder_is_gone_opens_at_its_checkout() {
+    fn a_tab_whose_saved_folder_is_gone_is_refused_with_that_reason() {
         let checkout = tempfile::tempdir().unwrap();
         let inside = checkout.path().join("sub");
         std::fs::create_dir(&inside).unwrap();
@@ -2304,10 +2293,16 @@ mod tests {
             cwd: cwd.display().to_string(),
         };
         let node = hide_node::Local::of_process();
-        let kept = request(&inside);
-        assert_eq!(tab_folder(Some(&node), &kept), kept.cwd);
-        let gone = request(&checkout.path().join("removed"));
-        assert_eq!(tab_folder(Some(&node), &gone), gone.checkout_path);
+        assert_eq!(folder_present(&node, &request(&inside)), Ok(()));
+        assert_eq!(folder_present(&node, &request(checkout.path())), Ok(()));
+        let gone = checkout.path().join("removed");
+        assert_eq!(
+            folder_present(&node, &request(&gone)),
+            Err(format!(
+                "The working folder {} no longer exists",
+                gone.display()
+            ))
+        );
     }
 
     // The only fake is the external server's newline-delimited protocol.
