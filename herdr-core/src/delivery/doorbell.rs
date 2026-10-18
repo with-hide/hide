@@ -977,6 +977,10 @@ mod tests {
 
     impl Bell {
         fn start(flags: Value) -> Self {
+            Self::with_submission_error(flags, None)
+        }
+
+        fn with_submission_error(flags: Value, submission_error: Option<&'static str>) -> Self {
             use crate::delivery::Command;
             use crate::runtime::delivery::tests::{authority, fixture, recipient_at_rest};
             let root = tempfile::tempdir().unwrap();
@@ -984,28 +988,38 @@ mod tests {
             let flags = Arc::new(Mutex::new(flags));
             let answer = Arc::clone(&flags);
             let herdr =
-                crate::fake_herdr::FakeHerdr::start("doorbell", move |method, _| match method {
-                    "agent.get" | "agent.prompt" => {
-                        let mut agent = json!({
-                            "pane_id": "recipient", "terminal_id": "terminal",
-                            "workspace_id": "w1", "tab_id": "w1:t1", "focused": false,
-                            "revision": 1, "name": "recipient", "agent": "codex",
-                            "agent_status": "idle", "state_change_seq": 2,
-                            "agent_session": {"source": "hook", "agent": "codex",
-                                "kind": "id", "value": "recipient-native"},
-                        });
-                        for (key, value) in answer.lock().unwrap().as_object().unwrap() {
-                            agent[key] = value.clone();
+                crate::fake_herdr::FakeHerdr::start_with_errors("doorbell", move |method, _| {
+                    match method {
+                        "agent.get" | "agent.prompt" => {
+                            if method == "agent.prompt"
+                                && let Some(code) = submission_error
+                            {
+                                return Err((
+                                    code.into(),
+                                    "submission refused or timed out".into(),
+                                ));
+                            }
+                            let mut agent = json!({
+                                "pane_id": "recipient", "terminal_id": "terminal",
+                                "workspace_id": "w1", "tab_id": "w1:t1", "focused": false,
+                                "revision": 1, "name": "recipient", "agent": "codex",
+                                "agent_status": "idle", "state_change_seq": 2,
+                                "agent_session": {"source": "hook", "agent": "codex",
+                                    "kind": "id", "value": "recipient-native"},
+                            });
+                            for (key, value) in answer.lock().unwrap().as_object().unwrap() {
+                                agent[key] = value.clone();
+                            }
+                            let response = if method == "agent.prompt" {
+                                "agent_prompted"
+                            } else {
+                                "agent_info"
+                            };
+                            Ok(json!({"type": response, "agent": agent}))
                         }
-                        let response = if method == "agent.prompt" {
-                            "agent_prompted"
-                        } else {
-                            "agent_info"
-                        };
-                        json!({"type": response, "agent": agent})
+                        "pane.send_input" => Ok(json!({"type": "ok"})),
+                        other => panic!("unexpected {other}"),
                     }
-                    "pane.send_input" => json!({"type": "ok"}),
-                    other => panic!("unexpected {other}"),
                 });
             let recipient =
                 recipient_at_rest(&mut runtime.lock().unwrap(), "recipient-native", &herdr);
@@ -1283,7 +1297,15 @@ mod tests {
             // Herdr owns each input reader's submission. Hide neither sends
             // cursor keys nor waits for a turn to finish before confirming it.
             assert!(typed[0].get("keys").is_none());
-            assert!(typed[0]["wait"].is_null());
+            assert!(typed[0].get("wait").is_none());
+            assert!(
+                !bell
+                    .herdr
+                    .methods()
+                    .iter()
+                    .any(|method| method == "pane.send_input"),
+                "one prompt must not also be sent as raw input"
+            );
             assert_eq!(bell.attempts(), 1, "{flags}");
             // The letter keeps the line it was rung with, which is what
             // recognizes the turn the bell opens.
@@ -1291,6 +1313,49 @@ mod tests {
                 bell.line().as_deref(),
                 Some("🔔 Codex 보고: private · hide inbox")
             );
+        }
+    }
+
+    /// A failed submission may have written input before its answer was
+    /// lost. Neither an explicit refusal nor Herdr's submission timeout is
+    /// intake, and neither may make a timer type the same bell twice.
+    #[test]
+    fn a_refused_or_timed_out_prompt_stays_pending_until_the_pane_moves() {
+        for code in ["agent_blocked", "timeout"] {
+            let bell = Bell::with_submission_error(json!({}), Some(code));
+            let mut doorbell = Doorbell::default();
+            let at = now();
+            let records = bell.pass(&mut doorbell, at);
+            assert!(
+                records
+                    .iter()
+                    .any(|record| record["kind"] == "doorbell.failed"),
+                "{code}: {records:?}"
+            );
+            assert_eq!(bell.typed().len(), 1, "{code}");
+            {
+                let guard = bell.runtime.lock().unwrap();
+                let ledger = guard.delivery_state().unwrap();
+                let letter = ledger
+                    .letters
+                    .iter()
+                    .find(|letter| letter.id == bell.letter)
+                    .unwrap();
+                assert_eq!(letter.state, State::Pending, "{code}");
+                assert!(!letter.bell_sent, "{code}");
+                assert_eq!(letter.bell_errors, 1, "{code}");
+                assert_eq!(letter.attempts(), 1, "{code}");
+            }
+            assert!(
+                bell.pass(&mut doorbell, at + 2 * RETRY_LIMIT_MS).is_empty(),
+                "{code}"
+            );
+            assert_eq!(
+                bell.typed().len(),
+                1,
+                "{code}: a timer must not retry an uncertain submission"
+            );
+            assert_eq!(bell.attempts(), 1, "{code}");
         }
     }
 
@@ -1682,7 +1747,7 @@ mod tests {
         assert_eq!(typed.len(), 1);
         assert_eq!(typed[0]["text"], "🔔 Codex 보고: private · hide inbox");
         assert_eq!(typed[0]["target"], "recipient");
-        assert!(typed[0]["wait"].is_null());
+        assert!(typed[0].get("wait").is_none());
         assert_eq!(
             bell.line().as_deref(),
             Some("🔔 Codex 보고: private · hide inbox")
