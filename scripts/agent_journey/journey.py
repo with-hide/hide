@@ -166,7 +166,9 @@ class Journey:
             raise ProcessError("journey_conversation_answer_malformed: " + out[:200])
         if answer["path"] not in self.paths:
             self.paths.append(answer["path"])
-        return {"session": self.session if kind == "path" else value, "path": answer["path"],
+        # A path session is the journey's own when it named one, else the
+        # one Herdr reported in the pane, as a fork's is.
+        return {"session": (self.session or value) if kind == "path" else value, "path": answer["path"],
                 "events": answer["events"]}
 
     def wait_turn(self, since, value, after=lambda events: 0, seconds=TURN_SECONDS):

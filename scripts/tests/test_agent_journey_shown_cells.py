@@ -77,7 +77,7 @@ class Memory(unittest.TestCase):
 
 class Fork(unittest.TestCase):
     herdr = {"source": "herdr:claude", "agent": "claude", "kind": "id", "value": "fork-1"}
-    listed = {"id": "agent-9", "pane": "w4:p1", "parent": None, "origin": "agent-2"}
+    listed = {"id": "agent-9", "pane": "w4:p1", "session": "fork-1", "parent": None, "origin": "agent-2"}
 
     def row(self, **fields):
         return {"pane_id": "w4:p1", "session_id": "fork-1", "forked_from": {"pane_id": "w3:p2", "label": "Claude"},
@@ -87,6 +87,14 @@ class Fork(unittest.TestCase):
         status, reason = fork.verdict(self.row(), "source-1", self.herdr, "herdr:claude", self.listed, "agent-2")
         self.assertEqual(status, cells.PASS)
         self.assertIn("from w3:p2", reason)
+
+    def test_a_path_session_fork_is_matched_to_hides_registration_not_the_rows_native_id(self):
+        # Pi: Herdr and the registration name the session file, the row its native id.
+        path = "/h/.pi/agent/sessions/--w--/2026-10-18T01-49-42-785Z_fork-1.jsonl"
+        herdr = {"source": "herdr:pi", "agent": "pi", "kind": "path", "value": path}
+        status, reason = fork.verdict(self.row(), "source-1", herdr, "herdr:pi", {**self.listed, "session": path},
+                                      "agent-2")
+        self.assertEqual(status, cells.PASS, reason)
 
     def test_the_forked_row_is_the_one_naming_the_source(self):
         source = {"pane_id": "w3:p2", "session_id": "source-1"}
@@ -101,7 +109,7 @@ class Fork(unittest.TestCase):
                                       "agent-2")[0], cells.FAIL)
         status, reason = fork.verdict(self.row(), "source-1", {**self.herdr, "value": "fork-2"}, "herdr:claude",
                                       self.listed, "agent-2")
-        self.assertEqual((status, reason), (cells.FAIL, "Herdr reports session fork-2 in the fork, Hide fork-1"))
+        self.assertEqual((status, reason), (cells.FAIL, "Herdr reports session fork-2 in the fork, Hide registered fork-1"))
         self.assertEqual(fork.verdict(self.row(), "source-1", None, "herdr:claude", self.listed, "agent-2")[0], cells.FAIL)
 
     def test_a_fork_registered_as_a_child_or_from_another_source_fails(self):

@@ -35,7 +35,8 @@ def panes(runtime):
 
 def verdict(row, source_session, herdr_session, source, listed, source_agent):
     """`row` the forked row, `herdr_session` its pane's session as Herdr
-    reports it, `listed` its `hide agent list` entry."""
+    reports it, `listed` its `hide agent list` entry, which names the
+    session as Herdr does."""
     if not row:
         return cells.FAIL, "no row is shown as forked from the source"
     session = row.get("session_id")
@@ -44,10 +45,13 @@ def verdict(row, source_session, herdr_session, source, listed, source_agent):
     status, reason = cells.emitter_verdict(herdr_session, source)
     if status != cells.PASS:
         return status, "the fork's " + reason[0].lower() + reason[1:]
-    if (herdr_session or {}).get("value") != session:
-        return cells.FAIL, f"Herdr reports session {(herdr_session or {}).get('value')} in the fork, Hide {session}"
     if not listed:
         return cells.FAIL, "hide agent list has no registration for the fork's pane"
+    # Hide registers a session as Herdr names it, a path for Pi and omp,
+    # while the row shows its native id, so Herdr's is matched to the registration.
+    if (herdr_session or {}).get("value") != listed.get("session"):
+        return cells.FAIL, (f"Herdr reports session {(herdr_session or {}).get('value')} in the fork, Hide "
+                            f"registered {listed.get('session')}")
     if listed.get("parent") is not None or listed.get("origin") != source_agent:
         return cells.FAIL, (f"the fork is registered with parent {listed.get('parent')} and origin "
                             f"{listed.get('origin')}, not as a root from {source_agent}")
@@ -105,7 +109,7 @@ def measure(journey):
     record.update(herdr_session=herdr_session, listed=listed, errors=list(journey.daemon.errors))
     status, reason = verdict(row, source_session, herdr_session, journey.row["herdr_source"], listed, journey.agent)
     if status == cells.PASS:
-        answer = cells.with_turn(cells.reply_verdict(read, row["session_id"], value), turn)
+        answer = cells.with_turn(cells.reply_verdict(read, listed["session"], value), turn)
         status, reason = (status, reason + "; " + answer[1]) if answer[0] == cells.PASS else \
             (answer[0], "the fork's answer: " + answer[1])
     journey.settle(CELL, (status, reason), journey.evidence(CELL, record), pane=opened[0])
