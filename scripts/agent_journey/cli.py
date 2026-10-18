@@ -51,10 +51,15 @@ KIT_SECONDS = 90
 # the journey waits up to 120 s for a title, so a signed-in or local run gives
 # each agent 15 minutes: seven make 110 minutes, inside the signed-in CI
 # step's 115. Either way the journey ends itself, writes its report and cleans
-# up before its step would.
+# up before its step would (scripts/tests/test_agent_journey_workflow.py).
 SETUP_SECONDS = 5 * 60
 AGENT_SECONDS = {"keyless": 10 * 60, "provider": 15 * 60}
 SYSTEM_NAMES = {"darwin": "macOS", "linux": "Linux", "win32": "Windows"}
+
+
+def run_seconds(keyless, agents):
+    """The whole run's cap for `agents` measured agents."""
+    return SETUP_SECONDS + AGENT_SECONDS["keyless" if keyless else "provider"] * max(1, agents)
 
 
 def systems(mode):
@@ -502,8 +507,7 @@ def main(argv=None):
         report["agents"].append({"id": key, "unmeasured": reason})
         cells.settle_agent(table, key, reason)
     owner = OwnedProcesses(diagnostics=run / "process-diagnostics",
-                           run_seconds=SETUP_SECONDS + AGENT_SECONDS["keyless" if fake or fixture_bin else "provider"]
-                           * max(1, len(measured)))
+                           run_seconds=run_seconds(fake or fixture_bin, len(measured)))
     previous = {signum: signal.signal(signum, lambda *_: owner.cancelled.set())
                 for signum in STOP_SIGNALS}
     runtime = guard = daemon = user_path = None
