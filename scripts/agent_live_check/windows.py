@@ -135,6 +135,22 @@ QueryFullProcessImageNameW = declare(kernel32, "QueryFullProcessImageNameW", win
                                      HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD))
 
 
+def process_name(pid):
+    """The file name of `pid`'s executable, or "" when Windows does not give
+    it (it refuses some processes even this account starts), as the Unix
+    table leaves a name it could not read: a name only labels a failure."""
+    process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not process:
+        return ""
+    try:
+        image, length = ctypes.create_unicode_buffer(32768), wintypes.DWORD(32768)
+        if not QueryFullProcessImageNameW(process, 0, image, ctypes.byref(length)):
+            return ""
+        return os.path.basename(image.value)
+    finally:
+        CloseHandle(process)
+
+
 class Resident(NamedTuple):
     """A process of a job and the memory it keeps resident, read as the
     Unix process table's entries are. A Windows process is never a zombie: one
@@ -206,13 +222,13 @@ class Job:
         return accounting.ActiveProcesses
 
     def working_sets(self):
-        """Each process the job holds now, by pid, with its executable's name
-        and its resident memory (working set) in bytes; a process that ended
-        since the job listed it is left out."""
+        """The resident memory (working set) in bytes of each process the job
+        holds now, by pid; a process that ended since the job listed it is
+        left out."""
         if not QueryInformationJobObject(self.handle, JOB_BASIC_PROCESS_ID_LIST, ctypes.byref(self.ids),
                                          ctypes.sizeof(self.ids), None):
             raise failed("QueryInformationJobObject(process ids)")
-        residents = {}
+        sizes = {}
         for pid in self.ids.ProcessIdList[:self.ids.NumberOfProcessIdsInList]:
             process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
             if not process:
@@ -224,13 +240,10 @@ class Job:
                 counters.cb = ctypes.sizeof(counters)
                 if not K32GetProcessMemoryInfo(process, ctypes.byref(counters), counters.cb):
                     raise failed("GetProcessMemoryInfo")
-                image, length = ctypes.create_unicode_buffer(32768), wintypes.DWORD(32768)
-                if not QueryFullProcessImageNameW(process, 0, image, ctypes.byref(length)):
-                    raise failed("QueryFullProcessImageNameW")
-                residents[pid] = Resident(os.path.basename(image.value), counters.WorkingSetSize)
+                sizes[pid] = counters.WorkingSetSize
             finally:
                 CloseHandle(process)
-        return residents
+        return sizes
 
     def terminate(self):
         if not TerminateJobObject(self.handle, 1):

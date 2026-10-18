@@ -220,13 +220,15 @@ def job_over_budget(job):
     counts every page a process committed, touched or not, so a run within
     the cap on Linux and macOS would pass it."""
     try:
-        table = job.working_sets()
+        sizes = job.working_sets()
     except OSError as error:
         return "rss_samples_unavailable:" + str(error)[:MAX_FAILURE_REASON]
-    rss = sum(process.rss for process in table.values())
+    rss = sum(sizes.values())
     if rss > MAX_RSS_BYTES:
+        # Named only once the cap is crossed: a name is the failure's label, not a measure.
+        table = {pid: windows.Resident(windows.process_name(pid), size) for pid, size in sizes.items()}
         return "owned_processes_over_budget:" + json.dumps(
-            {"descendants": len(table), "rss_bytes": rss, "largest": largest(table)}, separators=(",", ":"))
+            {"descendants": len(sizes), "rss_bytes": rss, "largest": largest(table)}, separators=(",", ":"))
     return None
 
 
