@@ -16,7 +16,8 @@ started and is waiting.
 interrupted_after_usage, stream_disconnected and stream_disconnected_500 end
 an already-started turn after it reported tokens without a usable answer.
 generic_failure and unknown_failure do the same with missing or unfamiliar
-error information; bad_request and connection_failed refuse before usage.
+error information; bad_request and connection_failed refuse before usage;
+api_error fails the turn as `other` with FAKE_API_MESSAGE as its message.
 In every mode an `outputSchema` that uses a keyword the Responses API's strict
 mode refuses fails the turn the way codex-cli 0.163.0 was measured to: an
 `other` error whose message is the API's own 400 body.
@@ -146,6 +147,10 @@ for raw in sys.stdin:
         if MODE == "usage_limit":
             notify("turn/completed", {"threadId": "thread-1", "turn": {"id": active_turn, "status": "failed", "items": [],
                     "error": {"message": "limit", "codexErrorInfo": "usageLimitExceeded"}}})
+            continue
+        if MODE == "api_error":
+            notify("turn/completed", {"threadId": "thread-1", "turn": {"id": active_turn, "status": "failed", "items": [],
+                    "error": {"message": os.environ["FAKE_API_MESSAGE"], "codexErrorInfo": "other"}}})
             continue
         if MODE in ("bad_request", "connection_failed"):
             info = "badRequest" if MODE == "bad_request" else {"responseStreamConnectionFailed": {"httpStatusCode": None}}

@@ -149,15 +149,18 @@ pub enum AnswerMode {
     /// Codex's `outputSchema`) constrains the answer. Claude Code does this
     /// by calling a synthetic tool, which is a second model turn and a
     /// larger prompt: the right price for an answer with a long or strict
-    /// shape.
+    /// shape. Codex's surface is the API's strict mode, which refuses
+    /// `oneOf` and `uniqueItems`, so a schema using them cannot ask this way
+    /// there.
     #[default]
     Schema,
     /// The system prompt names the schema and asks for one JSON object, and
-    /// the object is read back from the text. One model turn: the choice for
-    /// a short answer whose shape the router checks anyway. The schema rides
-    /// in the system prompt, an argument of the child, so only a short one
-    /// belongs here. A provider that
-    /// has no schema surface answers this way in either mode.
+    /// the object is read back from the text; Claude and Codex both honour
+    /// it and send no schema of their own. One model turn: the choice for a
+    /// short answer whose shape the router checks anyway. For Claude the
+    /// schema rides in the system prompt, an argument of the child, so only
+    /// a short one belongs here. A provider that has no schema surface
+    /// answers this way in either mode.
     PlainJson,
 }
 

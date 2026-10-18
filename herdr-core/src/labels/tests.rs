@@ -675,27 +675,9 @@ fn an_end_waits_for_parent_authority_after_a_cold_context() {
 /// turn is judged as usual (B12-B15).
 #[test]
 fn an_end_whose_context_never_comes_is_recorded_unjudged_after_thirty_seconds() {
-    use crate::links::ledger::{LedgerContext, SessionIdentity};
+    use crate::links::ledger::LedgerContext;
     let harness = Harness::new();
-    let store = harness.store();
-    let client = crate::links::worker::LinkClient::full_mailbox_for_test();
-    let node: Arc<dyn crate::node_access::NodeLink> = Arc::new(hide_node::Local::new(Some(
-        harness.home.path().to_path_buf(),
-    )));
-    let (mut worker, woken) = harness.spawn_with_ledger(
-        Arc::clone(&store),
-        LOCAL_TARGET,
-        "local.sock",
-        Arc::new(NodeTranscripts::new(Box::new(move || {
-            Ok(Arc::clone(&node))
-        }))),
-        Arc::new(Mutex::new(Some(client.clone()))),
-    );
-    let identity = |session: &str| SessionIdentity {
-        device_id: LOCAL_TARGET.into(),
-        agent: "claude".into(),
-        session_id: session.into(),
-    };
+    let (mut worker, woken, store, client) = cold_ledger_worker(&harness);
     let mut turns = vec![("user", "배포 스크립트 고쳐줘"), ("assistant", "고치는 중")];
     let path = harness.session("a", "native-a", &turns);
     harness.backend.begin("배포 스크립트 수정 작업");
@@ -729,7 +711,7 @@ fn an_end_whose_context_never_comes_is_recorded_unjudged_after_thirty_seconds() 
         "native-b",
         &[("user", "로그 정리해줘"), ("assistant", "정리했습니다")],
     );
-    client.prime_context_for_test(identity("native-b"), LedgerContext::default());
+    client.prime_context_for_test(claude_session("native-b"), LedgerContext::default());
     let other = ObservedAgent {
         pane_id: "w1:p2".to_owned(),
         ..agent(&other_path, "idle", 2)
@@ -771,9 +753,16 @@ fn an_end_whose_context_never_comes_is_recorded_unjudged_after_thirty_seconds() 
     assert_eq!(capped.len(), 1, "{records:?}");
     assert_eq!(capped[0]["pane_id"], "w1:p1");
     assert_eq!(capped[0]["session_id"], "native-a");
+    // The turn is handed to the ledger as unjudged; this client's mailbox
+    // is full, so the attempt shows as the refusal it got.
+    assert!(
+        records.iter().any(|record| record["kind"] == "ledger.enqueue_failed"
+            && record["pane_id"] == "w1:p1"),
+        "{records:?}"
+    );
 
     // The next turn is judged once its context reads.
-    client.prime_context_for_test(identity("native-a"), LedgerContext::default());
+    client.prime_context_for_test(claude_session("native-a"), LedgerContext::default());
     turns.extend([("user", "다시 확인해줘"), ("assistant", "확인했습니다")]);
     harness.session("a", "native-a", &turns);
     harness
@@ -788,6 +777,87 @@ fn an_end_whose_context_never_comes_is_recorded_unjudged_after_thirty_seconds() 
         shown(&worker, &next).unwrap().progress.as_deref(),
         Some("배포 스크립트 수정 작업 진행")
     );
+}
+
+/// A wait for a turn's context counts only while the worker waits: the
+/// switch going off and back on starts it over instead of spending it.
+#[test]
+fn a_wait_for_context_starts_over_when_summaries_come_back() {
+    let harness = Harness::new();
+    let (mut worker, woken, store, _client) = cold_ledger_worker(&harness);
+    let path = harness.session(
+        "a",
+        "native-a",
+        &[
+            ("user", "배포 스크립트 고쳐줘"),
+            ("assistant", "고쳤습니다"),
+        ],
+    );
+    observe(&mut worker, &agent(&path, "idle", 3));
+    settle(&mut worker, &woken);
+    assert!(worker.set_summaries(false, Instant::now()));
+    let back = Instant::now() + Duration::from_secs(40);
+    let ((), records) = crate::diagnostics::capture(|| {
+        assert!(worker.set_summaries(true, back));
+        worker.tick(back);
+        settle(&mut worker, &woken);
+    });
+    assert!(
+        !records
+            .iter()
+            .any(|record| record["kind"] == "analysis.context_unavailable"),
+        "{records:?}"
+    );
+    assert!(
+        store.target(LOCAL_TARGET)["w1:p1"]
+            .analysis_turn_end
+            .is_none()
+    );
+    let ((), records) = crate::diagnostics::capture(|| {
+        worker.tick(back + Duration::from_secs(31));
+        settle(&mut worker, &woken);
+    });
+    assert!(
+        records
+            .iter()
+            .any(|record| record["kind"] == "analysis.context_unavailable"),
+        "{records:?}"
+    );
+    assert_eq!(harness.backend.calls(), 0);
+}
+
+/// A worker whose ledger client has no context for any session yet.
+fn cold_ledger_worker(
+    harness: &Harness,
+) -> (
+    LabelWorker,
+    Receiver<()>,
+    Arc<LabelStore>,
+    crate::links::worker::LinkClient,
+) {
+    let store = harness.store();
+    let client = crate::links::worker::LinkClient::full_mailbox_for_test();
+    let node: Arc<dyn crate::node_access::NodeLink> = Arc::new(hide_node::Local::new(Some(
+        harness.home.path().to_path_buf(),
+    )));
+    let (worker, woken) = harness.spawn_with_ledger(
+        Arc::clone(&store),
+        LOCAL_TARGET,
+        "local.sock",
+        Arc::new(NodeTranscripts::new(Box::new(move || {
+            Ok(Arc::clone(&node))
+        }))),
+        Arc::new(Mutex::new(Some(client.clone()))),
+    );
+    (worker, woken, store, client)
+}
+
+fn claude_session(session: &str) -> crate::links::ledger::SessionIdentity {
+    crate::links::ledger::SessionIdentity {
+        device_id: LOCAL_TARGET.into(),
+        agent: "claude".into(),
+        session_id: session.into(),
+    }
 }
 
 #[test]
@@ -1308,6 +1378,77 @@ fn a_short_turn_with_a_new_job_renames_the_pane_and_a_follow_up_does_not() {
     let label = shown(&worker, &idle).unwrap();
     assert_eq!(label.task.as_deref(), Some("README 오타 수정 작업"));
     assert_eq!(label.progress.as_deref(), Some("README.md였음"));
+}
+
+/// Only the operator's short turn renames from its end: another agent's
+/// letter does not, and neither does the end of a turn whose start was
+/// asked, whatever `goal_changed` says (D-04).
+#[test]
+fn an_end_renames_only_an_operator_turn_whose_start_was_never_asked() {
+    let renaming = |goal: &str| {
+        json!({
+            "goal": goal, "goal_changed": true, "line": "끝냄", "end": "done",
+            "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
+        })
+    };
+    let mut harness = Harness::new();
+    harness.start_delay = Duration::from_secs(15);
+    let (mut worker, woken, path) = harness_with_named_pane(&harness);
+    let named = harness.backend.calls();
+    // A short turn no operator submitted.
+    let mut turns = vec![
+        ("user", "첫 요청"),
+        ("assistant", "완료"),
+        ("user", "로그 정리 부탁"),
+        ("assistant", "정리했습니다"),
+    ];
+    harness.session("a", "native-a", &turns);
+    harness
+        .backend
+        .answers
+        .lock()
+        .unwrap()
+        .push_back(renaming("다른 에이전트가 붙인 이름"));
+    observe(&mut worker, &agent(&path, "working", 7));
+    settle(&mut worker, &woken);
+    let idle = agent(&path, "idle", 8);
+    observe(&mut worker, &idle);
+    settle(&mut worker, &woken);
+    assert_eq!(harness.backend.calls(), named + 1);
+    assert_eq!(
+        task(shown(&worker, &idle)).as_deref(),
+        Some("첫 요청에 붙은 작업 이름")
+    );
+
+    // An operator turn that worked past the delay: its start is asked and
+    // keeps the name, and its end may not move it.
+    turns.extend([("user", "긴 작업 해줘"), ("assistant", "하는 중")]);
+    harness.session("a", "native-a", &turns);
+    harness.input.record("w1:p1", turn_at(4) - 300, false);
+    harness.backend.answers.lock().unwrap().push_back(json!({
+        "goal": "첫 요청에 붙은 작업 이름", "goal_changed": false, "line": "하는 중",
+    }));
+    observe(&mut worker, &agent(&path, "working", 9));
+    settle(&mut worker, &woken);
+    worker.tick(Instant::now() + Duration::from_secs(20));
+    settle(&mut worker, &woken);
+    assert_eq!(harness.backend.calls(), named + 2, "the start was asked");
+    turns.push(("assistant", "끝났습니다"));
+    harness.session("a", "native-a", &turns);
+    harness
+        .backend
+        .answers
+        .lock()
+        .unwrap()
+        .push_back(renaming("끝에서 바꾼 이름"));
+    let idle = agent(&path, "idle", 10);
+    observe(&mut worker, &idle);
+    settle(&mut worker, &woken);
+    assert_eq!(harness.backend.calls(), named + 3);
+    assert_eq!(
+        task(shown(&worker, &idle)).as_deref(),
+        Some("첫 요청에 붙은 작업 이름")
+    );
 }
 
 #[test]

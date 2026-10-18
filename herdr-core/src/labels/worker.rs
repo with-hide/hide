@@ -275,7 +275,9 @@ struct PaneState {
     /// The turn whose end already had its one retry after a timeout (D-33).
     end_retried: Option<u64>,
     /// The turn whose end waits for its ledger context, and since when; see
-    /// [`CONTEXT_WAIT_LIMIT`].
+    /// [`CONTEXT_WAIT_LIMIT`]. It counts only time spent waiting: the turn
+    /// working again, the switch going off or the generator role changing
+    /// hands starts it over.
     context_wait: Option<(u64, Instant)>,
     /// The skip reasons already logged, so a cap that holds on every read
     /// (more subagent files than one read takes) is logged once.
@@ -790,6 +792,7 @@ impl LabelWorker {
             return false;
         }
         self.summaries = on;
+        self.restart_context_waits();
         if on {
             self.summaries_on_since = crate::links::now_ms();
             for (id, pane) in &self.panes {
@@ -829,7 +832,18 @@ impl LabelWorker {
                 pane.needs_read |= pane.reference_token.is_some();
             }
         }
+        if changed {
+            self.restart_context_waits();
+        }
         changed
+    }
+
+    /// A wait for a turn's context that stood still (nothing was asked
+    /// meanwhile) starts over rather than spending its limit at once.
+    fn restart_context_waits(&mut self) {
+        for pane in self.panes.values_mut() {
+            pane.context_wait = None;
+        }
     }
 
     fn forget_pane(&mut self, pane_id: &str) {
@@ -1401,6 +1415,9 @@ impl LabelWorker {
             pane.next_analysis_at = None;
             return false;
         };
+        if phase == AnalysisPhase::TurnStart {
+            pane.context_wait = None;
+        }
         // The turn ended while its start was held: the end is due now.
         if phase == AnalysisPhase::TurnEnd
             && let Some((_, due)) = pane.start_held.take()

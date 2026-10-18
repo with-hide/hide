@@ -316,13 +316,70 @@ fn a_schema_the_api_refuses_is_a_refused_request_with_its_code() {
             "invalid_output:codex_request_refused:http_400:invalid_json_schema"
         );
         assert!(attempts.calls.lock().unwrap().is_empty());
+        // The log names the refusal and the request, and nothing of the
+        // conversation.
+        let finished = attempts.finished.lock().unwrap();
+        let [(request_id, Some(detail))] = finished.as_slice() else {
+            panic!("{finished:?}");
+        };
+        assert_eq!(request_id.as_deref(), Some("req-1"));
+        assert!(
+            detail.starts_with("invalid_output:codex_request_refused:http_400:invalid_json_schema"),
+            "{detail}"
+        );
+        assert!(
+            !detail.contains("hello") && !detail.contains("strict"),
+            "{detail}"
+        );
     });
+}
+
+/// An `other` failure is read for the API body's status and code only: a
+/// 4xx is a refused request, an account status keeps its own class, and a
+/// server error or a message that is no API body stays an unknown completion.
+#[test]
+fn an_other_failure_is_classified_by_the_api_bodys_status_alone() {
+    let body = |status: u64, code: Option<&str>| {
+        json!({"type": "error", "status": status,
+               "error": {"message": "prose that is never read", "code": code}})
+        .to_string()
+    };
+    for (message, expected) in [
+        (
+            body(404, None),
+            "invalid_output:codex_request_refused:http_404",
+        ),
+        (
+            body(400, Some("has spaces in it")),
+            "invalid_output:codex_request_refused:http_400",
+        ),
+        (body(401, Some("invalid_api_key")), "not_authenticated"),
+        (
+            body(500, Some("server_error")),
+            "completion_unknown:codex_other",
+        ),
+        (
+            "not an api body".to_owned(),
+            "completion_unknown:codex_other",
+        ),
+    ] {
+        with_mode("api_error", || {
+            unsafe { std::env::set_var("FAKE_API_MESSAGE", &message) };
+            let error = backend()
+                .execute(&request(Duration::from_secs(10)), &CancelToken::new())
+                .unwrap_err();
+            unsafe { std::env::remove_var("FAKE_API_MESSAGE") };
+            assert_eq!(error.to_string(), expected, "{message}");
+        });
+    }
 }
 
 #[derive(Debug, Default)]
 struct Attempts {
     calls: Mutex<Vec<Vec<ModelTokens>>>,
     started: Mutex<usize>,
+    /// Each `ai.request.finished` as its request id and detail.
+    finished: Mutex<Vec<(Option<String>, Option<String>)>>,
 }
 
 impl AiUsageSink for Attempts {
@@ -335,6 +392,12 @@ impl AiLogSink for Attempts {
     fn log(&self, event: AiLogEvent) {
         if event.event == "ai.attempt" {
             *self.started.lock().unwrap() += 1;
+        }
+        if event.event == "ai.request.finished" {
+            self.finished
+                .lock()
+                .unwrap()
+                .push((event.request_id, event.detail));
         }
     }
 }
