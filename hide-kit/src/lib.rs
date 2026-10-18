@@ -33,6 +33,7 @@ pub mod legacy;
 mod local;
 pub mod process;
 mod record;
+mod refusal;
 mod retired_agents;
 pub mod retirement_inspection;
 pub mod runtime;
@@ -54,6 +55,7 @@ pub use labels::{HCOORD_PLUGIN_ID, LABELS_PLUGIN_ID, Retirement, labels_home, pl
 pub use legacy::{BuildPlace, build_of, is_build_name};
 pub use local::{STANDALONE_REASON, bundled_kit_dir, holds_package_runtime, local_target};
 pub use record::kit_state_dir;
+pub use refusal::{KitRefusal, RefusalCause};
 
 /// One part of the kit.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -207,6 +209,10 @@ pub struct KitReport {
     /// apply carries it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub herdr: Option<Box<device_herdr::HerdrUpdate>>,
+    /// The pass stopped before changing anything, and why; the report then
+    /// has no part and no agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused: Option<KitRefusal>,
 }
 
 impl KitReport {
@@ -214,29 +220,12 @@ impl KitReport {
         self.components.iter().find(|report| report.id == id)
     }
 
-    /// The same report for a machine the kit cannot run on, with one reason
-    /// for every part (a standalone daemon, a platform with no package).
-    pub fn unavailable(reason: &str) -> Self {
+    /// The report of a pass that stopped before changing anything: nothing
+    /// was judged, so it lists no part and no agent.
+    pub fn refused(refusal: KitRefusal) -> Self {
         Self {
-            components: ComponentId::ALL
-                .into_iter()
-                .map(|id| ComponentReport {
-                    id,
-                    state: ComponentState::Failed,
-                    reason: Some(reason.to_owned()),
-                    location: None,
-                })
-                .collect(),
-            agents: Vec::new(),
-            codex_daemon: None,
-            codex_daemon_on: None,
-            codex_daemon_running: None,
-            codex_daemon_unreadable: None,
-            codex_daemon_off: None,
-            held_for_onboarding: false,
-            labels_retirement: Retirement::default(),
-            legacy_retirement: Retirement::default(),
-            herdr: None,
+            refused: Some(refusal),
+            ..Self::default()
         }
     }
 }
@@ -531,28 +520,44 @@ pub(crate) struct AccountLock {
     _lock: hide_platform::fs::lock::Lock,
 }
 
-pub(crate) fn lock_account(target: &KitTarget) -> Result<AccountLock, String> {
+pub(crate) fn lock_account(target: &KitTarget) -> Result<AccountLock, KitRefusal> {
     use hide_platform::fs::lock::{Mode, Waited, lock_file};
     let path = record::private_state_dir(&target.home, true)?.join(".lock");
-    let file = hide_platform::fs::private::open_or_create_file(&path)
-        .map_err(|error| format!("{} could not be opened: {error}", path.display()))?;
+    let file = hide_platform::fs::private::open_or_create_file(&path).map_err(|error| {
+        KitRefusal::unsafe_path(&path, format!("{} could not be opened: {error}", path.display()))
+    })?;
     match lock_file(file, Mode::Exclusive, LOCK_DEADLINE, &|| {
         target.stop.load(Ordering::Relaxed)
     }) {
         Ok(Waited::Locked(lock)) => Ok(AccountLock { _lock: lock }),
-        Ok(Waited::Cancelled) => Err("Hide is quitting".to_owned()),
-        Ok(Waited::TimedOut) => Err(format!(
-            "another Hide was still changing this account's kit after {} seconds",
-            LOCK_DEADLINE.as_secs()
+        // The owner is going away and reads no answer.
+        Ok(Waited::Cancelled) => Err(KitRefusal::new(
+            RefusalCause::Busy,
+            None,
+            "Hide is quitting",
         )),
-        Err(error) => Err(format!("{} could not be locked: {error}", path.display())),
+        Ok(Waited::TimedOut) => Err(KitRefusal::new(
+            RefusalCause::Busy,
+            None,
+            format!(
+                "another Hide was still changing this account's kit after {} seconds",
+                LOCK_DEADLINE.as_secs()
+            ),
+        )),
+        Err(error) => Err(KitRefusal::unsafe_path(
+            &path,
+            format!("{} could not be locked: {error}", path.display()),
+        )),
     }
 }
 
-/// Judges every part and every agent without changing anything.
+/// Judges every part and every agent without changing anything. A machine
+/// whose pass would stop before changing anything reads as that refusal, so
+/// a re-read never lists parts and agents a pass could not install, and the
+/// operator's Try again is answered by the same check.
 pub fn status(target: &KitTarget) -> KitReport {
-    if let Err(reason) = record::private_state_dir(&target.home, false) {
-        return retirement_blocked(target, reason);
+    if let Err(refusal) = retirement_preflight(target) {
+        return KitReport::refused(refusal);
     }
     let mut record = record::load(&target.home);
     // A machine the kit never ran on reads as `apply` will leave it until the
@@ -602,6 +607,7 @@ pub fn status(target: &KitTarget) -> KitReport {
         labels_retirement: Retirement::default(),
         legacy_retirement: Retirement::default(),
         herdr: None,
+        refused: None,
     }
 }
 
@@ -717,12 +723,12 @@ pub fn apply(target: &KitTarget, scope: &Scope) -> KitReport {
 }
 
 fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
-    if let Err(reason) = retirement_preflight(target) {
-        return retirement_blocked(target, reason);
+    if let Err(refusal) = retirement_preflight(target) {
+        return KitReport::refused(refusal);
     }
     let _lock = match lock_account(target) {
         Ok(lock) => lock,
-        Err(reason) => return KitReport::unavailable(&reason),
+        Err(refusal) => return KitReport::refused(refusal),
     };
     let loaded = record::load(&target.home);
     let (mut record, record_failure) = match loaded {
@@ -919,6 +925,7 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
         labels_retirement,
         legacy_retirement,
         herdr: None,
+        refused: None,
     }
 }
 
@@ -967,23 +974,6 @@ fn codex_daemon(target: &KitTarget) -> DaemonRead {
     }
 }
 
-/// A preflight refusal, without inspecting any other part or external service.
-pub fn retirement_blocked(target: &KitTarget, reason: String) -> KitReport {
-    let mut report = KitReport::unavailable(&reason);
-    if let Some(component) = report
-        .components
-        .iter_mut()
-        .find(|component| component.id == ComponentId::CoordinationRetirement)
-    {
-        component.location = Some(
-            coordination_retirement::location(target)
-                .display()
-                .to_string(),
-        );
-    }
-    report
-}
-
 /// What removing the kit did to one part.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
@@ -1015,7 +1005,7 @@ pub struct RemoveReport {
 pub fn remove(target: &KitTarget) -> RemoveReport {
     let _lock = match lock_account(target) {
         Ok(lock) => lock,
-        Err(reason) => {
+        Err(KitRefusal { detail: reason, .. }) => {
             return RemoveReport {
                 components: ComponentId::ALL
                     .into_iter()
@@ -1066,7 +1056,11 @@ pub fn remove(target: &KitTarget) -> RemoveReport {
 /// refused rather than trusted. With `create`, a missing folder is made 0700;
 /// without it, a missing folder ends the check, since nothing below it can be
 /// there yet.
-pub(crate) fn private_dirs(base: &Path, parts: &[&str], create: bool) -> Result<PathBuf, String> {
+pub(crate) fn private_dirs(
+    base: &Path,
+    parts: &[&str],
+    create: bool,
+) -> Result<PathBuf, KitRefusal> {
     use hide_platform::fs::private;
     let mut folder = base.to_path_buf();
     for part in parts {
@@ -1076,9 +1070,9 @@ pub(crate) fn private_dirs(base: &Path, parts: &[&str], create: bool) -> Result<
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(error) => {
-                    return Err(format!(
-                        "{} could not be created: {error}",
-                        folder.display()
+                    return Err(KitRefusal::unsafe_path(
+                        &folder,
+                        format!("{} could not be created: {error}", folder.display()),
                     ));
                 }
             }
@@ -1088,24 +1082,43 @@ pub(crate) fn private_dirs(base: &Path, parts: &[&str], create: bool) -> Result<
             Err(error) if !create && error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(base.join(parts.join("/")));
             }
-            Err(error) => return Err(format!("{} could not be read: {error}", folder.display())),
+            Err(error) => {
+                return Err(KitRefusal::unsafe_path(
+                    &folder,
+                    format!("{} could not be read: {error}", folder.display()),
+                ));
+            }
         };
         if metadata.file_type().is_symlink() {
-            return Err(format!(
-                "{} is a link; Hide requires an owned real folder",
-                folder.display()
+            return Err(KitRefusal::unsafe_path(
+                &folder,
+                format!(
+                    "{} is a link; Hide requires an owned real folder",
+                    folder.display()
+                ),
             ));
         }
         if !metadata.is_dir() {
-            return Err(format!("{} is not a folder", folder.display()));
+            return Err(KitRefusal::unsafe_path(
+                &folder,
+                format!("{} is not a folder", folder.display()),
+            ));
         }
         let trusted = private::owned_by_current_user(&folder)
             .and_then(|owned| Ok(owned && !private::others_can_modify(&folder)?))
-            .map_err(|error| format!("{} could not be checked: {error}", folder.display()))?;
+            .map_err(|error| {
+                KitRefusal::unsafe_path(
+                    &folder,
+                    format!("{} could not be checked: {error}", folder.display()),
+                )
+            })?;
         if !trusted {
-            return Err(format!(
-                "{} can be changed by another account, so Hide keeps nothing it runs there",
-                folder.display()
+            return Err(KitRefusal::unsafe_path(
+                &folder,
+                format!(
+                    "{} can be changed by another account, so Hide keeps nothing it runs there",
+                    folder.display()
+                ),
             ));
         }
     }

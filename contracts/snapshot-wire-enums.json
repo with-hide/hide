@@ -39,6 +39,8 @@
   "kit_agent_availability": ["available", "not_installed", "unsupported_system"],
   "codex_daemon_off_failure": ["codex_missing", "codex_refused", "timed_out", "unreachable", "stop_failed"],
   "kit_check_failure": ["read_failed"],
+  "kit_refusal_cause": ["unsafe", "record", "busy"],
+  "kit_state_variable": ["HIDE_STATE_DIR", "XDG_STATE_HOME"],
   "kit_component_id": ["cli", "claude_code_hook", "codex_hook", "coordination_retirement"],
   "kit_component_state": ["installed", "outdated", "not_installed", "removed", "failed", "absent", "off"],
   "kit_feature": ["skill", "guidance", "letters", "bell", "memory", "spawn_guard", "herdr_integration", "sleep", "fork", "start", "titles"],

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::{KitTarget, Observed};
+use crate::{KitRefusal, KitTarget, Observed, RefusalCause};
 
 use crate::retirement_inspection::{self, MAX_ENTRIES, MAX_LEDGER_BYTES, MAX_STATE_BYTES};
 
@@ -40,52 +40,73 @@ fn homes(target: &KitTarget) -> Vec<PathBuf> {
     paths
 }
 
-fn read_json(path: &Path, limit: u64) -> Result<Option<Value>, String> {
+fn read_json(path: &Path, limit: u64) -> Result<Option<Value>, KitRefusal> {
     let file = match hide_platform::fs::private::open_own_file(path, false) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
-            return Err(format!(
-                "{} cannot be inspected: {error}; resolve it before retrying retirement",
-                path.display()
+            return Err(KitRefusal::unsafe_path(
+                path,
+                format!(
+                    "{} cannot be inspected: {error}; resolve it before retrying retirement",
+                    path.display()
+                ),
             ));
         }
     };
     if hide_platform::fs::private::handle_others_can_modify(&file).map_err(|error| {
-        format!(
-            "{} permissions cannot be inspected: {error}",
-            path.display()
+        KitRefusal::unsafe_path(
+            path,
+            format!(
+                "{} permissions cannot be inspected: {error}",
+                path.display()
+            ),
         )
     })? {
-        return Err(format!(
-            "{} can be changed by another account; inspect its permissions before retrying retirement",
-            path.display()
+        return Err(KitRefusal::unsafe_path(
+            path,
+            format!(
+                "{} can be changed by another account; inspect its permissions before retrying retirement",
+                path.display()
+            ),
         ));
     }
     let mut bytes = Vec::new();
     file.take(limit + 1)
         .read_to_end(&mut bytes)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| KitRefusal::record(path, error.to_string()))?;
     if bytes.len() as u64 > limit {
-        return Err(format!(
-            "{} exceeds the preflight size bound; inspect it before retrying retirement",
-            path.display()
+        return Err(KitRefusal::record(
+            path,
+            format!(
+                "{} exceeds the preflight size bound; inspect it before retrying retirement",
+                path.display()
+            ),
         ));
     }
     serde_json::from_slice(&bytes).map(Some).map_err(|error| {
-        format!(
-            "{} cannot be inspected: {error}; no retirement can begin",
-            path.display()
+        KitRefusal::record(
+            path,
+            format!(
+                "{} cannot be inspected: {error}; no retirement can begin",
+                path.display()
+            ),
         )
     })
 }
 
-fn load(target: &KitTarget) -> Result<Option<Progress>, String> {
+fn load(target: &KitTarget) -> Result<Option<Progress>, KitRefusal> {
     crate::record::private_state_dir(&target.home, false)?;
-    let progress: Option<Progress> = read_json(&path(target), 64 * 1024)?
+    let receipt = path(target);
+    let progress: Option<Progress> = read_json(&receipt, 64 * 1024)?
         .map(serde_json::from_value)
         .transpose()
-        .map_err(|error| format!("retirement progress is unreadable: {error}"))?;
+        .map_err(|error| {
+            KitRefusal::record(
+                &receipt,
+                format!("retirement progress is unreadable: {error}"),
+            )
+        })?;
     if let Some(progress) = &progress {
         for (source, destination) in &progress.homes {
             let prefix = format!(
@@ -98,10 +119,10 @@ fn load(target: &KitTarget) -> Result<Option<Progress>, String> {
                     .file_name()
                     .is_some_and(|name| name.to_string_lossy().starts_with(&prefix))
             {
-                return Err(
-                    "retirement progress names an unexpected folder; inspect it before retrying"
-                        .into(),
-                );
+                return Err(KitRefusal::record(
+                    &receipt,
+                    "retirement progress names an unexpected folder; inspect it before retrying",
+                ));
             }
         }
     }
@@ -115,35 +136,42 @@ fn save(target: &KitTarget, progress: &Progress) -> Result<(), String> {
 }
 
 /// No file creation, permissions change, launchctl, daemon RPC or install work.
-pub fn preflight(target: &KitTarget) -> Result<(), String> {
+/// A refusal names what the operator acts on (`KitRefusal`).
+pub fn preflight(target: &KitTarget) -> Result<(), KitRefusal> {
     if load(target)?.is_some_and(|progress| progress.complete) {
         return Ok(());
     }
     for home in homes(target) {
         inspect_legacy_home(target, &home)?;
-        let Some(ledger) = read_json(&home.join("ledger.json"), MAX_LEDGER_BYTES)? else {
+        let ledger_path = home.join("ledger.json");
+        let Some(ledger) = read_json(&ledger_path, MAX_LEDGER_BYTES)? else {
             continue;
         };
-        retirement_inspection::legacy_ledger(&ledger)?;
+        retirement_inspection::legacy_ledger(&ledger)
+            .map_err(|detail| KitRefusal::record(&ledger_path, detail))?;
     }
     inspect_below(
         &target.home,
         &crate::kit_state_dir(&target.home).join("hcoord"),
     )?;
-    let state = crate::layout::state_dir_from_process(&target.home);
+    let (state, variable) = crate::layout::state_dir_choice_from_process(&target.home);
+    let chosen = |refusal: KitRefusal| refusal.chosen_by(variable);
     if let Ok(anchor) = home_anchor(&target.home, &state) {
-        inspect_below(&anchor, &state)?;
+        inspect_below(&anchor, &state).map_err(chosen)?;
     } else {
-        inspect_state_override(&state)?;
+        inspect_state_override(&state).map_err(chosen)?;
     }
-    if let Some(ledger) = read_json(&crate::layout::delivery_ledger(&state), MAX_LEDGER_BYTES)? {
-        retirement_inspection::delivery_ledger(&ledger)?;
+    let ledger_path = crate::layout::delivery_ledger(&state);
+    if let Some(ledger) = read_json(&ledger_path, MAX_LEDGER_BYTES).map_err(chosen)? {
+        retirement_inspection::delivery_ledger(&ledger)
+            .map_err(|detail| KitRefusal::record(&ledger_path, detail))?;
     }
     if target.retirement_projects.len() > MAX_ENTRIES {
-        return Err(
-            "registered checkouts exceed the preflight entry bound; inspect them before retirement"
-                .into(),
-        );
+        return Err(KitRefusal::new(
+            RefusalCause::Record,
+            None,
+            "registered checkouts exceed the preflight entry bound; inspect them before retirement",
+        ));
     }
     sasu_preflight(target)?;
     for project in &target.retirement_projects {
@@ -154,7 +182,7 @@ pub fn preflight(target: &KitTarget) -> Result<(), String> {
 
 /// An external state override has no selected HOME or checkout anchor.
 /// Authenticate its namespace before a missing ledger can mean "empty".
-fn inspect_state_override(state: &Path) -> Result<bool, String> {
+fn inspect_state_override(state: &Path) -> Result<bool, KitRefusal> {
     use hide_platform::fs::private::{InspectionDirectory, inspect_directory_entry};
 
     let mut selected = state.to_path_buf();
@@ -170,17 +198,17 @@ fn inspect_state_override(state: &Path) -> Result<bool, String> {
                     )
                 }))
         {
-            return Err("the Hide state override has no absolute plain inspection path; choose a safe state directory and retry retirement".into());
+            return Err(KitRefusal::unsafe_path(state, "the Hide state override has no absolute plain inspection path; choose a safe state directory and retry retirement"));
         }
-        let root = selected.ancestors().last().ok_or(
-            "the Hide state override has no inspection root; choose a safe state directory and retry retirement",
-        )?;
+        let root = selected.ancestors().last().ok_or_else(|| {
+            KitRefusal::unsafe_path(state, "the Hide state override has no inspection root; choose a safe state directory and retry retirement")
+        })?;
         let mut remaining = selected.strip_prefix(root).unwrap().components();
         let mut current = root.to_path_buf();
         loop {
             inspected += 1;
             if inspected > MAX_ENTRIES {
-                return Err("the Hide state override exceeds the preflight component bound; inspect its path before retrying retirement".into());
+                return Err(KitRefusal::unsafe_path(state, "the Hide state override exceeds the preflight component bound; inspect its path before retrying retirement"));
             }
             #[cfg(all(test, unix))]
             let entry = crate::tests::inspect_system_alias_fixture(&current)
@@ -190,18 +218,21 @@ fn inspect_state_override(state: &Path) -> Result<bool, String> {
             match entry {
                 Ok(InspectionDirectory::Real) => {}
                 Ok(InspectionDirectory::SystemAlias(target)) => {
-                    let parent = current.parent().ok_or(
-                        "a state override alias has no parent; inspect its path before retrying retirement",
-                    )?;
+                    let parent = current.parent().ok_or_else(|| {
+                        KitRefusal::unsafe_path(&current, "a state override alias has no parent; inspect its path before retrying retirement")
+                    })?;
                     selected = parent.join(target).join(remaining.as_path());
                     system_alias_target = true;
                     continue 'namespace;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
                 Err(error) => {
-                    return Err(format!(
-                        "the Hide state override cannot be inspected at {}: {error}; resolve its ownership, permissions or links before retrying retirement",
-                        current.display()
+                    return Err(KitRefusal::unsafe_path(
+                        &current,
+                        format!(
+                            "the Hide state override cannot be inspected at {}: {error}; resolve its ownership, permissions or links before retrying retirement",
+                            current.display()
+                        ),
                     ));
                 }
             }
@@ -212,7 +243,7 @@ fn inspect_state_override(state: &Path) -> Result<bool, String> {
                 // unchecked directory or alias before its parent component.
                 Some(std::path::Component::ParentDir) if system_alias_target && current.pop() => {}
                 Some(_) => {
-                    return Err("the Hide state override leaves its inspection root; choose a safe state directory and retry retirement".into());
+                    return Err(KitRefusal::unsafe_path(state, "the Hide state override leaves its inspection root; choose a safe state directory and retry retirement"));
                 }
                 None => return Ok(true),
             }
@@ -222,64 +253,81 @@ fn inspect_state_override(state: &Path) -> Result<bool, String> {
 
 /// Only the selected anchor may have aliases above it. Every directory below
 /// it must be a real, owned directory that another account cannot replace.
-fn inspect_below(anchor: &Path, path: &Path) -> Result<bool, String> {
+/// A path that leaves its root came from a record or a registration, so the
+/// refusal is the record's; a folder on the way is refused as unsafe.
+fn inspect_below(anchor: &Path, path: &Path) -> Result<bool, KitRefusal> {
     if !anchor.is_absolute() {
-        return Err(
-            "an inspection root is not absolute; inspect its registration before retrying".into(),
-        );
+        return Err(KitRefusal::record(
+            anchor,
+            "an inspection root is not absolute; inspect its registration before retrying",
+        ));
     }
     let relative = path.strip_prefix(anchor).map_err(|_| {
-        "an inspection path has no trusted root; register its checkout before retrying retirement"
-            .to_owned()
+        KitRefusal::record(
+            path,
+            "an inspection path has no trusted root; register its checkout before retrying retirement",
+        )
     })?;
+    let leaves = || {
+        KitRefusal::record(
+            path,
+            "an inspection path leaves its trusted root; inspect it before retrying retirement",
+        )
+    };
     if relative
         .components()
         .any(|component| !matches!(component, std::path::Component::Normal(_)))
     {
-        return Err(
-            "an inspection path leaves its trusted root; inspect it before retrying retirement"
-                .into(),
-        );
+        return Err(leaves());
     }
     let mut current = anchor.to_path_buf();
     for (count, component) in relative.components().enumerate() {
         let std::path::Component::Normal(name) = component else {
-            return Err(
-                "an inspection path leaves its trusted root; inspect it before retrying retirement"
-                    .into(),
-            );
+            return Err(leaves());
         };
         if count >= MAX_ENTRIES {
-            return Err(
-                "an inspection path exceeds the component bound; inspect it before retirement"
-                    .into(),
-            );
+            return Err(KitRefusal::record(
+                path,
+                "an inspection path exceeds the component bound; inspect it before retirement",
+            ));
         }
         current.push(name);
         match fs::symlink_metadata(&current) {
             Ok(metadata) => {
                 if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                    return Err(format!(
-                        "{} is not an owned real directory; inspect it before retrying retirement",
-                        current.display()
+                    return Err(KitRefusal::unsafe_path(
+                        &current,
+                        format!(
+                            "{} is not an owned real directory; inspect it before retrying retirement",
+                            current.display()
+                        ),
                     ));
                 }
+                let unchecked = |error: std::io::Error| {
+                    KitRefusal::unsafe_path(&current, error.to_string())
+                };
                 let owned = hide_platform::fs::private::owned_by_current_user(&current)
-                    .map_err(|error| error.to_string())?;
-                let writable = hide_platform::fs::private::others_can_modify(&current)
-                    .map_err(|error| error.to_string())?;
+                    .map_err(unchecked)?;
+                let writable =
+                    hide_platform::fs::private::others_can_modify(&current).map_err(unchecked)?;
                 if !owned || writable {
-                    return Err(format!(
-                        "{} can be changed by another account; inspect its ownership and permissions before retrying retirement",
-                        current.display()
+                    return Err(KitRefusal::unsafe_path(
+                        &current,
+                        format!(
+                            "{} can be changed by another account; inspect its ownership and permissions before retrying retirement",
+                            current.display()
+                        ),
                     ));
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(error) => {
-                return Err(format!(
-                    "{} cannot be inspected: {error}; resolve it before retrying retirement",
-                    current.display()
+                return Err(KitRefusal::unsafe_path(
+                    &current,
+                    format!(
+                        "{} cannot be inspected: {error}; resolve it before retrying retirement",
+                        current.display()
+                    ),
                 ));
             }
         }
@@ -287,20 +335,24 @@ fn inspect_below(anchor: &Path, path: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
-fn home_anchor(home: &Path, path: &Path) -> Result<PathBuf, String> {
+fn home_anchor(home: &Path, path: &Path) -> Result<PathBuf, KitRefusal> {
     if home.is_absolute() && path.starts_with(home) {
         return Ok(home.to_path_buf());
     }
     // Resolve only the selected anchor, never a child that may redirect a read.
-    let resolved = fs::canonicalize(home)
-        .map_err(|error| format!("HOME authority cannot be inspected: {error}"))?;
+    let resolved = fs::canonicalize(home).map_err(|error| {
+        KitRefusal::unsafe_path(home, format!("HOME authority cannot be inspected: {error}"))
+    })?;
     if path.starts_with(&resolved) {
         return Ok(resolved);
     }
-    Err("the legacy coordination home has no trusted HOME anchor; inspect its location before retrying retirement".into())
+    Err(KitRefusal::unsafe_path(
+        path,
+        "the legacy coordination home has no trusted HOME anchor; inspect its location before retrying retirement",
+    ))
 }
 
-fn inspect_legacy_home(target: &KitTarget, path: &Path) -> Result<bool, String> {
+fn inspect_legacy_home(target: &KitTarget, path: &Path) -> Result<bool, KitRefusal> {
     let anchor = home_anchor(&target.home, path)?;
     let state = crate::layout::state_dir_from_process(&target.home);
     let state_anchor = home_anchor(&target.home, &state).ok();
@@ -310,13 +362,18 @@ fn inspect_legacy_home(target: &KitTarget, path: &Path) -> Result<bool, String> 
         .and_then(|root| state.strip_prefix(root).ok())
         .map(|relative| anchor.join(relative))
         .unwrap_or(state);
-    let wire = |path: &Path| hide_platform::path::to_wire(path).map_err(|error| error.to_string());
-    retirement_inspection::legacy_location(&wire(&anchor)?, &wire(path)?, &wire(&state)?)?;
+    let wire = |spelled: &Path| {
+        hide_platform::path::to_wire(spelled)
+            .map_err(|error| KitRefusal::unsafe_path(path, error.to_string()))
+    };
+    retirement_inspection::legacy_location(&wire(&anchor)?, &wire(path)?, &wire(&state)?)
+        .map_err(|detail| KitRefusal::unsafe_path(path, detail))?;
     inspect_below(&anchor, path)
 }
 
-fn run_state_anchor(target: &KitTarget, path: &Path) -> Result<PathBuf, String> {
-    let path_wire = hide_platform::path::to_wire(path).map_err(|error| error.to_string())?;
+fn run_state_anchor(target: &KitTarget, path: &Path) -> Result<PathBuf, KitRefusal> {
+    let path_wire = hide_platform::path::to_wire(path)
+        .map_err(|error| KitRefusal::record(path, error.to_string()))?;
     let authorized = |root: &Path| {
         hide_platform::path::to_wire(root).is_ok_and(|root| {
             retirement_inspection::inspection_root(&path_wire, std::iter::once(root.as_str()))
@@ -338,10 +395,13 @@ fn run_state_anchor(target: &KitTarget, path: &Path) -> Result<PathBuf, String> 
             return Ok(resolved);
         }
     }
-    Err("a sasu run state has no trusted HOME or registered checkout root; register its owning checkout, then retry retirement".into())
+    Err(KitRefusal::record(
+        path,
+        "a sasu run state has no trusted HOME or registered checkout root; register its owning checkout, then retry retirement",
+    ))
 }
 
-fn sasu_preflight(target: &KitTarget) -> Result<(), String> {
+fn sasu_preflight(target: &KitTarget) -> Result<(), KitRefusal> {
     let directory = target.home.join(".sasu/supervisor");
     if !inspect_below(&target.home, &directory)? {
         return Ok(());
@@ -352,9 +412,10 @@ fn sasu_preflight(target: &KitTarget) -> Result<(), String> {
         Ok(entries) => {
             for (count, entry) in entries.enumerate() {
                 if count >= MAX_ENTRIES {
-                    return Err("sasu supervisor folder exceeds the preflight entry bound; inspect it before retirement".into());
+                    return Err(KitRefusal::record(&directory, "sasu supervisor folder exceeds the preflight entry bound; inspect it before retirement"));
                 }
-                let entry = entry.map_err(|error| error.to_string())?;
+                let entry =
+                    entry.map_err(|error| KitRefusal::unsafe_path(&directory, error.to_string()))?;
                 let name = entry.file_name();
                 let Some(name) = name.to_str() else {
                     continue;
@@ -375,8 +436,9 @@ fn sasu_preflight(target: &KitTarget) -> Result<(), String> {
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => {
-            return Err(format!(
-                "sasu registry cannot be inspected: {error}; retirement has not begun"
+            return Err(KitRefusal::unsafe_path(
+                &directory,
+                format!("sasu registry cannot be inspected: {error}; retirement has not begun"),
             ));
         }
     }
@@ -384,56 +446,74 @@ fn sasu_preflight(target: &KitTarget) -> Result<(), String> {
     crate::tests::before_supervisor_index_read(&latest);
     let Some(index) = read_json(&latest, MAX_STATE_BYTES)? else {
         return if revision.is_some() {
-            Err("the selected sasu registry revision disappeared; retry retirement against the current registry; nothing was changed".into())
+            Err(KitRefusal::record(&latest, "the selected sasu registry revision disappeared; retry retirement against the current registry; nothing was changed"))
         } else {
             Ok(())
         };
     };
-    for state_path in retirement_inspection::supervisor_states(&index)? {
+    for state_path in retirement_inspection::supervisor_states(&index)
+        .map_err(|detail| KitRefusal::record(&latest, detail))?
+    {
         let path = Path::new(state_path);
         let anchor = run_state_anchor(target, path)?;
-        let parent = path.parent().ok_or(
-            "a sasu run state has no parent directory; inspect its registry before retrying",
-        )?;
+        let parent = path.parent().ok_or_else(|| {
+            KitRefusal::record(
+                &latest,
+                "a sasu run state has no parent directory; inspect its registry before retrying",
+            )
+        })?;
         inspect_below(&anchor, parent)?;
-        let state = read_json(path, MAX_STATE_BYTES)?
-            .ok_or("a sasu run state is missing; inspect its registry before retirement")?;
-        retirement_inspection::indexed_run(&state)?;
+        let state = read_json(path, MAX_STATE_BYTES)?.ok_or_else(|| {
+            KitRefusal::record(
+                &latest,
+                "a sasu run state is missing; inspect its registry before retirement",
+            )
+        })?;
+        retirement_inspection::indexed_run(&state)
+            .map_err(|detail| KitRefusal::record(path, detail))?;
     }
     Ok(())
 }
 
-fn project_preflight(project: &Path) -> Result<(), String> {
+fn project_preflight(project: &Path) -> Result<(), KitRefusal> {
     let directory = project.join("agents/runs");
     if !inspect_below(project, &directory)? {
         return Ok(());
     }
+    let unreadable = |error: std::io::Error| KitRefusal::unsafe_path(&directory, error.to_string());
     let entries = match fs::read_dir(&directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => {
-            return Err(format!(
-                "registered checkout runs cannot be inspected: {error}"
+            return Err(KitRefusal::unsafe_path(
+                &directory,
+                format!("registered checkout runs cannot be inspected: {error}"),
             ));
         }
     };
     for (count, entry) in entries.enumerate() {
         if count >= MAX_ENTRIES {
-            return Err("registered checkout runs exceed the preflight entry bound".into());
+            return Err(KitRefusal::record(
+                &directory,
+                "registered checkout runs exceed the preflight entry bound",
+            ));
         }
-        let entry = entry.map_err(|error| error.to_string())?;
-        let kind = entry.file_type().map_err(|error| error.to_string())?;
+        let entry = entry.map_err(unreadable)?;
+        let kind = entry.file_type().map_err(unreadable)?;
         if kind.is_symlink() {
-            return Err(
-                "a registered run folder is a symlink; inspect it before retirement".into(),
-            );
+            return Err(KitRefusal::unsafe_path(
+                &entry.path(),
+                "a registered run folder is a symlink; inspect it before retirement",
+            ));
         }
         if !kind.is_dir() {
             continue;
         }
         inspect_below(project, &entry.path())?;
-        if let Some(state) = read_json(&entry.path().join("state.json"), MAX_STATE_BYTES)? {
-            retirement_inspection::checkout_run(&state)?;
+        let state_path = entry.path().join("state.json");
+        if let Some(state) = read_json(&state_path, MAX_STATE_BYTES)? {
+            retirement_inspection::checkout_run(&state)
+                .map_err(|detail| KitRefusal::record(&state_path, detail))?;
         }
     }
     Ok(())
@@ -441,14 +521,14 @@ fn project_preflight(project: &Path) -> Result<(), String> {
 
 pub(crate) fn observe(target: &KitTarget) -> Observed {
     match load(target) {
-        Err(reason) => Observed::Blocked(reason),
+        Err(refusal) => Observed::Blocked(refusal.into()),
         Ok(Some(progress)) if progress.complete => Observed::Current,
         Ok(Some(progress)) if progress.failure.is_some() => {
             Observed::Blocked(progress.failure.unwrap())
         }
         Ok(Some(progress)) => Observed::Stale(format!("retirement resumes at {}", progress.step)),
         Ok(None) => match preflight(target) {
-            Err(reason) => Observed::Blocked(reason),
+            Err(refusal) => Observed::Blocked(refusal.into()),
             Ok(()) => {
                 Observed::Stale("legacy coordination retirement has not run on this machine".into())
             }

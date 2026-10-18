@@ -197,8 +197,8 @@ pub fn run_build(
     target.retirement_projects = projects;
     match action {
         KitAction::Apply | KitAction::Reinstall { .. } => {
-            if let Err(reason) = hide_kit::retirement_preflight(&target) {
-                return to_value(hide_kit::retirement_blocked(&target, reason));
+            if let Err(refusal) = hide_kit::retirement_preflight(&target) {
+                return to_value(hide_kit::KitReport::refused(refusal));
             }
             point_current(&placement.root, &placement.version)?;
             to_value(hide_kit::apply(&target, &scope_of(action)))
@@ -306,9 +306,8 @@ fn run_for_projects(
     };
     match action {
         KitAction::Apply | KitAction::Reinstall { .. } => {
-            let preflight_target = target();
-            if let Err(reason) = hide_kit::retirement_preflight(&preflight_target) {
-                return to_value(hide_kit::retirement_blocked(&preflight_target, reason));
+            if let Err(refusal) = hide_kit::retirement_preflight(&target()) {
+                return to_value(hide_kit::KitReport::refused(refusal));
             }
             point_current(&placement.root, &placement.version)?;
             remove_other_builds(&placement.root, &placement.version);

@@ -1897,14 +1897,15 @@ fn unconfirmed_or_invalid_hook_receipts_refuse_retirement_before_any_effect() {
         let daemon = UnixListener::bind(old.join("api.sock")).unwrap();
         daemon.set_nonblocking(true).unwrap();
         assert_preflight_refusal_preserves_fixture(&fixture, Some(&daemon));
-        let reason = retirement_preflight(&fixture.target).unwrap_err();
+        let refusal = retirement_preflight(&fixture.target).unwrap_err();
+        assert_eq!(refusal.cause, RefusalCause::Record, "{refusal:?}");
         assert!(
-            reason.contains(if invalid {
+            refusal.detail.contains(if invalid {
                 "request status cannot be inspected"
             } else {
                 "open requests"
             }),
-            "{reason}"
+            "{refusal:?}"
         );
     }
 }
@@ -2489,11 +2490,9 @@ fn record_preflight_commands(fixture: &mut Fixture) {
 fn assert_preflight_refusal_preserves_fixture(fixture: &Fixture, daemon: Option<&UnixListener>) {
     let before = home_tree(&fixture.root);
     let report = apply(&fixture.target, &Scope::automatic());
-    assert_eq!(
-        state(&report, ComponentId::CoordinationRetirement),
-        ComponentState::Failed,
-        "{report:?}"
-    );
+    // One refusal for the pass, with no part or agent judged.
+    assert!(report.refused.is_some(), "{report:?}");
+    assert!(report.components.is_empty() && report.agents.is_empty(), "{report:?}");
     assert_eq!(home_tree(&fixture.root), before, "preflight changed a file");
     assert!(fixture.herdr.calls.lock().unwrap().is_empty());
     assert!(!fixture.home().join("service-called").exists());

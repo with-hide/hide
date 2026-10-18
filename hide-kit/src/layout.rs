@@ -56,6 +56,17 @@ pub fn legacy_state_dir(home: &Path) -> PathBuf {
     home.join(".local/state/hide")
 }
 
+/// The environment variable that moves the state folder away from
+/// [`default_state_dir`], named so the operator can be told which one to
+/// change or unset.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum StateVariable {
+    #[serde(rename = "HIDE_STATE_DIR")]
+    HideStateDir,
+    #[serde(rename = "XDG_STATE_HOME")]
+    XdgStateHome,
+}
+
 /// `HIDE_STATE_DIR` wins; a set `XDG_STATE_HOME` keeps `$XDG_STATE_HOME/hide`
 /// as before and is never moved; otherwise `~/.hide/state` (D-04). Empty
 /// values count as unset, as the callers read them.
@@ -64,20 +75,34 @@ pub fn state_dir(
     hide_state_dir: Option<&str>,
     xdg_state_home: Option<&str>,
 ) -> PathBuf {
+    state_dir_choice(home, hide_state_dir, xdg_state_home).0
+}
+
+/// [`state_dir`] with the variable that chose it, `None` for the default.
+fn state_dir_choice(
+    home: &Path,
+    hide_state_dir: Option<&str>,
+    xdg_state_home: Option<&str>,
+) -> (PathBuf, Option<StateVariable>) {
     if let Some(dir) = hide_state_dir.filter(|value| !value.is_empty()) {
-        return PathBuf::from(dir);
+        return (PathBuf::from(dir), Some(StateVariable::HideStateDir));
     }
     if let Some(xdg) = xdg_state_home.filter(|value| !value.is_empty()) {
-        return Path::new(xdg).join("hide");
+        return (Path::new(xdg).join("hide"), Some(StateVariable::XdgStateHome));
     }
-    default_state_dir(home)
+    (default_state_dir(home), None)
 }
 
 /// [`state_dir`] from this process's environment, for a program that has no
 /// environment registry of its own (the device helper).
 pub fn state_dir_from_process(home: &Path) -> PathBuf {
+    state_dir_choice_from_process(home).0
+}
+
+/// [`state_dir_from_process`] with the variable that chose it.
+pub fn state_dir_choice_from_process(home: &Path) -> (PathBuf, Option<StateVariable>) {
     let read = |key: &str| std::env::var(key).ok();
-    state_dir(
+    state_dir_choice(
         home,
         read("HIDE_STATE_DIR").as_deref(),
         read("XDG_STATE_HOME").as_deref(),

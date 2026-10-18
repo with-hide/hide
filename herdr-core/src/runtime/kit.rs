@@ -323,6 +323,25 @@ impl Runtime {
         }
         let mut snapshot = KitSnapshot::from_report(report);
         snapshot.busy = self.kit_install_queued(device_id);
+        // The kit's own words go to the log when a refusal appears or changes,
+        // not on every read while Settings is open; the screen gets the line.
+        if let Some(refusal) = &report.refused
+            && self
+                .kit_states
+                .get(device_id)
+                .and_then(|state| state.refused.as_ref())
+                != snapshot.refused.as_ref()
+        {
+            crate::diagnostic!(serde_json::json!({
+                "component": "kit",
+                "kind": "kit.refused",
+                "device_id": device_id,
+                "cause": refusal.cause,
+                "path": refusal.path,
+                "variable": refusal.variable,
+                "detail": refusal.detail,
+            }));
+        }
         // A daemon answer the kit could not read reads as no answer; the log
         // keeps it when it appears or changes, not on every read (B13).
         let unreadable_before = self
@@ -376,8 +395,21 @@ impl Runtime {
     /// per run by its own detection; before that nothing is installed there.
     fn decide_agent_onboarding(&mut self, device_id: &str, report: &KitReport) -> bool {
         use crate::model::AgentOnboarding;
-        // A pass that could not run (retirement refused, account lock) lists
-        // no agents and says nothing about the record, so it decides nothing.
+        // A pass that stopped before changing anything says nothing about the
+        // record. On a Mac no pass has ever answered for, it is still the
+        // first run: the wizard opens with the refusal, so the operator learns
+        // why nothing was set up and can try again (design principle 13).
+        if report.refused.is_some() {
+            let opened = device_id == self.node.as_str()
+                && self.snapshot.ui_state.agent_onboarding.is_none()
+                && self.open_first_run();
+            if opened {
+                self.persist_ui_state();
+            }
+            return opened;
+        }
+        // A helper that predates agents lists none and says nothing about the
+        // record either.
         if report.agents.is_empty() {
             return false;
         }
@@ -501,7 +533,20 @@ impl Runtime {
         let answer =
             self.snapshot.ui_state.agent_onboarding == Some(crate::model::AgentOnboarding::Pending);
         let node = self.node.clone();
-        if let Some(reason) = self.kit_view(node.as_str()).unavailable {
+        let view = self.kit_view(node.as_str());
+        if view.refused.is_some() {
+            // The pass stopped before changing anything, so the step drew no
+            // tile and there is no choice to record: Try again runs the same
+            // pass, which checks again what stopped it, and its answer brings
+            // the tiles or the refusal back.
+            crate::diagnostic!(serde_json::json!({
+                "component": "first_run",
+                "kind": "first_run.retry_refused",
+                "answer": answer,
+            }));
+            return self.queue_kit_scope(node.as_str(), Scope::automatic());
+        }
+        if let Some(reason) = view.unavailable {
             // Nothing can be written here, and the step may not even have
             // drawn a tile, so the press records and queues nothing: the first
             // run's question stays open and the agents are read again (B12).
@@ -605,6 +650,11 @@ impl Runtime {
         if let Some(reason) = state.unavailable {
             self.set_error("kit.unavailable", reason, false);
             return true;
+        }
+        // A pass that stopped judged nothing, so there is nothing to name:
+        // Try again runs the pass again, which checks again what stopped it.
+        if state.refused.is_some() {
+            return self.queue_kit_scope(device_id, Scope::automatic());
         }
         // Naming parts or agents narrows the repair to what is named.
         let named = only.is_some() || only_agents.is_some();
