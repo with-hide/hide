@@ -494,7 +494,7 @@ fn agys_windows_session_hook_reads_its_input_and_injects_guidance() {
         .join("Hide 한글 (1) & it's %kit%")
         .join(HELPER_BINARY_NAME);
     std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
-    crate::stand_ins::place(Path::new(env!("CARGO_BIN_EXE_hide-agent-hooks")), &helper);
+    std::fs::copy(env!("CARGO_BIN_EXE_hide-agent-hooks"), &helper).unwrap();
     guidance::install(agent, &home, &helper).unwrap();
     assert_eq!(
         guidance::installed_helper_path(agent, &home).as_deref(),
@@ -534,5 +534,47 @@ fn agys_windows_session_hook_reads_its_input_and_injects_guidance() {
             .unwrap()
             .contains(PURPOSE_CONTEXT),
         "{answer}"
+    );
+    let recorded: Value =
+        serde_json::from_slice(&std::fs::read(diagnostics(&home)).unwrap_or_default())
+            .unwrap_or_default();
+    assert!(
+        recorded["last"]["memory_unavailable"].is_u64(),
+        "the helper read the conversation from stdin: {recorded}"
+    );
+}
+
+#[test]
+fn agys_windows_guard_preserves_korean_and_non_bmp_hook_answers() {
+    use hide_agent_hooks::guidance::{self, GuidanceAgent};
+
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let agent = GuidanceAgent::Antigravity;
+    std::fs::create_dir_all(agent.home_directory(&home)).unwrap();
+    let helper = root.path().join("hook answer.cmd");
+    let expected = "프로젝트 메모리: 한글 제목과 😀";
+    let answer = hide_agent_hooks::antigravity::inject(expected).unwrap();
+    // The real helper uses this serializer before writing stdout. A batch
+    // stand-in emits those exact bytes without adding a provider or daemon.
+    let wire = hide_agent_hooks::runtime::ascii_json(&answer);
+    std::fs::write(root.path().join("answer.json"), &wire).unwrap();
+    std::fs::write(&helper, "@echo off\r\ntype \"%~dp0answer.json\"\r\n").unwrap();
+    guidance::install(agent, &home, &helper).unwrap();
+    let document: Value =
+        serde_json::from_str(&std::fs::read_to_string(agent.config_path(&home)).unwrap()).unwrap();
+    let output = agy_shell(
+        document["hide"]["SessionStart"][0]["command"]
+            .as_str()
+            .unwrap(),
+    )
+    .stdin(Stdio::null())
+    .output()
+    .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let received: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        received["injectSteps"][0]["systemMessage"]["systemMessage"],
+        expected
     );
 }
