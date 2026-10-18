@@ -929,11 +929,11 @@ Regression owners: `runtime::tests::session_state`, `request_view::tests`, `web/
 ### The session work record
 
 A 태스크 row keeps its live group and navigation and adds a record action that opens the record in the lane's 보기 slot; it carries no missed-work flag.
-The record's title follows the same summary/native/manual rules, with the current status, the PRs the session and every descendant created, the assigned work as a checklist with each direct child under the task that delegated it, the open missed work, and the requests in that order.
-The PRs come from the record's `outputs`, which already hold every descendant's PR with its source session and name; no wire field was added.
+The record's title follows the same summary/native/manual rules, then shows the current status, requested work with the full source requests, tabs for the session's own PRs, open findings and request history, and one flat list of direct children.
+The PRs come from the record's `outputs`, filtered by each source's full session identity; a child's results are available when that child expands, and no wire field was added for this layout.
 The checklist lists tasks first-asked first with the finished count over the total.
 A request that asks for several independent deliverables (a numbered list, separate bullets with their own result) becomes one task per deliverable, one to six, the extras bundled into the last name; a question, an explanation, a progress check, a sub-step or a detail of one deliverable stays one task or none, and a task's name comes from the operator's request, never from the assistant's reply (PRD task-split-checklist D-01, D-02).
-A split request's tasks are one group: a later request that continues any of them continues all of them, and they finish together, so items of one request show one shared state; a missed item names, and the group's pull requests and children hang from, the group's first task (D-03, D-08, D-13).
+A split request's tasks are one group: a later request that continues any of them continues all of them, and they finish together, so items of one request show one shared state; a missed item's task name and the group's pull request and child attribution use the group's first task (D-03, D-08, D-13), independently of the record's flat presentation.
 Records written before requests split keep their one task per request; nothing is split again.
 The pane-header task popover keeps its direct-child count and uses the spawn turn's `spawn_task` attribution, falling back to start time when absent; the session record instead places children in one flat `함께 진행한 세션` section after the current session's own tasks and tabs.
 The record filters outputs by full source session identity, and findings stay in the record that owns them, so descendants never inflate the current session's tab counts.

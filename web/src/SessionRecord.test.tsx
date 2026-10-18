@@ -72,7 +72,7 @@ it("leaves an unjudged task without an old verdict and keeps a completed task's 
   try {
     expect(text(view.container.querySelector('[data-record-task="unknown"]'))).toBe("Not judged");
     expect(view.container.querySelector('[data-record-task="unknown"] [data-task-box="empty"]')).not.toBeNull();
-    await act(async () => useShellStore.setState({ agents: [legacyAgentRow({ pane_id: "w1:p1", session_id: SESSION.session_id, agent_kind: SESSION.agent, status: "question", status_code: "question", mark: "turn" }) as AgentRow] }));
+    await act(async () => useShellStore.setState({ agents: [legacyAgentRow({ pane_id: "w1:p1", session_id: SESSION.session_id, agent_kind: SESSION.agent, status_code: "question", mark: "turn" }) as AgentRow] }));
     expect(view.container.querySelector('[data-record-task="finished"] [data-task-box="checked"]')).not.toBeNull();
     expect(view.container.querySelector('[data-record-task="finished"] [data-task-asks]')).not.toBeNull();
   } finally { await view.unmount(); }
