@@ -1,3 +1,4 @@
+import { BrandOwl } from "../components/brand-owl";
 import { useEffect, useMemo } from "react";
 import { CircleXIcon, ClockIcon, MessageSquareIcon, PauseIcon, PlayIcon, PlusIcon, SparklesIcon } from "lucide-react";
 import type { Actions } from "../actions";
@@ -223,15 +224,16 @@ function NoFactory({ intro, actions }: { intro: boolean; actions: Actions }) {
         <h1 className="text-title font-semibold">{t("factory.title")}</h1>
       </div>
       {intro ? <ScreenIntroLine screen="factory" actions={actions} /> : null}
-      <NoFactoryButton />
+      <NoFactoryButton owl={!intro} />
     </>
   );
 }
 
-function NoFactoryButton() {
+function NoFactoryButton({ owl }: { owl: boolean }) {
   const { t } = useInterfaceTranslation();
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-md" data-factory-empty="none">
+      {owl ? <BrandOwl pose="factory" className="size-(--size-owl-empty)" /> : null}
       <Button data-factory-create-open="true" onClick={() => useUiStore.getState().setFactoryPlace({ create: true })}>
         <PlusIcon />
         {t("factory.create.open")}

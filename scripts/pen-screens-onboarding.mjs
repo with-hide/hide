@@ -36,6 +36,9 @@ export function onboardingBoards(tokens, root, {themedXref, screenButton, screen
   const sz = name => SCALE === 1 ? `$--text-${name}` : Math.round(SIZES[name] * SCALE * 10) / 10;
   const T = (id, content, {size = 'body', ...rest} = {}) => baseText(id, content, {size: sz(size), ...rest});
   const F = frame;
+  // Pen image fills use raster derivatives of the canonical vector stills.
+  // They are design artwork, not screenshots of a running application.
+  const owl = (p, pose, size) => F(p, `Decorative owl / ${pose} / static`, {width: size, height: size, fill: {type: 'image', url: `./assets/owls/owl-${pose}.png`, mode: 'contain'}}, []);
   const at = (node, x, y) => ({...node, x: Math.round(x), y: Math.round(y)});
   const spacer = id => F(id, 'Spacer', {width: 'fill_container', height: 1}, []);
 
@@ -224,7 +227,7 @@ export function onboardingBoards(tokens, root, {themedXref, screenButton, screen
     }, [
       F(`${p}-hdr`, 'Header', {layout: 'vertical', gap: '$--spacing-sm', width: 'fill_container'}, [
         ...(step ? [F(`${p}-top`, 'Top', {layout: 'horizontal', alignItems: 'center', width: 'fill_container'}, [
-          progress(`${p}-prog`, step), spacer(`${p}-topsp`), ...(close ? [iconBtn(`${p}-x`, 'x')] : []),
+          progress(`${p}-prog`, step), spacer(`${p}-topsp`), owl(`${p}-owl`, step === 1 ? 'agents' : step === 2 ? 'devices' : 'ai', '$--size-owl-onboarding'), ...(close ? [iconBtn(`${p}-x`, 'x')] : []),
         ])] : []),
         T(`${p}-title`, title, {size: 'headline', weight: '600'}),
         ...(desc ? [T(`${p}-desc`, desc, {fill: '$--subtle-foreground', width: width - 2 * PAD})] : []),
@@ -303,6 +306,7 @@ export function onboardingBoards(tokens, root, {themedXref, screenButton, screen
 
   function centered(p, message, button, keys) {
     return F(p, 'Empty Home', {width: 'fill_container', height: 'fill_container', layout: 'vertical', gap: '$--spacing-md', alignItems: 'center', justifyContent: 'center'}, [
+      owl(`${p}-owl`, 'ai', '$--size-owl-empty'),
       T(`${p}-msg`, message, {size: 'subhead', fill: '$--subtle-foreground'}),
       ...(button ? [F(`${p}-act`, 'Action', {layout: 'horizontal', gap: '$--spacing-sm', alignItems: 'center'}, [btn(`${p}-b`, button), kbd(`${p}-k`, keys)])] : []),
     ]);
@@ -375,7 +379,7 @@ export function onboardingBoards(tokens, root, {themedXref, screenButton, screen
           T(`${p}-title`, 'Factory', {size: 'title', weight: '600'}), spacer(`${p}-sp`),
         ]),
         F(`${p}-line`, 'First visit line', {width: 'fill_container', layout: 'horizontal', gap: '$--spacing-sm', alignItems: 'center', padding: ['$--spacing-sm', '$--spacing-md'], cornerRadius: '$--radius-md', fill: '$--card'}, [
-          icon(`${p}-li`, 'factory', {size: 14, fill: '$--subtle-foreground'}),
+          owl(`${p}-li`, 'factory', '$--size-owl-intro'),
           T(`${p}-lt`, 'Factory takes the GitHub issues you label and carries each to a merged pull request. Create one for a project to start.', {fill: '$--subtle-foreground'}),
         ]),
         F(`${p}-empty`, 'Empty', {width: 'fill_container', height: 'fill_container', layout: 'vertical', alignItems: 'center', justifyContent: 'center'}, [btn(`${p}-create`, 'Create Factory', {icon: 'plus'})]),
@@ -388,6 +392,22 @@ export function onboardingBoards(tokens, root, {themedXref, screenButton, screen
   function nativeWindow(p, children) {
     const w = 900, h = 560;
     return windowFrame(p, [at(F(`${p}-c`, 'Center', {width: w, height: h, layout: 'vertical', gap: '$--spacing-md', alignItems: 'center', justifyContent: 'center'}, children), 0, 0)], {width: w, height: h});
+  }
+
+  function starting(p) {
+    return nativeWindow(p, [
+      F(`${p}-flight`, 'Local owl-roam / reduced-motion still', {width: '$--size-brand-flight', height: 450, layout: 'none'}, [
+        at(F(`${p}-brand`, 'Brand', {width: 800, height: 450, layout: 'vertical', gap: '$--spacing-md', alignItems: 'center', justifyContent: 'center'}, [
+          baseText(`${p}-word`, 'hide', {size: '$--size-brand-word', weight: '750', fill: '$--foreground', letterSpacing: '$--tracking-brand'}),
+          T(`${p}-tagline`, 'Run more agents. Hold less.', {fill: '$--subtle-foreground'}),
+          F(`${p}-loading`, 'Preparing / localized host state', {layout: 'vertical', gap: '$--spacing-sm', alignItems: 'center', padding: ['$--spacing-md', 0, 0, 0]}, [
+      F(`${p}-track`, 'Indeterminate / static in reduced motion', {width: '$--size-brand-track', height: '$--size-brand-track-h', cornerRadius: '$--radius-sm', fill: '$--border', layout: 'horizontal', justifyContent: 'center'}, [F(`${p}-sweep`, 'Sweep', {width: 48, height: '$--size-brand-track-h', fill: '$--primary'}, [])]),
+      T(`${p}-preparing`, 'Starting Hide…', {size: 'caption', fill: '$--muted-foreground'}),
+          ]),
+        ]), 0, 0),
+        at(F(`${p}-owl`, 'owl-roam', {width: 800, height: 450, fill: {type: 'image', url: './assets/owls/owl-roam.png', mode: 'contain'}}, []), 0, 0),
+      ]),
+    ]);
   }
 
   // -- the sidebar and Home ---------------------------------------------------------
@@ -548,7 +568,7 @@ export function onboardingBoards(tokens, root, {themedXref, screenButton, screen
     board('b09-startup', '09 · Startup and connection failure (B1, B2)',
       'Starting: one line, no "hided". Failure: the reason line, Retry and Copy diagnostics. When the clipboard refuses, the same text appears as selectable text under the buttons: app build, reason code, log location.',
       t => [grid(`su-${t}`, [[
-        cell(`sus-${t}`, 'Starting', nativeWindow(`sus-${t}`, [T(`sus-${t}-t`, 'Starting Hide…', {size: 'subhead', fill: '$--subtle-foreground'})])),
+        cell(`sus-${t}`, 'Starting · packaged default is Hide dark', starting(`sus-${t}`)),
         cell(`suf-${t}`, 'Failed', nativeWindow(`suf-${t}`, [
           T(`suf-${t}-t`, 'Can’t start Hide', {size: 'title', weight: '600'}),
           T(`suf-${t}-r`, 'The hide command was not found.', {fill: '$--subtle-foreground'}),

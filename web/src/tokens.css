@@ -314,6 +314,17 @@
   --opacity-usage-level-3: 0.66;
   --opacity-usage-level-4: 0.88;
   --size-usage-year: 800px;
+  --size-owl-onboarding: 64px;
+  --size-owl-intro: 64px;
+  --size-owl-empty: 144px;
+  --size-brand-flight: 800px;
+  --size-brand-clearance: 160px;
+  --size-brand-word: 104px;
+  --size-brand-word-min: 62px;
+  --tracking-brand: -7px;
+  --size-brand-track: 144px;
+  --size-brand-track-h: 3px;
+  --motion-brand-sweep: 1.8;
 }
 
 .interface-scale-exempt {

@@ -102,3 +102,21 @@ Keep layouts spacious and stable; use one clear accent at a time instead of deco
 Avoid surveillance language, noisy urgency, and promises that an agent's output is correct before a person reviews it.
 
 The logo signals this approach, while the interface continues to use its established design tokens and semantic status rules.
+
+## Product decoration
+
+The connecting desktop status page uses the original `desktop/static/owl-roam.json` with one locally bundled, pinned Lottie light player and a static SVG fallback.
+Its lowercase hide wordmark and brand line sit inside the flight path, above a thin indeterminate bar and the host's localized connecting sentence.
+Ready navigation never waits for a loop, and failure hides the decoration and preserves the existing recovery actions.
+The player and bar pause for reduced motion, a hidden document or an offscreen scene, and the document destroys its player and listeners on exit.
+The player is MIT licensed; `desktop/static/owl-motion-LICENSE.md` ships beside the status page.
+
+The wizard uses `owl-agents`, `owl-devices` and `owl-ai` for its existing three steps.
+The ready Home without projects uses `owl-ai`; Factory uses one `owl-factory` in its first-visit line or empty state, without opening the unreleased Factory.
+`web/src/components/brand-owl.tsx` switches the canonical SVG animation to its matching still while motion is reduced or the image is hidden or offscreen, and owns and removes its listeners and intersection observer.
+A failed decoration records a structured diagnostic and leaves the screen's actions available.
+No decoration represents an agent's live state.
+
+`design/assets/owls/*.png` are transparent raster derivatives of those vector stills for Pen's image fills, with the same colors and proportions.
+Regenerate them with `rsvg-convert` at 288 square for the four web poses and 960 by 540 for the startup still.
+These are design artwork, not verification captures.

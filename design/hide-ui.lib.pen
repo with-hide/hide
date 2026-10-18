@@ -68614,6 +68614,50 @@
     "--size-lane-page": {
       "type": "number",
       "value": 900
+    },
+    "--motion-brand-sweep": {
+      "type": "number",
+      "value": 1.8
+    },
+    "--size-brand-clearance": {
+      "type": "number",
+      "value": 160
+    },
+    "--size-brand-flight": {
+      "type": "number",
+      "value": 800
+    },
+    "--size-brand-track": {
+      "type": "number",
+      "value": 144
+    },
+    "--size-brand-track-h": {
+      "type": "number",
+      "value": 3
+    },
+    "--size-brand-word": {
+      "type": "number",
+      "value": 104
+    },
+    "--size-brand-word-min": {
+      "type": "number",
+      "value": 62
+    },
+    "--size-owl-empty": {
+      "type": "number",
+      "value": 144
+    },
+    "--size-owl-intro": {
+      "type": "number",
+      "value": 64
+    },
+    "--size-owl-onboarding": {
+      "type": "number",
+      "value": 64
+    },
+    "--tracking-brand": {
+      "type": "number",
+      "value": -7
     }
   },
   "fileToken": "61e6a599-bafe-4c87-80e7-10732d9e7fe4"
