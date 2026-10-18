@@ -7,11 +7,15 @@ import { fixtureProgram } from "./platform-fixture";
 /** Proves typed input executes in the node's normal shell, independently of its prompt. */
 export async function executeTerminalCheck(page: Page, herdr: HerdrFixture, pane: string, timeout = 5_000): Promise<void> {
   const marker = "HIDE_TERMINAL_EXECUTED";
-  fixtureProgram(path.join(herdr.root, "bin"), "hide-terminal-check", `console.log(${JSON.stringify(marker)});`);
+  const executable = fixtureProgram(path.join(herdr.root, "bin"), "hide-terminal-check", `console.log(${JSON.stringify(marker)});`);
   const view = page.locator(`[data-pane-view="${pane}"]`);
   await expect(view).toHaveAttribute("data-transport", "controlling");
   await view.locator("textarea").focus();
-  await page.keyboard.type("hide-terminal-check");
+  // The node's normal shell need not inherit a test server's injected PATH
+  // (Windows starts PowerShell rather than the fixture server's cmd.exe).
+  // Run this fixture's exact executable, retaining a real execution proof.
+  const command = process.platform === "win32" ? `& '${executable.replaceAll("'", "''")}'` : `'${executable.replaceAll("'", "'\\''")}'`;
+  await page.keyboard.type(command);
   await page.keyboard.press("Enter");
   await expect.poll(() => page.evaluate((id) => window.__hideProbe?.paneText(id), pane), { timeout }).toContain(marker);
   await expect.poll(() => execFileSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 }), { timeout }).toContain(marker);
