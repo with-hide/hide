@@ -6,6 +6,7 @@ import { afterAll, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { AGENT_ADAPTERS, agentAdapter, agentProductName } from "./agentAdapters";
+import { monogram } from "./agentLogos";
 import manifest from "./assets/agents/manifest.json";
 import { PROVIDER_KINDS } from "./agentPicker";
 import { TooltipProvider } from "./components/ui/tooltip";
@@ -35,12 +36,12 @@ it.each([
   expect(resumeProvider(kind)).toBe(canonical);
 });
 
-// An agent with no licensed mark draws its monogram (manifest `monogram`, PRD antigravity-first-class B30).
-const MONOGRAMS = new Set(manifest.monogram.map((row) => row.id));
-it.each(AGENT_ADAPTERS.map((row) => [row.id, row.herdr_kind]))("draws the logo or monogram of %s, never the neutral mark", (id, herdrKind) => {
+// An agent whose mark is withdrawn moves to the manifest's `monogram` list and draws its initials there (docs/BRAND.md); today every adapter has a bundled mark.
+const MONOGRAMS: ReadonlySet<string> = new Set((manifest.monogram as { id: string }[]).map((row) => row.id));
+it.each(AGENT_ADAPTERS.map((row) => [row.id, row.herdr_kind, row.label]))("draws the logo or monogram of %s, never the neutral mark", (id, herdrKind, label) => {
   const markup = renderToStaticMarkup(<AgentMark kind={herdrKind} />);
   expect(markup).toContain(`data-agent-mark="${herdrKind}"`);
-  if (MONOGRAMS.has(id)) expect(markup).toContain(">AN<");
+  if (MONOGRAMS.has(id)) expect(markup).toContain(`>${monogram(label)}<`);
   else expect(markup).toContain("<img");
   expect(renderToStaticMarkup(<AgentMark kind={` ${id.toUpperCase()} `} />)).toContain(`data-agent-mark="${herdrKind}"`);
 });
