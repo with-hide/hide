@@ -15,7 +15,7 @@ import time
 
 from agent_live_check.processes import ProcessError
 from agent_live_check.protection import write_private
-from agent_live_check.system import git
+from agent_live_check.system import git, same_path
 
 from . import cells, fork, kit, memory, title, usage
 from .ci import redact
@@ -400,14 +400,14 @@ class Journey:
         which the operator's Wake opens in a new pane
         (`wake_sleeping_session`); the registration moves to that pane, which
         the resume then types into."""
-        checkout = {str(self.checkout), str(self.runtime.probe / "worktrees" / self.id)}
+        checkouts = [path for path in (self.checkout, self.runtime.probe / "worktrees" / self.id) if path]
 
         def sleeping(rest):
             return (rest.get("navigator") or {}).get("sleeping_sessions") or []
 
         def asleep(rest):
             found = next((entry for entry in sleeping(rest) if entry.get("kind") == self.kind
-                          and entry.get("checkout_path") in checkout), None)
+                          and any(same_path(entry.get("checkout_path"), path) for path in checkouts)), None)
             phase = found.get("phase") if found else None
             if not record["asleep"] or record["asleep"][-1] != phase:
                 record["asleep"].append(phase)

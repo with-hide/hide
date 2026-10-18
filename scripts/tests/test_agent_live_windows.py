@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_live_check import processes
 from agent_live_check.processes import OwnedProcesses, ProcessError, ProcessSafetyError
 from agent_live_check.protection import private, private_directory, write_private
-from agent_live_check.system import WINDOWS, PaneShell, launcher, remove_tree
+from agent_live_check.system import WINDOWS, PaneShell, launcher, remove_tree, same_path
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 WAIT_SECONDS = 10
@@ -242,6 +242,13 @@ class ShellForms(unittest.TestCase):
         for environment, argv in (({"ROUTE": "100%"}, [sys.executable]), ({}, [sys.executable, 'say "hi"'])):
             with self.assertRaisesRegex(ValueError, "cmd.exe cannot carry"):
                 launcher(self.folder / "bin/agent", argv, environment=environment)
+
+    def test_a_path_hide_spells_with_slashes_names_the_same_folder(self):
+        folder = self.folder / "Worktrees" / "codex"
+        self.assertTrue(same_path(folder.as_posix(), folder))
+        self.assertTrue(same_path(str(folder).lower(), folder))
+        self.assertFalse(same_path((self.folder / "worktrees/claude").as_posix(), folder))
+        self.assertFalse(same_path(None, folder))
 
     def test_a_tree_with_read_only_files_is_removed(self):
         folder = self.folder / "checkout/.git/objects"
