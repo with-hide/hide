@@ -56,6 +56,8 @@ export type RaisedAsk = {
   what: string | null;
   /** The raised descendant itself, where a tree draws the ask. */
   raised_pane_id: string;
+  /** The raised descendant's title; drafts may name its parent as the holder. */
+  origin_title?: string;
   /** The agent the band names: the raised descendant, or for a draft the parent holding it. */
   pane_id: string;
   title: string;
@@ -344,6 +346,8 @@ export type PullRequestWork = {
   asked_of_me: "unknown" | "none" | "direct" | "team";
   failed_checks: { name: string; url: string | null }[];
   pending_checks: number;
+  /** Disjoint counts from the open head's GitHub rollup; absent until read. */
+  check_counts?: { total: number; passed: number; failed: number; running: number; waiting: number; skipped: number; unknown: number } | null;
   /** Its place in the base branch's merge queue; `unknown` while the queue could not be read. */
   queue: { state: "unknown" | "not_queued" } | { state: "at"; position: number };
   review_requested_at_unix_ms: number | null;
@@ -940,10 +944,16 @@ export type PaneLayout = {
 
 export type PaneHeader = {
   working: boolean;
-  band: {kind: string; tone: PaneHeaderTone; reason: string | null; since_unix_ms: number | null; action: PaneHeaderAction | null; more: number; exit_code: number | null; raised?: RaisedAsk; facts?: {kind: "pull_request"; checks: NonNullable<PullRequest["checks"]>; review: PullRequest["review"]}} | null;
+  /** Why the terminal is not live, drawn in the pane's body. */
+  notice: PaneNotice | null;
+  /** What waits on the operator in this pane, drawn on its second row. */
+  band: PaneBand | null;
+  /** The current pane agent's own live working sentence, selected by the core. */
+  progress?: string | null;
 };
-export type PaneHeaderTone = "muted" | "warning" | "error" | "success" | "pr";
-export type PaneHeaderAction = {kind: "pr"; workspace_id: string; url: string; number: number; checks: NonNullable<PullRequest["checks"]>; tone: PaneHeaderTone} | {kind: "child"; pane_id: string; label: string};
+export type PaneNotice = {kind: string; tone: "muted" | "warning" | "error"; reason: string | null; since_unix_ms: number | null; exit_code: number | null};
+/** The pane's own approval, answer, block or stop, or a raised descendant's ask; `read` once the operator has looked. */
+export type PaneBand = {kind: "approval" | "answer" | "blocked" | "stopped" | "raised"; reason: string | null; since_unix_ms: number | null; read: boolean; action: {pane_id: string; label: string} | null; more: number; raised?: RaisedAsk};
 
 export type TerminalPane = {
   pane_id: string;
@@ -1872,7 +1882,8 @@ export type LinkSummaries = {
 export type WorkSession = { device_id: string; agent: string; session_id: string };
 export type WorkRequest = { offset: number; at_unix_ms: number; text: string; author: "operator" | "parent"; task_ids: string[]; chapter_id: string | null; judged: boolean };
 export type WorkEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished";
-export type WorkTask = { id: string; chapter_id: string; name: string; at_unix_ms: number; last_at_unix_ms: number; end: WorkEnd; done: boolean };
+/** `unjudged`: the session's newest turn went unjudged and the task is not done, so `end` is an earlier turn's (PRD task-continuation D-09). */
+export type WorkTask = { id: string; chapter_id: string; name: string; at_unix_ms: number; last_at_unix_ms: number; end: WorkEnd; done: boolean; unjudged: boolean };
 export type MissedWork = { id: string; kind: "leftover" | "problem" | "follow_up"; text: string; status: "open" | "resolved" | "issue" | "dismissed" | "backlog"; at_unix_ms: number; turn_offset: number; issue_repository: string | null; issue_number: number | null; backlog_key: string | null; creating: boolean };
 export type WorkOutput = { kind: "pr" | "issue"; repository: string; number: number; title: string; url: string; state: string; stale: boolean; last_read_at_unix_ms: number | null; created_at_unix_ms: number; task_id: string | null; source: WorkSession; source_name: string };
 export type SessionRecord = {
@@ -1881,8 +1892,10 @@ export type SessionRecord = {
   chapters: { id: string; goal: string; at_unix_ms: number }[]; tasks: WorkTask[]; requests: WorkRequest[]; missed: MissedWork[]; outputs: WorkOutput[]; children: SessionRecord[];
   /** How its direct children stand; absent without children. */
   child_progress?: ChildProgress | null;
+  /** For a child, the task group of the parent's turn that spawned it (PRD task-continuation B7); null when that turn held no task. */
+  spawn_task?: string | null;
 };
-/** One direct child as its parent counts it (`contracts/snapshot-wire-enums.json`: `child_work`): by its own tasks, or with none by its last END; `unjudged` has neither. */
+/** One direct child as its parent counts it (`contracts/snapshot-wire-enums.json`: `child_work`): a resting child's report or merged pull requests, else its own tasks, else its last END; `unjudged` has no judgment that says, or a newest turn that went unjudged. */
 export type ChildWork = "done" | "working" | "other" | "unjudged";
 /** One segment per direct child; `done` is null while any child is unjudged, never a false zero. */
 export type ChildProgress = { children: ChildWork[]; done: number | null };

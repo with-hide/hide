@@ -1112,9 +1112,11 @@ fn seed_open_missed(runtime: &Runtime, session: &crate::links::ledger::SessionId
         LedgerUpdate::TurnEnd {
             session: session.clone(),
             offset: 1,
+            started_at_unix_ms: now - 1_500,
             at_unix_ms: now - 1_500,
             end: crate::labels::analysis::LabelEnd::Done,
             work_author: true,
+            letter: None,
             turn_witness: None,
             judgment: TurnJudgment {
                 missed: vec![NewMissedWork {

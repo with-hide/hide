@@ -155,6 +155,20 @@ impl LinkClient {
         cache.used.push_back(session.clone());
         cache.values.insert(session, context);
     }
+    /// A mailbox that takes every update and keeps it for the test to read,
+    /// with the ledger started at the epoch.
+    #[cfg(test)]
+    pub(crate) fn open_mailbox_for_test() -> Self {
+        Self(
+            Arc::default(),
+            Arc::default(),
+            Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        )
+    }
+    #[cfg(test)]
+    pub(crate) fn ledger_updates_for_test(&self) -> Vec<LedgerUpdate> {
+        self.0.0.lock().unwrap().ledger.iter().cloned().collect()
+    }
     #[cfg(test)]
     pub(crate) fn full_mailbox_for_test() -> Self {
         Self(
@@ -716,11 +730,31 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
             state.filled_unknown = false;
             state.filled = store.meta(BACKFILL_DONE).is_ok_and(|done| done.is_some());
         }
+        // Lineage first: a letter's turn queued beside it is recorded against
+        // the task that spawned its sender only once the child is known
+        // (PRD task-continuation D-02).
+        if let Some(parents) = state.parents.take() {
+            let children = store.apply_parents(&parents);
+            for child in children.iter().flatten() {
+                update_context_ancestors(client, store, child);
+            }
+            if children.is_err() {
+                // Kept for the next pass: a descendant letter's turn waits
+                // for lineage facts the store has taken.
+                state.parents.get_or_insert(parents);
+            }
+            state.wrote(children.map(|_| ()), "parents");
+            state.dirty_at.get_or_insert_with(Instant::now);
+        }
         if state.ledger_retry_at.is_none_or(|at| at <= Instant::now()) {
             for _ in 0..16 {
                 let Some(update) = state.ledger.front() else {
                     break;
                 };
+                if store.awaits_lineage(update) {
+                    state.ledger_retry_at = Some(Instant::now() + Duration::from_secs(1));
+                    break;
+                }
                 let session = update.session().clone();
                 let result = store.apply_ledger_update(update);
                 if let Err(code) = &result
@@ -782,14 +816,6 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
                 state.dirty_at.get_or_insert_with(Instant::now);
             }
             state.panes_at = Some(Instant::now());
-        }
-        if let Some(parents) = state.parents.take() {
-            let children = store.apply_parents(&parents);
-            for child in children.iter().flatten() {
-                update_context_ancestors(client, store, child);
-            }
-            state.wrote(children.map(|_| ()), "parents");
-            state.dirty_at.get_or_insert_with(Instant::now);
         }
         for session in contexts {
             update_context(client, store, &session);
@@ -1660,6 +1686,9 @@ mod tests {
                         parent_agent: pair[0].agent.clone(),
                         parent_session_id: pair[0].session_id.clone(),
                         parent_name: "Parent".into(),
+                        name: "child".into(),
+                        reported_at_unix_ms: None,
+                        live: true,
                     })
                     .collect::<Vec<_>>(),
             )
@@ -1677,9 +1706,11 @@ mod tests {
             .apply_ledger_update(&LedgerUpdate::TurnEnd {
                 session: chain[0].clone(),
                 offset: 1,
+                started_at_unix_ms: CREATED + 1,
                 at_unix_ms: CREATED + 1,
                 end: LabelEnd::Working,
                 work_author: true,
+                letter: None,
                 turn_witness: None,
                 judgment: TurnJudgment {
                     task: TaskDecision::New {
@@ -1788,9 +1819,11 @@ mod tests {
             .apply_ledger_update(&LedgerUpdate::TurnEnd {
                 session: session("root"),
                 offset: 1,
+                started_at_unix_ms: CREATED + 1,
                 at_unix_ms: CREATED + 1,
                 end: LabelEnd::Working,
                 work_author: true,
+                letter: None,
                 turn_witness: None,
                 judgment: TurnJudgment {
                     task: TaskDecision::New {
@@ -1814,6 +1847,9 @@ mod tests {
             parent_agent: "claude".into(),
             parent_session_id: "root".into(),
             parent_name: "lead".into(),
+            name: "child".into(),
+            reported_at_unix_ms: None,
+            live: true,
         };
         store
             .apply_parents(&[parented(&session("child")), parented(&pi)])
@@ -2033,9 +2069,11 @@ mod tests {
                 .apply_ledger_update(&LedgerUpdate::TurnEnd {
                     session: session.clone(),
                     offset,
+                    started_at_unix_ms: offset * 1_000 + 500,
                     at_unix_ms: offset * 1_000 + 500,
                     end: crate::labels::analysis::LabelEnd::Waiting,
                     work_author: true,
+                    letter: None,
                     turn_witness: None,
                     judgment: crate::links::ledger::TurnJudgment {
                         task: crate::links::ledger::TaskDecision::New {

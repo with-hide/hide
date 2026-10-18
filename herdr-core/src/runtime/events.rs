@@ -372,14 +372,25 @@ pub(super) struct PaneTargetPayload {
 }
 
 /// Fork agent from the pane menu: where the fork goes, chosen at the press,
-/// and the shell's key request, which holds what is typed until the fork's
-/// agent has started.
+/// who pressed it, and the shell's key request, which holds what is typed
+/// until the fork's agent has started.
 #[derive(Debug, Deserialize)]
 pub(super) struct ForkPanePayload {
     pub(super) pane_id: String,
     pub(super) placement: crate::fork::ForkPlacement,
+    pub(super) origin: ForkOrigin,
     #[serde(default)]
     pub(super) request_id: Option<String>,
+}
+
+/// Who asked for a fork. Only the operator's own press moves the screen and
+/// the keyboard to it; any other caller's fork is made and waits where it
+/// was put, as an agent's spawn does (#1271).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ForkOrigin {
+    Operator,
+    Agent,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3117,30 +3128,6 @@ impl Runtime {
                     &pane_id,
                     &format!("{}-{}", self.fork_sequence, unix_milliseconds()),
                 );
-                self.forks_in_flight.insert(
-                    pane_id.clone(),
-                    super::agents::PendingFork {
-                        press: self.fork_sequence,
-                        generation: self.live_generation,
-                        // A view the operator chooses after this press is
-                        // where they are now, and the fork does not take it.
-                        issued_serial: self.control_lane.issued_serial(),
-                        tab_id: None,
-                        focused: None,
-                        kind: agent.agent_kind.clone(),
-                        name: name.clone(),
-                        launch: launch.clone(),
-                    },
-                );
-                let Some(context) = self.live.as_ref().cloned() else {
-                    self.forks_in_flight.remove(&pane_id);
-                    self.set_error(
-                        "pane.control_unavailable",
-                        "Forking a pane requires a live Herdr connection",
-                        true,
-                    );
-                    return true;
-                };
                 // A fork's tab is named as a new tab is, so the strip calls it
                 // by its agent rather than by the Herdr name it starts under.
                 let (cwd, tab_label) = self
@@ -3158,8 +3145,34 @@ impl Runtime {
                         Some((pane.cwd.clone(), checkout.next_tab_label.clone()))
                     })
                     .unzip();
+                self.forks_in_flight.insert(
+                    pane_id.clone(),
+                    super::agents::PendingFork {
+                        press: self.fork_sequence,
+                        generation: self.live_generation,
+                        // A view the operator chooses after this press is
+                        // where they are now, and the fork does not take it.
+                        issued_serial: self.control_lane.issued_serial(),
+                        origin: payload.origin,
+                        tab_id: None,
+                        pane_id: None,
+                        tab_label: tab_label.clone(),
+                        focused: None,
+                        kind: agent.agent_kind.clone(),
+                        name: name.clone(),
+                        launch: launch.clone(),
+                    },
+                );
+                let Some(context) = self.live.as_ref().cloned() else {
+                    self.forks_in_flight.remove(&pane_id);
+                    self.set_error(
+                        "pane.control_unavailable",
+                        "Forking a pane requires a live Herdr connection",
+                        true,
+                    );
+                    return true;
+                };
                 let request = ForkRequest {
-                    parent_state_change_seq: agent.state_change_seq,
                     connection_generation: self.live_generation,
                     parent_pane_id: pane_id.clone(),
                     agent: agent_kind,
@@ -3178,14 +3191,23 @@ impl Runtime {
                 // Keys typed between the press and the agent's start wait for
                 // the fork's agent rather than reaching the shell that starts
                 // it (B4); `ingest_fork_result` resolves or discards them.
-                if let Some(request_id) = payload.request_id.as_deref() {
-                    self.input_requests.open(
-                        request_id,
-                        super::terminal_input::InputOrigin::Fork(pane_id.clone()),
-                        std::time::Instant::now(),
+                let request_id = payload
+                    .request_id
+                    .unwrap_or_else(|| format!("fork-{}", self.fork_sequence));
+                if !self.input_requests.open(
+                    &request_id,
+                    super::terminal_input::InputOrigin::Fork(pane_id.clone()),
+                    std::time::Instant::now(),
+                ) {
+                    self.forks_in_flight.remove(&pane_id);
+                    self.set_error(
+                        "pane.fork_input_unavailable",
+                        "The fork could not reserve its input holder. Try again after other panes finish starting.",
+                        false,
                     );
-                    self.sync_input_requests();
+                    return true;
                 }
+                self.sync_input_requests();
                 self.push_diagnostic("pane.fork.requested", format!("Forking pane {pane_id}"));
                 if let Err(message) = live::spawn_agent_fork(context, request) {
                     // A worker that never started is a fork that failed, and

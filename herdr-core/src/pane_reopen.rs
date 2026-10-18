@@ -158,7 +158,7 @@ pub(crate) fn spawn_reopen(context: LiveContext, request: ReopenRequest) -> Resu
 mod tests {
     use std::process::Command;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use hide_platform::process;
     use serde_json::{Value, json};
@@ -264,12 +264,20 @@ mod tests {
             let pid = child.id();
             let exited = Arc::new(AtomicBool::new(false));
             let seen = Arc::clone(&exited);
+            let presses = Arc::new(AtomicUsize::new(0));
             let herdr = FakeHerdr::start("pane-reopen-ok", move |method, _| match method {
                 "agent.get" => agent_info(kind, "idle"),
                 "pane.process_info" => {
                     let shell = std::process::id();
                     let gone = !process::is_alive(pid) || seen.load(Ordering::SeqCst);
                     process_info(shell, if gone { shell } else { pid })
+                }
+                // The agent quits on the second press of its quit keys.
+                "pane.send_keys" => {
+                    if presses.fetch_add(1, Ordering::SeqCst) == 1 {
+                        process::terminate(pid).expect("the agent quits");
+                    }
+                    json!({"type": "ok"})
                 }
                 "agent.start" => json!({"type": "agent_started", "argv": [], "agent": {
                     "pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1",
@@ -344,6 +352,11 @@ mod tests {
                         let gone = !process::is_alive(pid) || seen.load(Ordering::SeqCst);
                         Ok(process_info(shell, if gone { shell } else { pid }))
                     }
+                    // The agent quits on its keys; the start is the subject.
+                    "pane.send_keys" => {
+                        let _ = process::terminate(pid);
+                        Ok(json!({"type": "ok"}))
+                    }
                     "agent.start" => Err(("agent_name_taken".into(), "name is used".into())),
                     other => panic!("unexpected {other}"),
                 },
@@ -399,6 +412,11 @@ mod tests {
                     let shell = std::process::id();
                     let gone = !process::is_alive(pid) || seen.load(Ordering::SeqCst);
                     Ok(process_info(shell, if gone { shell } else { pid }))
+                }
+                // The agent quits on its keys; the start is the subject.
+                "pane.send_keys" => {
+                    let _ = process::terminate(pid);
+                    Ok(json!({"type": "ok"}))
                 }
                 "agent.start" if attempts.fetch_add(1, Ordering::SeqCst) < 2 => Err((
                     "agent_name_taken".into(),

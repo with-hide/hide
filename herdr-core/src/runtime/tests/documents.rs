@@ -2050,7 +2050,7 @@ fn a_gui_file_read_cannot_recreate_its_closed_agent_tab() {
             .retain(|tab| tab.id.as_deref() != Some("tab-a"));
         checkout.active_tab_id = Some("tab-b".to_owned());
         runtime.sync_workspace_view();
-        runtime.prune_view_bookmarks(
+        runtime.prune_view_callers(
             &(DEVICE.to_owned(), f.root.to_string_lossy().into_owned()),
             &["tab-b"],
         );
@@ -2108,7 +2108,7 @@ fn a_coalesced_gui_read_serves_each_live_requesting_tab() {
             runtime.snapshot.navigator.workspaces[0].checkouts[0]
                 .tabs
                 .retain(|tab| tab.id.as_deref() != Some("tab-a"));
-            runtime.prune_view_bookmarks(
+            runtime.prune_view_callers(
                 &(DEVICE.to_owned(), f.root.to_string_lossy().into_owned()),
                 &["tab-b"],
             );

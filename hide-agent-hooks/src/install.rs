@@ -390,10 +390,8 @@ pub(crate) enum Quoting {
     /// Single quotes, a quote inside doubled. PowerShell takes the
     /// typographic single quotes for `'` as well, so they are doubled too.
     PowerShell,
-    /// Double quotes, for a command `cmd /c` runs (agy's hooks on Windows).
-    /// A Windows path holds no `"`, and one that holds a `%`, which cmd
-    /// expands inside quotes too, is refused before it is written
-    /// ([`Self::cmd_safe`]).
+    /// Double quotes in agy's legacy Windows commands, retained for reading
+    /// and migrating the entries written before guidance version 7.
     Cmd,
 }
 
@@ -406,11 +404,6 @@ impl Quoting {
 
     pub(crate) const POWERSHELL_QUOTES: [char; 5] =
         ['\'', '\u{2018}', '\u{2019}', '\u{201A}', '\u{201B}'];
-
-    /// Whether `value` reads the same inside cmd's double quotes.
-    pub(crate) fn cmd_safe(value: &str) -> bool {
-        !value.contains(['"', '%', '\n', '\r'])
-    }
 
     pub(crate) fn quote(self, value: &str) -> String {
         match self {

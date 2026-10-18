@@ -14,7 +14,7 @@ CELLS = ("start", "start_untrusted", "reply", "integration", "guidance_memory", 
          "sleep_wake", "resume", "fork", "title", "usage")
 # What this cycle measures (PRD agent-journey-check D-20); every other declared
 # cell reads "not built in this cycle" until a later change builds it.
-BUILT_AGENTS = ("claude-code", "codex")
+BUILT_AGENTS = ("claude-code", "codex", "grok", "opencode", "pi", "omp", "antigravity")
 BUILT_CELLS = ("start", "start_untrusted", "reply", "integration", "guidance_memory", "letter", "sleep_wake",
                "resume", "fork", "title", "usage")
 # A cell that cannot be measured until another one passed: a fork, a title
@@ -81,6 +81,9 @@ def measurable(table, agent, name):
     if before is None:
         return True
     status = table[agent][before]["status"]
+    if status == PENDING and not measurable(table, agent, before):
+        # An open prerequisite whose own prerequisite did not pass is settled first.
+        status = table[agent][before]["status"]
     if status == PASS:
         return True
     if status == PENDING:
@@ -191,12 +194,13 @@ def with_turn(verdict, turn):
     return PASS, verdict[1] + "; " + turn[1]
 
 
-def emitter_verdict(session, kind):
-    """Herdr's own integration reported the pane's session as herdr:<kind>."""
+def emitter_verdict(session, expected):
+    """Herdr's own integration reported the pane's session under `expected`,
+    the contract's `herdr_source`."""
     source = (session or {}).get("source")
-    if source == "herdr:" + kind:
+    if source == expected:
         return PASS, "Herdr integration reported the session as " + source
-    return FAIL, "Herdr integration did not report the session (source " + str(source) + ")"
+    return FAIL, f"Herdr integration did not report the session (source {source}, not {expected})"
 
 
 def start_verdict(*verdicts):
@@ -228,8 +232,18 @@ def reply_verdict(read, session, token, after=0):
 
 def bell_turn(events, bell_line):
     """The index just past the human event the doorbell typed, or None."""
+    # The delivery contract ignores characters above U+FFFF, which a console
+    # reader may drop. Compare the whole prompt; a prefix proves no bell turn.
+    def canonical(text):
+        # Trim Unicode White_Space. Python's default strip also removes the
+        # four C0 separators U+001C..U+001F, which remain part of the prompt.
+        return "".join(char for char in text if ord(char) <= 0xffff).strip(
+            "\t\n\v\f\r \u0085\u00a0\u1680"
+            "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+            "\u2028\u2029\u202f\u205f\u3000")
+    line = canonical(bell_line or "")
     for index, event in enumerate(events):
-        if event.get("role") == "user" and bell_line and bell_line in (event.get("text") or ""):
+        if event.get("role") == "user" and line and line == canonical(event.get("text") or ""):
             return index + 1
     return None
 
@@ -251,12 +265,27 @@ def letter_verdict(shown, read, session, token):
     return status, ("delivered; " + reason) if status == PASS else reason
 
 
-def sleep_verdict(asleep, awake):
-    """`asleep`: the row's sleep states after Sleep; `awake`: rows after Wake."""
+def prompt_letter_verdict(shown, read, session, token, after):
+    """A letter the agent's prompt hook handed over with the next prompt
+    typed after it: Hide records it delivered and confirmed by the hook, and
+    the reply to that prompt, from `after` on, carries the token."""
+    if not isinstance(shown, dict):
+        return FAIL, "hide request show gave no letter"
+    if shown.get("state") != "delivered" or shown.get("hook_confirmed") is not True:
+        return FAIL, (f"letter state is {shown.get('state')} and hook confirmed {shown.get('hook_confirmed')}, "
+                      "not delivered by the prompt hook")
+    status, reason = reply_verdict(read, session, token, after)
+    return status, ("delivered with the next prompt; " + reason) if status == PASS else reason
+
+
+def sleep_verdict(asleep, awake, failure=None):
+    """`asleep`: the sleep states read after Sleep (the row's, or the sleeping
+    session's phases when Sleep closed the pane); `awake`: whether the agent
+    ran again after Wake; `failure`: why Wake said it did not."""
     if "sleeping" not in asleep:
         return FAIL, "row never read asleep after Sleep (" + ", ".join(map(str, asleep[-3:])) + ")"
     if not awake:
-        return FAIL, "row never woke after Wake"
+        return FAIL, "row never woke after Wake" + (f": {failure}" if failure else "")
     return PASS, "row read asleep after Sleep and running after Wake"
 
 

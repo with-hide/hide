@@ -782,8 +782,8 @@ fn read_opencode(home: &std::path::Path, request: &ReadRequest, answer: &mut Rea
     let (transcript, proven) =
         match crate::opencode::read_as(home, &label, crate::opencode::Owner::Recorded) {
             Ok(read) => read,
-            Err(code) => {
-                answer.error = Some(code);
+            Err(refusal) => {
+                answer.error = Some(refusal.into());
                 return;
             }
         };

@@ -1,9 +1,9 @@
-//! The line the doorbell types into an idle agent pane: who wrote, what kind
+//! The line the doorbell submits through Herdr's `agent.prompt`: who wrote, what kind
 //! of letter it is and the letter's first line, so the operator watching the
 //! pane can tell what arrived (`docs/delivery.md`, The bell line).
 //!
-//! The line is typed into an agent's composer and submitted with Enter, so it
-//! is one line and carries nothing a composer acts on while it is typed: no
+//! The line reaches an agent's composer through that API, so it is one line
+//! and carries nothing a composer acts on while it is received: no
 //! control or invisible character, and none of the characters that open a
 //! picker or continue the line in the runtimes the doorbell rings.
 
@@ -28,11 +28,11 @@ pub(crate) struct Ring<'a> {
     pub inbox: bool,
 }
 
-/// `🔔 <sender> <kind>: <first line of the letter>`, then ` · 외 N통` when
+/// `🦉 <sender> <kind>: <first line of the letter>`, then ` · 외 N통` when
 /// other letters wait for the same recipient and ` · hide inbox` when the
 /// ring asks for it.
 pub(crate) fn line(ring: &Ring) -> String {
-    let mut line = format!("🔔 {} {}", inert(ring.sender, NAME_CHARS), word(ring.kind));
+    let mut line = format!("🦉 {} {}", inert(ring.sender, NAME_CHARS), word(ring.kind));
     let summary = ring
         .body
         .lines()
@@ -59,8 +59,7 @@ pub(crate) fn line(ring: &Ring) -> String {
 /// arrives with neither the letter nor the session guidance that says what
 /// the line means. Claude Code runs every user-level hook it is given.
 pub(crate) fn names_inbox(kind: &str) -> bool {
-    hide_agent_adapter::adapter(kind)
-        .is_some_and(|row| row.key == hide_agent_adapter::AgentId::Codex)
+    hide_agent_adapter::adapter(kind).is_some_and(|row| row.bell_names_inbox)
 }
 
 /// Whether a letter may keep `line` as its bell.
@@ -114,7 +113,7 @@ mod tests {
     /// A line the bell types, which the agent live check
     /// (`scripts/agent_live_check`) types into each scene in place of a
     /// letter's own: a cut summary carrying characters a composer acts on.
-    const SAMPLE: &str = "🔔 live-check 보고: ＠src/main.rs ＄HOME /review !ls #881 `cargo test` 50% 끝나면 진행… · 외 1통";
+    const SAMPLE: &str = "🦉 live-check 보고: ＠src/main.rs ＄HOME /review !ls #881 `cargo test` 50% 끝나면 진행… · 외 1통";
 
     #[test]
     fn the_live_checks_sample_is_a_line_the_bell_types() {
@@ -152,7 +151,7 @@ mod tests {
                 others: 1,
                 inbox: true,
             }),
-            "🔔 label-end-fix 보고: PR #881을 열었습니다 · 외 1통 · hide inbox"
+            "🦉 label-end-fix 보고: PR #881을 열었습니다 · 외 1통 · hide inbox"
         );
     }
 
@@ -166,7 +165,7 @@ mod tests {
                 "label end 수정 PR #881을 열었습니다\n\n변경: ...",
                 0
             ),
-            "🔔 label-end-fix 보고: label end 수정 PR #881을 열었습니다"
+            "🦉 label-end-fix 보고: label end 수정 PR #881을 열었습니다"
         );
         assert_eq!(
             ring(
@@ -175,12 +174,24 @@ mod tests {
                 "\n  Pen 시안이 준비됐습니다\n",
                 1
             ),
-            "🔔 hierarchy-pen-scratch 보고: Pen 시안이 준비됐습니다 · 외 1통"
+            "🦉 hierarchy-pen-scratch 보고: Pen 시안이 준비됐습니다 · 외 1통"
         );
-        assert_eq!(ring("a", "request", "x", 0), "🔔 a 요청: x");
-        assert_eq!(ring("a", "block", "x", 0), "🔔 a 막힘: x");
-        assert_eq!(ring("a", "reply", "x", 0), "🔔 a 답장: x");
-        assert_eq!(ring("a", "watch", "x", 2), "🔔 a 감시: x · 외 2통");
+        assert_eq!(ring("a", "request", "x", 0), "🦉 a 요청: x");
+        assert_eq!(ring("a", "block", "x", 0), "🦉 a 막힘: x");
+        assert_eq!(ring("a", "reply", "x", 0), "🦉 a 답장: x");
+        assert_eq!(ring("a", "watch", "x", 2), "🦉 a 감시: x · 외 2통");
+    }
+
+    #[test]
+    fn a_bell_with_a_non_bmp_summary_is_recognized_when_console_input_drops_it() {
+        let bell = ring("sender", "report", "Read🐈the letter", 0);
+        assert_eq!(bell, "🦉 sender 보고: Read🐈the letter");
+        // SHA-256 of the received "sender 보고: Readthe letter", independently
+        // calculated after both the leading owl and summary's cat were lost.
+        assert!(hide_agent_hooks::delivery::matches_prompt_digest(
+            &bell,
+            "25b30086ee8c322631a41392425753beb05ed84f46d8aeadc5a682ddea42018b"
+        ));
     }
 
     #[test]
@@ -188,15 +199,15 @@ mod tests {
         let body = "가".repeat(61);
         assert_eq!(
             ring("a", "report", &body, 0),
-            format!("🔔 a 보고: {}…", "가".repeat(60))
+            format!("🦉 a 보고: {}…", "가".repeat(60))
         );
         assert_eq!(
             ring("a", "report", &"가".repeat(60), 0),
-            format!("🔔 a 보고: {}", "가".repeat(60))
+            format!("🦉 a 보고: {}", "가".repeat(60))
         );
         assert_eq!(
             ring(&"n".repeat(40), "report", "x", 0),
-            format!("🔔 {}… 보고: x", "n".repeat(32))
+            format!("🦉 {}… 보고: x", "n".repeat(32))
         );
     }
 
@@ -210,13 +221,13 @@ mod tests {
         );
         assert_eq!(
             typed,
-            "🔔 ci-lead 보고: [2J fix ＠src/main.rs, ＄skill and C:＼＼"
+            "🦉 ci-lead 보고: [2J fix ＠src/main.rs, ＄skill and C:＼＼"
         );
         assert!(valid_line(&typed));
         // A body with no visible first line still names who rang.
-        assert_eq!(ring("a", "report", "\u{200B}\n\u{3164}", 0), "🔔 a 보고");
-        assert_eq!(ring("a", "progress", "plan", 0), "🔔 a 진행: plan");
-        assert!(!valid_line("🔔 a\n보고"));
+        assert_eq!(ring("a", "report", "\u{200B}\n\u{3164}", 0), "🦉 a 보고");
+        assert_eq!(ring("a", "progress", "plan", 0), "🦉 a 진행: plan");
+        assert!(!valid_line("🦉 a\n보고"));
         assert!(!valid_line(""));
         assert!(!valid_line(&"x".repeat(LINE_LIMIT + 1)));
     }

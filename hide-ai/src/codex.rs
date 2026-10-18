@@ -30,9 +30,10 @@ use hide_platform::process::{self as platform, OwnedChild};
 
 use crate::process::{self, ProcessMeasurement};
 use crate::program::Program;
+use crate::text_cli::{json_from_text, system_with_schema};
 use crate::{
-    AiBackend, AiError, AiLogSink, AiRequest, AiResponse, AiUsage, Availability, CancelToken,
-    ModelCatalog, ModelTokens, ProviderId,
+    AiBackend, AiError, AiLogSink, AiRequest, AiResponse, AiUsage, AnswerMode, Availability,
+    CancelToken, ModelCatalog, ModelTokens, ProviderId,
 };
 
 /// The user's decision for background features.
@@ -218,6 +219,17 @@ impl CodexAppServerBackend {
         cancel: &CancelToken,
     ) -> Result<AiResponse, AiError> {
         let deadline = Instant::now() + request.deadline;
+        // `PlainJson` names the schema in the instructions and sends no
+        // `outputSchema`, as the Claude backend does: the API's strict mode
+        // refuses keywords a feature's schema may use (`oneOf`, `uniqueItems`:
+        // HTTP 400 `invalid_json_schema`, codex-cli 0.163.0), and the router
+        // validates the answer against the full schema either way.
+        let instructions = match request.answer {
+            AnswerMode::Schema => request.system_prompt().into_owned(),
+            AnswerMode::PlainJson => {
+                system_with_schema(&request.system_prompt(), &request.output_schema)
+            }
+        };
         let thread = session.request(
             "thread/start",
             json!({
@@ -226,7 +238,7 @@ impl CodexAppServerBackend {
                 "approvalPolicy": "never",
                 "cwd": self.config.cwd,
                 "model": request.model(&self.config.model),
-                "baseInstructions": request.system_prompt(),
+                "baseInstructions": instructions,
             }),
             CONTROL_TIMEOUT,
         )?;
@@ -247,10 +259,12 @@ impl CodexAppServerBackend {
         let mut turn_start = json!({
             "threadId": thread_id,
             "input": [{"type": "text", "text": request.input}],
-            "outputSchema": request.output_schema,
             "clientUserMessageId": request.request_id.0,
         });
-        if let Some(effort) = request.effort() {
+        if request.answer == AnswerMode::Schema {
+            turn_start["outputSchema"] = request.output_schema.clone();
+        }
+        if let Some(effort) = request.effort(ProviderId::CODEX) {
             turn_start["effort"] = json!(effort);
         }
         let turn = session
@@ -318,9 +332,14 @@ impl CodexAppServerBackend {
                             let text = text.ok_or_else(|| {
                                 AiError::InvalidOutput("turn_completed_without_message".to_owned())
                             })?;
-                            let value = serde_json::from_str::<Value>(&text).map_err(|_| {
-                                AiError::InvalidOutput("message_not_json".to_owned())
-                            })?;
+                            // Under `outputSchema` the message is the object;
+                            // without it the model may fence it, so it is read
+                            // the way the other plain-JSON readers read it.
+                            let value = match request.answer {
+                                AnswerMode::Schema => serde_json::from_str::<Value>(&text).ok(),
+                                AnswerMode::PlainJson => json_from_text(&text),
+                            }
+                            .ok_or_else(|| AiError::InvalidOutput("message_not_json".to_owned()))?;
                             usage.models = model
                                 .as_deref()
                                 .zip(total.as_ref())
@@ -346,7 +365,8 @@ impl CodexAppServerBackend {
     }
 
     /// Maps the typed `codexErrorInfo` to the caller's failure classes. No
-    /// message text is inspected: the enum is the contract.
+    /// prose is inspected: the enum is the contract, and an `other` failure's
+    /// API error body is read only for its numeric status and its code.
     fn classify_turn_error(&self, session: &mut Session, error: &Value) -> AiError {
         let info = error.get("codexErrorInfo").unwrap_or(&Value::Null);
         // A response stream existed, so model work may already have run.
@@ -357,9 +377,13 @@ impl CodexAppServerBackend {
         let connection_failure = ["httpConnectionFailed", "responseStreamConnectionFailed"]
             .iter()
             .find_map(|key| info.get(key));
+        let refusal = (info.as_str() == Some("other"))
+            .then(|| api_refusal(error))
+            .flatten();
         let http_status = connection_failure
             .and_then(|failure| failure.get("httpStatusCode"))
-            .and_then(Value::as_u64);
+            .and_then(Value::as_u64)
+            .or(refusal.as_ref().map(|(status, _)| *status));
         match (info.as_str(), http_status) {
             (Some("usageLimitExceeded" | "rateLimitExceeded"), _) | (_, Some(429)) => {
                 AiError::UsageLimited {
@@ -369,6 +393,15 @@ impl CodexAppServerBackend {
             (Some("unauthorized"), _) | (_, Some(401 | 403)) => AiError::NotAuthenticated,
             (Some(code @ ("contextWindowExceeded" | "badRequest")), _) => {
                 AiError::Rejected(format!("codex_{code}"))
+            }
+            // The API refused the request itself, before any model work: a
+            // schema it does not take, a malformed parameter.
+            (Some("other"), Some(status @ 400..=499)) => {
+                let code = refusal.and_then(|(_, code)| code);
+                AiError::Rejected(match code {
+                    Some(code) => format!("codex_request_refused:http_{status}:{code}"),
+                    None => format!("codex_request_refused:http_{status}"),
+                })
             }
             (Some("sessionBudgetExceeded"), _) => {
                 AiError::InvalidOutput("codex_sessionBudgetExceeded".to_owned())
@@ -381,6 +414,26 @@ impl CodexAppServerBackend {
             (None, None) => AiError::CompletionUnknown("codex_turn_failed".to_owned()),
         }
     }
+}
+
+/// The status and code of the API error body an `other` turn failure
+/// carries as its `message` (codex-cli 0.163.0 forwards the Responses API's
+/// own frame: `{"type":"error","error":{"code":...},"status":400}`). The
+/// code is kept only when it is a short identifier, so no free text reaches
+/// the log.
+fn api_refusal(error: &Value) -> Option<(u64, Option<String>)> {
+    let body: Value = serde_json::from_str(error.get("message")?.as_str()?).ok()?;
+    let status = body.get("status")?.as_u64()?;
+    let code = body
+        .pointer("/error/code")
+        .and_then(Value::as_str)
+        .filter(|code| {
+            !code.is_empty()
+                && code.len() <= 64
+                && code.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        })
+        .map(str::to_owned);
+    Some((status, code))
 }
 
 impl AiBackend for CodexAppServerBackend {

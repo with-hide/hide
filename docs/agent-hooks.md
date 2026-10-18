@@ -103,7 +103,8 @@ For local and connected device agent delivery, `UserPromptSubmit` reads the subm
 The session id goes to `hide inbox --hook --session`, which is how the hook counts as a submission only in its own pane; an unreadable or truncated payload has none, so that hook clears no draft.
 The bell turn pulls at most five pending letters and 8 KiB of letter context from the sibling `hide` CLI within one total two-second budget; any other prompt receives only a one-line count of waiting letters.
 Only a successful stdout flush permits confirmation, so pre-confirm interruption can repeat an ID and confirmed letters do not repeat.
-The session guidance says that a prompt beginning with `🔔` is Hide's bell and that `hide inbox` shows the letter when the prompt did not bring it, and a Codex bell names `hide inbox` itself ([delivery.md: The bell line](delivery.md#the-bell-line)); a missing or failed hook leaves pending letters available through `hide inbox` and `hide request show`.
+The session guidance says that a prompt beginning with `🦉` is Hide's bell and that `hide inbox` shows the letter when the prompt did not bring it, and a Codex bell names `hide inbox` itself ([delivery.md: The bell line](delivery.md#the-bell-line)); a missing or failed hook leaves pending letters available through `hide inbox` and `hide request show`.
+The same guidance says that Codex CLI on Windows may show the line without the owl; the core and hook recognize the saved line after removing non-BMP characters ([delivery.md: Recognizing the bell](delivery.md#recognizing-the-bell)).
 This delivery path has its own bounded private diagnostics; Memory's request runs beside it and ends where it does.
 [delivery.md](delivery.md#safe-intake-and-manual-fallback) owns these intake, failure and confirmation rules.
 
@@ -118,7 +119,8 @@ A live `HIDE_CAP_REF` must agree with the fresh proof and, on a node, its own li
 An absent named reference falls back to the fresh proof and records `hook.reference_missing` with the request identity, never its path or token.
 Local and device refusals include the same `next_action` recovery advice.
 The selected route receives one request with no retry through another transport; ambiguous node bridges are refused before any command is sent.
-Every write and read uses the time remaining from the request's start, so partial responses cannot renew the deadline.
+The request's stream carries its deadline ([ARCHITECTURE.md](ARCHITECTURE.md#the-platform-layer)), so the connect and every write and read wait only for the time left, and partial responses cannot renew the deadline.
+Each step that can fail answers its own reason, which the hook records under a cause of its own ([What a hook records when it fails](#what-a-hook-records-when-it-fails)).
 Requests and responses are capped at 16 KiB and 64 KiB, and the existing bootstrap and node proof worker caps still apply.
 The letter and Memory children run independently and in parallel under their existing caller deadlines and fail-open outcomes.
 The core takes the Project from the caller's attested checkout, read by that checkout's own node, never from anything the hook sends.
@@ -200,6 +202,26 @@ The parent's `Stop` replaces the running ids with the ones it lists: a subagent 
 A `Stop` that lists nothing (an input cut off, or a Claude Code that sends no `background_tasks`) changes nothing; nothing sweeps, since no signal says a running subagent ended.
 The running ids are capped at 256 per session, the remembered finished ids at 256 (the oldest go first, and the done count keeps them); crossing the running cap fails the event and is written down as the pane's last report failure.
 Codex and the runtimes whose input carries no subagent id keep the older rule: a start adds one, a stop moves one to done, and the turn's `Stop` sets `working` to what the runtime lists, none for Codex.
+
+### What a hook records when it fails
+
+A hook that cannot get its answer goes on without it and records why in `~/.hide/agent-hooks/delivery-diagnostics.json`, private to the account, at most once per cause every ten minutes, with one JSON line on its standard error when it records.
+The causes are a fixed list (`CAUSES` in `hide-agent-hooks/src/delivery.rs`), so the file stays small and holds no path or text.
+A hook's request to its daemon (`hide inbox --hook`, `hide workspace memory`) answers a reason for the step it stopped at, and each step has a cause of its own:
+
+| Step | `hide` reason | Cause |
+| --- | --- | --- |
+| No daemon published its bootstrap socket for the state folder, and no device's node answers | `hide_unavailable` | `unavailable` |
+| The record naming that socket is not the account's own and private, or names a folder that is gone | `invalid_bootstrap_socket_record` | `record` |
+| Nothing took the connection at the socket the record or the pane's reference names | `hide_unreachable` | `connect` |
+| The request was not written whole, because its time ran out or the stream broke; nothing ran | `request_unsent` | `unsent` |
+| No answer came before the deadline; the command may have run | `request_timeout` | `timeout` |
+| The answer ended, broke off, or was not one bounded JSON line for this request | `invalid_response` | `answer` |
+
+The daemon's own refusals keep the causes a hook acts on (`ledger`, `capacity`, `identity`), and any other reason is `refused`; an answer with no reason is `format`, and `cli` means the helper could not run the `hide` beside it.
+The `hide` whose request failed also writes `hook.request_failed` on its standard error, with the request id, the reason and the system's error kind.
+Memory's request records every failure but a deadline as `memory_unavailable` and keeps the step's cause beside it under `step`, so the file says where it stopped; a file an earlier helper wrote has no `step` and is read as it is.
+Each step has its own reason because they used to share one: every step answered `hide_unavailable`, recorded as `cli`, so a Windows hook that never wrote a byte to its daemon read like a missing `hide`.
 
 ### After Herdr hands off or restarts
 
@@ -532,7 +554,8 @@ Lineage, the mailbox identity, labels and sleep all read the session id that int
 `AgentAdapter::herdr` is therefore required, not optional.
 Among the supported agents, one gets the multi-agent collaboration tier (letters, the spawn guard, Memory and the subagent count) when its official documentation or SDK types give a hook or plugin that can both put text into the prompt and refuse a tool call; today that is Claude Code and Codex, through the six-event hook, OpenCode, through Hide's plugin, Pi and omp, through Hide's extension (Pi without a subagent count, since Pi runs none), and Antigravity, through Hide's `hide` block ([Antigravity: Hide's hook block](#antigravity-hides-hook-block)), with no bell yet.
 Every other supported agent is the basic tier: the skill, Herdr's integration and, where its documentation gives a command hook, the agent hook: the spawn guard where the hook can refuse a shell call (Grok and Cursor), the subagent count where the hook also sees a subagent start and end (Grok), and the guidance where its session start adds context (Cursor).
-A basic-tier agent takes no letters through a hook, so `hide request ack` stays its receipt and it is no bell target (PRD grok-cursor-hooks D-07).
+Grok takes letters through its tool and turn-end hooks and is a bell target at rest; Cursor takes letters through its tool hook and has no bell.
+Neither carries a new operator prompt's letters or Memory, so both keep the Basic tier.
 Adding an agent to the list checks, in order: the pinned Herdr lists a target for it and which folder that target needs; the vendor's documentation confirms the folder it reads skills from and the name of the program it installs; the vendor publishes a mark (`docs/BRAND.md`) or the row draws a monogram; and whether its hooks or plugins meet the collaboration tier above.
 It is then one shared declaration, its contract fixtures, the logo manifest, and the expected kit case; the web shell reads the generated `contracts/agent-adapters.json` rather than maintaining its own order, names or links.
 
@@ -575,7 +598,8 @@ Two pieces are written per agent into the agent's own files, and nothing else; a
   An agent's own folder (`~/.claude`, `~/.gemini/config`) is never created for the stub: the hook code reads that folder as the agent's settings being there, so a pass that made it would write a hook on the next pass that it did not write on this one, and a second apply would not be a no-op; the row says the agent has not created its folder yet, and the stub goes in on the pass after it has.
 - The agent hook, for the agents below marked as done; for OpenCode this piece is Hide's plugin, and for Pi and omp Hide's extension, which carry the guidance with the rest ([OpenCode: Hide's plugin](#opencode-hides-plugin), [Pi and omp: Hide's extension](#pi-and-omp-hides-extension)).
   It is one entry per event the agent's documentation names, in the agent's own format, whose command is `hide-agent-hooks hook --runtime <agent id> --event <event>`.
-  `hide-agent-hooks` writes it (`src/guidance.rs`) and nothing else does, under the marker `hide-guidance@6` that proves an entry is Hide's and separates a current one from an older one; an entry of `@1`, which only knew the session start, of `@2`, `@3`, of `@4`, whose `PreToolUse` matchers did not select the file tools, or of `@5`, whose matchers let only the shell, question and file tools reach the hook, is Hide's own and replaced by the next pass.
+  `hide-agent-hooks` writes it (`src/guidance.rs`) and nothing else does, under the per-agent marker (`hide-guidance@7` for Grok and Windows Antigravity, `@6` for the others) that proves an entry is Hide's and separates a current one from an older one; an entry of `@1`, which only knew the session start, of `@2`, `@3`, of `@4`, whose `PreToolUse` matchers did not select the file tools, or of `@5`, whose matchers let only the shell, question and file tools reach the hook, is Hide's own and replaced by the next pass.
+  Antigravity version 7 encodes its Windows hook command; version 6's quoted cmd guard is replaced on the next pass, while its macOS and Linux entries stay at version 6.
   Version 4 prepares Cursor's Windows payload before starting the helper; the next pass replaces version 3's lazy PowerShell pipe too.
   Where the session start adds context (Cursor), its output is the worktree-purpose instruction, including the sentence that points at `hide factory add`, one fixed line that points at `hide browser help`, and the live Workspace guidance when the daemon answers, in the field the agent documents.
   It prints no Memory index, because a Memory receipt is read back only from a session Hide reads it from: Claude Code's, Codex's, Pi's and omp's files and OpenCode's database.
@@ -612,7 +636,7 @@ Grok and Cursor each document a hook that can refuse a shell call and that sees 
 Cursor declares no subagent count: Cursor CLI 2026.10.01 runs `subagentStart` and `subagentStop` only when its agent server asks for them, and a Task subagent run (issue 911) never produced one, so the count stayed 0 for a pane that had run a subagent.
 Its chat store does keep each subagent as a store of its own, in the parent's folder under `~/.cursor/chats`, with `subagentInfo` (`parentAgentId`, `toolCallId`, `typeName`), and the parent's graph holds the Task call and its tool result; a finished subagent could be counted from those, but nothing in a subagent's store says it is still running, so Hide shows no count rather than a zero it cannot stand behind (design principle 10).
 The pane's children projection follows the count's dialect, so a Cursor pane reads as Pi's does: the uninstrumented projection with the reason `unknown` and no count, which says Hide cannot tell what the session spawned ([status-model.md](status-model.md#uninstrumented-is-not-an-unknown-activity)), never a zero, and no screen draws it; the spawn guard and the guidance keep their own hooks.
-Each runs only the events its documentation names: Grok `SessionStart`, `PreToolUse` (no matcher, which Grok's guide reads as every tool call: the [project guardrails](#project-guardrails) read the shell call `run_terminal_command` and the file tools among them, and the letters due while the agent works go at any call), `SubagentStart`, `SubagentStop` and `Stop` (the hooks guide Grok ships, `~/.grok/docs/user-guide/10-hooks.md`); Cursor `sessionStart` and `preToolUse` (no matcher, every tool call, for the same two reasons).
+Each runs only the events its documentation names: Grok `SessionStart`, `UserPromptSubmit` (observe-only, no matcher), `PreToolUse` (no matcher, which Grok's guide reads as every tool call: the [project guardrails](#project-guardrails) read the shell call `run_terminal_command` and the file tools among them, and the letters due while the agent works go at any call), `SubagentStart`, `SubagentStop` and `Stop` (the hooks guide Grok ships, `~/.grok/docs/user-guide/10-hooks.md`); Cursor `sessionStart` and `preToolUse` (no matcher, every tool call, for the same two reasons).
 Grok's `SessionStart` does not fire for a subagent, so it is where the pane's count starts over and the pane first reports itself instrumented.
 
 Grok's file is Hide's own, `~/.grok/hooks/hide.json`, beside Herdr's and Orca's files in that folder (`{"hooks": {"<Event>": [{"matcher"?, "hooks": [{"type": "command", "command", "timeout"}]}]}}`, seconds); a switch-off deletes the file and nothing else there.
@@ -627,10 +651,22 @@ The helper (`src/bin/hide-agent-hooks.rs`, `run_basic_hook`; the payload and ans
 | Refusal | Claude Code's envelope, `hookSpecificOutput.permissionDecision = "deny"`, which Grok takes | `{"permission": "deny", "user_message": <reason>, "agent_message": <reason>, "additional_context": <reason>}` |
 | Nothing to refuse | no output | `{"permission": "allow"}` |
 | Letters due while the agent works | `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": <letters>}}`, which Grok's guide says the model reads with the batch's tool results (`sessionId` names the session) | `{"permission": "allow", "additional_context": <letters>}` (`conversation_id` names the session) |
-| Turn end | `Stop`: `subagentType` marks a subagent's own stop, `backgroundTasks` lists what still runs | `stop` |
+| Prompt submission | `UserPromptSubmit`: `prompt`, `sessionId` and/or `session_id`; observe only, no output | none |
+| Turn end | `Stop`: `subagentType` marks a subagent's own stop, `backgroundTasks` lists what still runs, `stopHookActive` prevents another letter pull; due letters go in `{"decision":"block","reason":<letters>}` | `stop` |
 
 The refusal's reason and every rule of what is refused are the spawn guard's above, through the same `guard_refusal`.
-A call that runs, in a Herdr pane and with a session in its payload, then asks `hide inbox --hook --session <id> --tool` for the letters due while the agent works and answers them as the row above shows, confirming them once the answer is printed ([docs/delivery.md: Letters while the agent works](delivery.md#letters-while-the-agent-works)); a refused call carries none, and only the tools in each matcher reach the hook, so a letter waits through the others.
+A call that runs, in a Herdr pane and with a session in its payload, then asks `hide inbox --hook --session <id> --tool` for the letters due while the agent works and answers them as the row above shows, confirming them once the answer is printed ([docs/delivery.md: Letters while the agent works](delivery.md#letters-while-the-agent-works)); a refused call carries none, and the entries have no matcher so every tool reaches the hook.
+Grok's `UserPromptSubmit` reads `prompt` and the native session, sends only the trimmed prompt's digest and session to the core, and prints and confirms nothing, because Grok discards its stdout.
+Its `Stop` reads the payload once for both the subagent count and turn-end letters; a child stop, missing session or malformed payload takes none.
+It asks `hide inbox --hook --session <id> --turn-end`, prints `{"decision":"block","reason":<letters>}` when something is due, and confirms after the flush.
+A Stop with `stopHookActive: true` makes no letter pull and allows the turn to end even if confirmation failed; it still updates the subagent count.
+Prompt, tool and Stop intake share the session parser: either `sessionId` or `session_id` is accepted, equal pairs are accepted, and conflicting pairs take no letters and record `session_conflict` without either value.
+The core recognizes a bell's turn and keeps the normal five-minute wait for letters arriving during an operator's turn ([delivery.md](delivery.md#safe-intake-and-manual-fallback)).
+`GuidanceAgent::version()` is per agent: Grok writes `hide-guidance@7`; Cursor, Antigravity and every other guidance agent stay at 6, leaving their expected entries unchanged.
+Grok's version 6 file reads Outdated until the kit replaces it; `HOOK_VERSION` stays unchanged, so this does not change the pane's connection chip.
+The bell line names `hide inbox` for a session still running older hook entries.
+Grok 1.0.62 keeps the loaded entries after the file changes; `/hooks`, then `r`, reloads them without restarting the session (measured with separate command tags before and after reload in an isolated session).
+
 Cursor reads output that is not a valid answer from `preToolUse` and `subagentStart` as a refusal even when the hook exits 0, and only the CLI's own code, not its documentation, says empty output proceeds, so for those two events (`subagentStart` only from a `@2` entry an earlier build installed and the next pass has not yet removed) every path that does not refuse prints `{"permission":"allow"}`: outside a pane or a registered checkout, an unreadable payload, a daemon that is down or slow, a panic, and a failed owner handshake before anything else runs (D-04).
 Grok fails open on everything but a refusal, so its hook prints nothing on those paths, as Claude Code's does.
 A failure goes to the guard's log, never to the agent (B5).
@@ -666,7 +702,15 @@ The block holds four events in agy's own format (`{"hide": {"<Event>": [{"type":
 agy refuses a tool call whose `PreToolUse` hook fails (a nonzero exit, output that is not its JSON, a timeout, a missing program), unlike every other agent Hide supports; empty output with exit 0 lets the call run (agy 1.4.0, measured 2026-10-17).
 In agy 1.4.0 only `deny` changes what agy does: `allow`, `ask` and an empty answer each leave agy's own permission question exactly as with no hook, asking before a command (`hide inbox` included) or a file write and not before a read (measured 2026-10-17 with no other block installed).
 Hide answers `ask` because agy's hook contract documents `allow` as running the call without its question, and Hide never makes agy ask less than agy's own rules; for the same reason a hook cannot spare the operator agy's question before Hide's own commands, and agy 1.4.0's settings hold no command allow list (only `trustedWorkspaces`), so an agy pane asks before each `hide` command until the operator answers agy's own "always allow".
-So the helper prints one of the two answers on every path, and the installed command prints the ask answer itself when the helper is gone or ends without answering (a binary that cannot run, a crash): `if [ -x <helper> ]; then <helper> ... || printf '%s\n' '{"decision":"ask"}'; else ...; fi`, and on Windows, where agy runs the command through `cmd /c`, `if exist <helper> (<helper> ... || echo {"decision":"ask"}) else (echo {"decision":"ask"})` (D-05).
+So the helper prints one of the two answers on every path, and the installed command prints the ask answer itself when the helper is gone or ends without answering (a binary that cannot run, a crash): `if [ -x <helper> ]; then <helper> ... || printf '%s\n' '{"decision":"ask"}'; else ...; fi`, and on Windows a PowerShell guard sent through `powershell.exe -NoProfile -NonInteractive -EncodedCommand` (D-05).
+agy 1.4.2 starts Windows hooks through `cmd /c` with Go's argument escaping: embedded double quotes arrive as backslash-quote, which cmd does not unescape.
+The earlier `if exist "<helper>"` guard therefore found no file and ran nothing, even though the hook block loaded; a direct cmd test without that escaping missed the defect.
+Hide encodes the PowerShell script as UTF-16LE Base64, so paths and JSON answers cross that boundary without embedded quotes, and decodes it when checking ownership and the helper path.
+The guard leaves stdin attached to the helper and prints the ask answer with exit 0 if the helper is absent, cannot start or exits unsuccessfully.
+It adds no PowerShell input pipeline, so it does not add the BOM that Windows PowerShell 5.1 puts on a pipe.
+The helper's existing ASCII JSON serializer escapes non-ASCII text before PowerShell sees stdout; JSON decoding restores Korean titles and non-BMP characters.
+Only agy uses this Go-to-cmd boundary: Grok and Cursor use their PowerShell forms directly, Claude Code uses the exec form and Codex its session shell, and the JavaScript plugins start the helper directly.
+The Windows crate-boundary tests reproduce agy's escaping and assert guidance injection and conversation parsing from a real helper, Korean and non-BMP JSON answers, the missing and failed helper answers, and migration from the old block; the fake-model journey checks Memory and confirmed letters through the real agy CLI.
 The helper's own waits end far inside the block's eight-second timeout: half a second for the payload, two and a half for the daemon's answer to a start or a question, two for `git status` before a discarding command, and a daemon that never answers lets the call run (`a_hide_that_never_answers_lets_the_call_run_well_inside_the_blocks_timeout` in `hide-agent-hooks/tests/it/agy_hooks.rs`).
 agy is on by default like Claude Code and Codex, so these guarantees, not the operator's switch, are what keep Hide from ever being what blocks an agy tool call.
 A subagent is a conversation of its own in the same process and pane, with its own `SessionStart` and `Stop` and no parent field; its transcript opens with the message its parent sent it, and that is how the helper tells a subagent's start and stop from the pane's own conversation; a subagent a subagent started is counted under the pane's own conversation too, found by following those first messages up at most eight levels (`hide_agent_hooks::antigravity::root_of`).
@@ -718,7 +762,7 @@ On Windows `~/.agents/skills` is `%USERPROFILE%\.agents\skills`; no vendor page 
 | --- | --- | --- | --- | --- |
 | Claude Code | `~/.claude/skills` | done: six-event hook, a kit part | `claude` | [skills](https://code.claude.com/docs/en/skills) |
 | Codex | `~/.agents/skills` | done: six-event hook, a kit part | `codex` | [skills](https://learn.chatgpt.com/docs/build-skills) |
-| Grok | `~/.agents/skills` | done: spawn guard and subagent count in `~/.grok/hooks/hide.json`; no guidance, because `SessionStart` cannot add context, only tool-call events can | `grok` | [skills](https://docs.x.ai/build/features/skills-plugins-marketplaces) |
+| Grok | `~/.agents/skills` | done: spawn guard and subagent count in `~/.grok/hooks/hide.json`; no guidance, because `SessionStart` cannot add context, tool-call context and a Stop block reason can | `grok` | [skills](https://docs.x.ai/build/features/skills-plugins-marketplaces) |
 | OpenCode | `~/.agents/skills` | done: Hide's plugin in `~/.config/opencode/plugins/`, not a command hook; OpenCode has none, only JS plugins (<https://opencode.ai/docs/plugins/>), whose `chat.message` hook adds a synthetic part to the prompt and whose `tool.execute.before` refuses a call by throwing ([OpenCode: Hide's plugin](#opencode-hides-plugin)) | `opencode` | [skills](https://opencode.ai/docs/skills/) |
 | Pi | `~/.agents/skills` | done: Hide's extension in `~/.pi/agent/extensions/`, not a command hook; Pi has none, only TS extensions, whose `before_agent_start` adds a hidden message to the prompt and whose `tool_call` refuses a call ([Pi and omp: Hide's extension](#pi-and-omp-hides-extension)) | `pi` | [skills](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/skills.md) |
 | omp | `~/.agents/skills` | done: the same extension in `~/.omp/agent/extensions/`, with omp's subagent counts and `ask` guard | `omp`, in `~/.omp/agent` | [skills](https://omp.sh/docs/skills) |
@@ -733,10 +777,10 @@ Its popover groups the feature table into Herdr basics, session reading and mult
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `skill` | always | yes | yes | yes | yes | yes | yes | yes |
 | `guidance` | Hide's hook, plugin or extension prints the session guidance | yes | yes | yes | yes | no | yes | yes |
-| `letters` | its prompt dialect declaration (a new prompt's letters; while the agent works, `tool_letters` names the dialect whose tool event hands them over: OpenCode, Pi, omp, Grok, Cursor and Antigravity, never a bell target) | yes | yes | yes | yes | no | no | yes |
+| `letters` | its prompt dialect declaration (a new prompt's letters; while the agent works, `tool_letters` names the dialect whose tool event hands them over: OpenCode, Pi, omp, Grok, Cursor and Antigravity; a kind with this path is belled only at rest) | yes | yes | yes | yes | no | no | yes |
 | `spawn_guard` | its refusal dialect declaration | yes | yes | yes | yes | yes | yes | yes |
 | `memory` | its Memory dialect declaration | yes | yes | yes | yes | no | no | yes |
-| `bell` | the core rings the doorbell for that agent (`AgentAdapter::bell`, tied to `delivery::doorbell::bell_target`) | yes | no | no | no | no | no | no |
+| `bell` | the core rings the doorbell for that agent (`AgentAdapter::bell`, tied to `delivery::doorbell::bell_target`) | yes | no | no | no | yes (at rest) | no | no |
 | `herdr_integration` | always: every supported agent has a Herdr target | yes | yes | yes | yes | yes | yes | yes |
 | `start` | its launch declaration | yes | yes | yes | yes | yes | yes | yes |
 | `sleep` | its Sleep declaration | yes | yes | yes | yes | yes | yes | yes |

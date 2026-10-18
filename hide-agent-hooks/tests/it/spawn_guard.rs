@@ -28,7 +28,7 @@ fixture="${HOME%/*}"
 echo "$@" >> "$fixture/hide-calls"
 mode="$(/bin/cat "$fixture/mode")"
 # A daemon with no letter for the pane answers a tool event's ask with nothing.
-if [ "$1 $2" = "inbox --hook" ] && [ "$mode" != letters ]; then
+if [ "$1 $2" = "inbox --hook" ] && [ "$mode" != letters ] && [ "$mode" != letters-once ] && [ "$mode" != letters-confirm-fails ]; then
   echo '{"ok":true,"result":{"context":"","ids":[],"remaining":0}}'
   exit 0
 fi
@@ -45,6 +45,22 @@ case "$mode" in
   bridge) echo bridge_unavailable >&2; exit 2 ;;
   later) echo a_reason_a_later_build_adds >&2; exit 2 ;;
   slow) echo $$ > "$fixture/cli-pid"; exec /bin/sleep 30 ;;
+  letters-once|letters-confirm-fails)
+    case "$*" in
+      "inbox --hook"*)
+        if [ -f "$fixture/confirmed" ]; then
+          echo '{"ok":true,"result":{"context":"","ids":[],"remaining":0}}'
+        else
+          echo '{"ok":true,"result":{"context":"BODY-ONCE","ids":["letter-1"],"remaining":0}}'
+        fi ;;
+      "inbox --confirm"*)
+        if [ "$mode" = letters-confirm-fails ]; then
+          echo '{"ok":true,"result":{"confirmed":[]}}'
+          exit 0
+        fi
+        echo yes > "$fixture/confirmed"
+        echo '{"ok":true,"result":{"confirmed":["letter-1"]}}' ;;
+    esac ;;
   letters)
     case "$*" in
       "inbox --hook"*) printf '%s\n' '{"ok":true,"result":{"context":"Hide letter letter-1 from lead (claude) [request]\nBODY-1\n","ids":["letter-1"],"remaining":0}}' ;;

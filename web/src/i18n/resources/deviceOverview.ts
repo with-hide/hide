@@ -23,7 +23,7 @@ const words = {
   "record.goToDevice": ["Go to {{device}} and open", "{{device}}로 가서 열기", "{{device}} に移動して開く", "前往 {{device}} 打开"],
   "record.backTo": ["Back to {{parent}}", "{{parent}}로 돌아가기", "{{parent}} に戻る", "返回 {{parent}}"],
   "record.incomingNote": ["Children running on {{device}} belong to this task on {{root}}", "{{device}}에서 도는 자식은 {{root}}의 이 일감에 속한다", "{{device}} で動く子は {{root}} のこのタスクに属します", "在 {{device}} 上运行的子任务属于 {{root}} 的这个任务"],
-  "record.toPane": ["Go to pane", "pane으로", "pane へ", "转到 pane"],
+  "record.toPane": ["Go to terminal", "터미널로 이동", "ターミナルへ", "转到终端"],
   "record.worktreeGone": ["{{label}} (removed)", "{{label}} (없어짐)", "{{label}}（削除済み）", "{{label}}（已删除）"],
   "record.recordHint": ["View session record", "세션 기록 보기", "セッション記録を表示", "查看会话记录"],
   "backlog.sourceGithub": ["GitHub issues", "GitHub 이슈", "GitHub Issue", "GitHub 议题"],
@@ -118,7 +118,7 @@ const words = {
   "quickAdd.view": ["View", "보기", "表示", "查看"],
   "quickAdd.creating": ["Creating", "만드는 중", "作成中", "正在创建"],
   "quickAdd.retry": ["Enter to try again", "Enter로 다시 시도", "Enterで再試行", "按 Enter 重试"],
-  "missed.toBacklog": ["To backlog", "백로그로", "バックログへ", "放入待办"],
+  "missed.toBacklog": ["Add to backlog", "백로그에 추가", "バックログへ", "放入待办"],
   "missed.public": ["public", "공개", "公開", "公开"],
   "missed.maybePublic": ["may be public", "공개일 수 있음", "公開の可能性あり", "可能公开"],
 } as const;

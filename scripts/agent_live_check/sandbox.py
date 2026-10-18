@@ -99,9 +99,12 @@ class WriteSandbox:
                  f"(allow network-outbound (remote unix-socket (subpath {quote(self.sockets)})))",
                  f"(allow network-outbound (remote unix-socket (subpath {quote(self.run)})))",
                  f"(deny file-read* (subpath {quote(self.run)}))",
-                 # Settings readers lstat every ancestor. Permit only this
-                 # directory's metadata, not its contents or its children.
-                 f"(allow file-read-metadata (literal {quote(self.run)}))",
+                 # Settings readers lstat every ancestor, and Bun's realpath
+                 # opens it (OpenCode resolves its project folder that way,
+                 # and falls back to HOME when it cannot). Permit only this
+                 # directory itself, its metadata and its names, not its
+                 # children.
+                 f"(allow file-read-metadata file-read-data (literal {quote(self.run)}))",
                  "(allow file-read* " + " ".join(f"(subpath {quote(p)})" for p in
                                                    [*allowed, self.run / "bin"]) + ")"]
         leaves = spellings([*protected, self.declared_proof])
@@ -152,14 +155,17 @@ class WriteSandbox:
         endpoint = outside / "operator-stand-in.sock"
         inside = self.probe / "guard-write-proof"
         private = self.run / "guard-controller-read"
+        # The run root itself may be listed (realpath opens it); its folders may not.
+        hidden = self.run / "guard-controller-folder"
         if beneath(outside, self.run) or beneath(outside, self.sockets):
             raise ProtectionError("guard_selftest_outside_aliases_allowance")
-        if any(path.exists() for path in (forbidden, endpoint, inside, native, private)):
+        if any(path.exists() for path in (forbidden, endpoint, inside, native, private, hidden)):
             raise ProtectionError("guard_selftest_paths_already_exist")
         listener = socket.socket(socket.AF_UNIX)
         try:
             write_private(forbidden, b"unchanged")
             write_private(private, b"controller-only")
+            hidden.mkdir(mode=0o700)
             listener.bind(str(endpoint))
             listener.listen(1)
             program = (
@@ -168,7 +174,7 @@ class WriteSandbox:
                 f"pathlib.Path({str(native)!r}).write_bytes(b'native-state'); "
                 f"p=pathlib.Path({str(forbidden)!r}); "
                 f"\nfor parent in pathlib.Path({str(inside)!r}).parents: parent.lstat()"
-                f"\ntry: os.listdir({str(self.run)!r})"
+                f"\ntry: os.listdir({str(hidden)!r})"
                 "\nexcept PermissionError: pass"
                 "\nelse: sys.exit(35)"
                 f"\ntry: pathlib.Path({str(private)!r}).read_bytes()"
@@ -198,3 +204,5 @@ class WriteSandbox:
             listener.close()
             for path in (forbidden, endpoint, inside, native, private):
                 path.unlink(missing_ok=True)
+            if hidden.is_dir():
+                hidden.rmdir()

@@ -388,6 +388,15 @@ jobs:
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 5
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & (test(=delivery::ledger::tests::validated_startup_reestablishes_the_installed_version_without_repairing_corruption) | test(=delivery::ledger::tests::startup_bootstraps_private_sibling_state_and_preserves_refused_or_corrupt_bytes) | test(=runtime::delivery::tests::agents_register_and_a_letter_reaches_the_inbox_through_the_saved_ledger) | test(=runtime::tests::agent_sleep::a_dormant_intent_is_saved_through_the_state_folders_barrier) | test(=persistence::tests::a_save_makes_its_folders_chain_durable_once_until_the_folder_is_replaced) | test(=persistence::tests::an_archived_session_saves_through_the_folders_barrier_and_loads_back))'
+      - name: Agent sleep ends the agent's process tree
+        # Claude Code, Codex and Antigravity sleep (and Reopen) by ending the
+        # pane's foreground job through the node, which Windows refused as
+        # unsupported until hide-platform ended the agent's process tree
+        # there: a real agent and the tool it started end, and the end waits
+        # for the shell to hold the terminal.
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 5
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(=agent_sleep_herdr::tests::an_agent_that_does_not_quit_on_its_keys_is_ended_with_what_it_started)'
       - name: Public repository read deadline
         # Execute the delayed native Git fixture, including Windows child
         # cleanup; compiling the public-boundary regression is not proof.
@@ -599,6 +608,19 @@ jobs:
     permissions:
       contents: read
 
+  # Every pinned agent CLI installed at its pin on Linux and Windows, for a
+  # change to the pin table or an installer; the nightly's journey installs
+  # them on macOS too, every night.
+  agent-clis:
+    name: agent CLIs
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'agent-clis')
+    uses: ./.github/workflows/agent-clis.yml
+    with:
+      systems: '["linux","windows"]'
+    permissions:
+      contents: read
+
   # The Electron app on macOS, the system it is written against: the whole
   # suite, for a change to what the app runs: the desktop host, the web shell
   # or a crate.
@@ -657,7 +679,7 @@ jobs:
 
   verify:
     name: verify
-    needs: [plan, policy, rust, checks, os-contract, os-contract-macos, agy-contract, agent-journey, windows-check, windows-e2e, windows-desktop, web-e2e, remote-mailbox, desktop-e2e, package]
+    needs: [plan, policy, rust, checks, os-contract, os-contract-macos, agy-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, web-e2e, remote-mailbox, desktop-e2e, package]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

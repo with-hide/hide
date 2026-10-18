@@ -24,6 +24,7 @@
 
 pub mod device;
 mod input;
+mod permit;
 pub mod protocol;
 pub mod router;
 pub mod session;
@@ -237,6 +238,7 @@ struct Inner {
     refusals: Refusals,
     /// Its owner ended it ([`Service::close`]): no session starts again.
     closed: bool,
+    permits: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[derive(Default)]
@@ -311,6 +313,39 @@ fn unix_ms() -> u64 {
 }
 
 impl Service {
+    fn route_input(&self, target: KeyTarget, chunk: HeldChunk) {
+        let now = Instant::now();
+        self.shared.run(|inner, _| {
+            let target = match target {
+                KeyTarget::Pane(ref pane) => inner
+                    .requests
+                    .holder(pane)
+                    .map(KeyTarget::Request)
+                    .unwrap_or(target),
+                _ => target,
+            };
+            match target {
+                KeyTarget::Pane(pane) => inner.write_key(&pane, chunk, true, now),
+                KeyTarget::Request(request) => match inner.requests.route(&request, chunk) {
+                    (KeyRoute::Pane(pane), Some(chunk)) => {
+                        inner.write_key(&pane, chunk, false, now)
+                    }
+                    (KeyRoute::Dropped { limit: true }, _) => {
+                        inner.reports.push(TerminalReport::RequestDiscarded {
+                            request,
+                            reason: "limit".to_owned(),
+                        })
+                    }
+                    (KeyRoute::Held, _) => inner.wake_clock = true,
+                    _ => {}
+                },
+            }
+            inner.expire_fork_input(now);
+        });
+    }
+}
+
+impl Service {
     pub fn start(
         attacher: Box<dyn Attacher>,
         outputs: Arc<dyn OutputSink>,
@@ -355,7 +390,11 @@ impl Service {
     pub fn close(&self) {
         self.shared.run(|inner, _| {
             inner.closed = true;
+            for (pane, session) in &mut inner.panes {
+                session.hold.discard(pane, "service_closed");
+            }
             inner.panes.clear();
+            inner.requests.close();
         });
         let live = self.shared.children.wait_gone(CLOSE_WITHIN);
         if live > 0 {
@@ -383,6 +422,32 @@ impl Drop for Service {
 }
 
 impl TerminalNode for Service {
+    fn input_permit(
+        &self,
+        pane: &str,
+        bytes: usize,
+        reply: hide_node_link::terminal::InputPermitReply,
+    ) {
+        use hide_node_link::terminal::InputPermitError;
+        if bytes > hide_node_link::terminal::INPUT_HOLD_LIMIT_BYTES {
+            reply(Err(InputPermitError::Limit));
+            return;
+        }
+        let count = Arc::clone(&self.shared.lock().permits);
+        let Some(permit) = permit::Permit::take(&count, reply) else {
+            return;
+        };
+        self.route_input(
+            KeyTarget::Pane(pane.to_owned()),
+            HeldChunk {
+                typed_at: Instant::now(),
+                typed_at_unix_ms: unix_ms(),
+                bytes: vec![0; bytes.max(1)],
+                permit: Some(permit),
+            },
+        );
+    }
+
     fn control(&self, control: TerminalControl) {
         self.shared
             .run(|inner, shared| inner.control(shared, control));
@@ -391,23 +456,12 @@ impl TerminalNode for Service {
     fn key(&self, target: KeyTarget, bytes: Vec<u8>, typed_at_unix_ms: u64) {
         let now = Instant::now();
         let chunk = HeldChunk {
+            permit: None,
             typed_at: now,
             typed_at_unix_ms,
             bytes,
         };
-        self.shared.run(|inner, _| match target {
-            KeyTarget::Pane(pane) => inner.write_key(&pane, chunk, true, now),
-            KeyTarget::Request(request) => match inner.requests.route(&request, chunk) {
-                (KeyRoute::Pane(pane), Some(chunk)) => inner.write_key(&pane, chunk, false, now),
-                (KeyRoute::Dropped { limit: true }, _) => {
-                    inner.reports.push(TerminalReport::RequestDiscarded {
-                        request,
-                        reason: "limit".to_owned(),
-                    });
-                }
-                _ => {}
-            },
-        });
+        self.route_input(target, chunk);
     }
 
     fn view(&self, pane: &str, size: GridSize, new_view: bool) {
@@ -836,6 +890,7 @@ impl Inner {
             }
             TerminalControl::Release { pane, message } => self.release(&pane, message),
             TerminalControl::Forget { pane } => {
+                self.requests.forget(&pane);
                 if let Some(mut entry) = self.panes.remove(&pane) {
                     entry.hold.discard(&pane, "pane_gone");
                 }
@@ -898,8 +953,16 @@ impl Inner {
                     self.panes.entry(pane).or_default().asleep = true;
                 }
             },
-            TerminalControl::RequestOpen { request } => self.requests.open(&request, now),
+            TerminalControl::RequestOpen { request, fork } => {
+                self.requests.open(&request, now);
+                self.requests.set_fork(&request, fork);
+                self.wake_clock = true;
+            }
+            TerminalControl::RequestHold { request, pane } => {
+                self.requests.hold_for(&request, &pane);
+            }
             TerminalControl::RequestResolve { request, pane } => {
+                self.expire_fork_input(now);
                 let held = self.requests.resolve(&request, &pane, now);
                 let held = input::fresh_chunks(&pane, held, now);
                 if held.is_empty() {
@@ -917,7 +980,11 @@ impl Inner {
                 }
             }
             TerminalControl::RequestDiscard { request, reason } => {
-                self.requests.discard(&request, &reason, now)
+                let lost = self.requests.discard(&request, &reason, now);
+                if lost && reason == "unconfirmed" {
+                    self.reports
+                        .push(TerminalReport::RequestDiscarded { request, reason });
+                }
             }
             TerminalControl::AttachmentHold { pane, intent } => {
                 self.attachment = Some(Attachment {
@@ -1074,6 +1141,47 @@ impl Inner {
     /// this pane on the screen; a key held for a creation reaches its new
     /// pane without moving the keyboard.
     fn write_key(&mut self, pane: &str, chunk: HeldChunk, focus: bool, now: Instant) {
+        if let Some(permit) = &chunk.permit {
+            use hide_node_link::terminal::InputPermitError;
+            let result = if now >= permit.deadline() {
+                Err(InputPermitError::Discarded)
+            } else if self.closed || self.panes.get(pane).is_some_and(|entry| entry.closing) {
+                Err(InputPermitError::Unavailable)
+            } else if self.panes.get(pane).is_some_and(|entry| entry.asleep) {
+                Err(InputPermitError::Asleep)
+            } else {
+                Ok(())
+            };
+            if result.is_err() {
+                permit.finish(result);
+            } else if self
+                .panes
+                .get(pane)
+                .is_some_and(|entry| !matches!(entry.hold, PaneHold::Empty))
+            {
+                // Earlier desktop keys still await their controller. Keep
+                // the permission behind them, without requiring an attach
+                // when there is no earlier input to order against.
+                self.panes
+                    .get_mut(pane)
+                    .expect("checked above")
+                    .hold
+                    .hold(pane, chunk);
+                self.wake_clock = true;
+            } else if let Some(session) = self
+                .panes
+                .get(pane)
+                .and_then(|entry| entry.session.as_ref())
+                .filter(|session| session.mode == Mode::Control)
+            {
+                if let Err(refused) = Self::write_session_chunk(session, chunk) {
+                    self.error(pane, "terminal.write_failed", refused.message(pane));
+                }
+            } else {
+                permit.finish(Ok(()));
+            }
+            return;
+        }
         if !self.panes.contains_key(pane) && !self.requests.names(pane) {
             // A pane this node was never told of takes no key and records no
             // fact: a screen could name any number of them.
@@ -1133,6 +1241,28 @@ impl Inner {
         }
         self.input_fact(pane, &chunk, (submitted, focus), "write_key", now);
         self.write_typed(pane, chunk, now);
+    }
+
+    fn write_session_chunk(
+        session: &Session,
+        chunk: HeldChunk,
+    ) -> Result<(), session::WriteRefused> {
+        if let Some(permit) = chunk.permit {
+            let done = permit.clone();
+            let result = session.after_writes(session::Written::new(move |written| {
+                done.finish(if written && Instant::now() < done.deadline() {
+                    Ok(())
+                } else {
+                    Err(hide_node_link::terminal::InputPermitError::Discarded)
+                });
+            }));
+            if result.is_err() {
+                permit.finish(Err(hide_node_link::terminal::InputPermitError::Unavailable));
+            }
+            result
+        } else {
+            session.write(&chunk.bytes)
+        }
     }
 
     fn input_fact(
@@ -1628,11 +1758,13 @@ impl Inner {
             );
         }
         let entry = self.panes.get_mut(pane).expect("checked above");
-        let held = entry.hold.take(pane, now);
+        let held = entry.hold.take_chunks(pane, now);
         if !held.is_empty() {
             if mode == Mode::Control {
-                if let Err(refused) = session.write(&held) {
-                    self.error(pane, "terminal.write_failed", refused.message(pane));
+                for chunk in held {
+                    if let Err(refused) = Self::write_session_chunk(&session, chunk) {
+                        self.error(pane, "terminal.write_failed", refused.message(pane));
+                    }
                 }
             } else {
                 crate::diagnostic!(json!({
@@ -1640,7 +1772,7 @@ impl Inner {
                     "kind": "terminal.input_discarded",
                     "pane_id": pane,
                     "reason": "read_only",
-                    "bytes": held.len(),
+                    "bytes": held.iter().map(|chunk| chunk.bytes.len()).sum::<usize>(),
                 }));
             }
         }
@@ -2141,6 +2273,11 @@ impl Inner {
 
     /// Advances what time alone moves, and answers when it must run next.
     fn tick(&mut self, shared: &Arc<Shared>, now: Instant) -> Option<Instant> {
+        self.expire_fork_input(now);
+        self.requests.expire_permits(now);
+        for entry in self.panes.values_mut() {
+            entry.hold.expire_permits(now);
+        }
         let settled = self
             .panes
             .iter()
@@ -2247,14 +2384,23 @@ impl Inner {
             let observer = entry
                 .observer_resized_at
                 .map(|at| at + OBSERVER_RESIZE_QUIET);
-            [retry, observer]
+            [retry, observer, entry.hold.permit_deadline()]
         });
         let facts = self.facts.values().map(InputFacts::deadline);
         panes
             .chain(facts)
-            .chain([self.refusals.deadline()])
+            .chain([self.refusals.deadline(), self.requests.deadline()])
             .flatten()
             .min()
+    }
+
+    fn expire_fork_input(&mut self, now: Instant) {
+        for request in self.requests.expire_forks(now) {
+            self.reports.push(TerminalReport::RequestDiscarded {
+                request,
+                reason: "timeout".to_owned(),
+            });
+        }
     }
 }
 

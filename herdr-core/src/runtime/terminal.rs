@@ -414,7 +414,6 @@ impl Runtime {
                     pane,
                     agents.get(pane.id.as_str()).copied(),
                     transports.get(pane.id.as_str()).copied(),
-                    workspace,
                     offline,
                 );
                 headers.insert(
@@ -1686,6 +1685,7 @@ impl Runtime {
 
     fn ingest_terminal_report(&mut self, report: TerminalReport) -> bool {
         match report {
+            TerminalReport::InputPermit { .. } => false,
             TerminalReport::State { pane, state } => {
                 // A pane Herdr no longer lists is not brought back by a late
                 // report from its node.
@@ -1771,8 +1771,14 @@ impl Runtime {
                 self.push_diagnostic(kind, message);
                 true
             }
-            TerminalReport::RequestDiscarded { request, .. } => {
+            TerminalReport::RequestDiscarded { request, reason } => {
                 if self.input_requests.discarded_by_node(&request) {
+                    self.push_diagnostic(
+                        "terminal.input_discarded",
+                        format!("Request {request}: {reason}"),
+                    );
+                    self.set_error("terminal.input_hold_failed",
+                        "Queued input could not be delivered. Type it again once the pane is ready.", true);
                     self.sync_input_requests();
                     return true;
                 }

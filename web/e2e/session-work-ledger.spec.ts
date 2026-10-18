@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { continueFixtureTranscript, setFixtureLifecycle, startHerdr } from "./herdr-fixture";
+import { claudeProjects, continueFixtureTranscript, declareParent, labelAgent, labelMarker, setFixtureLifecycle, startHerdr, type FixtureLabel } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { FIRST_GOAL, MISSED, NEXT_GOAL, nextWork, seedFirstWork, workFixture, workRepositoryReady } from "./session-work-fixture";
 import { enterWorkspace, showProjectRow, taskRow } from "./wire";
@@ -83,7 +83,8 @@ test("@platform a native session keeps its tasks, child outputs and missed work 
     const tasks = record.locator('[data-record-work]').first().locator('[data-record-task]');
     await expect(tasks).toHaveCount(1, { timeout: 45_000 });
     await expect(tasks.first().locator('[data-task-state="done"]')).toBeVisible();
-    await expect(record.locator('[data-record-output="pr"]')).toHaveCount(2, { timeout: 45_000 });
+    await record.getByRole('tab', { name: /^PR/ }).click();
+    await expect(record.locator('[data-record-output="pr"]')).toHaveCount(1, { timeout: 45_000 });
     await page.locator(`[data-pane-view="${herdr.panes[0]}"] .xterm-helper-textarea`).focus();
     await page.keyboard.type(NEXT_GOAL);
     await page.keyboard.press("Enter");
@@ -101,21 +102,27 @@ test("@platform a native session keeps its tasks, child outputs and missed work 
     await expect(tasks).toHaveCount(3, { timeout: 45_000 });
     await expect(record).toContainText(FIRST_GOAL);
     await expect(record).toContainText(NEXT_GOAL);
-    await expect(record.locator('[data-record-output="pr"]')).toHaveCount(3, { timeout: 45_000 });
+    await record.getByRole('tab', { name: /^PR/ }).click();
+    await expect(record.locator('[data-record-output="pr"]')).toHaveCount(2, { timeout: 45_000 });
     // First asked first: the finished task, then the split request's two, which share the failed CI of its PR.
     expect(await tasks.evaluateAll((rows) => rows.map((row) => row.querySelector("[data-task-state]")?.getAttribute("data-task-state")))).toEqual(["done", "ci_failed", "ci_failed"]);
     await expect(chip).toHaveText("1/3");
     // The split request's PR mark hangs on its first task; the second says the PR's state in a small word (status-marks B34).
     await pinAndClose(page, herdr.panes[0], ["기록 화면 구현", "이슈와 검색 검증", "좁은 열 줄바꿈 확인"]);
-    // A child is a row that opens its own record in the slot, and the head's ← comes back (PRD sidebar-task-lens B16).
-    await record.locator(`[data-record-child="${child}"]`).click();
-    // The slot swaps the parent's three tasks for the child's one, so wait for that whole list.
+    // Expand the child in place, retaining the parent's tasks and navigation.
+    await record.locator(`[data-record-child="${child}"] > button`).click();
+    const detail = record.locator(`[data-record-child-detail="${child}"]`);
+    await expect(tasks).toHaveCount(3);
+    await expect(detail.locator('[data-record-task]')).toHaveText([/자식 연결 검증/]);
+    // Explicit Open record navigates, and the slot's back action returns.
+    await detail.getByRole('button', { name: 'Open record', exact: false }).click();
     await expect(record.locator("[data-record-task]")).toHaveText([/자식 연결 검증/]);
     await page.locator("[data-detail-back]").click();
     await expect(tasks).toHaveCount(3);
     // An open missed item stands in its own section, named by the task its turn made (PRD record-card-readability B12).
     const missed = record.locator("[data-record-missed] [data-missed-work]", { hasText: MISSED });
-    await expect(missed.locator("[data-missed-note]")).toHaveText(" · 기록 화면 구현");
+    await record.getByRole('tab', { name: /^Findings/ }).click();
+    await expect(missed).toBeVisible();
     // The device's open missed work also folds above the Overview backlog,
     // newest first, and 무시 there closes the same item (PRD sidebar-task-lens B52).
     await openOverview(page, "backlog");
@@ -125,7 +132,7 @@ test("@platform a native session keeps its tasks, child outputs and missed work 
     const rows = group.locator("[data-missed-work]");
     await expect(rows).toHaveCount(2);
     await expect(rows.last()).toContainText(MISSED);
-    await rows.last().getByRole("button", { name: "Dismiss", exact: true }).click();
+    await rows.last().getByRole("button", { name: "Skip", exact: true }).click();
     await expect(rows).toHaveCount(1);
     // Closing the Overview shows the Workspace again, its slot still holding the record.
     await page.getByRole("button", { name: "Close Overview", exact: true }).click();
@@ -144,18 +151,69 @@ test("@platform a native session keeps its tasks, child outputs and missed work 
     await page.keyboard.press("Escape");
     await expect(record.locator('[data-record-task]')).toHaveCount(0);
     await expect(record.locator('[data-missed-work]')).toHaveCount(0);
-    // The parent's two requests; the child's is in its own record, behind its row.
+    // Request history and PR results belong to this session only, also with summaries off.
+    await record.getByRole('tab', { name: /^Request history/ }).click();
     await expect(record.locator('[data-record-request]')).toHaveCount(2);
-    await expect(record.locator('[data-record-output="pr"]')).toHaveCount(3);
+    await record.getByRole('tab', { name: /^PR/ }).click();
+    await expect(record.locator('[data-record-output="pr"]')).toHaveCount(2);
     await expect(record.getByRole('heading', { level: 2 })).toContainText('Claude');
-    await expect(record.locator('[data-record-child]')).toContainText('Claude');
-    // The child's pull request stands on the child's row; the session's own stand beside the title (B15).
-    await expect(record.locator('[data-record-child] [data-record-output="pr"]')).toHaveCount(1);
-    await expect(record.locator('h2 [data-record-output="pr"]')).toHaveCount(2);
+    await expect(record.locator('[data-record-child] > button')).toContainText('Claude');
+    await record.locator(`[data-record-child="${child}"] > button`).click();
+    await expect(record.locator('[data-record-child-detail] [data-record-output="pr"]')).toHaveCount(1);
+    await expect(record.locator('h2 [data-record-output="pr"]')).toHaveCount(0);
     // With summaries off the backlog draws no missed line, though one is still open (B52).
     await openOverview(page, "backlog");
     await expect(page.locator("[data-backlog-section]").first()).toBeVisible();
     await expect(page.locator("[data-open-missed]")).toHaveCount(0);
+  } finally { daemon?.stop(); herdr.stop(); }
+});
+
+/**
+ * A session that asks once and delegates finishes its tasks once the child's
+ * PR merges, and the turn its child's report wakes keeps `!` for the question
+ * it ends on, though the merge finished the task first; the child counts done
+ * (PRD task-continuation B1, B3, B16, D-07).
+ */
+test("a report letter's turn keeps the question's mark on the task its sender's merged PR finished", async ({ page }) => {
+  const herdr = await startHerdr();
+  let daemon: Daemon | undefined;
+  try {
+    const github = workFixture(herdr);
+    daemon = await startHided(herdr, "session-work-continuation", undefined, github.env);
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await workRepositoryReady(daemon.stateDir);
+    await enterWorkspace(page, "fixture");
+    const at = Date.now();
+    github.clock(at, at);
+    const goal = "사이드바 두 화면 개선 작업";
+    const session = labelAgent(herdr, herdr.panes[0], {
+      task: goal, at, cwd: path.join(herdr.root, "fixture"), end: "waiting",
+      work: { task: { kind: "new", names: ["쉬는 행 빈 원", "자식 PR 표시"] }, missed: [], resolved: [], output_task_id: null },
+    });
+    labelAgent(herdr, herdr.panes[1], {
+      task: "자식 세션 결과물 연결 검증", at: at + 200, cwd: path.join(herdr.root, "fixture"), end: "waiting", toolOutputs: ["https://github.com/acme/repo/pull/34"],
+    });
+    declareParent(herdr, herdr.panes[1], herdr.panes[0]);
+    const chip = page.locator(`[data-pane-task-chip="${herdr.panes[0]}"]`);
+    const list = page.locator(`[data-pane-task-list="${herdr.panes[0]}"]`);
+    // The child's merged PR finishes the task that spawned it.
+    await expect(chip).toHaveText("2/2", { timeout: 45_000 });
+    await chip.click();
+    await expect(list.locator('[data-task-box="checked"]')).toHaveCount(2);
+    await expect(list.locator("[data-task-asks]")).toHaveCount(0);
+    // The child's report wakes the parent, which ends asking; the envelope
+    // names the child by its agent name, as delivery writes it.
+    const letter: FixtureLabel = { task: goal, at: at + 5_000, end: "question", reply: "앱을 다시 설치할지 정하세요" };
+    fs.appendFileSync(path.join(claudeProjects(herdr), "e2e", `${session}.jsonl`), [
+      { type: "user", sessionId: session, timestamp: new Date(at + 5_000).toISOString(), origin: { kind: "human" }, message: { role: "user", content: `Hide letter letter-1 from two (claude) [report]\n끝났어요\n${labelMarker(letter)}` } },
+      { type: "assistant", sessionId: session, timestamp: new Date(at + 6_000).toISOString(), message: { role: "assistant", content: [{ type: "text", text: labelMarker(letter) }] } },
+    ].map((record) => `${JSON.stringify(record)}\n`).join(""));
+    await setFixtureLifecycle(herdr, herdr.panes[0], "working");
+    await setFixtureLifecycle(herdr, herdr.panes[0], "idle");
+    await expect(list.locator("[data-task-asks]")).toHaveCount(2, { timeout: 45_000 });
+    await expect(chip).toHaveText("2/2");
+    await expect(list.locator('[data-task-box="checked"]')).toHaveCount(2);
+    await expect(list.locator("[data-task-list-children]")).toHaveText("Delegated1· Done 1");
   } finally { daemon?.stop(); herdr.stop(); }
 });
 

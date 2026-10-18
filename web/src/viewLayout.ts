@@ -10,6 +10,7 @@ import type { TFunction } from "i18next";
 import type { ViewDisplaySnapshot, ViewLayoutSnapshot, ViewNode } from "./snapshot";
 import { revealExternalEntry, type RevealHost } from "./revealExternal";
 import { translate } from "./i18n/client";
+import type { MenuEntry } from "./components/entry-menu";
 import type { MessageKey } from "./i18n/catalogs";
 
 /** The order a display's menu offers directions in. */
@@ -60,6 +61,7 @@ export function displaysOfDocument(root: ViewNode, tabId: string): ViewDisplaySn
 }
 
 import {
+  findArea,
   activeDisplay, areasOf, locateDisplay, neighbourArea,
   splitEligibility as areaSplitEligibility, dropTarget as areaDropTarget,
   resizeTarget as areaResizeTarget, roomToSplit, areaSentence, splitLabel, moveLabel, type AreaWords,
@@ -124,7 +126,7 @@ export type ViewMenuId =
   | "reveal_external"
   | "close_view";
 
-export type ViewMenuEntry = { id: ViewMenuId; label: string; unavailable: string | null; separated?: boolean };
+export type ViewMenuEntry = MenuEntry<ViewMenuId>;
 
 /** The menu's items in docs/UI_BEHAVIOR.md's order, with its fixed labels. */
 const MENU_ITEMS: readonly { id: ViewMenuId; label: () => string }[] = [
@@ -201,7 +203,13 @@ export function displayMenu(layout: ViewLayoutSnapshot, geometry: Geometry, size
   if (!located) return [];
   return displayCommands(layout, { geometry, sizes }, located, external)
     .filter((entry) => !entry.hidden)
-    .map(({ id, label, unavailable, separated }) => ({ id, label, unavailable, ...(separated ? { separated } : {}) }));
+    .map(({ id, label, unavailable, separated }): ViewMenuEntry => {
+      const entry = { id, label, unavailable, ...(separated ? { separated } : {}) };
+      const edge = menuEdge(id);
+      if (edge) return { ...entry, icon: id.startsWith("split_") ? `split_${edge}` : edge, group: id.startsWith("split_") ? "split" : "move", menuLabel: translate(`menus.${edge}`), separated: id === "split_right" };
+      const icons = { keep_open: "pin", copy_path: "copy", select_in_tree: "folder", reveal_external: "external", close_view: "close" } as const;
+      return { ...entry, icon: icons[id as keyof typeof icons] };
+    });
 }
 
 /**
@@ -275,7 +283,7 @@ export function viewAreaStepUnavailable(layout: ViewLayoutSnapshot, drawn: { geo
  */
 export type ViewFocusRequest =
   | { workspace: string; displayId: string; from: { areaId: string; index: number } | null }
-  | { workspace: string; areaId: string }
+  | { workspace: string; areaId: string; revision?: number }
   | { workspace: string; opened: { path: string; kind: "file" | "diff"; committed: boolean | null } }
   | { workspace: string; browserOpen: string };
 
@@ -293,7 +301,7 @@ export type BrowserOpenReceipt = { request_id: string; ok: boolean; display_id: 
  */
 export function focusRequestArrived(request: ViewFocusRequest, workspace: string, layout: ViewLayoutSnapshot, opens: readonly BrowserOpenReceipt[] = []): boolean {
   if (request.workspace !== workspace) return false;
-  if ("areaId" in request) return layout.active_area === request.areaId;
+  if ("areaId" in request) return request.revision === undefined ? layout.active_area === request.areaId : !!findArea(layout.root, request.areaId);
   if ("browserOpen" in request) {
     const page = opens.find((receipt) => receipt.request_id === request.browserOpen);
     const located = page?.ok && page.display_id ? locateDisplay(layout.root, page.display_id) : null;

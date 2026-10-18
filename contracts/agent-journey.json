@@ -2,6 +2,10 @@
   {
     "id": "claude-code",
     "herdr_kind": "claude",
+    "herdr_source": "herdr:claude",
+    "home_folder": [
+      ".claude"
+    ],
     "prompt_flag": "--",
     "model_flag": [
       "--model",
@@ -21,11 +25,18 @@
       "title": true,
       "usage": true
     },
+    "letter": "bell",
+    "wake": "pane",
+    "title": "automatic",
     "request_budget": 18
   },
   {
     "id": "codex",
     "herdr_kind": "codex",
+    "herdr_source": "herdr:codex",
+    "home_folder": [
+      ".codex"
+    ],
     "prompt_flag": "--",
     "model_flag": [
       "--model",
@@ -45,11 +56,18 @@
       "title": true,
       "usage": true
     },
+    "letter": "bell",
+    "wake": "pane",
+    "title": "automatic",
     "request_budget": 18
   },
   {
     "id": "grok",
     "herdr_kind": "grok",
+    "herdr_source": "herdr:grok",
+    "home_folder": [
+      ".grok"
+    ],
     "prompt_flag": "--",
     "model_flag": [
       "--model",
@@ -69,11 +87,19 @@
       "title": true,
       "usage": true
     },
-    "request_budget": 15
+    "letter": "bell",
+    "wake": "sleeping_session",
+    "title": "automatic",
+    "request_budget": 20
   },
   {
     "id": "opencode",
     "herdr_kind": "opencode",
+    "herdr_source": "herdr:opencode",
+    "home_folder": [
+      ".config",
+      "opencode"
+    ],
     "prompt_flag": "--prompt",
     "model_flag": [],
     "untitled": "OpenCode",
@@ -90,11 +116,19 @@
       "title": true,
       "usage": true
     },
+    "letter": "next_prompt",
+    "wake": "sleeping_session",
+    "title": "automatic",
     "request_budget": 18
   },
   {
     "id": "pi",
     "herdr_kind": "pi",
+    "herdr_source": "herdr:pi",
+    "home_folder": [
+      ".pi",
+      "agent"
+    ],
     "prompt_flag": "--",
     "model_flag": [
       "--model",
@@ -114,11 +148,21 @@
       "title": true,
       "usage": true
     },
+    "letter": "next_prompt",
+    "wake": "sleeping_session",
+    "title": {
+      "named": "/name"
+    },
     "request_budget": 18
   },
   {
     "id": "omp",
     "herdr_kind": "omp",
+    "herdr_source": "herdr:omp",
+    "home_folder": [
+      ".omp",
+      "agent"
+    ],
     "prompt_flag": "--",
     "model_flag": [
       "--model",
@@ -138,11 +182,18 @@
       "title": true,
       "usage": true
     },
+    "letter": "next_prompt",
+    "wake": "sleeping_session",
+    "title": "automatic",
     "request_budget": 18
   },
   {
     "id": "cursor",
     "herdr_kind": "cursor",
+    "herdr_source": "herdr:cursor",
+    "home_folder": [
+      ".cursor"
+    ],
     "prompt_flag": "--",
     "model_flag": [
       "--model",
@@ -162,11 +213,19 @@
       "title": false,
       "usage": false
     },
+    "letter": "tool",
+    "wake": "sleeping_session",
+    "title": null,
     "request_budget": 12
   },
   {
     "id": "antigravity",
     "herdr_kind": "agy",
+    "herdr_source": "herdr:antigravity_cli",
+    "home_folder": [
+      ".gemini",
+      "config"
+    ],
     "prompt_flag": "-i",
     "model_flag": [
       "--model",
@@ -186,6 +245,9 @@
       "title": true,
       "usage": true
     },
+    "letter": "next_prompt",
+    "wake": "pane",
+    "title": "automatic",
     "request_budget": 18
   }
 ]

@@ -12,6 +12,9 @@ Three files each own one kind of truth, and none of them restates another's valu
   Its `System /` sheets are shadcn parts drawn 1:1 with the dev gallery: same name, same variants, one sheet per part with `Light` and `Dark` frames and one node per state.
   Its `Component /` sheets are hide composites built on top of `System /` masters (menus, rows, panels) that do not exist in shadcn.
   `Component / Agent graph box` is the one generated `Component /` sheet besides the two folded legacy masters: `componentSheets` in `scripts/pen-system.mjs` draws its master (a head and three rows a state turns on) and its states (primary, a worktree with an asking row, resting and dimmed, a row with a tucked badge, rows with cross-project chips, selected) as refs of that master, Light and Dark, and a new sheet lands where its `at` says until a person moves it.
+  `Component / Action menus` records the approved context-menu B layout as System menu item refs: terminal, Agent and View tabs, session and task rows, submenus and a shared disabled reason in both themes.
+  The approval came from an interactive HTML comparison; its source and run captures stay in the local run directory.
+  `scripts/pen-system.mjs` owns the sheet; `web/src/components/entry-menu.tsx` owns grouping without changing command identities.
   `Component / Sidebar chrome` is generated the same way by `scripts/pen-sidebar-chrome.mjs`: the Search row and the section header masters, the Help menu, Light and Dark.
   Only `System /` and `Component /` top-level sheets belong in this file; screen proposals, audits, and scratch never do.
 - **Numeric authority** is [design/tokens.json](../design/tokens.json): shadcn-named tokens (`--background`, `--foreground`, `--card`, `--popover`, `--primary`/`--primary-foreground`, `--secondary`, `--muted`/`--muted-foreground`, `--accent`, `--destructive`, `--border`, `--input`, `--ring`, `--sidebar-*`, and the four `--accent-choice-*` picks) each carrying a Dark value and a Light value, plus aliases.
@@ -34,6 +37,7 @@ It is excluded from the production build `hided` serves.
 `node scripts/check-pen-gallery.mjs` refuses a manifest and a library that name different parts or different states for either theme frame; see Checks below.
 
 The gallery also renders production screens on synthetic scenes, one document per scene because a scene seeds the app's own stores.
+`lang=en|ko|ja|zh-CN` initializes the gallery language, including the real action menus in `pane-header`, `area-focus`, `projects-sidebar` and `session-panel`.
 `/gallery?scene=projects-sidebar` is the shell's real `Sidebar` and `createActions` over `web/src/gallery/sceneData.ts`, a snapshot with the content `Screen / Projects Sidebar` draws; its folds go through the real actions and the scene answers them as the core would.
 Its query takes `theme` (`light`, `dark`), `width` (the sidebar's CSS width, seeded as the core's `ui_state.sidebar_width`), `scale` (the interface text scale, which reaches only what lies outside the sidebar, since the sidebar keeps its sizes at every scale) and `content` (`reference`, or `long` for long Korean titles).
 `/gallery?scene=factory` is the shell's real `Sidebar` beside the real `FactoryScreen` over `web/src/gallery/factorySceneData.ts`, a `FactorySummary` of two Factories with the content `Screen / Factory` draws; the scene answers the screen's requests as the engine does (the settings tab's `config` read, and an answer, merge, retry or cancel taking its item off 내 차례).
@@ -111,6 +115,9 @@ Its selector is the scene root, not `[data-factory-screen]`, because the Pen fra
 A target's `urlStates` lists the states its scene sets up from its address (`state=<name>`), or maps each state to the query it sets, as `first-run-onboarding` does to put a state on Windows or Linux.
 `first-run-onboarding` pairs the approved boards (PRD first-run-onboarding D-20, D-27) with the onboarding scene at rest and captures every state the scene draws in the state sheets, since one board draws several states; it measures the wizard with `web/e2e/onboarding-geometry.mjs` (no overlapping parts, no sideways overflow, no letters cut off at the bottom, no squeezed agent mark, and the wizard inside the window) at text scale 1 and at 17/13, the largest Appearance offers (B41).
 `area-focus` measures the production shared area renderer and View tabs with read-only Korean content, enforcing one keyboard area, retained selections, stable geometry and unfiltered content; real terminal and native browser behavior still requires an isolated app capture.
+The input area's selected tab uses the runtime primary accent, and its content boundary uses a 2px primary perimeter.
+An Agent pane also uses the existing selected header wash; the window being inactive or a menu, search, address field or another tool holding input removes canvas input emphasis.
+Files keeps its Explorer toggle in the persistent top header, while only the selected View's path or address toolbar shows its opener; background tabs retain provenance in their tooltip.
 
 ### Keep the chosen design: `baseline`
 
@@ -180,6 +187,7 @@ No `System /` or `Component /` master carries a tab part, so `design/hide-ui.lib
 `design/hide-screens.pen` draws every area the web shell shows today, one `Screen / <Area>` sheet per area, imported from `design/hide-ui.lib.pen` the same way a `Component /` sheet is drawn from `System /` masters.
 Each sheet carries a `Light` and a `Dark` frame and uses realistic content, including Korean labels and a long path, to show real wrapping and truncation rather than an abstract state.
 `scripts/check-hide-screens.mjs` enforces the shape (`Screen / ` naming, both theme frames, every reference resolving against the library, every cross-library color restated locally, and local variables matching `design/tokens.json`) and `scripts/gen-screens.mjs` regenerates the file from `scripts/pen-screens.mjs`.
+When a master gains a child, scoped generation also fills missing imported color overrides on retained screens, without replacing their layout or explicit variant overrides.
 Because the file is generated and several megabytes of JSON, `.gitattributes` marks it `-diff linguist-generated=true`: `git diff` reports only that it changed and GitHub folds it in a pull request, so review reads `scripts/pen-screens.mjs`; `git diff --text` still shows its lines when they are needed.
 
 The device Overview is `Screen / Overview`, drawn by `scripts/pen-screens-overview.mjs` (PRD overview-device-tasks, sidebar-task-lens D-20): one device's `백로그 · 프로젝트 · 사용량` under the title and the device switch, the panel beside the tabs with an item or, at Home, a session's record, the device that does not answer, and the ⌘⇧M quick add.
@@ -198,10 +206,11 @@ Workspace is `Screen / Workspace`.
 It draws Agent Views, the right lane and the tool rail beneath the window's top row (PRD right-lane D-17; PRD sidebar-titlebar-refresh D-15, D-16): the traffic lights, the sidebar's switch and This Mac over the device rail and the sidebar, and over the center the Workspace toolbar master as the `project / checkout` path with Overview and Open server, using the Workspace columns, toolbar and divider masters in the library; the sidebar beside it opens with the Search row and has no Home row.
 The tool rail carries Memory and PRs over the divider and Files and Changes under it with the pressed tool's bar, the Files badge while the lane does not show Files, PRs' warning badge with its Needs You count, and the `…` menu; the lane carries its `tool · scope` header with Pin, Expand and Close, and the files tool its tree button and ` › ` path.
 The board draws the approved v3 states: the lane closed, over the agents, pinned and docked, the tree on over the agents, the tree alone with no document, expanded, PRs pinned, and a narrow window with the pin filled over the agents.
-The pane header keeps the agent-hierarchy round 2 identity and ask-band patterns, with the operator-approved B2 child-status layout: the ancestor path, fork mark and own PR remain on the identity row, while core state counts share the second-row overlay with the existing band, without a separate total or internal divider.
+The pane header keeps the agent-hierarchy round 2 identity and ask-band patterns: the ancestor path, fork mark and own PR remain on the identity row.
+Its second row follows the approved 2026-10-18 pane-header-progress design: a tree icon, direct-child number and chevron at the left open the existing popover; one operator request or the pane's own live progress occupies the rest, and a raised request names its child origin.
 The fork mark is the issue 916 addition, chosen by the operator as a small icon after the title and drawn in the board's Forked pane section.
-The pane-header board and `Component / Agent tree parts` draw the full, compact raised, unknown and zero-child forms in both themes; `design/review-targets.json` names the board as the `pane-header` target.
-The B2 choice was approved from the interactive HTML comparison in the conversation; the committed board records that layout, while its fidelity is checked against the production gallery and native captures rather than claiming another Pen approval.
+The pane-header main and edge boards and `Component / Agent tree parts` draw the twelve approved situations in Light and Dark, including progress-only, tree-only, empty, finished, open popover and narrow text; `design/review-targets.json` names both boards as the `pane-header` target.
+The approved local Pen sheet is the frozen visual reference, and the production gallery and isolated native capture supply implementation evidence.
 The reference includes the lane's and the tree's dividers at rest, under the pointer, focused and being dragged.
 Light and Dark frames carry Korean text and long paths, including the one-line shortened document path and its full-path tooltip.
 The server-picker comparison retains its distinct reachable endpoints, and the area-focus comparison retains two View areas with one keyboard owner and independently readable selections.
@@ -210,10 +219,14 @@ The Explorer tree's rows use the shell's indent (`--size-tree-indent`), chevron 
 The shell's marks are Material Icon Theme SVGs, which Pen draws empty, so the sheet draws lucide glyphs in the theme's hues in their place; the production gallery's `right-lane` scene (`state=tree-only`) is the reference for the marks themselves.
 Its web files are `web/src/WorkspaceScreen.tsx`, `web/src/TabBar.tsx`, `web/src/ViewAreas.tsx`, `web/src/Tools.tsx`, and `web/src/ExplorerTree.tsx`.
 
-Session record is `Screen / Session record`, built by `sessionWorkScreens` in `scripts/pen-screens-session-work.mjs` (PRD session-record-redesign).
-It draws the record the lane's 보기 slot holds (PRD sidebar-task-lens D-44) in both themes: the default record (the PRs the session and its descendants made, the checklist with its `2/3 · 맡긴 일 N` head, checkbox tasks and the children under the tasks that delegated them, `놓친 것 N`, and `내 말 N` at the end; PRD record-card-readability), the Hide AI off record, and a states board.
-Its controls are library refs; the PR mark is a ref of the Agent tree parts.
-`/gallery?scene=session-record` is the production `SessionRecord` over `web/src/gallery/SessionWorkScene.tsx`, with `state=off`, `case=open-missed|now|goals|delegated|empty` and `state=ended` for the 태스크 list, measured by `web/e2e/session-record-geometry.mjs`.
+PR and session cards are the authored `Screen / PR card` and `Screen / Session card` sheets, transplanted from the operator-approved local proposals with the screen transplant procedure above.
+They replace the generated `Screen / Session record` sheet and supersede the standalone card arrangements in Task lens D and E; those task-lens sheets still describe their surrounding navigation.
+The PR sheet carries wide and narrow cards in Light and Dark, plus failed and ready cases.
+The session sheet carries wide and narrow cards in both themes, plus a child expanded in place.
+These sheets are not rebuilt from a screen generator; edit them through the same authored-screen procedure and keep their stable frame ids.
+`/gallery?scene=pr-card` renders production `PrCardView` over `web/src/gallery/PrCardScene.tsx`, with `state=rest|failed|ready|unknown|skipped` and `web/e2e/pr-card-geometry.mjs` as its measurement.
+`/gallery?scene=session-record` renders production `SessionRecord` over `web/src/gallery/SessionWorkScene.tsx`, with summaries Off, pending judgment, question, loading and failed cases, measured by `web/e2e/session-record-geometry.mjs`.
+Both galleries accept `width`, `theme`, `lang`, `scale` and long content for wrapping checks; gallery values are invented examples, and isolated daemon tests own runtime behavior.
 
 Settings is `Screen / Settings`, built by `settingsBoards` in `scripts/pen-screens-settings.mjs` from the boards the operator approved (PRD settings-left-nav D-11).
 It draws the ⌘, sheet with its list on the left, App (General, Notifications, Devices, Shortcuts) and This Mac (Agents, Hide AI, Mobile, GitHub) with About at the list's foot, and each page under its title alone: General as Appearance, Notifications with This Mac and Phone, Agents with its machine switch, Hide AI, GitHub and About.

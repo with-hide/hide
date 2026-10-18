@@ -1,3 +1,5 @@
+import { clientI18n } from "../i18n/translator";
+import { requireInterfaceLanguage } from "../i18n/locale";
 import { StrictMode } from "react";
 import type { Root } from "react-dom/client";
 import { Gallery, GalleryFrame } from "./Gallery";
@@ -19,6 +21,7 @@ import { OverviewScene, overviewSceneParams } from "./OverviewScene";
 import { UsageScene } from "./UsageScene";
 import { ProjectSettingsScene } from "./ProjectSettingsScene";
 import { SessionWorkScene } from "./SessionWorkScene";
+import { PrCardScene } from "./PrCardScene";
 import { PALETTE_HIDE_CLASS } from "../theme";
 
 export function mountGallery(root: Root) {
@@ -26,10 +29,20 @@ export function mountGallery(root: Root) {
   // draws (hide-color-theme D-10), though it shares the page whose first paint is Hide.
   document.documentElement.classList.remove(PALETTE_HIDE_CLASS);
   const params = new URLSearchParams(window.location.search);
+  const language = params.get("lang");
+  if (language) {
+    const selected = requireInterfaceLanguage(language);
+    void clientI18n.changeLanguage(selected);
+    document.documentElement.lang = selected;
+  }
   const scene = params.get("scene");
   if (scene !== null) {
     if (scene === "project-settings") {
       root.render(<StrictMode><ProjectSettingsScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "pr-card") {
+      root.render(<StrictMode><PrCardScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "session-record") {

@@ -592,7 +592,7 @@ impl Runtime {
         if let Command::Pull {
             session,
             prompt_digest,
-            tool,
+            point,
         } = &command
         {
             if prompt_digest
@@ -609,14 +609,14 @@ impl Runtime {
                 // A tool event's ask submits nothing: the composer may hold
                 // a draft while the agent works (D-09). It must come from
                 // the pane's own session, since it hands letters over.
-                if *tool {
+                if *point != hide_node_link::panes::PullPoint::Prompt {
                     if !own {
                         return Err("session_mismatch".into());
                     }
                 } else if own {
                     self.note_prompt_submitted(&actor.pane_id);
                 }
-            } else if *tool {
+            } else if *point != hide_node_link::panes::PullPoint::Prompt {
                 return Err("session_mismatch".into());
             }
         }
@@ -670,7 +670,11 @@ impl Runtime {
             Command::Send { .. } if repeated => None,
             // A tool event's ask is judged by the caller's own pane: whether
             // it works, and since when.
-            Command::Pull { tool: true, .. } => self.delivery_observations.get(actor_pane).cloned(),
+            Command::Pull {
+                point:
+                    hide_node_link::panes::PullPoint::Tool | hide_node_link::panes::PullPoint::TurnEnd,
+                ..
+            } => self.delivery_observations.get(actor_pane).cloned(),
             Command::Send { target, .. }
             | Command::WatchStart { target, .. }
             | Command::WatchAssign {
@@ -2324,7 +2328,7 @@ pub(crate) mod tests {
                     Command::Pull {
                         prompt_digest: prompt_digest.clone(),
                         session: session.map(str::to_owned),
-                        tool: false,
+                        point: hide_node_link::panes::PullPoint::Prompt,
                     },
                 )
                 .unwrap();
@@ -2345,7 +2349,7 @@ pub(crate) mod tests {
                     Command::Pull {
                         prompt_digest: Some("prompt".into()),
                         session: None,
-                        tool: false,
+                        point: hide_node_link::panes::PullPoint::Prompt,
                     },
                 )
                 .err()
@@ -2355,7 +2359,7 @@ pub(crate) mod tests {
         let pull = |session: String| Command::Pull {
             prompt_digest: None,
             session: Some(session),
-            tool: false,
+            point: hide_node_link::panes::PullPoint::Prompt,
         };
         // An id past the session bound is refused before it is hashed under the lock.
         assert_eq!(
@@ -2444,7 +2448,7 @@ pub(crate) mod tests {
         let pull = |session: &str| Command::Pull {
             prompt_digest: None,
             session: Some(session.into()),
-            tool: true,
+            point: hide_node_link::panes::PullPoint::Tool,
         };
         clocks(&mut guard, "recipient", true);
         let prepared = guard
@@ -2490,7 +2494,7 @@ pub(crate) mod tests {
                     Command::Pull {
                         prompt_digest: None,
                         session: None,
-                        tool: true,
+                        point: hide_node_link::panes::PullPoint::Tool,
                     },
                 )
                 .err()

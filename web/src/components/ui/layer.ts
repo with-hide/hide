@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { restoreFocus } from "../../terminals";
 import { useUiStore } from "../../ui";
+import { returnKeyboardFocus } from "../../viewFocus";
 
 /** While `open`, Escape runs `close` before any layer opened earlier. */
 export function useEscapeLayer(open: boolean, close: () => void, base = false) {
@@ -90,6 +91,6 @@ export function useReturnFocus(open: boolean, named?: { target: () => HTMLElemen
     // keeps it, since taking it back would blur and commit that field.
     const now = document.activeElement;
     if (now instanceof HTMLElement && now !== document.body && now.isConnected && !named?.within?.()?.contains(now)) return;
-    restoreFocus(target);
+    returnKeyboardFocus(() => restoreFocus(target));
   }, []);
 }

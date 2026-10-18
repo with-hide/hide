@@ -526,9 +526,10 @@ test("of three panes the focused one is outlined, and zoom hides the other two b
     await page.keyboard.press(chord("toggle_zoom"));
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-zoomed", "true");
     await expect.poll(() => sent.get("toggle_zoom")).toBe(1);
-    // The zoomed header names the two panes it hides and draws no outline.
+    // Zoom keeps the input perimeter and names the two panes it hides.
     await expect(page.locator("[data-pane-zoom]")).toHaveAttribute("data-pane-zoom", "2");
-    await expect(page.locator("[data-pane-focus-outline]")).toHaveCount(0);
+    await expect(page.locator("[data-pane-focus-outline]")).toHaveCount(1);
+    await expect(shellPane.locator("[data-pane-focus-outline]")).toBeVisible();
     await screenshot(page, "s2-zoom-chip");
     await page.locator("[data-pane-zoom]").click();
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-zoomed", "false");
@@ -548,17 +549,18 @@ test("a right-click focuses its pane and opens the terminal menu, whose Zoom pan
     const shellPane = page.locator(`[data-pane-view="${shellPaneId}"]`);
     const agentPane = herdr.panes[1];
 
-    // A right-click in a pane without the keyboard focus focuses it, like a click,
-    // and the outline moves with it while its menu is open.
+    // A right-click selects its pane, but the menu holds the keyboard until
+    // it closes, so no canvas carries input emphasis while it is open.
     const agentView = page.locator(`[data-pane-view="${agentPane}"]`);
     await agentView.locator("[data-terminal-host]").click({ button: "right", position: { x: 40, y: 40 } });
     await expect(page.getByRole("menu")).toBeVisible();
     await expect(agentView).toHaveAttribute("data-focused", "true");
-    await expect(agentView.locator("[data-pane-focus-outline]")).toBeVisible();
+    await expect(page.locator("[data-pane-focus-outline]")).toHaveCount(0);
     await page.keyboard.press("Escape");
     await expect(page.getByRole("menu")).toHaveCount(0);
     await expect.poll(() => herdrFocused(herdr), { timeout: 10_000 }).toBe(agentPane);
     await settledFocus(page, agentPane);
+    await expect(agentView.locator("[data-pane-focus-outline]")).toBeVisible();
     await shellPane.locator(".xterm-helper-textarea").focus();
     await expect.poll(() => herdrFocused(herdr), { timeout: 10_000 }).toBe(shellPaneId);
     await settledFocus(page, shellPaneId);
@@ -567,12 +569,12 @@ test("a right-click focuses its pane and opens the terminal menu, whose Zoom pan
     await shellPane.locator("[data-terminal-host]").click({ button: "right", position: { x: 40, y: 40 } });
     const menu = page.getByRole("menu");
     await expect(menu).toBeVisible();
-    for (const item of ["Paste", "Select all", "Find", "Split right", "Split down", "Zoom pane", "Copy pane name"]) {
+    for (const item of ["Paste", "Select all", "Find", "Split right", "Split down", "Zoom terminal", "Copy details"]) {
       await expect(menu.getByRole("menuitem", { name: item, exact: false }).first()).toBeVisible();
     }
-    await expect(page.locator("[data-pane-focus-outline]")).toBeVisible();
+    await expect(page.locator("[data-pane-focus-outline]")).toHaveCount(0);
     await screenshot(page, "s2-terminal-menu");
-    await menu.getByRole("menuitem", { name: /^Zoom pane/ }).click();
+    await menu.getByRole("menuitem", { name: /^Zoom terminal/ }).click();
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-zoomed", "true");
     await expect.poll(() => sent.get("toggle_zoom")).toBe(1);
     // The zoomed pane takes the whole canvas, not just its own split cell,

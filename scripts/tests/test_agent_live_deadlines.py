@@ -7,10 +7,13 @@ substituted boundaries; the real screen, identity and input adapters run.
 """
 
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -210,6 +213,13 @@ class ObservationDeadlines(unittest.TestCase):
             self.assertEqual(self.observe(root, runtime, 120)[0]["arrival"], "timeout")
             self.assertTrue(all(0 < value <= .5 for value in runtime.budgets))
 
+    def test_a_command_asked_to_run_past_the_cap_is_refused_before_it_starts(self):
+        owner = OwnedProcesses()
+        self.addCleanup(owner.close)
+        with self.assertRaisesRegex(ValueError, f"at most {COMMAND_SECONDS} s"):
+            owner.run([sys.executable, "-c", "pass"], env=dict(os.environ), seconds=COMMAND_SECONDS + 1)
+        self.assertEqual(owner.children, {})
+
     def test_seed_cannot_submit_or_certify_after_late_native_replies(self):
         for late, input_count in ((("screen", 1), 0), (("agent", 1), 0),
                                   (("screen", 2), 0), (("agent", 3), 1), (None, 1)):
@@ -240,6 +250,36 @@ class ObservationDeadlines(unittest.TestCase):
                                      {"session_root": root})
                 self.assertEqual(result["outcome"], "unknown" if late else "verified")
                 self.assertEqual(runtime.inputs, [])
+
+
+
+@unittest.skipIf(sys.platform == "win32", "a Windows run's children end with its job, not a guardian")
+class RunDeadline(unittest.TestCase):
+    def test_a_child_started_first_ends_with_the_owners_run_not_its_own_clock(self):
+        with self.assertRaisesRegex(ProcessError, "cleanup_unconfirmed"):
+            with OwnedProcesses(run_seconds=3) as owner:
+                child = owner.spawn([sys.executable, "-c", "import time; time.sleep(60)"],
+                                    env={"PATH": "/usr/bin:/bin"}, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL)
+                started = time.monotonic()
+                # The guardian ends its child at the owner's deadline and says so.
+                child.wait(timeout=20)
+                self.assertLess(time.monotonic() - started, 15)
+
+
+class Teardown(unittest.TestCase):
+    def test_a_run_past_its_deadline_and_cancelled_still_runs_its_stop(self):
+        # Windows run 39104633599: the deadline refused `opencode service stop` and the server stayed.
+        with OwnedProcesses(run_seconds=0) as owner:
+            owner.cancelled.set()
+            stop = [sys.executable, "-c", "print('stopped')"]
+            with self.assertRaisesRegex(ProcessError, "run_cancelled_or_timed_out"):
+                owner.run(stop, env=dict(os.environ))
+            with owner.teardown():
+                self.assertEqual(owner.run(stop, env=dict(os.environ))[:2], (0, "stopped\n"))
+            self.assertTrue(owner.cancelled.is_set())
+            with self.assertRaisesRegex(ProcessError, "run_cancelled_or_timed_out"):
+                owner.run(stop, env=dict(os.environ))
 
 
 if __name__ == "__main__":

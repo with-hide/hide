@@ -53,7 +53,7 @@ use crate::label_transcript::{
 use crate::turns::{ToolTurnMark, TurnMark, TurnTracker};
 use crate::{
     ConfirmedLabelSession, ConversationCheckpoint, MAX_SIGHTINGS_PER_OUTPUT, PrSighting,
-    SESSION_INCREMENT_READ_LIMIT_BYTES, SESSION_LINE_LIMIT_BYTES, SkipReason,
+    ReadRefusal, SESSION_INCREMENT_READ_LIMIT_BYTES, SESSION_LINE_LIMIT_BYTES, SkipReason,
     label_reference_token, pull_request_addresses,
 };
 pub(crate) use schema::{Legacy, SCHEMA_UNKNOWN, Schema};
@@ -116,7 +116,7 @@ pub(crate) fn database_path(home: &Path) -> Result<PathBuf, String> {
 pub(crate) fn with_read<T>(
     home: &Path,
     read: impl FnOnce(&Connection, Schema) -> T,
-) -> Result<T, String> {
+) -> Result<T, ReadRefusal> {
     with_read_legacy(home, |connection, schema, _| read(connection, schema))
 }
 
@@ -124,17 +124,17 @@ pub(crate) fn with_read<T>(
 pub(crate) fn with_read_legacy<T>(
     home: &Path,
     read: impl FnOnce(&Connection, Schema, Legacy) -> T,
-) -> Result<T, String> {
-    with_unchecked_read(home, |connection| {
+) -> Result<T, ReadRefusal> {
+    Ok(with_unchecked_read(home, |connection| {
         Schema::detect(connection).map(|(schema, legacy)| read(connection, schema, legacy))
-    })?
+    })??)
 }
 
 /// One bounded read of the database file, whatever tables it holds.
 pub(crate) fn with_unchecked_read<T>(
     home: &Path,
     read: impl FnOnce(&Connection) -> T,
-) -> Result<T, String> {
+) -> Result<T, ReadRefusal> {
     let place = place(home)?;
     crate::sqlite::with_read(
         &place.root,
@@ -339,14 +339,17 @@ pub enum ForkRoute {
 /// is, by the schema the database holds, in the read that proves the session.
 /// A 2.x database that migrated a 1.x one holds both schemas, and its 2.x
 /// tables, the ones 2.x keeps writing, decide.
-pub fn fork_route(home: &Path, id: &str, cwd: &str) -> Result<ForkRoute, String> {
-    with_read(home, |connection, schema| {
-        prove(connection, schema, id, Owner::Root { cwd: Some(cwd) })?;
-        Ok(match schema {
-            Schema::V1 => ForkRoute::Flag,
-            Schema::V2 => ForkRoute::Server,
-        })
-    })?
+pub fn fork_route(home: &Path, id: &str, cwd: &str) -> Result<ForkRoute, ReadRefusal> {
+    Ok(with_read(
+        home,
+        |connection, schema| -> Result<_, String> {
+            prove(connection, schema, id, Owner::Root { cwd: Some(cwd) })?;
+            Ok(match schema {
+                Schema::V1 => ForkRoute::Flag,
+                Schema::V2 => ForkRoute::Server,
+            })
+        },
+    )??)
 }
 
 /// A session's activity: its newest write (the session row or any of its
@@ -356,9 +359,9 @@ pub fn fork_route(home: &Path, id: &str, cwd: &str) -> Result<ForkRoute, String>
 pub(crate) fn activity(
     home: &Path,
     request: &crate::session_activity::SessionActivityRequest,
-) -> Result<crate::session_activity::SessionActivity, String> {
+) -> Result<crate::session_activity::SessionActivity, ReadRefusal> {
     if request.reference_kind != "id" {
-        return Err("session_kind_unsupported".to_owned());
+        return Err("session_kind_unsupported".into());
     }
     let id = request.reference_value.as_str();
     if request
@@ -366,22 +369,25 @@ pub(crate) fn activity(
         .as_deref()
         .is_some_and(|expected| expected != id)
     {
-        return Err("session_route_owner_changed".to_owned());
+        return Err("session_route_owner_changed".into());
     }
-    with_read(home, |connection, schema| {
-        let proven = prove(
-            connection,
-            schema,
-            id,
-            Owner::Root {
-                cwd: request.cwd.as_deref(),
-            },
-        )?;
-        Ok(crate::session_activity::SessionActivity {
-            modified_at_unix_ms: newest_write(connection, schema, id, &proven)?,
-            bytes: proven.messages,
-        })
-    })?
+    Ok(with_read(
+        home,
+        |connection, schema| -> Result<_, String> {
+            let proven = prove(
+                connection,
+                schema,
+                id,
+                Owner::Root {
+                    cwd: request.cwd.as_deref(),
+                },
+            )?;
+            Ok(crate::session_activity::SessionActivity {
+                modified_at_unix_ms: newest_write(connection, schema, id, &proven)?,
+                bytes: proven.messages,
+            })
+        },
+    )??)
 }
 
 /// When the session or any of its messages was last written.
@@ -439,7 +445,7 @@ pub(crate) fn catalog(
     with_read(home, |connection, schema| {
         catalog_connection(connection, schema, device_id, project, visited, limit)
     })
-    .unwrap_or_else(|reason| Ok(Err(reason)))
+    .unwrap_or_else(|refusal| Ok(Err(refusal.into())))
 }
 
 fn catalog_connection(
@@ -608,7 +614,7 @@ fn message_at(
 pub(crate) fn read(
     home: &Path,
     request: &LabelTranscriptRequest,
-) -> Result<LabelTranscript, String> {
+) -> Result<LabelTranscript, ReadRefusal> {
     read_as(
         home,
         request,
@@ -624,11 +630,11 @@ pub(crate) fn read_as(
     home: &Path,
     request: &LabelTranscriptRequest,
     owner: Owner<'_>,
-) -> Result<(LabelTranscript, Proven), String> {
-    with_read(home, |connection, schema| {
+) -> Result<(LabelTranscript, Proven), ReadRefusal> {
+    Ok(with_read(home, |connection, schema| {
         read_connection(connection, schema, request, owner)
             .map(|page| (page.transcript, page.proven))
-    })?
+    })??)
 }
 
 /// One bounded page of the root session `scope` names, in the shape every
@@ -643,7 +649,7 @@ pub fn read_conversation(
     home: &Path,
     scope: &crate::SessionReadScope,
     saved: Option<ConversationCheckpoint>,
-) -> Result<crate::ConversationRead, String> {
+) -> Result<crate::ConversationRead, ReadRefusal> {
     let request = LabelTranscriptRequest {
         agent: crate::Agent::OpenCode,
         reference_kind: "id".to_owned(),
@@ -1315,5 +1321,5 @@ impl Read {
 /// A database refusal as a stable reason code: a lock OpenCode holds is a
 /// read to skip, anything else a database Hide cannot read.
 fn refusal(error: &rusqlite::Error) -> String {
-    crate::sqlite::refusal(&REASONS, error)
+    crate::sqlite::refusal(&REASONS, error).into()
 }

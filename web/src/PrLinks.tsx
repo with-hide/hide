@@ -1,5 +1,5 @@
 import { HouseIcon } from "lucide-react";
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "./components/ui/command";
 import { Popover, PopoverAnchor, PopoverContent } from "./components/ui/popover";
 import { Hint } from "./components/ui/tooltip";
@@ -29,15 +29,9 @@ function issueLabel(key: string): string {
   return `#${key.split("#").pop() ?? key}`;
 }
 
-/**
- * The links line (B2; PRD record-card-readability D-10, B18): each issue as
- * one sentence, `이슈 #N 제목 · 열림/닫음`, its title cut short where it runs
- * out, or `연결된 이슈 없음 · 이슈 잇기`; then the worktree of the branch as
- * one chip at the right end, a gone one dim with `정리됨`.
- */
-export function PrLinks({ number, issue: boardIssue, checkout: boardCheckout, linkable, record, project, actions }: { number: number; issue: { key: string } | null; checkout: Checkout | null; linkable: boolean; record: LinkPanel | null; project: Workspace; actions: Actions }) {
+/** Actual linked issues and branch worktrees; an absent link draws no placeholder. */
+export function PrLinks({ issue: boardIssue, checkout: boardCheckout, record, project, actions }: { issue: { key: string } | null; checkout: Checkout | null; record: LinkPanel | null; project: Workspace; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const [linking, setLinking] = useState(false);
   const tasks = project.tasks?.tasks ?? [];
   const issues: { key: string; source: LinkIssueSource | null }[] = [...(record?.pr?.issues ?? [])];
   // The board's issue is GitHub's or the branch's link now; the record may not have it yet (B5).
@@ -45,32 +39,19 @@ export function PrLinks({ number, issue: boardIssue, checkout: boardCheckout, li
   const paths = [...(record?.pr?.worktrees ?? [])];
   if (boardCheckout && !paths.includes(boardCheckout.path)) paths.unshift(boardCheckout.path);
   const checkouts = project.checkouts;
+  if (!issues.length && !paths.length) return null;
   return (
-    <p className="flex min-w-0 items-center gap-x-md text-caption text-muted-foreground" data-pr-panel-links="true">
-      <span className="flex min-w-0 flex-1 flex-col gap-y-xxs">
-        {issues.length === 0 ? (
-          <span className="inline-flex min-w-0 items-center gap-xs" data-pr-panel-issue="none">
-            <span>{t("links.noIssue")}</span>
-            {linkable ? (
-              <IssuePicker number={number} project={project} open={linking} onOpenChange={setLinking}>
-                <button type="button" className="inline-flex items-center gap-xxs rounded-xs text-primary outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" onClick={() => setLinking(true)} data-pr-link-open={number}>
-                  <span aria-hidden="true">·</span>
-                  {t("prList.linkIssue")}
-                </button>
-              </IssuePicker>
-            ) : null}
-          </span>
-        ) : (
-          issues.map((issue) => {
-            const task = tasks.find((candidate) => sameIssue(candidate.key, issue.key)) ?? null;
-            return <IssueLine key={issue.key} issueKey={issue.key} source={issue.source} task={task} project={project} actions={actions} />;
-          })
-        )}
-      </span>
+    <p className="flex min-w-0 flex-wrap items-center gap-x-md text-caption text-muted-foreground" data-pr-panel-links="true">
+      {issues.length > 0 ? <span className="flex min-w-0 flex-1 flex-col gap-y-xxs">
+        {issues.map((issue) => {
+          const task = tasks.find((candidate) => sameIssue(candidate.key, issue.key)) ?? null;
+          return <IssueLine key={issue.key} issueKey={issue.key} source={issue.source} task={task} project={project} actions={actions} />;
+        })}
+      </span> : null}
       {paths.map((path) => {
         const here = checkouts.find((checkout) => checkout.path === path && checkout.exists) ?? null;
         return (
-          <span key={path} className="inline-flex min-w-0 max-w-2/5 shrink-0 items-center gap-xxs rounded-xs border border-border px-xs font-mono text-micro" data-pr-panel-worktree={path} data-removed={here ? undefined : "true"}>
+          <span key={path} className="inline-flex min-w-0 max-w-full items-center gap-xxs rounded-xs border border-border px-xs font-mono text-micro" data-pr-panel-worktree={path} data-removed={here ? undefined : "true"}>
             <HouseIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
             {here ? (
               <Hint label={path}>

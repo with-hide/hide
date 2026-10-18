@@ -1333,9 +1333,7 @@ pub(crate) fn report_agent_session_params(
         .ok_or_else(|| format!("{kind} has no Herdr integration to report as"))?;
     params(req::PaneReportAgentSessionParams {
         pane_id: pane_id.into(),
-        // The source the agent's own Herdr integration reports under, named
-        // by its integration target (`herdr:antigravity_cli` for agy).
-        source: format!("herdr:{}", adapter.herdr.target.replace('-', "_")),
+        source: adapter.herdr.session_source(),
         agent: adapter.herdr.name.into(),
         agent_session_id: Some(session_id.into()),
         agent_session_path: None,
@@ -1552,6 +1550,10 @@ pub(crate) enum Readiness {
 }
 
 impl Readiness {
+    pub(crate) fn accepts_input(self) -> bool {
+        matches!(self, Self::Ready | Self::Unreported)
+    }
+
     fn of(interactive_ready: Option<bool>, launch_pending: Option<bool>) -> Self {
         match (interactive_ready, launch_pending) {
             (_, Some(true)) => Self::Launching,
@@ -1577,6 +1579,21 @@ pub(crate) fn delivery_agent(value: Value) -> Result<DeliveryAgent, String> {
             readiness: Readiness::of(agent.interactive_ready, agent.launch_pending),
         }),
         _ => Err("delivery_agent_format".into()),
+    }
+}
+
+pub(crate) fn delivery_prompt_params(pane: &str, text: &str) -> Result<Value, String> {
+    params(req::AgentPromptParams {
+        target: pane.into(),
+        text: text.into(),
+        wait: None,
+    })
+}
+
+pub(crate) fn delivery_prompted(value: Value) -> Result<(), String> {
+    match response(value, "delivery_prompt_format")? {
+        res::ResponseResult::AgentPrompted { .. } => Ok(()),
+        _ => Err("delivery_prompt_format".into()),
     }
 }
 

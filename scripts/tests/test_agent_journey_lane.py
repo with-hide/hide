@@ -65,7 +65,7 @@ class Fixture(unittest.TestCase):
     def table(self, **override):
         cells = {name: {"status": "pass", "reason": ""} for name in lane.FIXTURE_CELLS}
         cells["start_untrusted"] = {"status": "not measured", "reason": "a stand-in has no folder question"}
-        return {agent: {**cells, **override} for agent in lane.AGENTS}
+        return {agent: {**cells, **override} for agent in lane.FIXTURE_AGENTS}
 
     def test_every_imitated_cell_passing_passes(self):
         self.assertEqual(lane.judge(report(self.table(), [], fixture=True), "fixture"), (True, []))
@@ -79,6 +79,49 @@ class Fixture(unittest.TestCase):
     def test_each_lane_refuses_the_other_lanes_report(self):
         self.assertFalse(lane.judge(report(self.table(), []), "fixture")[0])
         self.assertFalse(lane.judge(report(self.table(), [], fixture=True), "login")[0])
+        for name in ("fixture", "login"):
+            with self.subTest(name):
+                self.assertFalse(lane.judge(report(self.table(), [], fake_model=True), name)[0])
+        self.assertFalse(lane.judge(report(self.table(), []), "fake")[0])
+
+
+class FakeModel(unittest.TestCase):
+    def table(self, **override):
+        cells = {name: {"status": "pass", "reason": ""} for name in lane.BUILT_CELLS}
+        return {agent: {**cells, **override} for agent in lane.FIXTURE_AGENTS}
+
+    def test_every_built_cell_passing_passes(self):
+        self.assertEqual(lane.judge(report(self.table(), [], fake_model=True), "fake"), (True, []))
+
+    def test_the_folder_question_a_stand_in_cannot_ask_must_pass(self):
+        # The lane takes the stand-ins' place only when it measures what they cannot.
+        passed, notes = lane.judge(report(self.table(start_untrusted={"status": "not measured", "reason": "x"}), [],
+                                          fake_model=True), "fake")
+        self.assertFalse(passed)
+        self.assertIn("::error title=agent journey claude-code::start_untrusted is not measured, the fake model lane "
+                      "stands in for the stand-in only when it passes: x", notes)
+
+    def test_a_missing_cli_fails(self):
+        passed, _ = lane.judge(report(self.table(), [{"id": "grok", "cli_missing": "grok"}], fake_model=True), "fake")
+        self.assertFalse(passed)
+
+    def test_a_cli_answering_another_version_than_the_pin_fails(self):
+        agent = {"id": "antigravity", "version": "1.4.3",
+                 "pin": {"version": "1.4.2", "matches": False, "pinned": "installer takes no version"}}
+        passed, notes = lane.judge(report(self.table(), [agent], fake_model=True), "fake")
+        self.assertFalse(passed)
+        self.assertEqual(notes, ["::error title=agent journey antigravity::answered '1.4.3', contracts/agent-clis.json "
+                                 "pins 1.4.2 (installer takes no version)"])
+
+    def test_a_report_without_a_row_the_lane_stands_for_fails(self):
+        # Every row it has passes, but Codex's is not there to pass.
+        table = self.table()
+        del table["codex"]
+        for name, flag in (("fake", "fake_model"), ("fixture", "fixture")):
+            with self.subTest(name):
+                passed, notes = lane.judge(report(table, [], **{flag: True}), name)
+                self.assertFalse(passed)
+                self.assertIn("::error title=agent journey codex::the report has no codex row", notes)
 
 
 if __name__ == "__main__":

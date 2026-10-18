@@ -376,6 +376,19 @@ impl Router {
 }
 
 impl TerminalNode for Router {
+    fn input_permit(
+        &self,
+        pane: &str,
+        bytes: usize,
+        reply: hide_node_link::terminal::InputPermitReply,
+    ) {
+        match self.route(pane) {
+            Route::Local => self.local.input_permit(pane, bytes, reply),
+            Route::Device { node, pane, .. } => node.input_permit(&pane, bytes, reply),
+            Route::Unrouted => reply(Err(hide_node_link::terminal::InputPermitError::Unavailable)),
+        }
+    }
+
     fn control(&self, mut control: TerminalControl) {
         match &mut control {
             TerminalControl::Shown { panes } => {
@@ -425,6 +438,7 @@ impl TerminalNode for Router {
                 }
             }
             TerminalControl::RequestOpen { .. }
+            | TerminalControl::RequestHold { .. }
             | TerminalControl::RequestResolve { .. }
             | TerminalControl::RequestDiscard { .. } => {
                 // The core opens creation requests for this machine's panes.
@@ -699,11 +713,21 @@ mod tests {
 
     #[derive(Default)]
     struct Recorder {
+        permits: Mutex<Vec<(String, usize)>>,
         controls: Mutex<Vec<TerminalControl>>,
         keys: Mutex<Vec<(KeyTarget, Vec<u8>)>>,
     }
 
     impl TerminalNode for Recorder {
+        fn input_permit(
+            &self,
+            pane: &str,
+            bytes: usize,
+            reply: hide_node_link::terminal::InputPermitReply,
+        ) {
+            self.permits.lock().unwrap().push((pane.to_owned(), bytes));
+            reply(Ok(()));
+        }
         fn control(&self, control: TerminalControl) {
             self.controls.lock().unwrap().push(control);
         }
@@ -814,6 +838,34 @@ mod tests {
                 generation: 2
             }]
         );
+    }
+
+    #[test]
+    fn input_permissions_route_local_and_device_ids_and_refuse_unrouted_devices() {
+        use hide_node_link::terminal::InputPermitError;
+        let (router, local, _, _) = router();
+        let mini = Arc::new(Recorder::default());
+        router.install_device("mini", Arc::clone(&mini) as Arc<dyn TerminalNode>);
+        for (pane, expected) in [
+            ("w1:p1", Ok(())),
+            ("remote:mini:pane:w2:p3", Ok(())),
+            (
+                "remote:missing:pane:w2:p3",
+                Err(InputPermitError::Unavailable),
+            ),
+        ] {
+            let (reply, result) = std::sync::mpsc::channel();
+            router.input_permit(
+                pane,
+                7,
+                Box::new(move |outcome| {
+                    reply.send(outcome).unwrap();
+                }),
+            );
+            assert_eq!(result.try_recv().unwrap(), expected);
+        }
+        assert_eq!(*local.permits.lock().unwrap(), [("w1:p1".into(), 7)]);
+        assert_eq!(*mini.permits.lock().unwrap(), [("w2:p3".into(), 7)]);
     }
 
     /// A device linked again starts with a fresh node, which is told which

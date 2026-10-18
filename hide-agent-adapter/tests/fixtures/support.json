@@ -91,6 +91,7 @@
     },
     "features": [
       "skill",
+      "bell",
       "spawn_guard",
       "herdr_integration",
       "sleep",

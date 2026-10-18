@@ -8,7 +8,7 @@ mod declarations;
 mod journey;
 pub mod usage;
 pub use declarations::ADAPTERS;
-pub use journey::{JourneyAdapter, JourneyCells, journey_contract};
+pub use journey::{JourneyAdapter, JourneyCells, JourneyLetter, JourneyWake, journey_contract};
 mod web;
 pub use web::{HookKind, WebAdapter, web_contract};
 
@@ -305,6 +305,26 @@ impl LaunchDialect {
         !matches!(self, Self::Claude | Self::Codex | Self::Antigravity)
     }
 
+    /// The keys, as Herdr names them, that make the idle agent quit on its
+    /// own, as the operator quits it: a sleep in the agent's own pane presses
+    /// them first, so the agent puts back the terminal modes it set (bracketed
+    /// paste, extended keys) before the shell takes the terminal again
+    /// (herdrdev/herdr#5371: a Windows prompt reads a bracketed paste left on
+    /// as keys), and ends it only when it does not quit. Each is a press of
+    /// its own, read within the agent's double-press window: Claude Code
+    /// 2.1.302 quits on a second Ctrl+C within 800 ms of the first ("Press
+    /// Ctrl-C again to exit"), Codex CLI on a second Ctrl+C ("again to quit")
+    /// and agy 1.4.2 on "ctrl+c or ctrl+d twice"; Ctrl+D is never pressed,
+    /// because a shell that already holds the terminal ends on it. A first
+    /// Ctrl+C clears a draft instead, and that agent is then ended. Empty for
+    /// an agent that closes its pane when sleeping.
+    pub const fn exit_keys(self) -> &'static [&'static str] {
+        match self {
+            Self::Claude | Self::Codex | Self::Antigravity => &["ctrl+c", "ctrl+c"],
+            Self::Grok | Self::OpenCode | Self::Pi | Self::Omp | Self::Cursor => &[],
+        }
+    }
+
     /// Whether the agent asks before it works in a folder it has not been
     /// told to trust, so Hide records that trust for a worktree it made
     /// before it starts the agent there: the question would otherwise hold a
@@ -465,6 +485,14 @@ pub struct HerdrIntegration {
     pub folder: &'static [&'static str],
 }
 
+impl HerdrIntegration {
+    /// The source the agent's own Herdr integration reports its sessions
+    /// under, named by the integration target (`herdr:antigravity_cli` for agy).
+    pub fn session_source(&self) -> String {
+        format!("herdr:{}", self.target.replace('-', "_"))
+    }
+}
+
 /// These are facts for later Factory consumers, not switches activating them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Capability<T> {
@@ -489,6 +517,13 @@ pub struct FactoryCapabilities {
     pub next_prompt_letters: Capability<HookDialect>,
 }
 
+/// A submission hook may observe a prompt even when its output is discarded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PromptHook {
+    pub dialect: HookDialect,
+    pub context: bool,
+}
+
 /// Independent gates; adding prompt intake never grants bell or shell denial.
 #[derive(Clone, Copy, Debug)]
 pub struct AgentAdapter {
@@ -503,15 +538,16 @@ pub struct AgentAdapter {
     pub hook: HookInstall,
     pub herdr: HerdrIntegration,
     pub default_on: bool,
-    pub prompt_hook: Option<HookDialect>,
+    pub prompt_hook: Option<PromptHook>,
     pub spawn_guard: Option<HookDialect>,
     pub subagent_counts: Option<HookDialect>,
     pub memory: Option<HookDialect>,
     pub bell: bool,
+    pub bell_names_inbox: bool,
+    pub turn_end_letters: Option<HookDialect>,
     /// The dialect whose hook, plugin or extension hands letters over at a
     /// tool event while the agent works (PRD letters-to-busy-agents D-02),
-    /// never beside a bell: a bell target reads its letters from the input
-    /// line instead, so one letter has one path.
+    /// A kind with this path may only be belled at rest.
     pub tool_letters: Option<HookDialect>,
     pub session: Option<SessionFormat>,
     pub sleep: Option<LaunchDialect>,
@@ -629,7 +665,7 @@ impl AgentAdapter {
                 HookInstall::Guidance(dialect) => dialect.prints_guidance(),
                 HookInstall::None => false,
             },
-            Feature::Letters => self.prompt_hook.is_some(),
+            Feature::Letters => matches!(self.prompt_hook, Some(PromptHook { context: true, .. })),
             Feature::Bell => self.bell,
             Feature::Memory => self.memory.is_some(),
             Feature::SpawnGuard => self.spawn_guard.is_some(),
@@ -643,6 +679,7 @@ impl AgentAdapter {
     }
 
     pub const fn basic(&self) -> bool {
-        self.prompt_hook.is_none() || self.spawn_guard.is_none()
+        !matches!(self.prompt_hook, Some(PromptHook { context: true, .. }))
+            || self.spawn_guard.is_none()
     }
 }

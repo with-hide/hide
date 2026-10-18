@@ -2742,22 +2742,32 @@ pub(crate) fn confirm_session_launch(
     if source_reference.kind != agent.proof_reference_kind() {
         return Err("session_route_reference_unconfirmed".into());
     }
-    let _: hide_session::session_activity::SessionActivity = crate::node_access::call_as(
+    let request = hide_session::session_activity::SessionActivityRequest {
+        agent,
+        reference_kind: source_reference.kind.clone(),
+        reference_value: source_reference.value.clone(),
+        cwd: Some(cwd.ok_or("session_route_cwd_unconfirmed")?.into()),
+        exact_route: true,
+        expected_id: Some(id.into()),
+    };
+    // A proof that met the agent writing its records is read again: agy
+    // writes its index after every turn, and the route stands or falls on
+    // what the next read finds.
+    let _: hide_session::session_activity::SessionActivity = read_past_writes(
         node,
-        hide_node_link::protocol::Call::SessionActivity {
-            request: hide_session::session_activity::SessionActivityRequest {
-                agent,
-                reference_kind: source_reference.kind.clone(),
-                reference_value: source_reference.value.clone(),
-                cwd: Some(cwd.ok_or("session_route_cwd_unconfirmed")?.into()),
-                exact_route: true,
-                expected_id: Some(id.into()),
-            },
+        || hide_node_link::protocol::Call::SessionActivity {
+            request: request.clone(),
         },
         Duration::from_secs(10),
+        Instant::now() + Duration::from_secs(10),
     )
     .map_err(|error| {
         let reason = match &error {
+            crate::node_access::LinkError::Refused(error)
+                if error.code == hide_node_link::ErrorCode::Busy =>
+            {
+                "session_route_in_motion"
+            }
             crate::node_access::LinkError::Refused(error) => match error
                 .message
                 .strip_prefix("session_checkpoint_invalid:")
@@ -3374,57 +3384,115 @@ pub fn spawn_agent_fork(context: LiveContext, request: ForkRequest) -> Result<()
     thread::Builder::new()
         .name("herdr-core-agent-fork".to_owned())
         .spawn(move || {
-            let started = Instant::now();
-            let parent_pane_id = request.parent_pane_id.clone();
-            let result = run_agent_fork_with_registration(
-                context.api_connector.as_ref(),
-                context.node.as_ref(),
-                &request,
-                &|| fork_execution_current(&context, &request),
-                |tab_id, pane_id| {
-                    let Some(runtime) = context.runtime.upgrade() else {
-                        return;
-                    };
-                    let changed = match runtime.lock() {
-                        Ok(mut guard) => {
-                            guard.ingest_fork_pane(&request.parent_pane_id, tab_id, pane_id)
+            // Includes pane creation and the start acknowledgment, so this
+            // input wait never extends Herdr's 120-second start reservation.
+            let input_deadline =
+                Instant::now() + crate::agent_start::AGENT_START_DEADLINE - Duration::from_secs(5);
+            finish_fork_worker(&context, &request.parent_pane_id, || {
+                let pane = run_agent_fork_with_registration(
+                    context.api_connector.as_ref(),
+                    context.node.as_ref(),
+                    &request,
+                    &|| fork_execution_current(&context, &request),
+                    |tab_id, pane_id| {
+                        let Some(runtime) = context.runtime.upgrade() else {
+                            return;
+                        };
+                        let changed = match runtime.lock() {
+                            Ok(mut guard) => {
+                                guard.ingest_fork_pane(&request.parent_pane_id, tab_id, pane_id)
+                            }
+                            Err(_) => return,
+                        };
+                        drop(runtime);
+                        if changed {
+                            context.notifier.notify();
                         }
-                        Err(_) => return,
-                    };
-                    drop(runtime);
-                    if changed {
-                        context.notifier.notify();
-                    }
-                },
-                |parent, child| {
-                    fork_execution_current(&context, &request)?;
-                    crate::coordination::link_fork(&context, parent, child, &request.name)
-                },
-            );
-            let elapsed_ms = started.elapsed().as_millis();
-            let Some(runtime) = context.runtime.upgrade() else {
-                return;
-            };
-            let changed = match runtime.lock() {
-                Ok(mut guard) => guard.ingest_fork_result(&parent_pane_id, result, elapsed_ms),
-                Err(_) => return,
-            };
-            drop(runtime);
-            if changed {
-                context.notifier.notify();
-            }
+                    },
+                    |parent, child| {
+                        fork_execution_current(&context, &request)?;
+                        crate::coordination::link_fork(&context, parent, child, &request.name)
+                    },
+                )?;
+                // The fork already succeeded. Readiness owns only its held
+                // input and must never close a slow but working pane.
+                wait_for_fork_input(&context, &request, &pane, input_deadline);
+                Ok(pane)
+            });
         })
         .map(|_| ())
         .map_err(|error| format!("fork worker could not be started: {error}"))
 }
 
+fn wait_for_fork_input(
+    context: &LiveContext,
+    request: &ForkRequest,
+    pane: &str,
+    deadline: Instant,
+) {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::agent_start::confirm_fork_started(
+            context.api_connector.as_ref(),
+            pane,
+            &request.name,
+            request.agent.kind(),
+            &|| fork_input_owner_alive(&context.runtime),
+            deadline,
+        )
+    }))
+    .unwrap_or_else(|_| Err("fork input confirmation panicked".into()));
+    if let Err(reason) = outcome {
+        crate::diagnostic!(serde_json::json!({
+            "component": "terminal_input", "kind": "terminal.fork_input_unconfirmed",
+            "pane_id": pane, "reason": reason,
+        }));
+        if let Some(runtime) = context.runtime.upgrade() {
+            runtime
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .discard_fork_input(&request.parent_pane_id);
+            context.notifier.notify();
+        }
+    }
+}
+
+fn fork_input_owner_alive(owner: &Weak<Mutex<Runtime>>) -> Result<(), String> {
+    if owner.strong_count() == 0 {
+        Err("The fork's daemon stopped.".into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Every worker exit settles its input holder, including an unwinding provider
+/// or connector. Runtime teardown settles it if the weak owner has ended.
+pub(crate) fn finish_fork_worker(
+    context: &LiveContext,
+    parent_pane_id: &str,
+    work: impl FnOnce() -> Result<String, String>,
+) {
+    let started = Instant::now();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+        .unwrap_or_else(|_| Err("fork worker panicked".into()));
+    let Some(runtime) = context.runtime.upgrade() else {
+        return;
+    };
+    let changed = runtime
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .ingest_fork_result(parent_pane_id, result, started.elapsed().as_millis());
+    if changed {
+        context.notifier.notify();
+    }
+}
+
 fn fork_execution_current(context: &LiveContext, request: &ForkRequest) -> Result<(), String> {
+    let runtime = context.runtime.upgrade().ok_or("runtime stopped")?;
     if !hide_session::Agent::from_kind(request.agent.kind())
         .is_some_and(hide_session::Agent::requires_native_proof)
     {
         return Ok(());
     }
-    let runtime = context.runtime.upgrade().ok_or("runtime stopped")?;
     let runtime = runtime.lock().map_err(|_| "runtime unavailable")?;
     if !runtime.fork_request_is_current(request, &context.api_connector)
         || !Arc::ptr_eq(&runtime.own_node(), &context.node)
@@ -3475,7 +3543,8 @@ fn run_agent_fork_with_registration(
     // the new tab, the agent's start, or the parent closed meanwhile), and the
     // session OpenCode's server made stays in OpenCode's list: it is named in
     // the reason and a diagnostic for the operator to find, never deleted.
-    let opened = (|| -> Result<String, String> {
+    let mut made_pane = None;
+    let opened = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<String, String> {
         // A split takes no command, so only a fork in its own tab runs the
         // integration's launch.
         let launch = matches!(request.placement, ForkPlacement::Tab)
@@ -3528,6 +3597,7 @@ fn run_agent_fork_with_registration(
                     launch.as_ref().map(|launch| launch.command.as_slice()),
                 )
                 .map_err(|error| error.message().to_owned())?;
+                made_pane = Some(tab.pane_id.clone());
                 created(Some(&tab.tab_id), &tab.pane_id);
                 tab.pane_id
             }
@@ -3543,6 +3613,7 @@ fn run_agent_fork_with_registration(
                     )?,
                 )
                 .and_then(wire::split_pane)?;
+                made_pane = Some(pane_id.clone());
                 created(None, &pane_id);
                 pane_id
             }
@@ -3595,7 +3666,18 @@ fn run_agent_fork_with_registration(
                 })
             }
         }
-    })();
+    })).unwrap_or_else(|_| {
+        if let Some(pane) = made_pane {
+            // Closing can fail too, but must never prevent settling the hold.
+            let closed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                control_request(connector, "pane.close", wire::pane_target_params(&pane)?)
+            }));
+            if !matches!(closed, Ok(Ok(_))) {
+                crate::diagnostic!(json!({"component": "pane_fork", "kind": "pane.fork.close_failed", "pane_id": pane}));
+            }
+        }
+        Err("fork worker panicked".into())
+    });
     opened.map_err(|error| match made {
         Some(session) => opencode_fork_left(request, &session, error),
         None => error,
@@ -3637,13 +3719,16 @@ fn fork_arguments(
         .cwd
         .as_deref()
         .ok_or("Session fork has no confirmed checkout")?;
-    let fork: hide_node_link::protocol::OpenCodeFork = crate::node_access::call_as(
+    // Busy answers only a route read that met OpenCode writing its
+    // database, before the node forked anything, so it is asked again.
+    let fork: hide_node_link::protocol::OpenCodeFork = read_past_writes(
         node,
-        hide_node_link::protocol::Call::OpenCodeFork {
+        || hide_node_link::protocol::Call::OpenCodeFork {
             source: request.session_id.clone(),
             cwd: cwd.to_owned(),
         },
         hide_node_link::protocol::OPENCODE_FORK_TIMEOUT,
+        Instant::now() + Duration::from_secs(10),
     )
     .map_err(|error| match error {
         crate::node_access::LinkError::Unknown(_) => format!(
@@ -3665,31 +3750,34 @@ fn fork_arguments(
 /// conversation its `/fork` made.
 const ANTIGRAVITY_FORK_WAIT: Duration = Duration::from_secs(30);
 const ANTIGRAVITY_FORK_POLL: Duration = Duration::from_millis(250);
-/// How many index reads in a row may meet agy writing its index before the
-/// fork gives up on it: 5 s of polls, far past one agy write.
-const ANTIGRAVITY_INDEX_IN_MOTION_LIMIT: usize = 20;
+/// How many reads of an agent's records in a row may meet the agent writing
+/// them before the reader gives up: 5 s of polls, far past one write.
+const NATIVE_READ_IN_MOTION_LIMIT: usize = 20;
+const NATIVE_READ_IN_MOTION_POLL: Duration = Duration::from_millis(250);
 
-/// One read of agy's index on the pane's node, read again while it only met
-/// agy writing the index (`hide_session::antigravity::index_in_motion`). A
-/// read that answers is one consistent snapshot of the index, so it needs no
-/// second read to agree with; the wait ends at `deadline` or after
-/// [`ANTIGRAVITY_INDEX_IN_MOTION_LIMIT`] reads in a row, whichever is first.
+/// One read of an agent's native records on a node, read again while it
+/// only met the agent writing them, which the node answers as busy
+/// (`hide_session::ReadRefusal::InMotion`). A read that answers is one
+/// consistent snapshot, so it needs no second read to agree with; the wait
+/// ends at `deadline` or after [`NATIVE_READ_IN_MOTION_LIMIT`] reads in a
+/// row, whichever is first, and answers the last read's busy refusal.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code: bounded by count and deadline
-fn read_antigravity_index<T: serde::de::DeserializeOwned>(
+fn read_past_writes<T: serde::de::DeserializeOwned>(
     node: &dyn crate::node_access::NodeLink,
     call: impl Fn() -> hide_node_link::protocol::Call,
+    timeout: Duration,
     deadline: Instant,
 ) -> Result<T, crate::node_access::LinkError> {
     let mut in_motion = 0;
     loop {
-        match crate::node_access::call_as(node, call(), Duration::from_secs(5)) {
+        match crate::node_access::call_as(node, call(), timeout) {
             Err(crate::node_access::LinkError::Refused(error))
-                if hide_session::antigravity::index_in_motion(&error.message)
-                    && in_motion + 1 < ANTIGRAVITY_INDEX_IN_MOTION_LIMIT
+                if error.code == hide_node_link::ErrorCode::Busy
+                    && in_motion + 1 < NATIVE_READ_IN_MOTION_LIMIT
                     && Instant::now() < deadline =>
             {
                 in_motion += 1;
-                thread::sleep(ANTIGRAVITY_FORK_POLL);
+                thread::sleep(NATIVE_READ_IN_MOTION_POLL);
             }
             answer => return answer,
         }
@@ -3728,12 +3816,13 @@ fn fork_antigravity(
     // What the checkout holds before /fork, read on the pane's node, so the
     // fork is the row that was not there: no clock is compared, and the
     // source may move on while agy writes it.
-    let mark: hide_node_link::protocol::AntigravityForkMark = read_antigravity_index(
+    let mark: hide_node_link::protocol::AntigravityForkMark = read_past_writes(
         node,
         || hide_node_link::protocol::Call::AntigravityForkMark {
             source: request.session_id.clone(),
             cwd: cwd.to_owned(),
         },
+        Duration::from_secs(5),
         Instant::now() + ANTIGRAVITY_FORK_WAIT,
     )
     .map_err(|error| format!("agy's conversation to fork could not be read: {error}"))?;
@@ -3752,13 +3841,14 @@ fn fork_antigravity(
     )?;
     let deadline = Instant::now() + ANTIGRAVITY_FORK_WAIT;
     let forked = loop {
-        let found: Option<String> = read_antigravity_index(
+        let found: Option<String> = read_past_writes(
             node,
             || hide_node_link::protocol::Call::AntigravityFork {
                 source: request.session_id.clone(),
                 cwd: cwd.to_owned(),
                 mark: mark.clone(),
             },
+            Duration::from_secs(5),
             deadline,
         )
         .map_err(|error| format!("agy's fork could not be confirmed: {error}"))?;
@@ -4474,6 +4564,7 @@ mod tests {
         for case in [
             "success",
             "refused",
+            "panic-created",
             "duplicate-before",
             "duplicate-after",
             "execution-after",
@@ -4586,7 +4677,6 @@ mod tests {
                     kind: "path".into(),
                     value: source.display().to_string(),
                 }),
-                parent_state_change_seq: None,
                 connection_generation: 0,
                 codex_daemon: Default::default(),
                 parent_pane_id: "parent-pane".into(),
@@ -4613,7 +4703,8 @@ mod tests {
                 |tab, pane| {
                     created
                         .borrow_mut()
-                        .push((tab.map(str::to_owned), pane.to_owned()))
+                        .push((tab.map(str::to_owned), pane.to_owned()));
+                    assert_ne!(case, "panic-created", "fixture callback panicked");
                 },
                 |_, _| Ok(()),
             );
@@ -4671,6 +4762,8 @@ mod tests {
                     expected.pop();
                 }
                 expected.push("pane.close");
+            } else if case == "panic-created" {
+                expected = vec!["session.snapshot", "layout.apply", "pane.close"];
             } else if refused {
                 expected.push("pane.close");
             }
@@ -4780,7 +4873,6 @@ mod tests {
                     kind: "id".into(),
                     value: session.into(),
                 }),
-                parent_state_change_seq: None,
                 connection_generation: 0,
                 codex_daemon: Default::default(),
                 parent_pane_id: "parent-pane".into(),
@@ -4955,7 +5047,6 @@ mod tests {
                     kind: "id".into(),
                     value: "ses_root".into(),
                 }),
-                parent_state_change_seq: None,
                 connection_generation: 0,
                 codex_daemon: Default::default(),
                 parent_pane_id: "parent-pane".into(),
@@ -5091,7 +5182,6 @@ mod tests {
                     kind: "path".into(),
                     value: source.display().to_string(),
                 }),
-                parent_state_change_seq: None,
                 connection_generation: 0,
                 codex_daemon: Default::default(),
                 parent_pane_id: "parent-pane".into(),
@@ -5181,17 +5271,19 @@ mod tests {
                 4,
                 Some("2026-10-03 01:00:00+00:00"),
             );
-            let node = IndexInMotion {
+            let node = DatabaseInMotion {
                 inner: hide_node::Local::new(Some(home.path().to_path_buf())),
                 left: std::sync::atomic::AtomicUsize::new(match case {
                     "in-motion" => 3,
                     "unreadable" => 1,
                     _ => 0,
                 }),
-                reason: if case == "unreadable" {
-                    "antigravity_db_unreadable"
+                // What the node answers for each: agy writing its index is
+                // busy, an index Hide cannot read is not.
+                refusal: if case == "unreadable" {
+                    (hide_node_link::ErrorCode::Io, "antigravity_db_unreadable")
                 } else {
-                    "antigravity_db_changed"
+                    (hide_node_link::ErrorCode::Busy, "antigravity_db_changed")
                 },
             };
             let index_home = home.path().to_path_buf();
@@ -5253,7 +5345,6 @@ mod tests {
             });
             let request = ForkRequest {
                 source_reference: None,
-                parent_state_change_seq: None,
                 connection_generation: 0,
                 codex_daemon: Default::default(),
                 parent_pane_id: "parent-pane".into(),
@@ -5317,14 +5408,118 @@ mod tests {
         }
     }
 
-    /// A node whose next `left` agy index reads are refused for `reason`.
-    struct IndexInMotion {
-        inner: hide_node::Local,
-        left: std::sync::atomic::AtomicUsize,
-        reason: &'static str,
+    /// The route Fork, Sleep's wake and resume prove before they start an
+    /// agent that keeps its records in a database, agy's index or
+    /// OpenCode's database (Windows run 39104633599 refused an OpenCode
+    /// wake this way): a proof that meets the agent writing is read again,
+    /// and one that cannot read the database is refused at its first read.
+    #[test]
+    fn a_database_route_proof_is_read_again_only_while_it_meets_the_agent_writing() {
+        for agent in ["agy", "opencode"] {
+            for (left, code, proven) in [
+                (3, hide_node_link::ErrorCode::Busy, true),
+                (1, hide_node_link::ErrorCode::Io, false),
+            ] {
+                let home = tempfile::tempdir().unwrap();
+                let cwd = hide_platform::fs::identity::canonical(home.path()).unwrap();
+                let (id, reasons) = if agent == "agy" {
+                    let id = "a9c0e2f4-0000-4000-8000-000000000001";
+                    crate::fixture::antigravity_conversation(home.path(), &cwd, id, 4, None);
+                    let transcript = hide_session::antigravity::transcript(home.path(), id);
+                    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+                    std::fs::write(
+                        &transcript,
+                        include_str!(
+                            "../../hide-session/tests/fixtures/adapters/antigravity-1.3.6/transcript_full.jsonl"
+                        ),
+                    )
+                    .unwrap();
+                    (id, ("antigravity_db_busy", "antigravity_db_unreadable"))
+                } else {
+                    let id = "ses_root";
+                    crate::fixture::opencode_database(
+                        home.path(),
+                        &[(id, None, cwd.to_str().unwrap())],
+                    );
+                    (id, ("opencode_db_busy", "opencode_db_unreadable"))
+                };
+                let node = DatabaseInMotion {
+                    inner: hide_node::Local::new(Some(home.path().to_path_buf())),
+                    left: std::sync::atomic::AtomicUsize::new(left),
+                    refusal: (code, if proven { reasons.0 } else { reasons.1 }),
+                };
+                let reference = crate::sidebar::SessionAgentSessionPayload {
+                    kind: "id".into(),
+                    value: id.into(),
+                };
+                let result =
+                    confirm_session_launch(&node, agent, id, cwd.to_str(), Some(&reference));
+                assert_eq!(result.is_ok(), proven, "{agent} {code:?}: {result:?}");
+                assert_eq!(
+                    node.left.load(std::sync::atomic::Ordering::SeqCst),
+                    0,
+                    "{agent} {code:?}"
+                );
+            }
+        }
     }
 
-    impl crate::node_access::NodeLink for IndexInMotion {
+    /// An OpenCode fork whose route read met OpenCode writing its database
+    /// forked nothing, so it is asked again; one that cannot read the
+    /// database is refused at its first ask.
+    #[test]
+    fn an_opencode_fork_is_asked_again_only_while_its_route_meets_opencode_writing() {
+        for (left, code, forked) in [
+            (3, hide_node_link::ErrorCode::Busy, true),
+            (1, hide_node_link::ErrorCode::Io, false),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let checkout = hide_platform::fs::identity::canonical(home.path())
+                .unwrap()
+                .display()
+                .to_string();
+            crate::fixture::opencode_database(home.path(), &[("ses_root", None, &checkout)]);
+            let node = DatabaseInMotion {
+                inner: hide_node::Local::new(Some(home.path().to_path_buf())),
+                left: std::sync::atomic::AtomicUsize::new(left),
+                refusal: (code, "opencode_db_busy"),
+            };
+            let request = ForkRequest {
+                source_reference: None,
+                connection_generation: 0,
+                codex_daemon: Default::default(),
+                parent_pane_id: "parent-pane".into(),
+                agent: crate::fork::ForkableAgent::OpenCode,
+                session_id: "ses_root".into(),
+                cwd: Some(checkout),
+                name: "fork-opencode-1".into(),
+                tab_label: None,
+                placement: ForkPlacement::Tab,
+                launch: Default::default(),
+            };
+            let result = fork_arguments(&node, &request);
+            assert_eq!(result.is_ok(), forked, "{code:?}: {result:?}");
+            assert_eq!(
+                node.left.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "{code:?}"
+            );
+        }
+    }
+
+    /// A node whose next `left` reads of an agent's database are refused
+    /// with `refusal`.
+    struct DatabaseInMotion {
+        inner: hide_node::Local,
+        left: std::sync::atomic::AtomicUsize,
+        refusal: (hide_node_link::ErrorCode, &'static str),
+    }
+
+    impl crate::node_access::NodeLink for DatabaseInMotion {
+        fn reader_features(&self) -> Option<&hide_node_link::sessions::ReaderFeatures> {
+            self.inner.reader_features()
+        }
+
         fn call(
             &self,
             call: hide_node_link::protocol::Call,
@@ -5334,6 +5529,8 @@ mod tests {
                 call,
                 hide_node_link::protocol::Call::AntigravityForkMark { .. }
                     | hide_node_link::protocol::Call::AntigravityFork { .. }
+                    | hide_node_link::protocol::Call::SessionActivity { .. }
+                    | hide_node_link::protocol::Call::OpenCodeFork { .. }
             ) && self
                 .left
                 .try_update(
@@ -5344,7 +5541,7 @@ mod tests {
                 .is_ok()
             {
                 return Err(crate::node_access::LinkError::Refused(
-                    hide_node_link::HostError::new(hide_node_link::ErrorCode::Io, self.reason),
+                    hide_node_link::HostError::new(self.refusal.0, self.refusal.1),
                 ));
             }
             self.inner.call(call, timeout)
@@ -5372,7 +5569,6 @@ mod tests {
         });
         let request = ForkRequest {
             source_reference: None,
-            parent_state_change_seq: None,
             connection_generation: 0,
             codex_daemon: crate::codex_launch::CodexDaemon::Present,
             parent_pane_id: "parent-pane".to_owned(),
@@ -5397,7 +5593,7 @@ mod tests {
         assert_eq!(pane_id, "child-pane");
         assert_eq!(
             herdr.methods(),
-            ["pane.split", "pane.process_info", "agent.start"]
+            ["pane.split", "pane.process_info", "agent.start",]
         );
     }
 

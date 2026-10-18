@@ -97,7 +97,10 @@ fn gemini_writes_the_documented_settings_shape_with_milliseconds() {
     assert_eq!(hook["timeout"], 8000, "Gemini CLI counts milliseconds");
     let command = hook["command"].as_str().unwrap();
     assert!(command.contains("--runtime gemini-cli --event SessionStart"));
-    assert!(command.contains(&format!("--source hide-guidance@{GUIDANCE_VERSION}")));
+    assert!(command.contains(&format!(
+        "--source hide-guidance@{}",
+        GuidanceAgent::Gemini.version()
+    )));
     assert!(command.starts_with("if [ -x '"), "guarded: {command}");
 }
 
@@ -357,8 +360,8 @@ fn a_second_install_changes_nothing_and_a_removal_leaves_no_trace_of_an_own_file
         assert!(matches!(
             status(agent, fixture.home()),
             HookStatus::Installed {
-                version: GUIDANCE_VERSION
-            }
+                version
+            } if version == agent.version()
         ));
         assert!(matches_install(agent, fixture.home(), &fixture.helper));
         let removed = remove(agent, fixture.home()).unwrap();
@@ -416,7 +419,7 @@ fn an_older_marker_reads_outdated_and_a_gone_helper_reads_failed() {
     install(GuidanceAgent::Qwen, fixture.home(), &fixture.helper).unwrap();
     let path = GuidanceAgent::Qwen.config_path(fixture.home());
     let text = fs::read_to_string(&path).unwrap().replace(
-        &format!("hide-guidance@{GUIDANCE_VERSION}"),
+        &format!("hide-guidance@{}", GuidanceAgent::Qwen.version()),
         "hide-guidance@0",
     );
     fs::write(&path, text).unwrap();
@@ -644,6 +647,7 @@ fn grok_writes_its_own_file_of_the_events_its_documentation_names() {
     assert_eq!(
         events,
         [
+            "UserPromptSubmit",
             "SessionStart",
             "PreToolUse",
             "SubagentStart",
@@ -658,6 +662,7 @@ fn grok_writes_its_own_file_of_the_events_its_documentation_names() {
         assert_eq!(hook["timeout"], 8, "{event}");
         let command = hook["command"].as_str().unwrap();
         assert!(command.starts_with("if [ -x '"), "{command}");
+        assert!(command.contains("hide-guidance@7"), "{command}");
         assert!(
             command.contains(&format!("--runtime grok --event {event} ")),
             "{command}"
@@ -667,11 +672,24 @@ fn grok_writes_its_own_file_of_the_events_its_documentation_names() {
     // in Grok's guide, and the letters due while the agent works go at any
     // call's gap.
     assert!(grok["hooks"]["PreToolUse"][0].get("matcher").is_none());
+    assert!(
+        grok["hooks"]["UserPromptSubmit"][0]
+            .get("matcher")
+            .is_none()
+    );
     assert!(grok["hooks"]["Stop"][0].get("matcher").is_none());
     assert_eq!(
         installed_helper_path(GuidanceAgent::Grok, fixture.home()).as_deref(),
         Some(fixture.helper.to_str().unwrap())
     );
+    let old = fs::read_to_string(&path)
+        .unwrap()
+        .replace("hide-guidance@7", "hide-guidance@6");
+    fs::write(&path, old).unwrap();
+    assert!(matches!(
+        status(GuidanceAgent::Grok, fixture.home()),
+        HookStatus::Outdated { version: 6 }
+    ));
 }
 
 #[cfg(unix)]
@@ -723,9 +741,7 @@ fn a_missing_event_or_an_edited_entry_is_not_current() {
     install(GuidanceAgent::Cursor, fixture.home(), &fixture.helper).unwrap();
     assert!(matches!(
         status(GuidanceAgent::Cursor, fixture.home()),
-        HookStatus::Installed {
-            version: GUIDANCE_VERSION
-        }
+        HookStatus::Installed { version: 6 }
     ));
     assert!(matches_install(
         GuidanceAgent::Cursor,
@@ -824,9 +840,7 @@ fn installing_over_version_two_takes_out_the_subagent_and_turn_entries_and_only_
     );
     assert!(matches!(
         status(GuidanceAgent::Cursor, fixture.home()),
-        HookStatus::Installed {
-            version: GUIDANCE_VERSION
-        }
+        HookStatus::Installed { version: 6 }
     ));
     assert!(matches_install(
         GuidanceAgent::Cursor,
@@ -933,4 +947,56 @@ fn agys_tool_command_passes_the_helpers_own_answer_through_alone() {
         format!("{deny}\n")
     );
     assert_eq!(answer["decision"], "deny");
+}
+
+#[cfg(windows)]
+#[test]
+fn agys_legacy_windows_block_is_replaced_without_touching_other_blocks() {
+    let fixture = Fixture::new(GuidanceAgent::Antigravity);
+    let agent = GuidanceAgent::Antigravity;
+    let legacy = format!(
+        "if exist \"{}\" (\"{}\" hook --runtime antigravity --event SessionStart --source hide-guidance@6)",
+        fixture.helper.display(),
+        fixture.helper.display()
+    );
+    let other = json!({"SessionStart": [{"type": "command", "command": "echo other"}]});
+    fixture.write(
+        agent,
+        &json!({
+            "other": other,
+            "hide": {"SessionStart": [{"type": "command", "command": legacy, "timeout": 8}]},
+        })
+        .to_string(),
+    );
+    assert_eq!(
+        status(agent, fixture.home()),
+        HookStatus::Outdated { version: 6 }
+    );
+    assert_eq!(
+        installed_helper_path(agent, fixture.home()).as_deref(),
+        fixture.helper.to_str()
+    );
+    install(agent, fixture.home(), &fixture.helper).unwrap();
+    assert_eq!(
+        status(agent, fixture.home()),
+        HookStatus::Installed {
+            version: agent.version()
+        }
+    );
+    assert_eq!(
+        installed_helper_path(agent, fixture.home()).as_deref(),
+        fixture.helper.to_str()
+    );
+    assert!(matches_install(agent, fixture.home(), &fixture.helper));
+    assert!(
+        !install(agent, fixture.home(), &fixture.helper)
+            .unwrap()
+            .changed
+    );
+    assert_eq!(fixture.read(agent)["other"], other);
+    assert_eq!(
+        remove(agent, fixture.home()).unwrap().removed_entries,
+        agent.slots().len()
+    );
+    assert_eq!(fixture.read(agent), json!({"other": other}));
 }

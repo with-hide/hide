@@ -71,10 +71,6 @@ pub(super) struct WorkspaceViewStore {
     /// the tree the file carried until it is shown.
     pub(super) live: HashSet<WorkspaceKey>,
     pub(super) agent_live: HashSet<WorkspaceKey>,
-    /// What the bookmark pass saw of each Workspace it has had in front
-    /// (`view_bookmarks.rs`). Runtime only: a Workspace not seen yet counts
-    /// every shown tab as newly shown.
-    pub(super) bookmark_seen: HashMap<WorkspaceKey, super::view_bookmarks::Seen>,
     pub(super) agent_admissions: BTreeMap<WorkspaceKey, HashSet<String>>,
     pub(super) agent_placements: BTreeMap<String, (WorkspaceKey, String, Option<usize>)>,
     /// The Workspace the last sync saw in front.
@@ -301,7 +297,6 @@ impl WorkspaceViewStore {
                 views,
                 live: HashSet::new(),
                 agent_live: HashSet::new(),
-                bookmark_seen: HashMap::new(),
                 agent_admissions: BTreeMap::new(),
                 agent_placements: BTreeMap::new(),
                 front: None,
@@ -854,12 +849,6 @@ impl Runtime {
         self.restore_front_when_ready();
         self.reconcile_view_displays();
         self.sync_agent_selection();
-        // The one comparison point for Agent tab bookmarks: a restore lands
-        // before the editor is reconciled and the snapshot published, so the
-        // tab and the panel's fronts leave in the same frame.
-        if self.track_view_bookmarks() {
-            self.reconcile_view_displays();
-        }
         self.refresh_browser_inventory_scope();
         if let Some(store) = self.workspace_views.as_ref()
             && self.snapshot.browser_views_revision != Some(store.generation)
@@ -1243,9 +1232,6 @@ impl Runtime {
         store.live.retain(|(device, _)| device != device_id);
         store
             .lane_called
-            .retain(|(device, _), _| device != device_id);
-        store
-            .bookmark_seen
             .retain(|(device, _), _| device != device_id);
         store
             .split_requests

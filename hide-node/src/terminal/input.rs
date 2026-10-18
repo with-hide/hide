@@ -17,7 +17,9 @@
 //!
 //! Crossing a cap discards what was held, with a diagnostic naming the
 //! holder and the byte count, never the content. So does each key held
-//! longer than [`HELD_INPUT_MAX_AGE`] when its pane could take it.
+//! longer than [`HELD_INPUT_MAX_AGE`] when its pane could take it, except a
+//! fork request: it keeps the complete queue until completion, or fails at
+//! [`FORK_HOLD_MAX_AGE`]. Bare pane keys join its request on this node.
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
@@ -29,6 +31,7 @@ use hide_node_link::terminal::{
 use serde_json::json;
 
 pub(super) const HELD_INPUT_MAX_AGE: Duration = Duration::from_millis(HELD_INPUT_MAX_AGE_MS);
+pub(super) const FORK_HOLD_MAX_AGE: Duration = Duration::from_secs(30);
 /// A request the core never told this node about stops holding keys after
 /// this long; its keys are older than the age limit by then anyway.
 pub(super) const UNKNOWN_REQUEST_TTL: Duration = Duration::from_secs(10);
@@ -91,6 +94,7 @@ pub(super) struct HeldChunk {
     pub(super) typed_at: Instant,
     pub(super) typed_at_unix_ms: u64,
     pub(super) bytes: Vec<u8>,
+    pub(super) permit: Option<super::permit::Permit>,
 }
 
 /// The keys a pane can still be given at `now`, in order; those held longer
@@ -126,9 +130,12 @@ struct Request {
     /// first.
     known: bool,
     opened: Instant,
+    fork: bool,
+    pane: Option<String>,
     state: RequestState,
     held: Vec<HeldChunk>,
     held_bytes: usize,
+    permit_deadline: Option<Instant>,
     dropped_bytes: usize,
 }
 
@@ -138,15 +145,19 @@ impl Request {
             id: id.to_owned(),
             known,
             opened: now,
+            fork: false,
+            pane: None,
             state: RequestState::Pending,
             held: Vec::new(),
             held_bytes: 0,
+            permit_deadline: None,
             dropped_bytes: 0,
         }
     }
 
     fn discard(&mut self, reason: &str) {
         self.held.clear();
+        self.permit_deadline = None;
         let held = std::mem::take(&mut self.held_bytes);
         self.state = RequestState::Discarded;
         crate::diagnostic!(json!({
@@ -195,11 +206,92 @@ impl Requests {
             }
             return;
         }
-        self.make_room(true);
+        if !self.make_room(true) {
+            return;
+        }
         self.requests.push_back(Request::new(request_id, true, now));
     }
 
-    fn make_room(&mut self, known: bool) {
+    pub(super) fn set_fork(&mut self, request_id: &str, fork: bool) {
+        if let Some(request) = self.find(request_id) {
+            request.fork = fork;
+        }
+    }
+
+    pub(super) fn hold_for(&mut self, request_id: &str, pane: &str) {
+        if let Some(request) = self.find(request_id) {
+            request.pane = Some(pane.to_owned());
+        }
+    }
+
+    pub(super) fn holder(&self, pane: &str) -> Option<String> {
+        self.requests
+            .iter()
+            .find(|request| request.pane.as_deref() == Some(pane))
+            .map(|request| request.id.clone())
+    }
+
+    pub(super) fn forget(&mut self, pane: &str) {
+        for request in &mut self.requests {
+            if request.pane.as_deref() == Some(pane) {
+                request.discard("pane_gone");
+                request.pane = None;
+            }
+        }
+    }
+
+    pub(super) fn deadline(&self) -> Option<Instant> {
+        self.requests
+            .iter()
+            .filter(|request| {
+                request.fork && request.held_bytes > 0 && request.state == RequestState::Pending
+            })
+            .map(|request| request.opened + FORK_HOLD_MAX_AGE)
+            .chain(
+                self.requests
+                    .iter()
+                    .filter_map(|request| request.permit_deadline),
+            )
+            .min()
+    }
+
+    pub(super) fn expire_permits(&mut self, now: Instant) {
+        for request in &mut self.requests {
+            if request
+                .permit_deadline
+                .is_none_or(|deadline| now < deadline)
+            {
+                continue;
+            }
+            request
+                .held
+                .retain(|chunk| chunk.permit.as_ref().is_none_or(|p| now < p.deadline()));
+            request.held_bytes = request.held.iter().map(|chunk| chunk.bytes.len()).sum();
+            request.permit_deadline = request
+                .held
+                .iter()
+                .filter_map(|chunk| chunk.permit.as_ref().map(|p| p.deadline()))
+                .min();
+        }
+    }
+
+    /// Fail once at the bound, retaining the pane guard until creation ends.
+    pub(super) fn expire_forks(&mut self, now: Instant) -> Vec<String> {
+        let mut expired = Vec::new();
+        for request in &mut self.requests {
+            if request.fork
+                && request.held_bytes > 0
+                && request.state == RequestState::Pending
+                && now >= request.opened + FORK_HOLD_MAX_AGE
+            {
+                request.discard("timeout");
+                expired.push(request.id.clone());
+            }
+        }
+        expired
+    }
+
+    fn make_room(&mut self, known: bool) -> bool {
         let limit = if known {
             INPUT_REQUEST_LIMIT
         } else {
@@ -211,17 +303,20 @@ impl Requests {
             .filter(|request| request.known == known)
             .count();
         if count < limit {
-            return;
+            return true;
         }
-        if let Some(index) = self
-            .requests
-            .iter()
-            .position(|request| request.known == known)
-            && let Some(mut evicted) = self.requests.remove(index)
-            && evicted.state == RequestState::Pending
-        {
+        let Some(index) = self.requests.iter().position(|request| {
+            request.known == known
+                && !(request.fork
+                    && (request.pane.is_some() || request.state == RequestState::Pending))
+        }) else {
+            return false;
+        };
+        let mut evicted = self.requests.remove(index).expect("found");
+        if evicted.state == RequestState::Pending {
             evicted.discard("evicted");
         }
+        true
     }
 
     fn find(&mut self, request_id: &str) -> Option<&mut Request> {
@@ -246,7 +341,9 @@ impl Requests {
         }
         self.expire_unknown(chunk.typed_at);
         if self.find(request_id).is_none() {
-            self.make_room(false);
+            if !self.make_room(false) {
+                return (KeyRoute::Dropped { limit: true }, None);
+            }
             self.requests
                 .push_back(Request::new(request_id, false, chunk.typed_at));
         }
@@ -272,6 +369,13 @@ impl Requests {
                     return (KeyRoute::Dropped { limit: true }, None);
                 }
                 request.held_bytes += chunk.bytes.len();
+                if let Some(permit) = &chunk.permit {
+                    request.permit_deadline = Some(
+                        request
+                            .permit_deadline
+                            .map_or(permit.deadline(), |at| at.min(permit.deadline())),
+                    );
+                }
                 request.held.push(chunk);
                 (KeyRoute::Held, None)
             }
@@ -290,33 +394,53 @@ impl Requests {
             return Vec::new();
         }
         if self.find(request_id).is_none() {
-            self.make_room(true);
+            if !self.make_room(true) {
+                return Vec::new();
+            }
             self.requests.push_back(Request::new(request_id, true, now));
         }
         let request = self.find(request_id).expect("just made");
         request.known = true;
+        request.pane = None;
         if request.state != RequestState::Pending {
+            if request.fork {
+                request.state = RequestState::Ready(pane_id.to_owned());
+            }
             return Vec::new();
         }
         request.state = RequestState::Ready(pane_id.to_owned());
         request.held_bytes = 0;
+        request.permit_deadline = None;
+        if request.fork {
+            // The fork holder has ended. An attaching pane now owns these
+            // bytes under its own bounded hold; the original wall time
+            // remains the input fact's time.
+            for chunk in &mut request.held {
+                chunk.typed_at = now;
+            }
+        }
         std::mem::take(&mut request.held)
     }
 
-    /// The creation made no pane the keys may follow.
-    pub(super) fn discard(&mut self, request_id: &str, reason: &str, now: Instant) {
+    /// These keys may not follow the pane. Returns whether any were held.
+    pub(super) fn discard(&mut self, request_id: &str, reason: &str, now: Instant) -> bool {
         if !valid_request_id(request_id) {
-            return;
+            return false;
         }
         if self.find(request_id).is_none() {
-            self.make_room(true);
+            if !self.make_room(true) {
+                return false;
+            }
             self.requests.push_back(Request::new(request_id, true, now));
         }
         let request = self.find(request_id).expect("just made");
+        let lost = request.held_bytes > 0;
         request.known = true;
+        request.pane = None;
         if request.state != RequestState::Discarded {
             request.discard(reason);
         }
+        lost
     }
 
     /// Drops requests the core never named, once their keys are too old to
@@ -339,6 +463,15 @@ impl Requests {
             .any(|request| matches!(&request.state, RequestState::Ready(pane) if pane == pane_id))
     }
 
+    pub(super) fn close(&mut self) {
+        for request in &mut self.requests {
+            if request.held_bytes > 0 {
+                request.discard("service_closed");
+            }
+        }
+        self.requests.clear();
+    }
+
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.requests.len()
@@ -353,6 +486,7 @@ pub(super) enum PaneHold {
     Holding {
         chunks: Vec<HeldChunk>,
         bytes: usize,
+        permit_deadline: Option<Instant>,
     },
     /// The cap was crossed: everything typed until the session opens is
     /// dropped too, so the pane never receives the tail of a lost paste.
@@ -367,9 +501,15 @@ impl PaneHold {
             *self = Self::Holding {
                 chunks: Vec::new(),
                 bytes: 0,
+                permit_deadline: None,
             };
         }
-        let Self::Holding { chunks, bytes } = self else {
+        let Self::Holding {
+            chunks,
+            bytes,
+            permit_deadline,
+        } = self
+        else {
             return false;
         };
         if chunks.first().is_some_and(|first| {
@@ -391,18 +531,71 @@ impl PaneHold {
             return false;
         }
         *bytes += chunk.bytes.len();
+        if let Some(permit) = &chunk.permit {
+            *permit_deadline =
+                Some(permit_deadline.map_or(permit.deadline(), |at| at.min(permit.deadline())));
+        }
         chunks.push(chunk);
         true
     }
 
     /// What the pane's control session, open at `now`, writes first.
-    pub(super) fn take(&mut self, pane_id: &str, now: Instant) -> Vec<u8> {
+    pub(super) fn take_chunks(&mut self, pane_id: &str, now: Instant) -> Vec<HeldChunk> {
         match std::mem::take(self) {
-            Self::Holding { chunks, .. } => fresh_chunks(pane_id, chunks, now)
-                .into_iter()
-                .flat_map(|chunk| chunk.bytes)
-                .collect(),
+            Self::Holding { chunks, .. } => {
+                let mut writes: Vec<HeldChunk> = Vec::new();
+                for chunk in fresh_chunks(pane_id, chunks, now) {
+                    if chunk.permit.is_none()
+                        && let Some(last) = writes.last_mut().filter(|last| last.permit.is_none())
+                    {
+                        last.bytes.extend(chunk.bytes);
+                    } else {
+                        writes.push(chunk);
+                    }
+                }
+                writes
+            }
             Self::Empty | Self::Overflowed => Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    fn take(&mut self, pane_id: &str, now: Instant) -> Vec<u8> {
+        self.take_chunks(pane_id, now)
+            .into_iter()
+            .flat_map(|chunk| chunk.bytes)
+            .collect()
+    }
+
+    pub(super) fn permit_deadline(&self) -> Option<Instant> {
+        let Self::Holding {
+            permit_deadline, ..
+        } = self
+        else {
+            return None;
+        };
+        *permit_deadline
+    }
+
+    pub(super) fn expire_permits(&mut self, now: Instant) {
+        if let Self::Holding {
+            chunks,
+            bytes,
+            permit_deadline,
+        } = self
+        {
+            if permit_deadline.is_none_or(|deadline| now < deadline) {
+                return;
+            }
+            chunks.retain(|chunk| chunk.permit.as_ref().is_none_or(|p| now < p.deadline()));
+            *bytes = chunks.iter().map(|chunk| chunk.bytes.len()).sum();
+            *permit_deadline = chunks
+                .iter()
+                .filter_map(|chunk| chunk.permit.as_ref().map(|p| p.deadline()))
+                .min();
+            if chunks.is_empty() {
+                *self = Self::Empty;
+            }
         }
     }
 
@@ -679,8 +872,30 @@ pub(super) struct AttachmentHold {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_long_fork_keeps_keys_older_than_three_seconds() {
+        let start = Instant::now();
+        let mut requests = Requests::default();
+        requests.open("fork-1", start);
+        requests.set_fork("fork-1", true);
+        requests.hold_for("fork-1", "w1:p2");
+        assert_eq!(
+            requests.route("fork-1", chunk(b"hello\r", start)).0,
+            KeyRoute::Held
+        );
+        let ready = start + Duration::from_secs(10);
+        assert!(requests.expire_forks(ready).is_empty());
+        let held = requests.resolve("fork-1", "w1:p2", ready);
+        let delivered: Vec<u8> = fresh_chunks("w1:p2", held, ready)
+            .into_iter()
+            .flat_map(|chunk| chunk.bytes)
+            .collect();
+        assert_eq!(delivered, b"hello\r");
+    }
+
     fn chunk(bytes: &[u8], typed_at: Instant) -> HeldChunk {
         HeldChunk {
+            permit: None,
             typed_at,
             typed_at_unix_ms: 0,
             bytes: bytes.to_vec(),
