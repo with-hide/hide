@@ -18,7 +18,7 @@ use crate::protocol::{
 };
 use crate::root::{Root, relative_path};
 use crate::{bytes, document, git, index, list, mutate, save, worktrees};
-use hide_node_link::process::{LineInput, ProcessStart};
+use hide_node_link::process::{GroupEnd, LeftRunning, LineInput, ProcessStart};
 
 /// Requests the helper works on at once; the core also admits at most this
 /// many per device, so the helper never queues behind itself.
@@ -1281,13 +1281,24 @@ pub fn handle_with_progress(
                     format!("Process group {leader} is not a pane's"),
                 ));
             }
-            hide_platform::process::terminate_group(leader).map_err(|error| {
+            let ended = hide_platform::process::terminate_group(leader).map_err(|error| {
                 HostError::new(
                     ErrorCode::Io,
                     format!("ending process group {leader} failed: {error}"),
                 )
             })?;
-            to_value(())
+            to_value(match ended {
+                hide_platform::process::GroupEnd::Ended { left } => GroupEnd::Ended {
+                    left: left
+                        .into_iter()
+                        .map(|process| LeftRunning {
+                            pid: process.pid,
+                            reason: process.reason,
+                        })
+                        .collect(),
+                },
+                hide_platform::process::GroupEnd::Gone => GroupEnd::Gone,
+            })
         }
         Call::ProcessStarts { pids } => to_value(
             pids.into_iter()
