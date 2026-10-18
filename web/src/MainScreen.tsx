@@ -1,4 +1,7 @@
 import { UsageOverview } from "./UsageOverview";
+import { BrandOwl } from "./components/brand-owl";
+import { firstRunStep } from "./firstRun";
+import { useSetupWalk } from "./FirstRunWizard";
 import { useInterfaceTranslation } from "./i18n/client";
 import { ChevronDownIcon, SearchIcon } from "lucide-react";
 import { useEffect, useMemo, type ReactNode } from "react";
@@ -200,10 +203,13 @@ function DeviceUnanswered({ device, availability, actions }: { device: Device; a
  */
 function NoProjectView({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
+  const firstRun = useShellStore((s) => firstRunStep(s.rest, hostBridge() !== null));
+  const setup = useSetupWalk((s) => s.step);
   const chord = commandLabel("new_workspace");
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-md p-xl text-center" data-main-empty-home="no_project">
-      <p className="text-subhead text-subtle-foreground">{t("firstRun.home.noProject")}</p>
+    <div className="flex min-h-full flex-1 flex-col items-center justify-center gap-md p-xl text-center" data-main-empty-home="no_project">
+      {firstRun === null && setup === null ? <BrandOwl pose="ai" className="size-(--size-owl-empty)" /> : null}
+      <p className="text-subhead break-keep text-subtle-foreground">{t("firstRun.home.noProject")}</p>
       {hostBridge() ? (
         <span className="flex items-center gap-sm">
           <Button onClick={() => actions.openAddProject()} data-main-empty-home-action="new_workspace">

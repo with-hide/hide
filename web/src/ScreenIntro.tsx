@@ -5,7 +5,7 @@
 // (`ui_state.screen_intros_seen`), so another window or a restart does not
 // show it twice; this visit keeps the line it opened with.
 
-import { FactoryIcon } from "lucide-react";
+import { BrandOwl } from "./components/brand-owl";
 import { useEffect, useState } from "react";
 import type { Actions } from "./actions";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -45,7 +45,7 @@ export function ScreenIntroLine({ screen, actions }: { screen: Screen; actions: 
   }, [actions, screen]);
   return (
     <p className="mx-lg mb-md flex items-center gap-sm rounded-md bg-card px-md py-sm text-body text-subtle-foreground" data-screen-intro={screen}>
-      <FactoryIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-subtle-foreground" />
+      <BrandOwl pose="factory" className="size-(--size-owl-intro)" />
       {t(WORDS[screen])}
     </p>
   );

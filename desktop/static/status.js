@@ -11,6 +11,8 @@
 // interface catalogs in the language in effect; a missing one is a host bug
 // and fails loudly rather than showing a guess.
 
+import { startOwlMotion } from "./owl-motion.js";
+
 const params = new URLSearchParams(location.search);
 
 function words(key) {
@@ -22,7 +24,8 @@ function words(key) {
 document.documentElement.lang = words("lang");
 // `hidden`: macOS draws its window buttons over the page's top, which stays a drag strip.
 document.body.dataset.titlebar = words("titlebar");
-document.getElementById("connecting").textContent = words("connecting");
+document.getElementById("connecting-text").textContent = words("connecting");
+const motion = startOwlMotion();
 document.getElementById("retry").textContent = words("retry");
 const copy = document.getElementById("copy");
 const REASONS = ["cli_missing", "start_failed", "no_response", "other_build", "state_refused", "core_newer", "update_failed"];
@@ -42,6 +45,7 @@ function show() {
   shownLine("builds", hash.get("builds"));
   document.getElementById("connecting").hidden = failed !== null;
   document.getElementById("failed").hidden = failed === null;
+  motion.connecting(failed === null);
   copy.textContent = words(hash.has("copied") ? "copied" : "copy");
   const diagnostics = document.getElementById("diagnostics");
   diagnostics.textContent = hash.get("diagnostics") ?? "";
