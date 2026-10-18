@@ -40,6 +40,14 @@ class RequireNoLogin(unittest.TestCase):
             with self.subTest(screen=screen), self.assertRaises(AuthenticationRequired):
                 require_no_login(screen)
 
+    def test_a_folder_named_login_in_a_prompt_is_not_a_login_wall(self):
+        require_no_login("runner@host:~/work/hide/agents/runs/agent-journey-login-linux/probe/controller-journey$ ")
+        require_no_login(r"PS D:\a\hide\agents\runs\agent-journey-login-windows\probe> ")
+
+    def test_a_wall_that_names_a_login_page_still_stops(self):
+        with self.assertRaises(AuthenticationRequired):
+            require_no_login("Sign in at https://example.com/login to continue")
+
     def test_a_hint_beside_a_real_wall_still_stops(self):
         with self.assertRaises(AuthenticationRequired):
             require_no_login("Use /login to add providers.\nNot logged in")
