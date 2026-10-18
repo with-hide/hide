@@ -5,8 +5,8 @@ import type { Actions } from "./actions";
 import { agentProductName } from "./agentAdapters";
 import { askWhat, VerbText } from "./components/agent-tree";
 import { AgentPrMark, useAgentStaleness } from "./components/pr-mark";
-import { reviewWord, sessionPulls, type SessionPull } from "./prMark";
-import { AgentTreePopover, childrenOf } from "./components/agent-tree-popover";
+import { familyPulls, reviewWord, type SessionPull } from "./prMark";
+import { AgentTreePopover } from "./components/agent-tree-popover";
 import { StatusMark } from "./components/status-mark";
 import { Elapsed } from "./components/elapsed";
 import { Hint } from "./components/ui/tooltip";
@@ -238,7 +238,7 @@ export function PanePrChip({ paneId, actions }: { paneId: string; actions: Actio
   const agents = usePaneAgents();
   const byPane = agentsByPane(agents);
   const agent = byPane.get(paneId);
-  const family = useMemo(() => agent && childrenOf(agent, byPane).length > 0 ? sessionPulls(agent, byPane) : undefined, [agent, byPane]);
+  const family = useMemo(() => (agent ? familyPulls(agent, byPane) : undefined), [agent, byPane]);
   if (!agent || (family ? family.length === 0 : !agent.state.pr)) return null;
   return <PaneAgentPrMark agent={agent} family={family} actions={actions} />;
 }

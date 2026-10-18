@@ -19,7 +19,8 @@ import { GithubIcon } from "./components/github-icon";
 import { Hint } from "./components/ui/tooltip";
 import { CHECKOUT_KIND_ICON } from "./components/checkout-icon";
 import { PrMark } from "./components/pr-mark";
-import { PR_LOOK } from "./prMark";
+import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
+import { familyPulls, PR_LOOK, type SessionPull } from "./prMark";
 import { CheckoutCardHint, pullRequestOpenExternal } from "./components/pr-card";
 import { DeviceRail } from "./components/device-rail";
 import { frontDeviceId, frontTitle, railShown, readsHere, sidebarBody } from "./devices";
@@ -543,6 +544,12 @@ function ProjectList({ actions }: { actions: Actions }) {
   useStuckHeaders(list, loaded);
   const agentRowMenu = useAgentRowMenu(actions);
   const children = useMemo(() => new Map(agents.map((agent) => [agent.pane_id, directChildren(agent, agents)])), [agents]);
+  // A root row's PR mark gathers its family over the rows the 태스크 list reads, so the two agree (PRD project-tree-pr-family D-01, D-02).
+  const families = useMemo(() => {
+    const every = allPaneAgents(localAgents, remoteStatuses);
+    const byPane = agentsByPane(every);
+    return new Map(every.flatMap((agent) => (agent.state.root ? [[agent.pane_id, familyPulls(agent, byPane)] as const] : [])));
+  }, [localAgents, remoteStatuses]);
   // A row Hide AI started names its task in its place line, so the place reads the agents too.
   const hideAiOf = useMemo(() => new Map(agents.flatMap((agent) => (agent.hide_ai ? [[agent.pane_id, agent.hide_ai] as const] : []))), [agents]);
   const placeOf = useMemo(() => agentPlaces(localWorkspaces, remoteStatuses, devices, hideAiOf), [localWorkspaces, remoteStatuses, devices, hideAiOf, t]);
@@ -558,6 +565,7 @@ function ProjectList({ actions }: { actions: Actions }) {
   const context: ListContext = {
     agents,
     childrenOf: (agent) => children.get(agent.pane_id)!,
+    familyOf: (agent) => families.get(agent.pane_id),
     placeOf,
     numberOf: numberOfPane,
     focusedCheckoutId,
@@ -616,11 +624,13 @@ const NO_IDS: string[] = [];
 
 /** What every row of the Projects list reads besides its own project. */
 /** What an opened tree reads from its list: a checkout's tree and Home's alike. */
-type TreeContext = Pick<ListContext, "agents" | "childrenOf" | "numberOf" | "focusRowPane" | "actions" | "agentRowMenu">;
+type TreeContext = Pick<ListContext, "agents" | "childrenOf" | "familyOf" | "numberOf" | "focusRowPane" | "actions" | "agentRowMenu">;
 
 type ListContext = {
   agents: AgentRow[];
   childrenOf: (agent: AgentRow) => AgentRow[];
+  /** A root's own and every descendant's PRs, undefined for a child or a root without children. */
+  familyOf: (agent: AgentRow) => SessionPull[] | undefined;
   /** The Agents list's context line for a raised row, which no project row above names. */
   placeOf: (device: string | null, paneId: string) => string | null;
   /** The number an ⌥ hold shows on an agent's raised row (checkout null) or tree row, while one shows. */
@@ -830,6 +840,7 @@ function RaisedAgentRow({ listed: { agent, device }, context }: { listed: Listed
       inset={PROJECT_COLUMN}
       number={context.numberOf?.(agent.pane_id, null) ?? null}
       menu={context.agentRowMenu}
+      family={context.familyOf(agent)}
     />
   );
 }
@@ -1680,6 +1691,7 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, context }: { ch
             branchShown={false}
             number={depth === 0 ? context.numberOf?.(agent.pane_id, checkoutId) ?? null : null}
             menu={context.agentRowMenu}
+            family={context.familyOf(agent)}
           />
         );
       })}
