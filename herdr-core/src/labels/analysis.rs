@@ -147,8 +147,10 @@ impl AnalysisFailure {
     }
 }
 
-/// Cut a goal to `max` characters without splitting a word.
-pub(crate) fn truncate_goal(text: &str, max: usize) -> String {
+/// Cut a goal or a line to `max` characters without splitting a word, ending
+/// in `…` when cut; a head shorter than half of `max` (a language written
+/// with few spaces) is cut on a character instead.
+pub(crate) fn truncate_phrase(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_owned();
     }
@@ -172,7 +174,7 @@ pub(crate) fn normalize_goal(raw: &str, max: usize) -> Option<String> {
     if candidate.chars().count() < MIN_GOAL_CHARS || candidate.chars().any(char::is_control) {
         return None;
     }
-    Some(truncate_goal(candidate, max))
+    Some(truncate_phrase(candidate, max))
 }
 
 /// Normalize a one-line non-title field without silently accepting a
@@ -723,7 +725,7 @@ mod tests {
     #[test]
     fn goal_truncates_on_a_word_boundary_and_rejects_short_or_multiline_titles() {
         assert_eq!(
-            truncate_goal(
+            truncate_phrase(
                 "Refactor the authentication middleware to use JWT tokens",
                 30
             ),

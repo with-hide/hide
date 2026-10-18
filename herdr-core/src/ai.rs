@@ -756,6 +756,7 @@ pub(crate) fn suggest_worktree_name(
         // A Git name is lowercase ASCII whatever the operator reads (D-07).
         output_language: None,
         answer: hide_ai::AnswerMode::PlainJson,
+        provider_efforts: Vec::new(),
     };
     let router = waited_router(node, settings, usage);
     let answer = router
