@@ -1109,7 +1109,8 @@ test("page width: a page opened into the lane widens it to 900 beside Agent View
   await expect(divider).toHaveAttribute("aria-valuenow", "900");
   await expect.poll(storedLaneWidth).toBe(900);
   const displayId = await displayIdOf(page, "Site");
-  await expectOnSlot(page, site, displayId);
+  // The shell is zoomed to fit the window, so the page's CSS width is the lane's share of it.
+  await expect.poll(async () => (await viewOf(site)).visible).toBe(true);
   await expect.poll(async () => Math.abs((await inPage<number>(site, "innerWidth")) - 900 * zoom)).toBeLessThanOrEqual(1);
   await windowShot("page-width-widened");
 
@@ -1267,6 +1268,7 @@ test("device size: a page lays out at 390, 768 and 1280 CSS pixels at any zoom, 
   await choose("mobile");
   const moved = `${origin}/site-2.html`;
   await inPage(site, `location.href = ${JSON.stringify(moved)}`);
+  await viewOf(moved);
   await expect.poll(() => inPage<number>(moved, "innerWidth")).toBe(390);
   expect((await zoomOf(moved)).factor).toBe(1.1);
 
