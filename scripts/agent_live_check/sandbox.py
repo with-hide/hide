@@ -136,7 +136,7 @@ class WriteSandbox:
             # to Pi. Conceal metadata too, so operator skills cannot enter a run.
             for name in (".agents", ".claude", ".claude.json", ".codex", ".gemini", ".grok", ".omp", ".pi",
                          ".config/opencode", ".local/share/opencode", "Library/Keychains"):
-                rules.append(f"(deny file-read* file-write* (subpath {quote(operator_home / name)}))")
+                rules.append(f"(deny file-read* file-test-existence file-write* (subpath {quote(operator_home / name)}))")
         self.profile = self.run / ("fake-write-guard.sb" if fake_private else "native-write-guard.sb")
         self.rules = rules
         self.references = set()

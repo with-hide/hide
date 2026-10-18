@@ -141,6 +141,7 @@ class PrivateHome(unittest.TestCase):
             # direct reads must also fail, even when their name is known.
             probe = ("import os,pathlib\n"
                      f"assert not os.path.exists({str(skills)!r})\n"
+                     f"assert not os.access({str(skills)!r}, os.F_OK)\n"
                      f"try: pathlib.Path({str(private_skill)!r}).read_bytes()\n"
                      "except PermissionError: pass\n"
                      "else: raise AssertionError('operator skill readable')\n")
