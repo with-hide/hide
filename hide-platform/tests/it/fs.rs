@@ -2219,3 +2219,52 @@ fn a_program_running_from_a_folder_or_a_file_open_in_it_holds_it_in_use() {
     drop(open);
     assert_eq!(first_in_use(sandbox.path()).unwrap(), None);
 }
+
+/// A file another handle holds refuses a reader on Windows for as long as it
+/// is held, and the refusal says so: an open the holder did not share, and a
+/// read of a range it locked. Elsewhere the holder refuses neither. On every
+/// system an error that never lets go, a missing file or Windows' access
+/// denied, is not one.
+#[test]
+fn a_file_another_handle_holds_refuses_a_reader_only_on_windows_and_only_while_held() {
+    use hide_platform::fs::in_use::held_by_another;
+    let sandbox = folder();
+    let path = sandbox.path().join("held.db");
+    fs::write(&path, "held").unwrap();
+    let read = || -> std::io::Result<String> {
+        let mut text = String::new();
+        File::open(&path)?.read_to_string(&mut text)?;
+        Ok(text)
+    };
+    let refused_while_held = || {
+        let answered = read();
+        if cfg!(windows) {
+            let error = answered.expect_err("a held file refuses a reader on Windows");
+            assert!(held_by_another(&error), "{error:?}");
+        } else {
+            assert_eq!(answered.unwrap(), "held");
+        }
+    };
+    let writer = || File::options().read(true).write(true).clone();
+
+    #[cfg(windows)]
+    let unshared = {
+        use std::os::windows::fs::OpenOptionsExt;
+        writer().share_mode(0).open(&path).unwrap()
+    };
+    #[cfg(not(windows))]
+    let unshared = writer().open(&path).unwrap();
+    refused_while_held();
+    drop(unshared);
+    assert_eq!(read().unwrap(), "held");
+
+    let locked = lock::lock_file_blocking(writer().open(&path).unwrap(), Mode::Exclusive).unwrap();
+    refused_while_held();
+    drop(locked);
+    assert_eq!(read().unwrap(), "held");
+
+    let missing = File::open(sandbox.path().join("missing")).unwrap_err();
+    assert!(!held_by_another(&missing));
+    // ERROR_ACCESS_DENIED on Windows.
+    assert!(!held_by_another(&std::io::Error::from_raw_os_error(5)));
+}

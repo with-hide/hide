@@ -206,7 +206,7 @@ The hook emits at most five letters and 8 KiB of context, with a remaining-count
 A large letter is truncated at a UTF-8 boundary and includes its ID and `hide request show` command for the complete body.
 The installed prompt hook supervises one guarded internal operation with a 1.85-second deadline inside the two-second caller budget, including Memory, filesystem, output and diagnostic work.
 The internal operation requires positive owner proof and inherits the runtime payload and output streams; it confirms only after its output is successfully flushed.
-Failure leaves actual intake unconfirmed and attempts a rate-limited private diagnostic inside that same budget.
+Failure leaves actual intake unconfirmed and attempts a rate-limited private diagnostic inside that same budget, under the cause of the step that failed ([agent-hooks.md](agent-hooks.md#what-a-hook-records-when-it-fails)).
 A blocked diagnostic store or output stream can prevent the diagnostic from finishing; the outer timeout performs no filesystem or output tail that could hold submission open.
 CLI output collection uses the canonical platform capture, with a 64 KiB bound and no reader thread or blocking join after timeout.
 Cleanup uncertainty is a separate private diagnostic field and never authorizes confirmation.

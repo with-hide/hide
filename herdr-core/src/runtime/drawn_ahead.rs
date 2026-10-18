@@ -71,9 +71,64 @@ impl Runtime {
     }
 
     pub(super) fn created_pane_awaits_layout(&self, pane_id: &str, checkout: &str) -> bool {
-        self.provisional_tabs
+        self.created_pane_place(pane_id)
+            .is_some_and(|(made_in, _)| made_in == checkout)
+    }
+
+    /// Where a pane Hide made sits before Herdr's layout lists it, as the
+    /// checkout it was made in, by path, and its tab: a created tab's own, or
+    /// for a drawn split, its target's, which a fork's split shares with its
+    /// source.
+    pub(super) fn created_pane_place(&self, pane_id: &str) -> Option<(&str, &str)> {
+        if let Some(tab) = self
+            .provisional_tabs
             .iter()
-            .any(|tab| tab.pane_id == pane_id && tab.cwd == checkout)
+            .find(|tab| tab.pane_id == pane_id)
+        {
+            return Some((tab.cwd.as_str(), tab.tab_id.as_str()));
+        }
+        let target =
+            self.pane_operations
+                .values()
+                .find_map(|operation| match &operation.prediction {
+                    Some(super::pane_prediction::Prediction::Split {
+                        target, created, ..
+                    }) if created == pane_id => Some(target.as_str()),
+                    _ => None,
+                })?;
+        self.snapshot
+            .navigator
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.checkouts)
+            .find_map(|checkout| {
+                checkout
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.panes.iter().any(|pane| pane.id == target))
+                    .and_then(|tab| tab.id.as_deref())
+                    .map(|tab_id| (checkout.path.as_str(), tab_id))
+            })
+    }
+
+    /// Takes back a created tab whose pane its worker closed before Herdr
+    /// laid it out.
+    pub(super) fn take_back_created_tab(&mut self, tab_id: &str) {
+        let Some(index) = self
+            .provisional_tabs
+            .iter()
+            .position(|tab| tab.tab_id == tab_id)
+        else {
+            return;
+        };
+        let tab = self.provisional_tabs.remove(index);
+        crate::diagnostic!(serde_json::json!({
+            "component": "tab_control",
+            "kind": "tab.create.taken_back",
+            "tab_id": tab.tab_id,
+            "pane_id": tab.pane_id,
+        }));
+        self.request_republish();
     }
 
     /// The Herdr workspace that holds the checkout at `path`, as the session

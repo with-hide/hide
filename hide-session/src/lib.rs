@@ -39,6 +39,7 @@ pub mod label_transcript;
 pub mod links;
 mod native_file;
 pub mod opencode;
+mod refusal;
 pub mod session_activity;
 mod sightings;
 mod sqlite;
@@ -47,6 +48,7 @@ pub mod turns;
 pub mod usage;
 
 pub use envelope::{envelope_from_operator, envelope_header, envelope_names, envelope_sender};
+pub use refusal::ReadRefusal;
 pub use sightings::{
     MAX_SIGHTINGS_PER_OUTPUT, PrSighting, issue_addresses, pull_request_addresses,
 };
@@ -642,6 +644,9 @@ pub enum SessionError {
     SessionFileMissing,
     UnsupportedSessionKind,
     Checkpoint(String),
+    /// A proof read met the agent writing its records
+    /// ([`ReadRefusal::InMotion`]); reading again can answer.
+    InMotion(&'static str),
     Capacity {
         resource: &'static str,
         limit: u64,
@@ -654,6 +659,15 @@ pub enum SessionError {
 }
 
 impl SessionError {
+    /// A proof `error` refused: still in motion when it only met the agent
+    /// writing, the reason it gave otherwise.
+    pub(crate) fn unproven(error: &anyhow::Error) -> Self {
+        match ReadRefusal::of(error) {
+            ReadRefusal::InMotion(reason) => Self::InMotion(reason),
+            ReadRefusal::Refused(_) => Self::Checkpoint(error.to_string()),
+        }
+    }
+
     fn io(operation: &'static str, path: &Path, source: io::Error) -> Self {
         Self::Io {
             operation,
@@ -670,6 +684,7 @@ impl Display for SessionError {
             Self::SessionFileMissing => formatter.write_str("session_file_missing"),
             Self::UnsupportedSessionKind => formatter.write_str("session_kind_unsupported"),
             Self::Checkpoint(reason) => write!(formatter, "session_checkpoint_invalid:{reason}"),
+            Self::InMotion(reason) => formatter.write_str(reason),
             Self::Capacity { resource, limit } => {
                 write!(formatter, "session_capacity:{resource}:{limit}")
             }

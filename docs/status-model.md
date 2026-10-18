@@ -408,9 +408,9 @@ The sidebar tree under an opened root is `agent_scope.sidebar_tree.visible_rows`
 The shell shows five siblings per parent and folds the rest behind `N개 더` (`web/src/sidebarTree.ts`).
 A grandchild's own children open in the tree popover instead of a third level.
 A delegated row whose checkout differs from its parent's carries `row.state.branch_badge` (`agent_state/axes.rs::apply_lineage`): that checkout's branch, or its label when it has none, the name the sidebar gives the checkout; a device checkout's label is its folder name, so the label alone would name a folder there.
-The tree popover (`web/src/components/agent-tree-popover.tsx`) opens from the pane header's second-row tree button, a grandchild's chevron and an ask band's fallback `외 N건` when that tree button is unavailable.
-The second-row button shows `direct_child_counts` in the marks a row uses (raised asks as the turn mark, working children as the ring, finished ones as the dot) and the subtree's operator-raised `descendant_mark.count`, with the live direct child total only in its tooltip and accessible name; resting and unknown children, and ordinary child requests, which are the parent's to answer (status-marks B21), are not drawn on the button and are named only there.
-Its compact ask-band form keeps only the raised count, or a tree icon when none is raised, while its tooltip names every count; unknown children are excluded from the resting remainder.
+The tree popover (`web/src/components/agent-tree-popover.tsx`) opens from the children button at the right end of the pane's second row, a grandchild's chevron and an ask band's fallback `외 N건` when that button is unavailable.
+The children button reads `자식 N`, after the subtree's operator-raised `descendant_mark.count` with the turn mark when it is positive; its tooltip and accessible name spell out the live direct child total and every `direct_child_counts` state, and ordinary child requests are named only there, because they are the parent's to answer (status-marks B21).
+Each child's own state is the mark beside its name on the same row, the mark its sidebar row draws; unknown children are excluded from the resting remainder of the tooltip.
 Its head names the parent with its direct child count, and its body draws the same rows two levels deep with five siblings each, the children that finished and were read, with nothing below them raised or working, folded below them behind `끝난 자식 N`; choosing a grandchild that has children re-roots the popover on it.
 Arrows move, Right and Left open and fold a branch, Enter opens the agent's pane, and Escape closes it and returns focus to what opened it.
 Opened from a pane button with a raised mark, or the fallback ask-band button, it starts with the raised branches open and draws each ask on the row it raised (`raised_pane_id`) with its verb, what to do and Open, which for a draft goes to the parent holding it.
@@ -718,7 +718,6 @@ The rule reads in this order: merged, closed, draft, failed (failed checks or a 
 A draft is draft even with failing checks, and absent or unknown checks never imply a pass.
 Each state has one token and one icon, drawn the same on every surface (operator approval, 2026-10-10): failed red (`--pr-failed`), pending amber (`--pr-pending`), mergeable green (`--pr-mergeable`), draft grey (`--pr-draft`), merged purple with the merge icon (`--pr-merged`), and closed dim (`--pr-closed`).
 A change request is red wherever its word is drawn, as failed checks are.
-The pane header's Review and Merge bands read the same state (`agent_state/header.rs`): Merge for a mergeable duty, Review for a pending one, the band's colour the state's.
 The web turns a state into its icon, colour and word in one module (`web/src/prMark.ts`) and draws it with one component (`web/src/components/pr-mark.tsx`); no screen keeps a colour table or a classifier of its own, and the checks and review words and the stale reading live in the same module.
 The state word and the accessibility label keep the meaning without relying on colour.
 A mark dims while GitHub cannot be read again, and its tooltip says when it was last read.
@@ -985,23 +984,22 @@ Regression owners: `agent_state::escalation::tests`, `runtime::tests::lineage`, 
 
 ### Quiet pane headers
 
-`agent_state/header.rs` publishes a working-line flag and at most one band per pane.
-Connection or sleep availability wins, then the pane's own demand, then the lead raised descendant, then the ordinary task verb.
-Approval, Answer, Blocked, Fix, Review, Merge, Stopped and Result have bands; Working has a thin blue line, while CI wait, child wait and Idle have no task band, although their live children can fill the overlay slot.
-An ask band (the pane's own Approval or Answer, or a raised descendant's `RaisedAsk`) is quiet text on the secondary fill with a warning rail (PRD D-43): the compact operator-raised count, the verb in its colour, what to do (for the pane's own Answer, the row's second line, so a native question reads as itself), who asks with the path, checkout and wait in its hover, the unreceived parent for an Answer, the elapsed time, and Open.
-The duplicate `외 N건` is absent when the child trigger supplies raised-tree access, and remains as a fallback otherwise.
-Other bands carry the core reason, action and stable verb time.
-PR actions select the duty that produced the verb and retain the canonical URL, so equal PR numbers in different repositories cannot redirect the action.
-PR reason facts carry checks and review separately from label progress, and the band words only what its verb does not already say: a failed check and asked-for changes, so Review and Merge carry no reason.
-An Approval band carries no reason either: the core reads no approval command and a generated sentence is not one, so the band shows the ask's own default words.
-What Hide could not read, such as a failed check's name or an approval command, is not written on the band, since the operator cannot act on its absence (design principle #13).
-A failed exit is red with its real exit code, a normal termination is gray, and connection and sleep actions remain in their existing body surfaces.
-The band overlays the terminal so state changes never resize its PTY grid.
+`agent_state/header.rs` publishes three things per pane: a working-line flag, at most one notice, and at most one band.
+The notice says why the terminal is not live and is drawn in the pane's body: the device away first, then Herdr's restoration failure, sleep, and the stream's own state (ended with its exit code, released, closing, unavailable, starting, or a wheel another client holds); a device's unavailable pane reads `reconnecting` or `helper_not_allowed` by what its link waits for.
+A pane with a notice takes no answer, so it has no band and no working line.
+The band is the operator's turn and nothing else: the pane's own Approval, Answer or Blocked first, then the lead raised descendant, then the pane's own Stopped.
+A pull request's verb (Fix, Review, Merge) and a finished turn (Result) have no band: the header's PR mark and status mark already say them; Working has a thin blue line, while CI wait, child wait and Idle have nothing.
+A band stays until it is answered, not until it is read: `Band.read` says the operator has had the pane focused since it arrived, and a question the operator read but did not answer keeps its Answer band although the row's verb has left Answer.
+An ask band is quiet text on the secondary fill with a warning rail (PRD D-43): the pane's own ask starts with its verb and says what is asked (for an Answer, the row's second line, so a native question reads as itself), and a raised descendant's `RaisedAsk` starts with that agent's name, the path, checkout and wait in its hover, then the verb, what to do, the unreceived parent for an Answer, the elapsed time, and Open.
+The duplicate `외 N건` is absent when the children button supplies raised-tree access, and remains as a fallback otherwise.
+An Approval band carries no reason: the core reads no approval command and a generated sentence is not one, so the band shows the ask's own default words.
+What Hide could not read, such as an approval command, is not written on the band, since the operator cannot act on its absence (design principle #13).
+The band and the children row overlay the terminal so state changes never resize its PTY grid.
 The identity row reads the ancestor path, the status mark, the agent's logo, title, the letters-waiting pill from `row.letters_waiting`, the pane's own PR mark from `row.state.pr`, the Not connected chip and the existing controls; the ancestors' names drop first when narrow, leaving `›` and the accessible name.
-The tree button with state counts and no separate total or internal divider starts the second-row overlay, sharing that slot with a core band or, without one, the core-ranked child's existing line.
-An unavailable device anywhere in that known subtree overrides the retained state totals and activity line with a dim disconnected mark and the existing connection reason, while preserving topology access.
-Pending or failed relationship navigation stays visible at its popover, ancestor step or band with retry where available, and in the retained Agent-area status when the source pane is no longer on screen.
-Regression owners: `runtime::tests::session_state`, `web/src/PaneHeaderBand.test.tsx`, `web/e2e/sidebar-status.spec.ts`, and the pane/lineage desktop checks.
+A parent's second row keeps the children button at its right end; without a band the rest of the row names each live direct child with its row's mark, a child with news first, and with a band the ask takes that place.
+An unavailable device anywhere in that known subtree replaces the names with the existing connection reason and drops the button's raised count, while preserving topology access.
+Pending or failed relationship navigation stays visible at its popover, ancestor step or band's Open with retry where available, and in the retained Agent-area status when the source pane is no longer on screen.
+Regression owners: `runtime::tests::session_state`, `runtime::tests::device_kit`, `web/src/PaneHeaderBand.test.tsx`, `web/src/PaneNotice.test.tsx`, `web/e2e/sidebar-status.spec.ts`, and the pane/lineage desktop checks.
 
 ### The second line
 
@@ -1034,7 +1032,7 @@ It is what the agent last said, and the last-words popover shows it only when th
 
 The core publishes the sentence; when a view shows it is that view's presentation.
 The web sidebar row keeps a request line in the warning color until the request resolves, at the mark's reduced emphasis once read, shows the sentence of an unread row as a bright line that goes once the row is read, reveals the full sentence up to two lines on the selected or hovered row with the rest in a tooltip, and otherwise draws one line (`web/src/agentRow.ts`, owned by `agentRow.test.ts`; docs/UI_BEHAVIOR.md).
-The pane identity row shows the title without a status sentence; actionable state belongs to the core band described above.
+The pane identity row shows the title without a status sentence; the operator's turn belongs to the core band described above.
 A shell operation string (`forking…`, `reopening…`) retains its existing identity-row slot while it runs.
 The accessibility label of a row and of a header always carries the status word, in the order title, agent kind, status word, sentence, so a row whose word left the screen is still read out with it.
 

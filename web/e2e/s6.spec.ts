@@ -257,7 +257,7 @@ test("Main, Overview and a Workspace with its lane, tools and delegated child", 
     const menuButton = page.locator(`[data-pane-menu="${parent}"]`);
     const focusCount = sent.get("focus_pane") ?? 0;
     await menuButton.click();
-    const copyName = page.locator('[data-menu-item="copy_name"]');
+    const copyName = page.locator('[data-menu-group="copy"]');
     await expect(copyName).toBeVisible();
     await expect(page.locator(`[data-menu-item="open:${child}"]`)).toHaveCount(0);
     await screenshot(page, "s6-pane-menu");
