@@ -92,6 +92,13 @@ fn setup(
     let (runtime, _) = tab_order_runtime(PATH);
     let mut runtime = with_new_views(runtime, "agent-start-incarnation");
     record_terminals(&mut runtime);
+    runtime.set_kit_state(
+        crate::node::TEST_NODE,
+        crate::model::KitSnapshot {
+            codex_daemon: Some(false),
+            ..Default::default()
+        },
+    );
     let task = runtime
         .begin_task_operation(
             "agent_start",
@@ -125,6 +132,8 @@ fn setup(
                 seed_tab_id: None,
                 target: None,
                 expected_command: None,
+                shell_readiness: hide_node_link::protocol::ShellReadiness::Plain,
+                shell_env: Default::default(),
                 binding: Some(binding.clone()),
             },
         )
@@ -159,6 +168,21 @@ fn setup(
     };
     let target = live::WorktreeTarget::local(&context, node);
     runtime.lock().unwrap().set_live(context);
+    {
+        let guard = runtime.lock().unwrap();
+        assert!(
+            guard.group_start_target_is_current(task),
+            "completed start target is current: operation={:?}, view={:?}",
+            guard.snapshot().task_operation,
+            guard
+                .workspace_views
+                .as_ref()
+                .unwrap()
+                .views
+                .get(crate::node::TEST_NODE, PATH),
+        );
+        assert!(guard.pending_task_agent_start(task).is_some());
+    }
     (runtime, task, path, target)
 }
 
@@ -201,9 +225,14 @@ fn admission_case(change: Option<&str>) {
     // before either owner's Drop waits for it.
     let mut gate = ReadinessGate(Some(release));
     live::spawn_task_agent_start(target, task).unwrap();
-    readiness
-        .recv_timeout(Duration::from_secs(10))
-        .expect("worker reached shell readiness");
+    readiness.recv_timeout(Duration::from_secs(10)).unwrap_or_else(|error| {
+        panic!(
+            "worker did not reach shell readiness: {error:?}; operation={:?}; methods={:?}; inspections={:?}",
+            runtime.lock().unwrap().snapshot().task_operation,
+            server.methods(),
+            node.inspected.lock().unwrap(),
+        )
+    });
     let original_binding = BoundPane {
         tab_id: TAB.into(),
         pane_id: PANE.into(),
