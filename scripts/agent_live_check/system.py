@@ -161,6 +161,14 @@ def launcher(path, argv, *, environment=(), unset=(), file_variables=()):
     return target
 
 
+def same_path(spelled, path):
+    """Whether `spelled`, a path as Hide or Herdr answers it (`/` between
+    names on every system), names `path`: on Windows either slash and either
+    case name the same folder, so a string comparison with `str(path)` never
+    matches there."""
+    return isinstance(spelled, str) and bool(spelled) and Path(spelled) == Path(path)
+
+
 def remove_tree(path):
     """Removes a folder the run made. Windows refuses to delete a read-only
     file, which Git makes of every object it writes, so there each one is

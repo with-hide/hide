@@ -25,8 +25,10 @@ START_SECONDS = 60
 
 
 class Controller:
-    def __init__(self, runtime):
+    def __init__(self, runtime, provider=None):
         self.runtime = runtime
+        # The spawn provider built before the run (agent-journey.yml), or None to build it here.
+        self.provider = provider
         self.root = runtime.probe / "controller"
         private_directory(self.root)
         self.bin = self.root / "bin"
@@ -41,13 +43,18 @@ class Controller:
         runtime = self.runtime
         source = runtime.checkout / "web/e2e/shims/spawn-provider.c"
         shim = self.bin / exe("claude")
-        # The e2e's compilers (web/e2e/shims/build.ts), with the account's
-        # environment, where clang finds the Windows SDK and linker.
-        compiler = shutil.which("clang") if WINDOWS else "/usr/bin/cc"
-        if not compiler:
-            raise ProcessError("controller_compiler_missing: install clang (LLVM)")
-        runtime.owner.run([compiler, "-O2", "-o", str(shim), str(source)],
-                          env={**clean_env(), **temp_env(runtime.run / "agent-tmp")}, seconds=60)
+        if self.provider:
+            write_private(shim, self.provider.read_bytes())
+            shim.chmod(0o700)
+        else:
+            # The e2e's compilers (web/e2e/shims/build.ts), with the account's
+            # environment, where clang finds the Windows SDK and linker; a
+            # Windows link can outlast the command cap, so CI builds it first.
+            compiler = shutil.which("clang") if WINDOWS else "/usr/bin/cc"
+            if not compiler:
+                raise ProcessError("controller_compiler_missing: install clang (LLVM)")
+            runtime.owner.run([compiler, "-O2", "-o", str(shim), str(source)],
+                              env={**clean_env(), **temp_env(runtime.run / "agent-tmp")})
         driver = Path(__file__).resolve().with_name("controller_command.py")
         write_private(self.root / "provider.config", "\n".join(
             [str(runtime.herdr_bin), str(self.completed), sys.executable, "-I", str(driver), str(self.command)]).encode())

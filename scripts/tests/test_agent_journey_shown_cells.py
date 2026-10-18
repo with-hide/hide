@@ -31,26 +31,26 @@ class Integration(unittest.TestCase):
     session = {"source": "herdr:codex", "agent": "codex", "kind": "id", "value": "s1"}
 
     def test_the_kit_installed_both_pieces_in_the_agents_home_and_herdr_reported_the_session(self):
-        status, reason = kit.verdict(kit_row(), self.session, "codex", HOME)
+        status, reason = kit.verdict(kit_row(), self.session, "herdr:codex", HOME)
         self.assertEqual(status, cells.PASS)
         self.assertIn("herdr:codex", reason)
 
     def test_an_outdated_or_missing_piece_fails_with_the_kits_reason(self):
-        self.assertEqual(kit.verdict(kit_row(herdr="outdated"), self.session, "codex", HOME),
+        self.assertEqual(kit.verdict(kit_row(herdr="outdated"), self.session, "herdr:codex", HOME),
                          (cells.FAIL, "the kit's herdr piece is outdated: an older version of Herdr's integration is there"))
-        self.assertEqual(kit.verdict(kit_row(hook="not_installed"), self.session, "codex", HOME),
+        self.assertEqual(kit.verdict(kit_row(hook="not_installed"), self.session, "herdr:codex", HOME),
                          (cells.FAIL, "the kit's hook piece is not_installed"))
-        self.assertEqual(kit.verdict(None, self.session, "codex", HOME),
+        self.assertEqual(kit.verdict(None, self.session, "herdr:codex", HOME),
                          (cells.FAIL, "the kit has no row for the agent on this Mac"))
 
     def test_a_piece_outside_the_home_the_agent_reads_is_not_the_one_it_loaded(self):
-        status, reason = kit.verdict(kit_row(herdr_at="/elsewhere/operator/.codex"), self.session, "codex", HOME)
+        status, reason = kit.verdict(kit_row(herdr_at="/elsewhere/operator/.codex"), self.session, "herdr:codex", HOME)
         self.assertEqual(status, cells.FAIL)
         self.assertIn("outside the HOME the agent reads", reason)
 
     def test_a_session_another_emitter_reported_fails(self):
-        self.assertEqual(kit.verdict(kit_row(), {**self.session, "source": "hide:hook"}, "codex", HOME)[0], cells.FAIL)
-        self.assertEqual(kit.verdict(kit_row(), None, "codex", HOME)[0], cells.FAIL)
+        self.assertEqual(kit.verdict(kit_row(), {**self.session, "source": "hide:hook"}, "herdr:codex", HOME)[0], cells.FAIL)
+        self.assertEqual(kit.verdict(kit_row(), None, "herdr:codex", HOME)[0], cells.FAIL)
 
     def test_the_kit_row_is_this_macs(self):
         remote = {"id": "device-1", "kind": "remote", "state": "ready", "kit": {"agents": [kit_row(herdr="outdated")]}}
@@ -77,39 +77,47 @@ class Memory(unittest.TestCase):
 
 class Fork(unittest.TestCase):
     herdr = {"source": "herdr:claude", "agent": "claude", "kind": "id", "value": "fork-1"}
-    listed = {"id": "agent-9", "pane": "w4:p1", "parent": None, "origin": "agent-2"}
+    listed = {"id": "agent-9", "pane": "w4:p1", "session": "fork-1", "parent": None, "origin": "agent-2"}
 
     def row(self, **fields):
         return {"pane_id": "w4:p1", "session_id": "fork-1", "forked_from": {"pane_id": "w3:p2", "label": "Claude"},
                 **fields}
 
     def test_a_root_fork_with_its_own_session_from_the_source_passes(self):
-        status, reason = fork.verdict(self.row(), "source-1", self.herdr, "claude", self.listed, "agent-2")
+        status, reason = fork.verdict(self.row(), "source-1", self.herdr, "herdr:claude", self.listed, "agent-2")
         self.assertEqual(status, cells.PASS)
         self.assertIn("from w3:p2", reason)
+
+    def test_a_path_session_fork_is_matched_to_hides_registration_not_the_rows_native_id(self):
+        # Pi: Herdr and the registration name the session file, the row its native id.
+        path = "/h/.pi/agent/sessions/--w--/2026-10-18T01-49-42-785Z_fork-1.jsonl"
+        herdr = {"source": "herdr:pi", "agent": "pi", "kind": "path", "value": path}
+        status, reason = fork.verdict(self.row(), "source-1", herdr, "herdr:pi", {**self.listed, "session": path},
+                                      "agent-2")
+        self.assertEqual(status, cells.PASS, reason)
 
     def test_the_forked_row_is_the_one_naming_the_source(self):
         source = {"pane_id": "w3:p2", "session_id": "source-1"}
         other = self.row(pane_id="w5:p1", forked_from={"pane_id": "w9:p9"})
         self.assertEqual(fork.forked_row(rest(source, other, self.row()), "w3:p2")["pane_id"], "w4:p1")
         self.assertIsNone(fork.forked_row(rest(source, other), "w3:p2"))
-        self.assertEqual(fork.verdict(None, "source-1", self.herdr, "claude", self.listed, "agent-2"),
+        self.assertEqual(fork.verdict(None, "source-1", self.herdr, "herdr:claude", self.listed, "agent-2"),
                          (cells.FAIL, "no row is shown as forked from the source"))
 
     def test_a_fork_that_kept_the_sources_session_or_another_session_fails(self):
-        self.assertEqual(fork.verdict(self.row(session_id="source-1"), "source-1", self.herdr, "claude", self.listed,
+        self.assertEqual(fork.verdict(self.row(session_id="source-1"), "source-1", self.herdr, "herdr:claude", self.listed,
                                       "agent-2")[0], cells.FAIL)
-        status, reason = fork.verdict(self.row(), "source-1", {**self.herdr, "value": "fork-2"}, "claude",
+        status, reason = fork.verdict(self.row(), "source-1", {**self.herdr, "value": "fork-2"}, "herdr:claude",
                                       self.listed, "agent-2")
-        self.assertEqual((status, reason), (cells.FAIL, "Herdr reports session fork-2 in the fork, Hide fork-1"))
-        self.assertEqual(fork.verdict(self.row(), "source-1", None, "claude", self.listed, "agent-2")[0], cells.FAIL)
+        self.assertEqual((status, reason), (cells.FAIL, "Herdr reports session fork-2 in the fork, Hide registered fork-1"))
+        self.assertEqual(fork.verdict(self.row(), "source-1", None, "herdr:claude", self.listed, "agent-2")[0], cells.FAIL)
 
     def test_a_fork_registered_as_a_child_or_from_another_source_fails(self):
         child = {**self.listed, "parent": "agent-2"}
-        self.assertEqual(fork.verdict(self.row(), "source-1", self.herdr, "claude", child, "agent-2")[0], cells.FAIL)
+        self.assertEqual(fork.verdict(self.row(), "source-1", self.herdr, "herdr:claude", child, "agent-2")[0], cells.FAIL)
         stranger = {**self.listed, "origin": "agent-7"}
-        self.assertEqual(fork.verdict(self.row(), "source-1", self.herdr, "claude", stranger, "agent-2")[0], cells.FAIL)
-        self.assertEqual(fork.verdict(self.row(), "source-1", self.herdr, "claude", None, "agent-2"),
+        self.assertEqual(fork.verdict(self.row(), "source-1", self.herdr, "herdr:claude", stranger, "agent-2")[0], cells.FAIL)
+        self.assertEqual(fork.verdict(self.row(), "source-1", self.herdr, "herdr:claude", None, "agent-2"),
                          (cells.FAIL, "hide agent list has no registration for the fork's pane"))
 
 
@@ -125,6 +133,12 @@ class Title(unittest.TestCase):
         self.assertIn("without Hide's label sentences", reason)
         status, reason = title.verdict({"identity_label": "Reply with a token", "message": "Replying."}, "Codex")
         self.assertIn("with Hide's label sentences", reason)
+
+    def test_a_named_title_passes_only_with_the_name_the_operator_gave(self):
+        self.assertEqual(title.verdict({"identity_label": "JOURNEY-1"}, "pi", "JOURNEY-1")[0], cells.PASS)
+        self.assertEqual(title.verdict({"identity_label": "Reply with a token"}, "pi", "JOURNEY-1"),
+                         (cells.FAIL, "the row shows 'Reply with a token', not 'JOURNEY-1', the name the operator "
+                                      "gave the session"))
 
 
 def usage_section(node="node-1", agent="codex", consumption=None):

@@ -12,9 +12,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_journey import cells
 from agent_journey.daemon import Daemon
 from agent_live_check.processes import ProcessError
-from agent_journey.local import codex_login_refusal, trust_codex
+from agent_journey.local import (codex_login_refusal, grok_login_refusal, pi_login_refusal,
+                                 trust_codex, trust_grok)
 
 CHECKOUT = Path(__file__).resolve().parents[2]
+HOUR = 3600
 
 
 def contract():
@@ -73,6 +75,14 @@ class Propagation(unittest.TestCase):
         cells.close(table, interrupted=False)
         self.assertEqual(table["codex"]["resume"]["reason"], "prerequisite cell not measured (sleep_wake)")
         self.assertEqual(cells.exit_code(table, ["codex"], setup_failed=False), 1)
+
+    def test_a_cell_two_steps_after_a_failed_start_reads_not_measured(self):
+        # A failed start leaves its reply open; the fork, which needs the reply, settles both.
+        table = measured_table()
+        cells.settle(table, "codex", "start", cells.FAIL, "spawn refused")
+        self.assertFalse(cells.measurable(table, "codex", "fork"))
+        self.assertEqual(table["codex"]["reply"]["reason"], "prerequisite cell failed (start)")
+        self.assertEqual(table["codex"]["fork"]["reason"], "prerequisite cell not measured (reply)")
 
     def test_a_settled_cell_is_never_overwritten(self):
         table = measured_table("start")
@@ -135,9 +145,13 @@ class Verdicts(unittest.TestCase):
                          (cells.FAIL, "Hide's reader found no answer to the prompt"))
 
     def test_the_emitter_must_be_herdrs_own_integration(self):
-        self.assertEqual(cells.emitter_verdict({"source": "herdr:codex"}, "codex")[0], cells.PASS)
-        self.assertEqual(cells.emitter_verdict({"source": "hide:hook"}, "codex")[0], cells.FAIL)
-        self.assertEqual(cells.emitter_verdict(None, "codex")[0], cells.FAIL)
+        self.assertEqual(cells.emitter_verdict({"source": "herdr:codex"}, "herdr:codex")[0], cells.PASS)
+        self.assertEqual(cells.emitter_verdict({"source": "hide:hook"}, "herdr:codex")[0], cells.FAIL)
+        self.assertEqual(cells.emitter_verdict(None, "herdr:codex")[0], cells.FAIL)
+        # agy's integration reports under its target, not its kind (the contract's `herdr_source`).
+        self.assertEqual(cells.emitter_verdict({"source": "herdr:antigravity_cli"}, "herdr:antigravity_cli")[0],
+                         cells.PASS)
+        self.assertEqual(cells.emitter_verdict({"source": "herdr:agy"}, "herdr:antigravity_cli")[0], cells.FAIL)
 
     def test_a_reply_passes_only_with_the_token_from_the_assistant_in_that_session(self):
         events = [{"role": "user", "text": "Reply with exactly JOURNEY-1"}, {"role": "assistant", "text": "JOURNEY-1"}]
@@ -167,10 +181,38 @@ class Verdicts(unittest.TestCase):
         early = {"session": "s", "events": events[:2]}
         self.assertEqual(cells.letter_verdict(delivered, early, "s", "JOURNEY-1")[0], cells.FAIL)
 
+    def test_a_next_prompt_letter_passes_only_when_the_prompt_hook_confirmed_it_and_the_reply_carries_it(self):
+        events = [{"role": "assistant", "text": "JOURNEY-0"},
+                  {"role": "user", "text": "Reply with exactly the token on the second line of the letter attached to this prompt."},
+                  {"role": "assistant", "text": "JOURNEY-1"}]
+        read = {"session": "s", "events": events}
+        confirmed = {"state": "delivered", "hook_confirmed": True}
+        self.assertEqual(cells.prompt_letter_verdict(confirmed, read, "s", "JOURNEY-1", 1),
+                         (cells.PASS, "delivered with the next prompt; assistant message carries JOURNEY-1"))
+        # Handed over but never confirmed by the hook, or still pending, is not a delivery.
+        for shown in ({"state": "delivered", "hook_confirmed": False}, {"state": "pending", "hook_confirmed": False}):
+            status, reason = cells.prompt_letter_verdict(shown, read, "s", "JOURNEY-1", 1)
+            self.assertEqual(status, cells.FAIL)
+            self.assertIn("not delivered by the prompt hook", reason)
+        # A token answered before the prompt the letter rode is not its answer.
+        self.assertEqual(cells.prompt_letter_verdict(confirmed, read, "s", "JOURNEY-0", 1),
+                         (cells.FAIL, "no assistant message carries JOURNEY-0"))
+
+    def test_the_contract_names_each_agents_letter_and_wake_forms(self):
+        rows = {row["id"]: row for row in contract()}
+        self.assertEqual({key: (rows[key]["letter"], rows[key]["wake"]) for key in rows if key != "cursor"}, {
+            "claude-code": ("bell", "pane"), "codex": ("bell", "pane"), "antigravity": ("next_prompt", "pane"),
+            "grok": ("tool", "sleeping_session"), "opencode": ("next_prompt", "sleeping_session"),
+            "pi": ("next_prompt", "sleeping_session"), "omp": ("next_prompt", "sleeping_session")})
+
     def test_sleep_and_wake_and_resume(self):
         self.assertEqual(cells.sleep_verdict([None, "sleeping"], True)[0], cells.PASS)
         self.assertEqual(cells.sleep_verdict([None, "waking"], True)[0], cells.FAIL)
         self.assertEqual(cells.sleep_verdict([None, "sleeping"], False), (cells.FAIL, "row never woke after Wake"))
+        # A sleeping session's phases read the same, and a Wake the core says failed names why.
+        self.assertEqual(cells.sleep_verdict(["saving_close", "closing", "sleeping"], True)[0], cells.PASS)
+        self.assertEqual(cells.sleep_verdict(["sleeping"], False, "wake failed: reader unavailable"),
+                         (cells.FAIL, "row never woke after Wake: wake failed: reader unavailable"))
         self.assertEqual(cells.resume_verdict("a", "b", (cells.PASS, "ok")),
                          (cells.FAIL, "native session changed across Wake (a -> b)"))
         self.assertEqual(cells.resume_verdict("a", "a", (cells.PASS, "ok")), (cells.PASS, "same session a; ok"))
@@ -212,6 +254,40 @@ class LocalRoute(unittest.TestCase):
             self.assertEqual(codex_login_refusal(auth, now), "login near refresh (8.0 days old); run Codex once, then rerun")
             auth.write_text("{}")
             self.assertIn("unreadable", codex_login_refusal(auth, now))
+
+    def test_an_oauth_login_copy_is_refused_unless_its_access_outlasts_the_run(self):
+        now = datetime.datetime(2026, 10, 18, tzinfo=datetime.timezone.utc).timestamp()
+        with tempfile.TemporaryDirectory() as temporary:
+            auth = Path(temporary) / "auth.json"
+            self.assertIn("not logged in", grok_login_refusal(auth, HOUR, now))
+            self.assertIn("not logged in", pi_login_refusal(auth, HOUR, now))
+            iso = lambda hours: datetime.datetime.fromtimestamp(now + hours * 3600, datetime.timezone.utc).isoformat()
+            auth.write_text(json.dumps({"https://auth.x.ai::a": {"expires_at": iso(3), "refresh_token": "r"}}))
+            self.assertIsNone(grok_login_refusal(auth, HOUR, now))
+            auth.write_text(json.dumps({"https://auth.x.ai::a": {"expires_at": iso(0.5)}}))
+            self.assertIn("login near refresh (0.5 h left, the run needs 1.0 h)", grok_login_refusal(auth, HOUR, now))
+            # Pi's OpenAI access token lasts an hour: a short run may use it, a long one may not.
+            auth.write_text(json.dumps({"openai": {"type": "oauth", "expires": (now + 0.8 * HOUR) * 1000}}))
+            self.assertIsNone(pi_login_refusal(auth, 0.5 * HOUR, now))
+            self.assertIn("near refresh", pi_login_refusal(auth, 0.7 * HOUR, now))
+            auth.write_text(json.dumps({"openai": {"type": "oauth", "expires": (now - 3600) * 1000}}))
+            refusal = pi_login_refusal(auth, HOUR, now)
+            self.assertIn("login expired", refusal)
+            self.assertIn("run pi once yourself", refusal)
+            auth.write_text(json.dumps({"openai": {"type": "oauth", "expires": "soon"}}))
+            self.assertIn("unreadable", pi_login_refusal(auth, HOUR, now))
+
+    def test_grok_trust_adds_one_entry_for_the_resolved_repository(self):
+        import tomllib
+        with tempfile.TemporaryDirectory() as temporary:
+            trusted = Path(temporary) / "trusted_folders.toml"
+            repository = Path(temporary) / "repo"
+            repository.mkdir()
+            trust_grok(trusted, repository)
+            trust_grok(trusted, repository)
+            folders = tomllib.loads(trusted.read_text())["folders"]
+            self.assertEqual(list(folders), [str(repository.resolve())])
+            self.assertIs(folders[str(repository.resolve())]["trusted"], True)
 
     def test_codex_trust_adds_one_entry_for_the_resolved_repository(self):
         with tempfile.TemporaryDirectory() as temporary:

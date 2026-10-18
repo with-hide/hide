@@ -608,6 +608,19 @@ jobs:
     permissions:
       contents: read
 
+  # Every pinned agent CLI installed at its pin on Linux and Windows, for a
+  # change to the pin table or an installer; the nightly's journey installs
+  # them on macOS too, every night.
+  agent-clis:
+    name: agent CLIs
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'agent-clis')
+    uses: ./.github/workflows/agent-clis.yml
+    with:
+      systems: '["linux","windows"]'
+    permissions:
+      contents: read
+
   # The Electron app on macOS, the system it is written against: the whole
   # suite, for a change to what the app runs: the desktop host, the web shell
   # or a crate.
@@ -666,7 +679,7 @@ jobs:
 
   verify:
     name: verify
-    needs: [plan, policy, rust, checks, os-contract, os-contract-macos, agy-contract, agent-journey, windows-check, windows-e2e, windows-desktop, web-e2e, remote-mailbox, desktop-e2e, package]
+    needs: [plan, policy, rust, checks, os-contract, os-contract-macos, agy-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, web-e2e, remote-mailbox, desktop-e2e, package]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
