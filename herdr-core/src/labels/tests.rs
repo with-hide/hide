@@ -1910,10 +1910,10 @@ fn a_new_turn_read_retires_an_old_done_result_that_arrived_first() {
     source.hold();
     let next = agent(&path, "working", 7);
     observe(&mut worker, &next);
+    assert_eq!(shown(&worker, &next).unwrap().progress, None);
     harness.backend.release();
-    drain_until(&mut worker, &woken, |worker| {
-        shown(worker, &next).unwrap().progress.as_deref() == Some("마친 첫 요청을 정리함 진행")
-    });
+    drain_until(&mut worker, &woken, |worker| worker.analyzer_idle());
+    assert_eq!(shown(&worker, &next).unwrap().progress, None);
 
     harness.backend.hold();
     source.release();

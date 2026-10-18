@@ -443,7 +443,11 @@ impl LabelWorker {
                 || (seq_moved
                     && was_stopped
                     && matches!(status.as_str(), "idle" | "done" | "blocked"));
-            if ran && record.end.is_some_and(|end| end != LabelEnd::Working) {
+            if ran
+                && record
+                    .end
+                    .is_some_and(|end| end != LabelEnd::Working || was_stopped)
+            {
                 record.line.clear();
                 record.end = None;
                 self.dirty = true;
@@ -836,6 +840,11 @@ impl LabelWorker {
     #[cfg(test)]
     pub(crate) fn reader_idle(&self) -> bool {
         self.read_in_flight.is_none()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn analyzer_idle(&self) -> bool {
+        self.analysis_in_flight.is_none()
     }
 
     /// Takes the generator role when it is free. Returns whether this worker
@@ -1722,6 +1731,15 @@ impl LabelWorker {
             .get_mut(pane_id)
             .and_then(|pane| turn_key(pane.events.make_contiguous()))
             .is_some_and(|turn| turn != outcome.turn);
+        // A TurnEnd request was made for a stopped agent. If it has since
+        // resumed, its old sentence cannot describe the running turn, even
+        // before the new transcript read has completed (or if that read fails).
+        let stale_display = stale_turn
+            || (outcome.phase == AnalysisPhase::TurnEnd
+                && self
+                    .panes
+                    .get(pane_id)
+                    .is_some_and(|pane| pane.status == "working"));
         match result {
             Ok((provider, analysis)) => {
                 let record = self.records.get_mut(pane_id).expect("checked above");
@@ -1779,7 +1797,7 @@ impl LabelWorker {
                         );
                     }
                 }
-                if stale_turn {
+                if stale_display {
                     record.task_input_cursor =
                         outcome.task_input_cursor.or(record.task_input_cursor);
                     match outcome.phase {
@@ -1835,7 +1853,7 @@ impl LabelWorker {
             // A stopping daemon records nothing; the next one asks again.
             Err(AnalysisFailure::Stopped) => false,
             Err(failure) => {
-                if stale_turn {
+                if stale_display {
                     let record = self.records.get_mut(pane_id).expect("checked above");
                     record.task_input_cursor =
                         outcome.task_input_cursor.or(record.task_input_cursor);
