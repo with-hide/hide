@@ -10,7 +10,7 @@ import { screenshot } from "./wire";
 // The guidance hooks Apply writes are not written on Windows (their documentation names no shell there).
 test.skip(process.platform === "win32", "the first-run choice installs POSIX hooks");
 
-const modal = (page: Page) => page.locator("[data-agent-onboarding]");
+const modal = (page: Page) => page.locator("[data-first-run]");
 const tile = (page: Page, id: string, state: string) => page.locator(`[data-onboarding-tile="${id}:${state}"]`);
 const read = (file: string) => (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "");
 
@@ -41,6 +41,9 @@ test("a Mac with no kit record is asked once, the installed agents are on, and A
   try {
     await open(page, daemon);
     await expect(modal(page)).toBeVisible({ timeout: 60_000 });
+    await expect(modal(page)).toHaveAttribute("data-first-run", "agents");
+    await expect(modal(page).locator('[data-brand-owl="agents"]')).toBeVisible();
+    await expect(page.locator("[data-first-run-progress]")).toHaveCount(0);
     await expect(tile(page, "claude-code", "on")).toBeVisible();
     await expect(tile(page, "cursor", "on")).toBeVisible();
     // Nothing was written to any agent while the question was open.
@@ -57,6 +60,7 @@ test("a Mac with no kit record is asked once, the installed agents are on, and A
     await expect(page.locator("[data-onboarding-hide-ai]")).toHaveCount(0);
     await page.locator("[data-onboarding-apply]").click();
     await expect(modal(page)).toHaveCount(0);
+    await expect(page.locator('[data-first-run="notifications"], [data-first-run="project"]')).toHaveCount(0);
     await expect.poll(() => read(path.join(home, ".cursor", "hooks.json")), { timeout: 60_000 }).toContain("hide-guidance@");
     expect(read(path.join(home, ".claude", "settings.json"))).not.toContain("hide-subagents@");
 
