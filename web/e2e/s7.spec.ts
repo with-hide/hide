@@ -1038,7 +1038,8 @@ test("a pinned view has no Keep open and, beside another area, can move there", 
     expect(left.map((row) => row.id)).toEqual(["new_tab", ...SPLITS, "move_right", "copy_path", "select_in_tree", "close_view"]);
     expect(left.every((row) => !row.disabled)).toBe(true);
     const right = await tabMenuRows(page, area(page, 1), "f10.txt");
-    expect(right.map((row) => row.id)).toEqual(["new_tab", ...SPLITS, "move_left", "copy_path", "select_in_tree", "close_view"]);
+    expect(right.map((row) => row.id)).toEqual(["new_tab", "split", "move_left", "copy_path", "select_in_tree", "close_view"]);
+    expect(right.find((row) => row.id === "split")).toMatchObject({ disabled: true, reason: "This is the only view in its area." });
   } finally { stopStack(stack); }
 });
 
