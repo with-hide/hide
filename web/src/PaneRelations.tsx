@@ -77,7 +77,7 @@ export function RelationStatus({ actions, visiblePaneIds }: { actions: Actions; 
   if (!relation) return null;
   // A visible source band owns its move's feedback. Retain the existing
   // fallback only when that band is no longer on screen or cannot show it.
-  if (visiblePaneIds.includes(relation.sourcePaneId) && band?.action?.kind === "child" && band.action.pane_id === relation.targetPaneId) return null;
+  if (visiblePaneIds.includes(relation.sourcePaneId) && band?.action?.pane_id === relation.targetPaneId) return null;
   const state = relationState(relation, outcome, t);
   if (!state) return null;
   if (state.phase === "pending") {

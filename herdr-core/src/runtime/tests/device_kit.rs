@@ -2431,22 +2431,22 @@ fn a_device_pane_waiting_for_its_helper_reads_reconnecting_only_while_it_will_re
     runtime.ingest_remote_session(DEVICE, Ok(session_with_pane()));
     runtime.snapshot.navigator.focused_device_id = Some(DEVICE.to_owned());
     report_terminal(&mut runtime, PANE, terminal_state("controlling", 1));
-    let band = |runtime: &Runtime| {
+    let notice = |runtime: &Runtime| {
         runtime.snapshot.terminal.headers[PANE]
-            .band
+            .notice
             .as_ref()
-            .map(|band| band.kind.clone())
+            .map(|notice| notice.kind.clone())
     };
-    assert_eq!(band(&runtime), None);
+    assert_eq!(notice(&runtime), None);
 
     runtime.ingest_host_closed(DEVICE, first, "the link dropped".to_owned());
-    assert_eq!(band(&runtime).as_deref(), Some("reconnecting"));
+    assert_eq!(notice(&runtime).as_deref(), Some("reconnecting"));
 
     // The retry finds no SSH connection to dial and schedules no other: the
     // pane waits for something that is not coming, so it is not reconnecting.
     let at = runtime.device_host_retries[DEVICE].at_unix_ms.unwrap();
     runtime.tick_device_hosts(at);
-    assert_eq!(band(&runtime).as_deref(), Some("unavailable"));
+    assert_eq!(notice(&runtime).as_deref(), Some("unavailable"));
 
     runtime.start_device_host(DEVICE);
     let second = runtime.device_host_generation(DEVICE);
@@ -2458,7 +2458,7 @@ fn a_device_pane_waiting_for_its_helper_reads_reconnecting_only_while_it_will_re
         )),
     );
     assert_eq!(
-        band(&runtime).as_deref(),
+        notice(&runtime).as_deref(),
         Some("unavailable"),
         "a device waiting for the operator is not reconnecting"
     );
@@ -2597,13 +2597,13 @@ fn revoking_the_helper_ends_the_devices_terminals_and_its_panes_say_why() {
     );
     runtime.ingest_remote_session(DEVICE, Ok(session_with_pane()));
     report_terminal(&mut runtime, PANE, terminal_state("controlling", 1));
-    let band = |runtime: &Runtime| {
+    let notice = |runtime: &Runtime| {
         runtime.snapshot.terminal.headers[PANE]
-            .band
+            .notice
             .as_ref()
-            .map(|band| band.kind.clone())
+            .map(|notice| notice.kind.clone())
     };
-    assert_eq!(band(&runtime), None);
+    assert_eq!(notice(&runtime), None);
 
     runtime.set_host_consent(DEVICE, false);
 
@@ -2617,11 +2617,11 @@ fn revoking_the_helper_ends_the_devices_terminals_and_its_panes_say_why() {
         .expect("the pane stays projected")
         .clone();
     assert_eq!(pane.transport_state, "unavailable");
-    assert_eq!(band(&runtime).as_deref(), Some("helper_not_allowed"));
+    assert_eq!(notice(&runtime).as_deref(), Some("helper_not_allowed"));
 
     runtime.set_host_consent(DEVICE, true);
     assert_ne!(
-        band(&runtime).as_deref(),
+        notice(&runtime).as_deref(),
         Some("helper_not_allowed"),
         "allowing it again ends the consent wait"
     );

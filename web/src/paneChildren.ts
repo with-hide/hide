@@ -3,17 +3,15 @@ import { agentsByPane } from "./paneAgents";
 import { deviceConnected, localDeviceId } from "./devices";
 import type { MessageKey } from "./i18n/catalogs";
 import { remoteTargetOfPane } from "./remote";
-import type { AgentRow, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, SnapshotRest } from "./snapshot";
 
 export type ChildCountPart = {
   kind: "raised" | "working" | "result" | "waiting" | "unknown" | "idle";
-  /** The mark the count is drawn with; a quiet count (unknown, idle) draws none and is named only in the hint. */
-  mark: RowMark | null;
   count: number;
   label: Extract<MessageKey, `panes.children.${string}`>;
 };
 
-/** Presentation of the core's direct-child counts, not another status projection. */
+/** The children button's words for the core's direct-child counts, not another status projection. */
 export function paneChildren(paneId: string, agents: AgentRow[], rest: SnapshotRest | null) {
   const byPane = agentsByPane(agents);
   const parent = byPane.get(paneId);
@@ -30,12 +28,12 @@ export function paneChildren(paneId: string, agents: AgentRow[], rest: SnapshotR
   const raised = parent.descendant_mark?.kind === "raised" ? parent.descendant_mark.count : 0;
   const parts: ChildCountPart[] = [];
   const counts = parent.direct_child_counts;
-  // The four marks mean here what they mean on a row (B21, B24): a request a
-  // child raised to the operator is `!`; a child's own question is its
-  // parent's to answer, so it draws no mark and is named only in the hint.
+  // A request a child raised to the operator is the button's `!` count; a
+  // child's own question is its parent's to answer, so it is named only in
+  // the hint (B21, B24).
   const asking = counts ? counts.error + counts.approval + counts.question : 0;
   if (unavailableDevice === null) {
-    parts.push({ kind: "raised", mark: "turn", count: raised, label: "panes.children.raised" }, { kind: "waiting", mark: null, count: asking, label: "panes.children.waiting" });
+    parts.push({ kind: "raised", count: raised, label: "panes.children.raised" }, { kind: "waiting", count: asking, label: "panes.children.waiting" });
   }
   if (counts && unavailableDevice === null) {
     // The core omits its unknown count from the wire; its final row status
@@ -43,13 +41,13 @@ export function paneChildren(paneId: string, agents: AgentRow[], rest: SnapshotR
     const unknown = children.filter((child) => child.status_code === "unknown").length;
     const idle = children.length - asking - counts.working - counts.done - unknown;
     parts.push(
-      { kind: "working", mark: "going", count: counts.working, label: "panes.children.working" },
-      { kind: "result", mark: "unread", count: counts.done, label: "panes.children.result" },
-      { kind: "unknown", mark: null, count: unknown, label: "panes.children.unknown" },
-      { kind: "idle", mark: null, count: idle, label: "panes.children.idle" },
+      { kind: "working", count: counts.working, label: "panes.children.working" },
+      { kind: "result", count: counts.done, label: "panes.children.result" },
+      { kind: "unknown", count: unknown, label: "panes.children.unknown" },
+      { kind: "idle", count: idle, label: "panes.children.idle" },
     );
   }
-  return { parent, children, raised, parts: parts.filter((part) => part.count > 0), lead: children[0]!, unavailableDevice };
+  return { parent, children, raised, parts: parts.filter((part) => part.count > 0), unavailableDevice };
 }
 
 export type PaneChildren = NonNullable<ReturnType<typeof paneChildren>>;

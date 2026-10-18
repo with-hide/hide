@@ -940,10 +940,14 @@ export type PaneLayout = {
 
 export type PaneHeader = {
   working: boolean;
-  band: {kind: string; tone: PaneHeaderTone; reason: string | null; since_unix_ms: number | null; action: PaneHeaderAction | null; more: number; exit_code: number | null; raised?: RaisedAsk; facts?: {kind: "pull_request"; checks: NonNullable<PullRequest["checks"]>; review: PullRequest["review"]}} | null;
+  /** Why the terminal is not live, drawn in the pane's body. */
+  notice: PaneNotice | null;
+  /** What waits on the operator in this pane, drawn on its second row. */
+  band: PaneBand | null;
 };
-export type PaneHeaderTone = "muted" | "warning" | "error" | "success" | "pr";
-export type PaneHeaderAction = {kind: "pr"; workspace_id: string; url: string; number: number; checks: NonNullable<PullRequest["checks"]>; tone: PaneHeaderTone} | {kind: "child"; pane_id: string; label: string};
+export type PaneNotice = {kind: string; tone: "muted" | "warning" | "error"; reason: string | null; since_unix_ms: number | null; exit_code: number | null};
+/** The pane's own approval, answer, block or stop, or a raised descendant's ask; `read` once the operator has looked. */
+export type PaneBand = {kind: "approval" | "answer" | "blocked" | "stopped" | "raised"; reason: string | null; since_unix_ms: number | null; read: boolean; action: {pane_id: string; label: string} | null; more: number; raised?: RaisedAsk};
 
 export type TerminalPane = {
   pane_id: string;

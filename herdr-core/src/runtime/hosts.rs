@@ -609,7 +609,7 @@ impl Runtime {
     fn set_host_phase(&mut self, device_id: &str, phase: HostPhase) {
         let waiting = self.helper_link_wait(device_id);
         self.device_host_entry(device_id).phase = phase;
-        // A pane of the device says what its link waits for, so its band
+        // A pane of the device says what its link waits for, so its notice
         // follows the phase.
         if waiting != self.helper_link_wait(device_id) {
             self.refresh_pane_headers();
