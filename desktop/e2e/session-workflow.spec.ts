@@ -33,10 +33,15 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
     await expect(pane.locator(`[data-pane-child-name]`)).toHaveCount(0);
     await expect(pane.locator(`[data-pane-own-progress="${parent}"]`)).toHaveCount(0);
     const raisedRow = pane.locator('[data-pane-header-band="raised"]');
-    await expect(raisedRow.locator(`[data-pane-band-who="${child}"]`)).toBeVisible();
-    await expect(raisedRow).toContainText("자식");
-    const raisedText = await raisedRow.innerText();
-    expect(raisedText.indexOf("승인")).toBeLessThan(raisedText.indexOf("자식의 긴 한국어 검증 요청"));
+    const raisedVerb = raisedRow.locator('[data-verb="approval"]');
+    const raisedWho = raisedRow.locator(`[data-pane-band-who="${child}"]`);
+    await expect(raisedVerb).toHaveText("Approval");
+    await expect(raisedWho).toContainText("자식의 긴 한국어 검증 요청");
+    await expect(raisedWho).toContainText("(child)");
+    expect(await raisedVerb.evaluate((verb, childPaneId) => {
+      const who = verb.parentElement?.querySelector(`[data-pane-band-who="${childPaneId}"]`);
+      return !!who && !!(verb.compareDocumentPosition(who) & Node.DOCUMENT_POSITION_FOLLOWING);
+    }, child)).toBe(true);
     const terminal = await host.boundingBox();
     const facts = { head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), parent, child, home: run.env.HOME, socket: herdr.socket, state: run.env.HIDE_STATE_DIR, provider: "synthetic agent transcript and lifecycle" };
     for (const theme of ["light", "dark"] as const) {
