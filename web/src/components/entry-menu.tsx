@@ -174,6 +174,7 @@ export function EntryContextMenu<Id extends string>({
   onCloseAutoFocus,
   asChild = false,
   disabled = false,
+  returnToInput = false,
   ...data
 }: {
   label: string;
@@ -185,11 +186,13 @@ export function EntryContextMenu<Id extends string>({
   onCloseAutoFocus?: (event: Event) => void;
   asChild?: boolean;
   disabled?: boolean;
+  returnToInput?: boolean;
 } & Record<`data-${string}`, string>) {
   const [open, setOpen] = useState(false);
   const entries = open ? items() : [];
   return (
     <ContextMenu
+      returnToInput={returnToInput}
       canOpen={() => items().length > 0}
       onOpenChange={setOpen}
     >
@@ -232,6 +235,7 @@ export function EntryDropdown<Id extends string>({
   onOpenChange?: (open: boolean) => void;
 } & Record<`data-${string}`, string>) {
   const [open, setOpen] = useState(false);
+  const returnFocus = useReturnFocus(open);
   const entries = typeof items === "function" ? (open ? items() : []) : items;
   const control = <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>;
   return (
@@ -242,7 +246,7 @@ export function EntryDropdown<Id extends string>({
       }}
     >
       {hint ? <Hint label={hint}>{control}</Hint> : control}
-      <DropdownMenuContent className={entryBounds} aria-label={label} align={align} {...data}>
+      <DropdownMenuContent className={entryBounds} aria-label={label} align={align} onCloseAutoFocus={returnFocus} {...data}>
         <MenuTitle title={title} />
         <EntryItems items={entries} onSelect={onSelect} parts={{ Item: DropdownMenuItem, Separator: DropdownMenuSeparator }} />
       </DropdownMenuContent>

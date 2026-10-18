@@ -48,6 +48,7 @@
 
 use std::path::{Path, PathBuf};
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -89,10 +90,12 @@ pub enum GuidanceAgent {
 impl GuidanceAgent {
     /// Raise this agent's marker when its installed entry changes shape;
     /// unrelated agents keep byte-identical hook entries.
-    /// Version 7 adds prompt observation and turn-end letters for Grok.
+    /// Version 7 adds prompt observation and turn-end letters for Grok,
+    /// and encodes Antigravity commands on Windows across its Go-to-cmd boundary.
     pub const fn version(self) -> u32 {
         match self {
             Self::Grok => 7,
+            Self::Antigravity if cfg!(windows) => 7,
             Self::Gemini
             | Self::Qwen
             | Self::Droid
@@ -564,25 +567,54 @@ fn antigravity_tool_command(helper: &Path) -> String {
     )
 }
 
-/// agy's command on Windows, which agy hands to `cmd /c`: it runs the helper
-/// while it is there and, for a tool call, answers ask itself when it is
-/// gone or fails, as [`antigravity_tool_command`] does.
-fn cmd_command(helper: &Path, agent: GuidanceAgent, event: HookEvent) -> String {
-    let quoted = Quoting::Cmd.quote(&helper.display().to_string());
-    let run = format!("{quoted} {}", arguments(agent, event));
-    if event == HookEvent::PreToolUse {
-        let ask = crate::antigravity::ASK;
-        format!("if exist {quoted} ({run} || echo {ask}) else (echo {ask})")
+/// agy 1.4.2 passes the command to cmd using Go's argument escaping, which
+/// turns embedded quotes into backslash-quote. cmd treats that backslash
+/// literally, so a quoted `if exist` path never reaches the helper. An
+/// encoded PowerShell command has no embedded quotes for that boundary.
+const AGY_WINDOWS_COMMAND: &str = "powershell.exe -NoProfile -NonInteractive -EncodedCommand ";
+
+fn antigravity_windows_command(helper: &Path, event: HookEvent) -> String {
+    let quoted = Quoting::PowerShell.quote(&helper.display().to_string());
+    let run = format!(
+        "& {quoted} {}",
+        arguments(GuidanceAgent::Antigravity, event)
+    );
+    let script = if event == HookEvent::PreToolUse {
+        let ask = Quoting::PowerShell.quote(crate::antigravity::ASK);
+        format!(
+            "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ try {{ {run}; if ($LASTEXITCODE -ne 0) {{ {ask} }} }} catch {{ {ask} }} }} else {{ {ask} }}; exit 0"
+        )
     } else {
-        format!("if exist {quoted} ({run})")
+        format!("if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ {run} }}")
+    };
+    let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    format!(
+        "{AGY_WINDOWS_COMMAND}{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    )
+}
+
+/// Decode only the form Hide writes. Ownership, read-back and migration
+/// inspect the same script that PowerShell runs; malformed encodings are
+/// not claimed as Hide's entries.
+fn decoded_windows_command(text: &str) -> Option<String> {
+    let encoded = text.strip_prefix(AGY_WINDOWS_COMMAND)?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    let (pairs, remainder) = bytes.as_chunks::<2>();
+    if !remainder.is_empty() {
+        return None;
     }
+    let units: Vec<u16> = pairs.iter().copied().map(u16::from_le_bytes).collect();
+    String::from_utf16(&units).ok()
 }
 
 /// The entry Hide writes for `slot`.
 fn entry(agent: GuidanceAgent, helper: &Path, slot: &Slot) -> Value {
     let event = slot.event;
     let command = if cfg!(windows) && agent == GuidanceAgent::Antigravity {
-        cmd_command(helper, agent, event)
+        antigravity_windows_command(helper, event)
     } else if agent == GuidanceAgent::Antigravity && event == HookEvent::PreToolUse {
         antigravity_tool_command(helper)
     } else if cfg!(windows) && agent == GuidanceAgent::Cursor {
@@ -782,7 +814,10 @@ fn entry_marker_version(entry: &Value) -> Option<u32> {
     strings(entry, &mut found);
     found
         .into_iter()
-        .filter_map(|text| marker_version_of(GUIDANCE_SOURCE_NAME, text))
+        .filter_map(|text| {
+            let decoded = decoded_windows_command(text);
+            marker_version_of(GUIDANCE_SOURCE_NAME, decoded.as_deref().unwrap_or(text))
+        })
         .min()
 }
 
@@ -790,18 +825,24 @@ fn entry_marker_version(entry: &Value) -> Option<u32> {
 fn entry_helper(agent: GuidanceAgent, entry: &Value) -> Option<String> {
     let mut found = Vec::new();
     strings(entry, &mut found);
-    found
-        .into_iter()
-        .filter(|text| text.contains(GUIDANCE_SOURCE_NAME))
-        .find_map(|text| {
-            agent.quoting().first_quoted(text).or_else(|| {
-                // Cursor's plain form: the helper's path, then its arguments.
-                text.split_whitespace()
-                    .next()
-                    .filter(|first| first.starts_with('/'))
-                    .map(str::to_owned)
-            })
+    found.into_iter().find_map(|text| {
+        if let Some(decoded) = decoded_windows_command(text) {
+            return decoded
+                .contains(GUIDANCE_SOURCE_NAME)
+                .then(|| Quoting::PowerShell.first_quoted(&decoded))
+                .flatten();
+        }
+        if !text.contains(GUIDANCE_SOURCE_NAME) {
+            return None;
+        }
+        agent.quoting().first_quoted(text).or_else(|| {
+            // Cursor's plain form: the helper's path, then its arguments.
+            text.split_whitespace()
+                .next()
+                .filter(|first| first.starts_with('/'))
+                .map(str::to_owned)
         })
+    })
 }
 
 /// Takes Hide's own hook out of `list` and nothing else. A group another
@@ -950,13 +991,6 @@ pub fn install(
             path: agent.config_path(home).display().to_string(),
             detail: why.to_owned(),
         })?;
-    if agent.quoting() == Quoting::Cmd && !Quoting::cmd_safe(&helper.display().to_string()) {
-        return Err(InstallFailure::UnexpectedShape {
-            path: agent.config_path(home).display().to_string(),
-            detail: "the helper's path holds a character cmd would read inside its quotes"
-                .to_owned(),
-        });
-    }
     let outcome = install_any(agent, home, helper)?;
     if agent == GuidanceAgent::Antigravity {
         crate::antigravity_trust::prepare_read_only(home)?;

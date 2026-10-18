@@ -306,6 +306,7 @@
   --size-overview-panel-breakpoint: 1280px;
   --size-pane-parent-breakpoint: 640px;
   --size-pane-state-example: 144px;
+  --size-pane-narrow-example: 440px;
   --size-usage-cell: 12px;
   --size-usage-cell-gap: 3px;
   --size-usage-bar-plot: 66px;

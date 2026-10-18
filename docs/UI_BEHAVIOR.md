@@ -77,7 +77,10 @@ Close (the header's ×, the pressed rail icon, or the tool's chord) closes the l
 A close keeps the tool the lane showed, so ⌘E and Show right lane bring it back on that tool.
 
 The files tool shows the View areas below, with their tabs, splits, previews and browser displays, each page inside its area's bounds.
-The active document's header starts with the tree button, the checkout's name, then the path in ` › ` steps, cutting a long path at its start so the file name stays; a browser display's toolbar carries the same tree button.
+The active document's header starts with the checkout's name, then the path in ` › ` steps, cutting a long path at its start so the file name stays.
+The Files top header keeps one folder-and-Explorer toggle, with localized text, pressed background and accessible pressed state.
+It stays visible with no View and is disabled while the tree alone must remain.
+Document and page toolbars retain their path or address and controls, without another tree toggle.
 The tree button or ⌘⇧E (`Toggle File Tree`) turns the file tree, the Explorer, on and off, the button pressed while it is on; ⌘⇧E while the lane does not show Files opens it on Files with the tree.
 On, the tree is a column left of the documents and the lane widens by its width, so the documents keep theirs: over Agent Views it covers more of them, and docked, Agent Views give up the tree's width as well.
 The tree stays on when a file is picked, when the lane is put away or closed and comes back, and when another tool shows and Files comes back; only the tree button and ⌘⇧E turn it off.
@@ -202,7 +205,7 @@ This boundary is an Observer-approved, user-vetoable implementation assumption f
 
 Agent Views draws the selected group's area tree, separate from the files tool's View tree.
 Each area keeps its own tab bar and New tab button, and draws its active draft or live pane canvas; dividers separate areas.
-Only the area holding the keyboard carries the foreground-colored selected-tab underline, across Agent Views and the lane.
+Only the area holding the keyboard carries the user-accent selected-tab underline, across Agent Views and the lane.
 Clicking a tab or pane activates its area and sends the keyboard to that pane.
 All shown tabs of the selected group stay attached and awake, while only its active area's live tab receives read and sleep-visit updates.
 Hidden groups add no shown-tab attachments, polling or PTY restart; the existing recent-tab attachment policy still applies.
@@ -280,9 +283,12 @@ A provider whose sleep closes its pane (Pi, OpenCode, Cursor and omp; [ARCHITECT
 The files tool holds one or more View areas, each with its own tab bar above its own view, split left/right or up/down as often as the limits allow.
 A split divides one area in two along one axis, and either half can split again along either axis, so every arrangement of side-by-side and stacked areas is a tree of halves.
 Each layout keeps its own active area for opening and layout actions.
-The recorded keyboard owner alone gives one Agent or View area the foreground-colored selected-tab underline.
+The recorded keyboard owner alone gives one Agent or View area the user-accent selected-tab underline.
 Every other area's tab bar uses the card background, and its selected tab keeps a foreground title and secondary background without the underline.
-Areas have no visible focus perimeter; their transparent content border reserves the same space as before.
+The keyboard View area has a 2px accent content border outside any native page slot; the other areas reserve the same transparent border.
+The keyboard Agent pane has a 2px accent perimeter and a lightly accent-tinted header, in single, split and zoomed presentations.
+Menus, search, tools and an inactive app show no canvas input emphasis; returning input restores it without changing selection or geometry.
+A View's address and path controls retain that View as the target of Close and New tab while suppressing its canvas emphasis.
 The content stays readable and unfiltered; focus adds no content blur, opacity reduction, capture loop or geometry change.
 The same rule applies at every lane width, in the narrow single-area presentation and in both themes.
 A View area's tabs use the same continuous shrinking strip as Agent tabs, with the same preferred, title-minimum and icon-identity widths.
@@ -301,21 +307,16 @@ When the last view closes, the lane stays on Files with the tree across it if th
 
 The checkout owns the Files View list, its split, its selected Views and its active area, whichever Agent tab is in front.
 Every tab sees the same list.
-Each Agent tab remembers one View, the one the operator last had in front on it, as its bookmark.
 The lane, its tool, pin, tree and widths, and document editing and saving remain shared by the Workspace.
-A tab with no bookmark changes nothing when it appears, and the files tool shows the list as it stands.
-
-A tab that was on no Agent area and now appears brings its bookmarked View to the front of that View's own area, in the frame that shows the tab.
-The active area and the keyboard are not moved by it.
-A bookmarked View that has closed is ignored, and a tab with no bookmark leaves the front as it is.
-The tab strip, sidebar, palette, tab cycle and a confirmed Herdr or device switch follow this rule.
-Moving ordinary focus among tabs already shown in Agent areas changes nothing in the lane.
-
-A tab's bookmark follows the front View while that tab is on screen, whether the operator selected a View or the agent in the operator's pane brought one forward.
-A View another pane opens behind the front is no tab's bookmark, so going to that pane's tab later shows what the operator last had there.
-Closing a tab drops its bookmark and keeps its Views in the list.
+Changing Agent tabs through the strip, sidebar, search, cycling or a confirmed local or device switch changes no View selection, split or list.
+Closing an Agent tab keeps its Views and documents.
 Putting the lane away or closing it preserves its documents, unsaved text and save state.
-Closing the last View leaves the files tool on the tree when the tree is on, and closes the lane otherwise.
+Closing the selected input View chooses its area's most recently visited surviving View, then the right neighbour and then the left when none was visited, and the keyboard follows the confirmed result.
+Closing a background View, including the selected View of another area, leaves input where it was.
+A View context menu borrows the current input without selecting its target, and its automatic focus return does not cancel a pending close follow.
+An emptied area collapses and input follows its surviving neighbour.
+The last View returns input to the existing tree if it is on, else closes the lane and returns to the existing Agent pane; with no pane there is no invented input target.
+A last document reference waits for save protection; failure or conflict leaves it open, and a newer input destination wins over a delayed close completion.
 
 From the pane the operator is in, a file, diff or browser open or a select brings the View to the front, its area becomes the active one and the lane is called to Files.
 From another pane of the Workspace on screen, of the same tab or another, the View is added at the end of the area it lands in; the selection, the active area, the keyboard, the lane and the tab on screen stay as they were, and the Files icon's badge counts it.
@@ -330,9 +331,10 @@ Dirty-document close guards count every reference.
 A page added behind the front may stay pending until it first appears, and `--wait` proves only a real load.
 The desktop hides every retained page absent from the current placements.
 
-The list and the bookmarks are saved with the Workspace and survive restart and core moves.
+The list, split and selection are saved with the Workspace and survive restart and core moves.
+Obsolete `tab_views` bookmarks are ignored without erasing the saved `view_layout`, lane, documents or comments.
 A first start after the update shows an empty list: Views saved per tab by the earlier build are not read, while the lane's tool, pin, tree, widths, comments and the Agent layout are kept.
-Authoritative topology drops a closed tab's bookmark and pending opens and keeps the Views and documents.
+Authoritative topology drops a closed tab's pending opens and keeps the Views and documents.
 An unanswered connected-device session or unresolved catalog preserves saved state.
 Local and connected-device callers follow the same rules; the phone keeps its existing flow.
 No additional badge, notice or setting is introduced.
@@ -340,7 +342,7 @@ The checkout keeps at most 32 Views in its six View areas and depth three.
 An open that would add the 33rd View first closes the View looked at longest ago in the checkout, the way closing its last View closes a file (Reopen Closed brings it back); a View in front of any area and a document with unsaved work never close.
 Only when nothing can close is the open refused, with the View notice, and existing content stays as it was.
 Web owner: none, the shell draws the existing snapshot projection.
-Core owner: `herdr-core/src/runtime/{view_bookmarks,view_areas,workspace_control,workspace_view}.rs` and `herdr-core/src/workspace_views.rs`.
+Core owner: `herdr-core/src/runtime/{view_callers,view_areas,workspace_control,workspace_view}.rs` and `herdr-core/src/workspace_views.rs`.
 Regression owners are `runtime/tests/view_bookmarks.rs`, `web/e2e/{view-bookmarks,right-lane}.spec.ts` and `desktop/e2e/browser.spec.ts`.
 
 ### Opening, preview, and Open to the side
@@ -431,10 +433,11 @@ In a plain browser tab the view keeps its address on the toolbar row, level with
 
 ### View openers and comments
 
-A View an agent opened wears that agent's provider logo, 14 pixels, after the file name, so the tab's kind mark and the name stay readable: a page, a file, a diff, an image or a PDF opened by `hide file open`, `hide diff open` or `hide browser open` from the agent's pane, or by the operator clicking a path or an address in that agent's terminal (PRD view-opener-feedback D-02, D-04, D-24).
+Each area's selected View shows its actual opener's 14px provider mark at the right of the address or path toolbar, while tabs retain their type mark and title without repeated opener logos: a page, a file, a diff, an image or a PDF opened by `hide file open`, `hide diff open` or `hide browser open` from the agent's pane, or by the operator clicking a path or an address in that agent's terminal (PRD view-opener-feedback D-02, D-04, D-24).
 A View the operator opened from the Explorer, ⌘K, the file tree or a new tab's address field, and one a caller Hide could not bind to a pane opened, wears no mark.
 The mark follows the agent that last opened the View; a link inside the page and an agent's `hide browser` command keep it, and an address the operator types takes it off.
-Its hint, above the tab, says the agent's name, `Opened this · <product>` and `Click to go to its pane`, and the mark's accessible name says the same; only the mark's hint opens while the pointer is on it, not the tab's.
+Its hint, above the toolbar mark, says the agent's name, `Opened this · <product>` and `Click to go to its pane`, and the mark's accessible name says the same; the tab's tooltip also identifies its opener, including on background tabs.
+Opening, waiting and unavailable Views retain a path toolbar with the same opener, and a missing or unknown opener creates no invented identity.
 Pressing it brings the agent's pane forward with the keyboard, leaving the View selected; an agent whose pane closed is found again by its session in another pane, and one found nowhere draws its mark dimmed with `(closed)` in the hint and goes nowhere.
 A pane whose agent opened Views that are open shows `N views` after its PR mark, a list of each View's kind mark, name, address or path and unsent comment count, counted once however many tabs show it; a row brings that View forward.
 
@@ -487,7 +490,7 @@ A press while the lane already draws that record turns the lane back to its tool
 Whether the lane draws that record is read from the slot's front item and the lane's tool, both of which the core keeps.
 A plain shell, and an agent pane whose session is not known yet, keeps the plain head with nothing to press; the head becomes the button in place once the session is known, on a device's pane as on this Mac's (B24).
 Over a narrow window the record shows in the lane floating over the panes (`web/src/PaneHeaderBand.tsx`, `PaneRecordButton`).
-The provider logo is drawn on a pane's own header, and in the heads and places that are about the agent or its provider itself: the start picker, Settings, the footer's usage chips and the Usage pages, the session record's head, the tree popover's head, the last-words popover's head, the phone's detail head, the Memory tab's Hide AI chip, the Factory card, the first-run tiles, and the corner of an agent-opened View tab's kind mark ([View openers and comments](#view-openers-and-comments)).
+The provider logo is drawn on a pane's own header, and in the heads and places that are about the agent or its provider itself: the start picker, Settings, the footer's usage chips and the Usage pages, the session record's head, the tree popover's head, the last-words popover's head, the phone's detail head, the Memory tab's Hide AI chip, the Factory card, the first-run tiles, and the selected View's toolbar ([View openers and comments](#view-openers-and-comments)).
 The sidebar's 프로젝트 and 태스크 rows and the Agent tabs draw it only by the operator's choice or while ⌥ is held ([Agent logo view mode](#agent-logo-view-mode)); ⌘K and the recent-pane list and the phone's list lead with the status mark alone in both modes (PRD agent-mark-quiet); a session record's children and the PR card's session rows draw the logo after the status mark in both modes (PRD record-card-readability D-06, D-09).
 A pane header draws exactly one logo, the pane's own agent, for each of the eight supported agents: Claude Code, Codex, Grok, OpenCode, Pi, omp, Cursor and Antigravity, the same logo Settings and the first-run choice draw.
 A row without a logo names its agent by product name (`Claude Code`, `Codex`, the adapter's label, never the raw kind) in its hover hint and its accessible name, and the pane header's logo and title say it the same way.
@@ -501,28 +504,32 @@ A delegated child and a handed-off root have none, and neither does a fork made 
 A device's pane header wears the mark too, as its rows do, although a device's pane offers no fork.
 The letters-waiting pill follows the title and the fork mark while letters wait on the pane for a possible draft, as the core decides ([delivery.md](delivery.md#delivering-a-held-letter-now)): the envelope, the count from two letters, and `지금 전달` (`Deliver now`) on the popover fill with a border edge, which stands apart from both a focused and an unfocused header in Light and Dark.
 The whole pill is one button, reachable by keyboard and pressed with Enter, and its hover and accessible name read `대기 중인 편지 N통 지금 전달`; a pane narrower than the pane breakpoint drops the word and keeps the envelope and the count, and pressing it still delivers.
-Pressing sends `deliver_letters_now` and nothing else: the pill goes, and the bell line appears in the terminal as the doorbell types it, with no confirmation and no warning about a draft, because the pill sits right above the composer.
+Pressing sends `deliver_letters_now` and nothing else: the pill goes, and the bell line appears in the terminal as the doorbell submits it through Herdr's `agent.prompt`, with no confirmation and no warning about a draft, because the pill sits right above the composer.
+The line begins with 🦉 (U+1F989, no variation selector); Codex CLI on Windows may omit it, and the saved bell still identifies the letter ([delivery.md](delivery.md#recognizing-the-bell)).
 No other hold of a letter reaches the screen, and nothing changes on the sender's pane (`web/src/components/letter-mark.tsx`).
 The tree popover's `Overview에서 일감 보기` opens the Overview on the agent's device with the card of the task it belongs to selected and the agent's own record in the panel (PRD overview-device-tasks B59); a resting or cleanup card's fold opens with it, so the selected card is drawn.
-The zoom control names the panes it hides and unzooms the tab; the existing pane keyboard outline and focused-header wash remain.
+The zoom control names the panes it hides and unzooms the tab; the input pane keeps its accent perimeter and header tint.
 
-The second row over the terminal has one job: it shows what waits on the operator in this pane, or the pane's children, and nothing else.
-A pane with children always has it; a pane without children has it only while something waits on the operator, and a pane whose terminal is not live has no ask on it, because its body says why.
+The second row over the terminal shows one operator request or the current pane agent's own live working progress, with a child-tree button at its left when direct children are known.
+It is absent when there is no request, valid progress or child button; a pane whose terminal is not live has no ask or progress on it, because its body says why.
 The core publishes the ask (`herdr-core/src/agent_state/header.rs`, `Header.band`): the pane's own Approval, Answer or Blocked first, the lead raised descendant next, then the pane's own Stopped.
 A pull request's verb (Fix, Review, Merge) is the header PR mark's colour and a finished turn is the status mark's dot to read, so neither draws a row; the PR mark carries no review word either.
 An ask stays until it is answered: once the operator has had the pane focused it dims to `--opacity-read-status`, as its row's request line does, and a question the operator read but did not answer keeps its row (`Band.read`).
 The pane's own ask starts with its verb, `승인`, `질문`, `막힘` or `멈춤` in the warning colour, then what is asked and the stable wait; an Approval names no command, since the core reads none, and shows the ask's own default words.
-A raised descendant's ask starts with that agent's name after the turn mark (the product, the path from the root, the checkout and the wait in its hover), then its verb, what to do, the parent that has not received a letter, the elapsed time and Open, so the row never reads as a child asking for the pane's own approval.
+A raised descendant's ask starts with its verb, then the originating agent's name and `(자식)` for a direct child or `(하위 세션)` for a deeper descendant, what to do, the parent that has not received a letter, the elapsed time and Open.
+The hover gives the originating agent's product, path, checkout and wait when known; a draft still names its originating child while Open goes to the parent holding the input draft.
 Open goes to the raised descendant, or for a draft to the parent whose input holds it, and is disabled with the connection reason beside it while that pane's device is not connected.
 An ask is quiet text on the secondary fill with a warning rail; the request text gets three shares of the flexible space, and the asking agent and an unreceived-letter explanation get one each, so they do not consume the whole reason at narrow widths or enlarged text.
-Without an ask, a parent's row names every live direct child with its row's mark, the way the sidebar lists them: a child with news to read (done or unread) first and the rest in the core's `tree_rank` order, an unknown child without a mark, and the names that do not fit fading out at the right edge; pressing a name opens that child.
-Each name's hover and accessible name give the child's name, product and state line, and a sleeping child's says what its moon means (status-marks B31).
-The children button keeps the row's right end whenever the pane has live children, with an ask on the row or not: `자식 N` and a chevron, after the core's operator-raised request count over the subtree with the turn mark when that count is positive, and it opens the existing tree popover ([status-model.md](status-model.md#the-descendant-mark-and-the-tree-popover)).
+Without an ask, the row shows the current pane agent's own nonblank progress only while its state is live Working; finished, idle and disconnected states cannot retain that sentence.
+The label worker retires the previous turn's sentence as soon as it proves a new human turn, even when the agent stays Working, before the new turn's analysis arrives.
+The row does not substitute a child's line or the pane title for missing progress.
+The children button stays at the row's left whenever the pane has live direct children, with an ask or progress on the row or neither: a tree icon, the actual number and a chevron open the existing tree popover ([status-model.md](status-model.md#the-descendant-mark-and-the-tree-popover)).
+The row never lists individual child names or a second status icon; child names, states and navigation remain in the popover.
 Its tooltip and accessible name spell out the live direct child total and every state count; an ordinary child's question, approval or error is its parent's to answer, so it is named only there, and a dot on a name is a reported completion, not verified delivery of a task.
 The button opens with the raised branches expanded whenever its core raised count is positive; `외 N건` remains only when the children button is unavailable.
-If the parent or a known descendant's device is not connected, the row says the connection reason in place of the names and the button drops its raised count, keeping the last topology total and the reason in its tooltip and accessible name, until the connection returns.
+If the parent or a known descendant's device is not connected, the button keeps the last topology total and the reason in its tooltip and accessible name; the connection reason is also visible beside any progress until the connection returns.
 With no live children there is no children button, and no empty separator.
-Working has a thin blue line along the top instead of a row; CI wait, waiting and idle have none.
+Working keeps a thin blue line along the top and adds its own progress row only when the core has a valid sentence; CI wait, waiting and idle have neither.
 The row and the blue line overlay the terminal and change neither its viewport nor its PTY grid.
 Pending and failed moves appear at the initiating popover, ancestor step or Open with the existing retry rules, plus the Agent-area notice when the source pane is no longer visible or the move started from a child's name.
 
@@ -566,7 +573,7 @@ A start that fails closes the fork and discards its held input rather than typin
 Failure to confirm input readiness preserves the successful fork pane and discards held keys; the existing input-loss notice appears only if keys were actually held.
 Either moves the keyboard to the fork as soon as Herdr has made its pane, as a new tab does, with the fork's tab or split drawn from that moment rather than from Herdr's later layout, unless the operator chose another view after the press or the Agent area has no room to show the tab, where the fork then waits; what is typed before the fork's agent has started reaches that agent, never the shell that starts it, with the node retaining it until the fork ends, up to 64 KiB and 30 seconds per holder.
 Crossing either bound discards that queue and shows a dismissible notice asking the operator to type again once the pane is ready; later keys remain refused until readiness or the input deadline, at most 115 seconds from the fork worker starting, releases the guard, and late readiness never replays discarded keys.
-This rule covers NodeLink input; phone input still uses its separate Herdr path pending migration.
+This rule covers NodeLink keys and phone input; a phone waits for the same node holder before its reply or quick key is written.
 A second press while a fork of the same pane is starting, either item, is refused with `pane.fork_already_running`, and a fork whose agent does not start closes the pane it made and shows the same failure notice for both.
 On such a window's own machine, bringing a tab forward wakes what sleeps there once that machine's Herdr has it in front.
 Web owner: `web/src/PaneView.tsx` (`SleepBody`), `web/src/sleep.ts`, `web/src/PaneRelations.tsx`.
@@ -1632,7 +1639,7 @@ Turning them on stores that choice and sends one test notification, `Notificatio
 The step reads macOS's permission every two seconds while it is open, one read at a time, so a change in System Settings shows within seconds; an already allowed Mac shows `Notifications are on` at once, with Continue, which turns the switch on with the step; nothing is said before the first read; a permission Hide cannot read shows `Hide can't read the notification setting` with `Send a test`, and the reason goes to the host log (B16-B18).
 On Windows and Linux the step has no permission to show: turning on stores the switch and sends the test once (B19).
 A desktop with no notification service (Electron says notifications are not supported, or on Linux the last notification failed to show, until one shows again) shows no `Turn on notifications`: the step says `This desktop has no notification service, so Hide can't show notifications here.` with Continue, and Settings > Notifications shows the same line under Needs You; both switches stay off and locked, with no test (D-24, B47, B48).
-Settings > Notifications' desktop group has independent `Notify me when an agent needs me` (Needs You) and `Notify me when an agent finishes` (Done) switches; while either is on, the permission row says what macOS allows (`macOS permission`, `✓ Allowed` with `Send a test`, `! Blocked by macOS` with `Open System Settings`), or on Windows and Linux `Test notification` with `Send a test`, and the group ends with `Sent only while no Hide window is in front. With Needs You on, the app icon counts agents that need you.` (B30).
+Settings > Notifications' desktop group has independent `Notify me when an agent needs me` (Needs You) and `Notify me when an agent finishes` (Done) switches; while either is on, the permission row says what macOS allows (`macOS permission`, `✓ Allowed` with `Send a test`, `! Blocked by macOS` with `Open System Settings`), or on Windows and Linux `Test notification` with `Send a test`, and the group ends with `Sent only while no Hide window is in front. The app icon counts agents in the notification groups you enable.` (B30, operator decision 2026-10-18).
 `Not now` goes on with both switches off, even after `Turn on notifications` was pressed while macOS still asks, in the same event that leaves the step, and `Also on your phone →` opens Settings > Mobile over the wizard, which returns to the step when it closes (B21).
 The project step is Add a project under `Add your first project`, with its Host select, Browse folder, Clone from URL and Create new project, its refusals and its clone progress, and `Skip for now` (B22, B25); its Host list has no Add device, which would take the wizard's place, and only a project on the chosen host counts as the one added.
 The first project added ends the wizard and opens the start panel once, on that project, with the first agent that is on and signed in (in the order Claude Code, Codex, Grok, Pi), else the first agent that is on, and the keyboard in its text box; with no agent on it opens no panel and the wizard closes to the empty Home, whose Start an agent is the way on; a later project opens nothing (D-15, B23, B24).
@@ -1647,8 +1654,10 @@ See [With and without Hide AI](status-model.md#with-and-without-hide-ai) for the
 hided judges the changes with the phone push's rules (status-model.md, Row presentation and phone notifications), so a child's raise arrives on its root, the same state never notifies twice, an agent back within ten minutes is not announced again, and nothing already waiting when the app opened is announced (B32, B33).
 A click brings Hide forward and opens that agent's pane, on a device too; an agent the operator has seen takes its notification back, and a newer one for the same agent replaces it (B34, B35).
 On Windows a click on a notification in Action Center after Hide quit starts Hide and opens what it named once the shell is up, as a click while it runs does.
-The Needs You switch puts a count on the app icon: how many root agents are in the Needs You group across every device and project the window shows, Done not counted, and nothing at zero; macOS draws it on the Dock once it lets Hide notify, Linux where the desktop shows launcher counts, and Windows as a dot on the taskbar button whose description gives the count.
-With both switches off nothing is sent; with Needs You off the app icon has no count even if Done is on.
+The app icon sums root agents in every enabled notification group across every device and project the window shows: Needs You under its switch and unread Done under its own, including rows folded into `more`, and nothing at zero (operator decision 2026-10-18).
+Reading a Done row removes it from that group and the count; turning either switch off removes only that group's contribution.
+macOS draws it on the Dock once it lets Hide notify, Linux where the desktop shows launcher counts, and Windows as a dot on the taskbar button whose description gives the count.
+With both switches off nothing is sent and the app icon has no count; with Done alone on, it counts unread Done.
 The phone's push follows its own settings whatever these switches say (B36, B38).
 
 The Factory screen shows one line under its title the first time it opens, saying what the screen does and its first step, and never again (`ui_state.screen_intros_seen`); it counts as seen once it has been drawn, so a visit that only showed loading or a Task page leaves it for the next; Settings > Devices keeps its own description instead, and both empty states are unchanged (D-18, B43).
@@ -2097,11 +2106,11 @@ A failure before autostart went off leaves the setting unchanged; when autostart
 A finished answer is shown only to the operator who asked in that popover.
 `PaneChildren.connection` carries the reason, whether Reopen is offered, and a Reopen's pending or refused state as a code, and `docs/status-model.md`, Not connected and what fixes it, owns what each one means; `web/src/paneConnectionRules.ts` names what each code asks of the operator.
 An Overview agent row reuses the same agent identity and state presentation as the sidebar and shared child popover; a missing row means the current live projection has no agent there.
-The header wash marks the pane Hide is showing, while the neutral split-pane outline marks the terminal that owns keyboard focus; moving keyboard focus into Overview keeps the shown wash and removes the terminal outline.
+The accent header tint and 2px perimeter mark only the pane that owns input; moving input into another surface removes both while the pane remains selected.
 Keys typed right after New tab or a split go to the new pane once Herdr names it and its shell reads keys itself, in the order typed, so its line editor takes them: they are not echoed on a line above the first prompt, and a Backspace over a character typed in several bytes (a Hangul syllable) erases the whole character; a shell that does not read keys within 2 seconds of the first key, or a pane Herdr makes later than that, gets them as they were typed. Outside a fork holder, keys typed while a pane's terminal is still opening reach it once it opens; nothing typed is dropped unless more than 64 KiB waits, which discards what waited and shows a dismissible notice asking the operator to type again, the pane can take a key only more than 3 seconds after it was typed, which discards that key because it is no longer what the operator means to run, or the keys have no pane to go to: the creation is refused or makes no pane, the new pane opens in the background, or the pane closes, is released or its terminal fails before it opens (`docs/ARCHITECTURE.md` names every reason).
 Keyboard focus follows the core's answer, not the drawing, so a second ⌘D pressed before Herdr confirms the first splits the original pane again, as Herdr does.
 Keys typed after a click go to the pane clicked last, whatever order snapshots arrive in: the header may briefly follow an older snapshot, but keyboard focus does not leave the last-clicked pane until the core has answered that click, and a focus move the core makes afterwards (Herdr's own move, or a refused click) is followed.
-Opening a pane from a sidebar row, a 태스크 row, a list, a link or a View's opener mark takes the keyboard to its terminal even when that pane is already the focused one, so the control pressed never keeps the keys and the split-pane outline shows which terminal has them.
+Opening a pane from a sidebar row, a 태스크 row, a list, a link or a View's opener mark takes the keyboard to its terminal even when that pane is already the focused one, so the control pressed never keeps the keys and the accent perimeter shows which terminal has them.
 Unread weight is never reused to mean parent, child, delegated, or selected.
 
 ## Project settings
@@ -2187,7 +2196,7 @@ Both default off before the wizard's choice; the fresh wizard enables Needs You 
 An existing install whose old shared switch was on migrates to both on; an old off or absent switch migrates to both off, so no existing notification choice silently disappears.
 Each toggle sends one event and persists through the core's existing UI-state writer; a repeated choice publishes nothing and a stale generic UI save cannot replace either choice.
 While either switch is on, the group shows what macOS allows with `Open System Settings` when it blocks Hide or `Send a test` when it allows, or a `Test notification` row on Windows and Linux.
-The note says notices arrive only while no Hide window is in front, and the icon count follows Needs You only (First run above).
+The note says notices arrive only while no Hide window is in front, and the icon count sums the notification groups enabled by their own switches (First run above).
 The second, Phone, is the push to a paired phone, the dropdown Settings > Mobile below describes.
 
 ### Usage
@@ -2395,6 +2404,10 @@ The phones group is titled 연결된 폰 · n / 4; each row shows the phone's na
 The push to the phone is on Settings > Notifications, not on this page (PRD settings-left-nav B7): one dropdown of 끔 (the default), 앱이 닫혀 있을 때만 and 항상, with the description of the chosen mode only under it, and the choice survives a restart (B59).
 
 ### The phone app
+
+A reply or quick key sent while its pane is being forked waits for that fork under the same 64 KiB and 30-second holder bounds as desktop input.
+The phone reports success only after Herdr confirms the write; a holder refusal keeps the reply text and shows the existing send-failure line so the operator can retry once the pane is ready.
+A pane outside the desktop's attached tabs remains writable without attaching it or moving the desktop's keyboard.
 
 The QR opens a page with the hide icon, "<Mac>에 연결", a line on what the phone can do, 연결, and a note that the code expires in five minutes.
 연결 opens the list and a one-time hint to keep hide on the Home Screen; an expired or spent code says so, a fifth phone is told the limit and to revoke one on the Mac, and a page opened with no code or credential says to scan the QR in Settings > Mobile.

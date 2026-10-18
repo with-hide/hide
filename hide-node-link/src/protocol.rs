@@ -191,10 +191,13 @@ use crate::error::HostError;
 /// 47: hook letter pulls name prompt, tool or turn end.
 /// A helper on 46 cannot distinguish the intake point; Hello refuses it
 /// until the existing helper replacement installs a compatible build.
-/// 48: the owning node's shell recipe declares Integrated or Plain readiness.
+/// 48: side-channel pane input waits for the node's creation holder and
+/// gets a permission result before writing through Herdr, without attaching.
+/// Older terminal helpers cannot grant this permission and are replaced.
+/// 49: the owning node's shell recipe declares Integrated or Plain readiness.
 /// Older helpers cannot preserve ordinary shell starts and their readiness;
 /// Hello refuses them until the existing helper replacement upgrades them.
-pub const PROTOCOL_VERSION: u32 = 48;
+pub const PROTOCOL_VERSION: u32 = 49;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).

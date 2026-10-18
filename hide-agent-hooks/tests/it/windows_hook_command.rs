@@ -400,14 +400,23 @@ fn grok_and_cursor_run_the_helper_through_the_powershell_they_start_only_while_i
     }
 }
 
-/// agy hands its hook command to `cmd /c` on Windows (its hook contract:
-/// "run via `sh -c` on Unix, `cmd /c` on Windows"). Run here as cmd receives
-/// it, verbatim: with the helper gone, failing, or answering for itself, the
+/// agy's Go process launcher quotes its command argument for CommandLineToArgvW,
+/// although cmd parses quotes differently. agy 1.4.2's real Windows hook run
+/// escapes every embedded quote as backslash-quote (docs/agent-hooks.md).
+fn agy_shell(command: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+
+    let mut shell = Command::new("cmd.exe");
+    shell
+        .raw_arg("/c")
+        .raw_arg(format!("\"{}\"", command.replace('"', "\\\"")));
+    shell
+}
+
+/// With the helper gone, failing, or answering for itself, the installed
 /// command prints one line agy reads, and never allow.
 #[test]
 fn agys_cmd_tool_command_leaves_the_call_to_agy_when_the_helper_is_gone_or_fails() {
-    use std::os::windows::process::CommandExt;
-
     use hide_agent_hooks::guidance::{self, GuidanceAgent};
 
     let ask: Value = serde_json::json!({ "decision": "ask" });
@@ -444,9 +453,7 @@ fn agys_cmd_tool_command_leaves_the_call_to_agy_when_the_helper_is_gone_or_fails
         let command = document["hide"]["PreToolUse"][0]["hooks"][0]["command"]
             .as_str()
             .unwrap();
-        let mut child = Command::new("cmd.exe")
-            .raw_arg("/c")
-            .raw_arg(command)
+        let mut child = agy_shell(command)
             .env(hide_platform::host::HOME_VARIABLE, &home)
             .env_remove("HERDR_PANE_ID")
             .env_remove("HIDE_CAP_REF")
@@ -472,4 +479,110 @@ fn agys_cmd_tool_command_leaves_the_call_to_agy_when_the_helper_is_gone_or_fails
         let answer: Value = serde_json::from_str(lines[0].trim()).unwrap_or(Value::Null);
         assert_eq!(answer, ask, "{case}: {output:?}");
     }
+}
+
+#[test]
+fn agys_windows_session_hook_reads_its_input_and_injects_guidance() {
+    use hide_agent_hooks::guidance::{self, GuidanceAgent};
+
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let agent = GuidanceAgent::Antigravity;
+    std::fs::create_dir_all(agent.home_directory(&home)).unwrap();
+    let helper = root
+        .path()
+        .join("Hide 한글 (1) & it's %kit%")
+        .join(HELPER_BINARY_NAME);
+    std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
+    std::fs::copy(env!("CARGO_BIN_EXE_hide-agent-hooks"), &helper).unwrap();
+    guidance::install(agent, &home, &helper).unwrap();
+    assert_eq!(
+        guidance::installed_helper_path(agent, &home).as_deref(),
+        helper.to_str()
+    );
+    let document: Value =
+        serde_json::from_str(&std::fs::read_to_string(agent.config_path(&home)).unwrap()).unwrap();
+    let command = document["hide"]["SessionStart"][0]["command"]
+        .as_str()
+        .unwrap();
+    let mut shell = agy_shell(command);
+    shell
+        .env(hide_platform::host::HOME_VARIABLE, &home)
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HIDE_CAP_REF")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = hide_platform::process::OwnedChild::spawn(&mut shell).unwrap();
+    child
+        .take_stdin()
+        .unwrap()
+        .write_all(br#"{"conversationId":"ade08778-fcdd-4e96-88ba-fd1c4e594fa2"}"#)
+        .unwrap();
+    let output = child
+        .capture_until(
+            std::time::Instant::now() + std::time::Duration::from_secs(15),
+            64 * 1024,
+        )
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let answer: Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|error| panic!("{error}: {output:?}"));
+    assert!(
+        answer["injectSteps"][0]["systemMessage"]["systemMessage"]
+            .as_str()
+            .unwrap()
+            .contains(PURPOSE_CONTEXT),
+        "{answer}"
+    );
+    let recorded: Value =
+        serde_json::from_slice(&std::fs::read(diagnostics(&home)).unwrap_or_default())
+            .unwrap_or_default();
+    assert!(
+        recorded["last"]["memory_unavailable"].is_u64(),
+        "the helper read the conversation from stdin: {recorded}"
+    );
+}
+
+#[test]
+fn agys_windows_guard_preserves_korean_and_non_bmp_hook_answers() {
+    use hide_agent_hooks::guidance::{self, GuidanceAgent};
+
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let agent = GuidanceAgent::Antigravity;
+    std::fs::create_dir_all(agent.home_directory(&home)).unwrap();
+    let helper = root.path().join("hook answer.cmd");
+    let expected = "프로젝트 메모리: 한글 제목과 😀";
+    let answer = hide_agent_hooks::antigravity::inject(expected).unwrap();
+    // The real helper uses this serializer before writing stdout. A batch
+    // stand-in emits those exact bytes without adding a provider or daemon.
+    let wire = hide_agent_hooks::runtime::ascii_json(&answer);
+    std::fs::write(root.path().join("answer.json"), &wire).unwrap();
+    std::fs::write(&helper, "@echo off\r\ntype \"%~dp0answer.json\"\r\n").unwrap();
+    guidance::install(agent, &home, &helper).unwrap();
+    let document: Value =
+        serde_json::from_str(&std::fs::read_to_string(agent.config_path(&home)).unwrap()).unwrap();
+    let mut shell = agy_shell(
+        document["hide"]["SessionStart"][0]["command"]
+            .as_str()
+            .unwrap(),
+    );
+    shell
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = hide_platform::process::OwnedChild::spawn(&mut shell)
+        .unwrap()
+        .capture_until(
+            std::time::Instant::now() + std::time::Duration::from_secs(15),
+            64 * 1024,
+        )
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let received: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        received["injectSteps"][0]["systemMessage"]["systemMessage"],
+        expected
+    );
 }

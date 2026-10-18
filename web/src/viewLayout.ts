@@ -61,6 +61,7 @@ export function displaysOfDocument(root: ViewNode, tabId: string): ViewDisplaySn
 }
 
 import {
+  findArea,
   activeDisplay, areasOf, locateDisplay, neighbourArea,
   splitEligibility as areaSplitEligibility, dropTarget as areaDropTarget,
   resizeTarget as areaResizeTarget, roomToSplit, areaSentence, splitLabel, moveLabel, type AreaWords,
@@ -282,7 +283,7 @@ export function viewAreaStepUnavailable(layout: ViewLayoutSnapshot, drawn: { geo
  */
 export type ViewFocusRequest =
   | { workspace: string; displayId: string; from: { areaId: string; index: number } | null }
-  | { workspace: string; areaId: string }
+  | { workspace: string; areaId: string; revision?: number }
   | { workspace: string; opened: { path: string; kind: "file" | "diff"; committed: boolean | null } }
   | { workspace: string; browserOpen: string };
 
@@ -300,7 +301,7 @@ export type BrowserOpenReceipt = { request_id: string; ok: boolean; display_id: 
  */
 export function focusRequestArrived(request: ViewFocusRequest, workspace: string, layout: ViewLayoutSnapshot, opens: readonly BrowserOpenReceipt[] = []): boolean {
   if (request.workspace !== workspace) return false;
-  if ("areaId" in request) return layout.active_area === request.areaId;
+  if ("areaId" in request) return request.revision === undefined ? layout.active_area === request.areaId : !!findArea(layout.root, request.areaId);
   if ("browserOpen" in request) {
     const page = opens.find((receipt) => receipt.request_id === request.browserOpen);
     const located = page?.ok && page.display_id ? locateDisplay(layout.root, page.display_id) : null;

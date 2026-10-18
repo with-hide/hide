@@ -412,6 +412,12 @@ class NamedPaths(unittest.TestCase):
         self.assertEqual(self.lanes("scripts/tests/test_agent_live_protection.py"), {"policy"})
         self.assertNotIn("agent-journey", self.lanes("hide-session/src/lib.rs"))
 
+    def test_the_shared_prompt_identity_examples_run_the_hooks_and_policy_readers(self):
+        result = plan("hide-agent-hooks/tests/fixtures/bell-prompt-identity.json")
+        self.assertEqual(set(result["lanes"]), self.lanes("hide-agent-hooks/src/delivery.rs"))
+        self.assertIn("hide-agent-hooks", result["rust_packages"])
+        self.assertIn("policy", result["lanes"])
+
     def test_desktop_e2e_helpers_run_the_desktop_suites_and_windows_unit_tests(self):
         for path in ("desktop/e2e/fixture.ts", "desktop/e2e/fixture-cleanup.unit.ts", "desktop/playwright.config.ts", "desktop/vitest.config.ts"):
             with self.subTest(path=path):

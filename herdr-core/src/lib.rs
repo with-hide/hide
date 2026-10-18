@@ -71,7 +71,6 @@ mod terminal_attachments;
 pub mod terminal_reports;
 mod usage;
 pub mod usage_ledger;
-mod view_bookmarks;
 pub mod view_feedback;
 mod view_layout;
 pub mod wire;

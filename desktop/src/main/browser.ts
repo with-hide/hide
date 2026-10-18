@@ -124,6 +124,12 @@ export class BrowserViews {
   private cycleSequence = 0;
   /** The page a blur cancelled a hold on, owed the keyboard once the window is back and the page shown. */
   private returnTo: Page | null = null;
+  private reportedWindowFocus: boolean | null = null;
+  private reportWindowFocus(focused: boolean): void {
+    if (this.reportedWindowFocus === focused) return;
+    this.reportedWindowFocus = focused;
+    this.emit({ kind: "window-focus", focused });
+  }
   /**
    * Whether the window has had its `focus` event since its last `blur`. On
    * macOS that event is the window becoming main again, and Electron restores
@@ -295,6 +301,7 @@ export class BrowserViews {
       if (details.isMainFrame && !details.isSameDocument) this.hideAll();
     });
     window.on("blur", () => {
+      this.reportWindowFocus(false);
       this.windowBack = false;
       const held = this.cycleInput;
       this.cancelCycle();
@@ -306,6 +313,7 @@ export class BrowserViews {
       this.log.event("browser.window_blur", { held: held !== null, id: held?.page.id ?? null, owed: this.returnTo !== null });
     });
     window.on("focus", () => {
+      this.reportWindowFocus(true);
       this.windowBack = true;
       this.log.event("browser.window_focus", { owed: this.returnTo !== null, page_visible: this.returnTo?.visible ?? null });
       this.giveBack();
@@ -410,6 +418,7 @@ export class BrowserViews {
   private sync(workspace: string | null, displays: BrowserPlacement[], retained: { workspace: string; id: string; area_id?: string }[], attachmentEpoch?: string, authorizedScopes?: { workspace: string; area_id: string; incarnation?: number }[]): void {
     const window = this.window;
     if (!window) return;
+    this.reportWindowFocus(window.isFocused());
     // The shared parser bounds this list. Missing authority grants nothing;
     // retained display rows can never restore a revoked checkout/area.
     const rows = authorizedScopes && authorizedScopes.length <= MAX_AUTHORIZED_SCOPES ? authorizedScopes : [];

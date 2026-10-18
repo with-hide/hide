@@ -205,7 +205,7 @@ const TabButton = memo(function TabButton({
           <XIcon />
         </Button>
       </Hint>
-      {active && areaActive ? <span className="absolute inset-x-0 bottom-0 h-[var(--size-tab-indicator)] bg-foreground" /> : null}
+      {active && areaActive ? <span className="absolute inset-x-0 bottom-0 h-[var(--size-tab-indicator)] bg-primary" /> : null}
       {/* The digit takes the close control's corner for the length of the hold; the control keeps its space and comes back with the release. */}
       {number !== null ? <Keycap number={number} /> : null}
 

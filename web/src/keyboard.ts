@@ -31,7 +31,7 @@ import { editorFor, focusedCheckout, localDeviceId, type AgentRow, type Snapshot
 import { useShellStore } from "./store";
 import { useUiStore, type Cycle } from "./ui";
 import { workspaceViewOf } from "./workspace";
-import { drawnViews, installKeyboardOwner, keyboardOwner, keyboardCommandOwner, noteCommandDelivered, subscribeKeyboardOwner } from "./viewFocus";
+import { drawnViews, installKeyboardOwner, keyboardCommandOwner, noteCommandDelivered, subscribeKeyboardOwner } from "./viewFocus";
 
 /**
  * Recent Panels: every surface the shell holds on every connected device and
@@ -73,9 +73,10 @@ export function projectCycle(rest: SnapshotRest | null): Cycle | null {
  * front.
  */
 export function observeRecent(rest: SnapshotRest | null, moved: boolean) {
-  const surface = focusedSurface(rest, focusedCycleScope(rest));
-  observeEntries(rest, moved ? surface ?? currentEntry(useUiStore.getState().screen, rest, keyboardOwner().kind === "view") : null);
-  observePane(rest, moved ? (agentOrigin(rest)?.paneId ?? null) : null);
+  const owner = keyboardCommandOwner();
+  const surface = focusedSurface(rest, focusedCycleScope(rest, owner));
+  observeEntries(rest, moved ? surface ?? currentEntry(useUiStore.getState().screen, rest, owner.kind === "view") : null);
+  observePane(rest, moved ? (agentOrigin(rest, owner)?.paneId ?? null) : null);
   if (moved) observeProject(remoteContext(rest)?.session?.focused_workspace_id ?? rest?.navigator?.focused_workspace_id);
 }
 
@@ -177,7 +178,8 @@ export function installKeyboard(actions: Actions): () => void {
   const removeKeyboardOwner = installKeyboardOwner();
   const unsubscribeOwner = subscribeKeyboardOwner(() => {
     const rest = useShellStore.getState().rest;
-    if (focusedCycleScope(rest) || agentOrigin(rest)) observeRecent(rest, true);
+    const owner = keyboardCommandOwner();
+    if (focusedCycleScope(rest, owner) || agentOrigin(rest, owner)) observeRecent(rest, true);
   });
   // The modifier whose release commits the running cycle: ⌥ for the ⌥ family,
   // ⌃ for the desktop app's ⌃Tab.
@@ -224,7 +226,7 @@ export function installKeyboard(actions: Actions): () => void {
         const current = ui().cycle;
         const held = current && (current.kind === "agents" ? "area" : current.kind) === family;
         if (event && current && !held) return;
-        const owner = event ? keyboardOwner() : keyboardCommandOwner();
+        const owner = keyboardCommandOwner();
         // The Agent area and a View area never both hold the keyboard, so at most one of these is a cycle.
         const fresh = () => family === "area" ? (agentCycle(rest, owner) ?? areaCycle(rest, owner)) : family === "panels" ? panelCycle(rest) : projectCycle(rest);
         const cycle = event && held ? reconcileHeldCycle(current, rest) : fresh();
@@ -275,7 +277,7 @@ export function installKeyboard(actions: Actions): () => void {
         // focused terminal pane's find bar opens, even with an editor open
         // beside it.
         const { editor } = useShellStore.getState();
-        if (editorFor(editor) && drawnViews() && keyboardOwner().kind === "view") return actions.requestEditorFind();
+        if (editorFor(editor) && drawnViews() && keyboardCommandOwner().kind === "view") return actions.requestEditorFind();
         return actions.openFind();
       }
       case "save_file":
@@ -293,7 +295,7 @@ export function installKeyboard(actions: Actions): () => void {
         // One chord for "this, full size", chosen by where the operator
         // works: in the right lane it expands the lane and back, anywhere
         // else it zooms the focused terminal pane.
-        const owner = event ? keyboardOwner() : keyboardCommandOwner();
+        const owner = keyboardCommandOwner();
         const lane = ui().drawnLane.mode;
         if ((owner.kind === "view" || owner.kind === "tool") && lane !== "closed" && lane !== "hidden") return ui().setLaneExpanded(!ui().laneExpanded);
         return actions.toggleZoom();

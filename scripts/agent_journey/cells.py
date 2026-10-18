@@ -232,8 +232,18 @@ def reply_verdict(read, session, token, after=0):
 
 def bell_turn(events, bell_line):
     """The index just past the human event the doorbell typed, or None."""
+    # The delivery contract ignores characters above U+FFFF, which a console
+    # reader may drop. Compare the whole prompt; a prefix proves no bell turn.
+    def canonical(text):
+        # Trim Unicode White_Space. Python's default strip also removes the
+        # four C0 separators U+001C..U+001F, which remain part of the prompt.
+        return "".join(char for char in text if ord(char) <= 0xffff).strip(
+            "\t\n\v\f\r \u0085\u00a0\u1680"
+            "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+            "\u2028\u2029\u202f\u205f\u3000")
+    line = canonical(bell_line or "")
     for index, event in enumerate(events):
-        if event.get("role") == "user" and bell_line and bell_line in (event.get("text") or ""):
+        if event.get("role") == "user" and line and line == canonical(event.get("text") or ""):
             return index + 1
     return None
 

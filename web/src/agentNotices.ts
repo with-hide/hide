@@ -5,7 +5,7 @@
 // the interface language and hands it to the desktop host, which drops it
 // while a Hide window has the keyboard. A click opens that agent's pane, and
 // an agent the operator has seen takes its notification back. The app icon
-// counts the root agents that need the operator under the Needs You switch.
+// counts root agents in each notification group whose switch is on.
 
 import { useEffect } from "react";
 import type { Actions } from "./actions";
@@ -34,25 +34,30 @@ function cut(text: string, limit: number): string {
 }
 
 /**
- * The agents the app icon counts: the sidebar's Needs You group of every
+ * The agents the app icon counts: the sidebar's enabled notification groups of every
  * device the window shows, the root agents the notifications announce.
- * Each device's scope carries that group as its `raised` `needs_you` entry
+ * Each device's scope carries those groups as its `raised` entries
  * (unresolved, not delegated, in a pane the device draws), so adding the
  * devices up counts the whole desktop whichever device the sidebar shows;
- * the navigator's own scope has no such group. Done is not counted.
+ * the navigator's own scope has no such groups. Reading a Done row removes it.
  */
-export function needsYouCount(rest: SnapshotRest | null): number {
+function notificationBadgeCount(rest: SnapshotRest | null): number {
+  const needsYou = rest?.ui_state?.desktop_notifications === true;
+  const done = (rest?.ui_state?.desktop_notifications_done ?? rest?.ui_state?.desktop_notifications) === true;
   let count = 0;
   for (const device of rest?.navigator?.devices ?? []) {
-    const group = device.agent_scope.raised.find((raised) => raised.group === "needs_you");
-    if (group) count += group.shown.length + group.more.length;
+    for (const group of device.agent_scope.raised) {
+      if (group.group === "needs_you" ? needsYou : group.group === "done" && done) {
+        count += group.shown.length + group.more.length;
+      }
+    }
   }
   return count;
 }
 
 /**
  * Shows each group through the desktop host while its own switch is on,
- * opens what a click names, and keeps the Needs You app icon count.
+ * opens what a click names, and keeps the enabled groups' app icon count.
  */
 export function useAgentNotifications(actions: Actions) {
   const { t } = useInterfaceTranslation();
@@ -62,7 +67,7 @@ export function useAgentNotifications(actions: Actions) {
   const doneEnabled = useShellStore((s) => (s.rest?.ui_state?.desktop_notifications_done ?? s.rest?.ui_state?.desktop_notifications) === true);
   const wanted = bridge !== null && live && (needsYouEnabled || doneEnabled);
   // Null until the page is live: the first count is also the host's sign that a click can be opened here.
-  const badge = useShellStore((s) => (s.connection !== "live" ? null : s.rest?.ui_state?.desktop_notifications === true ? needsYouCount(s.rest) : 0));
+  const badge = useShellStore((s) => (s.connection !== "live" ? null : notificationBadgeCount(s.rest)));
   useEffect(() => {
     if (bridge && badge !== null) bridge.reportBadge(badge);
   }, [bridge, badge]);

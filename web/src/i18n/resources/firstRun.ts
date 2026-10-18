@@ -54,7 +54,7 @@ export const firstRunEnglish = {
   "firstRun.settings.allowed": "Allowed",
   "firstRun.settings.blocked": "Blocked by macOS",
   "firstRun.settings.testRow": "Test notification",
-  "firstRun.settings.sentWhen": "Sent only while no Hide window is in front. With Needs You on, the app icon counts agents that need you.",
+  "firstRun.settings.sentWhen": "Sent only while no Hide window is in front. The app icon counts agents in the notification groups you enable.",
   "firstRun.intro.factory": "Factory takes the GitHub issues you label and carries each to a merged pull request. Create one for a project to start.",
 } as const;
 
@@ -108,7 +108,7 @@ const ko = {
   "firstRun.settings.allowed": "허용됨",
   "firstRun.settings.blocked": "macOS가 막음",
   "firstRun.settings.testRow": "테스트 알림",
-  "firstRun.settings.sentWhen": "Hide 창이 앞에 없을 때만 보냅니다. 내 차례 알림을 켜면 앱 아이콘에 내 차례인 에이전트 수를 표시합니다.",
+  "firstRun.settings.sentWhen": "Hide 창이 앞에 없을 때만 보냅니다. 앱 아이콘에는 알림을 켠 항목의 에이전트 수를 합산해 표시합니다.",
   "firstRun.intro.factory": "Factory는 라벨을 붙인 GitHub 이슈를 하나씩 머지된 풀 리퀘스트까지 가져갑니다. 프로젝트에 하나 만들어 시작하세요.",
 } satisfies Catalog<typeof firstRunEnglish>;
 
@@ -162,7 +162,7 @@ const zhCN = {
   "firstRun.settings.allowed": "已允许",
   "firstRun.settings.blocked": "被 macOS 阻止",
   "firstRun.settings.testRow": "测试通知",
-  "firstRun.settings.sentWhen": "仅在没有 Hide 窗口位于前台时发送。开启轮到你的通知后，应用图标会显示轮到你的智能体数量。",
+  "firstRun.settings.sentWhen": "仅在没有 Hide 窗口位于前台时发送。应用图标会显示已开启通知的各组智能体总数。",
   "firstRun.intro.factory": "Factory 会把你加了标签的 GitHub issue 逐个推进到已合并的拉取请求。为项目创建一个即可开始。",
 } satisfies Catalog<typeof firstRunEnglish>;
 
@@ -216,7 +216,7 @@ const ja = {
   "firstRun.settings.allowed": "許可済み",
   "firstRun.settings.blocked": "macOSがブロック中",
   "firstRun.settings.testRow": "テスト通知",
-  "firstRun.settings.sentWhen": "Hideのウィンドウが前面にないときだけ送ります。自分の番の通知をオンにすると、アプリのアイコンに自分の番のエージェントの数を表示します。",
+  "firstRun.settings.sentWhen": "Hideのウィンドウが前面にないときだけ送ります。アプリのアイコンには、通知をオンにしたグループのエージェント数を合計して表示します。",
   "firstRun.intro.factory": "Factoryはラベルを付けたGitHubのissueを一つずつマージ済みのプルリクエストまで運びます。プロジェクトに一つ作成して始めます。",
 } satisfies Catalog<typeof firstRunEnglish>;
 

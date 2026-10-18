@@ -141,7 +141,7 @@ fn format_context(program: &OsString, reference: &Path, answer: &Value) -> Optio
         letters.push_str(" A letter's first line is its one-line summary, which Hide shows the operator when it wakes the recipient, so begin the body with what happened or what you need.");
     }
     if has("inbox") {
-        letters.push_str(" A prompt that begins with 🔔 is Hide waking you for a letter: the letter comes with that prompt, and `inbox` shows it if it did not.");
+        letters.push_str(" A prompt that begins with 🦉 is Hide waking you for a letter: the letter comes with that prompt, and `inbox` shows it if it did not. Codex CLI on Windows may show the line without the owl.");
     }
     let command_prefix = format!(
         "HIDE_CAP_REF={} {}",
@@ -209,7 +209,7 @@ mod tests {
         let context =
             format_context(&OsString::from("hide"), Path::new("ref.json"), &answer).unwrap();
         assert!(context.contains("A letter's first line is its one-line summary"));
-        assert!(context.contains("A prompt that begins with 🔔 is Hide waking you for a letter"));
+        assert!(context.contains("A prompt that begins with 🦉 is Hide waking you for a letter"));
     }
 
     #[test]

@@ -20,11 +20,10 @@ import { useShellStore } from "./store";
 import { locateDisplay, workspaceKey, type ViewWorkspace } from "./viewLayout";
 import { workspaceViewOf } from "./workspace";
 import { commandLabel } from "./shortcutLabels";
-import { TreeButton } from "./TreeButton";
 import { useInterfaceTranslation } from "./i18n/client";
 import { MessageSquarePlusIcon } from "lucide-react";
 import { browserCommentKey, commentsOn, useFeedbackStore, noteBrowserComment } from "./viewFeedback";
-import { PageNoteLayer, useViewFeedback } from "./ViewComments";
+import { OpenerMark, PageNoteLayer, useViewFeedback } from "./ViewComments";
 
 // A browser display (issue 155): its toolbar and the place its page shows.
 // In the desktop app the page is a native view the host lays over the slot
@@ -43,10 +42,10 @@ export function BrowserDisplay({ display, workspace, actions }: { display: ViewD
     return (
       <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-browser-display={display.id}>
         <div className="flex h-(--size-tab-strip) shrink-0 items-center gap-xs border-b border-border pl-xs pr-md" data-browser-toolbar={display.id}>
-          <TreeButton actions={actions} />
-          <span className="min-w-0 flex-1 truncate font-mono text-caption text-subtle-foreground" data-browser-address="true">
+              <span className="min-w-0 flex-1 truncate font-mono text-caption text-subtle-foreground" data-browser-address="true">
             {addressShown(url)}
           </span>
+          {display.opener ? <OpenerMark opener={display.opener} actions={actions} /> : null}
         </div>
         <AreaEmpty state="browser-host" text={t("documents.browserDesktopOnly")}>
           {web ? (
@@ -68,11 +67,11 @@ function NewTab({ display, actions }: { display: ViewDisplaySnapshot; actions: A
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-browser-display={display.id}>
       <div className="flex h-(--size-tab-strip) shrink-0 items-center gap-xs border-b border-border pl-xs pr-sm" data-browser-toolbar={display.id}>
-        <TreeButton actions={actions} />
-        <Hint label={t("common.back")}><Button variant="ghost" size="icon-sm" disabled><ArrowLeftIcon /></Button></Hint>
+          <Hint label={t("common.back")}><Button variant="ghost" size="icon-sm" disabled><ArrowLeftIcon /></Button></Hint>
         <Hint label={t("documents.browserForward")}><Button variant="ghost" size="icon-sm" disabled><ArrowRightIcon /></Button></Hint>
         <Hint label={t("documents.browserReload")}><Button variant="ghost" size="icon-sm" disabled><RotateCwIcon /></Button></Hint>
         <AddressField address="" autoFocus onSubmit={(url) => actions.navigateBrowser(display.id, url)} />
+        {display.opener ? <OpenerMark opener={display.opener} actions={actions} /> : null}
       </div>
       <NewTabBody hasChanges={changedFiles(changes, root).length > 0} fileChord={commandLabel("open_file")} onFile={() => actions.openFilePalette()} onDiff={() => useUiStore.getState().openOverlay("diff_palette")} />
     </div>
@@ -110,8 +109,7 @@ function HostedPage({ display, workspace, actions }: { display: ViewDisplaySnaps
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-browser-display={display.id}>
       <div className="flex h-(--size-tab-strip) shrink-0 items-center gap-xs border-b border-border pl-xs pr-sm" data-browser-toolbar={display.id}>
-        <TreeButton actions={actions} />
-        <Hint label={t("common.back")}>
+          <Hint label={t("common.back")}>
           <Button variant="ghost" size="icon-sm" disabled={!page?.canGoBack} onClick={() => command("back")} data-browser-command="back">
             <ArrowLeftIcon />
           </Button>
@@ -141,6 +139,7 @@ function HostedPage({ display, workspace, actions }: { display: ViewDisplaySnaps
         />
         <DeviceButton device={device} drawn={drawn} onChoose={(next) => useUiStore.getState().setBrowserDevice(key, next)} />
         <BrowserCommentButton display={display} workspace={workspace} areaId={areaId} address={address} actions={actions} />
+        {display.opener ? <OpenerMark opener={display.opener} actions={actions} /> : null}
       </div>
       <DeviceFrame width={size?.width ?? null}>
         <div ref={slot} className={cn("relative min-h-0 min-w-0", size ? "h-full max-w-full shadow-lg ring-1 ring-border" : "flex-1")} style={size ? { width: size.width } : undefined} data-browser-slot={display.id} data-browser-device={device}>

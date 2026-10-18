@@ -61,7 +61,7 @@ export function useViewFeedback(): ViewFeedback | undefined {
 
 // --- the opener's mark (B1-B7) ----------------------------------------------------
 
-/** The 14 px logo an agent-opened View tab wears after its file name; a press goes to the agent's pane (B5, B6). */
+/** The selected View toolbar's opener mark; a press goes to the agent's pane. */
 export function OpenerMark({ opener, actions }: { opener: ViewOpener; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const product = agentProductName(opener.provider);
@@ -83,7 +83,6 @@ export function OpenerMark({ opener, actions }: { opener: ViewOpener; actions: A
           closed ? "cursor-default opacity-[var(--opacity-dimmed)] grayscale" : "cursor-pointer",
         )}
         onPointerDown={(event) => event.stopPropagation()}
-        // The tab around it has its own hint; the mark's pointer and focus stay with the mark, so only its hint opens.
         onPointerMove={(event) => event.stopPropagation()}
         onFocus={(event) => event.stopPropagation()}
         onDoubleClick={(event) => event.stopPropagation()}

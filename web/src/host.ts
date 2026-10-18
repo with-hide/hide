@@ -80,6 +80,7 @@ export type BrowserPageState = {
 };
 
 export type BrowserHostEvent =
+  | { kind: "window-focus"; focused: boolean }
   | { kind: "state"; workspace: string; id: string; load: number; state: BrowserPageState }
   /** Actual debugger ownership, scoped to `device_id + NUL + checkout_path`. */
   | { kind: "attached"; workspace: string; id: string; attached: boolean }
@@ -138,7 +139,7 @@ export type HostBridge = {
   /** Opens Hide's page of the system's notification settings (macOS). */
   openNotificationSettings(): void;
   /**
-   * Hands the host how many root agents need the operator, for the app icon
+   * Hands the host how many root agents are in enabled notification groups, for the app icon
    * (the Dock badge, the Windows taskbar overlay); zero clears it. Reported
    * once the page holds a live snapshot, which is also when the host hands
    * over a notification click that started the app, and then on each change.

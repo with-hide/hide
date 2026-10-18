@@ -65,7 +65,7 @@ import {
   type LinkTarget,
   type PrMergeMethod,
 } from "./snapshot";
-import { fileUrl, isHtmlFile } from "./browserViews";
+import { fileUrl, focusBrowserDisplay, isHtmlFile } from "./browserViews";
 import { requestLine } from "./editor/lineRequest";
 import { terminalPathOwner, type FoundPath } from "./terminalLinkProvider";
 import { homeOpening } from "./hideAiOrigin";
@@ -77,7 +77,7 @@ import type { FactoryCommand } from "./factory/commands";
 import { FACTORY_OPEN } from "./factory/launch";
 import { SECRETARY_PROMPT, paneListed } from "./factory/secretary";
 import type { DispatchFn } from "./ws";
-import { closeShortcutPolicy, drawnViews, keyboardOwner, newTabPolicy } from "./viewFocus";
+import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, newTabPolicy } from "./viewFocus";
 import { focusTerminal } from "./terminals";
 import { zoomViewer } from "./viewers/viewerZoom";
 import { submitDrop, type CapturedDrop } from "./explorerDrop";
@@ -572,9 +572,8 @@ export function createActions(send: DispatchFn) {
    * event, naming the Workspace of the frame it was taken on, and the core
    * applies it whole or refuses it.
    */
-  const viewLayout = (frame: ViewFrame, action: { action: string } & Record<string, unknown>) => {
+  const viewLayout = (frame: ViewFrame, action: { action: string } & Record<string, unknown>) =>
     dispatch({ schema_version: 2, kind: "view_layout", payload: viewLayoutPayload(frame.workspace, action) });
-  };
 
   /**
    * Moves the keyboard to a display or an area once the core shows it there
@@ -789,6 +788,62 @@ export function createActions(send: DispatchFn) {
    * unsaved work this page cannot reproduce is not sent at all: a notice
    * offers Don't save, the only close that drops unsaved text.
    */
+  let stopCloseFocus: (() => void) | null = null;
+  const followViewClose = (frame: ViewFrame, displayId: string) => {
+    stopCloseFocus?.();
+    stopCloseFocus = null;
+    const located = locateDisplay(frame.layout.root, displayId);
+    const owner = keyboardCommandOwner();
+    const checkout = frontCheckout(rest());
+    if (!located || owner.kind !== "view" || owner.workspace !== checkout?.id) return;
+    if (located.area.active !== displayId || owner.areaId !== located.area.id) {
+      // Clicking a background X borrows native keyboard response even when
+      // preventDefault keeps the shell's DOM focus. Give the visible page back.
+      const inputArea = findArea(frame.layout.root, owner.areaId);
+      const page = inputArea?.displays.find((display) => display.id === inputArea.active && display.kind === "browser");
+      if (page) focusBrowserDisplay(workspaceKey(frame.workspace), page.id);
+      return;
+    }
+    const revision = keyboardInputRevision();
+    const workspace = workspaceKey(frame.workspace);
+    const errorAt = rest()?.status?.last_error?.occurred_at;
+    const finish = () => { stop(); if (stopCloseFocus === finish) stopCloseFocus = null; };
+    // One pending close follow, ended on removal, newer input, leaving the
+    // Workspace or disconnect. The core alone selects the MRU replacement.
+    const stop = useShellStore.subscribe((next) => {
+      const view = workspaceViewOf(next.rest);
+      if (keyboardInputRevision() !== revision || !view || workspaceKey(view) !== workspace || next.connection !== "live" || next.rest?.status?.last_error?.occurred_at !== errorAt) {
+        finish();
+        return;
+      }
+      if (!view.layout || locateDisplay(view.layout.root, displayId)) return;
+      finish();
+      requestAnimationFrame(() => {
+        if (keyboardInputRevision() !== revision) return;
+        const current = workspaceViewOf(rest());
+        if (!current?.layout || workspaceKey(current) !== workspace) return;
+        const area = findArea(current.layout.root, located.area.id) ?? findArea(current.layout.root, current.layout.active_area);
+        const screen = document.querySelector<HTMLElement>(`[data-workspace-screen="${CSS.escape(checkout.id)}"]`);
+        if (current.layout.display_count > 0 && area) {
+          const element = screen?.querySelector<HTMLElement>(`[data-view-area-id="${CSS.escape(area.id)}"]`);
+          const page = element?.querySelector<HTMLElement>("[data-browser-slot]")?.dataset.browserSlot;
+          if (page) focusBrowserDisplay(workspace, page);
+          else {
+            const content = element?.querySelector<HTMLElement>('.cm-content');
+            if (content) content.focus({ preventScroll: true });
+            else ui().setViewFocusRequest({ workspace, areaId: area.id, revision });
+          }
+        } else if (current.tool === "files" && current.tree) {
+          screen?.querySelector<HTMLElement>("[data-explorer-tree]")?.focus({ preventScroll: true });
+        } else {
+          const pane = useShellStore.getState().focusedPaneId;
+          if (pane && screen?.querySelector(`[data-pane-view="${CSS.escape(pane)}"]`)) focusTerminal(pane);
+        }
+      });
+    });
+    stopCloseFocus = finish;
+  };
+
   const closeView = (displayId: string) => {
     const frame = frameFor("close");
     if (!frame) return;
@@ -796,7 +851,11 @@ export function createActions(send: DispatchFn) {
     if (!located) return diagnostic(`view_layout close: ${displayId} is not open`);
     const state = useShellStore.getState();
     const tab = editorTabFor(state.editor, located.display.tab_id);
-    if (!tab || tab.kind !== "file") return viewLayout(frame, { action: "close", display_id: displayId });
+    if (!tab || tab.kind !== "file") {
+      followViewClose(frame, displayId);
+      if (viewLayout(frame, { action: "close", display_id: displayId }) === false) stopCloseFocus?.();
+      return;
+    }
     const last = displaysOfDocument(frame.layout.root, tab.id).length === 1;
     const document = state.documents[tab.id] ?? null;
     const carries = documentCloseCarries({ draft: latestDraft(tab.id), document, dirty: tab.dirty });
@@ -809,8 +868,9 @@ export function createActions(send: DispatchFn) {
       return;
     }
     const pending = carries.kind === "save" ? { tab_id: tab.id, path: tab.path, contents_utf8: carries.contents } : null;
+    followViewClose(frame, displayId);
     if (last) watchDocumentClose(tab, { workspace: frame.workspace, displayId }, pending, document);
-    viewLayout(frame, { action: "close", display_id: displayId, ...(pending ? { pending_save: pending } : {}) });
+    if (viewLayout(frame, { action: "close", display_id: displayId, ...(pending ? { pending_save: pending } : {}) }) === false) stopCloseFocus?.();
   };
 
   /**
@@ -820,7 +880,9 @@ export function createActions(send: DispatchFn) {
    */
   const closeViewWithoutSaving = (target: { workspace: ViewWorkspace; displayId: string }) => {
     ui().setNotice(null);
-    dispatch({ schema_version: 2, kind: "view_layout", payload: viewLayoutPayload(target.workspace, { action: "close", display_id: target.displayId, discard: true }) });
+    const frame = frameNow();
+    if (frame && workspaceKey(frame.workspace) === workspaceKey(target.workspace)) followViewClose(frame, target.displayId);
+    if (dispatch({ schema_version: 2, kind: "view_layout", payload: viewLayoutPayload(target.workspace, { action: "close", display_id: target.displayId, discard: true }) }) === false) stopCloseFocus?.();
   };
 
   /** A preview display becomes an ordinary one (B2): the named one, or the active one. */
@@ -2035,7 +2097,7 @@ export function createActions(send: DispatchFn) {
     },
 
     closeFocused() {
-      const owner = keyboardOwner();
+      const owner = keyboardCommandOwner();
       const agents = areaFrame("agent");
       const active = agents ? activeAgentDisplay(agents.layout)?.display.id : null;
       if (owner.kind !== "view" && active && agents?.layout.drafts?.includes(active)) return closeTab(active);
@@ -2071,7 +2133,7 @@ export function createActions(send: DispatchFn) {
         for (const pane of tabs.find((tab) => tab.id === shown)?.panes ?? []) paneAreas[pane.id] = area.id;
       }
       const target = newTabPolicy({
-        owner: keyboardOwner(),
+        owner: keyboardCommandOwner(),
         workspace: ui().screen?.kind === "workspace" ? frontCheckout(rest())?.id ?? null : null,
         viewAreaIds: drawn ? areasOf(drawn.layout.root).map((area) => area.id) : [],
         paneAreas,
@@ -2211,7 +2273,7 @@ export function createActions(send: DispatchFn) {
      * editor tab owns the canvas, else the focused terminal pane's. */
     textScale(direction: "in" | "out" | "reset") {
       // A viewer's zoom is its display's own, page-local and never sent.
-      const owner = keyboardOwner();
+      const owner = keyboardCommandOwner();
       const frame = frameNow();
       const area = owner.kind === "view" && frame ? findArea(frame.layout.root, owner.areaId) : null;
       if (area?.active && zoomViewer(area.active, direction)) return;

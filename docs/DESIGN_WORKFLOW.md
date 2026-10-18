@@ -115,6 +115,9 @@ Its selector is the scene root, not `[data-factory-screen]`, because the Pen fra
 A target's `urlStates` lists the states its scene sets up from its address (`state=<name>`), or maps each state to the query it sets, as `first-run-onboarding` does to put a state on Windows or Linux.
 `first-run-onboarding` pairs the approved boards (PRD first-run-onboarding D-20, D-27) with the onboarding scene at rest and captures every state the scene draws in the state sheets, since one board draws several states; it measures the wizard with `web/e2e/onboarding-geometry.mjs` (no overlapping parts, no sideways overflow, no letters cut off at the bottom, no squeezed agent mark, and the wizard inside the window) at text scale 1 and at 17/13, the largest Appearance offers (B41).
 `area-focus` measures the production shared area renderer and View tabs with read-only Korean content, enforcing one keyboard area, retained selections, stable geometry and unfiltered content; real terminal and native browser behavior still requires an isolated app capture.
+The input area's selected tab uses the runtime primary accent, and its content boundary uses a 2px primary perimeter.
+An Agent pane also uses the existing selected header wash; the window being inactive or a menu, search, address field or another tool holding input removes canvas input emphasis.
+Files keeps its Explorer toggle in the persistent top header, while only the selected View's path or address toolbar shows its opener; background tabs retain provenance in their tooltip.
 
 ### Keep the chosen design: `baseline`
 
@@ -184,6 +187,7 @@ No `System /` or `Component /` master carries a tab part, so `design/hide-ui.lib
 `design/hide-screens.pen` draws every area the web shell shows today, one `Screen / <Area>` sheet per area, imported from `design/hide-ui.lib.pen` the same way a `Component /` sheet is drawn from `System /` masters.
 Each sheet carries a `Light` and a `Dark` frame and uses realistic content, including Korean labels and a long path, to show real wrapping and truncation rather than an abstract state.
 `scripts/check-hide-screens.mjs` enforces the shape (`Screen / ` naming, both theme frames, every reference resolving against the library, every cross-library color restated locally, and local variables matching `design/tokens.json`) and `scripts/gen-screens.mjs` regenerates the file from `scripts/pen-screens.mjs`.
+When a master gains a child, scoped generation also fills missing imported color overrides on retained screens, without replacing their layout or explicit variant overrides.
 Because the file is generated and several megabytes of JSON, `.gitattributes` marks it `-diff linguist-generated=true`: `git diff` reports only that it changed and GitHub folds it in a pull request, so review reads `scripts/pen-screens.mjs`; `git diff --text` still shows its lines when they are needed.
 
 The device Overview is `Screen / Overview`, drawn by `scripts/pen-screens-overview.mjs` (PRD overview-device-tasks, sidebar-task-lens D-20): one device's `백로그 · 프로젝트 · 사용량` under the title and the device switch, the panel beside the tabs with an item or, at Home, a session's record, the device that does not answer, and the ⌘⇧M quick add.
@@ -203,10 +207,10 @@ It draws Agent Views, the right lane and the tool rail beneath the window's top 
 The tool rail carries Memory and PRs over the divider and Files and Changes under it with the pressed tool's bar, the Files badge while the lane does not show Files, PRs' warning badge with its Needs You count, and the `…` menu; the lane carries its `tool · scope` header with Pin, Expand and Close, and the files tool its tree button and ` › ` path.
 The board draws the approved v3 states: the lane closed, over the agents, pinned and docked, the tree on over the agents, the tree alone with no document, expanded, PRs pinned, and a narrow window with the pin filled over the agents.
 The pane header keeps the agent-hierarchy round 2 identity and ask-band patterns: the ancestor path, fork mark and own PR remain on the identity row.
-Its second row follows the layout the operator chose on 2026-10-18 from an interactive HTML comparison in the conversation, which replaced the B2 child-status counts: the row is only the operator's turn or the pane's children, the children button keeps its right end, the children are named one by one with their row marks, and an ask leads with whose it is; the committed board still draws the B2 row until it is regenerated.
+Its second row follows the approved 2026-10-18 pane-header-progress design: a tree icon, direct-child number and chevron at the left open the existing popover; one operator request or the pane's own live progress occupies the rest, and a raised request names its child origin.
 The fork mark is the issue 916 addition, chosen by the operator as a small icon after the title and drawn in the board's Forked pane section.
-The pane-header board and `Component / Agent tree parts` draw the full, compact raised, unknown and zero-child forms in both themes; `design/review-targets.json` names the board as the `pane-header` target.
-The B2 choice was approved from the interactive HTML comparison in the conversation; the committed board records that layout, while its fidelity is checked against the production gallery and native captures rather than claiming another Pen approval.
+The pane-header main and edge boards and `Component / Agent tree parts` draw the twelve approved situations in Light and Dark, including progress-only, tree-only, empty, finished, open popover and narrow text; `design/review-targets.json` names both boards as the `pane-header` target.
+The approved local Pen sheet is the frozen visual reference, and the production gallery and isolated native capture supply implementation evidence.
 The reference includes the lane's and the tree's dividers at rest, under the pointer, focused and being dragged.
 Light and Dark frames carry Korean text and long paths, including the one-line shortened document path and its full-path tooltip.
 The server-picker comparison retains its distinct reachable endpoints, and the area-focus comparison retains two View areas with one keyboard owner and independently readable selections.

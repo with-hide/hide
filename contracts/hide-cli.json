@@ -634,7 +634,7 @@
                         },
                         "bell_line": {
                             "default": null,
-                            "description": "The line the doorbell typed for this letter last, saved with its reservation before it was typed; null until the first bell. A submitted prompt is that bell exactly when it is this line.",
+                            "description": "The line the doorbell typed for this letter last, saved with its reservation before it was typed; null until the first bell. A submitted prompt is that bell when its canonical digest matches this line; older hooks' whole-line digests remain accepted too.",
                             "type": [
                                 "string",
                                 "null"
@@ -980,7 +980,7 @@
                 },
                 "bell_line": {
                     "default": null,
-                    "description": "The line the doorbell typed for this letter last, saved with its reservation before it was typed; null until the first bell. A submitted prompt is that bell exactly when it is this line.",
+                    "description": "The line the doorbell typed for this letter last, saved with its reservation before it was typed; null until the first bell. A submitted prompt is that bell when its canonical digest matches this line; older hooks' whole-line digests remain accepted too.",
                     "type": [
                         "string",
                         "null"
@@ -1985,7 +1985,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:de88b1601258e61ed276ebbae1e6bd7797ef29d783786e0ce578b8818e3dcbe5",
+    "digest": "sha256:664d21d95baf7f8c6b93da7fa21cd5811f4cc7a5f89b0934fc5e240fdf8a13a4",
     "envelopes": {
         "agent": {
             "answer": "value",

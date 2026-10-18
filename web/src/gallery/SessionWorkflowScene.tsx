@@ -26,7 +26,8 @@ const EXAMPLES: Example[] = [
   { title: "쉬는 세션", group: "idle", line: null },
   { title: "완료한 검토", group: "resolved", line: null, pr: "merged" },
 ];
-const RAISED: RaisedAsk = { verb: "approval", what: "검증 명령 실행 권한이 필요합니다", raised_pane_id: "a1c1", pane_id: "a1c1", title: "한국어 입력 경계 검토", agent_kind: "codex", open_pane_id: "a1c1", since_unix_ms: null, path: ["입력과 세션 복귀 흐름 검토", "한국어 입력 경계 검토"], checkout: "prd/session-ui", human_notice: true };
+const RAISED: RaisedAsk = { verb: "approval", what: "검증 명령 실행 권한이 필요합니다", raised_pane_id: "a1c1", origin_title: "한국어 입력 경계 검토", pane_id: "a1c1", title: "한국어 입력 경계 검토", agent_kind: "codex", open_pane_id: "a1c1", since_unix_ms: null, path: ["입력과 세션 복귀 흐름 검토", "한국어 입력 경계 검토"], checkout: "prd/session-ui", human_notice: true };
+const PANE_RAISED: RaisedAsk = { ...RAISED, raised_pane_id: "pane-raised-child", origin_title: "UI 검증", pane_id: "pane-raised-child", open_pane_id: "pane-raised-child", title: "UI 검증", what: "권한 승인을 기다리고 있어요", path: ["Group tab 기능 설계", "UI 검증"] };
 const NO_NOTICE = { notice: null, band: null };
 const HEADERS: [string, Omit<PaneHeader, "working">][] = [
   ["sleeping", { ...NO_NOTICE, notice: { kind: "sleeping", tone: "muted", reason: "12분 동안 휴면 중", since_unix_ms: null, exit_code: null } }],
@@ -40,9 +41,23 @@ const HEADERS: [string, Omit<PaneHeader, "working">][] = [
   ["raised", { ...NO_NOTICE, band: { kind: "raised", reason: null, since_unix_ms: null, read: false, action: { pane_id: "a1c1", label: RAISED.title }, more: 1, raised: RAISED } }],
   ["working", NO_NOTICE], ["idle", NO_NOTICE], ["children", NO_NOTICE], ["unknown", NO_NOTICE],
 ];
-
-// Panes drawn as a delegated child, so their header starts with the path back to the root (B20).
-const CHILD_PANES = ["sleeping", "fix", "merge", "blocked", "working"];
+// The twelve approved pane-header situations use the production header and
+// popover components over explicit wire fixtures. The other examples above
+// remain for the Sessions panel's unrelated fixture.
+const PANE_HEADER_CASES: [string, string, Omit<PaneHeader, "working">][] = [
+  ["progress", "01 · 진행 중", { ...NO_NOTICE, progress: "상황별 헤더 시안을 정리하고 있어요" }],
+  ["question", "02 · 답변이 필요함", { ...NO_NOTICE, band: { kind: "answer", reason: "그룹 이름은 직접 정하게 할까요?", since_unix_ms: null, read: false, action: null, more: 0 } }],
+  ["approval-case", "03 · 승인이 필요함", { ...NO_NOTICE, band: { kind: "approval", reason: "권한 승인을 기다리고 있어요", since_unix_ms: null, read: false, action: null, more: 0 } }],
+  ["blocked-case", "04 · 막힘", { ...NO_NOTICE, band: { kind: "blocked", reason: "접근 권한을 확인해 주세요", since_unix_ms: null, read: false, action: null, more: 0 } }],
+  ["raised-case", "05 · 자식에게 사용자 승인이 필요함", { ...NO_NOTICE, band: { kind: "raised", reason: null, since_unix_ms: null, read: false, action: { pane_id: PANE_RAISED.open_pane_id, label: PANE_RAISED.title }, more: 0, raised: PANE_RAISED } }],
+  ["stopped", "06 · 현재 세션이 멈춤", { ...NO_NOTICE, band: { kind: "stopped", reason: "응답이 중단됐어요", since_unix_ms: null, read: false, action: null, more: 0 } }],
+  ["solo", "07 · 자식 없이 진행 중", { ...NO_NOTICE, progress: "상황별 헤더 시안을 정리하고 있어요" }],
+  ["tree-only", "08 · progress 없음 · 자식 있음", NO_NOTICE],
+  ["empty", "09 · progress도 자식도 없음", NO_NOTICE],
+  ["finished", "10 · 작업 완료 · 자식 있음", NO_NOTICE],
+  ["popover", "11 · 자식 목록 열기", { ...NO_NOTICE, progress: "검토 결과를 정리하고 있어요" }],
+  ["narrow", "12 · 좁은 패널 · 긴 progress", { ...NO_NOTICE, progress: "헤더 상태별 표시와 요청 우선순위를 검토하고 있어요" }],
+];
 
 // Frozen visual examples, not a second implementation of core judgments.
 const MARKS: [RowMark, StatusTone["kind"], RequestVerb][] = [
@@ -51,7 +66,7 @@ const MARKS: [RowMark, StatusTone["kind"], RequestVerb][] = [
   ["going", "working", "waiting"], ["quiet", "subtle", "idle"], ["quiet", "subtle", "result"],
 ];
 
-export function SessionWorkflowScene({ scene: kind, theme, content, scale, width }: SceneParams & { scene: "session-panel" | "pane-header" }) {
+export function SessionWorkflowScene({ scene: kind, theme, content, scale, width, state }: SceneParams & { scene: "session-panel" | "pane-header" }) {
   const actions = useMemo(() => createActions(() => true), []);
   const fixture = useMemo(() => {
     const base = sidebarScene(content, REFERENCE_FOLDS, Date.now());
@@ -104,7 +119,7 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
     const childPanes = children.map((child) => ({ ...pane, id: child.pane_id, identity_label: child.identity_label }));
     feature.tabs[0]!.panes.push(childPanes[0]!);
     checkout.tabs[0]!.panes.push(...childPanes.slice(1));
-    const headers = Object.fromEntries(HEADERS.map(([id, header]) => [id, { ...header, working: id === "working", band: header.band && { ...header.band, since_unix_ms: Date.now() - 180_000 } }]));
+    const headers = Object.fromEntries([...HEADERS.map(([id, header]) => [id, { ...header, working: id === "working", band: header.band && { ...header.band, since_unix_ms: Date.now() - 180_000 } }]), ...PANE_HEADER_CASES.map(([id, , header]) => [id, { ...header, progress: id === "narrow" && content === "long" ? "헤더 상태별 표시와 요청 우선순위를 검토하고 다음 단계의 배치와 접근성까지 다시 확인하고 있어요" : header.progress, working: ["progress", "solo", "popover", "narrow"].includes(id), band: header.band && { ...header.band, since_unix_ms: Date.now() - 180_000 } }])]);
     // The fix and merge panes own one PR each: their header's PR chip is all
     // that says it, with no second row (B21, B22).
     const ownPr = (id: string): Pick<AgentRow, "state" | "request"> => {
@@ -123,17 +138,25 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
       { ...children[1]!, id: "b2-unknown", pane_id: "b2-unknown", identity_label: "상태 확인 중인 자식", mark: "unknown", status_code: "unknown", activity: "unknown", demand: "none", descendant_mark: null, state: { ...children[1]!.state, tree_rank: 3, line: null } },
       { ...children[1]!, id: "b2-question", pane_id: "b2-question", identity_label: "부모에게 PR 구성 질문", mark: "turn", status_code: "question", unknown: false, descendant_mark: null, state: { ...children[1]!.state, tree_rank: 0, line: { text: "기존 PR에 합칠지 부모 응답을 기다리는 중", mode: "quiet", tone: { kind: "subtle", read: false } } } },
     ];
-    const headerAgents = HEADERS.map(([id]) => ({ ...seed, id, pane_id: id,
+    const raisedChild: AgentRow = { ...children[0]!, id: PANE_RAISED.pane_id, pane_id: PANE_RAISED.pane_id, identity_label: PANE_RAISED.title, lineage_parent_pane_id: "raised-case", lineage_path_pane_ids: ["raised-case", PANE_RAISED.pane_id], lineage_child_pane_ids: [] };
+    const popoverChildren: AgentRow[] = ["레이아웃 설계", "구현", "검증"].map((label, index) => ({ ...children[index]!, id: `pane-popover-child-${index}`, pane_id: `pane-popover-child-${index}`, identity_label: label, lineage_parent_pane_id: "popover", lineage_path_pane_ids: ["popover", `pane-popover-child-${index}`], lineage_child_pane_ids: [], mark: index === 2 ? "done" as const : "going" as const, state: { ...children[index]!.state, session: { group: index === 2 ? "done" as const : "working" as const, line: ["상태별 헤더 시안 정리 중", "진행 문구 연결 중", "검토 결과 도착"][index]!, unfinished: false } } }));
+    const narrowChildren: AgentRow[] = Array.from({ length: 12 }, (_, index) => {
+      const id = `pane-narrow-child-${index}`;
+      return { ...childExamples[0]!, id, pane_id: id, identity_label: `자식 ${index + 1}`, lineage_parent_pane_id: "narrow", lineage_path_pane_ids: ["narrow", id], lineage_child_pane_ids: [], state: { ...childExamples[0]!.state, tree_rank: index + 1 } };
+    });
+    const headerAgents = [...HEADERS.map(([id]) => id), ...PANE_HEADER_CASES.map(([id]) => id)].map((id) => ({ ...seed, id, pane_id: id,
+      identity_label: PANE_HEADER_CASES.some(([caseId]) => caseId === id) ? "Group tab 기능 설계" : seed.identity_label,
       device_id: id === "device" ? "mini" : seed.device_id,
-      descendant_mark: id === "raised" ? { kind: "raised" as const, count: 2 } : null,
-      raised: id === "raised" ? [RAISED, { ...RAISED, raised_pane_id: "a1c2", pane_id: "a1c2", open_pane_id: "a1c2", title: children[1]!.identity_label, verb: "answer" as const, what: "PR을 함께 올릴까요?" }] : [],
+      lineage_path_pane_ids: [id],
+      descendant_mark: id === "raised" ? { kind: "raised" as const, count: 2 } : id === "raised-case" ? { kind: "raised" as const, count: 1 } : null,
+      raised: id === "raised" ? [RAISED, { ...RAISED, raised_pane_id: "a1c2", origin_title: children[1]!.identity_label, pane_id: "a1c2", open_pane_id: "a1c2", title: children[1]!.identity_label, verb: "answer" as const, what: "PR을 함께 올릴까요?" }] : id === "raised-case" ? [PANE_RAISED] : [],
       // A childless approval and merge show the row only for the ask, and none for a PR.
-      lineage_child_pane_ids: ["idle", "approval", "merge"].includes(id) ? [] : id === "children" ? childExamples.map((child) => child.pane_id) : id === "unknown" ? ["b2-unknown"] : ["a1c1", "a1c2"],
-      direct_child_counts: id === "children" ? { error: 0, approval: 0, question: 1, working: 1, done: 1 } : id === "unknown" ? { error: 0, approval: 0, question: 0, working: 0, done: 0 } : { error: 0, approval: 0, question: 0, working: 1, done: 0 },
+      lineage_child_pane_ids: ["idle", "approval", "merge", "solo", "empty"].includes(id) ? [] : id === "raised-case" ? [raisedChild.pane_id, ...childExamples.slice(1, 3).map((child) => child.pane_id)] : id === "popover" ? popoverChildren.map((child) => child.pane_id) : id === "narrow" ? narrowChildren.map((child) => child.pane_id) : ["children", "progress", "question", "approval-case", "blocked-case", "stopped", "tree-only", "finished"].includes(id) ? childExamples.slice(0, 3).map((child) => child.pane_id) : id === "unknown" ? ["b2-unknown"] : ["a1c1", "a1c2"],
+      direct_child_counts: id === "narrow" ? { error: 0, approval: 0, question: 0, working: 12, done: 0 } : ["children", "progress", "question", "approval-case", "blocked-case", "raised-case", "stopped", "tree-only", "finished", "popover"].includes(id) ? { error: 0, approval: 0, question: 1, working: 1, done: 1 } : id === "unknown" ? { error: 0, approval: 0, question: 0, working: 0, done: 0 } : { error: 0, approval: 0, question: 0, working: 1, done: 0 },
       ...(id === "fix" || id === "merge" ? ownPr(id) : {}) }));
     base.rest.terminal = { headers };
     base.rest.status = { ...base.rest.status, remote: [{ target_id: "mini", state: "not_connected", message: "Mac mini 연결되지 않음", herdr_version: null, session: null }] };
-    return { ...base, agents: [...agents, ...children, ...childExamples, ...headerAgents], pane };
+    return { ...base, agents: [...agents, ...children, ...childExamples, raisedChild, ...popoverChildren, ...narrowChildren, ...headerAgents], pane };
   }, [content]);
   useLayoutEffect(() => {
     useShellStore.setState({ rest: fixture.rest, agents: fixture.agents, connection: "gone" });
@@ -141,5 +164,5 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));
   }, [fixture, theme, scale]);
-  return <TooltipProvider>{kind === "session-panel" ? <div className="flex h-full bg-background text-foreground" data-gallery-scene={kind}><TaskLens actions={actions} /></div> : <div style={{ width: width ?? undefined }} className="grid grid-cols-2 gap-lg bg-background p-xl text-foreground" data-gallery-scene={kind}>{HEADERS.map(([id]) => <div key={id} className="h-[var(--size-pane-state-example)] min-w-0 border border-border"><PaneView pane={{ ...fixture.pane, id, identity_label: content === "long" ? "긴 한국어 제목을 좁은 pane에서 확인하는 상태 검토" : "한국어 입력 경계 검토", fork: id === "idle" ? { available: true, forked_from: { pane_id: "a1", label: "hide 에이전트 지원 PR 묶음 머지 조율" } } : undefined, sleep: id === "sleeping" ? { state: "sleeping", since_unix_ms: 0, progress: "12분 동안 휴면 중" } : undefined, lineage_path: CHILD_PANES.includes(id) ? [{ pane_id: "a1", label: "hide 에이전트 지원 PR 묶음 머지 조율", siblings: [] }, { pane_id: id, label: "한국어 입력 경계 검토", siblings: [] }] : undefined }} transport={undefined} focused={false} scale={1} actions={actions} agentKind="codex" markSymbol="quiet" markTone="text-muted-foreground" paneCount={2} zoomed={false} /></div>)}</div>}</TooltipProvider>;
+  return <TooltipProvider>{kind === "session-panel" ? <div className="flex h-full bg-background text-foreground" data-gallery-scene={kind}><TaskLens actions={actions} /></div> : <div style={{ width: width ?? undefined }} className="flex flex-col gap-lg bg-background p-xl text-foreground" data-gallery-scene={kind} data-gallery-state={state}>{PANE_HEADER_CASES.slice(state === "edge" ? 6 : 0, state === "edge" ? 12 : 6).map(([id, label]) => <div key={id} data-pane-header-case={id} className={id === "narrow" ? "w-(--size-pane-narrow-example) max-w-full min-w-0" : "min-w-0"}><div className="pb-xs text-micro text-muted-foreground">{label}</div><div className="h-[var(--size-pane-state-example)] min-w-0 border border-border"><PaneView pane={{ ...fixture.pane, id, identity_label: content === "long" ? "긴 한국어 제목과 변경 사항을 좁은 화면에서 확인하는 작업" : "Group tab 기능 설계" }} transport={undefined} focused={false} scale={1} actions={actions} agentKind="codex" markSymbol={id === "finished" ? "done" : "quiet"} markTone={id === "finished" ? "text-success" : "text-muted-foreground"} paneCount={2} zoomed={false} /></div></div>)}</div>}</TooltipProvider>;
 }

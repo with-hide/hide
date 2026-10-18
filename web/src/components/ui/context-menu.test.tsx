@@ -25,10 +25,10 @@ afterEach(async () => {
   document.body.replaceChildren();
 });
 
-async function openMenu() {
+async function openMenu(returnToInput = false) {
   await act(async () => {
     root.render(
-      <ContextMenu>
+      <ContextMenu returnToInput={returnToInput}>
         <ContextMenuTrigger asChild>
           <div><button>Project</button><button>More actions</button></div>
         </ContextMenuTrigger>
@@ -40,7 +40,7 @@ async function openMenu() {
   expect(buttons).toHaveLength(2);
   const project = buttons.item(0);
   const more = buttons.item(1);
-  project.focus();
+  if (!returnToInput) project.focus();
   await act(async () => {
     project.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await vi.runOnlyPendingTimersAsync();
@@ -68,4 +68,14 @@ it("keeps focus on the next control when the context-menu hand-back arrives late
   more.focus();
   await act(async () => { await vi.runOnlyPendingTimersAsync(); });
   expect(document.activeElement).toBe(more);
+});
+
+it("returns a View menu to the input it borrowed from another area", async () => {
+  const input = document.createElement("input");
+  document.body.append(input);
+  input.focus();
+  await openMenu(true);
+  closeMenu();
+  await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+  expect(document.activeElement).toBe(input);
 });

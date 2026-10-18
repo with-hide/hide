@@ -80,7 +80,7 @@ impl Runtime {
         // A tab that left Herdr takes its View bookmark with it (D-11).
         let listed: Vec<&str> = topology.iter().map(|(id, _)| id.as_str()).collect();
         // Not `||`: the prune must run whether or not the layout changed.
-        Ok(self.prune_view_bookmarks(key, &listed) | changed)
+        Ok(self.prune_view_callers(key, &listed) | changed)
     }
 
     pub(super) fn sync_agent_lineage_layouts(&mut self) {

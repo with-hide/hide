@@ -193,28 +193,49 @@
     ]
   },
   "pane-header": {
-    "description": "The approved B2 pane header: identity and own PR on the first row, core state counts without a separate total or internal divider on the second-row overlay, compact counts beside an ask band.",
+    "description": "The approved pane header: direct-child tree/count at the left, then one operator request or the pane agent's own live progress, across twelve main and edge situations.",
     "file": "design/hide-screens.pen",
     "sheet": "screen-workspace",
     "scene": "pane-header",
+    "language": "ko",
     "selector": "[data-gallery-scene=\"pane-header\"]",
     "measurement": "web/e2e/pane-header-geometry.mjs",
     "frames": [
       {
         "node": "sfu-ph-board-l",
         "theme": "light",
-        "width": 761,
+        "width": 840,
         "scale": 1,
         "content": "reference",
-        "state": "rest"
+        "state": "rest",
+        "referenceNode": "hgw81"
       },
       {
         "node": "sfu-ph-board-d",
         "theme": "dark",
-        "width": 761,
+        "width": 840,
         "scale": 1,
         "content": "reference",
-        "state": "rest"
+        "state": "rest",
+        "referenceNode": "tLg2a"
+      },
+      {
+        "node": "sfu-ph-edge-l",
+        "theme": "light",
+        "width": 840,
+        "scale": 1,
+        "content": "reference",
+        "state": "edge",
+        "referenceNode": "XEWY5"
+      },
+      {
+        "node": "sfu-ph-edge-d",
+        "theme": "dark",
+        "width": 840,
+        "scale": 1,
+        "content": "reference",
+        "state": "edge",
+        "referenceNode": "gzTm1"
       }
     ],
     "conditions": {
@@ -223,26 +244,33 @@
         "dark"
       ],
       "widths": [
-        761
+        840,
+        440
       ],
       "contents": [
         "reference",
         "long"
+      ],
+      "scales": [
+        1,
+        1.25,
+        1.3076923076923077
       ]
     },
     "states": {
-      "rest": "Core bands, child counts and representative lines, unknown and zero-child header identities.",
-      "children": "The tree button popover."
+      "rest": "Six primary and six edge states in each theme.",
+      "edge": "The six edge states, with the existing tree button popover opened from case 11."
     },
     "rules": {
       "noOverlap": true,
       "noSidewaysOverflow": true
     },
+    "urlStates": { "edge": { "state": "edge" } },
     "judgment": [
-      "B2 was approved from the interactive HTML comparison; this board records its layout in both themes using the existing tokens. Compare each state's production and native captures with the approved arrangement.",
-      "Does the ask band retain its request and Open action beside the compact ! count, with no separate total, internal divider or duplicate 외 N건 trigger? Does the request keep readable space at narrow widths and enlarged text?",
-      "Do the ancestor path, fork and own PR remain on the first row, with child counts on the second row and a core-ranked child line only when no core band takes that slot?",
-      "Are ordinary child requests distinct from operator-raised requests, unknown distinct from resting, and reported results distinct from verified task delivery? Does an empty parent lose the child row without changing the terminal grid?"
+      "Compare all twelve approved states with the production gallery and isolated native capture in both themes.",
+      "Do the tree icon, real direct-child count and chevron remain at the left with no child names or duplicate status icon on the second row?",
+      "Does the raised request name its child origin, while own requests outrank progress and the progress disappears when work finishes?",
+      "Are the essential request action and complete tooltip available at narrow widths and enlarged text without overlap or a PTY grid change?"
     ]
   },
   "projects-sidebar": {
@@ -407,7 +435,7 @@
     "judgment": [
       "Does exactly one area read as the keyboard owner while the other selected tab remains recognizable?",
       "Are Korean text and the native page content readable in the app, including narrow and expanded panels?",
-      "Does the foreground underline identify the keyboard area without a colored perimeter?"
+      "Do the chosen accent underline and 2px perimeter identify the input area, with stable geometry and no badge?"
     ]
   },
   "factory": {
@@ -1751,7 +1779,7 @@
     "judgment": ["Does the lane read as one surface over or beside the agents, its rail, header, pin, tree button and divider matching the boards?", "Does opening over the agents keep the terminals at their width, with only pinning narrowing them, once?"]
   },
   "view-opener-feedback": {
-    "description": "View opener mark and View feedback (PRD view-opener-feedback D-20, D-24, D-25): the opener's logo on a View tab, the pane header's N views, Comment mode on pages, diffs, files, images and PDFs, the feedback row with Send and its menu, and what follows Send.",
+    "description": "View opener mark and View feedback (PRD view-opener-feedback D-20, D-24, D-25): the selected View toolbar's opener and background tab tooltip, the pane header's N views, Comment mode on pages, diffs, files, images and PDFs, the feedback row with Send and its menu, and what follows Send.",
     "file": "design/hide-screens.pen",
     "sheet": "screen-workspace",
     "scene": "view-opener-feedback",
@@ -1774,7 +1802,7 @@
     ],
     "conditions": { "themes": ["light", "dark"], "widths": [1456], "contents": ["reference"], "scales": [1] },
     "states": {
-      "opener-tip": "A View tab's opener mark with its tooltip above the tab, unsent counts on the tabs (board 1).",
+      "opener-tip": "The selected View toolbar's opener mark with its tooltip, unsent counts on the tabs (board 1).",
       "views-list": "The pane header's `2 views` list open (board 2).",
       "comment-browser": "Comment mode on a page: the hint, an outlined element, numbered pins and a region (board 3).",
       "comment-diff": "A diff with a range note being written and a commented line with its bar and note (board 4).",
@@ -1785,7 +1813,7 @@
     "urlStates": ["opener-tip", "views-list", "comment-browser", "comment-diff", "comment-pdf", "send-menu", "sent"],
     "rules": { "noOverlap": true, "noSidewaysOverflow": true },
     "judgment": [
-      "Does the 10 px opener mark sit on the kind icon's lower right, keep the kind readable, and open its tooltip above the tab, in both themes?",
+      "Does the selected View toolbar retain its small opener and reachable provenance tooltip while background tabs keep provenance without a repeated logo, in both themes?",
       "Do pins and image/PDF regions show only while Comment is on, with the tab count and the feedback row carrying the comments otherwise?",
       "Do the feedback row, the Send button (always with its logo) and the ▾ menu (status mark and name; the logo only while the agent logo view mode shows it) match board 6?",
       "Each window is paired with one state; the state cells under it on its board (boards vof-<board>-l/d in the bundle's .pen) carry the rest, including Not delivered, Couldn't send and `Comment deleted · Undo`, and are judged in the state sheets."
