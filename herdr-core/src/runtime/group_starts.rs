@@ -62,10 +62,10 @@ pub(super) struct TaskStartFocus {
     /// Global starts may bring their checkout forward only while the
     /// original screen's selection has not been superseded.
     global_focus: Option<StartFocus>,
-    remote_focus: Option<RemoteStartFocus>,
+    pending_focus: Option<StartPaneFocus>,
 }
 
-struct RemoteStartFocus {
+struct StartPaneFocus {
     workspace: workspace_view::WorkspaceKey,
     pane: String,
     generation: u64,
@@ -714,7 +714,7 @@ impl Runtime {
     pub(super) fn supersede_start_navigation(&mut self) {
         if let Some(active) = self.task_start_focus.as_mut() {
             active.global_focus = None;
-            active.remote_focus = None;
+            active.pending_focus = None;
         }
     }
 
@@ -722,13 +722,13 @@ impl Runtime {
         self.task_start_focus = (kind == "agent_start").then(|| TaskStartFocus {
             task,
             global_focus: Some(self.start_focus()),
-            remote_focus: None,
+            pending_focus: None,
         });
     }
 
     /// One pending follow belongs to the current start, never a shell-side
     /// open intent. It expires with the start panel's 90-second answer bound.
-    pub(super) fn queue_remote_start_focus(&mut self, task: u64, pane: String) {
+    pub(super) fn queue_start_focus(&mut self, task: u64, pane: String) {
         let operation = self
             .snapshot
             .task_operation
@@ -737,7 +737,7 @@ impl Runtime {
         let device = operation
             .device_id
             .clone()
-            .expect("a remote start names its device");
+            .unwrap_or_else(|| self.node.as_str().to_owned());
         let path = operation
             .path
             .clone()
@@ -753,25 +753,28 @@ impl Runtime {
             );
             return;
         };
-        active.remote_focus = Some(RemoteStartFocus {
+        active.pending_focus = Some(StartPaneFocus {
             workspace: (device.clone(), path),
             pane,
-            generation: self
-                .remote_connection_generations
-                .get(&device)
-                .copied()
-                .unwrap_or(0),
+            generation: if device == self.node.as_str() {
+                self.live_generation
+            } else {
+                self.remote_connection_generations
+                    .get(&device)
+                    .copied()
+                    .unwrap_or(0)
+            },
             deadline: std::time::Instant::now() + std::time::Duration::from_secs(90),
         });
     }
 
     /// Automatic archive descendants share the start slot, so they wait for
     /// this bounded follow rather than replacing their root's permission.
-    pub(super) fn pending_remote_start_focus(&mut self) -> bool {
+    pub(super) fn pending_start_focus(&mut self) -> bool {
         let Some(active) = self.task_start_focus.as_ref() else {
             return false;
         };
-        let Some(pending) = active.remote_focus.as_ref() else {
+        let Some(pending) = active.pending_focus.as_ref() else {
             return false;
         };
         let device = &pending.workspace.0;
@@ -782,38 +785,42 @@ impl Runtime {
             .is_some_and(|op| op.id == active.task && op.phase == "ready" && !op.stays_behind)
             && self.group_start_should_focus(active.task)
             && pending.generation
-                == self
-                    .remote_connection_generations
-                    .get(device.as_str())
-                    .copied()
-                    .unwrap_or(0)
+                == if device == self.node.as_str() {
+                    self.live_generation
+                } else {
+                    self.remote_connection_generations
+                        .get(device.as_str())
+                        .copied()
+                        .unwrap_or(0)
+                }
             && std::time::Instant::now() < pending.deadline;
         if !current {
             let device = device.clone();
-            self.task_start_focus.as_mut().unwrap().remote_focus = None;
+            self.task_start_focus.as_mut().unwrap().pending_focus = None;
             self.push_diagnostic(
-                "agent_start.remote_focus_cancelled",
-                format!("Remote start focus on {device} was superseded or expired"),
+                "agent_start.focus_cancelled",
+                format!("Start focus on {device} was superseded or expired"),
             );
             return false;
         }
         true
     }
 
-    pub(super) fn follow_remote_start(&mut self, device: &str) -> bool {
-        if !self.pending_remote_start_focus() {
+    pub(super) fn follow_start(&mut self, device: Option<&str>) -> bool {
+        if !self.pending_start_focus() {
             return false;
         }
+        let device = device.unwrap_or(self.node.as_str());
         let active = self.task_start_focus.as_ref().unwrap();
         let Some(pending) = active
-            .remote_focus
+            .pending_focus
             .as_ref()
             .filter(|pending| pending.workspace.0 == device)
         else {
             return false;
         };
         // The exact pane must belong to this start's checkout on this
-        // connection before the ordinary remote control boundary accepts it.
+        // connection before the ordinary focus boundary accepts it.
         let listed = self
             .catalog_workspaces()
             .filter(|workspace| workspace.device_id == device)
@@ -825,16 +832,25 @@ impl Runtime {
         if !listed {
             return false;
         }
-        let request_id = format!("agent-start-focus:{}:{}", active.task, pending.generation);
+        let task = active.task;
         let pending = self
             .task_start_focus
             .as_mut()
             .unwrap()
-            .remote_focus
+            .pending_focus
             .take()
             .unwrap();
+        let device = pending.workspace.0;
+        if device == self.node.as_str() {
+            self.focus_pane(pending.pane, PaneFocusOrigin::Restore, None);
+            if self.snapshot.status.last_error.is_none() && !self.device_in_front(&device) {
+                self.bring_device_forward(device);
+            }
+            return true;
+        }
+        let request_id = format!("agent-start-focus:{task}:{}", pending.generation);
         self.request_remote_control(RemoteControlPayload {
-            target_id: device.to_owned(),
+            target_id: device,
             request_id,
             report_pane_focus_outcome: false,
             focus_device: true,

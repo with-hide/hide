@@ -2185,7 +2185,7 @@ impl Runtime {
         changed |= self.refresh_device_snapshots();
         if observed_session.is_some() {
             self.reconcile_node_agent_topology(target_id);
-            changed |= self.follow_remote_start(target_id);
+            changed |= self.follow_start(Some(target_id));
         }
         if let Some(session) = observed_session.as_ref() {
             let (live_pane_ids, active_pane_ids) = remote_terminal_pane_sets(
@@ -3174,6 +3174,7 @@ impl Runtime {
             );
         }
         changed |= self.settle_selection_projection();
+        changed |= self.follow_start(None);
         changed |= self.refresh_sessions_after_catalog_change(catalog_changed);
         changed |= self.refresh_browser_inventory_scope();
         changed | self.refresh_pet()
@@ -4118,9 +4119,23 @@ impl Runtime {
                 // reads them; for an agent they wait for its start
                 // (`ingest_task_agent_result`).
                 let input_ready = operation.agent_phase.is_none().then(|| pane_id.clone());
+                let waits_for_local_catalog = operation.kind == "agent_start"
+                    && device.is_none()
+                    && !self.catalog_workspaces().any(|workspace| {
+                        workspace.device_id == self.node.as_str()
+                            && workspace
+                                .checkouts
+                                .iter()
+                                .any(|checkout| checkout.path == path)
+                    });
                 if should_focus && let Some(device) = device.as_deref() {
-                    self.queue_remote_start_focus(id, pane_id.clone());
-                    self.follow_remote_start(device);
+                    self.queue_start_focus(id, pane_id.clone());
+                    self.follow_start(Some(device));
+                } else if should_focus && waits_for_local_catalog {
+                    // The first Home can finish before its registration has a
+                    // catalog row. Moving only its pane would leave the next
+                    // session scoped to the previous checkout.
+                    self.queue_start_focus(id, pane_id.clone());
                 } else if should_focus {
                     // Targeted creation intentionally did not focus Herdr.
                     // Use the same ordered, acknowledged focus as a pane press.
