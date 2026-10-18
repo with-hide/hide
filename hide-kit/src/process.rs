@@ -15,15 +15,17 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 pub use hide_platform::process::Finished;
-use hide_platform::process::{RunFailure, run_to_end};
+use hide_platform::process::{RunFailure, restrict_to_login_environment, run_to_end};
 
-/// Runs `program` with `args` and `env` added to an empty-ish environment
-/// that keeps only `PATH` and `HOME`, and waits at most `deadline`, or
+/// Runs `program` with `args` and `env` added to the account's login
+/// variables with `HOME` set to `home`, and waits at most `deadline`, or
 /// until `stop` is raised.
 ///
 /// The environment is built rather than inherited: a daemon launched from a
 /// Herdr pane carries that pane's `HERDR_*` identity, and a child that
 /// inherited it would act on the operator's Herdr instead of the target's.
+/// It is built from the login variables rather than from nothing, because a
+/// Windows program needs `SystemRoot` and the rest of them to start.
 pub fn run(
     program: &Path,
     args: &[&str],
@@ -33,10 +35,8 @@ pub fn run(
     stop: &AtomicBool,
 ) -> Result<Finished, String> {
     let mut command = Command::new(program);
-    command.args(args).env_clear().env("HOME", home).env(
-        "PATH",
-        std::env::var_os("PATH").unwrap_or_else(|| "/usr/bin:/bin".into()),
-    );
+    restrict_to_login_environment(&mut command);
+    command.args(args).env("HOME", home);
     for (key, value) in env {
         command.env(key, value);
     }
@@ -239,5 +239,38 @@ mod tests {
             Some(format!("{}||yes", home.path().display()).as_str())
         );
         assert_eq!(finished.last_error_line(), "oops");
+    }
+
+    /// A Windows program finds what it needs to start in the environment the
+    /// kit builds: Node, which an agent CLI installed from npm runs, aborts at
+    /// start-up without `SystemRoot`. Node is required, not optional, as in
+    /// hide-agent-hooks' `windows_scripts.rs`.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_program_that_runs_node_starts_in_the_kits_environment() {
+        let home = tempfile::tempdir().unwrap();
+        let node = hide_platform::host::find_program(
+            &std::env::var_os("PATH").expect("the test has a PATH"),
+            "node",
+        )
+        .expect("node is required to start a Windows program the way an agent CLI does");
+        let finished = run(
+            &node,
+            &[
+                "-e",
+                "require('crypto').randomBytes(1); console.log('started')",
+            ],
+            &[],
+            home.path(),
+            Duration::from_secs(30),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(
+            (finished.code, finished.stdout.trim()),
+            (Some(0), "started"),
+            "{}",
+            finished.stderr
+        );
     }
 }

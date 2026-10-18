@@ -1296,6 +1296,9 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "target_unavailable" => {
             "No agent answers to that; a bare pane ID names a pane on your own machine. Find the recipient in hide agent list and send to its name or registration ID"
         }
+        "codex_capability_unknown" => {
+            "Hide has not read whether that machine's Codex runs a shared server; ask the operator to press Check again in Settings > Agents for that machine, then run the same command again with the same intent"
+        }
         _ => "Check the current agent pane and retry the same intent",
     }
 }
@@ -4510,6 +4513,7 @@ mod tests {
             "session_too_long",
             "target_ambiguous",
             "target_unavailable",
+            "codex_capability_unknown",
         ] {
             let (reason, next) = refusal_answer(code.to_owned(), delivery_next_action(code));
             assert_eq!(reason, code);

@@ -239,6 +239,7 @@ pub const COMMANDS: &[Spec] = &[
             "native_identity_unavailable",
             "identity_waits_full",
             "session_too_long",
+            "codex_capability_unknown",
         ],
     },
     spec(
