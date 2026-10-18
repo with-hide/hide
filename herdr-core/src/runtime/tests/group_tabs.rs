@@ -81,6 +81,99 @@ fn a_global_start_in_the_front_checkout_keeps_its_navigation_through_snapshot_sy
 }
 
 #[test]
+fn a_settled_global_start_reuses_its_tab_after_a_group_move() {
+    settled_global_start_after_group_change(false);
+}
+
+#[test]
+fn a_settled_global_start_reuses_its_tab_after_its_group_is_dissolved() {
+    settled_global_start_after_group_change(true);
+}
+
+fn settled_global_start_after_group_change(dissolve: bool) {
+    let (mut runtime, checkout) = setup();
+    let original = create(&mut runtime, "original", "Original");
+    let task = runtime
+        .begin_task_operation("agent_start", None, None, None, None)
+        .unwrap();
+    let first = runtime
+        .prepare_group_start(
+            task,
+            (crate::node::TEST_NODE, PATH),
+            None,
+            Some("settled-global"),
+            None,
+            false,
+        )
+        .unwrap();
+    let outcome = || live::WorktreeTaskOutcome {
+        path: PATH.into(),
+        pane_id: "w-order:t4:p".into(),
+        created_tab_id: Some("w-order:t4".into()),
+        purpose_error: None,
+        unconfirmed_purpose_token: None,
+        issue_error: None,
+        shell: crate::agent_start::ShellStart::Plain,
+    };
+    runtime.ingest_task_operation_result(task, Ok(outcome()));
+    ingest(&mut runtime, &[TABS[0], TABS[1], TABS[2], "w-order:t4"]);
+    let destination = if dissolve {
+        group(
+            &mut runtime,
+            "dissolve-original",
+            json!({"action":"dissolve","group_id":original}),
+        );
+        None
+    } else {
+        let destination = create(&mut runtime, "destination", "Destination");
+        group(
+            &mut runtime,
+            "move-settled",
+            json!({"action":"move","group_id":destination,"tab_id":"w-order:t4"}),
+        );
+        Some(destination)
+    };
+    assert!(runtime.snapshot().status.last_error.is_none());
+    let before = ordered_tab_ids(&runtime, &checkout);
+    let repeated_task = runtime
+        .begin_task_operation("agent_start", None, None, None, None)
+        .unwrap();
+    let repeated = runtime
+        .prepare_group_start(
+            repeated_task,
+            (crate::node::TEST_NODE, PATH),
+            None,
+            Some("settled-global"),
+            None,
+            false,
+        )
+        .unwrap();
+    assert!(repeated.request.recovery_only);
+    assert_eq!(repeated.request.marker, first.request.marker);
+    assert_eq!(
+        repeated.request.settled_tab_id.as_deref(),
+        Some("w-order:t4")
+    );
+    assert!(runtime.group_start_should_focus(repeated_task));
+    runtime.ingest_task_operation_result(repeated_task, Ok(outcome()));
+    runtime.sync_workspace_view();
+    assert_eq!(published(&runtime).group_id, destination);
+    assert_eq!(geometry(&published(&runtime).root)["active"], "w-order:t4");
+    assert_eq!(ordered_tab_ids(&runtime, &checkout), before);
+    assert!(published(&runtime).drafts.is_empty());
+    assert_eq!(
+        runtime
+            .snapshot
+            .task_operation
+            .as_ref()
+            .unwrap()
+            .pane_id
+            .as_deref(),
+        Some("w-order:t4:p")
+    );
+}
+
+#[test]
 fn a_global_start_stays_behind_after_an_empty_selection_round_trip() {
     for draft in [false, true] {
         let (mut runtime, _) = setup();

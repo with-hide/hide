@@ -945,7 +945,7 @@ impl Runtime {
             return;
         };
         let local = active.workspace.0 == self.node.as_str();
-        let follow_local_global = local && !active.explicit_target && should_focus;
+        let follows_local_global = local && !active.explicit_target && should_focus;
         let workspace = active.workspace.clone();
         let Some(tab) = tab else {
             return;
@@ -984,6 +984,7 @@ impl Runtime {
             return;
         };
         let promoted = !start.add_pane && start.state != StartState::Ready;
+        let mut follow_local_global = follows_local_global && promoted;
         if promoted {
             // Topology may arrive before its acknowledgement; remove that
             // provisional ungrouped entry before replacing the draft slot.
@@ -1010,14 +1011,32 @@ impl Runtime {
         start.pane_id = Some(pane);
         start.state = StartState::Ready;
         start.seen_in_topology |= seen;
-        if follow_local_global {
-            view.agent_groups.selected = start.group_id.clone();
-            let layout = view.selected_agent_layout_mut();
-            let stamp = layout.tree.next_stamp(unix_milliseconds());
-            layout
-                .select(start.live_tab_id.as_deref().unwrap(), false, stamp)
-                .expect("a current start retains its admitted slot");
-        }
+        // Only a newly filled slot needs selection before topology arrives.
+        // A Ready receipt may retain a group that was legally moved or
+        // dissolved; its ordinary pane focus follows the current location.
+        let selection_error = if follow_local_global {
+            let selection = view
+                .group_layout_mut(start.group_id.as_deref())
+                .ok_or_else(|| "The admitted start group is no longer present".to_owned())
+                .and_then(|layout| {
+                    let stamp = layout.tree.next_stamp(unix_milliseconds());
+                    layout
+                        .select(start.live_tab_id.as_deref().unwrap(), false, stamp)
+                        .map_err(|error| format!("{error:?}"))
+                });
+            match selection {
+                Ok(_) => {
+                    view.agent_groups.selected = start.group_id.clone();
+                    None
+                }
+                Err(error) => {
+                    follow_local_global = false;
+                    Some(error)
+                }
+            }
+        } else {
+            None
+        };
         if start.agent_phase.is_none() {
             start.agent_phase = start.agent_kind.as_ref().map(|_| "starting".into());
         }
@@ -1027,6 +1046,9 @@ impl Runtime {
         }
         store.generation = store.generation.wrapping_add(1);
         self.persist_workspace_views();
+        if let Some(error) = selection_error {
+            self.push_diagnostic("agent_start.slot_selection_failed", error);
+        }
         if follow_local_global {
             // The result owns this selection even before its first owner
             // appears in topology. Clear the old visible pane in this event;
