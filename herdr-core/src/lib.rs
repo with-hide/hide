@@ -25,6 +25,7 @@ pub mod factory;
 mod fake_herdr;
 mod files;
 pub use files::{FileRoots, inode_text};
+mod agent_groups;
 mod agent_layout;
 pub mod find;
 pub mod fixture;

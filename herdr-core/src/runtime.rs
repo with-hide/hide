@@ -7,6 +7,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 mod agent_areas;
 pub(crate) mod agent_choice;
 mod agent_close;
+mod agent_groups;
 mod agent_sleep;
 mod agents;
 mod attachments;
@@ -27,6 +28,7 @@ mod events;
 mod factory;
 mod first_run;
 mod github_poll;
+pub(crate) mod group_starts;
 mod guardrails;
 mod home;
 mod hosts;
@@ -78,6 +80,7 @@ pub(crate) use kit::{DeviceKitAnswer, DeviceKitCall, DeviceKitWork, KitJob};
 pub use snapshot_delta::serialize_snapshot_delta;
 
 use agent_areas::AgentLayoutPayload;
+use agent_groups::AgentGroupPayload;
 use agent_sleep::{AgentSleepSetPayload, AgentWakePayload, SleepingSessionPayload};
 use control_lane::ControlLane;
 pub(crate) use control_lane::LaneStart;
@@ -993,12 +996,12 @@ fn remote_pane_source_id<'a>(target_id: &str, projected_id: &'a str) -> Option<&
 }
 
 /// Every pane `session` lists, and the panes on screen: while its machine
-/// is in front, the tab its Herdr has in front and `shown_tabs`, the tabs the
-/// Workspace's other Agent areas show.
+/// is in front, exactly the tabs its selected group shows. Without a core
+/// layout, the legacy Herdr-focused tab supplies the initial canvas.
 fn remote_terminal_pane_sets(
     session: &RemoteSessionSnapshot,
     target_is_active: bool,
-    shown_tabs: &[String],
+    shown_tabs: Option<&[String]>,
 ) -> (HashSet<String>, HashSet<String>) {
     let live_pane_ids = session
         .workspaces
@@ -1025,7 +1028,9 @@ fn remote_terminal_pane_sets(
         .flat_map(|checkout| checkout.tabs.iter())
         .filter(|tab| {
             tab.id.as_deref().is_some_and(|id| {
-                Some(id) == active_tab_id || shown_tabs.iter().any(|shown| shown == id)
+                shown_tabs.map_or(Some(id) == active_tab_id, |shown| {
+                    shown.iter().any(|tab| tab == id)
+                })
             })
         })
         .flat_map(|tab| tab.panes.iter())
@@ -1643,6 +1648,8 @@ pub struct Runtime {
     /// id. Kept off the snapshot: an issue body or a request has no business
     /// on the wire after the surface that sent it.
     task_agent_launch: Option<TaskAgentLaunch>,
+    group_start: Option<group_starts::ActiveStart>,
+    group_start_saves: Vec<group_starts::SaveWaiter>,
     /// How the pane a task created says its shell has finished starting,
     /// by task id, for that task's agent start.
     task_pane_shell: Option<(u64, crate::agent_start::ShellStart)>,
@@ -2268,6 +2275,8 @@ impl Runtime {
             github_search: issues::GithubSearchWork::default(),
             pr_link_checkout: None,
             task_agent_launch: None,
+            group_start: None,
+            group_start_saves: Vec::new(),
             task_pane_shell: None,
             home_links: HashMap::new(),
             last_accepted_catalog: None,

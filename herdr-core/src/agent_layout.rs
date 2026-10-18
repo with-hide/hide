@@ -10,6 +10,11 @@ pub struct Tab {
     #[serde(default)]
     focused: u64,
 }
+impl Tab {
+    pub fn new(id: String) -> Self {
+        Self { id, focused: 0 }
+    }
+}
 impl AreaItem for Tab {
     const LIMITS: TreeLimits = TreeLimits {
         areas: 6,

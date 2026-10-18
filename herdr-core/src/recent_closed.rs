@@ -28,6 +28,8 @@ pub struct ClosedContext {
     pub tab_index: usize,
     /// Hide-owned area and insertion position, independent of Herdr order.
     pub agent_area: Option<(String, usize)>,
+    #[serde(default)]
+    pub agent_group: Option<String>,
     /// A shell is made before the close: a new tab when the primary
     /// workspace's last tab closes, or a pane in the closing tab when
     /// `replacement_in_tab` says so.
@@ -159,6 +161,15 @@ pub enum ClosedLayoutBranch {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ClosedItem {
+    Draft {
+        key: String,
+        device_id: String,
+        checkout_path: String,
+        group_id: Option<String>,
+        area_id: String,
+        index: usize,
+        tab: crate::agent_layout::Tab,
+    },
     Pane {
         key: String,
         context: ClosedContext,
@@ -187,7 +198,10 @@ pub enum ClosedItem {
 impl ClosedItem {
     pub fn key(&self) -> &str {
         match self {
-            Self::Pane { key, .. } | Self::Tab { key, .. } | Self::File { key, .. } => key,
+            Self::Pane { key, .. }
+            | Self::Tab { key, .. }
+            | Self::File { key, .. }
+            | Self::Draft { key, .. } => key,
         }
     }
 
@@ -196,7 +210,7 @@ impl ClosedItem {
     pub fn device_id<'a>(&'a self, node: &'a str) -> &'a str {
         match self {
             Self::Pane { .. } | Self::Tab { .. } => node,
-            Self::File { device_id, .. } => device_id,
+            Self::File { device_id, .. } | Self::Draft { device_id, .. } => device_id,
         }
     }
 
@@ -205,6 +219,7 @@ impl ClosedItem {
             Self::Pane { pane, .. } => pane.label.as_deref().unwrap_or("Pane"),
             Self::Tab { context, .. } => &context.tab_label,
             Self::File { label, .. } => label,
+            Self::Draft { .. } => "New tab",
         }
     }
 }

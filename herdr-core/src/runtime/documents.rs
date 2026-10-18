@@ -216,8 +216,8 @@ impl Runtime {
     }
 
     /// The checkout the operator is looking at: this machine's focus while
-    /// it is the selected device, otherwise the selected device's Herdr
-    /// session focus, which the core follows rather than keeps (B31).
+    /// it is the selected device, otherwise the core's explicit device/path
+    /// choice. Herdr focus supplies the initial choice only.
     pub(super) fn front_checkout(&self) -> Option<(&str, &str)> {
         let device = self
             .snapshot
@@ -232,6 +232,23 @@ impl Runtime {
                 .focused_workspace_id
                 .as_deref()
                 .zip(self.snapshot.navigator.focused_checkout_id.as_deref());
+        }
+        if let Some(path) = self
+            .workspace_views
+            .as_ref()
+            .and_then(|store| store.remote_front.get(device))
+            && let Some((workspace, checkout)) = self
+                .catalog_workspaces()
+                .filter(|workspace| workspace.device_id == device)
+                .find_map(|workspace| {
+                    workspace
+                        .checkouts
+                        .iter()
+                        .find(|checkout| &checkout.path == path)
+                        .map(|checkout| (workspace, checkout))
+                })
+        {
+            return Some((&workspace.id, &checkout.id));
         }
         let session = self
             .snapshot

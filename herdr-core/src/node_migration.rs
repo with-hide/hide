@@ -493,6 +493,18 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
     ),
     (
         WORKSPACE_VIEWS,
+        "/workspaces/*/agent_groups",
+        Mechanism::Owned,
+        Moves::Whole,
+    ),
+    (
+        WORKSPACE_VIEWS,
+        "/workspaces/*/agent_starts",
+        Mechanism::Owned,
+        Moves::Whole,
+    ),
+    (
+        WORKSPACE_VIEWS,
         "/workspaces/*/tab_views/{key}",
         Mechanism::Owned,
         Moves::Tab,

@@ -417,177 +417,88 @@ fn a_file_of_a_nodes_checkout_in_front_is_revealed_through_the_node() {
     );
 }
 
-/// The same click while the node shows another checkout, as on the Overview:
-/// the node's Herdr is asked to bring the checkout forward, nothing is read
-/// meanwhile, and the file is revealed once the node's front lands there, as
-/// a click on this machine's checkout brings it forward.
+/// Group-tabs B28 makes checkout navigation core-owned: an empty checkout
+/// can read its file immediately without a Herdr workspace or focus request.
 #[test]
-fn a_file_of_a_nodes_checkout_behind_is_revealed_once_the_node_brings_it_forward() {
-    let (f, requests) = behind_reveal("documents-node-reveal");
+fn a_file_of_a_nodes_checkout_behind_is_revealed_without_a_herdr_focus_ack() {
+    let (f, requests, _held) = behind_reveal("documents-node-reveal");
+    f.wait("the device file read", |_| f.device.reads().iter().any(|read| read.ends_with("a.txt")));
     {
-        let runtime = f.shared.lock().unwrap();
+        let mut runtime = f.shared.lock().unwrap();
         assert_eq!(runtime.snapshot.status.last_error, None);
-        assert_eq!(
-            runtime.snapshot.navigator.focused_device_id.as_deref(),
-            Some(DEVICE),
-            "the node comes forward with the request"
-        );
-        assert!(!revealing(&f, &runtime), "nothing is read yet");
+        assert_eq!(runtime.snapshot.navigator.focused_device_id.as_deref(), Some(DEVICE));
+        assert!(revealing(&f, &runtime), "the core choice starts its file read");
+        let other = other_checkout(&runtime);
+        land(&mut runtime, &other);
+        assert_eq!(runtime.front_checkout().map(|(_, checkout)| checkout), Some(f.checkout.as_str()), "stale Herdr focus cannot cancel the chosen checkout");
     }
-    f.wait("the request to reach the node's Herdr", |_| {
-        !requests.lock().unwrap().is_empty()
-    });
-
-    // The node's Herdr moved its front to the checkout; the sync sees it land.
-    land(&mut f.shared.lock().unwrap(), &f.checkout);
+    assert!(requests.lock().unwrap().is_empty(), "an empty checkout needs no PTY or focus mutation");
+    f.device.release_read("a.txt");
     f.wait("the revealed file", |runtime| {
         runtime.snapshot.ui_state.selected_path.as_deref() == Some(f.path("a.txt").as_str())
     });
-    assert!(f.device.reads().iter().any(|read| read.ends_with("a.txt")));
     assert_eq!(f.last_error(), None);
 }
 
-/// The reveal lives as long as the request that brings its checkout
-/// forward. Once the node lets that request go, the operator's own later
-/// visit to the same checkout lands the front there and opens nothing for
-/// the old click, whichever way the request ended.
+/// The read stays asynchronous after core navigation. A newer explicit
+/// checkout choice keeps the late result from taking the current screen.
 #[test]
-fn a_reveal_waiting_on_a_node_dies_with_the_request() {
-    type End = fn(&Fixture, &mut Runtime, &str);
-    let cases: [(&str, End, &str); 7] = [
-        (
-            "refused",
-            |_, runtime, request| {
-                runtime.ingest_remote_control_result(
-                    DEVICE,
-                    request,
-                    RemoteControlAction::FocusWorkspace {
-                        workspace_id: "1".to_owned(),
-                    },
-                    Err("the workspace is gone".to_owned()),
-                    3,
-                );
-            },
-            "",
-        ),
-        (
-            "answer lost with its connection",
-            |_, runtime, request| {
-                let gone = runtime
-                    .remote_connection_generations
-                    .get(DEVICE)
-                    .copied()
-                    .unwrap_or(0)
-                    + 1;
-                runtime.ingest_remote_control_result_with_generation(
-                    DEVICE,
-                    request,
-                    RemoteControlAction::FocusWorkspace {
-                        workspace_id: "1".to_owned(),
-                    },
-                    Ok(RemoteControlOutcome::Acknowledged {
-                        created_tab_id: None,
-                        created_pane_id: None,
-                    }),
-                    3,
-                    Some(gone),
-                );
-            },
-            "",
-        ),
-        (
-            "a later choice",
-            |_, runtime, _| {
-                runtime.request_remote_control(RemoteControlPayload {
-                    target_id: DEVICE.to_owned(),
-                    request_id: "later".to_owned(),
-                    report_pane_focus_outcome: false,
-                    focus_device: true,
-                    request: RemoteControlRequest::FocusWorkspace {
-                        workspace_id: OTHER_WORKSPACE.to_owned(),
-                        checkout_id: Some(other_checkout(runtime)),
-                    },
-                });
-                assert_eq!(runtime.pending_choice_request(), Some("later"));
-            },
-            "",
-        ),
-        (
-            "the device left",
-            |_, runtime, _| runtime.forget_device_views(DEVICE),
-            "",
-        ),
-        (
-            "the device's front moved elsewhere",
-            |_, runtime, _| {
-                let other = other_checkout(runtime);
-                land(runtime, &other);
-            },
-            "workspace.choice_dropped",
-        ),
-        (
-            "no answer in time",
-            |_, runtime, _| {
-                runtime.tick_async_operations(unix_milliseconds() + CLOSE_STAGE_TIMEOUT_MS + 1);
-            },
-            "workspace.choice_expired",
-        ),
-        (
-            "accepted, and the front never landed",
-            |_, runtime, request| {
-                runtime.ingest_remote_control_result(
-                    DEVICE,
-                    request,
-                    RemoteControlAction::FocusWorkspace {
-                        workspace_id: "1".to_owned(),
-                    },
-                    Ok(RemoteControlOutcome::Acknowledged {
-                        created_tab_id: None,
-                        created_pane_id: None,
-                    }),
-                    3,
-                );
-                // A slow device's front gets longer to land than its answer.
-                runtime.tick_async_operations(unix_milliseconds() + CLOSE_STAGE_TIMEOUT_MS + 1);
-                assert!(
-                    runtime.pending_choice_request().is_some(),
-                    "an accepted request waits for its front"
-                );
-                runtime.tick_async_operations(
-                    unix_milliseconds()
-                        + crate::runtime::workspace_view::CHOICE_LANDING_TIMEOUT_MS
-                        + 1,
-                );
-            },
-            "workspace.choice_expired",
-        ),
-    ];
-    for (case, end, diagnostic) in cases {
-        let (f, _) = behind_reveal("documents-node-reveal-dropped");
+fn a_core_chosen_remote_reveal_read_does_not_replace_a_newer_checkout_choice() {
+    let (f, _, _held) = behind_reveal("documents-node-reveal-new-choice");
+    f.wait("the held file read", |_| f.device.reads().iter().any(|read| read.ends_with("a.txt")));
+    let other;
+    {
         let mut runtime = f.shared.lock().unwrap();
-        let request = runtime
-            .pending_choice_request()
-            .expect("the reveal waits on its request")
-            .to_owned();
-        end(&f, &mut runtime, &request);
-        // Later, the operator brings the same checkout forward themselves.
-        land(&mut runtime, &f.checkout);
-        assert!(!revealing(&f, &runtime), "{case}: the old click opened");
-        if !diagnostic.is_empty() {
-            assert_eq!(diagnostic_count(&runtime, diagnostic), 1, "{case}");
-        }
-        drop(runtime);
-        assert!(f.device.reads().is_empty(), "{case}: the file was read");
+        other = other_checkout(&runtime);
+        runtime.request_remote_control(RemoteControlPayload {
+            target_id: DEVICE.to_owned(), request_id: "later".to_owned(),
+            report_pane_focus_outcome: false, focus_device: true,
+            request: RemoteControlRequest::FocusWorkspace {
+                workspace_id: OTHER_WORKSPACE.to_owned(), checkout_id: Some(other.clone()),
+            },
+        });
+        runtime.sync_workspace_view();
+        assert_eq!(runtime.front_checkout().map(|(_, checkout)| checkout), Some(other.as_str()));
     }
+    f.device.release_read("a.txt");
+    f.wait("the old read to settle", |runtime| runtime.snapshot.editor.opening.is_empty());
+    let runtime = f.shared.lock().unwrap();
+    assert_eq!(runtime.front_checkout().map(|(_, checkout)| checkout), Some(other.as_str()));
+    assert_ne!(runtime.snapshot.ui_state.selected_path.as_deref(), Some(f.path("a.txt").as_str()));
+    assert!(runtime.snapshot.editor.document.is_none());
+}
+
+/// Device removal still retires an in-flight read; changing checkout
+/// navigation must not weaken the existing late-answer cancellation boundary.
+#[test]
+fn a_core_chosen_remote_reveal_read_is_dropped_when_its_device_is_removed() {
+    let (f, _, _held) = behind_reveal("documents-node-reveal-removed");
+    f.wait("the held file read", |_| f.device.reads().iter().any(|read| read.ends_with("a.txt")));
+    {
+        let mut runtime = f.shared.lock().unwrap();
+        runtime.retire_device_editor_tabs(DEVICE);
+        runtime.forget_device_views(DEVICE);
+        assert!(runtime.snapshot.editor.opening.is_empty());
+    }
+    f.device.release_read("a.txt");
+    f.wait("the late reveal answer to be dropped", |runtime| diagnostic_count(runtime, "file.open_dropped") == 1);
+    let runtime = f.shared.lock().unwrap();
+    assert!(runtime.snapshot.editor.tabs.is_empty());
+    assert!(runtime.snapshot.editor.document.is_none());
+}
+
+/// A failed assertion also releases the boundary gate before the runtime
+/// joins its workers, so the test reports the failure rather than hanging.
+struct HeldRevealRead(Arc<FakeDevice>);
+impl Drop for HeldRevealRead {
+    fn drop(&mut self) { self.0.release_read("a.txt"); }
 }
 
 const OTHER_WORKSPACE: &str = "remote:device-a:workspace:2";
 
-/// A node fixture whose checkout is behind on the node, with a second
-/// checkout there, and a path in the first clicked: the reveal waits on
-/// the request that asks the node's Herdr to bring it forward, whose
-/// requests the returned list records.
-fn behind_reveal(views: &str) -> (Fixture, Arc<Mutex<Vec<Value>>>) {
+/// A node fixture with two empty checkouts and a clicked file whose actual
+/// device read is held at the NodeLink boundary.
+fn behind_reveal(views: &str) -> (Fixture, Arc<Mutex<Vec<Value>>>, HeldRevealRead) {
     let f = Fixture::with(|runtime| super::workspace_view::with_new_views(runtime, views))
         .in_node_session();
     let requests = Arc::new(Mutex::new(Vec::new()));
@@ -617,8 +528,10 @@ fn behind_reveal(views: &str) -> (Fixture, Arc<Mutex<Vec<Value>>>) {
         session.focused_checkout_id = None;
         runtime.snapshot.navigator.focused_device_id = Some(crate::node::TEST_NODE.to_owned());
     }
+    f.device.hold_read("a.txt");
+    let held = HeldRevealRead(f.device.clone());
     f.dispatch("reveal_path", node_reveal(&f, "a.txt"));
-    (f, requests)
+    (f, requests, held)
 }
 
 fn other_checkout(runtime: &Runtime) -> String {

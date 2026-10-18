@@ -862,8 +862,18 @@ impl Runtime {
                         tab_id: tab_id.clone(),
                         tab_label: tab.label.clone().unwrap_or_else(|| "Tab".into()),
                         tab_index: tab_order.iter().position(|id| id == tab_id).unwrap_or(0),
+                        agent_group: self
+                            .workspace_views
+                            .as_ref()
+                            .and_then(|s| s.views.get(&workspace.device_id, &checkout.path))
+                            .and_then(|v| v.agent_tab_group(tab_id))
+                            .flatten()
+                            .map(str::to_owned),
                         agent_area: self
-                            .agent_layout_of(&(workspace.device_id.clone(), checkout.path.clone()))
+                            .workspace_views
+                            .as_ref()
+                            .and_then(|s| s.views.get(&workspace.device_id, &checkout.path))
+                            .and_then(|v| v.group_layout(v.agent_tab_group(tab_id)?))
                             .and_then(|layout| {
                                 layout.tree.areas().into_iter().find_map(|area| {
                                     area.displays
@@ -1942,6 +1952,7 @@ impl Runtime {
                     tab_label: request.key.clone(),
                     tab_index: 0,
                     agent_area: None,
+                    agent_group: None,
                     replacement_shell: false,
                     replacement_in_tab: false,
                     tab_name: ClosedTabName::Unnamed,
@@ -2628,6 +2639,9 @@ impl Runtime {
             }));
             return false;
         };
+        if matches!(item, ClosedItem::Draft { .. }) {
+            return self.reopen_agent_draft(item);
+        }
         if let ClosedItem::File {
             workspace_id,
             checkout_id,
@@ -2695,6 +2709,7 @@ impl Runtime {
                 None,
             ),
             ClosedItem::File { .. } => (true, true, None),
+            ClosedItem::Draft { .. } => unreachable!("draft reopen is local"),
         };
         // A tab made again lands in its checkout's owner (D-16), found by the
         // checkout the item was closed from, else by its folder.
@@ -2738,7 +2753,7 @@ impl Runtime {
                     &self.node,
                 ))
             }
-            ClosedItem::File { .. } => None,
+            ClosedItem::File { .. } | ClosedItem::Draft { .. } => None,
         };
         // With View areas the reopened file takes a display, so a Workspace
         // at its display cap refuses it here and the item stays.
@@ -2767,7 +2782,7 @@ impl Runtime {
                     context.checkout_path.clone(),
                     format!("reopen:{}", item.key()),
                 )),
-                ClosedItem::File { .. } => None,
+                ClosedItem::File { .. } | ClosedItem::Draft { .. } => None,
             }
         } else {
             None
@@ -2859,7 +2874,7 @@ impl Runtime {
                     ClosedItem::Pane { context, .. } | ClosedItem::Tab { context, .. } => {
                         self.has_agent_effect(&context.checkout_path, &format!("reopen:{key}"))
                     }
-                    ClosedItem::File { .. } => false,
+                    ClosedItem::File { .. } | ClosedItem::Draft { .. } => false,
                 };
                 let reservation = if reserved {
                     " Its tab place stays reserved."

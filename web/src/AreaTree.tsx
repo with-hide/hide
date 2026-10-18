@@ -71,6 +71,8 @@ export type AreaAdapter<I extends AreaItem> = {
   /** The page's keyboard owner, independent of each layout's committed active area. */
   keyboardArea?: string | null;
   barAttributes?: Record<string, string>;
+  barStart?: (area: Area<I>) => React.ReactNode;
+  barEnd?: (area: Area<I>) => React.ReactNode;
   shown?: (area: Area<I>) => I | null;
   splitUnavailable?: string;
   label: (item: I) => string;
@@ -528,6 +530,7 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
   }, [area.active, area.displays.length, fits]);
   return (
     <div className={`flex h-[var(--size-tab-strip)] shrink-0 items-stretch border-b border-border ${active ? "bg-background" : "bg-card"}`} data-area-tab-bar={area.id} {...data("tab-bar", area.id)} {...tree.adapter.barAttributes}>
+      {tree.adapter.barStart?.(area)}
       <div ref={zone} className="flex min-w-0 flex-1 items-stretch">
         <div ref={strip} role="tablist" aria-label={t("panes.area.tabListOf", { label: tree.adapter.tabListLabel, index: index + 1, total: count })} className="flex min-w-0 items-stretch overflow-x-auto">
           {area.displays.map((display) => (
@@ -560,6 +563,7 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
         </Hint>
       </div>
       {switcher ? <AreaSwitcher current={area.id} /> : null}
+      {tree.adapter.barEnd?.(area)}
       {shown ? (
         <EntryDropdown
           title={tree.adapter.label(shown)}

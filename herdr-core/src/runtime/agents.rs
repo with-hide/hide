@@ -334,6 +334,51 @@ impl Runtime {
                 retryable: false,
             });
         }
+        // Checkout navigation is core UI state. In particular an empty
+        // checkout or draft must never turn into OpenOwner and start a PTY.
+        if self.separate_view_areas()
+            && let RemoteControlRequest::FocusWorkspace {
+                workspace_id,
+                checkout_id,
+            } = &payload.request
+        {
+            let key = self
+                .catalog_workspaces()
+                .find(|workspace| workspace.device_id == target_id && workspace.id == *workspace_id)
+                .and_then(|workspace| {
+                    workspace
+                        .checkouts
+                        .iter()
+                        .find(|checkout| checkout_id.as_ref().is_none_or(|id| id == &checkout.id))
+                })
+                .map(|checkout| (target_id.clone(), checkout.path.clone()));
+            let Some(key) = key else {
+                fail_request!(
+                    "remote.control.workspace_not_found",
+                    "This checkout is no longer available. Select it again.".to_owned(),
+                    false
+                );
+            };
+            self.reconcile_node_agent_topology(&target_id);
+            let live = self
+                .workspace_views
+                .as_ref()
+                .and_then(|store| store.views.get(&key.0, &key.1))
+                .and_then(|view| {
+                    view.selected_agent_layout()
+                        .active()
+                        .filter(|id| !view.agent_groups.drafts.contains(*id))
+                        .map(str::to_owned)
+                });
+            self.show_agent_workspace_tab(&key, live);
+            self.remember_core_workspace_choice(&target_id, &request_id, key);
+            if self.remote_control_requests.len() == 128 {
+                self.remote_control_requests.pop_front();
+            }
+            self.remote_control_requests
+                .push_back((target_id, request_id));
+            return true;
+        }
         let Some(context) = self.remote_controls.get(&target_id).cloned() else {
             fail_request!(
                 "remote.control.unavailable",
@@ -478,6 +523,30 @@ impl Runtime {
             } if self.separate_view_areas() => self.workspace_key(workspace_id, checkout_id),
             _ => agent_workspace_key,
         };
+        let focused_tab = session
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.checkouts)
+            .flat_map(|checkout| &checkout.tabs)
+            .find(|tab| match &payload.request {
+                RemoteControlRequest::FocusTab { tab_id } => tab.id.as_ref() == Some(tab_id),
+                RemoteControlRequest::FocusPane { pane_id } => {
+                    tab.panes.iter().any(|pane| &pane.id == pane_id)
+                }
+                _ => false,
+            })
+            .and_then(|tab| tab.id.clone().map(|id| (id, tab.delegated)));
+        if let Some(key) = chosen_key.as_ref()
+            && let Some((tab, _)) = focused_tab.as_ref()
+            && self.agent_tab_waiting_in(key, tab)
+        {
+            fail_request!(
+                "agent_layout.display_limit",
+                "This tab is waiting for an Agent area slot. Close a tab before selecting it."
+                    .to_owned(),
+                false
+            );
+        }
         let action = match payload.request {
             RemoteControlRequest::FocusPane { .. } => {
                 RemoteControlAction::Pane(PaneControlAction::Focus {
@@ -862,11 +931,15 @@ impl Runtime {
             }
             return true;
         }
+        if let Some(key) = chosen_key {
+            if let Some((tab, delegated)) = focused_tab {
+                self.reveal_remote_agent_tab(&key, &tab, delegated);
+            } else {
+                self.choose_when_in_front(&target_id, &dispatched_request_id, key);
+            }
+        }
         if focus_device && !self.device_in_front(&target_id) {
             self.bring_device_forward(target_id.clone());
-        }
-        if let Some(key) = chosen_key {
-            self.choose_when_in_front(&target_id, &dispatched_request_id, key);
         }
         true
     }
@@ -1254,7 +1327,25 @@ impl Runtime {
         target_id: &str,
         session: &mut RemoteSessionSnapshot,
     ) -> bool {
-        let focused = session.focused_pane_id.clone();
+        let focused = session.focused_pane_id.clone().filter(|pane| {
+            if self.workspace_views.is_none() {
+                return true;
+            }
+            if !self.device_in_front(target_id) {
+                return false;
+            }
+            self.node_shown_agent_tabs(target_id).is_none_or(|shown| {
+                session
+                    .workspaces
+                    .iter()
+                    .flat_map(|workspace| &workspace.checkouts)
+                    .flat_map(|checkout| &checkout.tabs)
+                    .any(|tab| {
+                        tab.id.as_ref().is_some_and(|id| shown.contains(id))
+                            && tab.panes.iter().any(|entry| &entry.id == pane)
+                    })
+            })
+        });
         let prefix = remote_pane_id_prefix(target_id);
         let live_pane_ids = session
             .workspaces
@@ -2574,14 +2665,27 @@ impl Runtime {
             return Some(checkout_path);
         };
         let key = (self.node.as_str().to_owned(), checkout_path.clone());
-        let Some((area, index)) = store.views.get(&key.0, &key.1).and_then(|view| {
-            let area = view.agent_layout.tree.area_of(&source_tab)?;
+        let Some((group, area, index)) = store.views.get(&key.0, &key.1).and_then(|view| {
+            let group = view.agent_tab_group(&source_tab)?;
+            let area = view.group_layout(group)?.tree.area_of(&source_tab)?;
             let index = area.displays.iter().position(|tab| tab.id == source_tab)?;
-            Some((area.id.clone(), index + 1))
+            Some((group.map(str::to_owned), area.id.clone(), index + 1))
         }) else {
             return Some(checkout_path);
         };
-        let layout = &mut store.views.entry(&key.0, &key.1).agent_layout;
+        let view = store.views.entry(&key.0, &key.1);
+        if view.agent_tab_group(tab_id).is_some() {
+            let selected = view.agent_groups.selected.clone();
+            let result = view.move_agent_to_group(tab_id, group.as_deref(), unix_milliseconds());
+            view.agent_groups.selected = selected;
+            if let Err(error) = result {
+                self.push_diagnostic("agent_group.fork_placement_failed", format!("{error:?}"));
+                return Some(checkout_path);
+            }
+        }
+        let layout = view
+            .group_layout_mut(group.as_deref())
+            .expect("source group exists");
         // Herdr's session can carry the tab before this answer does; the
         // reconcile appended it then, and it moves next to its source now.
         if layout.tree.display(tab_id).is_some() {
@@ -2605,7 +2709,7 @@ impl Runtime {
         }
         store
             .agent_placements
-            .insert(tab_id.to_owned(), (key, area, Some(index)));
+            .insert(tab_id.to_owned(), (key, group, area, Some(index)));
         Some(checkout_path)
     }
 

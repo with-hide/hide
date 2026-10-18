@@ -22,8 +22,8 @@ An empty, loading, disconnected, failed or stale catalog gives small feedback in
 Discovery never starts or stops a server, and an opened page retains the Browser View’s own connection failure and recovery controls.
 Hovering or focusing an icon shows its name in a tooltip; `Open server` has no chord.
 A right-click or the menu key on the path offers Show or Hide right lane and Copy Workspace path.
-An empty Agent area offers New tab.
-The area is empty only when the checkout has no tab: a checkout whose only tab holds delegated children keeps that tab off the strip and still draws it on the canvas, so the agent chosen from the sidebar there opens on its pane.
+An empty Agent group or draft offers an agent start and a separate `Start with terminal` action.
+An area showing a delegated child still draws that tab's canvas even though the tab stays off the ordinary strip, so choosing the child from the sidebar opens its pane rather than an empty start surface.
 
 ### The window's top row
 
@@ -159,10 +159,33 @@ A browser page's own new target, bound to its area, does not open the lane.
 
 ### Agent areas
 
-Electron’s numbered tab shortcuts and hold keycaps share the saved Agent area tree order, then each bar’s left-to-right tab order.
+Each checkout has an ungrouped collection and up to 32 named groups, one level deep.
+Existing tabs, named or unnamed, stay ungrouped; a tab name never creates a group.
+The group selector, actual tabs, New tab and Add agent share the existing tab-bar row, with no additional group header above the canvas.
+Each group owns its Agent area tree, tab order and selection; selecting a group restores that tree, while Files keeps the checkout's own View tree and per-tab bookmarks.
+The selector offers Create group, Rename group and Ungroup, and the tab menu can create a group around a tab, move it to another group or remove it from its group.
+A move puts the whole tab at the end of the destination's active area and selects it; its panes, processes, conversations and bookmarks stay with it.
+An emptied non-root area collapses, but an empty group's root stays.
+Group names are trimmed, contain 1 to 80 Unicode characters with no line breaks or control characters, and must be distinct by exact name within the checkout; groups stay in creation order.
+Ungroup moves the group's tabs in order to the end of the ungrouped active area and closes no session.
+Undo restores the last ungrouping while its session-local receipt remains valid, until the next group mutation or the checkout's saved state is unloaded; Undo is shown only while it can act and does not survive restart.
+
+New tab creates a core-owned draft in the chosen area's bar without starting a shell or PTY.
+An empty group creates its first draft when a start is requested.
+Empty groups and grouped or ungrouped drafts show the instruction field, the shared provider/model picker and Start, with a terminal icon and secondary `Start with terminal` button always visible beside that start flow.
+Terminal start needs neither an instruction nor an agent selection.
+The first start fills that draft's position with the live tab; Add agent on a live tab starts another pane in that same tab.
+The picker uses the same supported kinds, model validation and remembered defaults as the [Start panel](#start-panel), with no effort choice.
+Pending starts keep the submitted inputs, prevent another submission, and show their progress or actionable failure where the start was requested.
+An uncertain result offers Check status for the original intent, never a fresh start merely because an answer was lost; a definite failure can retry that intent.
+The text survives navigation and failure for this page's lifetime, as the start panel's text does, but is not saved across an app restart.
+After restart the saved intent can still be checked without recovering or resending its prompt.
+A disconnected device disables the start controls and sends no start; Enter during IME composition does not submit.
+
+Electron's numbered tab shortcuts and hold keycaps share the selected group's saved Agent area tree order, then each bar's left-to-right tab order.
 Moving or reordering a tab updates both numbers together; waiting overflow tabs have no number.
 
-At most 64 normal Agent tabs are placed, in up to six areas and three split levels.
+At most 64 normal Agent tabs are placed across all the checkout's groups together, counting drafts, live tabs and pending admissions; each group has up to six areas and three split levels.
 New tab, Reopen that needs a tab, and protected replacement close count pending admissions and refuse before any external effect when full; the existing one-line notice asks the operator to close a tab.
 After an ambiguous creation reply, Hide checks the request marker once without resending the mutation.
 An unconfirmed creation retains its request-specific place and reports that uncertainty in the same notice; elapsed time alone never frees the place.
@@ -170,11 +193,12 @@ External tabs beyond the cap remain in Herdr topology, with their waiting count 
 A waiting tab cannot take Hide's keyboard or active-tab selection.
 This boundary is an Observer-approved, user-vetoable implementation assumption from the Agent groups contract.
 
-Agent Views has its own area tree, separate from the files tool's View tree.
-Each area has a tab bar, a New tab button and the active tab's live pane canvas; dividers separate areas.
+Agent Views draws the selected group's area tree, separate from the files tool's View tree.
+Each area keeps its own tab bar and New tab button, and draws its active draft or live pane canvas; dividers separate areas.
 Only the area holding the keyboard carries the foreground-colored selected-tab underline, across Agent Views and the lane.
 Clicking a tab or pane activates its area and sends the keyboard to that pane.
-All shown tabs stay attached and awake, while only the active area's tab receives read and sleep-visit updates.
+All shown tabs of the selected group stay attached and awake, while only its active area's live tab receives read and sleep-visit updates.
+Hidden groups add no shown-tab attachments, polling or PTY restart; the existing recent-tab attachment policy still applies.
 Pane headers, child chips, relationship controls and pane splits remain inside each canvas; find belongs to the focused pane.
 ⌘F on a full-screen Claude Code or Codex pane opens that agent's own search over its whole conversation in the pane, with the agent's own keys and count (Claude Code: type, Enter, `n`/`N`; Codex: type, Enter, Ctrl+P), and no find bar appears; any other pane, and an agent drawing inline, gets the find bar.
 
@@ -199,12 +223,12 @@ When that close leaves the checkout in front with no tab at all, the operator is
 With no such checkout, the screen stays and the area shows its empty state; a tab off the strip (a delegated child's) still keeps the checkout, and a close Hide makes on its own (an agent's sleep) never moves the screen.
 A close Herdr refuses, or one that fails before it is sent, puts the tab back where it stood, and the operator and the keyboard with it, to that checkout too, when nothing has moved since; a close whose result is unknown shows the tab again until the status check settles it.
 A pane closing inside a tab that keeps other panes leaves the canvas the moment the close is approved, and its neighbours take its space as Herdr will lay them out; its sidebar row stays until Herdr confirms the close, and a close Herdr refuses or cannot answer draws the pane back where it stood.
-A split, a zoom or unzoom and a pane resize Hide asked for are drawn at once, a split as soon as Herdr names the new pane, without waiting for Herdr's layout; a new tab appears in its area as soon as Herdr answers its creation.
+A split, a zoom or unzoom and a pane resize Hide asked for are drawn at once, a split as soon as Herdr names the new pane, without waiting for Herdr's layout; a new live tab replaces its draft in the same area when Herdr answers its creation.
 In the same frame a pane's rectangle changes, the terminal inside it takes the rows and columns that fit the new rectangle and its program redraws, without waiting for Herdr: a pane's neighbour widens the moment the pane leaves, a zoomed pane fills the tab the moment it is zoomed, and a split pane's terminal shrinks to its half as soon as Herdr names the new pane.
 When Herdr's layout differs from the drawn one, Herdr's is drawn and each terminal in it takes that rectangle's grid, one more reflow; when it is the same, nothing moves again.
 Changes to one tab's panes are made one at a time in the order asked, with up to eight waiting; a ninth waiting change is not made, and one Herdr refuses drops the changes waiting behind it and draws the layout Herdr confirmed.
 Changes in different tabs never wait for each other.
-A sole empty area shows No agent tab is open and New tab.
+A sole empty area shows the group's start surface.
 Agent tabs cannot enter the lane, and a sole tab cannot split its own area.
 Invalid size, area or depth limits show the forbidden cursor without an overlay; Escape, outside release and a vanished target leave the layout unchanged.
 Each area scrolls its selected tab into view; when Agent Views are too narrow, an area switcher shows one area without changing the saved tree.
@@ -215,14 +239,15 @@ Next and previous Agent area focus and Agent area grow and shrink are chordless 
 An area's New tab adds at its end.
 The new tab chord, ⌘T in the desktop app and ⌥T in a browser, opens where the keyboard is: with a View area focused it is that area's New tab, with an Agent pane focused it adds an agent tab at the end of the area showing that pane, and anywhere else (the sidebar, the Overview, the lane's tools, the Agent controls) it adds one to the Agent active area.
 Agent Views and the files tool keep separate active areas, so the chord follows the recorded keyboard owner, never whichever active area changed last.
-Externally created tabs append to the active area without changing the shown tab; Herdr's own reorder never changes Hide's area order.
+Externally created ordinary tabs append to the ungrouped active area without changing the selected group or shown tab; Herdr's own reorder never changes Hide's area order.
 Delegated-only tabs remain absent from every bar and occupy the active canvas when chosen from the sidebar.
-Choosing a normal tab elsewhere activates its owning area.
+Choosing a normal tab or agent elsewhere, including the sidebar, search and recent history, selects its owning group and area before showing its tab and pane.
 
-The tree, ratios, ordered membership and active selections return after restart.
-Missing tabs are removed, previously unplaced tabs append, and Reopen closed tab uses the former area when it survives, otherwise the active area.
+Group membership, drafts, trees, ratios and active selections return after restart.
+Only authoritative topology removes missing live tabs; an unresolved catalog or connection does not erase saved groups or drafts.
+Reopen closed tab uses the former group, area and position when they survive, otherwise the ungrouped fallback.
 An older build may discard Agent layout state; returning starts with all current tabs in one area and keeps the View layout.
-A Workspace of an SSH device the core dials uses the same component with one area, retains device Herdr reorder, and disables splitting with the reason that SSH devices have no Agent groups.
+A Workspace of an SSH device the core dials has the same named-group and draft controls but keeps its existing single-area restriction within each group.
 A machine that dials in to the core, which is what the machine the core moved off becomes, keeps its Agent areas as this machine does: its tree, splits and active area are the same before a move, after it and after the move back, its Herdr shows the tab of the area in use, and the panes of every area's tab are live.
 
 Closing a primary Herdr workspace's last tab or last pane while a linked worktree remains first creates a shell at the checkout root in the same area and position.
@@ -1320,7 +1345,7 @@ A width outside the bounds is refused into the diagnostic log: a sent one leaves
 ### Sidebar hierarchy
 
 This is the 프로젝트 list; the `프로젝트 | 태스크` switch above it, ⇧⌘B, and the 태스크 list are in [The sidebar's 태스크 list](#the-sidebars-태스크-list) (PRD sidebar-task-lens B1-B3).
-The sidebar hierarchy is Project > Workspace > Agents; a Workspace corresponds to one checkout path, including a plain folder.
+The sidebar hierarchy is Project > Workspace > Group > Tab > Agents; a Workspace corresponds to one checkout path, including a plain folder.
 Two checkouts of one repository share a project cycle.
 Each checkout row shows a kind glyph: home for the stored primary checkout, otherwise the pull-request lifecycle icon when current GitHub data has a pull request, then branch, commit for detached HEAD, or folder for a plain folder.
 A project row with checkouts draws no glyph of its own: its name starts on the row's inset and its checkouts' kind glyphs stand on that same column under it, one step shallower than a project glyph would put them (PRD sidebar-quiet-mark-indent D-06); a plain folder's row keeps its folder glyph, which says its checkout's kind (D-07).
@@ -1374,26 +1399,20 @@ Opened folder projects use the same neutral selected fill and unboxed tab segmen
 Their required secondary lines and metadata remain visible.
 An opened checkout keeps its rows on the sidebar background, without an enclosing card, border or group fill.
 Checkouts start open, and `session_collapsed_checkout_ids` keeps only the checkouts the operator explicitly closes across launches.
-Within an open checkout or plain folder, every operator root stands at one depth whatever tab holds it: tabs make no depth, and a tab adds only the quiet line below.
-The sidebar keeps each root and its complete lineage subtree together under the root's actual tab, in checkout tab order and then the core's root order.
-Groups stay separated by `--spacing-sm` (8px), without a card or border.
-The first group hangs `--spacing-xxs` (2px) under its checkout row, only so the checkout's fill and a selected row's never merge, and the last group ends with the same 8px before the next row, so every agent stands nearer its own checkout than the one below it.
-Root status marks share one axis on the checkout name's column, to the right of the checkout's kind glyph, so no agent row's leftmost ink stands left of its checkout's glyph and a `?` or `!` is scanned on one line.
-Lineage children keep their `--size-lineage-indent` (18px) step and elbow rails from that axis, and a root's lineage disclosure stays in the reserved trailing slot.
-A tab with two or more recognized agent panes, or with a manual name, draws a 1px vertical guide centered under the checkout's kind glyph (a plain folder's folder glyph) and spanning the group's rows, and opens with one quiet line at its head, a sidebar line and a hairline high, standing inside the guide like a row: the guide runs past it unbroken, the tab glyph stands on the status-mark column and the tab's name in 11px subtle text starts on the title column, so the tab reads as part of its checkout and never as a row beside the checkout's own glyph.
-The name is the tab's manual name, or localized `Tab N` from the core's stable number when it has none.
-Shell panes are not counted, children in other tabs do not inflate their parent's count, and a tab without a sidebar root draws no segment unless it is named.
-A named tab with no agent left, typically the shell its last agent left behind ([Agent areas](#agent-areas)), keeps its line under its checkout with its name and opens the tab like any tab line; a checkout whose only line it is opens and folds as one with agents, and a tab a spawn named or a delegated child's tab never stands alone.
-Pointer or keyboard focus on the line shows its hint, the same name and its agent count, or the name alone when the tab holds no agent.
-The line is a button with that accessible name: click, Enter and Space open the real tab without read-state or process effects, and it is a stop in the Arrow Up/Down and Home/End traversal, ahead of its segment's rows.
-The existing tab Rename still sets or clears the manual name; automatic tabbar titles remain independent.
-An unnamed single-agent tab draws no guide and no line: its row alone is the segment, and the 8px gap between segments is the tab boundary.
-Naming a single-agent tab with Rename brings its guide and line, and clearing the name takes them away again.
-A tab has no disclosure and the sidebar saves nothing about it; a stored fold choice from an earlier version is ignored on load and dropped on the next write.
-When two agents become one an unnamed tab's segment loses its guide and line and a named one keeps them, and a second agent brings them back with the name the tab still has.
-At a 240px sidebar width, its 8px list inset puts a project's name and its checkouts' kind glyphs at x16 with the guide centered on x23, a checkout's name and its root status marks starting at x34 and titles at x50, and a tab line's glyph centered on the status-mark column at x40 with its name at x50; a plain folder's glyph stands at x16 and its name and its agents' marks at x38; an agent row with no second line is 28px high, using the existing 20px line and 4px vertical padding, and a tab line is 22px.
+An open checkout or plain folder lists its ungrouped collection and named groups in creation order, with tabs inside each group and the real agents beneath their tab.
+The list uses the core's membership for every group, including groups whose canvases are hidden, rather than inferring membership from the front tab bar.
+Empty groups, drafts and terminal-only tabs stay reachable, with no invented agent row or agent count.
+Group disclosure changes only this page's fold state; selecting the group's name changes the checkout's selected group.
+A tab line selects its owning group, area and tab, while an agent row continues to its pane.
+The sidebar keeps a root and its complete lineage subtree together under the root's actual tab; children working in another tab do not inflate that tab's physical agent count.
+Tab names use the manual name or localized `Tab N` from the core's stable number, while a draft reads New tab; automatic tabbar task titles remain independent.
+The tab line's tooltip and accessible name give its name and recognized agent count, or its name alone when it holds no agent; shell panes never count as agents.
+Group, tab and agent controls are stops in Arrow Up/Down and Home/End traversal, and click, Enter and Space use the same navigation.
+Lineage children retain their `--size-lineage-indent` step and elbow rails, and each root's lineage disclosure stays in its trailing slot.
+A tab has no disclosure state of its own; a stored tab fold from an earlier version is ignored on load and dropped on the next write.
+For a catalog without named-group metadata the previous tab-segment presentation remains: manual-name or multi-agent tabs have a quiet line and guide, an unnamed single-agent tab is its row alone, and a named empty tab remains reachable.
 Focused sidebar agent and checkout rows use the neutral `--secondary` fill.
-Root shortcuts follow the same physical grouping order and deduplicate raised occurrences, with no numbers for tab lines or children.
+Root shortcuts follow the physical grouping order and deduplicate raised occurrences, with no numbers for group lines, tab lines or children.
 A closed checkout draws its status badge and still shows questioning or blocked Needs You rows.
 An agent row draws one of four marks in one 12 px slot ([status-model.md](status-model.md#the-mark)): the operator's turn as a `!` in a warning badge, in progress as a static three-quarter ring in the working colour (solid while the agent works, cut into dashes while it waits on proven work, status-marks D-25), to read as a 7 px dot that is green only when the label read the turn as finished, and quiet, an agent at rest, as a faint hollow ring in the muted colour, smaller and thinner than the in-progress ring (PRD sidebar-quiet-mark-indent D-01, D-02); a read turn keeps its badge dimmed.
 A row of unknown state and a disconnected device's row keep the slot empty and are drawn dimmed whole, so neither reads as an agent at rest (D-04).
@@ -1861,6 +1880,7 @@ The window takes no input while its strip shows, and sends none of what was type
 Web owner: `web/src/StartPanel.tsx`, `web/src/startTargets.ts`, `web/src/startDraft.ts`, `web/src/startAnswer.ts`, `web/src/agentPicker.ts`, `web/src/components/agent-picker.tsx`.
 
 The start panel starts an agent supported by the shared adapter with a first instruction anywhere hide can reach (PRD home-device-rail D-17..D-22).
+It remains independent of the inline group/draft start: a successful start makes its own tab in the target checkout's selected group rather than consuming the draft whose form happens to be open.
 ⌘N opens it in the desktop app, where it is also File › Start agent; in a browser tab ⌘N stays the browser's and `에이전트 시작…` in ⌘K, found by typing, opens it, on every screen.
 It floats at the ⌘P palette's place and width with no backdrop, and the keyboard lands in its one-line text box, `무엇을 시킬까요?`.
 Opened while Settings is up, it takes Settings' place: Settings closes and the target is the front device's Home.

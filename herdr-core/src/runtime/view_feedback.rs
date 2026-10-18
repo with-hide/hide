@@ -918,6 +918,8 @@ impl Runtime {
         let start_request = format!("view-feedback-reopen-{request_id}");
         let before = self.snapshot.status.last_error.clone();
         self.agent_start_in_checkout(super::events::AgentStartInCheckoutPayload {
+            target: None,
+            confirm_only: false,
             checkout_path: Some(key.1.clone()),
             device_id: Some(key.0.clone()),
             home: false,

@@ -1226,6 +1226,8 @@ impl Runtime {
             .map(|reference| reference.value.clone());
         self.start_in_checkout(
             super::events::AgentStartInCheckoutPayload {
+                target: None,
+                confirm_only: false,
                 checkout_path: Some(member.checkout_path.clone()),
                 device_id: (!local).then(|| member.machine.clone()),
                 home: false,

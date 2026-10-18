@@ -39,9 +39,12 @@ Before adding resident work, use the [tick/timer/watcher ledger and cost review]
 
 `TabSnapshot.sidebar` serializes the existing `TabNaming` as a manual name and stable tab number, using the same automatic-number convention as the tabbar.
 The automatic task label remains the tabbar's own projection; the shell never guesses a sidebar name from that label.
-The shell derives tab segments and physical agent counts from the snapshot and keeps a root's complete subtree under that root's tab, even for cross-tab or cross-device children.
+The shell derives physical agent counts from the snapshot and keeps a root's complete subtree under that root's tab, even for cross-tab or cross-device children.
+`CheckoutSnapshot.agent_groups` publishes all named and ungrouped memberships, draft identities and start receipts independently of the one group drawn in `workspace_view.agent_layout`.
+The sidebar joins these memberships to real tabs and agents, so a hidden group's tabs, empty groups, drafts and terminal-only tabs remain reachable without a second membership store in the shell.
+Group disclosure is page-local presentation; group selection and tab membership are core state, and opening a tab or pane selects its owning group and area in the same navigation transition.
 A tab has no disclosure state: the former `sidebar_collapsed_tabs` field and its `sidebar_tab_expanded` event are gone, and a state file that still carries the field loads without error and loses it on the next save.
-Nothing in this feature writes state; typing and terminal echo add no event, I/O, timer or subprocess for it.
+Deriving sidebar rows adds no event, I/O, timer or subprocess to typing or terminal echo; group mutations save through the existing Workspace-view owner described below.
 
 ### View openers and comments
 
@@ -550,7 +553,7 @@ Pane notices and bands travel in `terminal.headers` through the terminal metadat
 The stamp compares the core-owned header map, so an unchanged header publishes no rest delta; header changes are copied with the changed owned snapshot and serialized outside the runtime lock.
 `docs/status-model.md` owns both rules.
 The Agents `My Work` view filters only the core-final Delegated answer and leaves visible orphans in operator-owned groups; `All` changes only the shell's session-local visibility projection.
-`agent_start_in_checkout` creates a tab in the checkout's owner workspace (see Checkout owner workspace below) through the task-operation slot that `create_worktree` already uses.
+`agent_start_in_checkout` starts through the task-operation slot that `create_worktree` already uses, creating a tab in the checkout's owner workspace or adding a pane to an explicitly named live tab (see Checkout owner workspace below).
 It is the one start path for every surface (⌘N's start panel, New worktree, an issue's Start, a pull request's hand-off, the phone; PRD home-device-rail D-20): it names a checkout by path, or `home` for the device's Home (see Home below), and a `device_id` for a device's checkout, which opens its tab on that device's Herdr through the checkout's owner there (`worktree_control::TabTarget::device`; a tab needs no file helper, so a device whose helper is not ready still takes one).
 A start may name a `model` only for an agent whose start declares one, the one rule of the shared adapter (`LaunchDialect::options()`): Claude Code, Codex, Grok, Pi, omp, Cursor and agy take `--model <id>`, and OpenCode, whose CLI lists no model option, takes none, so a model for it is refused with that reason rather than dropped.
 The id must pass `hide_agent_adapter::valid_model` (`[A-Za-z0-9._:/\[\]-]`, at most 80, never starting with `-`), the one check every start and restart uses; the CLI judges whether it knows the model, and a refusal stays on its pane, never replaced by another model.
@@ -565,6 +568,18 @@ The words come from the same declaration (`LaunchDialect::choice_arguments`): th
 A pane with no record (an agent started on the CLI's defaults, or by a build before the record existed) restarts on its resume arguments alone, as before.
 Every start supported by the shared adapter writes that kind and the kind's model into `ui_state.agent_start`, which every start surface preselects next; `terminal` is never remembered, and a store written before this choice existed seeds the kind once from the retired `issue_settings.default_agent`, which the next save drops.
 A start carries the surface's `request_id`, stamped on the task receipt and on a refusal's `last_error`, so each surface reads only its own answer.
+A group start additionally names `target { group_id, area_id, tab_id, add_pane }`; the checkout and device qualify that target, because different groups can each have an area named `a1`.
+Without an explicit target the start reserves a new draft in the checkout's selected group, preserving the independent meaning of the global start panel.
+`runtime/group_starts.rs` keeps the stable request's receipt in `WorkspaceView.agent_starts`: its group, area, draft/live tab, pane, recovery marker, provider kind and completion phase, with no instruction text or serialized launch arguments.
+There are at most 64 receipts per checkout; the oldest settled receipt can leave, while 64 unresolved receipts refuse another start instead of dropping an uncertain effect.
+The existing Workspace-view save worker must acknowledge the exact claim before its worker creates a tab or pane, and acknowledge the agent-start phase before the worker starts the agent.
+Filesystem work and both save waits stay outside Runtime's mutex.
+First start replaces the draft's slot with the confirmed live tab; adding an agent splits a pane inside the exact existing tab, preserving the other panes and their processes.
+A lost creation answer receives a bounded marker lookup through the existing recovery reader, never another creation merely because the call timed out.
+Pending receipts, including those loaded after restart, recover by inspection only; `confirm_only` loads the receipt's original provider and ignores replacement prompt/model choices.
+A definite failure may retry its stable intent, and a definite agent failure retries the existing pane; an unknown launch is not blindly repeated.
+The answer fills its original group even when hidden, but a late answer does not take focus from a group the operator has since selected.
+The inline form keeps prompt and picker edits in page memory across navigation and failures, while the durable receipt lets a new page inspect the original effect without recovering or replaying the prompt.
 A start may also carry `stay_behind` (the phone's, see The mobile companion): its tab is made without moving the desktop's visible tab or keyboard focus.
 A first prompt goes as the CLI's own argument: `--prompt <text>` for OpenCode, whose positional argument is a project path, and a positional prompt after `--` for Claude Code, Codex, Grok, Pi, omp and Cursor.
 Nothing is ever typed into the pane, where a startup question would take it.
@@ -2525,9 +2540,16 @@ The file is schema 3; a schema 2 file (`StoredColumns`), whichever build wrote i
 Its older shapes read through the same path: the side panel (`panel`, `open` and `expanded` as File Views on), S6's `mode` (`legacy_views`), and the two independent `explorer` and `changes` flags (`legacy_tool`), whose widths were shares of a floating panel and start at the defaults.
 Such a load records `workspace_views.migrated`, the next save writes schema 3, and a file of a schema this build does not know is kept aside with a diagnostic and the defaults.
 
-The same entry adds a defaulted `agent_layout` key for the Agent areas of this machine's Workspaces and of a node that dialed in (`arranges_agent_areas`), whose Workspaces the core arranged as its own before it moved off that machine; the snapshot's `workspace_view.agent_layout` is null on a device the core dials, whose Herdr shows one tab.
+The same schema-3 entry keeps its original `agent_layout` as the ungrouped tree and adds defaulted `agent_groups` and `agent_starts` fields.
+`agent_groups.rs` owns at most 32 named collections, their independent area trees, the selected collection and explicit Hide draft identities; an older entry loads with every existing tab and its original split tree ungrouped, without converting tab names into groups.
+Names are trimmed to 1 to 80 Unicode characters, reject controls and line breaks, and must be exactly distinct within the checkout.
+Create, rename, move, dissolve and undo are one core event (`runtime/agent_groups.rs`); they change membership without moving or restarting Herdr PTYs.
+Dissolve appends the group's ordered tabs to the ungrouped active area and retains one session-local undo record, invalidated by the next group mutation or unloading the checkout's saved state and never serialized.
+The selected group's layout is projected for local, inbound-node and outbound-SSH checkouts; outbound SSH keeps one area and depth zero per group, while local and inbound-node groups keep six areas and depth three.
+The core retains the explicit remote checkout choice independently of a device's raw Herdr focus, so selecting an empty group or draft can navigate without creating or focusing a PTY.
+An unanswered session or unresolved checkout catalog preserves groups and drafts; authoritative topology reconciles live membership only, admitting ordinary external arrivals to ungrouped.
 A node's tabs reach its areas when its session arrives (`reconcile_node_agent_topology`, through the same `reconcile_agent_topology`), the tab of the area in use is asked of the node's Herdr (`focus_node_tab`), the node's own focus moves the area in use (`sync_agent_selection`), and the panes of every area's tab attach as the front tab's do (`node_shown_agent_tabs`).
-Externally created tabs join the active area's bar without replacing a shown canvas, including when creation focuses the new tab in Herdr.
+Externally created ordinary tabs join the ungrouped active area's bar without replacing the selected group or shown canvas, including when creation focuses the new tab in Herdr.
 The replica carries the creation cause and a focus-event revision with the authoritative workspace focus, including during partial publication and bootstrap replay.
 One pending creation pairing per live tab is consumed by its first `tab_focused` event; a later `tab_focused` event gets a new revision and is followed.
 The pinned Herdr emits no event for a focus command that leaves its current tab unchanged; Hide cannot observe that no-op command.
@@ -2558,7 +2580,7 @@ The same admission check covers a caller on an inbound node; an unanswered sessi
 Pruning drops a closed tab's bookmark and pending reads and keeps its displays and clean documents in the list, so a tab close never closes a View.
 Every tab-valued owner and tab-keyed map participates in `node_migration::KEYS` with `Moves::Tab` for core moves and returns.
 Changes use the existing coalesced off-lock save and notification path; identical state creates no additional save or publication, and there is no new polling, subprocess or blocking work under Runtime.
-Agent admission counts the shared 64-item limit together with pending creates, placements, reopen and replacement-close effects.
+Agent admission counts the shared checkout-wide 64-item limit across every group's drafts and live tabs together with pending creates, placements, reopen and replacement-close effects.
 Request-specific claims reserve slots before the worker starts; reconciliation places acknowledged local effects before external arrivals and does not expire uncertain claims by time.
 An ambiguous local create gets one bounded marker lookup outside the runtime lock, without another mutation; an unresolved claim remains charged for that runtime session.
 Reopen and replacement claims have the same explicit owner, independent of operation phase or Dismiss; retries reuse their claim, and a confirmed tab transfers it to placement before the claim is released.
@@ -2566,12 +2588,16 @@ A close retry that reuses a confirmed replacement carries reuse-only permission 
 An authoritative excess tab remains in checkout topology and contributes to the snapshot waiting count; reconciliation admits it when a slot opens without selecting an unplaced tab.
 Hide refuses a new external effect at capacity, including a protected replacement close, and uses the existing capacity notice surface.
 
-`split_tree.rs::SplitTree<I: AreaItem>` owns structural repair, ordered membership, focus, move, split, collapse, resize and limits; `view_layout.rs` wraps it with document/preview/browser rules, and `agent_layout.rs` wraps it with stable Herdr tab references and delegated canvas selection.
+`split_tree.rs::SplitTree<I: AreaItem>` owns structural repair, ordered membership, focus, move, split, collapse, resize and limits; `view_layout.rs` wraps it with document/preview/browser rules, and `agent_layout.rs` wraps it with Agent tab references and delegated canvas selection.
+`agent_groups.rs` composes those Agent layouts without duplicating their tree rules; draft identities are explicit Hide state and never Herdr topology identifiers.
 The shared web `AreaTree` consumes View and Agent adapters over `areaLayout`, `areaDrag` and column-scoped drawn frames, so gestures, geometry, dividers and narrow presentation have one implementation.
 `AgentTab` renders the same status/provider/name/Rename unit in every area, and `PaneCanvas` receives its explicit tab.
-Agent actions name the Workspace and use the shared stale-frame guard and bounded split-request deduplication; only authoritative topology reconciles persisted references, so a startup placeholder cannot erase the saved tree.
-Created and reopened tabs carry a bounded pending placement into that reconciliation; a missing target area falls back to the active area.
-The snapshot's `workspace_view.agent_layout` contains only the tree and tab references; `checkout.tabs` remains the source of tab and pane contents, and `checkout.active_tab_id` remains the active area's tab.
+Agent actions name the Workspace and group and use the shared stale-frame guard and bounded split-request deduplication; only authoritative topology reconciles persisted live references, so a startup placeholder cannot erase the saved tree.
+Created and reopened tabs carry their group, area and position into reconciliation; a removed group falls back to ungrouped and a removed area to that group's active area.
+The snapshot's `workspace_view.agent_layout` contains the selected tree, group identity and membership metadata; `checkout.tabs` remains the source of real tab and pane contents, while explicit drafts render their start surface without inventing a pane.
+Only the selected group's shown live tabs enter the shown-tab attachment set, including an authoritative empty set for an empty group or draft; hidden groups add no attach work or polling and the existing recent-tab cap still applies.
+Group changes leave the checkout's `view_layout` and each real tab's `tab_views` bookmark with their existing owners.
+Every new real-tab or pane reference in the groups, receipts and closed-item records participates in node migration; Hide's draft identities remain distinct from those rekeyed Herdr identifiers.
 
 A protected primary close uses authoritative workspace `worktree` provenance, including repository identity and linked status, rather than labels or paths alone (`runtime/agent_close.rs`).
 The existing close worker first creates or adopts a shell bearing the close intent marker, outside the runtime mutex, reconciles its same-area placement, then sends the original tab or last-pane close.

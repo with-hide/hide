@@ -15,7 +15,8 @@ import { deviceListedAgents } from "./navigation";
 import { agentsByPane, allAgents as everyPaneAgent } from "./paneAgents";
 import { projectRows, activeCheckouts, inactiveCheckouts, folderCheckout, projectExpanded } from "./projects";
 import { checkoutAgentRows } from "./projectBoard";
-import { sidebarTabGroups } from "./sidebarTabs";
+import { sidebarNamedGroups, sidebarTabGroups } from "./sidebarTabs";
+import { groupFoldKey, useGroupFolds } from "./groupTabs";
 import { contextWorkspaces, contextAgents } from "./remote";
 import { DIGITS, type Digit } from "./shortcuts";
 import { catalogWorkspaces, type AgentRow, type Checkout, type SnapshotRest } from "./snapshot";
@@ -30,7 +31,7 @@ export function numberedTabs(checkout: Checkout, layout?: AgentLayout | null): M
   const numbered = new Map<Digit, string>();
   const entries = agentEntries(checkout);
   const placed = layout ? areasOf(layout.root).flatMap((area) => area.displays.map((item) => item.id)) : entries.map((entry) => entry.source_id);
-  placed.filter((id) => entries.some((entry) => entry.source_id === id))
+  placed.filter((id) => entries.some((entry) => entry.source_id === id) || layout?.drafts?.includes(id))
     .slice(0, DIGITS.length)
     .forEach((id, index) => numbered.set(DIGITS[index]!, id));
   return numbered;
@@ -56,7 +57,7 @@ export function numberOf(numbered: Map<Digit, string>, id: string): Digit | null
 }
 
 /** The Agents list's rows in draw order, the list ⌥n numbers whichever list is on screen (B2): the front device's. */
-function sidebarAgentOrder(state: { rest: SnapshotRest | null; agents: AgentRow[] }, raisedOpen: readonly string[]): { row: TreeRow; place: string | null }[] {
+function sidebarAgentOrder(state: { rest: SnapshotRest | null; agents: AgentRow[] }, raisedOpen: readonly string[], groupClosed: ReadonlySet<string>): { row: TreeRow; place: string | null }[] {
   const { rest } = state;
   const scope = deviceScope(rest, frontDeviceId(rest));
   const agents = contextAgents(rest, state.agents);
@@ -69,7 +70,8 @@ function sidebarAgentOrder(state: { rest: SnapshotRest | null; agents: AgentRow[
   const collapsed = rest?.ui_state?.session_collapsed_checkout_ids ?? [];
   const checkout = (workspace: import("./snapshot").Workspace, value: Checkout) => {
     const grouped = sidebarTabGroups(value, workspace.device_id, checkoutAgentRows(workspace, agents, "sidebar").get(value.id) ?? [], agents);
-    for (const row of grouped.flatMap((group) => group.rows)) {
+    const ordered = value.agent_groups && !collapsed.includes(value.id) ? sidebarNamedGroups(value, grouped).filter(({ group }) => !groupClosed.has(groupFoldKey(workspace.device_id, value.id, group.id))).flatMap(({ segments }) => segments) : grouped;
+    for (const row of ordered.flatMap((group) => group.rows)) {
       // Digits number the roots; an opened root's children and grandchildren take none.
       if (row.depth === 0 && (!collapsed.includes(value.id) || row.agent.state.needs_you)) append(row.agent, value.id);
     }
@@ -95,13 +97,13 @@ function sidebarAgentOrder(state: { rest: SnapshotRest | null; agents: AgentRow[
 }
 
 /** Sidebar order is the actual drawn order, including each open fold. */
-export function agentListOrder(state: { rest: SnapshotRest | null; agents: AgentRow[] }, raisedOpen: readonly string[] = []): TreeRow[] {
-  return sidebarAgentOrder(state, raisedOpen).map(({ row }) => row);
+export function agentListOrder(state: { rest: SnapshotRest | null; agents: AgentRow[] }, raisedOpen: readonly string[] = [], groupClosed: ReadonlySet<string> = useGroupFolds.getState().closed): TreeRow[] {
+  return sidebarAgentOrder(state, raisedOpen, groupClosed).map(({ row }) => row);
 }
 
 /** A physical pane gets a keycap only at its first visible appearance. */
-export function sidebarAgentNumbers(state: { rest: SnapshotRest | null; agents: AgentRow[] }, raisedOpen: readonly string[]) {
-  const entries = sidebarAgentOrder(state, raisedOpen);
+export function sidebarAgentNumbers(state: { rest: SnapshotRest | null; agents: AgentRow[] }, raisedOpen: readonly string[], groupClosed: ReadonlySet<string> = useGroupFolds.getState().closed) {
+  const entries = sidebarAgentOrder(state, raisedOpen, groupClosed);
   const numbers = numberedAgents(entries.map(({ row }) => row));
   const first = new Map<string, string | null>();
   for (const { row, place } of entries) if (!first.has(row.agent.pane_id)) first.set(row.agent.pane_id, place);

@@ -49,6 +49,8 @@ mod first_run;
 mod fork_registration;
 #[path = "tests/github_reads.rs"]
 mod github_reads;
+mod group_tabs;
+mod group_tabs_remote;
 mod guardrails;
 #[path = "tests/home.rs"]
 mod home;
@@ -1530,6 +1532,7 @@ fn close_capture_request(key: &str) -> live::CloseCaptureRequest {
             tab_label: key.to_owned(),
             tab_index: 0,
             agent_area: None,
+            agent_group: None,
             replacement_shell: false,
             replacement_in_tab: false,
             tab_name: Default::default(),

@@ -223,6 +223,7 @@ impl Runtime {
         // A registration that changed while this sync ran is caught up now.
         self.request_home_link_syncs();
         Some(live::CheckoutTabRequest {
+            start: None,
             resume_reference: None,
             id,
             agent_kind: None,

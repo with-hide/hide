@@ -47,6 +47,7 @@ pub(crate) use worktree_control::{
     CONFIRM_TIMEOUT, ProcessWait, close_checkout_panes, close_checkout_panes_checked,
     prompt_argument,
 };
+pub(crate) use worktree_control::{CheckoutStart, spawn_targeted_checkout_start};
 pub use worktree_control::{
     CheckoutTabRequest, HomeStartRequest, IssueWriteFailure, PendingAgentStart, PurposeMirror,
     PurposeTaskOutcome, PurposeTaskRequest, TabTarget, TaskAgentOutcome, WorktreeTarget,
@@ -1305,6 +1306,9 @@ fn prepare_close_replacement(
             return Err("replacement inspection timed out".into());
         }
         let layout = export_reopen_layout(connector, key, &tab.tab_id)?;
+        if layout.tab_id != tab.tab_id || layout.workspace_id != tab.workspace_id {
+            return Err("The tab changed during start confirmation. Retry confirmation.".into());
+        }
         if layout_has_reopen_marker(&layout, &marker) {
             if owned.is_some() {
                 return Err("multiple shells carry the same close intent".into());
@@ -1657,6 +1661,7 @@ const REOPEN_INTENT_ENV: &str = "HIDE_REOPEN_INTENT";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReopenIntentStage {
+    CheckoutStart,
     LocalCreate,
     Workspace,
     Layout,
@@ -1666,6 +1671,7 @@ enum ReopenIntentStage {
 
 fn reopen_intent_marker(key: &str, stage: ReopenIntentStage) -> String {
     let stage = match stage {
+        ReopenIntentStage::CheckoutStart => "checkout-start",
         ReopenIntentStage::LocalCreate => "local-create",
         ReopenIntentStage::Workspace => "workspace",
         ReopenIntentStage::Layout => "layout",
@@ -1762,6 +1768,94 @@ fn export_reopen_layout(
         wire::layout_export_params(tab_id)?,
     )?;
     wire::exported_layout(exported)
+}
+
+/// The same exact, exported environment claim used by closed-tab recovery.
+/// This is effect identity, not a user shell setting.
+fn checkout_start_env(key: &str) -> std::collections::BTreeMap<String, String> {
+    reopen_intent_env(key, ReopenIntentStage::CheckoutStart)
+}
+
+fn recover_checkout_start(
+    connector: &dyn ApiConnector,
+    key: &str,
+    workspace: Option<&str>,
+    tab: Option<&str>,
+) -> Result<OwnedTab, String> {
+    let started = Instant::now();
+    let snapshot =
+        fetch_session_with_connector(connector).map_err(|error| error.message().to_owned())?;
+    let tabs: Vec<_> = snapshot
+        .tabs
+        .iter()
+        .filter(|item| {
+            tab.is_none_or(|tab| item.tab_id == tab)
+                && workspace.is_none_or(|workspace| item.workspace_id == workspace)
+        })
+        .collect();
+    if tabs.len() > 64 {
+        return Err(
+            "Too many tabs for bounded start confirmation. Narrow the target and retry.".into(),
+        );
+    }
+    let marker = reopen_intent_marker(key, ReopenIntentStage::CheckoutStart);
+    let mut found = None;
+    for tab in tabs {
+        if started.elapsed() > Duration::from_secs(5) {
+            return Err("Start confirmation timed out. Retry confirmation.".into());
+        }
+        let layout = export_reopen_layout(connector, key, &tab.tab_id)?;
+        if layout.tab_id != tab.tab_id || layout.workspace_id != tab.workspace_id {
+            return Err(
+                "The start's topology changed during confirmation. Retry confirmation.".into(),
+            );
+        }
+        let mut panes = Vec::new();
+        pane_ids_with_reopen_marker(&layout.root, &marker, &mut panes);
+        if panes.len() > 1 || (found.is_some() && !panes.is_empty()) {
+            return Err(
+                "More than one pane carries this start. Inspect the tab before continuing.".into(),
+            );
+        }
+        if let Some(pane_id) = panes.pop() {
+            found = Some(OwnedTab {
+                initial_label: None,
+                workspace_id: tab.workspace_id.clone(),
+                tab_id: tab.tab_id.clone(),
+                pane_id,
+                launched: false,
+            });
+        }
+    }
+    found.ok_or_else(|| "The original start is not yet confirmed. Retry confirmation; no second process was started.".into())
+}
+
+fn split_checkout_start(
+    connector: &dyn ApiConnector,
+    tab: &str,
+    cwd: &str,
+    key: &str,
+) -> Result<OwnedTab, ControlFailure> {
+    // The export proves the pane still belongs to this exact tab before split.
+    let layout = export_reopen_layout(connector, key, tab).map_err(ControlFailure::Definite)?;
+    if layout.tab_id != tab {
+        return Err(ControlFailure::Definite(
+            "The selected tab changed. Return to it and retry.".into(),
+        ));
+    }
+    let value = mutation_request(
+        connector,
+        "pane.split",
+        wire::fork_split_params(&layout.focused_pane_id, Some(cwd), checkout_start_env(key))?,
+    )?;
+    let pane_id = wire::split_pane(value).map_err(ControlFailure::Ambiguous)?;
+    Ok(OwnedTab {
+        initial_label: None,
+        workspace_id: layout.workspace_id,
+        tab_id: tab.to_owned(),
+        pane_id,
+        launched: false,
+    })
 }
 
 fn restore_tab_position(
@@ -1941,6 +2035,7 @@ fn run_herdr_reopen(
             request.codex_daemon,
         ),
         ClosedItem::File { .. } => unreachable!("file reopen uses the filesystem worker"),
+        ClosedItem::Draft { .. } => unreachable!("draft reopen is local"),
     }
 }
 
@@ -5618,6 +5713,7 @@ mod tests {
             tab_label: "Agent one".into(),
             tab_index: 0,
             agent_area: None,
+            agent_group: None,
             replacement_shell: false,
             replacement_in_tab: false,
             tab_name: crate::recent_closed::ClosedTabName::Unnamed,
@@ -5697,6 +5793,7 @@ mod tests {
             tab_label: "Tab".into(),
             tab_index: 0,
             agent_area: None,
+            agent_group: None,
             replacement_shell: false,
             replacement_in_tab: false,
             tab_name: Default::default(),
@@ -5807,6 +5904,7 @@ mod tests {
             tab_label: "tab".into(),
             tab_index: 0,
             agent_area: None,
+            agent_group: None,
             replacement_shell: false,
             replacement_in_tab: false,
             tab_name: Default::default(),
@@ -5940,6 +6038,7 @@ mod tests {
             tab_label: "Tab".into(),
             tab_index: 0,
             agent_area: None,
+            agent_group: None,
             replacement_shell: false,
             replacement_in_tab: false,
             tab_name: Default::default(),
@@ -6057,6 +6156,7 @@ mod tests {
             tab_label: "Tab".into(),
             tab_index: 0,
             agent_area: None,
+            agent_group: None,
             replacement_shell: false,
             replacement_in_tab: false,
             tab_name: Default::default(),

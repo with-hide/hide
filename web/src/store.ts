@@ -25,7 +25,7 @@ import type { MobileState } from "./mobileSettings";
 /** The pane holding the keyboard on the device in front, as the core reports it. */
 export function focusedPaneOf(rest: SnapshotRest): string | null {
   const remote = remoteContext(rest);
-  if (remote) return remoteView(remote.session)?.focusedPaneId ?? null;
+  if (remote) return remoteView(remote.session, rest.workspace_view)?.focusedPaneId ?? null;
   return rest.terminal?.pane_id ?? rest.focused?.pane_id ?? null;
 }
 

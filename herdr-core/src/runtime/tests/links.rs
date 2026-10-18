@@ -1097,6 +1097,7 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
         live::spawn_checkout_tab_create(
             target,
             live::CheckoutTabRequest {
+                start: None,
                 id,
                 agent_kind: Some(kind.into()),
                 checkout_path: cwd.clone(),

@@ -3999,11 +3999,44 @@ impl Runtime {
     /// ignored and the tab starts at the checkout.
     pub(super) fn start_in_checkout(
         &mut self,
-        payload: AgentStartInCheckoutPayload,
+        mut payload: AgentStartInCheckoutPayload,
         remember: bool,
         cwd: Option<String>,
     ) -> bool {
         let request_id = payload.request_id.clone();
+        if payload.confirm_only {
+            let device = payload.device_id.as_deref().unwrap_or(self.node.as_str());
+            match self.group_start_confirmation_kind(
+                device,
+                payload.checkout_path.as_deref(),
+                request_id.as_deref(),
+            ) {
+                Ok(provider) => {
+                    payload.provider = provider;
+                    payload.model = None;
+                    payload.prompt = None;
+                    payload.resume_session_id = None;
+                    payload.resume_session_path = None;
+                }
+                Err(message) => {
+                    self.set_request_error(
+                        "agent_start.confirmation_unavailable",
+                        message,
+                        true,
+                        request_id.as_deref(),
+                    );
+                    return true;
+                }
+            }
+        }
+        if self.repeat_checkout_start(request_id.as_deref())
+            && (!payload.confirm_only
+                || self.snapshot.task_operation.as_ref().is_some_and(|op| {
+                    op.phase == "working" || op.agent_phase.as_deref() == Some("starting")
+                }))
+        {
+            return true;
+        }
         let agent_kind = match payload.provider.as_str() {
             "terminal" => None,
             other => {
@@ -4020,19 +4053,21 @@ impl Runtime {
                 }
             }
         };
-        let model =
-            match agent_choice::chosen_model(agent_kind.as_deref(), payload.model.as_deref()) {
-                Ok(model) => model,
-                Err(message) => {
-                    self.set_request_error(
-                        "agent_start.unknown_model",
-                        message,
-                        false,
-                        request_id.as_deref(),
-                    );
-                    return true;
-                }
-            };
+        let model = match agent_choice::chosen_model(
+            agent_kind.as_deref(),
+            agent_kind.as_ref().and(payload.model.as_deref()),
+        ) {
+            Ok(model) => model,
+            Err(message) => {
+                self.set_request_error(
+                    "agent_start.unknown_model",
+                    message,
+                    false,
+                    request_id.as_deref(),
+                );
+                return true;
+            }
+        };
         let resume = match payload.resume_session_id.as_deref() {
             None => None,
             Some(session_id) => match agent_kind.as_deref().and_then(|kind| {
@@ -4134,13 +4169,31 @@ impl Runtime {
             }
             None => None,
         };
-        let id = match self.begin_task_operation(
-            "agent_start",
-            Some(workspace_path),
-            None,
-            None,
-            agent_kind.clone(),
-        ) {
+        let retry = (!payload.confirm_only)
+            .then(|| {
+                self.snapshot
+                    .task_operation
+                    .as_ref()
+                    .filter(|op| {
+                        op.request_id.as_deref() == request_id.as_deref()
+                            && request_id.is_some()
+                            && op.agent_phase.as_deref() == Some("failed")
+                            && op.path.as_deref() == Some(checkout_path.as_str())
+                            && op.agent_kind == agent_kind
+                            && op.device_id.as_deref().unwrap_or(self.node.as_str()) == device
+                    })
+                    .map(|op| op.id)
+            })
+            .flatten();
+        let id = match retry.map(Ok).unwrap_or_else(|| {
+            self.begin_task_operation(
+                "agent_start",
+                Some(workspace_path),
+                None,
+                None,
+                agent_kind.clone(),
+            )
+        }) {
             Ok(id) => id,
             Err(message) => {
                 self.set_request_error("task_operation.busy", message, true, request_id.as_deref());
@@ -4148,13 +4201,13 @@ impl Runtime {
             }
         };
         if let Some(operation) = self.snapshot.task_operation.as_mut() {
-            operation.request_id = request_id;
+            operation.request_id = request_id.clone();
             operation.device_id = (!local).then(|| device.clone());
             operation.stays_behind = payload.stay_behind;
         }
         // A resume Hide makes from the archive is not the operator's choice
         // of agent.
-        if remember {
+        if remember && !payload.confirm_only {
             self.remember_agent_choice(agent_kind.as_deref(), model.as_deref());
         }
         let mut arguments = resume.unwrap_or_default();
@@ -4175,10 +4228,42 @@ impl Runtime {
         if let Some(launch) = self.task_agent_launch.as_mut() {
             launch.resume_reference = resume_reference.clone();
         }
+        if retry.is_some() {
+            return self.retry_task_agent(id);
+        }
+        if (local && self.live.is_none()) || (!local && !self.remote_controls.contains_key(&device))
+        {
+            return self.ingest_task_operation_result(
+                id,
+                Err(if local {
+                    "A live Herdr connection is required. Reconnect and retry.".into()
+                } else {
+                    "The device's Herdr connection is unavailable. Reconnect and retry.".into()
+                }),
+            );
+        }
+        let prepared = if self.workspace_views.is_some() || payload.target.is_some() {
+            match self.prepare_group_start(
+                id,
+                &device,
+                &checkout_path,
+                payload.target,
+                request_id.as_deref(),
+                agent_kind.as_deref(),
+                payload.confirm_only,
+            ) {
+                Ok(prepared) => Some(prepared),
+                Err(message) => return self.ingest_task_operation_result(id, Err(message)),
+            }
+        } else {
+            self.group_start = None;
+            None
+        };
         let cwd = cwd
             .filter(|cwd| hide_platform::path::wire_relative(&checkout_path, cwd).is_ok())
             .unwrap_or_else(|| checkout_path.clone());
         let request = live::CheckoutTabRequest {
+            start: prepared.as_ref().map(|prepared| prepared.request.clone()),
             id,
             agent_kind,
             resume_reference,
@@ -4194,7 +4279,9 @@ impl Runtime {
             checkout_path,
             label,
             host,
-            focus: !payload.stay_behind,
+            // The result selects its target only if it is still visible.
+            // Herdr must not move focus behind a group the user selected.
+            focus: !payload.stay_behind && prepared.is_none(),
         };
         let target = if local {
             self.live
@@ -4211,7 +4298,12 @@ impl Runtime {
             Ok(target) => target,
             Err(message) => return self.ingest_task_operation_result(id, Err(message.into())),
         };
-        if let Err(message) = live::spawn_checkout_tab_create(target, request) {
+        let spawned = match prepared {
+            Some(prepared) => live::spawn_targeted_checkout_start(target, request, prepared.saved),
+            None => live::spawn_checkout_tab_create(target, request),
+        };
+        if let Err(message) = spawned {
+            self.group_start_failed(id, false);
             return self.ingest_task_operation_result(id, Err(message));
         }
         true

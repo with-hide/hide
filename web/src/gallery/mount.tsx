@@ -7,6 +7,7 @@ import { CmdkScene, cmdkSceneParams } from "./CmdkScene";
 import { GALLERY, type Section } from "./manifest";
 import { ServerSessionScene } from "./ServerSessionScene";
 import { RightLaneScene, rightLaneSceneParams } from "./RightLaneScene";
+import { GroupTabsScene } from "./GroupTabsScene";
 import { ViewFeedbackScene, viewFeedbackSceneParams } from "./ViewFeedbackScene";
 import { sceneParams, SidebarScene } from "./SidebarScene";
 import { AreaFocusScene } from "./AreaFocusScene";
@@ -36,6 +37,11 @@ export function mountGallery(root: Root) {
   }
   const scene = params.get("scene");
   if (scene !== null) {
+    if (scene === "group-tabs") {
+      document.title = "hide · Group tabs scene";
+      root.render(<StrictMode><GroupTabsScene params={params} /></StrictMode>);
+      return;
+    }
     if (scene === "project-settings") {
       root.render(<StrictMode><ProjectSettingsScene params={params} /></StrictMode>);
       return;

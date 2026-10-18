@@ -505,6 +505,7 @@ pub(crate) fn fixture_record(pane: &str) -> DormantRecord {
             tab_label: "Tab".into(),
             tab_index: 0,
             agent_area: None,
+            agent_group: None,
             replacement_shell: false,
             replacement_in_tab: false,
             tab_name: Default::default(),

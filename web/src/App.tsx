@@ -25,6 +25,8 @@ import { useAgentNotifications } from "./agentNotices";
 import { useGithubLook } from "./githubLook";
 import { SettingsGate } from "./SettingsSheet";
 import { StartPanelHost } from "./StartPanel";
+import { GroupNameDialog } from "./AgentGroupControls";
+import { InlineStartHost } from "./AgentTabStart";
 import { FONT_SIZE_BASE, usableAccent, usableFontSize } from "./settings";
 import { ShortcutSheet } from "./ShortcutSheet";
 import { Sidebar } from "./sidebar";
@@ -267,6 +269,8 @@ export function App() {
     ["palette", <Palette actions={actions} />],
     ["quick_add", <QuickAdd actions={actions} />],
     ["start_panel", <StartPanelHost actions={actions} />],
+    ["group_name", <GroupNameDialog actions={actions} />],
+    ["inline_starts", <InlineStartHost />],
     ["shortcuts", <ShortcutSheetGate actions={actions} />],
     ["settings", <SettingsGate actions={actions} />],
     ["first_run", <FirstRunWizard actions={actions} />],

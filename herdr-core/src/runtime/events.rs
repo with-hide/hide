@@ -842,6 +842,10 @@ pub(super) struct OverviewOpenSectionPayload {
 /// it. `terminal` means the tab alone.
 #[derive(Debug, Deserialize)]
 pub(super) struct AgentStartInCheckoutPayload {
+    #[serde(default)]
+    pub(super) confirm_only: bool,
+    #[serde(default)]
+    pub(super) target: Option<super::group_starts::StartTarget>,
     /// The checkout to start in; absent for a Home start.
     #[serde(default)]
     pub(super) checkout_path: Option<String>,
@@ -1403,6 +1407,7 @@ pub(super) enum Event {
     WorkspaceView(WorkspaceViewPayload),
     ViewLayout(ViewLayoutPayload),
     AgentLayout(AgentLayoutPayload),
+    AgentGroup(AgentGroupPayload),
     BrowserOpen(BrowserOpenPayload),
     BrowserState(BrowserStatePayload),
     Attachment(AttachmentPayload),
@@ -1855,6 +1860,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "pet_shortcut_update" => decode!(PetShortcutPayload, PetShortcutUpdate),
         "workspace_view" => decode!(WorkspaceViewPayload, WorkspaceView),
         "agent_layout" => decode!(AgentLayoutPayload, AgentLayout),
+        "agent_group" => decode!(AgentGroupPayload, AgentGroup),
         "view_layout" => decode!(ViewLayoutPayload, ViewLayout),
         "browser_open" => decode!(BrowserOpenPayload, BrowserOpen),
         "view_comment" => decode!(super::view_feedback::ViewCommentPayload, ViewComment),
@@ -1976,6 +1982,7 @@ impl Runtime {
         match event {
             Event::WorkspaceView(payload) => self.apply_workspace_view(payload),
             Event::AgentLayout(payload) => self.apply_agent_layout(payload),
+            Event::AgentGroup(payload) => self.apply_agent_group(payload),
             Event::ViewLayout(payload) => self.apply_view_layout(payload),
             Event::BrowserOpen(payload) => self.open_browser(payload),
             Event::ViewComment(payload) => self.apply_view_comment(payload),

@@ -183,6 +183,10 @@ pub struct WorkspaceView {
     #[serde(rename = "view_layout")]
     pub layout: Layout,
     pub agent_layout: crate::agent_layout::Layout,
+    /// Named collections are additive: the original tree remains ungrouped.
+    pub agent_groups: crate::agent_groups::Groups,
+    pub(crate) agent_starts:
+        std::collections::BTreeMap<String, crate::runtime::group_starts::StartIntent>,
     /// The View each Agent tab last put in front (PRD lane-files-checkout-views
     /// D-03, D-16). Left out of the file while empty; stored as `tab_views`,
     /// so the per-area bookmark of earlier builds is never read.
@@ -222,6 +226,10 @@ struct StoredLane {
     layout: Layout,
     #[serde(default)]
     agent_layout: crate::agent_layout::Layout,
+    #[serde(default)]
+    agent_groups: crate::agent_groups::Groups,
+    #[serde(default)]
+    agent_starts: std::collections::BTreeMap<String, crate::runtime::group_starts::StartIntent>,
     #[serde(default, rename = "tab_views")]
     view_bookmarks: Bookmarks,
     #[serde(default)]
@@ -246,6 +254,8 @@ impl StoredLane {
             last_used_unix_ms: self.last_used_unix_ms,
             layout: self.layout,
             agent_layout: self.agent_layout,
+            agent_groups: self.agent_groups,
+            agent_starts: self.agent_starts,
             view_bookmarks: self.view_bookmarks,
             feedback: self.feedback,
         }
@@ -319,6 +329,8 @@ impl StoredColumns {
             last_used_unix_ms: self.last_used_unix_ms,
             layout: self.layout,
             agent_layout: self.agent_layout,
+            agent_groups: Default::default(),
+            agent_starts: Default::default(),
             view_bookmarks: Bookmarks::default(),
             feedback: Default::default(),
         }
@@ -386,6 +398,8 @@ impl WorkspaceView {
             last_used_unix_ms: 0,
             layout: Layout::default(),
             agent_layout: crate::agent_layout::Layout::default(),
+            agent_groups: Default::default(),
+            agent_starts: Default::default(),
             view_bookmarks: Bookmarks::default(),
             feedback: Default::default(),
         }
@@ -698,7 +712,7 @@ fn settle(
             .layout
             .repair()
             .into_iter()
-            .chain(view.agent_layout.repair())
+            .chain(view.repair_agent_groups())
         {
             repairs.push(format!("{} on {}: {note}", view.path, view.device_id));
         }

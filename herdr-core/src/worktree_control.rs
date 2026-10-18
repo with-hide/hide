@@ -102,6 +102,7 @@ impl TabTarget {
         let runtime = self.runtime.upgrade().ok_or("runtime stopped")?;
         let runtime = runtime.lock().map_err(|_| "runtime unavailable")?;
         if !runtime.task_session_control_is_current(id, &self.connector, self.connection_generation)
+            || !runtime.group_start_target_is_current(id)
         {
             return Err("session_resume_control_changed".into());
         }
@@ -911,6 +912,7 @@ pub fn spawn_remote_purpose_write(
 /// in the returned pane exactly as it does there.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CheckoutTabRequest {
+    pub(crate) start: Option<CheckoutStart>,
     pub id: u64,
     pub agent_kind: Option<String>,
     pub checkout_path: String,
@@ -925,6 +927,17 @@ pub struct CheckoutTabRequest {
     /// it where a resumed conversation ran, since a CLI may find its
     /// conversations by folder; a folder that is gone refuses the start.
     pub cwd: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CheckoutStart {
+    pub marker: String,
+    pub recovery_only: bool,
+    pub tab_id: Option<String>,
+    pub settled_tab_id: Option<String>,
+    pub agent_already_attempted: bool,
+    pub agent_phase: Option<String>,
+    pub confirm_only: bool,
 }
 
 /// What the task's worker starts once the creation is settled: the pane, the
@@ -999,22 +1012,19 @@ fn start_task_agent(
         Ok(reader) => {
             let expected = start.clone();
             let current_start = || {
+                current()?;
+                let guard = runtime.lock().map_err(|_| "runtime unavailable")?;
+                if !guard.task_session_control_is_current(id, connector, generation)
+                    || !guard.group_start_target_is_current(id)
+                {
+                    return Err("session_resume_control_changed".into());
+                }
+                if guard.pending_task_agent_start(id).as_ref() != Some(&expected) {
+                    return Err("session_resume_intent_changed".into());
+                }
+                drop(guard);
                 if let Some(reader) = reader.as_ref() {
-                    current()?;
-                    if !runtime
-                        .lock()
-                        .map_err(|_| "runtime unavailable")?
-                        .task_session_control_is_current(id, connector, generation)
-                    {
-                        return Err("session_resume_control_changed".into());
-                    }
-                    let pending = runtime
-                        .lock()
-                        .map_err(|_| "runtime unavailable")?
-                        .pending_task_agent_start(id);
-                    if pending.as_ref() != Some(&expected)
-                        || !Arc::ptr_eq(&task_session_node(&runtime, id, &expected.kind)?, reader)
-                    {
+                    if !Arc::ptr_eq(&task_session_node(&runtime, id, &expected.kind)?, reader) {
                         return Err("session_resume_intent_changed".into());
                     }
                 }
@@ -1024,11 +1034,7 @@ fn start_task_agent(
                 connector: connector.as_ref(),
                 current: &current_start,
             };
-            let launch_connector: &dyn ApiConnector = if reader.is_some() {
-                &checked
-            } else {
-                connector.as_ref()
-            };
+            let launch_connector: &dyn ApiConnector = &checked;
             launch_with_prompt_checked(
                 launch_connector,
                 reader.as_deref().or(agent_node),
@@ -1190,6 +1196,33 @@ pub fn spawn_task_agent_start(context: WorktreeTarget, id: u64) -> Result<(), St
     thread::Builder::new()
         .name("herdr-core-task-agent-start".into())
         .spawn(move || {
+            let saved = context.runtime.upgrade().and_then(|runtime| {
+                runtime
+                    .lock()
+                    .ok()
+                    .and_then(|mut runtime| runtime.group_agent_start_save(id))
+            });
+            if let Some(saved) = saved
+                && !saved
+                    .recv_timeout(Duration::from_secs(10))
+                    .ok()
+                    .and_then(Result::ok)
+                    .is_some()
+            {
+                if let Some(runtime) = context.runtime.upgrade()
+                    && let Ok(mut runtime) = runtime.lock()
+                {
+                    runtime.ingest_task_agent_result(
+                        id,
+                        TaskAgentOutcome::Failed(
+                            "The agent start could not be saved. Retry the agent in this pane."
+                                .into(),
+                        ),
+                    );
+                }
+                context.notifier.notify();
+                return;
+            }
             start_task_agent(
                 &context.connector,
                 &context.runtime,
@@ -1310,6 +1343,44 @@ pub fn spawn_checkout_tab_create(
         .map_err(|error| format!("checkout tab worker could not be started: {error}"))
 }
 
+pub(crate) fn spawn_targeted_checkout_start(
+    target: TabTarget,
+    request: CheckoutTabRequest,
+    saved: std::sync::mpsc::Receiver<Result<(), String>>,
+) -> Result<(), String> {
+    thread::Builder::new()
+        .name("herdr-core-checkout-tab-create".into())
+        .spawn(move || {
+            let result = saved
+                .recv_timeout(Duration::from_secs(10))
+                .map_err(|_| {
+                    "The start intent could not be saved in time. Retry; nothing was started."
+                        .to_owned()
+                })
+                .and_then(|result| result)
+                .and_then(|()| target.check_current(request.id));
+            if let Err(message) = result {
+                if let Some(runtime) = target.runtime.upgrade()
+                    && let Ok(mut runtime) = runtime.lock()
+                {
+                    runtime.group_start_failed(
+                        request.id,
+                        request
+                            .start
+                            .as_ref()
+                            .is_some_and(|start| start.recovery_only),
+                    );
+                    runtime.ingest_task_operation_result(request.id, Err(message));
+                }
+                target.notifier.notify();
+                return;
+            }
+            open_tab_and_start_agent(&target, &request);
+        })
+        .map(|_| ())
+        .map_err(|_| "The start worker could not run. Retry; nothing was started.".into())
+}
+
 /// Opens the task's tab, publishes it, then starts the task's agent in it.
 /// The tab's shell is started with Hide's shell integration, written by the
 /// node of the machine that runs it (`agent_start::shell_environment`).
@@ -1318,21 +1389,33 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
         .runtime
         .upgrade()
         .and_then(|runtime| task_pane_node(&runtime, request.id).ok());
-    let launch = crate::agent_start::shell_launch(
-        node.as_deref(),
-        &format!("herdr-core:task:{}:tab", request.id),
-    );
-    let result = (|| {
+    let launch = if request
+        .start
+        .as_ref()
+        .is_some_and(|start| start.confirm_only)
+    {
+        None
+    } else {
+        crate::agent_start::shell_launch(
+            node.as_deref(),
+            &format!("herdr-core:task:{}:tab", request.id),
+        )
+    };
+    let result: Result<WorktreeTaskOutcome, ControlFailure> = (|| {
+        target.check_current(request.id)?;
         if let Some(node) = node.as_deref() {
             folder_present(node, request)?;
         }
         if let Some(scope) = request.resume_scope.as_ref() {
             target.check_current(request.id)?;
-            let runtime = target.runtime.upgrade().ok_or("runtime stopped")?;
+            let runtime = target
+                .runtime
+                .upgrade()
+                .ok_or_else(|| "runtime stopped".to_owned())?;
             let kind = request
                 .agent_kind
                 .as_deref()
-                .ok_or("session_resume_agent_required")?;
+                .ok_or_else(|| "session_resume_agent_required".to_owned())?;
             let node = task_session_node(&runtime, request.id, kind)?;
             crate::live::confirm_session_launch(
                 node.as_ref(),
@@ -1342,7 +1425,9 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
                 request.resume_reference.as_ref(),
             )?;
             if !Arc::ptr_eq(&node, &task_session_node(&runtime, request.id, kind)?) {
-                return Err("session_resume_reader_changed".into());
+                return Err(ControlFailure::Definite(
+                    "session_resume_reader_changed".into(),
+                ));
             }
             target.check_current(request.id)?;
             let current = || {
@@ -1361,18 +1446,86 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
                 launch.as_ref(),
             );
         }
-        create_checkout_tab(target.connector.as_ref(), request, launch.as_ref())
+        create_checkout_tab(
+            &CurrentSessionConnector {
+                connector: target.connector.as_ref(),
+                current: &|| target.check_current(request.id),
+            },
+            request,
+            launch.as_ref(),
+        )
     })();
     let Some(runtime) = target.runtime.upgrade() else {
         return;
     };
-    if let Ok(mut guard) = runtime.lock() {
-        guard.ingest_task_operation_result(request.id, result);
+    let saved = if let Ok(mut guard) = runtime.lock() {
+        if let Err(failure) = &result {
+            guard.group_start_failed(
+                request.id,
+                failure.is_ambiguous()
+                    || request
+                        .start
+                        .as_ref()
+                        .is_some_and(|start| start.recovery_only),
+            );
+        }
+        guard.ingest_task_operation_result(
+            request.id,
+            result.map_err(|failure| failure.message().to_owned()),
+        );
+        if request
+            .start
+            .as_ref()
+            .is_some_and(|start| start.agent_already_attempted || start.confirm_only)
+        {
+            None
+        } else {
+            guard.group_agent_start_save(request.id)
+        }
     } else {
         return;
-    }
+    };
     drop(runtime);
     target.notifier.notify();
+    if request
+        .start
+        .as_ref()
+        .is_some_and(|start| start.agent_already_attempted || start.confirm_only)
+    {
+        if let Some(runtime) = target.runtime.upgrade()
+            && let Ok(mut runtime) = runtime.lock()
+        {
+            let outcome = match request.start.as_ref().and_then(|start| start.agent_phase.as_deref()) {
+                Some("started") => TaskAgentOutcome::Started,
+                Some("failed") | None => TaskAgentOutcome::Failed("The original pane was restored. Enter a task and start the agent in this pane.".into()),
+                _ => TaskAgentOutcome::Unknown("The original pane was restored. Inspect it before starting another agent.".into()),
+            };
+            runtime.ingest_task_agent_result(request.id, outcome);
+        }
+        target.notifier.notify();
+        return;
+    }
+    if let Some(saved) = saved {
+        let saved = saved
+            .recv_timeout(Duration::from_secs(10))
+            .ok()
+            .and_then(Result::ok)
+            .is_some();
+        if !saved {
+            if let Some(runtime) = target.runtime.upgrade()
+                && let Ok(mut runtime) = runtime.lock()
+            {
+                runtime.ingest_task_agent_result(
+                    request.id,
+                    TaskAgentOutcome::Failed(
+                        "The agent start could not be saved. Retry the agent in this pane.".into(),
+                    ),
+                );
+            }
+            target.notifier.notify();
+            return;
+        }
+    }
     start_task_agent(
         &target.connector,
         &target.runtime,
@@ -1529,30 +1682,78 @@ fn create_checkout_tab(
     connector: &dyn ApiConnector,
     request: &CheckoutTabRequest,
     launch: Option<&hide_node_link::protocol::ShellLaunch>,
-) -> Result<WorktreeTaskOutcome, String> {
-    let env = launch.map(|launch| launch.env.clone()).unwrap_or_default();
-    let command = launch.map(|launch| launch.command.as_slice());
-    let tab = match &request.host {
-        crate::checkout_owner::TabHost::Workspace(workspace_id) => super::create_tab_in(
-            connector,
-            workspace_id,
-            &request.cwd,
-            &request.label,
-            request.focus,
-            env,
-            command,
-        ),
-        crate::checkout_owner::TabHost::Open(owner) => super::open_owner_tab(
-            connector,
-            owner,
-            &request.cwd,
-            &request.label,
-            request.focus,
-            env,
-            command,
-        ),
+) -> Result<WorktreeTaskOutcome, ControlFailure> {
+    let mut env = launch.map(|launch| launch.env.clone()).unwrap_or_default();
+    if let Some(start) = &request.start {
+        env.extend(super::checkout_start_env(&start.marker));
     }
-    .map_err(|failure| failure.message().to_owned())?;
+    let command = launch.map(|launch| launch.command.as_slice());
+    let result = if let Some(start) = request.start.as_ref().filter(|start| start.recovery_only) {
+        super::recover_checkout_start(
+            connector,
+            &start.marker,
+            match &request.host {
+                crate::checkout_owner::TabHost::Workspace(id) => Some(id.as_str()),
+                _ => None,
+            },
+            start.tab_id.as_deref().or(start.settled_tab_id.as_deref()),
+        )
+        .map_err(ControlFailure::Ambiguous)
+    } else if let Some(start) = request
+        .start
+        .as_ref()
+        .filter(|start| start.tab_id.is_some())
+    {
+        super::split_checkout_start(
+            connector,
+            start.tab_id.as_deref().expect("checked"),
+            &request.cwd,
+            &start.marker,
+        )
+    } else {
+        match &request.host {
+            crate::checkout_owner::TabHost::Workspace(workspace_id) => super::create_tab_in(
+                connector,
+                workspace_id,
+                &request.cwd,
+                &request.label,
+                request.focus,
+                env,
+                command,
+            ),
+            crate::checkout_owner::TabHost::Open(owner) => super::open_owner_tab(
+                connector,
+                owner,
+                &request.cwd,
+                &request.label,
+                request.focus,
+                env,
+                command,
+            ),
+        }
+    };
+    let tab = match result {
+        Err(failure)
+            if failure.is_ambiguous()
+                && request
+                    .start
+                    .as_ref()
+                    .is_some_and(|start| !start.recovery_only) =>
+        {
+            let start = request.start.as_ref().expect("checked");
+            super::recover_checkout_start(
+                connector,
+                &start.marker,
+                match &request.host {
+                    crate::checkout_owner::TabHost::Workspace(id) => Some(id.as_str()),
+                    _ => None,
+                },
+                start.tab_id.as_deref().or(start.settled_tab_id.as_deref()),
+            )
+            .map_err(ControlFailure::Ambiguous)?
+        }
+        result => result?,
+    };
     // A tab that does not run the launch (Herdr's own shell, or no launch
     // for this shell) gives no mark.
     let shell = crate::agent_start::ShellStart::of_tab(tab.launched, launch);
@@ -2286,6 +2487,7 @@ mod tests {
         let inside = checkout.path().join("sub");
         std::fs::create_dir(&inside).unwrap();
         let request = |cwd: &std::path::Path| CheckoutTabRequest {
+            start: None,
             id: 1,
             agent_kind: Some("claude".into()),
             checkout_path: checkout.path().display().to_string(),
@@ -2341,6 +2543,135 @@ mod tests {
             replies: Mutex::new(replies.into()),
             requests: Arc::new(Mutex::new(vec![])),
         }
+    }
+
+    fn targeted_start_request(recovery: bool, tab: Option<&str>) -> CheckoutTabRequest {
+        CheckoutTabRequest {
+            start: Some(CheckoutStart {
+                marker: "fixture-intent".into(),
+                recovery_only: recovery,
+                tab_id: tab.map(str::to_owned),
+                settled_tab_id: None,
+                agent_already_attempted: false,
+                agent_phase: None,
+                confirm_only: false,
+            }),
+            id: 1,
+            agent_kind: None,
+            checkout_path: "/fixture".into(),
+            label: "Tab 2".into(),
+            host: crate::checkout_owner::TabHost::Workspace("w1".into()),
+            focus: false,
+            resume_scope: None,
+            resume_reference: None,
+            cwd: "/fixture".into(),
+        }
+    }
+
+    fn start_snapshot() -> Value {
+        json!({"result":{"type":"session_snapshot","snapshot":{
+            "version":"fixture","protocol":hide_herdr_client::HERDR_PROTOCOL_REVISION,
+            "workspaces":[],"tabs":[{"tab_id":"w1:t2","workspace_id":"w1","number":2,
+                "label":"Tab 2","focused":false,"pane_count":1,"agent_status":"idle"}],
+            "panes":[],"layouts":[],"agents":[]
+        }}})
+    }
+
+    fn start_export(marked: bool) -> Value {
+        let env = if marked {
+            super::checkout_start_env("fixture-intent")
+        } else {
+            BTreeMap::new()
+        };
+        json!({"result":{"type":"layout_export","layout":{
+            "workspace_id":"w1","tab_id":"w1:t2","focused_pane_id":"w1:p2","zoomed":false,
+            "root":{"type":"pane","pane_id":"w1:p2","cwd":"/fixture","env":env}
+        }}})
+    }
+
+    #[test]
+    fn checkout_start_adds_a_pane_to_the_exact_tab_without_replacing_its_layout() {
+        let server = server(vec![
+            start_export(false),
+            json!({"result":{"type":"pane_info","pane":{
+                "pane_id":"w1:p3","terminal_id":"fixture-terminal","workspace_id":"w1","tab_id":"w1:t2",
+                "focused":false,"agent_status":"idle","revision":1
+            }}}),
+        ]);
+        let result =
+            create_checkout_tab(&server, &targeted_start_request(false, Some("w1:t2")), None)
+                .unwrap();
+        assert_eq!(result.created_tab_id.as_deref(), Some("w1:t2"));
+        assert_eq!(result.pane_id, "w1:p3");
+        let requests = server.requests.lock().unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|r| r["method"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["layout.export", "pane.split"]
+        );
+        assert_eq!(requests[1]["params"]["target_pane_id"], "w1:p2");
+        assert_eq!(requests[1]["params"]["focus"], false);
+        assert_eq!(
+            requests[1]["params"]["env"][super::REOPEN_INTENT_ENV],
+            "fixture-intent:checkout-start"
+        );
+    }
+
+    #[test]
+    fn checkout_start_recovers_an_unreadable_creation_answer_by_its_exact_claim() {
+        let server = server(vec![
+            json!({"result":{"type":"ok"}}),
+            start_snapshot(),
+            start_export(true),
+        ]);
+        let result =
+            create_checkout_tab(&server, &targeted_start_request(false, None), None).unwrap();
+        assert_eq!(result.pane_id, "w1:p2");
+        assert_eq!(result.created_tab_id.as_deref(), Some("w1:t2"));
+        let requests = server.requests.lock().unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|r| r["method"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["tab.create", "session.snapshot", "layout.export"]
+        );
+        assert_eq!(
+            requests[0]["params"]["env"][super::REOPEN_INTENT_ENV],
+            "fixture-intent:checkout-start"
+        );
+    }
+
+    #[test]
+    fn checkout_start_retry_only_reads_and_never_adopts_an_unmarked_same_folder_tab() {
+        let server = server(vec![
+            start_snapshot(),
+            start_export(false),
+            start_snapshot(),
+            start_export(true),
+        ]);
+        let request = targeted_start_request(true, None);
+        let first = create_checkout_tab(&server, &request, None).unwrap_err();
+        assert!(first.is_ambiguous());
+        let confirmed = create_checkout_tab(&server, &request, None).unwrap();
+        assert_eq!(confirmed.pane_id, "w1:p2");
+        assert_eq!(
+            server
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|r| r["method"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "session.snapshot",
+                "layout.export",
+                "session.snapshot",
+                "layout.export"
+            ]
+        );
     }
     fn snapshot(ids: &[&str]) -> Value {
         json!({"result":{"type":"session_snapshot","snapshot":{"panes":ids.iter().map(|id|json!({"pane_id":id})).collect::<Vec<_>>()}}})
@@ -3495,6 +3826,7 @@ mod tests {
             let outcome = create_checkout_tab(
                 &server,
                 &CheckoutTabRequest {
+                    start: None,
                     id: 1,
                     agent_kind: None,
                     checkout_path: "/repo".into(),

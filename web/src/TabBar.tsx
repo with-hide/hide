@@ -1,4 +1,4 @@
-import { XIcon } from "lucide-react";
+import { PanelsTopLeftIcon, XIcon } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { StatusMark } from "./components/status-mark";
@@ -21,6 +21,12 @@ const NONE: AsyncOperation[] = [];
 
 /** Phases of a close the core is still confirming with Herdr (`operations.rs`). */
 const IN_FLIGHT = new Set(["transmitting", "awaiting_topology", "unknown"]);
+
+export function AgentDraftTab({ id, number, interaction, actions }: { id: string; number: number | null; interaction: AreaTabInteraction; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const label = t("groups.newTab");
+  return <TabButton entry={{ id, source_id: id, kind: "herdr", label, preview: false }} identity={label} agentPaneCount={0} editor={null} mark={<PanelsTopLeftIcon className="size-(--size-icon-sm) shrink-0" />} number={number} active={interaction.selected} areaActive={interaction.areaActive} closing={false} closeLabel={t("shell.closeTab", { title: label })} fit={interaction.fit} dragging={interaction.dragging} onSelect={interaction.select} onClose={() => actions.closeTab(id)} onPointerDown={interaction.press} />;
+}
 
 /** "closing…" while the core is still confirming a close with Herdr. */
 export function closingSuffix(targetId: string, kind: "tab.close" | "pane.close", operations: AsyncOperation[]): boolean {

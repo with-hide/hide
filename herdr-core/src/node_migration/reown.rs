@@ -428,6 +428,29 @@ impl Mapper<'_> {
                     if let Some(layout) = view.get_mut("agent_layout") {
                         self.agent_layout(layout);
                     }
+                    if let Some(groups) = view.get_mut("agent_groups") {
+                        for group in each(groups, "items") {
+                            if let Some(layout) = group.get_mut("layout") {
+                                self.agent_layout(layout);
+                            }
+                        }
+                    }
+                    if let Some(starts) =
+                        view.get_mut("agent_starts").and_then(Value::as_object_mut)
+                    {
+                        for start in starts.values_mut() {
+                            for (field, kind) in
+                                [("live_tab_id", Moves::Tab), ("pane_id", Moves::Pane)]
+                            {
+                                if let Some(value) = start.get_mut(field)
+                                    && let Some(Mapped::To(id)) =
+                                        value.as_str().map(|text| self.map(kind, text))
+                                {
+                                    *value = Value::String(id);
+                                }
+                            }
+                        }
+                    }
                     super::each_opener(view, &mut |device| match device
                         .as_str()
                         .map(|id| self.map(Moves::Device, id))
@@ -2025,6 +2048,54 @@ mod tests {
         reown(dir.path(), &forward(), &IdTable::default()).unwrap();
         let (_, _, disposition) = crate::persistence::load(&path);
         assert_eq!(disposition, crate::persistence::LoadDisposition::Loaded);
+    }
+
+    #[test]
+    fn a_core_move_rekeys_named_group_tabs_and_start_receipts_but_keeps_draft_identity() {
+        let dir = macbook_folder();
+        let path = dir.path().join(WORKSPACE_VIEWS);
+        let mut views = read(&path);
+        views["workspaces"][0]["agent_groups"] = json!({
+            "next_id": 6, "selected": "g5", "drafts": ["draft:6"],
+            "items": [{"id": "g5", "name": "Review", "layout": {
+                "root": {"area": {"id": "a1", "active": "draft:6", "displays": [{"id": "w1:t9"}, {"id": "draft:6"}]}},
+                "active_area": "a1", "next_id": 2, "canvases": {"a1": "w1:tD"}
+            }}]
+        });
+        views["workspaces"][0]["agent_starts"] = json!({"same-intent": {
+            "group_id": "g5", "area_id": "a1", "draft_tab_id": "draft:6",
+            "live_tab_id": "w1:t9", "pane_id": "w1:p9", "add_pane": false,
+            "marker": "original-claim", "state": "pending", "agent_kind": null,
+            "agent_phase": null, "recorded_at": 1, "seen_in_topology": false
+        }});
+        std::fs::write(&path, serde_json::to_vec(&views).unwrap()).unwrap();
+        let original = views["workspaces"][0].clone();
+        reown(dir.path(), &forward(), &forward_ids()).unwrap();
+        let moved = read(&path);
+        let group = &moved["workspaces"][0]["agent_groups"];
+        let layout = &group["items"][0]["layout"];
+        assert_eq!(group["selected"], "g5");
+        assert_eq!(group["drafts"], json!(["draft:6"]));
+        assert_eq!(layout["root"]["area"]["active"], "draft:6");
+        assert_eq!(
+            layout["root"]["area"]["displays"][0]["id"],
+            format!("remote:{M}:tab:w1:t9")
+        );
+        assert_eq!(layout["canvases"]["a1"], format!("remote:{M}:tab:w1:tD"));
+        let start = &moved["workspaces"][0]["agent_starts"]["same-intent"];
+        assert_eq!(start["live_tab_id"], format!("remote:{M}:tab:w1:t9"));
+        assert_eq!(start["pane_id"], format!("remote:{M}:pane:w1:p9"));
+        assert_eq!(start["marker"], "original-claim");
+        reown(dir.path(), &back(), &back_ids()).unwrap();
+        let restored = read(&path);
+        assert_eq!(
+            restored["workspaces"][0]["agent_groups"],
+            original["agent_groups"]
+        );
+        assert_eq!(
+            restored["workspaces"][0]["agent_starts"],
+            original["agent_starts"]
+        );
     }
 
     #[test]

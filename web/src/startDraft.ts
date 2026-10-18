@@ -9,6 +9,8 @@ import { create } from "zustand";
 import type { ProviderKind } from "./agentPicker";
 import type { MessageKey } from "./i18n/catalogs";
 import { startReason } from "./startReason";
+import type { AgentSelection } from "./agentPicker";
+import type { AgentStartTarget } from "./agentLayout";
 
 /**
  * What an open names instead of what is in front: the project to aim at, as
@@ -85,4 +87,69 @@ export const useStartPanel = create<StartPanelState>((set) => ({
   finish: (taskId) => set((s) => ({ isOpen: false, text: "", request: null, failure: null, spent: taskId === null ? null : { taskId, text: s.sent } })),
   restore: (failure) => set((s) => (s.spent ? { text: s.text === "" ? s.spent.text : s.text, failure, spent: null } : {})),
   settle: () => set({ spent: null }),
+}));
+
+/** Input follows a core target through navigation; no group or tab topology lives here. */
+export type InlineStartDraft = {
+  text: string;
+  selection: AgentSelection;
+  request: null | { id: string; sentAt: number; provider: AgentSelection["kind"]; model: string | null; prompt: string | null; target: AgentStartTarget; restored?: boolean; beforeAnswer?: string };
+  phase: "editing" | "pending" | "unknown" | "failed" | "agent_failed";
+  taskId: number | null;
+  failure: StartFailure | null;
+};
+const INLINE_DRAFT_LIMIT = 256;
+export const inlineStartKey = (device: string, path: string, target: AgentStartTarget) => JSON.stringify([device, path, target.group_id, target.tab_id ?? target.area_id, target.add_pane]);
+export const useInlineStarts = create<{
+  drafts: Readonly<Record<string, InlineStartDraft>>;
+  closing: Readonly<Record<string, { device: string; path: string; tab: string }>>;
+  noteClose: (request: string, device: string, path: string, tab: string) => void;
+  settleClose: (request: string, confirmed: boolean) => void;
+  put: (key: string, draft: InlineStartDraft) => boolean;
+  retarget: (device: string, path: string, requestId: string, target: AgentStartTarget) => boolean;
+  drop: (key: string) => void;
+}>((set, get) => ({
+  drafts: {},
+  closing: {},
+  noteClose: (request, device, path, tab) => set((state) => ({ closing: { ...state.closing, [request]: { device, path, tab } } })),
+  settleClose: (request, confirmed) => set((state) => {
+    const closed = state.closing[request];
+    if (!closed) return state;
+    const closing = { ...state.closing }; delete closing[request];
+    const drafts = { ...state.drafts };
+    if (confirmed) for (const key of Object.keys(drafts)) {
+      const [device, path, , tab] = JSON.parse(key) as string[];
+      if (device === closed.device && path === closed.path && tab === closed.tab) delete drafts[key];
+    }
+    return { closing, drafts };
+  }),
+  // Reservation changes an empty-area address into a core draft identity. Move
+  // its input in one update, without consuming another slot or minting an intent.
+  retarget: (device, path, requestId, target) => {
+    const key = inlineStartKey(device, path, target);
+    const matches = Object.entries(get().drafts).filter(([heldKey, draft]) => {
+      const [heldDevice, heldPath] = JSON.parse(heldKey) as string[];
+      return heldDevice === device && heldPath === path && draft.request?.id === requestId;
+    });
+    const source = matches.find(([, draft]) => !draft.request?.restored) ?? matches[0];
+    if (!source) return false;
+    const [oldKey, draft] = source;
+    const occupied = get().drafts[key];
+    if (occupied && occupied.request?.id !== requestId) return false;
+    const request = draft.request!;
+    if (oldKey === key && matches.length === 1 && request.target.group_id === target.group_id && request.target.area_id === target.area_id && request.target.tab_id === target.tab_id && request.target.add_pane === target.add_pane) return true;
+    set((state) => {
+      const drafts = { ...state.drafts };
+      for (const [heldKey] of matches) delete drafts[heldKey];
+      drafts[key] = { ...draft, request: { ...request, target } };
+      return { drafts };
+    });
+    return true;
+  },
+  put: (key, draft) => {
+    if (!get().drafts[key] && Object.keys(get().drafts).length >= INLINE_DRAFT_LIMIT) return false;
+    set((state) => ({ drafts: { ...state.drafts, [key]: draft } }));
+    return true;
+  },
+  drop: (key) => set((state) => { const drafts = { ...state.drafts }; delete drafts[key]; return { drafts }; }),
 }));

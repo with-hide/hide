@@ -1,7 +1,7 @@
 //! A node that dialed in arranges its Workspaces' tabs in Agent areas as
 //! this machine does, since the core arranged them as its own before it moved
 //! off that machine (PRD core-host-node-move D-29); a device this core dials
-//! keeps the one tab its Herdr has in front.
+//! retains one Agent area in each named group.
 
 use super::device_catalog::{
     RecordingHerdr, connected_status, dispatch, herdr_workspace, next_request, session, tree,
@@ -215,6 +215,11 @@ fn device_in_front(
             host_consent: None,
         });
     runtime.snapshot.status.remote.push(connected_status(NODE));
+    let mut device = runtime.snapshot.navigator.devices[0].clone();
+    device.id = NODE.to_owned();
+    device.kind = "remote".to_owned();
+    device.state = "connected".to_owned();
+    runtime.snapshot.navigator.devices.push(device);
     let views = tempfile::tempdir().unwrap();
     runtime.workspace_views =
         Some(WorkspaceViewStore::open(views.path().join("views.json"), Default::default()).0);
@@ -294,7 +299,7 @@ fn collect(
 
 /// A split on a node's Workspace shows both tabs, asks the node's Herdr for
 /// the tab the new area holds, and attaches the panes of both; the node's
-/// keyboard moving back to the first tab moves the area in use with it.
+/// stale keyboard focus does not replace the explicitly selected area.
 #[test]
 fn a_node_that_dialed_in_splits_its_tabs_into_agent_areas_and_its_herdr_shows_the_active_one() {
     let t = tree();
@@ -333,7 +338,7 @@ fn a_node_that_dialed_in_splits_its_tabs_into_agent_areas_and_its_herdr_shows_th
         .unwrap()
         .agent_layout
         .clone();
-    assert_eq!(layout.active(), Some(tab("t1").as_str()));
+    assert_eq!(layout.active(), Some(tab("t2").as_str()));
     assert_eq!(
         shown(&runtime),
         [tab("t1"), tab("t2")],
@@ -358,10 +363,9 @@ fn a_node_s_own_tabs_join_and_leave_its_agent_areas() {
     assert_eq!(shown(&runtime), [tab("t1")], "the emptied area closed");
 }
 
-/// A device this core dials keeps the one tab its Herdr has in front: no
-/// Agent areas reach the window and a split is refused with the reason.
+/// Group-tabs B28 preserves named groups on SSH, with one area per group.
 #[test]
-fn a_dialed_device_shows_one_tab_and_refuses_agent_groups() {
+fn a_dialed_device_shows_agent_groups_but_refuses_a_second_area() {
     let t = tree();
     let (mut runtime, requests, _views) = device_in_front(
         crate::model::LinkOrigin::Dialed {
@@ -374,7 +378,7 @@ fn a_dialed_device_shows_one_tab_and_refuses_agent_groups() {
             .snapshot()
             .workspace_view
             .as_ref()
-            .map(|view| view.agent_layout.is_none()),
+            .map(|view| view.agent_layout.as_ref().is_some_and(|layout| layout.limits.areas == 1)),
         Some(true)
     );
     split(&mut runtime, &t.main, "t2");
@@ -396,7 +400,7 @@ fn a_dialed_device_shows_one_tab_and_refuses_agent_groups() {
             .unwrap()
             .views
             .get(NODE, &t.main)
-            .is_none_or(|view| view.agent_layout.tree.display_count() == 0),
-        "nothing arranged for {checkout}"
+            .is_some_and(|view| view.agent_layout.tree.display_count() == 2),
+        "both tabs remain arranged in the single area for {checkout}"
     );
 }

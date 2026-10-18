@@ -103,7 +103,7 @@ export function reconcileHeldCycle(cycle: Cycle, rest: SnapshotRest | null): Cyc
  */
 function stripCheckout(rest: SnapshotRest | null) {
   const remote = remoteContext(rest);
-  if (remote) return remoteView(remote.session)?.checkout ?? null;
+  if (remote) return remoteView(remote.session, rest?.workspace_view)?.checkout ?? null;
   return focusedCheckout(rest);
 }
 

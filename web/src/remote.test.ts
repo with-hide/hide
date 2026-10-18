@@ -174,6 +174,16 @@ function recorder() {
 }
 
 describe("remote view", () => {
+  it("keeps a core-selected draft or empty group visible instead of the host's live tab", () => {
+    const host = session();
+    const front = { device_id: "studio", path: "/home/remote/app", agent_layout: { root: { area: { id: "a1", active: "draft-1", displays: [{ id: "draft-1" }] } }, active_area: "a1", canvases: {}, drafts: ["draft-1"] } } as WorkspaceView;
+    expect(remoteView(host, front)?.tab).toBeNull();
+    expect(remoteView(host, front)?.focusedPaneId).toBeNull();
+    front.agent_layout!.root = { area: { id: "a1", active: null, displays: [] } };
+    expect(remoteView(host, front)?.tab).toBeNull();
+    expect(remoteView(host)?.tab).not.toBeNull();
+  });
+
   it("draws the tab the host focused, which is the one the core attaches", () => {
     const view = remoteView(session());
     expect(view?.tab?.id).toBe("remote:studio:tab:w9:t1");

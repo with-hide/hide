@@ -328,7 +328,7 @@ impl Runtime {
                 let (live_pane_ids, active_pane_ids) = remote_terminal_pane_sets(
                     &session,
                     focused_device_id.as_deref() == Some(target_id.as_str()),
-                    &self.node_shown_agent_tabs(&target_id),
+                    self.node_shown_agent_tabs(&target_id).as_deref(),
                 );
                 self.reconcile_remote_terminal_panes(&target_id, &live_pane_ids, &active_pane_ids)
                     | changed

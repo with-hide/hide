@@ -738,6 +738,7 @@ export type WorktreeDisk = {
 };
 
 export type Checkout = {
+  agent_groups?: import("./agentLayout").CheckoutAgentGroups;
   agent_scope: AgentScope;
   id: string;
   workspace_id: string;

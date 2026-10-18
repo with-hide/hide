@@ -311,12 +311,47 @@ pub struct BrowserAreaScopeRow {
 /// Agent tab identities only; pane contents remain in checkout.tabs.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct AgentLayoutSnapshot {
+    pub group_id: Option<String>,
+    pub groups: Vec<AgentGroupSnapshot>,
+    pub drafts: Vec<String>,
+    pub start_receipts: Vec<AgentStartReceiptSnapshot>,
+    pub can_undo_group: bool,
     pub waiting: usize,
     pub root: crate::split_tree::Node<crate::agent_layout::Tab>,
     pub active_area: String,
     pub canvases: BTreeMap<String, String>,
     pub limits: ViewLimitsSnapshot,
     pub display_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AgentGroupSnapshot {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub tabs: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct AgentGroupsSnapshot {
+    pub selected: Option<String>,
+    pub groups: Vec<AgentGroupSnapshot>,
+    pub drafts: Vec<String>,
+    pub start_receipts: Vec<AgentStartReceiptSnapshot>,
+}
+
+/// A start's identity and outcome. Prompts and ownership markers stay private.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AgentStartReceiptSnapshot {
+    pub request_id: String,
+    pub group_id: Option<String>,
+    pub area_id: String,
+    pub draft_tab_id: Option<String>,
+    pub live_tab_id: Option<String>,
+    pub pane_id: Option<String>,
+    pub add_pane: bool,
+    pub state: String,
+    pub agent_kind: Option<String>,
+    pub agent_phase: Option<String>,
 }
 
 /// The front Workspace's View areas (PRD S7): the tree the shell draws, the
@@ -1718,6 +1753,7 @@ pub struct CheckoutPurposeSnapshot {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct CheckoutSnapshot {
+    pub agent_groups: Option<AgentGroupsSnapshot>,
     pub agent_scope: crate::agent_state::Scope,
     pub issue: Option<crate::issues::IssueLinkSnapshot>,
     /// The key of the task in its project's `tasks` this checkout works on.

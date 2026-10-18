@@ -1544,6 +1544,7 @@ fn a_device_agent_chosen_brings_the_device_forward_and_moves_no_column() {
     store.views.entry(TARGET, &t.main).tool = Some(crate::workspace_views::Tool::Files);
     store.views.entry(TARGET, &t.linked).tool = Some(crate::workspace_views::Tool::Files);
     runtime.workspace_views = Some(store);
+    runtime.reconcile_node_agent_topology(TARGET);
 
     runtime.request_remote_control(RemoteControlPayload {
         target_id: TARGET.to_owned(),
@@ -1579,14 +1580,14 @@ fn a_device_agent_chosen_brings_the_device_forward_and_moves_no_column() {
         Some(crate::workspace_views::Tool::Files)
     );
 
-    // D-11: the choice is remembered only once the device's Herdr has moved
-    // there, so a refusal on the device would remember nothing.
+    // Group-tabs B28: explicit navigation chooses the core checkout now,
+    // independently of the device Herdr focus that may arrive later.
     let resumed = |runtime: &mut Runtime| {
         runtime.sync_workspace_view();
         let view = runtime.snapshot.workspace_view.clone().expect("front");
         (view.path, view.resumed)
     };
-    assert_eq!(resumed(&mut runtime), (t.main.clone(), false));
+    assert_eq!(resumed(&mut runtime), (t.linked.clone(), true));
     let moved = |runtime: &mut Runtime, workspace: &str| {
         let mut raw = session(vec![
             herdr_workspace(TARGET, "w1", &t.main, &[("t1", &t.main)]),
@@ -1611,60 +1612,15 @@ fn a_device_agent_chosen_brings_the_device_forward_and_moves_no_column() {
         },
     });
     assert_eq!(runtime.snapshot.status.last_error, None);
-    assert_eq!(resumed(&mut runtime), (t.linked.clone(), true));
+    assert_eq!(resumed(&mut runtime), (t.main.clone(), true));
     moved(&mut runtime, "w1");
     assert_eq!(resumed(&mut runtime), (t.main.clone(), true));
 
-    // A request the device refuses chooses nothing, even when its Herdr
-    // later moves there on its own.
-    runtime.request_remote_control(RemoteControlPayload {
-        target_id: TARGET.to_owned(),
-        request_id: "refused".to_owned(),
-        report_pane_focus_outcome: false,
-        focus_device: true,
-        request: RemoteControlRequest::FocusWorkspace {
-            workspace_id: format!("remote:{TARGET}:workspace:w2"),
-            checkout_id: Some(device_catalog::checkout_id(TARGET, &t.linked)),
-        },
-    });
-    runtime.ingest_remote_control_result(
-        TARGET,
-        "refused",
-        RemoteControlAction::FocusWorkspace {
-            workspace_id: "w2".to_owned(),
-        },
-        Err("the workspace is gone".to_owned()),
-        3,
-    );
+    // A stale report from Herdr cannot take the explicitly chosen checkout.
     moved(&mut runtime, "w2");
-    assert_eq!(resumed(&mut runtime), (t.linked.clone(), false));
+    assert_eq!(resumed(&mut runtime), (t.main.clone(), true));
 
-    // So does one whose answer comes back on a connection that is gone.
-    moved(&mut runtime, "w1");
-    runtime.request_remote_control(RemoteControlPayload {
-        target_id: TARGET.to_owned(),
-        request_id: "lost".to_owned(),
-        report_pane_focus_outcome: false,
-        focus_device: true,
-        request: RemoteControlRequest::FocusWorkspace {
-            workspace_id: format!("remote:{TARGET}:workspace:w2"),
-            checkout_id: Some(device_catalog::checkout_id(TARGET, &t.linked)),
-        },
-    });
-    runtime.ingest_remote_control_result_with_generation(
-        TARGET,
-        "lost",
-        RemoteControlAction::FocusWorkspace {
-            workspace_id: "w2".to_owned(),
-        },
-        Err("the connection closed".to_owned()),
-        3,
-        Some(u64::MAX),
-    );
-    moved(&mut runtime, "w2");
-    assert_eq!(resumed(&mut runtime), (t.linked.clone(), false));
-
-    // Removing the device forgets a choice still waiting for it.
+    // Removing the device forgets its saved core choice.
     runtime.request_remote_control(RemoteControlPayload {
         target_id: TARGET.to_owned(),
         request_id: "removed".to_owned(),

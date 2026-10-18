@@ -362,7 +362,8 @@ function RemoteAgentArea({ actions }: { actions: Actions }) {
   // The machine this window runs on, which "Show this machine" brings forward; on a node it is not the core's.
   const own = useShellStore((s) => windowDeviceId(s.rest?.navigator?.devices));
   const session = status?.session ?? null;
-  const view = useMemo(() => remoteView(session), [session]);
+  const front = useShellStore((s) => s.rest?.workspace_view);
+  const view = useMemo(() => remoteView(session, front), [session, front]);
   if (!device) return null;
   const connected = status?.state === "connected";
   const away = deviceAwayLine(device, name, t);
