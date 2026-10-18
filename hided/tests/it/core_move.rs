@@ -156,6 +156,32 @@ fn a_target_whose_state_folder_is_reached_through_a_link_takes_the_core() -> Res
     finish(fixture, journey)
 }
 
+/// A target whose state folder is itself a link cannot keep it private, so
+/// the check names the folder before anything stops: the source keeps its
+/// core, nothing is copied, and the failing check is the folder's, not the
+/// connection's.
+#[test]
+#[ignore = "external lane requires this worktree's CLI binaries and HIDE_E2E_HERDR_BIN"]
+fn a_target_whose_state_folder_is_a_link_fails_its_own_check() -> Result<()> {
+    let fixture = Fixture::start_with_linked_state_folder()?;
+    let journey = (|| {
+        let before = visible(&fixture)?;
+        fixture.event("core_move", json!({"action": "start", "device": DEVICE_ID}))?;
+        let failed = fixture.logged(&fixture.source, "checks.failed")?;
+        ensure!(failed["checks"] == json!(["target_folder"]), "{failed}");
+        let detail = failed["failed"][0]["detail"].as_str().unwrap_or_default();
+        ensure!(detail.contains("is a link"), "{failed}");
+        ensure!(fixture.role()? == "core");
+        ensure!(visible(&fixture)? == before, "the window changed");
+        ensure!(
+            fixture.target_core()?.is_none(),
+            "a core started on the target"
+        );
+        Ok(())
+    })();
+    finish(fixture, journey)
+}
+
 /// The choices made for a device's project (a guardrail, a repository, a
 /// branch) are kept at a key made from the machine's id, which a move gives
 /// another one: they follow the project through the move and the move back,

@@ -169,10 +169,11 @@ fn hold(state_dir: &Path) -> Result<handover::Held, StepAnswer> {
 /// them.
 fn inspect(state_dir: &Path, ai: Option<&str>) -> Answered {
     let node = herdr_core::node::NodeId::of_this_machine().map_err(plain)?;
-    let handover = handover::read(state_dir).map_err(plain)?;
-    // The copy is sent by a path without a link; this machine resolves its
-    // own, since only it can.
-    let reachable = reachable(state_dir);
+    let Folder {
+        reachable,
+        refused,
+        handover,
+    } = Folder::look_at(state_dir).map_err(plain)?;
     // The Herdr this machine's core would own, as its daemon resolves it.
     let env = crate::env::load()
         .map_err(|errors| plain(format!("{} environment errors", errors.len())))?;
@@ -196,8 +197,56 @@ fn inspect(state_dir: &Path, ai: Option<&str>) -> Answered {
         herdr_socket: env.herdr_socket_path,
         ai: herdr_core::stored_hide_ai_settings(&env.home),
         failed,
-        path_refused: path_refused(&reachable),
+        path_refused: refused,
     })))
+}
+
+/// What the move finds at the state folder before anything else reads it.
+struct Folder {
+    /// The folder as the copy reaches it (`reachable`).
+    reachable: PathBuf,
+    /// Why the copy cannot be sent there (`path_refused`, `leaf_link`).
+    refused: Option<String>,
+    /// The move touching the folder; none when the folder cannot be read,
+    /// which `refused` already says.
+    handover: Option<Handover>,
+}
+
+impl Folder {
+    /// The folder is judged first: a file on the way or a folder this
+    /// account cannot read fails the handover record's read too, which
+    /// would otherwise answer as a failed step, and the operator would be
+    /// told to check the connection instead of the folder.
+    fn look_at(state_dir: &Path) -> Result<Self, String> {
+        let reachable = reachable(state_dir);
+        let refused = leaf_link(state_dir).or_else(|| path_refused(&reachable));
+        let handover = if refused.is_some() {
+            None
+        } else {
+            handover::read(state_dir)?
+        };
+        Ok(Self {
+            reachable,
+            refused,
+            handover,
+        })
+    }
+}
+
+/// The state folder itself is a link. The copy could be sent by the path it
+/// resolves to, but every later step and the core's start use the folder by
+/// the path it is given, which the core's private folder check refuses as a
+/// link, so the move would stop the source's core and then roll back.
+fn leaf_link(state_dir: &Path) -> Option<String> {
+    std::fs::symlink_metadata(state_dir)
+        .ok()
+        .filter(|found| found.file_type().is_symlink())
+        .map(|_| {
+            format!(
+                "{} is a link, and the core cannot keep a folder that is one private",
+                state_dir.display()
+            )
+        })
 }
 
 /// `state_dir` with every link on the way resolved, the part below the
@@ -787,6 +836,49 @@ mod tests {
                 root.join("dangling").display()
             )
         );
+    }
+
+    /// The folder is judged before the handover record is read, so a file on
+    /// the way, a link as the folder itself and a folder this account cannot
+    /// enter are each answered as the folder's refusal, never as a failed
+    /// step; a folder that is fine answers with its handover.
+    #[cfg(unix)]
+    #[test]
+    fn the_folder_is_judged_before_the_handover_record_is_read() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let root = hide_platform::fs::identity::canonical(root.path()).unwrap();
+        let real = root.join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        std::os::unix::fs::symlink(&real, root.join("leaf")).unwrap();
+        std::os::unix::fs::symlink(&root, root.join("above")).unwrap();
+        std::fs::write(root.join("file"), "").unwrap();
+        let locked = root.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0)).unwrap();
+
+        let through_file = Folder::look_at(&root.join("file/s")).unwrap();
+        assert!(
+            through_file
+                .refused
+                .as_deref()
+                .unwrap()
+                .contains("is not a folder")
+        );
+        let leaf = Folder::look_at(&root.join("leaf")).unwrap();
+        assert!(leaf.refused.as_deref().unwrap().contains("is a link"));
+        assert_eq!(leaf.handover, None);
+        // A link above the folder is no refusal: the copy goes by its target.
+        let above = Folder::look_at(&root.join("above/real")).unwrap();
+        assert_eq!((above.refused, above.reachable), (None, real));
+        // The root of the tests may read anything; where it cannot, the
+        // refusal is the folder's.
+        if std::fs::read_dir(&locked).is_err() {
+            let denied = Folder::look_at(&locked.join("s")).unwrap();
+            assert!(denied.refused.is_some(), "{:?}", denied.refused);
+            assert_eq!(denied.handover, None);
+        }
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
 
     /// A move whose pending core already gave its copy back leaves no
