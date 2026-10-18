@@ -61,6 +61,15 @@ test("the local flight draws offline, freezes live for reduced motion, and yield
   await expect(page.locator("#brand strong")).toHaveText("hide");
   await captureElectronWindow(app, "startup-flight", { packaged: Boolean(packaged), offline: true });
   await captureNativeWindow(app, "startup-flight-native", { method: "screencapture exact candidate window without activation", packaged: Boolean(packaged), privateSocket: herdr.socket });
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(720, 480));
+  for (let phase = 0; phase < 5; phase++) {
+    await captureElectronWindow(app, `startup-flight-min-${phase}`, { packaged: Boolean(packaged), viewport: "720x480", phase });
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      let frames = 120;
+      const advance = () => { if (--frames === 0) resolve(); else requestAnimationFrame(advance); };
+      requestAnimationFrame(advance);
+    }));
+  }
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect(page.locator("body")).toHaveAttribute("data-owl-motion", "paused");
   expect(await page.locator("#loading-track span").evaluate((element) => getComputedStyle(element).animationName)).toBe("none");
@@ -68,6 +77,7 @@ test("the local flight draws offline, freezes live for reduced motion, and yield
   const frozen = await frame();
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   expect(await frame()).toBe(frozen);
+  await captureElectronWindow(app, "startup-reduced-motion-min", { packaged: Boolean(packaged), viewport: "720x480", reducedMotion: true });
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await expect.poll(frame).not.toBe(frozen);
   release();
