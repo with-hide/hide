@@ -186,8 +186,11 @@ class Runtime:
                 raise ProtectionError("herdr_binary_does_not_match_pin")
             self.expected_version = manifest["version"]
             base = clean_env()
+            # Native starts can bypass an agent wrapper; every child needs
+            # the same private state route as the daemon, not an XDG fallback.
             base.update(**home_env(self.home), **self.shell.environment(self.home),
                         **{name: str(self.home / folder) for name, folder in XDG_FOLDERS.items()},
+                        HIDE_STATE_DIR=str(self.state),
                         HERDR_SOCKET_PATH=str(self.socket), HERDR_BIN_PATH=str(self.herdr_bin),
                         HERDR_CONFIG_PATH=str(run / "herdr.toml"),
                         HERDR_SESSION_PATH=str(run / "herdr-session.json"),
@@ -198,7 +201,7 @@ class Runtime:
                 write_private(self.home / name, data)
             write_private(run / "herdr.toml", ("[update]\nversion_check = false\n[sound]\nenabled = false\n"
                                                + self.shell.herdr_config()).encode())
-            self.daemon_env = {**base, "HIDE_STATE_DIR": str(self.state), "HIDE_PORT": "0",
+            self.daemon_env = {**base, "HIDE_PORT": "0",
                                "HIDE_KEEP_ALIVE": "1", "HIDED_UI_DIR": str(checkout / "web/dist")}
             # hided observes native session identity using its usual reader.
             # These read-only references do not change the operator's trees.

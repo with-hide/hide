@@ -345,7 +345,8 @@ class Journey:
         while time.monotonic() < end:
             answer = self.controller.hide(["request", "show", letter])
             shown = answer.get("result") or {}
-            record["shown"].append({key: shown.get(key) for key in ("state", "bell_line", "hook_confirmed", "bell_attempts", "bell_turn", "tool_handovers")})
+            record["shown"].append({key: shown.get(key) for key in (
+                "state", "bell_line", "hook_confirmed", "bell_attempts", "bell_turn", "tool_handovers")})
             if done(shown):
                 break
             if self.runtime.owner.cancelled.wait(3):

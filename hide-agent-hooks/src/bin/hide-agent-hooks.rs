@@ -51,9 +51,6 @@ fn main() -> ExitCode {
     // Guarded launches acknowledge ownership before parsing, filesystem work
     // or runtime stdin. Keep this guard until all output and intake finish.
     let arguments: Vec<String> = std::env::args().skip(1).collect();
-    if argument_value("--runtime", &arguments).as_deref() == Some("grok") {
-        probe(serde_json::json!({"stage":"entry", "event":argument_value("--event", &arguments)}));
-    }
     let owner_watch = match OwnerWatch::from_launch() {
         Ok(watch) => watch,
         // Exit 2 from a `PreToolUse` hook refuses the tool call. The outer hook
@@ -62,15 +59,12 @@ fn main() -> ExitCode {
         // reads any exit as no answer, and an agent's call is never failed by
         // Hide's helper. Cursor's permission hooks get their allow, since
         // Cursor reads output that is not a valid answer as a refusal.
-        Err(error)
+        Err(_)
             if matches!(
                 arguments.first().map(String::as_str),
                 Some("hook" | "opencode" | "pi" | "omp")
             ) =>
         {
-            if argument_value("--runtime", &arguments).as_deref() == Some("grok") {
-                probe(serde_json::json!({"stage":"owner_error", "kind":format!("{:?}", error.kind())}));
-            }
             if cursor_permission_hook(&arguments) {
                 let _ = print_line(basic::CURSOR_ALLOW);
             }
@@ -227,17 +221,6 @@ fn run_basic_hook(agent: GuidanceAgent, arguments: &[String], started: Instant) 
     let payload = matches!(event, HookEvent::Stop | HookEvent::UserPromptSubmit)
         .then(|| read_stdin_before_deadline(started + GUARD_PAYLOAD_BUDGET))
         .flatten();
-    if dialect == HookDialect::Grok {
-        let value = payload.as_ref().and_then(|(bytes, _)| serde_json::from_slice::<serde_json::Value>(bytes).ok());
-        probe(serde_json::json!({"stage":"input", "event":event.name(), "read":payload.is_some(),
-            "bytes":payload.as_ref().map(|(bytes,_)|bytes.len()),
-            "session":value.as_ref().and_then(|v|v.get("sessionId")),
-            "snake_session":value.as_ref().and_then(|v|v.get("session_id")),
-            "active":value.as_ref().and_then(|v|v.get("stopHookActive")),
-            "child":value.as_ref().and_then(|v|v.get("subagentType")),
-            "digest":value.as_ref().and_then(|v|v.get("prompt")).and_then(|v|v.as_str()).map(hide_agent_hooks::delivery::prompt_digest),
-            "route":routing_probe()}));
-    }
     let (answer, intake) = std::panic::catch_unwind(|| match event {
         HookEvent::PreToolUse => basic_tool_call(dialect, agent.id(), started),
         HookEvent::Stop | HookEvent::UserPromptSubmit => {
@@ -258,9 +241,6 @@ fn run_basic_hook(agent: GuidanceAgent, arguments: &[String], started: Instant) 
         }
         (None, None)
     });
-    if dialect == HookDialect::Grok {
-        probe(serde_json::json!({"stage":"answer", "event":event.name(), "answer":answer.is_some(), "intake":intake.is_some()}));
-    }
     let answer = match answer {
         None if dialect == HookDialect::Cursor && basic::cursor_permission_event(event) => {
             Some(basic::CURSOR_ALLOW.to_owned())
@@ -277,30 +257,6 @@ fn run_basic_hook(agent: GuidanceAgent, arguments: &[String], started: Instant) 
         hide_agent_hooks::delivery::diagnose_failure(&home, &failure);
     }
     let _ = std::panic::catch_unwind(|| count_basic(dialect, event, payload.as_ref()));
-}
-
-fn probe(mut value: serde_json::Value) {
-    if let Some(home) = home_directory() {
-        value["at"] = serde_json::json!(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis());
-        let folder = std::env::var_os("GROK_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".grok"));
-        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(folder.join("hook-probe.jsonl")) {
-            let _ = writeln!(file, "{value}");
-        }
-    }
-}
-
-fn routing_probe() -> serde_json::Value {
-    fn read(path: PathBuf) -> String {
-        std::fs::File::open(path).map(|_| "readable".to_owned()).unwrap_or_else(|error| format!("{:?}", error.kind()))
-    }
-    let state = std::env::var_os("HIDE_STATE_DIR").map(PathBuf::from);
-    let reference = std::env::var_os("HIDE_CAP_REF").map(PathBuf::from);
-    serde_json::json!({
-        "present":(["HOME", "HIDE_STATE_DIR", "HIDE_CAP_REF", "XDG_STATE_HOME", "GROK_HOME", "HERDR_PANE_ID"].into_iter().filter(|key| std::env::var_os(key).is_some()).collect::<Vec<_>>()),
-        "state_record":state.map(|path| read(path.join("pane-capabilities/bootstrap-socket"))),
-        "reference":reference.as_ref().map(|path| read(path.clone())),
-        "reference_record":reference.as_ref().and_then(|path| path.parent().and_then(std::path::Path::parent)).map(|path| read(path.join("pane-capabilities/bootstrap-socket")))
-    })
 }
 
 fn basic_turn_event(
@@ -355,9 +311,6 @@ fn basic_turn_event(
         ),
         Ok(None) => (None, None),
         Err(failure) => {
-            if dialect == HookDialect::Grok {
-                probe(serde_json::json!({"stage":"failure", "event":event.name(), "code":failure.code}));
-            }
             if let Some(home) = home_directory() {
                 delivery::diagnose_failure(&home, &failure);
             }
