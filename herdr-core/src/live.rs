@@ -4604,14 +4604,11 @@ mod tests {
             }
             let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let observed_changed = Arc::clone(&changed);
-            // An account whose panes start zsh: the fork's tab gets the
-            // shell integration and its start waits for the prompt's mark.
-            let node = hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(
-                hide_host::shell_integration::UserShell {
-                    shell: Some("/bin/zsh".into()),
-                    ..Default::default()
-                },
-            );
+            // The fork's tab runs this account's integrated shell and
+            // waits for its prompt token, independently of installed shells.
+            let shell = crate::fixture::integrated_shell(home.path());
+            let expected_shell = shell.shell.clone().unwrap();
+            let node = hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(shell);
             let expected_cwd = cwd.display().to_string();
             let tab_source = source.clone();
             let tab_other = other_before.clone();
@@ -4649,7 +4646,7 @@ mod tests {
                         // it runs the node's shell with the integration's
                         // launch.
                         assert_eq!(params["tab_label"], "Tab 2");
-                        assert_eq!(params["root"]["command"][0], "/bin/zsh");
+                        assert_eq!(params["root"]["command"][0], expected_shell);
                         json!({"type":"layout_apply","layout":{"workspace_id":"w1","tab_id":"w1:t2",
                             "zoomed":false,"focused_pane_id":"child-pane",
                             "root":{"type":"pane","pane_id":"child-pane"}}})
@@ -4812,14 +4809,11 @@ mod tests {
             let database = home.path().join(".local/share/opencode/opencode.db");
             let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let observed_changed = Arc::clone(&changed);
-            // An account whose panes start zsh: the fork's tab gets the
-            // shell integration and its start waits for the prompt's mark.
-            let node = hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(
-                hide_host::shell_integration::UserShell {
-                    shell: Some("/bin/zsh".into()),
-                    ..Default::default()
-                },
-            );
+            // The fork's tab runs this account's integrated shell and
+            // waits for its prompt token, independently of installed shells.
+            let shell = crate::fixture::integrated_shell(home.path());
+            let expected_shell = shell.shell.clone().unwrap();
+            let node = hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(shell);
             let expected_cwd = checkout.clone();
             let herdr = FakeHerdr::start_with_errors("opencode-fork-tab", move |method, params| {
                 Ok(match method {
@@ -4846,7 +4840,7 @@ mod tests {
                         assert_eq!(params["focus"], false);
                         // The fork's tab runs the node's shell with the
                         // integration's launch.
-                        assert_eq!(params["root"]["command"][0], "/bin/zsh");
+                        assert_eq!(params["root"]["command"][0], expected_shell);
                         json!({"type":"layout_apply","layout":{"workspace_id":"w1","tab_id":"w1:t2",
                             "zoomed":false,"focused_pane_id":"child-pane",
                             "root":{"type":"pane","pane_id":"child-pane"}}})
@@ -4992,12 +4986,8 @@ mod tests {
             );
             let log = Arc::new(Mutex::new(Vec::new()));
             let node = OpenCodeForking {
-                inner: hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(
-                    hide_host::shell_integration::UserShell {
-                        shell: Some("/bin/zsh".into()),
-                        ..Default::default()
-                    },
-                ),
+                inner: hide_node::Local::new(Some(home.path().to_path_buf()))
+                    .with_shell(crate::fixture::integrated_shell(home.path())),
                 answer: if case == "refused" {
                     Err("opencode_fork_timed_out")
                 } else {
@@ -5131,14 +5121,11 @@ mod tests {
             let before = std::fs::read(&summary).unwrap();
             let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let observed_changed = Arc::clone(&changed);
-            // An account whose panes start zsh: the fork's tab gets the
-            // shell integration and its start waits for the prompt's mark.
-            let node = hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(
-                hide_host::shell_integration::UserShell {
-                    shell: Some("/bin/zsh".into()),
-                    ..Default::default()
-                },
-            );
+            // The fork's tab runs this account's integrated shell and
+            // waits for its prompt token, independently of installed shells.
+            let shell = crate::fixture::integrated_shell(home.path());
+            let expected_shell = shell.shell.clone().unwrap();
+            let node = hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(shell);
             let herdr = FakeHerdr::start_with_errors("grok-fork-tab", move |method, params| {
                 Ok(match method {
                     "session.snapshot" => json!({"type": "session_snapshot", "snapshot": {
@@ -5157,7 +5144,7 @@ mod tests {
                         assert_eq!(params["focus"], false);
                         // The fork's tab runs the node's shell with the
                         // integration's launch.
-                        assert_eq!(params["root"]["command"][0], "/bin/zsh");
+                        assert_eq!(params["root"]["command"][0], expected_shell);
                         json!({"type":"layout_apply","layout":{"workspace_id":"w1","tab_id":"w1:t2",
                             "zoomed":false,"focused_pane_id":"child-pane",
                             "root":{"type":"pane","pane_id":"child-pane"}}})

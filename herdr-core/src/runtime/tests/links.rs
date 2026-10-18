@@ -1262,15 +1262,11 @@ fn native_fork_current_journey(kind: &'static str) {
         std::fs::write(&source, &bytes).unwrap();
         let parent = "w-order:t1:p";
         let (mut runtime, _) = live_tab_order_runtime(&cwd);
-        // An account whose panes start zsh: the fork's tab gets the shell
-        // integration and its start waits for the prompt's mark.
+        // The fork's tab runs this account's integrated shell and waits
+        // for its prompt token, independently of installed shells.
         runtime.own_node = Arc::new(
-            hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(
-                hide_host::shell_integration::UserShell {
-                    shell: Some("/bin/zsh".into()),
-                    ..Default::default()
-                },
-            ),
+            hide_node::Local::new(Some(home.path().to_path_buf()))
+                .with_shell(crate::fixture::integrated_shell(home.path())),
         );
         runtime.live.as_mut().unwrap().node = runtime.own_node();
         let mut initial = tab_order_payload(&cwd, &["w-order:t1"], &["w-order:t1"], "w-order:t1");
