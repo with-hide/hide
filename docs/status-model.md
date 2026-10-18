@@ -282,6 +282,10 @@ Each of the four groups above is then a group of the rows the operator's lists e
 
 Done is deliberately separate from Needs You: a stop to read is "look when you have a moment", an unread demand is "act now".
 
+An archived session (PRD session-archive) is in no group and draws no mark: nothing of it runs, so it has no turn, no progress and nothing to read, and it is counted on no badge.
+It stands only in the 태스크 list's `보관됨` fold and its record, with its archive state (archiving, resuming, could not resume, deleting, unknown) as words; a member that came back is an ordinary row again, and a member still archived while its root is live is listed in that root's record, not as a row.
+While a member is archived, its delivery registration and the watches on it are held as a sleeping session's are (`docs/delivery.md`), so its pane's absence does not end its work's ownership; resuming continues them.
+
 ## The mark
 
 Every row draws one of seven marks, decided once in the core (`RowMark::of` in `agent_state/tally.rs`) and carried on the wire as `mark` (`turn`, `going`, `waiting`, `done`, `unread`, `quiet`, `asleep`); no surface derives a mark of its own (status-marks D-01, D-12).
