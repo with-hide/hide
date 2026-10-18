@@ -1279,7 +1279,7 @@ mod omp {
         fs::write(&sibling, other).unwrap();
         assert_eq!(
             hide_session::session_activity::read(native.home.path(), &action).unwrap_err(),
-            "session_route_ambiguous"
+            hide_session::ReadRefusal::Refused("session_route_ambiguous".into())
         );
         assert!(native.read().is_ok(), "ambiguity is action-local");
         fs::remove_file(sibling).unwrap();
@@ -1341,7 +1341,10 @@ mod omp {
                 exact_route: true,
                 expected_id: Some("omp-native-a".into()),
             };
-            let check = || hide_session::session_activity::read(native.home.path(), &action);
+            let check = || {
+                hide_session::session_activity::read(native.home.path(), &action)
+                    .map_err(String::from)
+            };
             assert!(check().is_ok());
             // These names come from upstream session-paths/session-listing, not
             // Hide's policy helpers: native startup moves/promotes their aliases.
@@ -1644,6 +1647,7 @@ mod grok {
                 },
             )
             .map(|_| ())
+            .map_err(String::from)
         }
     }
 
@@ -2586,6 +2590,7 @@ mod pi {
                 expected_id: None,
             },
         )
+        .map_err(String::from)
     }
 
     #[test]
@@ -2611,7 +2616,7 @@ mod pi {
         };
         assert_eq!(
             hide_session::session_activity::read(native.home.path(), &by_path).unwrap_err(),
-            "session_route_ambiguous"
+            hide_session::ReadRefusal::Refused("session_route_ambiguous".into())
         );
         // A reported path alone remains readable, but does not authorize CLI routing.
         assert!(
@@ -2678,7 +2683,7 @@ mod pi {
                 }
             )
             .unwrap_err(),
-            "session_route_capacity",
+            hide_session::ReadRefusal::Refused("session_route_capacity".into()),
             "a proven path still requires a bounded whole-candidate routing audit"
         );
     }
@@ -4258,13 +4263,13 @@ fn opencode_activity_answers_its_newest_write_and_count_only_for_its_proven_owne
     assert_eq!(answer.modified_at_unix_ms, 1_790_989_331_000);
     assert_eq!(
         activity(home.path(), &request("/work/other")).unwrap_err(),
-        "label_session_cwd_mismatch"
+        hide_session::ReadRefusal::Refused("label_session_cwd_mismatch".into())
     );
     let mut changed = request("/work/app");
     changed.expected_id = Some("ses_other".into());
     assert_eq!(
         activity(home.path(), &changed).unwrap_err(),
-        "session_route_owner_changed"
+        hide_session::ReadRefusal::Refused("session_route_owner_changed".into())
     );
     let value = serde_json::to_string(&answer).unwrap();
     assert!(!value.contains(OPENCODE_ROOT) && !value.contains("/work/app"));
@@ -4504,7 +4509,7 @@ mod antigravity {
                 .unwrap();
         }
 
-        fn route(&self, id: &str, cwd: &Path) -> Result<(), String> {
+        fn route(&self, id: &str, cwd: &Path) -> Result<(), hide_session::ReadRefusal> {
             hide_session::session_activity::read(
                 self.home.path(),
                 &hide_session::session_activity::SessionActivityRequest {
@@ -4586,8 +4591,27 @@ mod antigravity {
         .unwrap();
         assert_eq!(
             native.route(AGY_ID, &native.cwd).unwrap_err(),
-            "session_route_missing"
+            hide_session::ReadRefusal::Refused("session_route_missing".into())
         );
+    }
+
+    /// A route proof that meets agy writing its index says so, and a read a
+    /// moment later proves the route: Fork, Sleep and resume read it again
+    /// rather than refuse a conversation agy still keeps.
+    #[test]
+    fn a_route_proof_that_meets_agy_writing_its_index_answers_once_agy_is_done() {
+        let native = Native::new();
+        let journal = native
+            .home
+            .path()
+            .join(".gemini/antigravity-cli/conversation_summaries.db-journal");
+        fs::write(&journal, b"agy writing its index").unwrap();
+        assert_eq!(
+            native.route(AGY_ID, &native.cwd),
+            Err(hide_session::ReadRefusal::InMotion("antigravity_db_busy"))
+        );
+        fs::remove_file(&journal).unwrap();
+        native.route(AGY_ID, &native.cwd).unwrap();
     }
 
     #[test]

@@ -998,13 +998,13 @@ fn opencode_2_activity_answers_its_newest_write_and_count_only_for_its_proven_ow
     assert_eq!(answer.modified_at_unix_ms, START + 131_001);
     assert_eq!(
         activity(home.path(), &request("/work/other")).unwrap_err(),
-        "label_session_cwd_mismatch"
+        hide_session::ReadRefusal::Refused("label_session_cwd_mismatch".into())
     );
     let mut changed = request("/work/app");
     changed.expected_id = Some("ses_other".into());
     assert_eq!(
         activity(home.path(), &changed).unwrap_err(),
-        "session_route_owner_changed"
+        hide_session::ReadRefusal::Refused("session_route_owner_changed".into())
     );
 }
 
@@ -1121,7 +1121,7 @@ mod schema {
                 }
             )
             .unwrap_err(),
-            NEITHER
+            hide_session::ReadRefusal::Refused(NEITHER.into())
         );
         let project_root = home.path().join("project");
         std::fs::create_dir_all(&project_root).unwrap();
@@ -1249,10 +1249,14 @@ fn a_session_in_opencode_2_tables_forks_through_its_server_and_a_1x_one_by_its_f
     );
     assert_eq!(
         fork_route(two.path(), "ses_0a1b2c3d4e5f60718293child", "/work/app"),
-        Err("label_session_not_root".to_owned())
+        Err(hide_session::ReadRefusal::Refused(
+            "label_session_not_root".into()
+        ))
     );
     assert_eq!(
         fork_route(two.path(), ROOT, "/elsewhere/app"),
-        Err("label_session_cwd_mismatch".to_owned())
+        Err(hide_session::ReadRefusal::Refused(
+            "label_session_cwd_mismatch".into()
+        ))
     );
 }

@@ -197,14 +197,15 @@ pub(crate) fn row(home: &Path, id: &str) -> Result<Option<Row>> {
 }
 
 /// An index read that may succeed on a later pass: agy holds or is
-/// rewriting its index, or the read ran out of its work budget.
+/// rewriting its index ([`ReadRefusal::InMotion`]).
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct IndexBusy;
 
 /// The checkout agy's index places conversation `id` in, for a reader that
-/// goes on without one: `None` while there is no index, no row for `id`, or a
-/// row whose workspace Hide cannot place, since none of those changes by
-/// reading again; [`IndexBusy`] only for a read that may succeed next time.
+/// goes on without one: `None` while there is no index Hide reads, no row
+/// for `id`, or a row whose workspace Hide cannot place, since none of those
+/// changes by reading again; [`IndexBusy`] only for a read that may succeed
+/// next time.
 pub(crate) fn checkout(home: &Path, id: &str) -> std::result::Result<Option<PathBuf>, IndexBusy> {
     let found = crate::sqlite::with_read(
         home,
@@ -224,15 +225,9 @@ pub(crate) fn checkout(home: &Path, id: &str) -> std::result::Result<Option<Path
             .optional()
         },
     );
-    match found {
-        Ok(Ok(columns)) => Ok(columns.and_then(to_row).map(|row| row.cwd)),
-        Ok(Err(_)) | Err(ReadRefusal::InMotion(_)) => Err(IndexBusy),
-        Err(ReadRefusal::Refused(reason))
-            if [REASONS.unreadable, REASONS.work].contains(&reason.as_str()) =>
-        {
-            Err(IndexBusy)
-        }
-        // Missing, a link or not a regular file: no index Hide reads.
+    match found.and_then(|row| row.map_err(|error| crate::sqlite::refusal(&REASONS, &error))) {
+        Ok(columns) => Ok(columns.and_then(to_row).map(|row| row.cwd)),
+        Err(ReadRefusal::InMotion(_)) => Err(IndexBusy),
         Err(ReadRefusal::Refused(_)) => Ok(None),
     }
 }
@@ -376,8 +371,13 @@ pub(crate) fn confirm_route(home: &Path, path: &Path, id: &str, cwd: &Path) -> R
     if id_of(&checked) != Some(id) {
         return Err(anyhow!("session_route_missing"));
     }
+    // Meeting agy writing its index proves nothing about the route, so the
+    // caller may read again; every other refusal leaves it unconfirmed.
     let row = row(home, id)
-        .map_err(|_| anyhow!("session_route_unconfirmed"))?
+        .map_err(|error| match ReadRefusal::of(&error) {
+            motion @ ReadRefusal::InMotion(_) => anyhow::Error::new(motion),
+            ReadRefusal::Refused(_) => anyhow!("session_route_unconfirmed"),
+        })?
         .ok_or_else(|| anyhow!("session_route_missing"))?;
     if !row.parent.is_empty() {
         return Err(anyhow!("label_session_not_root"));
@@ -553,5 +553,34 @@ mod tests {
             parse_line(&step("MODEL", "GENERIC", "exit 0")),
             LineResult::Sightings(_)
         ));
+    }
+
+    /// The route's own read of the index can meet agy writing it after the
+    /// transcript was proven, and says so: Fork, Sleep and resume read it
+    /// again rather than refuse a conversation agy still keeps.
+    #[test]
+    fn a_route_read_that_meets_agy_writing_its_index_is_in_motion() {
+        let home = tempfile::tempdir().unwrap();
+        let id = "7956974a-cd2e-41c0-bd3b-4c12822badd5";
+        let path = transcript(home.path(), id);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"").unwrap();
+        let index = home.path().join(FOLDER).join(DATABASE);
+        Connection::open(&index)
+            .unwrap()
+            .execute_batch(include_str!(
+                "../tests/fixtures/adapters/antigravity-1.3.6/summaries.sql"
+            ))
+            .unwrap();
+        std::fs::write(
+            index.with_file_name(format!("{DATABASE}-journal")),
+            b"agy writing its index",
+        )
+        .unwrap();
+        let refused = confirm_route(home.path(), &path, id, home.path()).unwrap_err();
+        assert_eq!(
+            ReadRefusal::of(&refused),
+            ReadRefusal::InMotion(REASONS.busy)
+        );
     }
 }

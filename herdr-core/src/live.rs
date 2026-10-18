@@ -2742,22 +2742,32 @@ pub(crate) fn confirm_session_launch(
     if source_reference.kind != agent.proof_reference_kind() {
         return Err("session_route_reference_unconfirmed".into());
     }
-    let _: hide_session::session_activity::SessionActivity = crate::node_access::call_as(
+    let request = hide_session::session_activity::SessionActivityRequest {
+        agent,
+        reference_kind: source_reference.kind.clone(),
+        reference_value: source_reference.value.clone(),
+        cwd: Some(cwd.ok_or("session_route_cwd_unconfirmed")?.into()),
+        exact_route: true,
+        expected_id: Some(id.into()),
+    };
+    // A proof that met the agent writing its records is read again: agy
+    // writes its index after every turn, and the route stands or falls on
+    // what the next read finds.
+    let _: hide_session::session_activity::SessionActivity = read_past_writes(
         node,
-        hide_node_link::protocol::Call::SessionActivity {
-            request: hide_session::session_activity::SessionActivityRequest {
-                agent,
-                reference_kind: source_reference.kind.clone(),
-                reference_value: source_reference.value.clone(),
-                cwd: Some(cwd.ok_or("session_route_cwd_unconfirmed")?.into()),
-                exact_route: true,
-                expected_id: Some(id.into()),
-            },
+        || hide_node_link::protocol::Call::SessionActivity {
+            request: request.clone(),
         },
         Duration::from_secs(10),
+        Instant::now() + Duration::from_secs(10),
     )
     .map_err(|error| {
         let reason = match &error {
+            crate::node_access::LinkError::Refused(error)
+                if error.code == hide_node_link::ErrorCode::Busy =>
+            {
+                "session_route_in_motion"
+            }
             crate::node_access::LinkError::Refused(error) => match error
                 .message
                 .strip_prefix("session_checkpoint_invalid:")
@@ -3637,13 +3647,16 @@ fn fork_arguments(
         .cwd
         .as_deref()
         .ok_or("Session fork has no confirmed checkout")?;
-    let fork: hide_node_link::protocol::OpenCodeFork = crate::node_access::call_as(
+    // Busy answers only a route read that met OpenCode writing its
+    // database, before the node forked anything, so it is asked again.
+    let fork: hide_node_link::protocol::OpenCodeFork = read_past_writes(
         node,
-        hide_node_link::protocol::Call::OpenCodeFork {
+        || hide_node_link::protocol::Call::OpenCodeFork {
             source: request.session_id.clone(),
             cwd: cwd.to_owned(),
         },
         hide_node_link::protocol::OPENCODE_FORK_TIMEOUT,
+        Instant::now() + Duration::from_secs(10),
     )
     .map_err(|error| match error {
         crate::node_access::LinkError::Unknown(_) => format!(
@@ -3665,32 +3678,34 @@ fn fork_arguments(
 /// conversation its `/fork` made.
 const ANTIGRAVITY_FORK_WAIT: Duration = Duration::from_secs(30);
 const ANTIGRAVITY_FORK_POLL: Duration = Duration::from_millis(250);
-/// How many index reads in a row may meet agy writing its index before the
-/// fork gives up on it: 5 s of polls, far past one agy write.
-const ANTIGRAVITY_INDEX_IN_MOTION_LIMIT: usize = 20;
+/// How many reads of an agent's records in a row may meet the agent writing
+/// them before the reader gives up: 5 s of polls, far past one write.
+const NATIVE_READ_IN_MOTION_LIMIT: usize = 20;
+const NATIVE_READ_IN_MOTION_POLL: Duration = Duration::from_millis(250);
 
-/// One read of agy's index on the pane's node, read again while it only met
-/// agy writing the index, which the node answers as busy
+/// One read of an agent's native records on a node, read again while it
+/// only met the agent writing them, which the node answers as busy
 /// (`hide_session::ReadRefusal::InMotion`). A read that answers is one
-/// consistent snapshot of the index, so it needs no second read to agree
-/// with; the wait ends at `deadline` or after
-/// [`ANTIGRAVITY_INDEX_IN_MOTION_LIMIT`] reads in a row, whichever is first.
+/// consistent snapshot, so it needs no second read to agree with; the wait
+/// ends at `deadline` or after [`NATIVE_READ_IN_MOTION_LIMIT`] reads in a
+/// row, whichever is first, and answers the last read's busy refusal.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code: bounded by count and deadline
-fn read_antigravity_index<T: serde::de::DeserializeOwned>(
+fn read_past_writes<T: serde::de::DeserializeOwned>(
     node: &dyn crate::node_access::NodeLink,
     call: impl Fn() -> hide_node_link::protocol::Call,
+    timeout: Duration,
     deadline: Instant,
 ) -> Result<T, crate::node_access::LinkError> {
     let mut in_motion = 0;
     loop {
-        match crate::node_access::call_as(node, call(), Duration::from_secs(5)) {
+        match crate::node_access::call_as(node, call(), timeout) {
             Err(crate::node_access::LinkError::Refused(error))
                 if error.code == hide_node_link::ErrorCode::Busy
-                    && in_motion + 1 < ANTIGRAVITY_INDEX_IN_MOTION_LIMIT
+                    && in_motion + 1 < NATIVE_READ_IN_MOTION_LIMIT
                     && Instant::now() < deadline =>
             {
                 in_motion += 1;
-                thread::sleep(ANTIGRAVITY_FORK_POLL);
+                thread::sleep(NATIVE_READ_IN_MOTION_POLL);
             }
             answer => return answer,
         }
@@ -3729,12 +3744,13 @@ fn fork_antigravity(
     // What the checkout holds before /fork, read on the pane's node, so the
     // fork is the row that was not there: no clock is compared, and the
     // source may move on while agy writes it.
-    let mark: hide_node_link::protocol::AntigravityForkMark = read_antigravity_index(
+    let mark: hide_node_link::protocol::AntigravityForkMark = read_past_writes(
         node,
         || hide_node_link::protocol::Call::AntigravityForkMark {
             source: request.session_id.clone(),
             cwd: cwd.to_owned(),
         },
+        Duration::from_secs(5),
         Instant::now() + ANTIGRAVITY_FORK_WAIT,
     )
     .map_err(|error| format!("agy's conversation to fork could not be read: {error}"))?;
@@ -3753,13 +3769,14 @@ fn fork_antigravity(
     )?;
     let deadline = Instant::now() + ANTIGRAVITY_FORK_WAIT;
     let forked = loop {
-        let found: Option<String> = read_antigravity_index(
+        let found: Option<String> = read_past_writes(
             node,
             || hide_node_link::protocol::Call::AntigravityFork {
                 source: request.session_id.clone(),
                 cwd: cwd.to_owned(),
                 mark: mark.clone(),
             },
+            Duration::from_secs(5),
             deadline,
         )
         .map_err(|error| format!("agy's fork could not be confirmed: {error}"))?;
@@ -5182,7 +5199,7 @@ mod tests {
                 4,
                 Some("2026-10-03 01:00:00+00:00"),
             );
-            let node = IndexInMotion {
+            let node = DatabaseInMotion {
                 inner: hide_node::Local::new(Some(home.path().to_path_buf())),
                 left: std::sync::atomic::AtomicUsize::new(match case {
                     "in-motion" => 3,
@@ -5320,14 +5337,119 @@ mod tests {
         }
     }
 
-    /// A node whose next `left` agy index reads are refused for `reason`.
-    struct IndexInMotion {
+    /// The route Fork, Sleep's wake and resume prove before they start an
+    /// agent that keeps its records in a database, agy's index or
+    /// OpenCode's database (Windows run 39104633599 refused an OpenCode
+    /// wake this way): a proof that meets the agent writing is read again,
+    /// and one that cannot read the database is refused at its first read.
+    #[test]
+    fn a_database_route_proof_is_read_again_only_while_it_meets_the_agent_writing() {
+        for agent in ["agy", "opencode"] {
+            for (left, code, proven) in [
+                (3, hide_node_link::ErrorCode::Busy, true),
+                (1, hide_node_link::ErrorCode::Io, false),
+            ] {
+                let home = tempfile::tempdir().unwrap();
+                let cwd = hide_platform::fs::identity::canonical(home.path()).unwrap();
+                let (id, reasons) = if agent == "agy" {
+                    let id = "a9c0e2f4-0000-4000-8000-000000000001";
+                    crate::fixture::antigravity_conversation(home.path(), &cwd, id, 4, None);
+                    let transcript = hide_session::antigravity::transcript(home.path(), id);
+                    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+                    std::fs::write(
+                        &transcript,
+                        include_str!(
+                            "../../hide-session/tests/fixtures/adapters/antigravity-1.3.6/transcript_full.jsonl"
+                        ),
+                    )
+                    .unwrap();
+                    (id, ("antigravity_db_busy", "antigravity_db_unreadable"))
+                } else {
+                    let id = "ses_root";
+                    crate::fixture::opencode_database(
+                        home.path(),
+                        &[(id, None, cwd.to_str().unwrap())],
+                    );
+                    (id, ("opencode_db_busy", "opencode_db_unreadable"))
+                };
+                let node = DatabaseInMotion {
+                    inner: hide_node::Local::new(Some(home.path().to_path_buf())),
+                    left: std::sync::atomic::AtomicUsize::new(left),
+                    refusal: (code, if proven { reasons.0 } else { reasons.1 }),
+                };
+                let reference = crate::sidebar::SessionAgentSessionPayload {
+                    kind: "id".into(),
+                    value: id.into(),
+                };
+                let result =
+                    confirm_session_launch(&node, agent, id, cwd.to_str(), Some(&reference));
+                assert_eq!(result.is_ok(), proven, "{agent} {code:?}: {result:?}");
+                assert_eq!(
+                    node.left.load(std::sync::atomic::Ordering::SeqCst),
+                    0,
+                    "{agent} {code:?}"
+                );
+            }
+        }
+    }
+
+    /// An OpenCode fork whose route read met OpenCode writing its database
+    /// forked nothing, so it is asked again; one that cannot read the
+    /// database is refused at its first ask.
+    #[test]
+    fn an_opencode_fork_is_asked_again_only_while_its_route_meets_opencode_writing() {
+        for (left, code, forked) in [
+            (3, hide_node_link::ErrorCode::Busy, true),
+            (1, hide_node_link::ErrorCode::Io, false),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let checkout = hide_platform::fs::identity::canonical(home.path())
+                .unwrap()
+                .display()
+                .to_string();
+            crate::fixture::opencode_database(home.path(), &[("ses_root", None, &checkout)]);
+            let node = DatabaseInMotion {
+                inner: hide_node::Local::new(Some(home.path().to_path_buf())),
+                left: std::sync::atomic::AtomicUsize::new(left),
+                refusal: (code, "opencode_db_busy"),
+            };
+            let request = ForkRequest {
+                source_reference: None,
+                parent_state_change_seq: None,
+                connection_generation: 0,
+                codex_daemon: Default::default(),
+                parent_pane_id: "parent-pane".into(),
+                agent: crate::fork::ForkableAgent::OpenCode,
+                session_id: "ses_root".into(),
+                cwd: Some(checkout),
+                name: "fork-opencode-1".into(),
+                tab_label: None,
+                placement: ForkPlacement::Tab,
+                launch: Default::default(),
+            };
+            let result = fork_arguments(&node, &request);
+            assert_eq!(result.is_ok(), forked, "{code:?}: {result:?}");
+            assert_eq!(
+                node.left.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "{code:?}"
+            );
+        }
+    }
+
+    /// A node whose next `left` reads of an agent's database are refused
+    /// with `refusal`.
+    struct DatabaseInMotion {
         inner: hide_node::Local,
         left: std::sync::atomic::AtomicUsize,
         refusal: (hide_node_link::ErrorCode, &'static str),
     }
 
-    impl crate::node_access::NodeLink for IndexInMotion {
+    impl crate::node_access::NodeLink for DatabaseInMotion {
+        fn reader_features(&self) -> Option<&hide_node_link::sessions::ReaderFeatures> {
+            self.inner.reader_features()
+        }
+
         fn call(
             &self,
             call: hide_node_link::protocol::Call,
@@ -5337,6 +5459,8 @@ mod tests {
                 call,
                 hide_node_link::protocol::Call::AntigravityForkMark { .. }
                     | hide_node_link::protocol::Call::AntigravityFork { .. }
+                    | hide_node_link::protocol::Call::SessionActivity { .. }
+                    | hide_node_link::protocol::Call::OpenCodeFork { .. }
             ) && self
                 .left
                 .try_update(

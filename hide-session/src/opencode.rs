@@ -339,14 +339,17 @@ pub enum ForkRoute {
 /// is, by the schema the database holds, in the read that proves the session.
 /// A 2.x database that migrated a 1.x one holds both schemas, and its 2.x
 /// tables, the ones 2.x keeps writing, decide.
-pub fn fork_route(home: &Path, id: &str, cwd: &str) -> Result<ForkRoute, String> {
-    with_read(home, |connection, schema| {
-        prove(connection, schema, id, Owner::Root { cwd: Some(cwd) })?;
-        Ok(match schema {
-            Schema::V1 => ForkRoute::Flag,
-            Schema::V2 => ForkRoute::Server,
-        })
-    })?
+pub fn fork_route(home: &Path, id: &str, cwd: &str) -> Result<ForkRoute, ReadRefusal> {
+    Ok(with_read(
+        home,
+        |connection, schema| -> Result<_, String> {
+            prove(connection, schema, id, Owner::Root { cwd: Some(cwd) })?;
+            Ok(match schema {
+                Schema::V1 => ForkRoute::Flag,
+                Schema::V2 => ForkRoute::Server,
+            })
+        },
+    )??)
 }
 
 /// A session's activity: its newest write (the session row or any of its
@@ -356,9 +359,9 @@ pub fn fork_route(home: &Path, id: &str, cwd: &str) -> Result<ForkRoute, String>
 pub(crate) fn activity(
     home: &Path,
     request: &crate::session_activity::SessionActivityRequest,
-) -> Result<crate::session_activity::SessionActivity, String> {
+) -> Result<crate::session_activity::SessionActivity, ReadRefusal> {
     if request.reference_kind != "id" {
-        return Err("session_kind_unsupported".to_owned());
+        return Err("session_kind_unsupported".into());
     }
     let id = request.reference_value.as_str();
     if request
@@ -366,22 +369,25 @@ pub(crate) fn activity(
         .as_deref()
         .is_some_and(|expected| expected != id)
     {
-        return Err("session_route_owner_changed".to_owned());
+        return Err("session_route_owner_changed".into());
     }
-    with_read(home, |connection, schema| {
-        let proven = prove(
-            connection,
-            schema,
-            id,
-            Owner::Root {
-                cwd: request.cwd.as_deref(),
-            },
-        )?;
-        Ok(crate::session_activity::SessionActivity {
-            modified_at_unix_ms: newest_write(connection, schema, id, &proven)?,
-            bytes: proven.messages,
-        })
-    })?
+    Ok(with_read(
+        home,
+        |connection, schema| -> Result<_, String> {
+            let proven = prove(
+                connection,
+                schema,
+                id,
+                Owner::Root {
+                    cwd: request.cwd.as_deref(),
+                },
+            )?;
+            Ok(crate::session_activity::SessionActivity {
+                modified_at_unix_ms: newest_write(connection, schema, id, &proven)?,
+                bytes: proven.messages,
+            })
+        },
+    )??)
 }
 
 /// When the session or any of its messages was last written.
