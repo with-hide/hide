@@ -126,6 +126,99 @@ fn the_core_moves_to_the_device_and_the_window_follows_it() -> Result<()> {
     finish(fixture, journey)
 }
 
+/// A target whose state folder is reached through a link takes the core: the
+/// target answers the folder by its resolved path, which the copy can reach,
+/// where it once stopped the move at the check for a link it could not
+/// follow.
+#[test]
+#[ignore = "external lane requires this worktree's CLI binaries and HIDE_E2E_HERDR_BIN"]
+fn a_target_whose_state_folder_is_reached_through_a_link_takes_the_core() -> Result<()> {
+    let fixture = Fixture::start_through_link()?;
+    let journey = (|| {
+        ensure!(
+            fixture.target.state.starts_with(fixture.root.join("via")),
+            "the target's state folder is not spelled through the link"
+        );
+        fixture.event("core_move", json!({"action": "start", "device": DEVICE_ID}))?;
+        let journal = fixture.journal_until("done")?;
+        let canonical = hide_platform::fs::identity::canonical(&fixture.target.state)?;
+        ensure!(
+            journal["peer"]["state_dir"]
+                .as_str()
+                .is_some_and(|sent| sent.trim_end_matches('/') == canonical.display().to_string()),
+            "the copy was sent by {}, not by {}",
+            journal["peer"]["state_dir"],
+            canonical.display()
+        );
+        ensure!(fixture.target_core()?.is_some(), "no core on the target");
+        Ok(())
+    })();
+    finish(fixture, journey)
+}
+
+/// The choices made for a device's project (a guardrail, a repository, a
+/// branch) are kept at a key made from the machine's id, which a move gives
+/// another one: they follow the project through the move and the move back,
+/// and neither stops on them nor loses them.
+#[test]
+#[ignore = "external lane requires this worktree's CLI binaries and HIDE_E2E_HERDR_BIN"]
+fn a_device_project_s_settings_follow_it_through_the_move_and_the_move_back() -> Result<()> {
+    let fixture = Fixture::start()?;
+    let journey = (|| {
+        let theirs = fixture.target.project().display().to_string();
+        let own = fixture.source.project().display().to_string();
+        for (device, root, request) in [(DEVICE_ID, &theirs, "one"), (SOURCE_NODE, &own, "two")] {
+            fixture.event(
+                "project_settings_set",
+                json!({"device_id": device, "root": root, "request_id": request, "patch": {"new_work": "worktree"}}),
+            )?;
+        }
+        let kept = |device: &str, root: &str| -> Result<bool> {
+            Ok(settings_at(&fixture, root)?.is_some_and(|(key, record)| {
+                key == hide_project::project_id(device, std::path::Path::new(root))
+                    && record["device_id"] == device
+                    && record["new_work"] == "worktree"
+            }))
+        };
+        wait_for("both choices kept under their machines", || {
+            Ok((kept(DEVICE_ID, &theirs)? && kept(SOURCE_NODE, &own)?).then_some(()))
+        })?;
+
+        moved_forward(&fixture)?;
+        // The device is the core's own machine now, the source a node that
+        // links in by its node id.
+        wait_for("both choices kept under their new machines", || {
+            Ok((kept(TARGET_NODE, &theirs)? && kept(SOURCE_NODE, &own)?).then_some(()))
+        })?;
+
+        fixture.event("core_move", json!({"action": "back"}))?;
+        back_journal_until(&fixture, "done")?;
+        wait_for("this machine's core", || {
+            Ok((fixture.role()? == "core").then_some(()))
+        })?;
+        wait_for("both choices kept under their first machines", || {
+            Ok((kept(DEVICE_ID, &theirs)? && kept(SOURCE_NODE, &own)?).then_some(()))
+        })?;
+        Ok(())
+    })();
+    finish(fixture, journey)
+}
+
+/// The record of the project at `root` in the window's snapshot, with the key
+/// it is kept at.
+fn settings_at(fixture: &Fixture, root: &str) -> Result<Option<(String, Value)>> {
+    let snapshot = fixture.snapshot()?;
+    Ok(snapshot
+        .pointer("/ui_state/project_settings")
+        .and_then(Value::as_object)
+        .and_then(|records| {
+            records
+                .iter()
+                .find(|(_, record)| record["root"] == root)
+                .map(|(key, record)| (key.clone(), record.clone()))
+        }))
+}
+
 /// A window whose app is older than the core it moved to is told so with
 /// both builds and the core's machine, and the core goes on as it was
 /// (B11).
@@ -546,8 +639,8 @@ fn a_failing_check_changes_nothing() -> Result<()> {
         fixture.event("core_move", json!({"action": "start", "device": DEVICE_ID}))?;
         let failed = fixture.logged(&fixture.source, "checks.failed")?;
         ensure!(failed["checks"] == json!(["target_state"]), "{failed}");
-        // Every check ran, so the window counts the eleven that passed.
-        ensure!(failed["checked"] == 12, "{failed}");
+        // Every check ran, so the window counts the twelve that passed.
+        ensure!(failed["checked"] == 13, "{failed}");
         let detail = failed["failed"][0]["detail"].as_str().unwrap_or_default();
         ensure!(
             detail.contains("core-state.json") && detail.contains("Hide AI settings"),

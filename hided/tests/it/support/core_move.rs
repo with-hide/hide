@@ -157,6 +157,17 @@ fn machine_env(root: &Path, bin: &Path, node: &str) -> Result<(Environment, Path
 
 impl Fixture {
     pub fn start() -> Result<Self> {
+        Self::start_with(false)
+    }
+
+    /// A fixture whose target names its state folder through a link, as a
+    /// machine whose home is reached through one does (`/tmp` on macOS,
+    /// `/home` on a Linux with its homes elsewhere).
+    pub fn start_through_link() -> Result<Self> {
+        Self::start_with(true)
+    }
+
+    fn start_with(through_link: bool) -> Result<Self> {
         let repository = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let bin = PathBuf::from(
             std::env::var_os("HIDE_E2E_HERDR_BIN")
@@ -180,8 +191,13 @@ impl Fixture {
         let root = hide_platform::fs::identity::canonical(&root)?;
         let (mut source_env, source_socket, source_state) =
             machine_env(&root.join("m"), &bin, SOURCE_NODE)?;
-        let (mut target_env, target_socket, target_state) =
+        let (mut target_env, target_socket, mut target_state) =
             machine_env(&root.join("c"), &bin, TARGET_NODE)?;
+        if through_link {
+            std::os::unix::fs::symlink(root.join("c"), root.join("via"))?;
+            target_state = root.join("via/s");
+            target_env.set("HIDE_STATE_DIR", target_state.as_os_str());
+        }
         target_env.set("HIDE_CORE_STARTER", "fixture");
         // The target's reads find `herdr` where a real install puts it.
         fs::create_dir_all(target_env.home.join(".local/bin"))?;

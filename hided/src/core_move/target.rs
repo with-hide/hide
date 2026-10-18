@@ -170,6 +170,9 @@ fn hold(state_dir: &Path) -> Result<handover::Held, StepAnswer> {
 fn inspect(state_dir: &Path, ai: Option<&str>) -> Answered {
     let node = herdr_core::node::NodeId::of_this_machine().map_err(plain)?;
     let handover = handover::read(state_dir).map_err(plain)?;
+    // The copy is sent by a path without a link; this machine resolves its
+    // own, since only it can.
+    let reachable = reachable(state_dir);
     // The Herdr this machine's core would own, as its daemon resolves it.
     let env = crate::env::load()
         .map_err(|errors| plain(format!("{} environment errors", errors.len())))?;
@@ -186,24 +189,40 @@ fn inspect(state_dir: &Path, ai: Option<&str>) -> Answered {
     );
     Ok(StepAnswer::Inspected(Box::new(Inspection {
         node: node.as_str().to_owned(),
-        state_dir: hide_platform::path::to_wire(state_dir)
+        state_dir: hide_platform::path::to_wire(&reachable)
             .map_err(|error| plain(error.to_string()))?,
         brain: copy::brain_present(state_dir),
         handover,
         herdr_socket: env.herdr_socket_path,
         ai: herdr_core::stored_hide_ai_settings(&env.home),
         failed,
-        path_refused: path_refused(state_dir),
+        path_refused: path_refused(&reachable),
     })))
 }
 
-/// Why the move's copy cannot be sent to `state_dir` by its path: the copy
-/// goes over SFTP, which makes each folder on the way that is missing and
-/// refuses one that is a link or not a folder, so such a folder would fail
-/// the copy only after the source's core stopped. Names the first, from the
-/// root down; a folder that is missing below it is made by the copy. A state
-/// folder another account owns is named too: the moved core could not make
-/// it private, and would not start on it.
+/// `state_dir` with every link on the way resolved, the part below the
+/// deepest folder that exists kept as it is: the copy goes over SFTP, which
+/// refuses a link on the way, and a machine whose home is reached through
+/// one (`/tmp` on macOS, `/home` on a Linux with its homes elsewhere) still
+/// has a folder the copy can reach by its resolved path. What cannot be
+/// resolved is left as it is for `path_refused` to name.
+fn reachable(state_dir: &Path) -> PathBuf {
+    state_dir
+        .ancestors()
+        .find_map(|folder| {
+            let resolved = hide_platform::fs::identity::canonical(folder).ok()?;
+            Some(resolved.join(state_dir.strip_prefix(folder).ok()?))
+        })
+        .unwrap_or_else(|| state_dir.to_owned())
+}
+
+/// Why the move's copy cannot be sent to `state_dir`, which is `reachable`:
+/// a folder on the way that is a file, or a link that leads nowhere, or one
+/// that could not be read, would fail the copy only after the source's core
+/// stopped. Names the first, from the root down; a folder that is missing
+/// below it is made by the copy. A state folder another account owns is
+/// named too: the moved core could not make it private, and would not start
+/// on it.
 fn path_refused(state_dir: &Path) -> Option<String> {
     let mut folders: Vec<&Path> = state_dir.ancestors().collect();
     folders.reverse();
@@ -211,7 +230,7 @@ fn path_refused(state_dir: &Path) -> Option<String> {
         match std::fs::symlink_metadata(folder) {
             Ok(found) if found.file_type().is_symlink() => {
                 return Some(format!(
-                    "{} is a link, and the move's copy is sent by a path without one",
+                    "{} is a link that leads to no folder",
                     folder.display()
                 ));
             }
@@ -725,29 +744,48 @@ mod tests {
     use super::*;
 
     /// A state folder reached through a link, as macOS's `/tmp` is, is
-    /// named with the link, which the copy would refuse after the core
-    /// stopped; one reached by real folders, missing or not, is not.
+    /// answered by the path without it, existing or not, and so refused for
+    /// nothing; a file on the way and a link that leads nowhere still are,
+    /// named.
     #[cfg(unix)]
     #[test]
-    fn a_state_folder_reached_through_a_link_is_named_at_the_check() {
+    fn a_state_folder_reached_through_a_link_is_answered_by_its_resolved_path() {
         let root = tempfile::tempdir().unwrap();
         let root = hide_platform::fs::identity::canonical(root.path()).unwrap();
         let real = root.join("real");
         std::fs::create_dir_all(real.join("home/s")).unwrap();
         std::os::unix::fs::symlink(&real, root.join("link")).unwrap();
+        std::os::unix::fs::symlink(root.join("nowhere"), root.join("dangling")).unwrap();
         std::fs::write(root.join("file"), "").unwrap();
 
-        assert_eq!(path_refused(&real.join("home/s")), None);
-        assert_eq!(path_refused(&real.join("home/missing/s")), None);
-        let through_link = path_refused(&root.join("link/home/s")).unwrap();
-        assert!(
-            through_link.starts_with(&format!("{} is a link", root.join("link").display())),
-            "{through_link}"
-        );
-        let through_file = path_refused(&root.join("file/s")).unwrap();
+        for (given, resolved) in [
+            (real.join("home/s"), real.join("home/s")),
+            (root.join("link/home/s"), real.join("home/s")),
+            (
+                root.join("link/home/missing/s"),
+                real.join("home/missing/s"),
+            ),
+        ] {
+            assert_eq!(reachable(&given), resolved);
+            assert_eq!(
+                path_refused(&reachable(&given)),
+                None,
+                "{}",
+                given.display()
+            );
+        }
+        let through_file = path_refused(&reachable(&root.join("file/s"))).unwrap();
         assert_eq!(
             through_file,
             format!("{} is not a folder", root.join("file").display())
+        );
+        let through_dangling = path_refused(&reachable(&root.join("dangling/s"))).unwrap();
+        assert_eq!(
+            through_dangling,
+            format!(
+                "{} is a link that leads to no folder",
+                root.join("dangling").display()
+            )
         );
     }
 

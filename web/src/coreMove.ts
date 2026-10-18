@@ -26,6 +26,7 @@ export type CheckId =
   | "connection"
   | "other_node"
   | "target_state"
+  | "target_folder"
   | "herdr"
   | "identity"
   | "own_state"

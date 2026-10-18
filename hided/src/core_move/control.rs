@@ -168,6 +168,9 @@ pub enum CheckId {
     OtherNode,
     /// The device's state folder holds no brain state and no other move.
     TargetState,
+    /// The copy can reach the device's state folder: nothing on the way is
+    /// a file or a link that leads nowhere, and the account owns it.
+    TargetFolder,
     /// Both machines have a Herdr server.
     Herdr,
     /// The device answers as the machine this core knows.
@@ -198,7 +201,7 @@ pub enum CheckId {
 }
 
 /// The checks of a move toward a device, each once.
-pub const FORWARD_CHECKS: [CheckId; 12] = [
+pub const FORWARD_CHECKS: [CheckId; 13] = [
     CheckId::Connection,
     CheckId::OtherNode,
     CheckId::Herdr,
@@ -211,6 +214,7 @@ pub const FORWARD_CHECKS: [CheckId; 12] = [
     CheckId::Sleep,
     CheckId::Dormant,
     CheckId::TargetState,
+    CheckId::TargetFolder,
 ];
 
 /// The checks of a move back to this machine, each once.

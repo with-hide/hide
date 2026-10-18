@@ -375,8 +375,8 @@ impl Mapper<'_> {
     }
 
     /// The rows a pattern cannot express: the owner's path-keyed settings
-    /// and the `device_*` maps beside them, the device registrations, the
-    /// labels, the ledger's host scopes and spawn machines, the local issues
+    /// and the `device_*` maps beside them, the Project settings, the device
+    /// registrations, the labels, the ledger's host scopes and spawn machines, the local issues
     /// and the View layouts' tabs.
     fn whole_file(&mut self, file: &str, value: &mut Value) -> Result<(), String> {
         match file {
@@ -397,6 +397,7 @@ impl Mapper<'_> {
                 {
                     recent.retain(|row| row.get("checkout_id").is_some_and(Value::is_string));
                 }
+                self.project_settings(value)?;
                 self.device_registrations(value)
             }
             WORKSPACE_VIEWS => {
@@ -457,6 +458,48 @@ impl Mapper<'_> {
             LOCAL_ISSUES => swap_own(value, "projects", "devices", self.change),
             _ => Ok(()),
         }
+    }
+
+    /// A Project's choices are kept at the digest of the id of the machine
+    /// that holds it and the project's root, and name that id
+    /// (`project_settings::key`). A machine the move gives another id takes
+    /// its records with it: the record names the new id and moves to the
+    /// digest of it, because a core reads a record only at the key its
+    /// device and root make. The old owner's records are the core's own
+    /// choices becoming a device's, the new owner's a device's becoming the
+    /// core's own, and a third machine's stay as they are.
+    fn project_settings(&mut self, value: &mut Value) -> Result<(), String> {
+        let Some(records) = value
+            .as_object_mut()
+            .and_then(|object| object.get_mut("project_settings"))
+        else {
+            return Ok(());
+        };
+        let records = match records {
+            Value::Object(records) => std::mem::take(records),
+            Value::Null => return Ok(()),
+            _ => return Err("project_settings is not a map".to_owned()),
+        };
+        let mut moved = Map::new();
+        for (key, mut record) in records {
+            let device = record.get("device_id").and_then(Value::as_str);
+            let new_key = match device.map(|device| self.map(Moves::Device, device)) {
+                Some(Mapped::To(device)) => {
+                    let Some(root) = record.get("root").and_then(Value::as_str) else {
+                        return Err(format!("/project_settings/{key} names no root"));
+                    };
+                    let new_key = crate::project_settings::key(&device, root);
+                    record["device_id"] = Value::String(device);
+                    new_key
+                }
+                _ => key,
+            };
+            if moved.insert(new_key.clone(), record).is_some() {
+                return Err(format!("two project settings would both be {new_key}"));
+            }
+        }
+        value["project_settings"] = Value::Object(moved);
+        Ok(())
     }
 
     /// The old owner gets the registration the change carries; the new
@@ -994,6 +1037,34 @@ mod tests {
         crate::device_catalog::checkout_id(device, path)
     }
 
+    /// A Project's choices as the core saves them, with the protections a
+    /// device's project can carry.
+    fn project_settings(device: &str, root: &str) -> Value {
+        json!({
+            "version": 2, "device_id": device, "root": root,
+            "repository": {"mode": "repository", "repository": "acme/p"},
+            "issue_source": "github", "new_work": "worktree",
+            "base_branch": {"mode": "branch", "branch": "trunk"},
+            "guardrails": {"git_commands": true},
+        })
+    }
+
+    /// The saved choices of the projects `(device, root)`, each at the key
+    /// its device and root make.
+    fn settings_of(projects: &[(&str, &str)]) -> Value {
+        Value::Object(
+            projects
+                .iter()
+                .map(|(device, root)| {
+                    (
+                        crate::project_settings::key(device, root),
+                        project_settings(device, root),
+                    )
+                })
+                .collect(),
+        )
+    }
+
     /// The table the MacBook's core makes before it stops.
     fn forward_ids() -> IdTable {
         let own = own_workspace();
@@ -1154,6 +1225,8 @@ mod tests {
                 "expanded_paths": [M_ROOT],
                 "device_expanded_paths": {ALIAS: [C_ROOT], X: [X_ROOT]},
                 "selected_path": M_ROOT,
+                "operator_tab_names": keyed("tab", json!("review")),
+                "project_settings": settings_of(&[(M, M_ROOT), (ALIAS, C_ROOT), (X, X_ROOT)]),
                 "project_base_branches": {M_ROOT: "main", C_ROOT: "trunk", X_ROOT: "dev"},
                 "project_issue_sources": {M_ROOT: "github", C_ROOT: "local", X_ROOT: "github"},
                 "expanded_inactive_checkout_project_paths": [M_ROOT, C_ROOT, X_ROOT],
@@ -1374,6 +1447,14 @@ mod tests {
         assert_eq!(
             core["device_expanded_paths"],
             json!({M: [M_ROOT], X: [X_ROOT]})
+        );
+        // A Project's choices follow their machine to the id it has on the
+        // new core, record and key together, so the new core reads each one
+        // where it looks: the mini's become the core's own, the MacBook's
+        // keep the node id it links in by, a third machine's stay.
+        assert_eq!(
+            core["project_settings"],
+            settings_of(&[(M, M_ROOT), (C, C_ROOT), (X, X_ROOT)])
         );
         // Settings keyed by a project path are read the same on either
         // core, whichever machine holds the project: they stay.
@@ -1752,6 +1833,21 @@ mod tests {
             json!(M),
             "the owner is unchanged"
         );
+    }
+
+    #[test]
+    fn a_project_setting_that_cannot_be_given_its_new_key_stops_the_move() {
+        let dir = macbook_folder();
+        let state = dir.path();
+        let mut core = read(&state.join(CORE_STATE));
+        core["project_settings"][crate::project_settings::key(ALIAS, C_ROOT)]
+            .as_object_mut()
+            .unwrap()
+            .remove("root");
+        std::fs::write(state.join(CORE_STATE), serde_json::to_vec(&core).unwrap()).unwrap();
+        let refusal = reown(state, &forward(), &forward_ids()).unwrap_err();
+        assert_eq!(refusal.file, state.join(CORE_STATE));
+        assert!(refusal.reason.contains("names no root"), "{refusal}");
     }
 
     #[test]
