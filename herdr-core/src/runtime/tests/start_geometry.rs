@@ -211,6 +211,105 @@ fn checkout_start_revalidates_its_group_target_after_waiting() {
     assert!(!runtime.geometry_tab_busy(TAB));
 }
 
+#[test]
+fn queued_checkout_start_refuses_full_tab_and_last_pane_closes_without_native_work() {
+    for event in ["close_tab", "close_pane"] {
+        let (mut runtime, herdr, task) = setup();
+        // Stop at the queue's admission boundary, before the coordinator's
+        // next pump. No transport answer or scheduler delay creates the race.
+        runtime.pumping_geometry = true;
+        let ready = runtime.queue_checkout_start_geometry(task, PANE).unwrap();
+        runtime.pumping_geometry = false;
+        assert_eq!(ready.try_recv(), Err(TryRecvError::Empty));
+        let before = runtime.snapshot().pane_layouts.clone();
+        let payload = if event == "close_tab" {
+            serde_json::json!({"tab_id": TAB, "confirmed": true})
+        } else {
+            serde_json::json!({"pane_id": PANE, "confirmed": true})
+        };
+        runtime.dispatch_json(&explorer_event(event, payload.clone()));
+        assert_eq!(runtime.snapshot().pane_layouts, before);
+        assert!(
+            runtime.close_operations.is_empty(),
+            "{event} must not overtake the start"
+        );
+        assert!(!runtime.snapshot().recent_closed.notices.is_empty());
+        assert!(
+            herdr.methods().is_empty(),
+            "the refused close sends no native request"
+        );
+        assert_eq!(ready.try_recv(), Err(TryRecvError::Empty));
+        runtime.pump_geometry_queues();
+        let lease = ready.try_recv().unwrap().unwrap();
+        assert!(runtime.checkout_start_geometry_is_current(task, &lease));
+        // Positive control: the same close has complete context and really
+        // reaches the native boundary once the start releases its reservation.
+        runtime.finish_checkout_start_geometry(task, &lease, Err("start cancelled".into()));
+        runtime.dispatch_json(&explorer_event(event, payload));
+        assert_eq!(runtime.close_operations.len(), 1);
+        herdr.wait_for_requests(1, Duration::from_secs(5));
+    }
+}
+
+#[test]
+fn a_close_ahead_of_checkout_start_keeps_its_normal_fifo_turn() {
+    const OTHER: &str = "w-order:p2";
+    let (mut runtime, _herdr, task) = setup();
+    let mut split = session(true);
+    let mut other = split.panes[0].clone();
+    other.pane_id = OTHER.into();
+    split.panes.push(other);
+    let layout = &mut split.layouts[0];
+    let mut right = layout.panes[0].clone();
+    right.pane_id = OTHER.into();
+    right.rect.width /= 2;
+    right.rect.x += right.rect.width;
+    layout.panes[0].rect.width /= 2;
+    layout.panes.push(right);
+    layout
+        .splits
+        .push(crate::sidebar::SessionLayoutSplitPayload {
+            direction: crate::model::PaneLayoutDirection::Right,
+            ratio: 0.5,
+            rect: layout.area,
+        });
+    runtime.ingest_session(Ok(split.clone()));
+    let first = zoom(&mut runtime);
+    runtime.dispatch_json(&explorer_event(
+        "close_pane",
+        serde_json::json!({
+            "pane_id": OTHER, "confirmed": true,
+        }),
+    ));
+    let ready = runtime.queue_checkout_start_geometry(task, PANE).unwrap();
+    assert!(runtime.close_operations.is_empty());
+    assert_eq!(ready.try_recv(), Err(TryRecvError::Empty));
+    runtime.ingest_pane_mutation_result(
+        &first,
+        Ok(PaneControlOutcome::Acknowledged {
+            created_pane_id: None,
+        }),
+        0,
+    );
+    split.layouts[0].zoomed = false;
+    runtime.ingest_session(Ok(split));
+    assert!(
+        runtime
+            .close_operations
+            .values()
+            .any(|close| close.target_id == OTHER)
+    );
+    assert_eq!(
+        ready.try_recv(),
+        Err(TryRecvError::Empty),
+        "the later start waits for that close"
+    );
+    assert!(
+        runtime.snapshot().recent_closed.notices.is_empty(),
+        "the queued start must not veto an earlier close"
+    );
+}
+
 const DEVICE: &str = "geometry-device";
 
 fn remote_setup() -> (Runtime, FakeHerdr, u64, String, String) {

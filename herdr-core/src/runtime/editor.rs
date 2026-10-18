@@ -1260,10 +1260,15 @@ impl Runtime {
             .any(|operation| operation.scope_id == scope_id || operation.target_id == target_id)
             || self.pane_operations.values().any(|operation| {
                 operation.scope_id == scope_id
-                    && matches!(
+                    && (matches!(
                         operation.phase.as_str(),
                         "transmitting" | "awaiting_topology"
-                    )
+                    ) || (operation.phase == "queued"
+                        && matches!(operation.request, super::operations::GeometryRequest::Task { .. })
+                        // The pump has removed the earliest queued Close and
+                        // is synchronously starting its turn. A Task still
+                        // waiting is behind that Close, so must not veto it.
+                        && !self.pumping_geometry))
             })
         {
             self.set_reopen_notices(vec![live::ReopenNotice {
