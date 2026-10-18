@@ -571,9 +571,11 @@ pub enum Call {
     RemoveClipboard {
         path: String,
     },
-    /// `SIGTERM` to every member of the process group `leader` leads: a
-    /// pane's foreground job, ended for agent sleep. A group of 1 or less is
-    /// refused unsent, since kill(-0) and kill(-1) reach far more.
+    /// Ends the job `leader` leads, a pane's foreground job, for agent sleep
+    /// (`hide_platform::process::terminate_group`): `SIGTERM` to its process
+    /// group on Unix, and on Windows, where Herdr names the job by its first
+    /// process, that process and everything under it. A group of 1 or less
+    /// is refused unsent, since kill(-0) and kill(-1) reach far more.
     TerminateGroup {
         leader: u32,
     },

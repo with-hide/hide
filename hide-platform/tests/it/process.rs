@@ -957,20 +957,44 @@ fn terminating_ends_the_process() {
     assert!(!child.wait().unwrap().success());
 }
 
+/// How agent sleep ends a pane's foreground job: the agent and the helpers it
+/// started end (its own group on Unix, its process tree on Windows), and a
+/// process outside the job, the pane's shell or another pane, keeps running.
 #[test]
-fn a_process_group_is_ended_where_there_is_one() {
+fn ending_a_job_ends_its_leader_and_what_it_started_and_nothing_else() {
     let _serial = serial();
-    let mut child = OwnedChild::spawn(&mut role_command("sleep")).unwrap();
-    ready_number(child.take_stdout().unwrap());
-    match terminate_group(child.id()) {
-        Ok(()) => assert!(!child.wait().unwrap().success()),
-        Err(error) => {
-            if !cfg!(windows) {
-                panic!("only Windows has no group: {error}");
-            }
-            assert_eq!(error.kind(), ErrorKind::Unsupported);
-        }
-    }
+    let mut bystander = OwnedChild::spawn(&mut role_command("sleep")).unwrap();
+    ready_number(bystander.take_stdout().unwrap());
+    // An owned child leads its own group on Unix, as a terminal's foreground
+    // job does, and its child joins that group.
+    let mut leader = OwnedChild::spawn(&mut role_command("tree")).unwrap();
+    let helper = ready_number(leader.take_stdout().unwrap());
+    let _helper = FixtureProcess::live(helper);
+
+    terminate_group(leader.id()).unwrap();
+
+    assert!(!leader.wait().unwrap().success());
+    assert!(
+        gone_within(helper, Duration::from_secs(10)),
+        "the leader's helper survived"
+    );
+    assert!(is_alive(bystander.id()), "a process outside the job ended");
+    bystander.kill_tree().unwrap();
+}
+
+#[test]
+fn ending_a_job_whose_leader_has_ended_is_not_found() {
+    let _serial = serial();
+    let mut child = role_command("sleep").spawn().unwrap();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    // `child` is kept: on Windows its handle keeps the pid from being handed
+    // to a process that starts meanwhile.
+    assert_eq!(
+        terminate_group(child.id()).unwrap_err().kind(),
+        ErrorKind::NotFound
+    );
+    drop(child);
 }
 
 #[test]

@@ -3,9 +3,10 @@
 //!
 //! Herdr has no hibernate: the pinned release ends nothing on request and
 //! forgets an agent whose process ended. So sleeping is Hide ending the
-//! pane's foreground process group with SIGTERM, which returns the pane to
-//! its shell, and waking is Herdr's own `agent.start` in that same pane with
-//! the provider's resume arguments; the signal is sent by the pane's node.
+//! pane's foreground job (SIGTERM to its process group on Unix, the agent's
+//! process tree at once on Windows), which returns the pane to its shell,
+//! and waking is Herdr's own `agent.start` in that same pane with the
+//! provider's resume arguments; the end is made by the pane's node.
 //! When Herdr offers a hibernate or an
 //! exit mark of its own, this file is what changes; the decision, the
 //! records and the screens in `agent_sleep.rs` and the runtime stay.
@@ -70,9 +71,10 @@ impl std::fmt::Display for EndError {
 ///
 /// It reads the agent again first, because the decision was made on a list
 /// up to a second old and a parent's prompt may have set it working since.
-/// The signal goes to the pane's foreground process group only, and only
-/// when that group is not the shell's: the agent and what it started in its
-/// own group (MCP servers, tool processes) end, the shell and every other
+/// The end reaches the pane's foreground job only, and only when that job is
+/// not the shell's: the agent and what it started (MCP servers, tool
+/// processes; its group on Unix, its process tree on Windows, where Herdr
+/// names the agent's process as the group) end, the shell and every other
 /// pane stay (B7).
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
 pub(crate) fn end_agent(
@@ -121,7 +123,7 @@ pub(crate) fn end_agent(
             "the pane's shell already holds the terminal".into(),
         ));
     }
-    // The group Herdr reported as the pane's foreground gets SIGTERM.
+    // The job Herdr reported as the pane's foreground ends.
     call_as::<()>(
         node,
         Call::TerminateGroup { leader: foreground },
@@ -417,7 +419,8 @@ pub(crate) fn spawn_wake(context: SleepTarget, request: WakeRequest) -> Result<(
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -599,27 +602,75 @@ mod tests {
         drop(admission);
     }
 
+    const AGENT_TREE: &str = "HIDE_TEST_AGENT_TREE";
+
+    fn agent_tree_command(role: &str) -> Command {
+        let mut command = Command::new(std::env::current_exe().expect("the test binary"));
+        command
+            .args([
+                "--exact",
+                "agent_sleep_herdr::tests::agent_tree_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(AGENT_TREE, role)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null());
+        command
+    }
+
+    /// Plays the agent of the test below when `AGENT_TREE` is set: `agent`
+    /// starts a `tool`, as an agent starts an MCP server, says its pid and
+    /// waits on it; `tool` waits to be ended.
     #[test]
-    fn ending_signals_the_foreground_group_and_waits_for_the_shell() {
-        let mut child =
-            process::OwnedChild::spawn(Command::new("/bin/sleep").arg("60")).expect("sleep starts");
-        let pid = child.id();
-        let exited = Arc::new(AtomicBool::new(false));
-        let seen = Arc::clone(&exited);
+    #[allow(clippy::disallowed_methods)] // a stand-in agent: it sleeps to stay alive until it is ended
+    fn agent_tree_child() {
+        let Some(role) = std::env::var_os(AGENT_TREE) else {
+            return;
+        };
+        if role == "agent" {
+            let mut tool = agent_tree_command("tool")
+                .stdout(Stdio::null())
+                .spawn()
+                .expect("the tool starts");
+            println!("READY {}", tool.id());
+            std::io::stdout().flush().expect("the pid is said");
+            let _ = tool.wait();
+        } else {
+            thread::sleep(Duration::from_secs(60));
+        }
+    }
+
+    /// Sleep ends the pane's foreground job on every system: Herdr names the
+    /// agent's process as the pane's foreground group (on Windows, which keeps
+    /// no group, the job's first process stands in for it), the agent and the
+    /// tool it started end, and the end waits for the shell to hold the
+    /// terminal again. On Windows the node refused the end as unsupported,
+    /// so every Claude Code, Codex and Antigravity agent stayed awake.
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a polling wait for the tool's end, bounded by a deadline
+    fn ending_an_agent_ends_what_it_started_and_waits_for_the_shell() {
+        // Owned, so a failing test still ends the tree; on Unix it leads its
+        // own group, as a terminal's foreground job does.
+        let mut agent =
+            process::OwnedChild::spawn(agent_tree_command("agent").stdout(Stdio::piped()))
+                .expect("the agent starts");
+        let said = std::io::BufRead::lines(std::io::BufReader::new(
+            agent.take_stdout().expect("the agent's output"),
+        ))
+        .map_while(Result::ok)
+        .find_map(|line| line.split_once("READY ")?.1.trim().parse::<u32>().ok());
+        let tool = said.expect("the agent said its tool's pid");
+        let pid = agent.id();
         let herdr = FakeHerdr::start("agent-sleep-end", move |method, _| match method {
             "agent.get" => agent_info("idle", 7),
             "pane.process_info" => {
-                // The shell (this test process stands in for it) takes the
-                // terminal back only once the agent's group is really gone.
+                // This test process stands in for the shell, which takes the
+                // terminal back once the agent has ended.
                 let shell = std::process::id();
-                let gone = !process::is_alive(pid) || seen.load(Ordering::SeqCst);
-                process_info(shell, if gone { shell } else { pid })
+                process_info(shell, if process::is_alive(pid) { pid } else { shell })
             }
             other => panic!("unexpected {other}"),
-        });
-        let reaper = thread::spawn(move || {
-            let _ = child.wait();
-            exited.store(true, Ordering::SeqCst);
         });
         assert_eq!(
             end_agent(
@@ -630,8 +681,12 @@ mod tests {
             ),
             Ok(7)
         );
-        reaper.join().expect("reaped");
-        assert!(!process::is_alive(pid));
+        assert!(!agent.wait().expect("the agent is reaped").success());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while process::is_alive(tool) {
+            assert!(Instant::now() < deadline, "the agent's tool kept running");
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[test]

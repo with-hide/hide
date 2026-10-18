@@ -892,8 +892,13 @@ pub fn terminate(pid: u32) -> io::Result<()> {
     sys::terminate(checked_pid(pid)?)
 }
 
-/// `SIGTERM` to every member of the process group `leader` leads, which is how
-/// a terminal's foreground job is ended. `Unsupported` on Windows.
+/// Ends the job `leader` leads, which is how a terminal's foreground job is
+/// ended: `SIGTERM` to every member of its process group on Unix. Windows
+/// keeps no group, and names the job by its first process, so there `leader`
+/// and every process under it end at once, read from one look at the process
+/// table; a descendant whose parent had already exited is out of reach, as
+/// for [`kill_tree`]. `NotFound` when no such group (Unix) or process
+/// (Windows) is left.
 pub fn terminate_group(leader: u32) -> io::Result<()> {
     sys::terminate_group(checked_pid(leader)?)
 }
@@ -2859,11 +2864,34 @@ mod sys {
         Ok(())
     }
 
-    pub(super) fn terminate_group(_: u32) -> io::Result<()> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "a Windows process group cannot be signalled",
-        ))
+    /// Windows keeps no process group: a terminal's foreground job is named
+    /// by its first process, which stands in for the group (Herdr's
+    /// `foreground_process_group_id` there), so the job is that process and
+    /// everything under it. No signal asks a process on another console to
+    /// end, so each ends at once, as `terminate` ends one.
+    pub(super) fn terminate_group(leader: u32) -> io::Result<()> {
+        // Held to the end, so no later process can take the pid while the
+        // tree under it is read.
+        let process = open_live(leader, PROCESS_TERMINATE)?;
+        // Read before the first end, and a failed read ends nothing: ending
+        // the leader alone would leave what it started running with no owner.
+        let members = descendants(leader)?;
+        // SAFETY: the handle is open with the access the call needs.
+        if unsafe { TerminateProcess(process.0, 1) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut first_error = None;
+        for member in members {
+            match terminate(member) {
+                Ok(()) => {}
+                // It ended on its own once its parent had gone.
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
     pub(super) fn is_alive(pid: u32) -> bool {
