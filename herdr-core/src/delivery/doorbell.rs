@@ -600,26 +600,27 @@ fn native_current(
     let agent = wire::delivery_agent(rpc(connector, "agent.get", parameters)?)
         .map_err(|_| "herdr_format")?;
     Ok(match agent.readiness {
-        Readiness::Launching => Err(Hold::Launching),
-        Readiness::NotReady => Err(Hold::NotReady),
-        Readiness::Ready | Readiness::Unreported
-            if agent.pane_id != observed.raw_pane_id
-                || agent.name != observed.actor.name
-                || !agent.kind.as_deref().is_some_and(|kind| {
-                    hide_agent_adapter::canonical_kind(kind)
-                        == hide_agent_adapter::canonical_kind(&observed.actor.kind)
-                })
-                || agent.session != observed.actor.session =>
+        readiness if !readiness.accepts_input() => Err(if readiness == Readiness::Launching {
+            Hold::Launching
+        } else {
+            Hold::NotReady
+        }),
+        _ if agent.pane_id != observed.raw_pane_id
+            || agent.name != observed.actor.name
+            || !agent.kind.as_deref().is_some_and(|kind| {
+                hide_agent_adapter::canonical_kind(kind)
+                    == hide_agent_adapter::canonical_kind(&observed.actor.kind)
+            })
+            || agent.session != observed.actor.session =>
         {
             Err(Hold::Identity)
         }
-        Readiness::Ready | Readiness::Unreported
-            if agent.status != observed.status
-                || Some(agent.state_change_seq) != observed.state_change_seq =>
+        _ if agent.status != observed.status
+            || Some(agent.state_change_seq) != observed.state_change_seq =>
         {
             Err(Hold::Moved)
         }
-        Readiness::Ready | Readiness::Unreported => Ok(()),
+        _ => Ok(()),
     })
 }
 

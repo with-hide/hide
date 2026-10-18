@@ -3199,14 +3199,23 @@ impl Runtime {
                 // Keys typed between the press and the agent's start wait for
                 // the fork's agent rather than reaching the shell that starts
                 // it (B4); `ingest_fork_result` resolves or discards them.
-                if let Some(request_id) = payload.request_id.as_deref() {
-                    self.input_requests.open(
-                        request_id,
-                        super::terminal_input::InputOrigin::Fork(pane_id.clone()),
-                        std::time::Instant::now(),
+                let request_id = payload
+                    .request_id
+                    .unwrap_or_else(|| format!("fork-{}", self.fork_sequence));
+                if !self.input_requests.open(
+                    &request_id,
+                    super::terminal_input::InputOrigin::Fork(pane_id.clone()),
+                    std::time::Instant::now(),
+                ) {
+                    self.forks_in_flight.remove(&pane_id);
+                    self.set_error(
+                        "pane.fork_input_unavailable",
+                        "The fork could not reserve its input holder. Try again after other panes finish starting.",
+                        false,
                     );
-                    self.sync_input_requests();
+                    return true;
                 }
+                self.sync_input_requests();
                 self.push_diagnostic("pane.fork.requested", format!("Forking pane {pane_id}"));
                 if let Err(message) = live::spawn_agent_fork(context, request) {
                     // A worker that never started is a fork that failed, and
