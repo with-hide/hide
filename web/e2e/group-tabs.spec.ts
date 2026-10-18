@@ -3,6 +3,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { herdrGate } from "./herdr-gate";
 import { herdrTabs } from "./failure-dump";
@@ -167,7 +168,11 @@ test("adding an agent keeps the live tab and its existing pane, with the chosen 
     expect(topology(herdr)).toEqual(originalTabs);
     const added = (await page.locator("[data-pane-view]").evaluateAll((panes) => panes.map((pane) => pane.getAttribute("data-pane-view")!))).find((id) => id !== originalPane)!;
     await expect.poll(() => JSON.stringify(herdr.run(["pane", "process-info", "--pane", added])), { timeout: 30_000 }).toContain("opus");
-    await expect.poll(() => JSON.stringify(herdr.run(["pane", "read", added, "--source", "visible"])), { timeout: 30_000 }).toContain("같은 탭의 새 에이전트");
+    await expect.poll(() => {
+      const read = spawnSync(herdr.bin, ["pane", "read", added, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
+      expect(read.status, read.stderr).toBe(0);
+      return read.stdout;
+    }, { timeout: 30_000 }).toContain("같은 탭의 새 에이전트");
     await screenshot(page, "group-tabs-agent-added");
   } finally { try { daemon?.stop(); } finally { herdr.stop(); } }
 });
