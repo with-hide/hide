@@ -32,7 +32,8 @@
 </p>
 
 Your team runs several coding agents at once, and someone has to watch them.
-hide keeps every agent in one view, lets them hand work to each other, and keeps them going after you close the laptop.
+hide lets them work as one team: they start helpers, watch them and write to each other.
+It keeps the team in one view and keeps it going after you close the laptop.
 You get the decisions; the rest stays out of the way.
 
 It works with the agent CLIs you already signed in to: **Claude Code, Codex, Antigravity, OpenCode, Cursor, Grok, Pi and omp**.
@@ -40,18 +41,13 @@ No new API key, no hosted service.
 
 ## Features
 
-### Only what needs you comes up
+### Agents start, watch and write to each other
 
-Hide AI reads what each agent did and gives it a title and a one-line summary.
-Agents sort themselves into four groups, **Needs You, Unread, Working and Seen**, and the ones waiting on you sit on top of every screen.
-Hide AI runs on the agent CLI you already use.
-Each task keeps a record of what it is doing now and what you asked, ticked off as it goes.
-
-### Agents hand work to each other
-
-A lead starts workers, a worker starts a helper, and they write to each other in letters.
+A lead starts workers, a worker starts a helper, on this machine or another, and they write to each other in letters.
 Mix vendors freely: one agent writes, another checks.
 A child runs in its own tab and reports to its parent, not to you, and the tree shows who started whom on every machine.
+The agent that started a child watches it: it hears within a minute when the child stops on a question, and after 20 quiet minutes when it stalls.
+Claude Code and Codex can end a turn and wait; the letter they wait for wakes them.
 
 <p align="center">
   <picture>
@@ -59,6 +55,13 @@ A child runs in its own tab and reports to its parent, not to you, and the tree 
     <img src="site/assets/shots/agents-dark.webp" alt="A lead agent, Claude Code, open in a pane. Its header shows one child asking and its pull requests, and a popover lists the helpers it started. The sidebar tree beside it shows the lead with Codex workers and an OpenCode helper under them.">
   </picture>
 </p>
+
+### Only what needs you comes up
+
+Hide AI reads what each agent did and gives it a title and a one-line summary.
+Agents sort themselves into four groups, **Needs You, Unread, Working and Seen**, and the ones waiting on you sit on top of every screen.
+Hide AI runs on the agent CLI you already use.
+Each task keeps a record of what it is doing now and what you asked, ticked off as it goes.
 
 ### One core, any screen
 

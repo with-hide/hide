@@ -48,7 +48,7 @@
         <div class="wrap hero-copy">
           <p class="label bare">The agent development environment</p>
           <h1 id="intro-title">Run more agents.<br> <span class="accent">Hold less.</span></h1>
-          <p class="lead">Your team runs Claude Code, Codex and whatever comes next. hide keeps them in one view, lets them hand work to each other, and keeps them going after you close the laptop. <strong>You get the decisions.</strong></p>
+          <p class="lead">Claude Code, Codex and whatever comes next work as one team: they start helpers, watch them and write to each other. hide keeps the team in one view and keeps it going after you close the laptop. <strong>You get the decisions.</strong></p>
           <div class="actions">
             <a class="button primary" href="#download">Get hide <span aria-hidden="true">↓</span></a>
             <a class="button secondary" href="https://github.com/with-hide/hide">View on GitHub <span aria-hidden="true">↗</span></a>
@@ -64,7 +64,7 @@
               <img src="./assets/shots/hero-dark.webp" width="2912" height="1800" alt="The hide window. Two agents that need an answer are raised above the project tree. A lead splitting the work and the agent asking to merge two pull requests run side by side, and the PRs tool lists the two ready to merge above the ones agents are still working on.">
             </picture>
           </div>
-          <figcaption>Two agents need you. They are on top. Everything else keeps working.</figcaption>
+          <figcaption>A lead waits on its workers. The two that need you are on top.</figcaption>
         </figure>
 
         <div class="agents-strip wrap reveal">
@@ -82,32 +82,15 @@
         </div>
 
         <div class="pillars">
-          <article class="pillar" aria-labelledby="attention-title">
-            <div class="pillar-copy reveal">
-              <img class="owl" data-owl="ai" src="./assets/owls/owl-ai-still.svg" data-motion="./assets/owls/owl-ai.svg" width="510" height="680" alt="" loading="lazy">
-              <h3 id="attention-title">Only what needs you comes up.</h3>
-              <p>Hide AI reads what each agent did and gives it a title and a one-line summary. Agents sort themselves into four groups, and the ones waiting on you sit on top on every screen.</p>
-              <ul>
-                <li>Needs You, Unread, Working, Seen. Nothing else to watch.</li>
-                <li>Each task keeps a record: what it is doing now, and what you asked, ticked off.</li>
-                <li>Runs on the agent CLI you already signed in to. No new API key.</li>
-              </ul>
-            </div>
-            <figure class="shot shot-narrow reveal">
-              <picture>
-                <source media="(prefers-color-scheme: light)" srcset="./assets/shots/attention-light.webp">
-                <img src="./assets/shots/attention-dark.webp" width="856" height="1480" alt="hide's sidebar. Two agents wait under Needs You, with a one-line reason each. A finished fix sits under Unread. Below them, the project tree shows who is still working." loading="lazy" decoding="async">
-              </picture>
-            </figure>
-          </article>
-
           <article class="pillar" aria-labelledby="handoff-title">
             <div class="pillar-copy reveal">
               <img class="owl" data-owl="agents" src="./assets/owls/owl-agents-still.svg" data-motion="./assets/owls/owl-agents.svg" width="720" height="575" alt="" loading="lazy">
-              <h3 id="handoff-title">Agents hand work to each other.</h3>
-              <p>A lead can start workers, a worker can start a helper, and they write to each other in letters. Mix vendors freely: one writes, another checks. The tree shows who started whom, on every machine.</p>
+              <h3 id="handoff-title">Agents start, watch and write to each other.</h3>
+              <p>A lead starts workers, a worker starts a helper, on this machine or another. The agent that started a child watches it, and they write to each other in letters. Mix vendors freely: one writes, another checks. The tree shows who started whom.</p>
               <ul>
                 <li>A child runs in its own tab and reports to its parent, not to you.</li>
+                <li>A parent hears within a minute when its child stops on a question, and after 20 quiet minutes when it stalls.</li>
+                <li>Claude Code and Codex can end a turn and wait: the letter they wait for wakes them.</li>
                 <li>A letter reaches a working agent within five minutes, or at its next step when it cannot wait.</li>
               </ul>
             </div>
@@ -133,6 +116,25 @@
                   <li><b>Its children</b>One is asking its parent. The row says so; it does not wake you.</li>
                 </ol>
               </figcaption>
+            </figure>
+          </article>
+
+          <article class="pillar" aria-labelledby="attention-title">
+            <div class="pillar-copy reveal">
+              <img class="owl" data-owl="ai" src="./assets/owls/owl-ai-still.svg" data-motion="./assets/owls/owl-ai.svg" width="510" height="680" alt="" loading="lazy">
+              <h3 id="attention-title">Only what needs you comes up.</h3>
+              <p>Hide AI reads what each agent did and gives it a title and a one-line summary. Agents sort themselves into four groups, and the ones waiting on you sit on top on every screen.</p>
+              <ul>
+                <li>Needs You, Unread, Working, Seen. Nothing else to watch.</li>
+                <li>Each task keeps a record: what it is doing now, and what you asked, ticked off.</li>
+                <li>Runs on the agent CLI you already signed in to. No new API key.</li>
+              </ul>
+            </div>
+            <figure class="shot shot-narrow reveal">
+              <picture>
+                <source media="(prefers-color-scheme: light)" srcset="./assets/shots/attention-light.webp">
+                <img src="./assets/shots/attention-dark.webp" width="856" height="1480" alt="hide's sidebar. Two agents wait under Needs You, with a one-line reason each. A finished fix sits under Unread. Below them, the project tree shows who is still working." loading="lazy" decoding="async">
+              </picture>
             </figure>
           </article>
 
