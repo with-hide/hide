@@ -1,7 +1,7 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 /** Explicitly starts a terminal in the selected draft and keeps its strip slot. */
-export async function startDraftTerminal(page: Page, expectedDraft?: string): Promise<string> {
+export async function startDraftTerminal(page: Page | Locator, expectedDraft?: string): Promise<string> {
   const form = page.locator("[data-agent-tab-start]");
   await expect(form).toHaveAttribute("data-agent-tab-start", expectedDraft ?? /^draft:/);
   const draft = (await form.getAttribute("data-agent-tab-start"))!;

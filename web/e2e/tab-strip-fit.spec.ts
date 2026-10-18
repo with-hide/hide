@@ -148,8 +148,13 @@ test("Selecting an Agent tab moves the title width to it, and the selected tab s
   const { tabs, stop } = await startStrip(page, 16);
   try {
     // Selecting another tab moves the title width to it in the same frame.
-    // The tool rail takes its width from the strip's room (PRD right-lane B1).
-    expect((await check(page, 1500 + 48)).stage).toBe("others-compact");
+    // Reserve room for the visible group and area controls, then place the
+    // others halfway through the independent compact-width interval.
+    const initial = await strip(page);
+    const compactOther = (ICON + CONTROL + TITLE_MIN) / 2;
+    const room = TITLE_MIN + (initial.tabs.length - 1) * compactOther;
+    const width = page.viewportSize()!.width + room - initial.room;
+    expect((await check(page, width)).stage).toBe("others-compact");
     const before = await strip(page);
     expect(before.tabs.filter((tab) => !tab.selected).every((tab) => tab.width < TITLE_MIN)).toBe(true);
     const target = before.tabs.findIndex((tab) => !tab.selected);

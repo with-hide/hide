@@ -34,6 +34,8 @@ test("focused agent titles, inline rename, clear and reconnect", async ({ page }
       const menu = page.getByRole("menu");
       await expect(menu.getByRole("menuitem")).toHaveText([
         "New tab",
+        "Move to new group…",
+        "Move to group",
         "Rename…",
         /^Split/,
         "Copy name",
