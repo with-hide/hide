@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::install::{HookStatus, InstallFailure, status};
 use crate::report::{ReportFailure, last_failure};
-use crate::runtime::{AgentRuntime, HOOK_VERSION};
+use crate::runtime::{AgentRuntime, HOOK_ENTRY_VERSION, HOOK_VERSION};
 
 /// Why Hide cannot say what a pane's agent has spawned.
 ///
@@ -286,7 +286,7 @@ impl Diagnosis {
                     label: runtime.label().to_owned(),
                     path: runtime.config_path(home).display().to_string(),
                     status: status(runtime, home),
-                    current_version: HOOK_VERSION,
+                    current_version: HOOK_ENTRY_VERSION,
                     memory_compatibility: probe(runtime, home),
                 })
                 .collect(),
@@ -503,7 +503,7 @@ mod tests {
             label: "Codex".to_owned(),
             path: "/tmp/hooks.json".to_owned(),
             status: HookStatus::Outdated { version: 2 },
-            current_version: HOOK_VERSION,
+            current_version: HOOK_ENTRY_VERSION,
             memory_compatibility: compatible(AgentRuntime::Codex, Path::new("/tmp")),
         };
         assert_eq!(row.headline(), "Update required (v2, current v9)");
@@ -534,6 +534,23 @@ mod tests {
             result.blocked, None,
             "no adapter observes a blocked subagent"
         );
+    }
+
+    #[test]
+    fn updating_installed_commands_keeps_open_version_eight_panes_connected() {
+        // Version 8 is the already-published pane protocol, independently of
+        // the version of the command the next kit pass installs.
+        assert_eq!(HOOK_VERSION, 8);
+        assert_eq!(HOOK_ENTRY_VERSION, 9);
+        for status in [
+            HookStatus::Outdated { version: 8 },
+            HookStatus::Installed { version: 9 },
+        ] {
+            let result = instrumentation(observation(Some(8)), Some(&status));
+            assert!(result.instrumented, "{status:?}: {result:?}");
+            assert_eq!(result.reason, None);
+            assert_eq!((result.working, result.done), (Some(2), Some(3)));
+        }
     }
 
     #[test]
@@ -598,9 +615,9 @@ mod tests {
             label: "Codex".to_owned(),
             path: "/tmp/hooks.json".to_owned(),
             status: HookStatus::Installed {
-                version: HOOK_VERSION,
+                version: HOOK_ENTRY_VERSION,
             },
-            current_version: HOOK_VERSION,
+            current_version: HOOK_ENTRY_VERSION,
             memory_compatibility: MemoryCompatibility::Supported {
                 version: "0.155.1".to_owned(),
             },
@@ -610,9 +627,9 @@ mod tests {
             label: "Claude Code".to_owned(),
             path: "/tmp/settings.json".to_owned(),
             status: HookStatus::Installed {
-                version: HOOK_VERSION,
+                version: HOOK_ENTRY_VERSION,
             },
-            current_version: HOOK_VERSION,
+            current_version: HOOK_ENTRY_VERSION,
             memory_compatibility: MemoryCompatibility::UpdateRequired {
                 installed_version: Some("2.1.277".to_owned()),
                 minimum_version: "2.1.278".to_owned(),

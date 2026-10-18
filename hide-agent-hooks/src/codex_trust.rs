@@ -1286,8 +1286,8 @@ mod tests {
             command.replace("--runtime codex", "--runtime claude-code"),
             command.replace("SessionStart", "Stop"),
             command.replace(
-                &format!("hide-subagents@{}", crate::HOOK_VERSION),
-                &format!("hide-subagents@{}", crate::HOOK_VERSION - 1),
+                &format!("hide-subagents@{}", crate::HOOK_ENTRY_VERSION),
+                &format!("hide-subagents@{}", crate::HOOK_ENTRY_VERSION - 1),
             ),
             format!("{command} "),
             command.to_uppercase(),

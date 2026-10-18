@@ -40,6 +40,8 @@ Codex matches a tool by its whole name: with a hook on `request_user_input` alon
 An entry of Hide's whose matcher differs from the one written today reads Outdated at its own version, so the next kit pass rewrites it and records its Codex trust.
 The version-nine marker makes earlier entries Outdated until the normal kit pass at launch, connection or Reinstall replaces Hide's entries and records their exact Codex trust.
 Already-running sessions pick up the changed hooks when restarted.
+The installed-command version (`HOOK_ENTRY_VERSION`, now 9) is separate from the pane-report protocol (`HOOK_VERSION`, still 8).
+A pane already reporting protocol 8 keeps its connection and child counts both before and after that kit pass; updating a command does not invalidate a readable report.
 
 Every entry carries `--runtime claude-code|codex` and `--source hide-subagents@<version>` inside its command (in Claude Code's Windows entry, inside its `args`).
 The runtime argument selects that runtime's stdout envelope; the current marker also replaces commands not guarded against a missing helper.
@@ -52,6 +54,9 @@ The helper gives this route to each sibling `hide` call when `HIDE_STATE_DIR` is
 A malformed, relative or duplicate captured route fails the call rather than falling back to another daemon.
 This covers an app opened from the Dock without `XDG_STATE_HOME` while an agent's shell exports it, and agents whose hooks do not inherit Hide's environment.
 The current Grok and agy entries, Cursor entries, Pi and omp extensions, and both OpenCode server plugins use the same rule; the kit updates their owned entries through its normal pass and records the exact route-bearing Codex command as trusted.
+The install versions are Claude Code and Codex 9, Grok and agy 8, Cursor 7, Pi and omp 8, OpenCode V1 7 and OpenCode's server plugin 2; the TUI plugin stays at 1 because it starts no helper.
+Every kit pass compares the captured folder with the running daemon's folder, so a state move or a daemon started with another environment rewrites an unedited generated command without another version bump.
+Before that pass, an unavailable old folder leaves mail pending and records the existing throttled `intake.failed` diagnostic with code `unavailable` in the helper's private delivery diagnostics; an invalid captured argument records `record` instead.
 
 ## What the hook returns and reports back
 

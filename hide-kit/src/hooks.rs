@@ -28,7 +28,7 @@ pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
         HookStatus::NotInstalled | HookStatus::Off => Observed::Missing,
         HookStatus::Outdated { version } => Observed::Stale(format!(
             "version {version} of the hook is there; this build writes version {}",
-            hide_agent_hooks::HOOK_VERSION
+            hide_agent_hooks::HOOK_ENTRY_VERSION
         )),
         HookStatus::Failed {
             reason: InstallFailure::HelperMissing { helper, .. },

@@ -53,6 +53,6 @@ pub use install::{
     remove,
 };
 pub use runtime::{
-    AgentRuntime, HELPER_BINARY_NAME, HOOK_SOURCE_NAME, HOOK_VERSION, HookEvent, PURPOSE_CONTEXT,
-    hook_source_id, hook_stdout,
+    AgentRuntime, HELPER_BINARY_NAME, HOOK_ENTRY_VERSION, HOOK_SOURCE_NAME, HOOK_VERSION,
+    HookEvent, PURPOSE_CONTEXT, hook_source_id, hook_stdout,
 };

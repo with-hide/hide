@@ -92,6 +92,96 @@ fn diagnostics(home: &Path) -> std::path::PathBuf {
 }
 
 #[test]
+fn every_windows_command_preserves_the_captured_unicode_state_path() {
+    use base64::Engine;
+    use hide_agent_hooks::guidance::{self, GuidanceAgent};
+    use hide_agent_hooks::route::HookTarget;
+
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let state = root.path().join("state 한글 ' $x [1]");
+    let helper = root.path().join("kit ' $x [1]").join("route.cmd");
+    std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
+    // The stand-in observes argv after the agent's actual Windows shell
+    // boundary, without involving a daemon or the operator's settings.
+    std::fs::write(&helper, "@echo off\r\necho %*\r\nexit /b 0\r\n").unwrap();
+    let target = HookTarget::new(&helper, &state);
+    let assert_route = |output: Output| {
+        assert!(output.status.success(), "{output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let arguments: Vec<_> = stdout.split_whitespace().collect();
+        let routes: Vec<_> = arguments
+            .windows(2)
+            .filter(|pair| pair[0] == "--state-dir-b64")
+            .collect();
+        assert_eq!(routes.len(), 1, "{stdout:?}");
+        let received = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(routes[0][1])
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(received).unwrap(),
+            state.to_str().unwrap()
+        );
+    };
+    let shells = powershells();
+    for runtime in AgentRuntime::ALL {
+        std::fs::create_dir_all(runtime.home_directory(&home)).unwrap();
+        hide_agent_hooks::install(runtime, &home, target).unwrap();
+        let hook = session_start_hook(&home, runtime);
+        match runtime {
+            AgentRuntime::ClaudeCode => assert_route(run(runtime, &hook, "exec", &home, &home)),
+            AgentRuntime::Codex => {
+                for shell in &shells {
+                    assert_route(run(runtime, &hook, shell, &home, &home));
+                }
+            }
+        }
+    }
+    for agent in [GuidanceAgent::Grok, GuidanceAgent::Cursor] {
+        std::fs::create_dir_all(agent.home_directory(&home)).unwrap();
+        guidance::install(agent, &home, target).unwrap();
+        let document: Value =
+            serde_json::from_slice(&std::fs::read(agent.config_path(&home)).unwrap()).unwrap();
+        let command = if agent == GuidanceAgent::Grok {
+            document["hooks"]["PreToolUse"][0]["hooks"][0]["command"].as_str()
+        } else {
+            document["hooks"]["preToolUse"][0]["command"].as_str()
+        }
+        .unwrap();
+        for shell in &shells {
+            assert_route(if agent == GuidanceAgent::Grok {
+                run_grok(command, shell, &home, "{}")
+            } else {
+                run_cursor(command, shell, &home, root.path(), "{}")
+            });
+        }
+    }
+    let agent = GuidanceAgent::Antigravity;
+    std::fs::create_dir_all(agent.home_directory(&home)).unwrap();
+    guidance::install(agent, &home, target).unwrap();
+    let document: Value =
+        serde_json::from_slice(&std::fs::read(agent.config_path(&home)).unwrap()).unwrap();
+    let mut command = agy_shell(
+        document["hide"]["PreToolUse"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap(),
+    );
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    assert_route(
+        hide_platform::process::OwnedChild::spawn(&mut command)
+            .unwrap()
+            .capture_until(
+                std::time::Instant::now() + std::time::Duration::from_secs(15),
+                64 * 1024,
+            )
+            .unwrap(),
+    );
+}
+
+#[test]
 fn the_windows_entries_run_the_helper_through_powershell_only_while_it_is_there() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");

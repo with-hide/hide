@@ -158,7 +158,7 @@ pub fn status(runtime: AgentRuntime, home: &Path) -> HookStatus {
             },
         };
     }
-    if missing_event || version < crate::runtime::HOOK_VERSION {
+    if missing_event || version < crate::runtime::HOOK_ENTRY_VERSION {
         HookStatus::Outdated { version }
     } else {
         HookStatus::Installed { version }
@@ -1084,7 +1084,7 @@ mod tests {
             let group = serde_json::json!({ "hooks": [hook] });
             assert_eq!(
                 group_marker_version(&group),
-                Some(crate::runtime::HOOK_VERSION)
+                Some(crate::runtime::HOOK_ENTRY_VERSION)
             );
             let text = hook_texts(&group["hooks"][0])
                 .find(|text| text.contains('\''))
@@ -1235,7 +1235,7 @@ mod tests {
                 .remove("PreToolUse");
             fixture.write(runtime, &serde_json::to_string_pretty(&document).unwrap());
             assert!(
-                matches!(status(runtime, fixture.home()), HookStatus::Outdated { version } if version == crate::runtime::HOOK_VERSION),
+                matches!(status(runtime, fixture.home()), HookStatus::Outdated { version } if version == crate::runtime::HOOK_ENTRY_VERSION),
                 "{runtime:?}"
             );
             install(runtime, fixture.home(), &path).unwrap();
@@ -1268,7 +1268,7 @@ mod tests {
             assert_eq!(
                 matches!(
                     status(runtime, fixture.home()),
-                    HookStatus::Outdated { version } if version == crate::runtime::HOOK_VERSION
+                    HookStatus::Outdated { version } if version == crate::runtime::HOOK_ENTRY_VERSION
                 ),
                 stale,
                 "{runtime:?}"
@@ -1514,7 +1514,7 @@ mod tests {
         assert_eq!(
             status(AgentRuntime::ClaudeCode, fixture.home()),
             HookStatus::Installed {
-                version: crate::runtime::HOOK_VERSION
+                version: crate::runtime::HOOK_ENTRY_VERSION
             }
         );
     }

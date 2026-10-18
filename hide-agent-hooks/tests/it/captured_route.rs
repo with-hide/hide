@@ -176,3 +176,40 @@ fn explicit_routes_win_empty_routes_fall_back_and_malformed_routes_never_fall_ba
         assert_eq!(stdout.contains("CAPTURED-ROUTE-LETTER"), delivers);
     }
 }
+
+#[test]
+fn a_removed_captured_state_records_unavailable_until_the_kit_rewrites_it() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    let helper = root.path().join("hide-agent-hooks");
+    stand_ins::place(programs::hook(), &helper);
+    stand_ins::program(&root.path().join("hide"), HIDE);
+    let current_state = home.join("current-daemon");
+    let previous_state = home.join("removed-daemon");
+    assert!(!previous_state.exists());
+    let encoded =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(previous_state.to_str().unwrap());
+    let stdout = invoke(
+        &helper,
+        &home,
+        &current_state,
+        &[
+            "hook",
+            "--runtime",
+            "grok",
+            "--event",
+            "Stop",
+            "--state-dir-b64",
+            &encoded,
+        ],
+        json!({"sessionId":"route-session", "stopHookActive":false, "backgroundTasks":[]}),
+        None,
+    );
+    assert!(!stdout.contains("CAPTURED-ROUTE-LETTER"));
+    let diagnostic: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(home.join(".hide/agent-hooks/delivery-diagnostics.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(diagnostic["last"]["unavailable"].is_u64(), "{diagnostic}");
+}
