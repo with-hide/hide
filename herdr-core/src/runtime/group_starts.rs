@@ -57,6 +57,13 @@ pub(super) struct ActiveStart {
     /// Global starts may bring their checkout forward only while the
     /// original screen's selection has not been superseded.
     global_focus: Option<StartFocus>,
+    remote_focus: Option<RemoteStartFocus>,
+}
+
+struct RemoteStartFocus {
+    pane: String,
+    generation: u64,
+    deadline: std::time::Instant,
 }
 
 #[derive(PartialEq)]
@@ -460,6 +467,7 @@ impl Runtime {
             workspace,
             key,
             global_focus,
+            remote_focus: None,
         });
         self.persist_workspace_views();
         Ok(PreparedStart {
@@ -692,7 +700,89 @@ impl Runtime {
     pub(super) fn supersede_group_start_navigation(&mut self) {
         if let Some(active) = self.group_start.as_mut() {
             active.global_focus = None;
+            active.remote_focus = None;
         }
+    }
+
+    /// One pending follow belongs to the current start, never a shell-side
+    /// open intent. It expires with the start panel's 90-second answer bound.
+    pub(super) fn queue_remote_group_start_focus(&mut self, task: u64, pane: String) {
+        let Some(active) = self.group_start.as_mut().filter(|start| start.task == task) else {
+            return;
+        };
+        active.remote_focus = Some(RemoteStartFocus {
+            pane,
+            generation: self
+                .remote_connection_generations
+                .get(&active.workspace.0)
+                .copied()
+                .unwrap_or(0),
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(90),
+        });
+    }
+
+    pub(super) fn follow_remote_group_start(&mut self, device: &str) -> bool {
+        let Some(active) = self
+            .group_start
+            .as_ref()
+            .filter(|start| start.workspace.0 == device)
+        else {
+            return false;
+        };
+        let Some(pending) = active.remote_focus.as_ref() else {
+            return false;
+        };
+        let current = self
+            .snapshot
+            .task_operation
+            .as_ref()
+            .is_some_and(|op| op.id == active.task && op.phase == "ready" && !op.stays_behind)
+            && self.group_start_should_focus(active.task)
+            && pending.generation
+                == self
+                    .remote_connection_generations
+                    .get(device)
+                    .copied()
+                    .unwrap_or(0)
+            && std::time::Instant::now() < pending.deadline;
+        if !current {
+            self.group_start.as_mut().unwrap().remote_focus = None;
+            self.push_diagnostic(
+                "agent_start.remote_focus_cancelled",
+                format!("Remote start focus on {device} was superseded or expired"),
+            );
+            return false;
+        }
+        // The exact pane must belong to this start's checkout on this
+        // connection before the ordinary remote control boundary accepts it.
+        let listed = self
+            .catalog_workspaces()
+            .filter(|workspace| workspace.device_id == device)
+            .flat_map(|workspace| &workspace.checkouts)
+            .filter(|checkout| checkout.path == active.workspace.1)
+            .flat_map(|checkout| &checkout.tabs)
+            .flat_map(|tab| &tab.panes)
+            .any(|pane| pane.id == pending.pane);
+        if !listed {
+            return false;
+        }
+        let request_id = format!("agent-start-focus:{}:{}", active.task, active.key);
+        let pending = self
+            .group_start
+            .as_mut()
+            .unwrap()
+            .remote_focus
+            .take()
+            .unwrap();
+        self.request_remote_control(RemoteControlPayload {
+            target_id: device.to_owned(),
+            request_id,
+            report_pane_focus_outcome: false,
+            focus_device: true,
+            request: RemoteControlRequest::FocusPane {
+                pane_id: pending.pane,
+            },
+        })
     }
 
     /// A targeted start keeps its selected slot. A global start may open its
@@ -725,10 +815,14 @@ impl Runtime {
                 .group_layout(start.group_id.as_deref())
                 .is_some_and(|layout| {
                     layout.active()
-                        == start
-                            .draft_tab_id
-                            .as_deref()
-                            .or(start.live_tab_id.as_deref())
+                        == if start.state == StartState::Ready {
+                            start.live_tab_id.as_deref()
+                        } else {
+                            start
+                                .draft_tab_id
+                                .as_deref()
+                                .or(start.live_tab_id.as_deref())
+                        }
                 })
     }
 

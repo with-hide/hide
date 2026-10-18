@@ -2185,6 +2185,7 @@ impl Runtime {
         changed |= self.refresh_device_snapshots();
         if observed_session.is_some() {
             self.reconcile_node_agent_topology(target_id);
+            changed |= self.follow_remote_group_start(target_id);
         }
         if let Some(session) = observed_session.as_ref() {
             let (live_pane_ids, active_pane_ids) = remote_terminal_pane_sets(
@@ -4016,12 +4017,12 @@ impl Runtime {
         let repository_root = operation.repository_root.clone();
         let device = operation.device_id.clone();
         let stays_behind = operation.stays_behind;
-        // A device's Herdr focuses what it created, and the device's screen
-        // follows its host; this machine's focus does not move for it. A
-        // task that stays behind (a phone start, or an archived descendant
-        // resumed after its root) takes the screen nowhere.
+        // A task that stays behind (a phone start, or an archived descendant
+        // resumed after its root) takes the screen nowhere. Remote agent
+        // starts follow through their existing remote-control boundary once
+        // the exact pane is listed; other device tasks retain their own flow.
         let should_focus = operation_kind != "branch_migrate"
-            && device.is_none()
+            && (device.is_none() || operation_kind == "agent_start")
             && !stays_behind
             && self.group_start_should_focus(id);
         let adds_pane = self.group_start_adds_pane(id);
@@ -4116,7 +4117,10 @@ impl Runtime {
                 // reads them; for an agent they wait for its start
                 // (`ingest_task_agent_result`).
                 let input_ready = operation.agent_phase.is_none().then(|| pane_id.clone());
-                if should_focus {
+                if should_focus && let Some(device) = device.as_deref() {
+                    self.queue_remote_group_start_focus(id, pane_id.clone());
+                    self.follow_remote_group_start(device);
+                } else if should_focus {
                     // Targeted creation intentionally did not focus Herdr.
                     // Use the same ordered, acknowledged focus as a pane press.
                     self.focus_pane(pane_id, PaneFocusOrigin::Restore, None);
@@ -4125,7 +4129,9 @@ impl Runtime {
                 // operator's keys were going, agent or not.
                 let origin = super::terminal_input::InputOrigin::Task(id);
                 match input_ready {
-                    _ if !should_focus => self.discard_input_request(&origin, "not_shown"),
+                    _ if !should_focus || device.is_some() => {
+                        self.discard_input_request(&origin, "not_shown")
+                    }
                     Some(pane_id) => self.resolve_input_request_at_shell(&origin, &pane_id),
                     None => {}
                 }

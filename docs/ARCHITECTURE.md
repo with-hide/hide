@@ -998,6 +998,8 @@ A restart reads a save or close in flight as `CloseUnknown`, and a resume in fli
 The root takes the screen as an ordinary start does; a descendant starts as a phone start does (`stay_behind`): its tab is created without focus (`CheckoutTabRequest::focus`) and its start moves nothing (`TaskOperation::stays_behind`), because only the operator's pane moves the screen and Herdr would otherwise bring the new tab forward and have the core follow it.
 A group-qualified creation starts without Herdr focus; once its selected target is accepted, the core uses the ordinary ordered pane-focus control to bring it forward.
 The global agent-start panel reads that result without issuing a second pane-focus intent, so a result left behind stays behind in the shell too.
+For a connected device, the current start may hold one follow for at most 90 seconds until its exact pane appears in that checkout's catalog, then sends one ordinary remote pane focus with device forwarding.
+An intervening local or remote visit, a replacement task or a changed device connection cancels that follow; repeated catalog answers cannot focus it again.
 A global start, including an archived root, may open another checkout while its original checkout, group, tab and control-lane focus serial remain current; a later explicit visit cancels that permission even if the operator returns to the same empty group or draft without sending Herdr a focus command.
 A retry reuses the pane the earlier attempt made instead of opening another.
 A member is done once any live row on its machine shows the same kind and native session, which also covers the operator resuming it by hand; a failed member keeps its reason and its own 이어가기, and the record goes once every member is back.

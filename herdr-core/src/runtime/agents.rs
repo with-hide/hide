@@ -372,6 +372,7 @@ impl Runtime {
                 });
             self.show_agent_workspace_tab(&key, live);
             self.remember_core_workspace_choice(&target_id, &request_id, key);
+            self.supersede_group_start_navigation();
             if self.remote_control_requests.len() == 128 {
                 self.remote_control_requests.pop_front();
             }
@@ -759,6 +760,12 @@ impl Runtime {
             }
         };
 
+        let chooses_focus = matches!(
+            action,
+            RemoteControlAction::Pane(PaneControlAction::Focus { .. })
+                | RemoteControlAction::FocusTab { .. }
+                | RemoteControlAction::FocusWorkspace { .. }
+        );
         // A terminal tab chosen on the device's strip takes the surface from
         // a device file the editor shows, as a local tab does (`focus_tab`).
         if matches!(
@@ -932,6 +939,9 @@ impl Runtime {
                 self.set_error("remote.control.worker_failed", message, true);
             }
             return true;
+        }
+        if chooses_focus {
+            self.supersede_group_start_navigation();
         }
         if let Some(key) = chosen_key {
             if let Some((tab, delegated)) = focused_tab {

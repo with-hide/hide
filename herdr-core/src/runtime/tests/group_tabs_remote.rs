@@ -99,6 +99,162 @@ fn active(runtime: &Runtime) -> Option<&str> {
 }
 
 #[test]
+fn a_global_remote_start_follows_its_pane_once_even_when_the_answer_precedes_the_catalog() {
+    for (origin, boundary) in origins().into_iter().flat_map(|origin| {
+        ["answer-first", "catalog-first", "newer-visit", "reconnect"]
+            .map(|boundary| (origin.clone(), boundary))
+    }) {
+        let t = tree();
+        let (mut runtime, _saved) = setup(origin, &t.main);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        runtime.install_remote_control(RemoteControlContext::new(
+            DEVICE,
+            Arc::new(RecordingHerdr {
+                requests: requests.clone(),
+            }),
+            Weak::new(),
+            ChangeNotifier::noop(),
+        ));
+        runtime.snapshot.navigator.focused_device_id = Some(crate::node::TEST_NODE.into());
+        let task = runtime
+            .begin_task_operation("agent_start", None, None, None, None)
+            .unwrap();
+        runtime.snapshot.task_operation.as_mut().unwrap().device_id = Some(DEVICE.into());
+        runtime
+            .prepare_group_start(
+                task,
+                (DEVICE, &t.main),
+                None,
+                Some("remote-start"),
+                None,
+                false,
+            )
+            .unwrap();
+        let mut landed = raw(&t.main);
+        let new_tab = herdr_workspace(DEVICE, "w1", &t.main, &[("t3", &t.main)])
+            .checkouts
+            .remove(0)
+            .tabs
+            .remove(0);
+        landed.workspaces[0].checkouts[0].tabs.push(new_tab);
+        if boundary == "catalog-first" {
+            runtime.ingest_remote_session(DEVICE, Ok(landed.clone()));
+        }
+        runtime.ingest_task_operation_result(
+            task,
+            Ok(live::WorktreeTaskOutcome {
+                path: t.main.clone(),
+                pane_id: "t3".into(),
+                created_tab_id: Some("t3".into()),
+                purpose_error: None,
+                unconfirmed_purpose_token: None,
+                issue_error: None,
+                shell: crate::agent_start::ShellStart::Plain,
+            }),
+        );
+        if boundary != "catalog-first" {
+            assert_eq!(
+                runtime.snapshot.navigator.focused_device_id.as_deref(),
+                Some(crate::node::TEST_NODE)
+            );
+            assert!(
+                requests.lock().unwrap().is_empty(),
+                "the pane must first belong to the device's catalog"
+            );
+        }
+        match boundary {
+            "newer-visit" => dispatch(
+                &mut runtime,
+                "focus_device",
+                json!({"device_id":crate::node::TEST_NODE}),
+            ),
+            "reconnect" => {
+                runtime.ingest_remote_session(
+                    DEVICE,
+                    Err(SessionFetchError::Unreachable("fixture disconnect".into())),
+                );
+            }
+            _ => {}
+        }
+        runtime.ingest_remote_session(DEVICE, Ok(landed.clone()));
+        runtime.sync_workspace_view();
+        if matches!(boundary, "newer-visit" | "reconnect") {
+            assert_eq!(
+                runtime.snapshot.navigator.focused_device_id.as_deref(),
+                Some(crate::node::TEST_NODE),
+                "{boundary} cancels the old start's screen move"
+            );
+            assert!(requests.lock().unwrap().is_empty());
+        } else {
+            assert_eq!(
+                runtime.snapshot.navigator.focused_device_id.as_deref(),
+                Some(DEVICE),
+                "{boundary}"
+            );
+            assert_eq!(active(&runtime), Some(tab("t3").as_str()));
+            assert_eq!(next_request(&requests, 0)["method"], "pane.focus");
+            runtime.ingest_remote_session(DEVICE, Ok(landed));
+            assert_eq!(
+                requests.lock().unwrap().len(),
+                1,
+                "a repeated catalog must not focus again"
+            );
+        }
+    }
+}
+
+#[test]
+fn successful_remote_checkout_pane_and_tab_visits_supersede_a_global_start() {
+    for action in ["focus_workspace", "focus_pane", "focus_tab"] {
+        let t = tree();
+        let (mut runtime, _saved) = setup(LinkOrigin::Inbound, &t.main);
+        runtime.install_remote_control(RemoteControlContext::new(
+            DEVICE,
+            Arc::new(RecordingHerdr {
+                requests: Arc::new(Mutex::new(Vec::new())),
+            }),
+            Weak::new(),
+            ChangeNotifier::noop(),
+        ));
+        let task = runtime
+            .begin_task_operation("agent_start", None, None, None, None)
+            .unwrap();
+        runtime
+            .prepare_group_start(
+                task,
+                (crate::node::TEST_NODE, "/another-checkout"),
+                None,
+                Some("global-start"),
+                None,
+                false,
+            )
+            .unwrap();
+        assert!(runtime.group_start_should_focus(task));
+        let workspace = &runtime.snapshot.status.remote[0]
+            .session
+            .as_ref()
+            .unwrap()
+            .workspaces[0];
+        let mut visit = json!({"target_id": DEVICE, "request_id":"newer-visit", "focus_device":true, "action":action});
+        match action {
+            "focus_workspace" => {
+                visit["workspace_id"] = json!(workspace.id);
+                visit["checkout_id"] = json!(workspace.checkouts[0].id);
+            }
+            "focus_pane" => visit["pane_id"] = json!(pane_id("t1")),
+            "focus_tab" => visit["tab_id"] = json!(tab("t1")),
+            _ => unreachable!(),
+        }
+        dispatch(&mut runtime, "remote_control", visit);
+        assert_eq!(runtime.snapshot.status.last_error, None);
+        assert!(
+            !runtime.group_start_should_focus(task),
+            "a successful {action} is newer even when it returns to the same selection"
+        );
+    }
+}
+
+#[test]
 fn inbound_and_ssh_empty_checkout_groups_and_drafts_survive_stale_herdr_focus_without_control() {
     for origin in origins() {
         let t = tree();
