@@ -57,6 +57,10 @@ describe("placing pages", () => {
     ]);
     // A still standing in its place keeps the page placed but not shown.
     expect(placements(rows, new Map([["d2", rect]]), new Set(["d2"]))[0]).toMatchObject({ rect, visible: false });
+    // A page at a device size carries it beside its frame's rect; a page that fits carries none (PRD browser-width-zoom D-12).
+    const sized = placements(rows, new Map([["d2", rect]]), new Set(), new Map([["d2", { width: 390, mobile: true }]]));
+    expect(sized[0]).toMatchObject({ rect, device: { width: 390, mobile: true } });
+    expect(sized[1]).not.toHaveProperty("device");
   });
 
   it("reads back the Workspace a host key names", () => {

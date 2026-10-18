@@ -28,7 +28,18 @@ export type BrowserPlacement = {
   rect: BrowserRect | null;
   /** False while a still or a notice stands in its place. */
   visible: boolean;
+  /**
+   * The device size its page lays out at (PRD browser-width-zoom D-10, D-12):
+   * `rect` is then the page's own rectangle, centered or fitted in its slot,
+   * and the page's viewport is `width` CSS pixels wide, scaled to fill
+   * `rect`; `mobile` lays it out as a phone or tablet does (its meta
+   * viewport applies). Null, or absent from an older shell, fits the slot.
+   */
+  device?: BrowserDevicePlacement | null;
 };
+
+/** A device size as the host emulates it. */
+export type BrowserDevicePlacement = { width: number; mobile: boolean };
 
 /**
  * Every browser display of the front Workspace. The host closes a page of
@@ -48,7 +59,8 @@ export type BrowserSync = {
   node?: string;
 };
 
-export type BrowserCommand = "back" | "forward" | "reload" | "stop" | "focus";
+/** `zoom_in`, `zoom_out` and `zoom_reset` step the page's zoom the way Chrome's ⌘= / ⌘- / ⌘0 do, without moving the keyboard. */
+export type BrowserCommand = "back" | "forward" | "reload" | "stop" | "focus" | "zoom_in" | "zoom_out" | "zoom_reset";
 
 /** What the page itself says, which only the host can read. */
 export type BrowserPageState = {
@@ -59,6 +71,12 @@ export type BrowserPageState = {
   canGoForward: boolean;
   /** Why the last load failed or the page stopped; null while it shows. */
   failure: string | null;
+  /**
+   * The page's zoom factor, 1 for 100%. Chromium keeps one per host of a
+   * session, so a zoom anywhere is reported again for every page of that
+   * host. Absent from an older host.
+   */
+  zoom?: number;
 };
 
 export type BrowserHostEvent =

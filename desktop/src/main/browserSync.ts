@@ -5,7 +5,7 @@
 
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import type { BrowserCommand, BrowserPlacement, BrowserRect, BrowserSync } from "../../../web/src/host";
+import type { BrowserCommand, BrowserDevicePlacement, BrowserPlacement, BrowserRect, BrowserSync } from "../../../web/src/host";
 
 /** A Workspace holds at most this many displays (`MAX_VIEW_DISPLAYS` is 32);
  * the bound is kept wider than the core's. */
@@ -21,7 +21,9 @@ export const MAX_LIVE_VIEWS = 12;
 export const MAX_POPUPS = 4;
 const MAX_TEXT = 8192;
 const MAX_EXTENT = 100_000;
-const COMMANDS: ReadonlySet<string> = new Set<BrowserCommand>(["back", "forward", "reload", "stop", "focus"]);
+const COMMANDS: ReadonlySet<string> = new Set<BrowserCommand>(["back", "forward", "reload", "stop", "focus", "zoom_in", "zoom_out", "zoom_reset"]);
+/** The widest viewport a device size may ask for, in CSS pixels. */
+const MAX_DEVICE_WIDTH = 4096;
 const LOADABLE_PROTOCOLS: ReadonlySet<string> = new Set(["http:", "https:", "file:"]);
 /** Schemes Chromium answers itself (with every `chrome` one): a page never reaches them, and they are never another app's. */
 const BROWSER_PROTOCOLS: ReadonlySet<string> = new Set([
@@ -61,6 +63,15 @@ function rect(value: unknown): BrowserRect | null | undefined {
   if (!numbers.every((n) => typeof n === "number" && Number.isFinite(n) && Math.abs(n) <= MAX_EXTENT)) return undefined;
   if ((width as number) < 0 || (height as number) < 0) return undefined;
   return { x: x as number, y: y as number, width: width as number, height: height as number };
+}
+
+/** A display's device size: null or absent fits its slot; undefined is out of shape. */
+function device(value: unknown): BrowserDevicePlacement | null | undefined {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "object") return undefined;
+  const { width, mobile } = value as Record<string, unknown>;
+  if (typeof width !== "number" || !Number.isSafeInteger(width) || width < 1 || width > MAX_DEVICE_WIDTH || typeof mobile !== "boolean") return undefined;
+  return { width, mobile };
 }
 
 /** A sync message, or null when any part of it is out of shape. */
@@ -103,10 +114,11 @@ export function parseSync(value: unknown): BrowserSync | null {
     if (typeof entry !== "object" || entry === null) return null;
     const { id, area_id, url, load, visible } = entry as Record<string, unknown>;
     const placed = rect((entry as Record<string, unknown>).rect);
+    const size = device((entry as Record<string, unknown>).device);
     if (!identity(id) || !identity(area_id) || ids.has(id) || !text(url) || typeof load !== "number" || !Number.isSafeInteger(load) || load < 0) return null;
-    if (placed === undefined || typeof visible !== "boolean") return null;
+    if (placed === undefined || size === undefined || typeof visible !== "boolean") return null;
     ids.add(id);
-    parsed.push({ id, area_id, url, load, rect: placed, visible });
+    parsed.push({ id, area_id, url, load, rect: placed, visible, ...(size ? { device: size } : {}) });
   }
   if (workspace === null && parsed.length > 0) return null;
   if (workspace && parsed.some((display) => ownedAreas.get(viewKey(workspace, display.id)) !== display.area_id)) return null;
@@ -340,6 +352,28 @@ export function overCap(views: readonly LiveView[], cap: number): string[] {
     .sort((a, b) => a.shownAt - b.shownAt)
     .slice(0, excess)
     .map((view) => view.key);
+}
+
+/**
+ * What a page at a device size is emulated with (PRD browser-width-zoom
+ * D-12): a viewport `device.width` CSS pixels wide whatever the page's zoom,
+ * as tall as its rectangle at the scale that fits that width into it, drawn
+ * scaled to fill `bounds` (whole window points). A desktop size keeps the
+ * page's zoom, so its viewport is the zoomed width; a mobile one lays out at
+ * the device's own width, which Chromium does not zoom.
+ */
+export function deviceEmulation(device: BrowserDevicePlacement, bounds: BrowserRect, zoom: number): Electron.Parameters {
+  const factor = device.mobile || !Number.isFinite(zoom) || zoom <= 0 ? 1 : zoom;
+  const fit = bounds.width > 0 ? bounds.width / device.width : 1;
+  const view = { width: Math.round(device.width * factor), height: Math.max(1, Math.round((bounds.height / fit) * factor)) };
+  return {
+    screenPosition: device.mobile ? "mobile" : "desktop",
+    screenSize: view,
+    viewPosition: { x: 0, y: 0 },
+    deviceScaleFactor: 0,
+    viewSize: view,
+    scale: bounds.width > 0 ? bounds.width / view.width : 1,
+  };
 }
 
 /** A rect in the shell's CSS pixels as whole window points. */

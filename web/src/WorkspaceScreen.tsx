@@ -19,7 +19,7 @@ import { RunningServers } from "./RunningServers";
 import { useUiStore } from "./ui";
 import { noteShellLayer } from "./browserViews";
 import { workspaceKey } from "./viewLayout";
-import { laneFrame, laneToolOf, workspaceViewOf, type LaneFrame, type LaneSizes, type LaneTool, type WorkspaceView } from "./workspace";
+import { laneFrame, laneToolOf, pageLaneWidth, workspaceViewOf, type LaneFrame, type LaneSizes, type LaneTool, type WorkspaceView } from "./workspace";
 import { keyboardOwner, noteKeyboardOwner } from "./viewFocus";
 import { cn } from "./lib/utils";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -58,6 +58,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
       agentMin: tokenPx("--size-agent-views-min"),
       laneMin: tokenPx("--size-lane-min"),
       laneIdeal: tokenPx("--size-lane-ideal"),
+      lanePage: tokenPx("--size-lane-page"),
       treeMin: tokenPx("--size-tree-min"),
       treeIdeal: tokenPx("--size-tree-ideal"),
       divider: tokenPx("--spacing-sm"),
@@ -83,6 +84,22 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   });
   const up = laneUp(frame.mode);
   const checkoutId = checkout?.id ?? null;
+  // A lane call that put a page in front widens the lane once, so the page
+  // lays out wide enough for a site's desktop layout (PRD browser-width-zoom
+  // B1-B5); an expanded lane, or a call into another Workspace, is left as
+  // it is. The width is stored like a divider landing, and a refusal leaves
+  // the page at the width it opened at, with only the log saying so.
+  const pageWiden = useUiStore((s) => s.pageWiden);
+  const front = view ? workspaceKey(view) : null;
+  useLayoutEffect(() => {
+    if (pageWiden === null || width <= 0) return;
+    useUiStore.getState().setPageWiden(null);
+    if (pageWiden !== front || expanded || tool !== "files") return;
+    const laneWidth = pageLaneWidth({ laneWidth: view?.lane_width ?? null, tree: frame.tree, body: width, sizes });
+    if (laneWidth !== null && actions.setWorkspaceView({ lane_width: laneWidth }) === false) {
+      useShellStore.getState().noteDiagnostic(`lane_width: widening for a page refused (${laneWidth})`);
+    }
+  }, [pageWiden, front, width, expanded, tool, view?.lane_width, frame.tree, sizes, actions]);
   // The rail, the chords and the close shortcut read what is drawn.
   useLayoutEffect(() => {
     useUiStore.getState().setDrawnLane({ mode: frame.mode, tool });

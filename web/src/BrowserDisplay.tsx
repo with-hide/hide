@@ -1,5 +1,5 @@
-import { ArrowLeftIcon, ArrowRightIcon, RotateCwIcon, XIcon } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ArrowLeftIcon, ArrowRightIcon, MinusIcon, MonitorIcon, MonitorSmartphoneIcon, PlusIcon, RotateCwIcon, ScanIcon, SmartphoneIcon, TabletIcon, XIcon, type LucideIcon } from "lucide-react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AreaEmpty } from "./AreaEmpty";
 import { addressShown, addressUrl, clearBrowserAttachments, focusBrowserDisplay, hostKey, mountBrowserAttachments, noteBrowserAttachment, notePageState, parseWorkspaceKey, registerBrowserSlot, syncBrowserFront, useBrowserStore } from "./browserViews";
@@ -8,7 +8,12 @@ import { changedFiles } from "./newTab";
 import { useUiStore } from "./ui";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
+import { badgeVariants } from "./components/ui/badge";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuSeparator, DropdownMenuTrigger } from "./components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
 import { Hint } from "./components/ui/tooltip";
+import { BROWSER_DEVICES, deviceLabel, devicePlacement, type BrowserDevice } from "./browserDevice";
+import { cn } from "./lib/utils";
 import { browserBridge, type BrowserCommand } from "./host";
 import type { ViewDisplaySnapshot } from "./snapshot";
 import { useShellStore } from "./store";
@@ -76,13 +81,28 @@ function NewTab({ display, actions }: { display: ViewDisplaySnapshot; actions: A
 
 function HostedPage({ display, workspace, actions }: { display: ViewDisplaySnapshot; workspace: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const page = useBrowserStore((s) => s.pages[hostKey(workspace, display.id)] ?? null);
+  const key = hostKey(workspace, display.id);
+  const page = useBrowserStore((s) => s.pages[key] ?? null);
   const still = useBrowserStore((s) => s.stills[display.id]);
+  const device = useUiStore((s) => s.browserDevices[key] ?? "fit");
+  const size = devicePlacement(device);
   const slot = useRef<HTMLDivElement>(null);
+  // The width the page's frame takes in the area, for the device button's scale.
+  const [drawn, setDrawn] = useState(0);
   useLayoutEffect(() => {
     const element = slot.current;
-    return element ? registerBrowserSlot(display.id, element) : undefined;
-  }, [display.id]);
+    if (!element) return undefined;
+    const placement = devicePlacement(device);
+    const unregister = registerBrowserSlot(display.id, element, placement);
+    if (!placement || typeof ResizeObserver === "undefined") return unregister;
+    setDrawn(element.clientWidth);
+    const observer = new ResizeObserver(() => setDrawn(element.clientWidth));
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      unregister();
+    };
+  }, [display.id, device]);
   const command = (name: BrowserCommand) => browserBridge()?.command(workspace, display.id, name);
   const address = page?.url || display.url || "";
   const view = parseWorkspaceKey(workspace);
@@ -114,31 +134,155 @@ function HostedPage({ display, workspace, actions }: { display: ViewDisplaySnaps
             </Button>
           </Hint>
         )}
-        <AddressField address={address} onSubmit={(url) => actions.navigateBrowser(display.id, url)} />
+        <AddressField
+          address={address}
+          onSubmit={(url) => actions.navigateBrowser(display.id, url)}
+          trailing={size ? null : <ZoomBadge zoom={page?.zoom ?? 1} command={command} />}
+        />
+        <DeviceButton device={device} drawn={drawn} onChoose={(next) => useUiStore.getState().setBrowserDevice(key, next)} />
         <BrowserCommentButton display={display} workspace={workspace} areaId={areaId} address={address} actions={actions} />
       </div>
-      <div ref={slot} className="relative min-h-0 min-w-0 flex-1" data-browser-slot={display.id}>
-        {page?.failure ? (
-          <AreaEmpty state="browser-failed" text={t("documents.browserFailed", { address, reason: page.failure })}>
-            <Button variant="secondary" onClick={() => command("reload")} data-browser-retry={display.id}>
-              {t("documents.browserReload")}
-            </Button>
-          </AreaEmpty>
-        ) : still ? (
-          <img src={still} alt="" aria-hidden="true" draggable={false} className="absolute inset-0 size-full select-none object-fill" data-browser-still={display.id} />
-        ) : null}
-        {view && areaId ? (
-          <PageNoteLayer
-            commentKey={browserCommentKey(view, display.id)}
-            displayId={display.id}
-            workspace={view}
-            actions={actions}
-            add={(pick, note) => actions.browserComment({ workspace: view, area_id: areaId, display_id: display.id, on: true, update: true, add: { pick, note } })}
-            done={() => focusBrowserDisplay(workspace, display.id)}
-          />
-        ) : null}
-      </div>
+      <DeviceFrame width={size?.width ?? null}>
+        <div ref={slot} className={cn("relative min-h-0 min-w-0", size ? "h-full max-w-full shadow-lg ring-1 ring-border" : "flex-1")} style={size ? { width: size.width } : undefined} data-browser-slot={display.id} data-browser-device={device}>
+          {page?.failure ? (
+            <AreaEmpty state="browser-failed" text={t("documents.browserFailed", { address, reason: page.failure })}>
+              <Button variant="secondary" onClick={() => command("reload")} data-browser-retry={display.id}>
+                {t("documents.browserReload")}
+              </Button>
+            </AreaEmpty>
+          ) : still ? (
+            <img src={still} alt="" aria-hidden="true" draggable={false} className="absolute inset-0 size-full select-none object-fill" data-browser-still={display.id} />
+          ) : null}
+          {view && areaId ? (
+            <PageNoteLayer
+              commentKey={browserCommentKey(view, display.id)}
+              displayId={display.id}
+              workspace={view}
+              actions={actions}
+              add={(pick, note) => actions.browserComment({ workspace: view, area_id: areaId, display_id: display.id, on: true, update: true, add: { pick, note } })}
+              done={() => focusBrowserDisplay(workspace, display.id)}
+            />
+          ) : null}
+        </div>
+      </DeviceFrame>
     </div>
+  );
+}
+
+/**
+ * The area around a page shown at a device size (PRD browser-width-zoom
+ * B12): the page's frame sits at the top, centered with the sides left empty
+ * when it is narrower than the area, and filling the area's width when it is
+ * wider, where the host scales the page down to fit it. A page that fits its
+ * area is its slot alone.
+ */
+function DeviceFrame({ width, children }: { width: number | null; children: ReactNode }) {
+  if (width === null) return <>{children}</>;
+  return <div className="flex min-h-0 min-w-0 flex-1 justify-center bg-card px-md pt-md" data-browser-device-area="true">{children}</div>;
+}
+
+/** A zoom factor as the badge and the popover show it. */
+function zoomPercent(zoom: number): string {
+  return `${Math.round(zoom * 100)}%`;
+}
+
+/** Chrome's zoom steps end at 25% and 500% (`zoomSteps.ts`). */
+const ZOOM_LEAST = 0.25;
+const ZOOM_MOST = 5;
+const ZOOM_EPSILON = 0.001;
+
+/**
+ * The page's zoom inside the address field's right end, only while it is not
+ * 100% (PRD browser-width-zoom B6-B9). It opens − · zoom · + · Reset, which
+ * stays open while the operator steps, the number following the page, and
+ * closes when the page is back at 100%. The page keeps zooming on ⌘= / ⌘- /
+ * ⌘0 as before; a press here leaves the keyboard in the shell.
+ */
+function ZoomBadge({ zoom, command }: { zoom: number; command: (name: BrowserCommand) => void }) {
+  const { t } = useInterfaceTranslation();
+  const [open, setOpen] = useState(false);
+  const zoomed = Math.abs(zoom - 1) > ZOOM_EPSILON;
+  useEffect(() => {
+    if (!zoomed) setOpen(false);
+  }, [zoomed]);
+  if (!zoomed) return null;
+  const percent = zoomPercent(zoom);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <Hint label={t("documents.pageZoom")} shortcut={`${commandLabel("text_larger")} ${commandLabel("text_smaller")} ${commandLabel("text_reset")}`}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className={cn(badgeVariants({ variant: "secondary" }), "cursor-pointer font-semibold text-foreground outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring")}
+            aria-label={t("documents.pageZoomAt", { percent })}
+            data-browser-zoom={percent}
+          >
+            {percent}
+          </button>
+        </PopoverTrigger>
+      </Hint>
+      <PopoverContent align="end" className="flex w-auto items-center gap-xxs p-xs" onOpenAutoFocus={(event) => event.preventDefault()} data-browser-zoom-popover="true">
+        <Button variant="ghost" size="icon-sm" aria-label={t("documents.zoomOut")} disabled={zoom <= ZOOM_LEAST + ZOOM_EPSILON} onClick={() => command("zoom_out")} data-browser-zoom-step="out">
+          <MinusIcon />
+        </Button>
+        <span className="min-w-(--size-control-lg) text-center text-caption font-semibold tabular-nums" aria-live="polite" data-browser-zoom-level="true">
+          {percent}
+        </span>
+        <Button variant="ghost" size="icon-sm" aria-label={t("documents.zoomIn")} disabled={zoom >= ZOOM_MOST - ZOOM_EPSILON} onClick={() => command("zoom_in")} data-browser-zoom-step="in">
+          <PlusIcon />
+        </Button>
+        <span aria-hidden="true" className="mx-xxs h-(--size-icon) w-(--size-hairline) bg-border" />
+        <Hint label={t("documents.zoomResetHint")} shortcut={commandLabel("text_reset")}>
+          <Button variant="ghost" size="sm" className="whitespace-nowrap" onClick={() => command("zoom_reset")} data-browser-zoom-step="reset">
+            {t("documents.zoomReset")}
+          </Button>
+        </Hint>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+const DEVICE_ICONS: Record<BrowserDevice, LucideIcon> = { fit: ScanIcon, mobile: SmartphoneIcon, tablet: TabletIcon, desktop: MonitorIcon };
+const DEVICE_NAMES = { fit: "documents.deviceFit", mobile: "documents.deviceMobile", tablet: "documents.deviceTablet", desktop: "documents.deviceDesktop" } as const;
+
+/**
+ * The device size the page lays out at (PRD browser-width-zoom B10-B14):
+ * only an icon while the page fits its area, and the width, with the scale
+ * the page is drawn at when the area is narrower, once a size is chosen.
+ */
+function DeviceButton({ device, drawn, onChoose }: { device: BrowserDevice; drawn: number; onChoose: (device: BrowserDevice) => void }) {
+  const { t } = useInterfaceTranslation();
+  const label = deviceLabel(device, drawn);
+  const size = devicePlacement(device);
+  const Icon = device === "fit" ? MonitorSmartphoneIcon : DEVICE_ICONS[device];
+  const name = size ? t("documents.deviceSizeAt", { name: t(DEVICE_NAMES[device]), width: size.width }) : t("documents.deviceSize");
+  return (
+    <DropdownMenu>
+      <Hint label={name}>
+        <DropdownMenuTrigger asChild>
+          <Button variant={size ? "secondary" : "ghost"} size={label ? "sm" : "icon-sm"} className={cn("shrink-0 gap-xs font-mono text-caption", size ? "px-xs" : "text-muted-foreground")} aria-label={name} data-browser-device-button={device}>
+            <Icon />
+            {label ? <span className="whitespace-nowrap" data-browser-device-label="true">{label}</span> : null}
+          </Button>
+        </DropdownMenuTrigger>
+      </Hint>
+      <DropdownMenuContent align="end" data-browser-device-menu="true">
+        {BROWSER_DEVICES.map((choice) => {
+          const ChoiceIcon = DEVICE_ICONS[choice];
+          const width = devicePlacement(choice)?.width;
+          return (
+            <Fragment key={choice}>
+              <DropdownMenuCheckboxItem checked={choice === device} onSelect={() => onChoose(choice)} data-browser-device-choice={choice}>
+                <ChoiceIcon />
+                <span className="whitespace-nowrap">{t(DEVICE_NAMES[choice])}</span>
+                <span className="ml-auto pl-md font-mono text-caption text-muted-foreground">{width ?? t("documents.deviceFitWidth")}</span>
+              </DropdownMenuCheckboxItem>
+              {choice === "fit" ? <DropdownMenuSeparator /> : null}
+            </Fragment>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -147,7 +291,7 @@ function HostedPage({ display, workspace, actions }: { display: ViewDisplaySnaps
  * narrow area still shows the host; focusing it shows the whole address
  * selected. Return loads what was typed, Escape puts the page's address back.
  */
-function AddressField({ address, onSubmit, autoFocus = false }: { address: string; onSubmit: (url: string) => void; autoFocus?: boolean }) {
+function AddressField({ address, onSubmit, autoFocus = false, trailing = null }: { address: string; onSubmit: (url: string) => void; autoFocus?: boolean; trailing?: ReactNode }) {
   const { t } = useInterfaceTranslation();
   const [draft, setDraft] = useState<string | null>(null);
   const field = useRef<HTMLInputElement>(null);
@@ -161,38 +305,41 @@ function AddressField({ address, onSubmit, autoFocus = false }: { address: strin
     field.current?.select();
   });
   return (
-    <Input
-      ref={field}
-      mono
-      className="h-(--size-control-sm) flex-1 text-caption"
-      aria-label={t("documents.pageAddress")}
-      placeholder={t("documents.enterUrl")}
-      autoFocus={autoFocus}
-      spellCheck={false}
-      autoComplete="off"
-      value={draft ?? addressShown(address)}
-      data-browser-address="true"
-      onFocus={() => {
-        selectOnCommit.current = true;
-        setDraft(address);
-      }}
-      onChange={(event) => setDraft(event.currentTarget.value)}
-      onBlur={() => setDraft(null)}
-      onKeyDown={(event) => {
-        if (event.nativeEvent.isComposing) return;
-        if (event.key === "Enter") {
-          event.preventDefault();
-          const url = addressUrl(draft ?? address);
-          setDraft(null);
-          if (url) onSubmit(url);
-          event.currentTarget.blur();
-        } else if (event.key === "Escape" && draft !== null && draft !== address) {
-          event.preventDefault();
-          event.stopPropagation();
+    <div className="relative flex min-w-0 flex-1 items-center">
+      <Input
+        ref={field}
+        mono
+        className={cn("h-(--size-control-sm) flex-1 text-caption", trailing && "pr-xxxl")}
+        aria-label={t("documents.pageAddress")}
+        placeholder={t("documents.enterUrl")}
+        autoFocus={autoFocus}
+        spellCheck={false}
+        autoComplete="off"
+        value={draft ?? addressShown(address)}
+        data-browser-address="true"
+        onFocus={() => {
+          selectOnCommit.current = true;
           setDraft(address);
-        }
-      }}
-    />
+        }}
+        onChange={(event) => setDraft(event.currentTarget.value)}
+        onBlur={() => setDraft(null)}
+        onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing) return;
+          if (event.key === "Enter") {
+            event.preventDefault();
+            const url = addressUrl(draft ?? address);
+            setDraft(null);
+            if (url) onSubmit(url);
+            event.currentTarget.blur();
+          } else if (event.key === "Escape" && draft !== null && draft !== address) {
+            event.preventDefault();
+            event.stopPropagation();
+            setDraft(address);
+          }
+        }}
+      />
+      {trailing ? <div className="absolute inset-y-0 right-xs flex items-center">{trailing}</div> : null}
+    </div>
   );
 }
 
@@ -211,6 +358,8 @@ export function BrowserHost({ actions }: { actions: Actions }) {
   const layout = view?.layout ?? null;
   useEffect(() => {
     syncBrowserFront(front ? parseWorkspaceKey(front) : null, layout, inventory ?? [], scopes ?? []);
+    // A display the core no longer keeps takes its device size with it.
+    if (inventory) useUiStore.getState().keepBrowserDevices(new Set(inventory.map((row) => hostKey(workspaceKey(row), row.view_id))));
   }, [front, layout, inventory, scopes]);
   useEffect(() => {
     if (connection !== "live") clearBrowserAttachments();
