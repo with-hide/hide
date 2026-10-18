@@ -1009,6 +1009,25 @@ async fn a_ping_gets_its_number_back_until_the_phone_is_revoked() {
         next_pong(&mut socket).await,
         json!({"type": "pong", "id": 41})
     );
+    // An input is written beside the socket loop and answers as a frame; the loop keeps answering after it.
+    send_phone(
+        &mut socket,
+        json!({"type": "input", "request_id": "r-1", "device_id": "local", "pane_id": "w9:p9", "text": "hi"}),
+    )
+    .await;
+    send_phone(&mut socket, json!({"type": "ping", "id": 40})).await;
+    let mut result = None;
+    let mut pong = None;
+    while result.is_none() || pong.is_none() {
+        let frame = next_frame(&mut socket).await.expect("an answer");
+        match frame["type"].as_str() {
+            Some("input_result") => result = Some(frame),
+            Some("pong") => pong = Some(frame),
+            _ => {}
+        }
+    }
+    assert_eq!(result.unwrap()["request_id"], "r-1");
+    assert_eq!(pong.unwrap(), json!({"type": "pong", "id": 40}));
     // A ping with no number is refused and recorded; the connection stays and the next one is answered.
     send_phone(&mut socket, json!({"type": "ping"})).await;
     send_phone(&mut socket, json!({"type": "ping", "id": 42})).await;
