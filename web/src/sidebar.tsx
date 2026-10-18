@@ -2,7 +2,7 @@ import { deviceScope } from "./agentScope";
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
 import { useInterfaceTranslation } from "./i18n/client";
-import { ChevronDownIcon, ChevronRightIcon, CornerUpLeftIcon, EllipsisIcon, FolderGit2Icon, FolderIcon, Loader2Icon, PanelsTopLeftIcon, PinIcon, PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, CornerUpLeftIcon, EllipsisIcon, FolderIcon, Loader2Icon, PanelsTopLeftIcon, PinIcon, PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { StatusMark } from "./components/status-mark";
 import { markTone } from "./agentRow";
@@ -756,7 +756,6 @@ const ProjectRowView = memo(function ProjectRowView({ row, context }: { row: Pro
             label={t("sidebar.noAgentProjects")}
             count={row.count}
             expanded={row.group.expanded}
-            level="project"
             current={current}
             onToggle={() => context.actions.toggleSessionFold(`no_agents/${row.group.device_id}`)}
             data-no-agent-projects={row.group.device_id}
@@ -766,7 +765,6 @@ const ProjectRowView = memo(function ProjectRowView({ row, context }: { row: Pro
             label={t("sidebar.inactiveProjects")}
             count={row.count}
             expanded={row.group.expanded}
-            level="project"
             current={current}
             onToggle={() => context.actions.toggleInactiveProjects(row.group.device_id)}
             data-inactive-projects={row.group.device_id}
@@ -804,7 +802,6 @@ function RaisedSection({ row, context }: { row: Extract<ProjectRow, { kind: "rai
               label={t("sidebar.raisedMore")}
               count={row.more.length}
               expanded={row.expanded}
-              level="project"
               onToggle={() => toggleRaised(row.group)}
               data-raised-more={row.group}
             />
@@ -837,21 +834,21 @@ function RaisedAgentRow({ listed: { agent, device }, context }: { listed: Listed
   );
 }
 
-// The Projects columns (PRD sidebar-readability D-2): a project's glyph at the
-// row's inset, a checkout's glyph one lineage step in, and an opened
-// checkout's agent marks on the checkout name's column. Every row ends the
+// The Projects columns (PRD sidebar-readability D-2, sidebar-quiet-mark-indent
+// D-06): a project with checkouts draws no glyph, so its name starts at the
+// row's inset, a checkout's glyph stands under it, and an opened checkout's
+// agent marks on the checkout name's column. A plain folder's row keeps its
+// glyph, which says the checkout's kind (D-07). Every row ends the
 // same way, agent rows included: its time, then its fold slot, so the times
 // and the chevrons stand in one column each. A row's menu opens on a
 // right-click, or the menu key or ⇧F10 on the focused row; nothing on the
 // row stands for it.
-/** Where a project's glyph starts. */
+/** Where a project's name, a checkout's kind glyph, a plain folder's glyph and every fold start. */
 const PROJECT_COLUMN = "var(--spacing-sm)";
-/** Where a project's name, and a plain folder's agent marks, start. */
+/** Where a plain folder's name and its agent marks start. */
 const PROJECT_NAME_COLUMN = "calc(var(--spacing-sm) + var(--size-checkout-icon) + var(--spacing-sm))";
-/** Where a checkout's kind glyph, and its Inactive fold, start. */
-const CHECKOUT_COLUMN = "calc(var(--spacing-xs) * 2 + var(--size-agent-mark))";
 /** Where a checkout's name, its line two and its agents' marks start. */
-const CHECKOUT_NAME_COLUMN = `calc(${CHECKOUT_COLUMN} + var(--size-checkout-icon) + var(--spacing-xs))`;
+const CHECKOUT_NAME_COLUMN = `calc(${PROJECT_COLUMN} + var(--size-checkout-icon) + var(--spacing-xs))`;
 
 /**
  * A row control that waits for the pointer, inside a row `EntryContextMenu`
@@ -876,7 +873,6 @@ function FoldRow({
   label,
   count,
   expanded,
-  level,
   current = false,
   onToggle,
   ...data
@@ -884,7 +880,6 @@ function FoldRow({
   label: string;
   count: number;
   expanded: boolean;
-  level: "project" | "checkout";
   current?: boolean;
   onToggle: () => void;
 } & Record<`data-${string}`, string>) {
@@ -898,7 +893,7 @@ function FoldRow({
         "flex min-h-(--size-control-lg) w-full items-center gap-sm rounded-sm pr-xs text-left text-caption font-medium outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
         current ? "bg-secondary text-foreground" : "text-subtle-foreground hover:bg-accent",
       )}
-      style={{ paddingLeft: level === "project" ? PROJECT_COLUMN : CHECKOUT_COLUMN }}
+      style={{ paddingLeft: PROJECT_COLUMN }}
       onClick={onToggle}
       {...data}
     >
@@ -1055,7 +1050,6 @@ function WorkspaceRows({ workspace, level, context }: { workspace: Workspace; le
     );
   }
   if (workspace.checkouts.length > 0 && workspace.checkouts.every((checkout) => workspace.session_folds?.cleanup.includes(checkout.id))) return null;
-  const ProjectIcon = workspace.is_git ? FolderGit2Icon : FolderIcon;
   const target = projectCheckout(workspace, useShellStore.getState().rest?.ui_state?.recent_checkouts);
   const hiding = focusFold(workspace, context.workspaceScreen ? context.focusedCheckoutId : null, expanded);
   // A checkout Hide AI made is drawn only while it is in front or an operator's agent works in it (PRD hide-ai-work-home D-17, B3).
@@ -1094,7 +1088,6 @@ function WorkspaceRows({ workspace, level, context }: { workspace: Workspace; le
             className="flex min-w-0 flex-1 self-stretch items-center gap-sm rounded-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
             onClick={() => actions.openProject(workspace, projectRowExpansion(workspace, target, context.workspaceScreen ? context.focusedCheckoutId : null, disclosure))}
           >
-            <ProjectIcon aria-hidden="true" className="size-(--size-checkout-icon) shrink-0 text-subtle-foreground" />
             <ProjectName workspace={workspace} />
           </button>
           <RowActions
@@ -1120,7 +1113,7 @@ function WorkspaceRows({ workspace, level, context }: { workspace: Workspace; le
           {active.filter(drawn).map(checkoutRow)}
           {emptyFold.length > 0 ? <li>
             <FoldRow label={[t("agentSessions.emptyWorktrees"), workspace.session_folds!.open_prs > 0 ? t("agentSessions.openPrs", { count: workspace.session_folds!.open_prs }) : null].filter(Boolean).join(" · ")}
-              count={emptyFold.length} expanded={workspace.session_folds!.empty_open} level="checkout" current={hiding === "empty"}
+              count={emptyFold.length} expanded={workspace.session_folds!.empty_open} current={hiding === "empty"}
               onToggle={() => actions.toggleSessionFold(workspace.id)} data-empty-worktrees={workspace.id} />
             {workspace.session_folds!.empty_open ? <ul>{emptyFold.map(checkoutRow)}</ul> : null}
           </li> : null}
@@ -1130,7 +1123,6 @@ function WorkspaceRows({ workspace, level, context }: { workspace: Workspace; le
                 label={t("sidebar.inactive")}
                 count={inactiveDrawn.length}
                 expanded={workspace.inactive_checkouts.expanded}
-                level="checkout"
                 current={hiding === "inactive"}
                 onToggle={() => actions.toggleInactiveCheckouts(workspace.path)}
                 data-inactive-checkouts={workspace.path}
@@ -1176,7 +1168,7 @@ function CleanupRows({ workspaces, context, deviceId }: { workspaces: Workspace[
   const expanded = rows[0]!.workspace.session_folds!.cleanup_open;
   const current = !expanded && context.workspaceScreen && rows.some(({ checkout }) => checkout.id === context.focusedCheckoutId);
   return <li data-session-cleanup={deviceId}>
-    <FoldRow label={t("agentSessions.cleanup")} count={rows.length} expanded={expanded} level="project" current={current} onToggle={() => context.actions.toggleSessionFold(`cleanup/${deviceId}`)} />
+    <FoldRow label={t("agentSessions.cleanup")} count={rows.length} expanded={expanded} current={current} onToggle={() => context.actions.toggleSessionFold(`cleanup/${deviceId}`)} />
     {expanded ? <ul>{rows.map(({ workspace, checkout }) => <CheckoutRowView key={checkout.id} workspace={workspace} checkout={checkout} hideAi={hideAiCheckoutOf(hideAiListed, workspace, checkout)}
       agentRows={checkoutAgentRows(workspace, context.agents, "sidebar").get(checkout.id) ?? NO_BOARD_ROWS}
       focused={context.workspaceScreen && context.focusedCheckoutId === checkout.id} context={context} />)}</ul> : null}
@@ -1269,7 +1261,7 @@ const CheckoutRowView = memo(function CheckoutRowView({
             focused ? "bg-secondary" : !removing && "hover:bg-accent",
             view.settled && !removing && "opacity-(--opacity-dimmed)",
           )}
-          style={{ paddingLeft: CHECKOUT_COLUMN }}
+          style={{ paddingLeft: PROJECT_COLUMN }}
         >
           <CheckoutOpenButton
             workspace={workspace}
@@ -1310,7 +1302,7 @@ const CheckoutRowView = memo(function CheckoutRowView({
           {secondLine ? <PurposeLine purpose={purpose} origin={checkout.purpose?.origin} age={view.age} raisedFrom={raisedFrom} /> : null}
         </div>
       </EntryContextMenu>
-      {visibleRows.length > 0 || (open && sleeping.length + emptyTabs > 0) ? <OpenAgentRows checkout={checkout} groupTabs={open} deviceId={workspace.device_id} agentRows={visibleRows} sleeping={open ? sleeping : NO_SLEEPERS} inset={CHECKOUT_NAME_COLUMN} glyphColumn={CHECKOUT_COLUMN} context={context} /> : null}
+      {visibleRows.length > 0 || (open && sleeping.length + emptyTabs > 0) ? <OpenAgentRows checkout={checkout} groupTabs={open} deviceId={workspace.device_id} agentRows={visibleRows} sleeping={open ? sleeping : NO_SLEEPERS} inset={CHECKOUT_NAME_COLUMN} glyphColumn={PROJECT_COLUMN} context={context} /> : null}
     </li>
   );
 });
@@ -1428,6 +1420,7 @@ function KindGlyph({ view, deviceId, actions }: { view: CheckoutPresentation; de
       <button
         type="button"
         data-checkout-pr-glyph={pr.number}
+        data-checkout-glyph="true"
         aria-label={t("sidebar.openPullRequest", { number: pr.number })}
         className={cn(
           "pointer-events-auto relative flex size-(--size-checkout-icon) shrink-0 cursor-pointer items-center justify-center rounded-xs outline-none hover:ring-1 hover:ring-current focus-visible:ring-1 focus-visible:ring-ring",
@@ -1443,7 +1436,7 @@ function KindGlyph({ view, deviceId, actions }: { view: CheckoutPresentation; de
     );
   }
   const KindIcon = CHECKOUT_KIND_ICON[view.kind];
-  return <KindIcon aria-hidden="true" className={cn("size-(--size-checkout-icon) shrink-0", view.kindTone)} />;
+  return <KindIcon aria-hidden="true" data-checkout-glyph="true" className={cn("size-(--size-checkout-icon) shrink-0", view.kindTone)} />;
 }
 
 /**

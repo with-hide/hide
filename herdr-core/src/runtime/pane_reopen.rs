@@ -105,6 +105,7 @@ impl Runtime {
             },
             cwd: self.reopen_pane_cwd(pane_id),
             codex_daemon: self.codex_daemon_for_pane(pane_id),
+            launch: self.launch_choice_of(agent),
         };
         let Some(context) = self.live.clone() else {
             return self.settle_pane_reopen(

@@ -5208,7 +5208,7 @@ impl Engine {
                             .with(json!({"key": key, "max": WORKER_DESCRIPTION_LIMIT})));
                         }
                         self.worker_agent(node.as_deref(), key, candidate.agent.as_str())?;
-                        candidate.launch_arguments().map_err(|detail| {
+                        candidate.check_launch_choice().map_err(|detail| {
                             refuse("config_invalid", detail).with(json!({"key": key}))
                         })?;
                     }
@@ -6036,24 +6036,24 @@ impl Engine {
             .environment
             .hide_program(factory.node.as_deref())
             .unwrap_or_else(|| self.hide_program.clone());
-        let mut args = factory
+        let args = factory
             .config
             .worker_args
             .get(runtime.as_str())
             .cloned()
             .unwrap_or_default();
-        match candidate.launch_arguments() {
-            Ok(extra) => args.extend(extra),
-            Err(detail) => {
-                // The candidate names a model or effort its agent does not take.
-                self.set_state(factory_id, id, TaskState::Stopped);
-                let detail = judgment::cut(&detail, 300);
-                self.with_task(factory_id, id, |t| {
-                    t.stop = Some(StopReason::WorkerStart);
-                    t.stop_detail = Some(detail);
-                });
-                return Start::Refused;
-            }
+        // The model and effort travel as the spawn's launch choice, which
+        // the start and every later restart of the worker turn into
+        // arguments; here they are only checked against what the agent takes.
+        if let Err(detail) = candidate.check_launch_choice() {
+            // The candidate names a model or effort its agent does not take.
+            self.set_state(factory_id, id, TaskState::Stopped);
+            let detail = judgment::cut(&detail, 300);
+            self.with_task(factory_id, id, |t| {
+                t.stop = Some(StopReason::WorkerStart);
+                t.stop_detail = Some(detail);
+            });
+            return Start::Refused;
         }
         let relanding = task.state == TaskState::Relanding;
         // A Task with a worker resumes it (wake after answer, pause, retry,

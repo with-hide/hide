@@ -175,6 +175,13 @@ pub struct DormantRecord {
     /// The registration the wake continues; none for a session that held none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registration: Option<DormantRegistration>,
+    /// The model and effort the agent was started with, which its wake
+    /// starts it with again; none in a record from before it was kept.
+    #[serde(
+        default,
+        skip_serializing_if = "hide_agent_adapter::LaunchChoice::is_default"
+    )]
+    pub launch: hide_agent_adapter::LaunchChoice,
     /// None in a record an older build saved, whose wake finds the checkout
     /// in the project list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -250,7 +257,7 @@ impl DormantRecord {
                 !crate::delivery::valid_key(&registration.id) || !registration.actor.valid()
             })
             || self.owner.as_ref().is_some_and(|owner| {
-                !std::path::Path::new(&owner.repository_root).is_absolute()
+                !hide_platform::path::is_wire_absolute(&owner.repository_root)
                     || [owner.repository_root.as_str(), owner.label.as_str()]
                         .iter()
                         .any(|value| value.len() > 4096 || value.chars().any(char::is_control))
@@ -511,6 +518,7 @@ pub(crate) fn fixture_record(pane: &str) -> DormantRecord {
         reason: None,
         factory: None,
         registration: None,
+        launch: Default::default(),
         owner: None,
     }
 }
@@ -556,7 +564,11 @@ mod tests {
             is_git: true,
             label: "feature".into(),
         });
-        assert!(value.validate().is_ok());
+        // The record keeps the wire spelling, which every system reads alike.
+        for root in ["/fixture/repo", "C:/fixture/repo", "//server/share/repo"] {
+            value.owner.as_mut().unwrap().repository_root = root.into();
+            assert!(value.validate().is_ok(), "{root:?}");
+        }
         for root in ["", "fixture/repo", "../repo", "/fixture/\nrepo"] {
             value.owner.as_mut().unwrap().repository_root = root.into();
             assert!(value.validate().is_err(), "{root:?}");

@@ -70,18 +70,23 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   // The lane draws the window's 보기 slot while it is shown, else the Workspace's tool (PRD sidebar-task-lens D-50).
   const detail = useShellStore((s) => s.rest?.ui_state?.detail);
   const tool = laneToolOf(view, detail);
-  const frame = laneFrame({
+  const input = {
     tool,
     pinned: view?.pinned === true,
     tree: view?.tree === true,
     laneWidth: view?.lane_width ?? null,
+    panelWidth: view?.panel_width ?? null,
     treeWidth: view?.tree_width ?? null,
     hasViews,
     shown,
     expanded,
     body: width,
     sizes,
-  });
+  };
+  const frame = laneFrame(input);
+  // The files tool kept under another tool is laid out at its own width, so
+  // its View areas measure what Files will show (an Open to the side's room).
+  const files = tool === "files" ? frame : laneFrame({ ...input, tool: "files" });
   const up = laneUp(frame.mode);
   const checkoutId = checkout?.id ?? null;
   // A lane call that put a page in front widens the lane once, so the page
@@ -145,7 +150,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
       data-lane-mode={frame.mode}
       data-lane-shows={tool ?? "none"}
     >
-      <LaneRow view={view} tool={tool} frame={frame} width={width} body={body} setBody={setBody} sizes={sizes} actions={actions} checkout={checkout} />
+      <LaneRow view={view} tool={tool} frame={frame} files={files} width={width} body={body} setBody={setBody} sizes={sizes} actions={actions} checkout={checkout} />
       <div className="contents" onKeyDown={(event) => laneEscape(event, frame, view.pinned)}>
         <ToolRail actions={actions} />
       </div>
@@ -197,7 +202,7 @@ function useWidth(element: HTMLElement | null): number {
  * divider and an empty slot under the lane, so Agent Views keeps the width
  * it has (B8).
  */
-function LaneRow({ view, tool, frame, width, body, setBody, sizes, actions, checkout }: { view: WorkspaceView; tool: LaneTool | null; frame: LaneFrame; width: number; body: HTMLElement | null; setBody: (element: HTMLElement | null) => void; sizes: LaneSizes; actions: Actions; checkout: Checkout }) {
+function LaneRow({ view, tool, frame, files, width, body, setBody, sizes, actions, checkout }: { view: WorkspaceView; tool: LaneTool | null; frame: LaneFrame; files: LaneFrame; width: number; body: HTMLElement | null; setBody: (element: HTMLElement | null) => void; sizes: LaneSizes; actions: Actions; checkout: Checkout }) {
   const { t } = useInterfaceTranslation();
   const [guide, setGuide] = useState<number | null>(null);
   // The width Agent Views gives up: a docked lane's, kept while it is expanded.
@@ -235,7 +240,7 @@ function LaneRow({ view, tool, frame, width, body, setBody, sizes, actions, chec
           {frame.mode === "overlay" ? (
             <LaneDivider kind="lane" edge label={t("panes.workspace.resize", { name: t("panes.lane.aria") })} workspace={workspaceKey(view)} acknowledged={view.width_request_id ?? null} frame={frame} origin={body} sizes={sizes} setGuide={setGuide} actions={actions} />
           ) : null}
-          <Lane view={view} tool={tool} frame={frame} sizes={sizes} checkout={checkout} actions={actions} />
+          <Lane view={view} tool={tool} frame={frame} files={files} sizes={sizes} checkout={checkout} actions={actions} />
         </div>
       ) : null}
       {guide !== null ? <DividerGuide left={guide} /> : null}

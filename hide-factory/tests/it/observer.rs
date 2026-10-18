@@ -1718,12 +1718,18 @@ fn the_review_picks_a_candidate_and_the_worker_starts_with_its_model_and_effort(
         .cloned()
         .unwrap();
     assert_eq!(spawn.runtime, Runtime::CODEX);
-    assert!(spawn.args.ends_with(&[
-        "-m".into(),
-        "gpt-5.5".into(),
-        "-c".into(),
-        "model_reasoning_effort=high".into()
-    ]));
+    // The choice is the spawn's own, so a restart can carry it; it never
+    // rides in the configured arguments.
+    assert_eq!(
+        (spawn.model.as_deref(), spawn.effort.as_deref()),
+        (Some("gpt-5.5"), Some("high"))
+    );
+    assert!(
+        !spawn
+            .args
+            .iter()
+            .any(|arg| arg == "gpt-5.5" || arg.contains("model_reasoning_effort"))
+    );
     let detail = h.engine.show(&f, &t).unwrap();
     let worker = detail.worker.unwrap();
     assert_eq!(worker.picked.as_deref(), Some("큰 리팩터링"));
@@ -1808,7 +1814,11 @@ fn worker_and_observer_settings_are_checked_and_old_values_keep_reading() {
     assert_eq!(effort["reason"], "config_invalid", "{effort}");
     // Every agent whose adapter declares a start can work (B28); one that
     // declares no launch model refuses a candidate naming one.
-    let model = config(&mut h, "workers", r#"[{"agent":"grok","model":"grok-4"}]"#);
+    let model = config(
+        &mut h,
+        "workers",
+        r#"[{"agent":"opencode","model":"fixture-model"}]"#,
+    );
     assert_eq!(model["reason"], "config_invalid", "{model}");
     h.world().missing_agents.clear();
     assert_eq!(config(&mut h, "default_runtime", "codex")["ok"], true);

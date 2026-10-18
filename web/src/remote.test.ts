@@ -151,6 +151,7 @@ function deviceViews(views: boolean): WorkspaceView {
     pinned: true,
     tree: false,
     lane_width: null,
+    panel_width: null,
     tree_width: null,
     lane_called: 0, lane_calls: 0,
     layout: { root: { area: { id: "a1", active: "d2", displays: [notes] } }, active_area: "a1", limits: { areas: 6, depth: 3, displays: 64 }, display_count: 1 },

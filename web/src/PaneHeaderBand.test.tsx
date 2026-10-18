@@ -84,6 +84,7 @@ function childrenFixture(): AgentRow[] {
   const seed = legacyAgentRow({ id: "parent", pane_id: "parent", identity_label: "Parent", agent_kind: "claude", mark: "going", group: "working", status_code: "working", detail: null, changed_at_unix_ms: null, emphasized: false, unread: false, demand: "none", activity: "working" });
   const children = ["working", "result", "idle", "unknown", "question"].map((id, index) => ({
     ...seed, id, pane_id: id, identity_label: `Child ${id}`,
+    mark: id === "unknown" ? "unknown" as const : id === "idle" || id === "question" ? "quiet" as const : seed.mark,
     status_code: id === "unknown" ? "unknown" as const : id === "question" ? "question" as const : id === "result" ? "done" as const : id === "idle" ? "idle" as const : seed.status_code,
     activity: id === "unknown" ? "unknown" : id === "result" || id === "idle" ? "stopped" : seed.activity, demand: id === "question" ? "question" : "none",
     lineage_parent_pane_id: "parent", lineage_child_pane_ids: [],
@@ -98,6 +99,8 @@ it("shows direct child counts and the core-ranked child line without raising an 
     const trigger = container.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
     expect(trigger.getAttribute("aria-label")).toBe("Child agents 5 · Child requests: 1 · Working: 1 · Reported results: 1 · Unknown state: 1 · Resting: 1");
     expect(trigger.querySelector('[data-mark="turn"]')).toBeNull();
+    // Only counts with a mark are drawn on the button; resting, unknown and a child's own ask are named in the hint alone.
+    expect([...trigger.querySelectorAll("[data-pane-child-count]")].map((part) => part.getAttribute("data-pane-child-count"))).toEqual(["working", "result"]);
     expect(container.textContent).toContain("Should these changes share a PR?");
     expect(container.querySelector("[data-pane-working-line]")).not.toBeNull();
   } finally { await unmount(); }
@@ -390,6 +393,36 @@ it("names the pane's title and agent product on its record button", async () => 
     expect(name).toContain("Fix the login");
     expect(name).toContain("Claude Code");
     expect(container.querySelector("[data-plain]")).toBeNull();
+  } finally { await act(async () => root.unmount()); }
+});
+
+// A device's rows reach the page without a device on them; the record button
+// must still name the device the pane runs on, since the core keeps that
+// session's ledger row under the device id and not under its own node id. A
+// dialed device and a node (a machine whose own panes appear as
+// `remote:<node id>:pane:...` in a window whose core runs elsewhere) are both
+// such devices.
+it.each([["hq3mini", "a dialed device"], ["b06a260a-6c14-5287-9caf-672044350d94", "a node"]])("opens the session record of a pane on %s (%s) under that device, not under the core's node", async (target) => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  initializeInterfaceI18n("en");
+  const core = "14ad0319-60d7-5a7c-ae5a-f71550dc8a60";
+  const pane = `remote:${target}:pane:w1:p4`;
+  const agent = legacyAgentRow({ id: "a", pane_id: pane, identity_label: "Fix the login", agent_kind: "claude", session_id: "s-1" });
+  expect(agent.device_id).toBeUndefined();
+  useShellStore.getState().applyFrame({ type: "snapshot", payload: { revision: 1, rest: {
+    navigator: { devices: [{ id: core, kind: "local" }, { id: target, kind: "remote" }] },
+    status: { pane_focus_request: null, remote: [{ target_id: target, state: "connected", message: null, herdr_version: null, session: { agents: [agent] } }] },
+  } as unknown as SnapshotRest } });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<TooltipProvider><PaneRecordButton paneId={pane} title="Fix the login" product="Claude Code" actions={createActions(() => true)} plain={<span />}>Fix the login</PaneRecordButton></TooltipProvider>));
+  try {
+    // No workspace is in front here, so the press shows the record in the Overview of the session's device.
+    await act(async () => container.querySelector<HTMLButtonElement>("[data-pane-record]")!.click());
+    const { deviceId, panel } = useUiStore.getState().overview;
+    expect(deviceId).toBe(target);
+    expect(panel).toEqual({ kind: "record", session: { device_id: target, agent: "claude", session_id: "s-1" } });
   } finally { await act(async () => root.unmount()); }
 });
 
