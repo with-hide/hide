@@ -863,6 +863,9 @@ pub struct KitSnapshot {
     /// The daemon answer the kit could not read, for the log only.
     #[serde(skip)]
     pub codex_daemon_unreadable: Option<String>,
+    /// Why the kit had no answer for `codex_daemon`, for the log only.
+    #[serde(skip)]
+    pub codex_capability_unread: Option<hide_kit::CodexReadFailure>,
     /// How the last turn-off of the shared server ended, until the next one
     /// starts; the pane popover reads it (B30).
     pub codex_daemon_off: Option<CodexDaemonOffSnapshot>,
@@ -1044,6 +1047,7 @@ impl KitSnapshot {
             codex_daemon_on: report.codex_daemon_on,
             codex_daemon_running: report.codex_daemon_running,
             codex_daemon_unreadable: report.codex_daemon_unreadable.clone(),
+            codex_capability_unread: report.codex_capability_unread,
             codex_daemon_off: report
                 .codex_daemon_off
                 .as_ref()
