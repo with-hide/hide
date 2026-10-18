@@ -382,7 +382,7 @@ export function createActions(send: DispatchFn) {
    * should end at, so the same event sent twice lands where it did once. The
    * core keeps the lane per Workspace, so another Workspace is never touched.
    */
-  const setWorkspaceView = (patch: { tool?: Tool | null; pinned?: boolean; tree?: boolean; prs_only_checkout?: boolean; lane_width?: number; tree_width?: number; width_request_id?: string; reveal?: string }) => {
+  const setWorkspaceView = (patch: { tool?: Tool | null; pinned?: boolean; tree?: boolean; prs_only_checkout?: boolean; lane_width?: number; panel_width?: number; tree_width?: number; width_request_id?: string; reveal?: string }) => {
     if (!workspaceViewOf(rest())) return diagnostic("workspace_view: no Workspace in front");
     return dispatch({ schema_version: 2, kind: "workspace_view", payload: patch });
   };
@@ -1160,9 +1160,10 @@ export function createActions(send: DispatchFn) {
     /**
      * The operator left the wizard's step `from` (Continue, Not now, Skip for now, a project added); the core moves only the step on screen.
      * `notifications` is the desktop switch the notification step leaves with: on for Continue on a Mac that already allows Hide (B16),
-     * off for Not now (B21), absent to leave it as it is.
+     * off for Not now (B21), absent to leave it as it is. The agent step leaves this way only while this Mac's pass is refused: the
+     * wizard closes with the question unanswered.
      */
-    advanceFirstRun(from: "notifications" | "project", notifications?: boolean) {
+    advanceFirstRun(from: "agents" | "notifications" | "project", notifications?: boolean) {
       dispatch({ schema_version: 2, kind: "first_run_advance", payload: notifications === undefined ? { from } : { from, notifications } });
     },
 

@@ -65,6 +65,7 @@ impl Target {
     }
 
     /// `hided core-move inspect` with the environment an SSH exec has.
+    #[allow(clippy::disallowed_methods)] // env_clear: an SSH exec's environment, on Unix
     fn inspect(&self) -> Value {
         let output = Command::new(env!("CARGO_BIN_EXE_hided"))
             .args(["core-move", "inspect", "--state-dir"])

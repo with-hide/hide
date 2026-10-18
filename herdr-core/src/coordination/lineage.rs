@@ -1,5 +1,7 @@
 //! Changed-only metadata writes, driven by the existing coordinator refresh.
 //! One active batch and one pending batch per server, with bounded patches.
+//! The same batch carries the spawns' workspace and tab names and the
+//! registrations that waited for their agent's session (`identity_wait`).
 use super::AgentRecord;
 use crate::delivery::ledger::Ledger;
 use crate::runtime::Runtime;
@@ -35,6 +37,7 @@ struct Batch {
     generation: u64,
     patches: Vec<Patch>,
     names: Vec<super::naming::Work>,
+    waits: Vec<(String, super::identity_wait::Step)>,
 }
 #[derive(Debug)]
 struct Completion {
@@ -71,6 +74,14 @@ pub(crate) struct Writer {
     observed_names: Option<(usize, u64)>,
     attempted_names: HashSet<String>,
     pending_names: bool,
+    // The waits on this server the ledger held at the last plan: an agent
+    // list read after it can tell a wait whose agent is gone.
+    known_waits: HashSet<String>,
+    observed_waits: Option<u64>,
+    // The waits whose settle is queued or done; a settle that failed comes
+    // back on `unsettled` and is asked again at the next observation.
+    attempted_waits: HashSet<String>,
+    unsettled: mpsc::Receiver<String>,
 }
 
 impl Writer {
@@ -81,10 +92,12 @@ impl Writer {
     ) -> Result<Self, String> {
         let (sender, receiver) = mpsc::sync_channel::<Batch>(1);
         let (done, completed) = mpsc::sync_channel(super::AGENT_LIMIT * 2);
+        let (failed_settle, unsettled) = mpsc::sync_channel(super::identity_wait::LIMIT);
         let stopping = Arc::new(AtomicBool::new(false));
         let stop = stopping.clone();
         let queued = Arc::new(AtomicBool::new(false));
         let worker_queued = queued.clone();
+        let worker_device = device.clone();
         let worker = thread::Builder::new()
             .name("hide-lineage".into())
             .spawn(move || {
@@ -124,6 +137,36 @@ impl Writer {
                             crate::diagnostic!(json!({"component":"spawn_naming", "kind":"checkpoint_failed", "spawn_id":id, "detail":error}));
                         }
                     }
+                    for (id, step) in batch.waits {
+                        if stop.load(Ordering::Acquire) {
+                            return;
+                        }
+                        let pane = match &step {
+                            super::identity_wait::Step::Bind(agent) => Some(agent.pane_id.clone()),
+                            super::identity_wait::Step::End(_) => None,
+                        };
+                        match super::identity_wait::settle(&runtime, &worker_device, &id, step) {
+                            Ok(answer) if answer["bound"].is_string() => crate::diagnostic!(json!({
+                                "component": "identity_wait", "kind": "identity_wait.bound",
+                                "wait": id, "agent_id": answer["bound"], "pane_id": pane,
+                                "device": worker_device,
+                            })),
+                            Ok(answer) if answer["ended"].is_string() => crate::diagnostic!(json!({
+                                "component": "identity_wait", "kind": "identity_wait.ended",
+                                "wait": id, "reason": answer["ended"], "device": worker_device,
+                            })),
+                            Ok(_) => {}
+                            // Asked again at the next observation: a settle
+                            // converges, so a repeat binds or ends it once.
+                            Err(error) => {
+                                crate::diagnostic!(json!({
+                                    "component": "identity_wait", "kind": "identity_wait.settle_failed",
+                                    "wait": id, "detail": error, "device": worker_device,
+                                }));
+                                let _ = failed_settle.try_send(id);
+                            }
+                        }
+                    }
                 }
             })
             .map_err(|_| "lineage_unavailable")?;
@@ -145,22 +188,31 @@ impl Writer {
             observed_names: None,
             attempted_names: HashSet::new(),
             pending_names: false,
+            known_waits: HashSet::new(),
+            observed_waits: None,
+            attempted_waits: HashSet::new(),
+            unsettled,
         })
     }
 
-    /// Failed targets get one new attempt on a new authoritative connection.
+    /// Failed names get one new attempt on a new authoritative connection,
+    /// and every wait is judged again by its first agent list.
     pub(crate) fn reconnected(&mut self) {
         self.observed_names = None;
         self.attempted_names.clear();
+        self.observed_waits = None;
     }
 
     /// Plans and queues the token writes this server's panes still need:
     /// each registration's lineage keys and, from `marks` (Herdr pane id to
-    /// mark), the read axis's server mark (`wire::SERVER_MARK_TOKEN`).
+    /// mark), the read axis's server mark (`wire::SERVER_MARK_TOKEN`); and
+    /// settles each wait for an agent's session that `agents` answers, with
+    /// `pane_exists` saying which panes the server still has.
     pub(crate) fn observe(
         &mut self,
         ledger: &Arc<Ledger>,
         agents: &[ProjectedAgent],
+        pane_exists: &dyn Fn(&str) -> bool,
         marks: &BTreeMap<String, String>,
         changed: bool,
         snapshot_started_at: Instant,
@@ -186,20 +238,50 @@ impl Writer {
                 failed = true;
             }
         }
+        let mut unsettled = false;
+        while let Ok(id) = self.unsettled.try_recv() {
+            unsettled |= self.attempted_waits.remove(&id);
+        }
+        let waits_version = waits_on(ledger, &self.device);
         if !changed
             && !names_changed
             && !self.pending_names
             && !failed
+            && !unsettled
             && !self.pending_retry
             && self.acknowledged.is_empty()
             && self.observed_registrations == Some(placements(ledger))
             && self.observed_marks == Some(wanted_marks(marks))
+            && self.observed_waits == Some(waits_version)
         {
             return;
         }
         self.pending_retry = false;
         self.observed_registrations = Some(placements(ledger));
         self.observed_marks = Some(wanted_marks(marks));
+        self.observed_waits = Some(waits_version);
+        let (steps, deferred) = super::identity_wait::plan(
+            ledger,
+            &self.device,
+            agents,
+            pane_exists,
+            &self.known_waits,
+        );
+        self.known_waits = ledger
+            .identity_waits
+            .iter()
+            .filter(|wait| wait.machine == self.device)
+            .map(|wait| wait.id.clone())
+            .collect();
+        self.attempted_waits
+            .retain(|id| self.known_waits.contains(id));
+        // A wait this list could not judge is judged by the next one.
+        self.pending_retry |= deferred;
+        let waits = steps
+            .into_iter()
+            .filter(|(id, _)| !self.attempted_waits.contains(id))
+            .take(32)
+            .collect::<Vec<_>>();
         #[cfg(test)]
         {
             self.plans += 1;
@@ -240,12 +322,13 @@ impl Writer {
         };
         let more_names = names.len() > 32;
         names.truncate(32);
-        if fresh.is_empty() && names.is_empty() {
+        if fresh.is_empty() && names.is_empty() && waits.is_empty() {
             self.observed_names = Some(names_version);
             self.pending_names = false;
             return;
         }
         let named_ids = names.iter().map(|work| work.id.clone()).collect::<Vec<_>>();
+        let settled_ids = waits.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
         let signatures = fresh.iter().map(signature).collect::<Vec<_>>();
         let Some(generation) = self.generation.checked_add(1) else {
             return;
@@ -257,6 +340,7 @@ impl Writer {
                     generation,
                     patches: fresh,
                     names,
+                    waits,
                 })
                 .is_ok()
         }) {
@@ -264,6 +348,7 @@ impl Writer {
             self.observed_names = Some(names_version);
             self.pending_names = more_names;
             self.attempted_names.extend(named_ids);
+            self.attempted_waits.extend(settled_ids);
             self.in_flight.extend(
                 signatures
                     .into_iter()
@@ -291,6 +376,19 @@ fn placements(ledger: &Ledger) -> (usize, u64) {
         (&record.id, &record.pane).hash(&mut hasher);
     }
     (ledger.agents.len(), hasher.finish())
+}
+/// Which waits for an agent's session the ledger holds on `device`.
+fn waits_on(ledger: &Ledger, device: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for wait in ledger
+        .identity_waits
+        .iter()
+        .filter(|wait| wait.machine == device)
+    {
+        wait.id.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 /// Which panes should carry which mark.
 fn wanted_marks(marks: &BTreeMap<String, String>) -> u64 {
@@ -629,6 +727,7 @@ mod tests {
     fn agent(record: &AgentRecord, tokens: BTreeMap<String, Value>) -> ProjectedAgent {
         ProjectedAgent {
             pane_id: record.pane.clone(),
+            terminal_id: format!("term-{}", record.pane),
             name: record.name.clone(),
             workspace_id: "fixture".into(),
             tab_id: "fixture:tab".into(),
@@ -642,6 +741,7 @@ mod tests {
             lineage_session: record.actor.session.clone(),
             state_change_seq: 1,
             completion_seq: None,
+            launch_pending: false,
             tokens,
         }
     }
@@ -741,6 +841,7 @@ mod tests {
     struct TestBatches {
         receiver: mpsc::Receiver<Batch>,
         queued: Arc<AtomicBool>,
+        unsettled: mpsc::SyncSender<String>,
     }
     impl TestBatches {
         fn try_recv(&self) -> Result<Batch, mpsc::TryRecvError> {
@@ -759,9 +860,11 @@ mod tests {
     fn writer_fixture() -> WriterFixture {
         let (sender, receiver) = mpsc::sync_channel(1);
         let queued = Arc::new(AtomicBool::new(false));
+        let (failed_settle, unsettled) = mpsc::sync_channel(super::super::identity_wait::LIMIT);
         let batches = TestBatches {
             receiver,
             queued: queued.clone(),
+            unsettled: failed_settle,
         };
         let (done, completed) = mpsc::sync_channel(super::super::AGENT_LIMIT * 2);
         let parent = record("agent-1", "w1:p1", "parent", None);
@@ -790,6 +893,10 @@ mod tests {
                 observed_names: None,
                 attempted_names: HashSet::new(),
                 pending_names: false,
+                known_waits: HashSet::new(),
+                observed_waits: None,
+                attempted_waits: HashSet::new(),
+                unsettled,
             },
             batches,
             done,
@@ -812,29 +919,57 @@ mod tests {
         for reconnect in [false, true] {
             let (mut writer, batches, done, ledger, missing) = writer_fixture();
             let before = Instant::now();
-            writer.observe(&ledger, &missing, &BTreeMap::new(), true, before);
+            writer.observe(&ledger, &missing, &|_| true, &BTreeMap::new(), true, before);
             let first = batches.try_recv().unwrap();
             let finished = before + Duration::from_millis(1);
             done.try_send(completion(&first, true, finished)).unwrap();
             // This read began before the ACK. Its missing values cannot prove
             // a reset, so the successful write is not duplicated yet.
-            writer.observe(&ledger, &missing, &BTreeMap::new(), false, before);
+            writer.observe(
+                &ledger,
+                &missing,
+                &|_| true,
+                &BTreeMap::new(),
+                false,
+                before,
+            );
             assert!(batches.try_recv().is_err());
             assert!(writer.in_flight.is_empty());
             assert_eq!(writer.acknowledged.len(), 1);
             // Tokens were reset before we ever observed a matched snapshot.
             // Both the next regular read and a reconnect repair that state.
-            writer.observe(&ledger, &missing, &BTreeMap::new(), reconnect, finished);
+            writer.observe(
+                &ledger,
+                &missing,
+                &|_| true,
+                &BTreeMap::new(),
+                reconnect,
+                finished,
+            );
             let repair = batches.try_recv().unwrap();
             assert_eq!(repair.patches, first.patches);
             assert!(repair.generation > first.generation);
             done.try_send(completion(&repair, true, finished)).unwrap();
             let mut matched = missing.clone();
             matched[0].tokens = repair.patches[0].tokens.clone();
-            writer.observe(&ledger, &matched, &BTreeMap::new(), true, finished);
+            writer.observe(
+                &ledger,
+                &matched,
+                &|_| true,
+                &BTreeMap::new(),
+                true,
+                finished,
+            );
             assert!(writer.in_flight.is_empty());
             assert!(writer.acknowledged.is_empty());
-            writer.observe(&ledger, &matched, &BTreeMap::new(), false, finished);
+            writer.observe(
+                &ledger,
+                &matched,
+                &|_| true,
+                &BTreeMap::new(),
+                false,
+                finished,
+            );
             assert!(batches.try_recv().is_err());
         }
     }
@@ -843,15 +978,43 @@ mod tests {
     fn obsolete_completion_cannot_cancel_a_new_write_of_the_same_signature() {
         let (mut writer, batches, done, ledger, missing) = writer_fixture();
         let observed = Instant::now();
-        writer.observe(&ledger, &missing, &BTreeMap::new(), true, observed);
+        writer.observe(
+            &ledger,
+            &missing,
+            &|_| true,
+            &BTreeMap::new(),
+            true,
+            observed,
+        );
         let old = batches.try_recv().unwrap();
         let mut matched = missing.clone();
         matched[0].tokens = old.patches[0].tokens.clone();
-        writer.observe(&ledger, &matched, &BTreeMap::new(), true, observed);
-        writer.observe(&ledger, &missing, &BTreeMap::new(), true, observed);
+        writer.observe(
+            &ledger,
+            &matched,
+            &|_| true,
+            &BTreeMap::new(),
+            true,
+            observed,
+        );
+        writer.observe(
+            &ledger,
+            &missing,
+            &|_| true,
+            &BTreeMap::new(),
+            true,
+            observed,
+        );
         let current = batches.try_recv().unwrap();
         done.try_send(completion(&old, true, observed)).unwrap();
-        writer.observe(&ledger, &missing, &BTreeMap::new(), false, observed);
+        writer.observe(
+            &ledger,
+            &missing,
+            &|_| true,
+            &BTreeMap::new(),
+            false,
+            observed,
+        );
         assert!(batches.try_recv().is_err());
         assert!(writer.acknowledged.is_empty());
         assert_eq!(
@@ -860,7 +1023,14 @@ mod tests {
         );
         done.try_send(completion(&current, false, observed))
             .unwrap();
-        writer.observe(&ledger, &missing, &BTreeMap::new(), false, observed);
+        writer.observe(
+            &ledger,
+            &missing,
+            &|_| true,
+            &BTreeMap::new(),
+            false,
+            observed,
+        );
         let retry = batches.try_recv().unwrap();
         assert!(retry.generation > current.generation);
         assert_eq!(writer.in_flight.len(), 1);
@@ -878,19 +1048,93 @@ mod tests {
                 generation: 0,
                 patches: Vec::new(),
                 names: Vec::new(),
+                waits: Vec::new(),
             })
             .unwrap();
-        writer.observe(&ledger, &missing, &BTreeMap::new(), true, observed);
+        writer.observe(
+            &ledger,
+            &missing,
+            &|_| true,
+            &BTreeMap::new(),
+            true,
+            observed,
+        );
         assert!(writer.pending_retry);
         assert!(writer.in_flight.is_empty());
         batches.try_recv().unwrap();
-        writer.observe(&ledger, &missing, &BTreeMap::new(), false, observed);
+        writer.observe(
+            &ledger,
+            &missing,
+            &|_| true,
+            &BTreeMap::new(),
+            false,
+            observed,
+        );
         let submitted = batches.try_recv().unwrap();
         assert_eq!(submitted.patches.len(), 1);
         assert!(!writer.pending_retry);
-        writer.observe(&ledger, &missing, &BTreeMap::new(), false, observed);
+        writer.observe(
+            &ledger,
+            &missing,
+            &|_| true,
+            &BTreeMap::new(),
+            false,
+            observed,
+        );
         assert!(batches.try_recv().is_err());
         assert_eq!(writer.in_flight.len(), 1);
+    }
+
+    /// A settle that failed (a store that held its effects, a timeout) is
+    /// asked again at the next observation rather than holding the wait from
+    /// its end; one that is queued is never asked twice.
+    #[test]
+    fn a_failed_settle_is_asked_again_at_the_next_observation() {
+        let (mut writer, batches, _, _, _) = writer_fixture();
+        let ledger = Arc::new(Ledger {
+            next_id: 2,
+            identity_waits: vec![super::super::identity_wait::IdentityWait {
+                id: "wait-1".into(),
+                machine: crate::node::TEST_NODE.into(),
+                pane: "w9:p1".into(),
+                name: "fork-w1-p1-1-1".into(),
+                kind: "codex".into(),
+                owed: super::super::identity_wait::Owed::Fork {
+                    origin: "agent-1".into(),
+                },
+            }],
+            ..Default::default()
+        });
+        let observe = |writer: &mut Writer, changed| {
+            writer.observe(
+                &ledger,
+                &[],
+                &|_| false,
+                &BTreeMap::new(),
+                changed,
+                Instant::now(),
+            )
+        };
+        let settles = |batch: Batch| {
+            batch
+                .waits
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>()
+        };
+        // The first list predates nothing it can judge; the next one ends it.
+        observe(&mut writer, true);
+        assert!(batches.try_recv().is_err());
+        observe(&mut writer, false);
+        assert_eq!(settles(batches.try_recv().unwrap()), ["wait-1"]);
+        observe(&mut writer, false);
+        assert!(
+            batches.try_recv().is_err(),
+            "a queued settle is not asked twice"
+        );
+        batches.unsettled.send("wait-1".into()).unwrap();
+        observe(&mut writer, false);
+        assert_eq!(settles(batches.try_recv().unwrap()), ["wait-1"]);
     }
 
     /// B13: metadata observations and unrelated durable publications do not
@@ -908,12 +1152,13 @@ mod tests {
         }
         let now = Instant::now();
         for count in [32, 32, 6] {
-            writer.observe(&ledger, &agents, &BTreeMap::new(), false, now);
+            writer.observe(&ledger, &agents, &|_| true, &BTreeMap::new(), false, now);
             let plans = writer.plans;
             for _ in 0..100 {
                 writer.observe(
                     &Arc::new((*ledger).clone()),
                     &agents,
+                    &|_| true,
                     &BTreeMap::new(),
                     false,
                     now,
@@ -928,6 +1173,7 @@ mod tests {
         writer.observe(
             &Arc::new((*ledger).clone()),
             &agents,
+            &|_| true,
             &BTreeMap::new(),
             false,
             now,
@@ -937,20 +1183,41 @@ mod tests {
             "an unrelated publication cannot retry names"
         );
         writer.reconnected();
-        writer.observe(&ledger, &agents, &BTreeMap::new(), false, now);
+        writer.observe(&ledger, &agents, &|_| true, &BTreeMap::new(), false, now);
         assert_eq!(batches.try_recv().unwrap().names.len(), 32);
     }
     #[test]
     fn a_registration_that_moves_to_a_woken_pane_has_its_tokens_written_there() {
         let (mut writer, batches, done, ledger, missing) = writer_fixture();
         let observed = Instant::now();
-        writer.observe(&ledger, &missing, &BTreeMap::new(), true, observed);
+        writer.observe(
+            &ledger,
+            &missing,
+            &|_| true,
+            &BTreeMap::new(),
+            true,
+            observed,
+        );
         let first = batches.try_recv().unwrap();
         done.try_send(completion(&first, true, observed)).unwrap();
         let mut matched = missing.clone();
         matched[0].tokens = first.patches[0].tokens.clone();
-        writer.observe(&ledger, &matched, &BTreeMap::new(), true, observed);
-        writer.observe(&ledger, &matched, &BTreeMap::new(), false, observed);
+        writer.observe(
+            &ledger,
+            &matched,
+            &|_| true,
+            &BTreeMap::new(),
+            true,
+            observed,
+        );
+        writer.observe(
+            &ledger,
+            &matched,
+            &|_| true,
+            &BTreeMap::new(),
+            false,
+            observed,
+        );
         assert!(batches.try_recv().is_err());
         // The core hands the registration to the pane that woke it. Nothing
         // else in the ledger changed and no native snapshot is newly
@@ -964,6 +1231,7 @@ mod tests {
         writer.observe(
             &Arc::new(moved),
             &[woken],
+            &|_| true,
             &BTreeMap::new(),
             false,
             observed,

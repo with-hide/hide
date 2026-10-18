@@ -39,7 +39,7 @@
     ],
     "prompt_flag": "--",
     "model_flag": [
-      "-m",
+      "--model",
       "{}"
     ],
     "untitled": "Codex",
@@ -69,7 +69,10 @@
       ".grok"
     ],
     "prompt_flag": "--",
-    "model_flag": [],
+    "model_flag": [
+      "--model",
+      "{}"
+    ],
     "untitled": "grok",
     "cells": {
       "start": true,
@@ -127,7 +130,10 @@
       "agent"
     ],
     "prompt_flag": "--",
-    "model_flag": [],
+    "model_flag": [
+      "--model",
+      "{}"
+    ],
     "untitled": "pi",
     "cells": {
       "start": true,
@@ -158,7 +164,10 @@
       "agent"
     ],
     "prompt_flag": "--",
-    "model_flag": [],
+    "model_flag": [
+      "--model",
+      "{}"
+    ],
     "untitled": "omp",
     "cells": {
       "start": true,
@@ -186,7 +195,10 @@
       ".cursor"
     ],
     "prompt_flag": "--",
-    "model_flag": [],
+    "model_flag": [
+      "--model",
+      "{}"
+    ],
     "untitled": "cursor",
     "cells": {
       "start": true,

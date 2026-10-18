@@ -173,7 +173,7 @@ pub fn kit_state_dir(home: &Path) -> PathBuf {
 
 /// The kit's state folder, made private when it is missing, or why the kit
 /// keeps nothing there (`crate::private_dirs`).
-pub(crate) fn private_state_dir(home: &Path, create: bool) -> Result<PathBuf, String> {
+pub(crate) fn private_state_dir(home: &Path, create: bool) -> Result<PathBuf, crate::KitRefusal> {
     crate::private_dirs(home, &STATE_PARTS, create)
 }
 
@@ -184,9 +184,13 @@ fn path(home: &Path) -> PathBuf {
 /// The record, an empty one when the machine has none, or why it could not
 /// be read. An unreadable record is not treated as empty: that would read
 /// every part the operator removed as never installed and put it back.
-pub(crate) fn load(home: &Path) -> Result<Record, String> {
+/// The machine's record, or why a pass must stop before changing anything:
+/// without it the kit cannot tell which parts are Hide's, and one written by
+/// a newer build is that build's to change.
+pub(crate) fn load(home: &Path) -> Result<Record, crate::KitRefusal> {
     private_state_dir(home, false)?;
     let path = path(home);
+    let unreadable = |detail: String| crate::KitRefusal::record(&path, detail);
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -196,16 +200,25 @@ pub(crate) fn load(home: &Path) -> Result<Record, String> {
                 ..Record::default()
             });
         }
-        Err(error) => return Err(format!("{} could not be read: {error}", path.display())),
+        Err(error) => {
+            return Err(unreadable(format!(
+                "{} could not be read: {error}",
+                path.display()
+            )));
+        }
     };
-    let record: Record = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("{} is not a record Hide can read: {error}", path.display()))?;
+    let record: Record = serde_json::from_slice(&bytes).map_err(|error| {
+        unreadable(format!(
+            "{} is not a record Hide can read: {error}",
+            path.display()
+        ))
+    })?;
     if record.format != FORMAT {
-        return Err(format!(
+        return Err(unreadable(format!(
             "{} has format {}, which this build does not read",
             path.display(),
             record.format
-        ));
+        )));
     }
     Ok(record)
 }

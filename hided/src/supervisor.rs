@@ -809,8 +809,14 @@ async fn prepare(
         held.push(format!("move {}", handover.intent));
     }
     // Named here, before anything stops: the copy to that folder would
-    // fail only after this machine's core stopped.
-    held.extend(inspected.path_refused.clone());
+    // fail only after this machine's core stopped. It has a check of its
+    // own, since clearing earlier records never helps.
+    if let Some(reason) = inspected.path_refused.clone() {
+        failed.push(FailedCheck {
+            check: CheckId::TargetFolder,
+            detail: reason,
+        });
+    }
     // Hide AI settings move with the core and are never merged.
     match (
         &inspected.ai,

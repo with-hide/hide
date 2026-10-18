@@ -57,6 +57,9 @@ fn run_coordinator(
     };
     let mut replica: Option<SessionReplica> = None;
     let mut active_tab_reads: BTreeMap<String, u32> = BTreeMap::new();
+    // Kept across reconnects: it is keyed by terminal, and a reconnect
+    // neither refills a start's reads nor reports a cold one again.
+    let mut launch_settle = super::launch_settle::LaunchSettle::default();
     let mut subscription: Option<ActiveSubscription> = None;
     let mut subscription_generation = 0_u64;
     // Until when a line off the stream is reconciled against the bootstrap
@@ -248,9 +251,11 @@ fn run_coordinator(
                         && let Some((state, marks)) = lineage_inputs(&context)
                     {
                         writer.reconnected();
+                        let current = &replica.as_ref().unwrap().state;
                         writer.observe(
                             &state,
-                            &replica.as_ref().unwrap().state.agents,
+                            &current.agents,
+                            &|pane| current.panes.iter().any(|known| known.pane_id == pane),
                             &marks,
                             true,
                             snapshot_started_at,
@@ -797,10 +802,25 @@ fn run_coordinator(
                             }
                             let (native_changed, requested) =
                                 agent_tick_changes(current, &agents, catalog_cache.as_ref());
+                            launch_settle.observe(
+                                context.log_target(),
+                                &agents,
+                                Instant::now(),
+                                super::launch_settle::recorded_start,
+                                |panes| sync_reader.ask(generation, SyncRead::Launches(panes)),
+                            );
                             if let Some(writer) = lineage_writer.as_mut()
                                 && let Some((state, marks)) = lineage_inputs(&context)
                             {
-                                writer.observe(&state, &agents, &marks, native_changed, started_at);
+                                let panes = &current.state.panes;
+                                writer.observe(
+                                    &state,
+                                    &agents,
+                                    &|pane| panes.iter().any(|known| known.pane_id == pane),
+                                    &marks,
+                                    native_changed,
+                                    started_at,
+                                );
                             }
                             if let Some(restorer) = hook_token_restorer.as_mut() {
                                 restorer.observe(&agents, false);
@@ -905,6 +925,9 @@ fn run_coordinator(
                                 reconnect_delay = next_reconnect_delay(reconnect_delay);
                             }
                         }
+                    }
+                    SyncReadAnswer::Launches(reads) => {
+                        launch_settle.answered(context.log_target(), &reads);
                     }
                     SyncReadAnswer::ActiveTabs(result) => {
                         let current = replica

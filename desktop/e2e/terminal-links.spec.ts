@@ -496,9 +496,12 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
   const copied = () => page.evaluate(() => (window as unknown as { copied?: string }).copied);
   const paneId = await page.evaluate(() => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneId()!);
   await dockFiles(page, paneId);
+  // The page this HTML link opens widens the lane until Agent Views keep
+  // their 480px (UI_BEHAVIOR.md, lane widths), about 31 columns on macOS
+  // here, so the address goes on a line of its own that still fits.
   await print(page, paneId, [
     "html src/report.HTML:2",
-    `url ${origin}/a.html`,
+    `${origin}/a.html`,
     `osc8 \u001b]8;;${pathToFileURL(html).href}#L2\u001b\\HTML source label\u001b]8;;\u001b\\`,
     "folder ./src",
     "plain MENU-END",

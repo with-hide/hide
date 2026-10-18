@@ -5,8 +5,8 @@ import type { Actions } from "./actions";
 import { agentProductName } from "./agentAdapters";
 import { askWhat, VerbText } from "./components/agent-tree";
 import { AgentPrMark, useAgentStaleness } from "./components/pr-mark";
-import { reviewWord, sessionPulls, type SessionPull } from "./prMark";
-import { AgentTreePopover, childrenOf } from "./components/agent-tree-popover";
+import { familyPulls, reviewWord, type SessionPull } from "./prMark";
+import { AgentTreePopover } from "./components/agent-tree-popover";
 import { StatusMark } from "./components/status-mark";
 import { Elapsed } from "./components/elapsed";
 import { Hint } from "./components/ui/tooltip";
@@ -238,7 +238,7 @@ export function PanePrChip({ paneId, actions }: { paneId: string; actions: Actio
   const agents = usePaneAgents();
   const byPane = agentsByPane(agents);
   const agent = byPane.get(paneId);
-  const family = useMemo(() => agent && childrenOf(agent, byPane).length > 0 ? sessionPulls(agent, byPane) : undefined, [agent, byPane]);
+  const family = useMemo(() => (agent ? familyPulls(agent, byPane) : undefined), [agent, byPane]);
   if (!agent || (family ? family.length === 0 : !agent.state.pr)) return null;
   return <PaneAgentPrMark agent={agent} family={family} actions={actions} />;
 }
@@ -265,7 +265,7 @@ function PaneTreeButton({ paneId, children, agents, actions, compact = false, co
     triggerLabel={label}
     trigger={<button type="button" aria-label={label} data-pane-tree={paneId} className="flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border border-border bg-background px-xs outline-none hover:bg-popover focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary">
       {parts.length === 0 ? <ListTreeIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" /> : null}
-      {parts.length ? <span className="flex items-center gap-xxs" aria-hidden="true">{parts.map((part) => <span key={part.kind} className="flex items-center font-mono text-micro text-muted-foreground" data-pane-child-count={part.kind}><StatusMark mark={part.mark ?? "quiet"} /><span>{part.count}</span></span>)}</span> : null}
+      {parts.length ? <span className="flex items-center gap-xxs" aria-hidden="true">{parts.map((part) => <span key={part.kind} className="flex items-center font-mono text-micro text-muted-foreground" data-pane-child-count={part.kind}><StatusMark mark={part.mark} /><span>{part.count}</span></span>)}</span> : null}
       <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
     </button>}
   />;

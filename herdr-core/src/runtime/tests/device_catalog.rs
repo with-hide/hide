@@ -1862,8 +1862,10 @@ fn regrouping_a_device_session_keeps_its_agents_lineage() {
             codex_daemon_on: None,
             codex_daemon_running: None,
             codex_daemon_unreadable: None,
+            codex_capability_unread: None,
             codex_daemon_off: None,
             herdr: None,
+            refused: None,
         },
     );
     assert_eq!(descendants(&runtime), vec![child]);
@@ -1980,8 +1982,10 @@ fn a_device_agent_pane_is_judged_against_its_own_kit() {
             codex_daemon_on: None,
             codex_daemon_running: None,
             codex_daemon_unreadable: None,
+            codex_capability_unread: None,
             codex_daemon_off: None,
             herdr: None,
+            refused: None,
         },
     );
     let after = children(&runtime);

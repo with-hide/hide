@@ -114,8 +114,10 @@ pub(super) fn report(states: &[(ComponentId, ComponentState)]) -> KitReport {
         codex_daemon_on: None,
         codex_daemon_running: None,
         codex_daemon_unreadable: None,
+        codex_capability_unread: None,
         codex_daemon_off: None,
         herdr: None,
+        refused: None,
     }
 }
 
@@ -1307,7 +1309,13 @@ fn a_first_pass_that_did_not_run_does_not_decide_the_first_run_choice() {
     let shared = with_consent(None);
     shared.lock().unwrap().ingest_kit_report(
         crate::node::TEST_NODE,
-        &KitReport::unavailable("another Hide was still changing this account's kit"),
+        &KitReport::refused(hide_kit::KitRefusal {
+            cause: hide_kit::RefusalCause::Busy,
+            path: None,
+            variable: None,
+            stop: None,
+            detail: "another Hide was still changing this account's kit".into(),
+        }),
     );
     assert_eq!(onboarding(&shared), None);
 

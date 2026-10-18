@@ -11,8 +11,8 @@ import type { AgentLogoMode, UsagePreferences } from "./generated/hided-ws";
 /** The status codes the core sends in `status_code`; the catalogs name one word for each (agents.status.*). */
 export type AgentStatusCode = "error" | "question" | "approval" | "working" | "done" | "idle" | "unknown" | "waiting" | "unfinished" | "stopped" | "attached" | "sleeping" | "waking" | "sleep_failed";
 
-/** Whose move is next (`RowMark`): the operator's, in progress (the agent works, or `waiting` on proven work, D-25), unread as finished, unread otherwise, nothing, or asleep (status-marks D-21). */
-export type RowMark = "turn" | "going" | "waiting" | "done" | "unread" | "quiet" | "asleep";
+/** Whose move is next (`RowMark`): the operator's, in progress (the agent works, or `waiting` on proven work, D-25), unread as finished, unread otherwise, nothing (resting), a state Hide cannot read, or asleep (status-marks D-21). */
+export type RowMark = "turn" | "going" | "waiting" | "done" | "unread" | "quiet" | "unknown" | "asleep";
 
 /** What a quiet row waits on (`AgentWait`): its descendants, a background job its session proves is running, the reply to a Hide request it sent, or its pull request's checks. */
 export type AgentWait = "children" | "background" | "reply" | "checks";
@@ -222,7 +222,7 @@ export type AgentPullRequest = {
 /** A sleeping agent's state (`AgentSleepSnapshot`): the row and the pane draw it. */
 export type AgentSleep = {
   state: "sleeping" | "waking" | "failed";
-  /** Why the last wake failed, in plain words; set only when `failed`. */
+  /** Why the last wake failed, in plain words or as a start refusal code (`startReason`); set only when `failed`. */
   reason?: string | null;
   /** When it fell asleep, in Unix milliseconds. */
   since_unix_ms: number;
@@ -1438,9 +1438,26 @@ export type KitComponent = {
  * `offers_reinstall` is true only while a part needs it; `shares_account_with`
  * names another registered device that reaches the same account there.
  */
+/** What stopped a machine's kit pass before it changed anything (`contracts/snapshot-wire-enums.json`: `kit_refusal_cause`). */
+export type KitRefusalCause = "unsafe" | "record" | "busy" | "projects" | "other";
+
+/** The variable that chose Hide's state folder (`kit_state_variable`), named so the operator knows what to change or unset. */
+export type KitStateVariable = "HIDE_STATE_DIR" | "XDG_STATE_HOME";
+
+/** A pass that stopped before changing anything; the kit's own words stay in the log. */
+export type KitRefusal = {
+  cause: KitRefusalCause;
+  path: string | null;
+  variable: KitStateVariable | null;
+  /** With `variable`, on the machine whose app ran the pass: the command that stops its background service, which reads the variable only when it starts. */
+  stop?: string | null;
+};
+
 export type Kit = {
   unavailable: string | null;
   busy: boolean;
+  /** The machine's last pass or read stopped before changing anything; its parts and agents are then empty. */
+  refused?: KitRefusal | null;
   components: KitComponent[];
   /** Every agent Hide has an adapter for; empty until the machine was checked. */
   agents: KitAgent[];
@@ -2038,6 +2055,31 @@ export type SnapshotRest = {
  */
 export function localDeviceId(rest: SnapshotRest | null): string {
   return rest?.navigator?.devices?.find((device) => device.kind !== "remote")?.id ?? "";
+}
+
+/**
+ * Every device row named by the device it runs on. The core publishes a
+ * device's agents inside that device's status, where the row does not say
+ * whose it is, but a session's ledger row is kept under the device id, so
+ * every reader that names a row's session (a pane head, a task row, a reveal)
+ * has to find the id on the row. This is the one place that sets it; rows
+ * already carrying it, and statuses with no agents, are returned as they are
+ * so `share` keeps their identity.
+ */
+export function stampDeviceAgents(rest: SnapshotRest): SnapshotRest {
+  const remote = rest.status?.remote;
+  if (!remote?.some((status) => status.session?.agents?.some((agent) => agent.device_id !== status.target_id))) return rest;
+  return {
+    ...rest,
+    status: {
+      ...rest.status!,
+      remote: remote.map((status) => {
+        const session = status.session;
+        if (!session?.agents?.some((agent) => agent.device_id !== status.target_id)) return status;
+        return { ...status, session: { ...session, agents: session.agents.map((agent) => (agent.device_id === status.target_id ? agent : { ...agent, device_id: status.target_id })) } };
+      }),
+    },
+  };
 }
 
 export function focusedRemoteDevice(rest: SnapshotRest | null): Device | null {

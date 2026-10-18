@@ -1552,6 +1552,22 @@
                     }
                 },
                 {
+                    "name": "--model",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--effort",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
                     "name": "--help",
                     "required": false,
                     "requires": [],
@@ -1572,10 +1588,14 @@
                 "repository_unavailable",
                 "agent_not_installed",
                 "intent_conflict",
+                "invalid_launch_choice",
                 "shell_starting",
                 "agent_not_started",
                 "worktree_unconfirmed",
-                "session_too_long"
+                "native_identity_unavailable",
+                "identity_waits_full",
+                "session_too_long",
+                "codex_capability_unknown"
             ],
             "repeats_at_most": null,
             "rest": "the agent's own arguments"
@@ -1895,7 +1915,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:fff22a40798ecf7d7642efc0d5fa8f01af05c8afaa9842534c1164bd88cffe0e",
+    "digest": "sha256:150e5688f52dfb9e8d458b5b481e86d24e7d19cdf2d9f105d224fe0597cc7340",
     "envelopes": {
         "agent": {
             "answer": "value",

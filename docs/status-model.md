@@ -284,9 +284,9 @@ Done is deliberately separate from Needs You: a stop to read is "look when you h
 
 ## The mark
 
-Every row draws one of seven marks, decided once in the core (`RowMark::of` in `agent_state/tally.rs`) and carried on the wire as `mark` (`turn`, `going`, `waiting`, `done`, `unread`, `quiet`, `asleep`); no surface derives a mark of its own (status-marks D-01, D-12).
+Every row draws one of eight marks, decided once in the core (`RowMark::of` in `agent_state/tally.rs`) and carried on the wire as `mark` (`turn`, `going`, `waiting`, `done`, `unread`, `quiet`, `unknown`, `asleep`); no surface derives a mark of its own (status-marks D-01, D-12), the dimming of an unknown row included (`rowDimmed` reads `mark`, never `status_code`; sidebar-quiet-mark-indent D-04).
 `going` and `waiting` are the one in-progress mark in two shapes (D-25): every count and precedence takes them as one, and only the ring is drawn apart.
-Four say whose move is next, and their shapes alone tell them apart; `asleep` is the one exception, an agent Hide stopped that wakes when opened (D-21):
+Four say whose move is next, and their shapes alone tell them apart; `unknown` says Hide cannot tell, and `asleep` is an agent Hide stopped that wakes when opened (D-21):
 
 | Mark | Shape | When |
 | --- | --- | --- |
@@ -295,12 +295,13 @@ Four say whose move is next, and their shapes alone tell them apart; `asleep` is
 | `waiting` | The same ring dashed, also static (`2.2 2` over a path length of 19) | In progress while the agent waits (`wait`) on children, a background task, its pull request's checks or a reply; its hover and name read `진행 중 · 대기` |
 | `done` | A 7 px green dot | Unread, and the label read the turn as finished |
 | `unread` | A 7 px dot in the foreground colour | Unread, with work left (a wait nothing proves is work left), or no verdict |
-| `quiet` | Nothing; the slot is kept so titles line up | Everything else: read, idle, unknown, a disconnected device's row, a delegated child's own request |
+| `quiet` | A faint hollow ring in the 12 px slot: radius 3.4 of 12, a 1.3 stroke in the muted foreground at `--opacity-read-status`, smaller and thinner than the in-progress ring (sidebar-quiet-mark-indent D-01, D-02) | At rest: read, idle, a delegated child's own request |
+| `unknown` | Nothing; the slot is kept so titles line up, and the row is dimmed whole | No demand and an activity Hide cannot read (`status_code: unknown`, unless a block, a raise or an escalation makes it `turn`); counted on no badge (sidebar-quiet-mark-indent D-04) |
 | `asleep` | A grey moon (`☾`), not dimmed | An agent Hide put to sleep, waking, or one that could not be reopened; counted on no badge |
 
 The ring does not turn (D-02): its dashes, not motion, tell waiting from work, on every surface, the ones with no second line (tabs, pane headers, the ⌃Tab switcher, ⌘K, the child tree popover) included (D-25, B36).
 When the agent starts working again the dashes close, and when a turn ends with a wait left they open.
-A delegated row draws only `going`, `waiting` or `quiet` (B24): its question is its parent's to answer; one of the six escalation causes still makes it `turn`.
+A delegated row draws only `going`, `waiting`, `quiet` or `unknown` (B24): its question is its parent's to answer; one of the six escalation causes still makes it `turn`.
 Colour never carries the distinction alone: the mark's name and the word that leads its line are its hover text and part of the row's accessible name (`markWords` in `web/src/agentRow.ts`), as in `내 차례 · 질문` or `읽을 것 · 일 남음`.
 
 How a stop ended is the label's verdict (`axes.rs::stop_verdict`): finished, or unfinished (work left); a label `waiting` that nothing proves is running is work left too, since nothing will wake the agent (status-marks D-17).
@@ -312,6 +313,7 @@ A working row says its sentence alone or has no line; a waiting row's line is `�
 The web splits a line into its lead word, sentence and background tail (`lineParts`), and a narrow row cuts only the sentence, so the lead and the tail always show.
 A Needs You line's ask verb says the same word: an Answer reads `질문` (Question) and an Approval `승인` (Approval), followed by ` · ` and what to do.
 A row of unknown state, or on an unreachable device, has no mark and is drawn dimmed whole, and its line says why (B16).
+A slot with no live agent behind it, an ended session in a record or a link's timeline, a closed feedback recipient, draws no mark either (sidebar-quiet-mark-indent D-05): the ring says an agent is there and resting.
 A row on a device that is not connected still carries the last state Hide knew of it, which may be long over; while `status.remote` says the device is not connected, the shell draws that row and a tree popover's child with no mark, dimmed, with the line `<device> 연결 끊김` (`agents.line.disconnected`), and its hover and accessible name say the same instead of the stale mark words.
 A sleeping, waking or failed agent's row, and a saved sleeping conversation's row (`SleepingSessionRow`, the phone's sleeping row), draw the grey moon and are not dimmed (B31): a sleeping one has no line, and its hover and accessible name say `재움 · 열면 깨어남`; a waking one says `깨우는 중` and a failed one `재움 · 다시 열지 못함` on its line.
 The operator's turn outranks the moon: a sleeping row with a raised ask draws `!`. These lines and the moon are the same in the Agents tab, the child tree popover, the pane header's child summary, the close list (where the moon is not dimmed) and the phone (`agentRow.ts::stateLine`, `phone::line`); a sleeping row keeps the place and close-list class its awake mark gives it (`RowMark::awake`).
@@ -350,6 +352,10 @@ Herdr records no lineage, so hided writes the four pane tokens through `pane.rep
 The value and lifetime contract is unchanged.
 A fork made with Fork agent or Fork agent to the side is the operator's own root, not the source's child: its registration has no parent, names the source as its `origin`, and carries the `forked` fact (`AgentRecord::forked`), so `hide agent show` and `hide agent list` print a null `parent` and the source as `origin` (PRD fork-operator-root B1, B19, D-12).
 Only the source's own live registration can register a parentless fork with itself as origin; any other caller is refused `parent_authority_required`.
+The source is registered when the fork's agent starts, and the fork once Herdr shows the fork's own session: Codex started as `codex fork <id>` reports its session only at its first turn, so a Codex fork left at rest has no session, no `forked_from` and no registration until the operator gives it a prompt.
+Meanwhile the registration waits in the ledger, the source's consent kept as the wait, so the fork names the source as origin even when the source closed while it rested, and the wait ends with the fork's pane or agent ([delivery.md](delivery.md#a-registration-that-waits-for-its-agents-session)).
+A fork that cannot be recorded keeps running without its mark: when the source's registration or the wait is refused (`identity_waits_full` past 64 waits, `capacity` at the 2048 registrations the ledger holds, `registration_conflict`), the fork's row is an ordinary root of the operator's with no `forked_from`, the source shows nothing of it, and the refusal is logged as `fork` `registration_failed` with both panes.
+Nothing reaches the screen, by design principle 13 and because an alert is a PRD decision: the fork works, and no step the operator could take afterwards gives it the mark, since a fork is not asked again once a slot frees, so the log is where a lost mark is looked into.
 Its pane names the source under three keys of its own, never `parent_pane`, which would make it a child again: `fork_pane` is the source's pane id, `fork_session` the fork's own session digest and `fork_source_session` the source's (`lineage::FORK_KEYS`).
 The lineage writer writes them from the registration as it writes the four above, so a wake that continues the fork in another pane names the source there too, and a hided restart finds them on the pane and in the ledger (B17, B18).
 They are read only while the fork's pane still runs `fork_session`, so a pane that hosts another conversation later is not a fork; `wire::fork_declaration` reads them, and `agent_state::apply_fork_sources` names the source while its pane still runs `fork_source_session` and names none once the source closed or moved on (`SidebarAgentSnapshot.forked_from`, `PaneForkSnapshot.forked_from`, B9, B10).
@@ -383,7 +389,7 @@ A parent whose pane no longer lists an agent is a different case: the child stay
 An empty token is a cleared declaration, not a parent named by an empty string.
 The token is display-only in Herdr's own terms and dies with the pane, so a closed child leaves no edge behind, and a parent that has gone makes the child an orphan root.
 
-Fork regression owners: `a_fork_registers_as_a_root_whose_origin_is_its_source` (`coordination/mod.rs`), `a_fork_names_its_source_under_fork_keys_and_never_as_a_parent` and `a_fork_that_is_woken_in_another_pane_names_its_source_there` (`coordination/lineage.rs`), `a_fork_names_its_source_and_stays_the_operators_own_work` (`runtime/tests/lineage.rs`), and `web/e2e/agent-fork.spec.ts`.
+Fork regression owners: `a_fork_registers_as_a_root_whose_origin_is_its_source` (`coordination/mod.rs`), `a_fork_names_its_source_under_fork_keys_and_never_as_a_parent` and `a_fork_that_is_woken_in_another_pane_names_its_source_there` (`coordination/lineage.rs`), `a_fork_names_its_source_and_stays_the_operators_own_work` (`runtime/tests/lineage.rs`), `a_fork_whose_session_arrives_late_registers_as_the_operators_root_from_its_source` and `a_fork_whose_pane_closes_or_agent_ends_before_its_session_ends_its_wait` (`runtime/tests/fork_registration.rs`), the decisions in `coordination/identity_wait.rs`, and `web/e2e/agent-fork.spec.ts`.
 
 Regression owners: `a_parent_declared_as_a_pane_token_is_the_lineage`, `a_child_whose_pane_now_hosts_another_session_declares_no_parent` and the `lineage_sessions` tests in `herdr-core/src/session_sync/tests.rs`, `a_parent_pane_on_another_machine_reused_by_another_agent_adopts_no_local_child`, `a_sleeping_child_stays_under_its_parent_only_while_its_record_can_prove_it`, and `web/e2e/lineage-session.spec.ts`.
 
@@ -399,7 +405,7 @@ The shell shows five siblings per parent and folds the rest behind `N개 더` (`
 A grandchild's own children open in the tree popover instead of a third level.
 A delegated row whose checkout differs from its parent's carries `row.state.branch_badge` (`agent_state/axes.rs::apply_lineage`): that checkout's branch, or its label when it has none, the name the sidebar gives the checkout; a device checkout's label is its folder name, so the label alone would name a folder there.
 The tree popover (`web/src/components/agent-tree-popover.tsx`) opens from the pane header's second-row tree button, a grandchild's chevron and an ask band's fallback `외 N건` when that tree button is unavailable.
-The second-row button shows `direct_child_counts` in the marks a row uses (raised asks as the turn mark, working children as the ring, finished ones as the dot) and the subtree's operator-raised `descendant_mark.count`, with the live direct child total only in its tooltip and accessible name; ordinary child requests draw no mark and are named only there, because they are the parent's to answer (status-marks B21).
+The second-row button shows `direct_child_counts` in the marks a row uses (raised asks as the turn mark, working children as the ring, finished ones as the dot) and the subtree's operator-raised `descendant_mark.count`, with the live direct child total only in its tooltip and accessible name; resting and unknown children, and ordinary child requests, which are the parent's to answer (status-marks B21), are not drawn on the button and are named only there.
 Its compact ask-band form keeps only the raised count, or a tree icon when none is raised, while its tooltip names every count; unknown children are excluded from the resting remainder.
 Its head names the parent with its direct child count, and its body draws the same rows two levels deep with five siblings each, the children that finished and were read, with nothing below them raised or working, folded below them behind `끝난 자식 N`; choosing a grandchild that has children re-roots the popover on it.
 Arrows move, Right and Left open and fold a branch, Enter opens the agent's pane, and Escape closes it and returns focus to what opened it.
@@ -428,7 +434,7 @@ They remain separate badges or Git indicators and never select the agent status 
 
 ### One meaning across surfaces
 
-Agent rows, focused-agent tab marks, pane headers, the tree popover, the ⌃Tab switcher, the close sheet, ⌘K results, the Sessions tool, the Overview and its task cards, the pull request lens, Factory cards, the View comment menu, the Hide AI home row and the phone draw the same mark and the same words for the same row (status-marks B20), from the core's `mark` and `status_code` (`web/src/components/status-mark.tsx` draws the five shapes in one box of one size).
+Agent rows, focused-agent tab marks, pane headers, the tree popover, the ⌃Tab switcher, the close sheet, ⌘K results, the Sessions tool, the Overview and its task cards, the pull request lens, Factory cards, the View comment menu, the Hide AI home row and the phone draw the same mark and the same words for the same row (status-marks B20), from the core's `mark` and `status_code` (`web/src/components/status-mark.tsx` draws the six shapes in one box of one size, and an empty box for `unknown` and for a slot with no live agent).
 Working uses a fixed blue status token, independent of the user's accent color; the finished dot uses green, so running and completed work remain distinct.
 
 A read question, approval or block keeps the turn mark and its request line at `--opacity-read-status`, so an unread one stands apart from one already looked at.
@@ -449,6 +455,9 @@ Wake resumes the saved native conversation in its own intent-marked tab, and cur
 A delegated child that held a registration wakes into the same registration, so its row returns under its parent and its parent's watch and letters still reach it ([delivery.md](delivery.md#agent-registration-and-spawning)); the sleeping row itself never carries lineage.
 A Cursor wake needs no session hook from Cursor: the core reports the resumed session to Herdr itself, so the row returns under its parent like any other kind's ([ARCHITECTURE.md: Agent sleep](ARCHITECTURE.md#agent-sleep)).
 The Wake action is available only when this build declares the provider's resume capability.
+A record an older build saved names no checkout owner ([ARCHITECTURE.md: Agent sleep](ARCHITECTURE.md#agent-sleep)), so its Wake is offered only while the project list shows its checkout; until then the row has no Wake and its reason says to open Hide on that computer and add the project if it is missing, and the Wake returns once the checkout is listed.
+A record this build saved wakes from the owner it kept, whatever the list shows.
+Regression owners: `a_sleep_keeps_its_checkouts_owner_for_the_wake`, `a_sleeping_worktree_session_is_opened_from_its_repository_while_no_list_shows_it`, `a_sleeping_session_wakes_in_its_checkout_while_no_list_shows_it`, `a_sleeping_session_an_older_build_saved_offers_wake_only_while_its_checkout_is_listed` and `a_sleeping_session_offers_wake_only_over_a_connection` in `herdr-core/src/runtime/tests/agent_sleep.rs`, and `a_kept_owner_names_its_repository_by_an_absolute_path` in `herdr-core/src/agent_sleep/dormant.rs`.
 A retained unsupported sleeping record stays visible without a Wake action or a loading spinner; only an active transition or status check spins.
 Unknown work survives restart without replaying external effects; an intent saved before close admission can be released without touching a pane.
 `agent_sleep/dormant.rs` owns the bounded archive and row values, while `runtime/agent_sleep/dormant.rs` owns its transitions and exact save/connection/execution fences.

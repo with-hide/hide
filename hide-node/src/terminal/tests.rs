@@ -800,6 +800,52 @@ fn keys_for_a_sleeping_pane_are_dropped_until_it_wakes() {
     assert_eq!(opened.next_input(), b"kept");
 }
 
+/// A dropped file's path and the bytes a screen answers its terminal with are
+/// as much typing as a key: neither reaches the shell under a sleeping agent,
+/// and a paste already held waits for the agent with what was typed behind it.
+#[test]
+fn a_paste_and_control_bytes_for_a_sleeping_pane_wait_for_the_agent() {
+    let harness = harness(RetryPolicy::Automatic);
+    let opened = harness.controlling("w1:p1");
+    let generation = harness.service.shared.lock().panes["w1:p1"]
+        .current_generation
+        .unwrap();
+    harness.service.control(TerminalControl::AttachmentHold {
+        pane: "w1:p1".into(),
+        intent: "i1".into(),
+    });
+    harness.key("w1:p1", b"\r");
+    harness.service.control(TerminalControl::Asleep {
+        pane: "w1:p1".into(),
+        asleep: true,
+    });
+    let deliver = |harness: &Harness| {
+        harness.service.control(TerminalControl::AttachmentDeliver {
+            intent: "i1".into(),
+            generation,
+            paste: protocol::encode_base64(b"'/tmp/a.png' "),
+        });
+    };
+    deliver(&harness);
+    harness.report_where(|report| {
+        matches!(
+            report,
+            TerminalReport::AttachmentDelivered { written: false, .. }
+        )
+    });
+    harness.service.control(TerminalControl::Write {
+        pane: "w1:p1".into(),
+        data: protocol::encode_base64(b"\x1b[?1;2c"),
+    });
+    harness.service.control(TerminalControl::Asleep {
+        pane: "w1:p1".into(),
+        asleep: false,
+    });
+    deliver(&harness);
+    // Only the paste and the key typed before the agent slept arrive, and in order.
+    assert_eq!(opened.next_input(), b"'/tmp/a.png' \r");
+}
+
 #[test]
 fn keys_sent_before_the_core_names_their_creation_reach_the_pane_it_makes() {
     let harness = harness(RetryPolicy::Automatic);

@@ -916,6 +916,9 @@ pub struct CheckoutTabRequest {
     pub checkout_path: String,
     pub label: String,
     pub host: crate::checkout_owner::TabHost,
+    /// Whether Herdr focuses the tab it makes; false for a start that stays
+    /// behind the operator's screen.
+    pub focus: bool,
     pub resume_scope: Option<hide_session::SessionReadScope>,
     pub(crate) resume_reference: Option<crate::sidebar::SessionAgentSessionPayload>,
 }
@@ -1078,8 +1081,11 @@ fn launch_with_prompt_checked(
         shell,
         made_worktree,
     } = start;
+    // The trust is written by the machine that runs the pane: `agent_node`
+    // is none for a device, whose own Herdr answers for its PATH, and a
+    // device's worktree still needs its trust recorded there.
     if let Some(path) = made_worktree.as_deref()
-        && let Err(reason) = crate::agent_start::trust_worktree(agent_node, &kind, path)
+        && let Err(reason) = crate::agent_start::trust_worktree(pane_node, &kind, path)
     {
         return TaskAgentOutcome::Failed(reason);
     }
@@ -1507,7 +1513,7 @@ fn create_checkout_tab(
             workspace_id,
             &request.checkout_path,
             &request.label,
-            true,
+            request.focus,
             env,
             command,
         ),
@@ -1516,7 +1522,7 @@ fn create_checkout_tab(
             owner,
             &request.checkout_path,
             &request.label,
-            true,
+            request.focus,
             env,
             command,
         ),
@@ -3425,6 +3431,36 @@ mod tests {
     }
 
     #[test]
+    fn a_checkout_tab_is_focused_in_herdr_only_when_the_request_asks() {
+        for focus in [true, false] {
+            let server = server(vec![json!({"result":{
+                "type":"tab_created",
+                "tab":{"tab_id":"w9:t2","workspace_id":"w9","number":2,"label":"Tab 2","focused":focus,"pane_count":1,"agent_status":"idle"},
+                "root_pane":{"pane_id":"w9:p2","terminal_id":"fixture-terminal","workspace_id":"w9","tab_id":"w9:t2","focused":focus,"agent_status":"idle","revision":1}
+            }})]);
+            let outcome = create_checkout_tab(
+                &server,
+                &CheckoutTabRequest {
+                    id: 1,
+                    agent_kind: None,
+                    checkout_path: "/repo".into(),
+                    label: "Tab 2".into(),
+                    host: crate::checkout_owner::TabHost::Workspace("w9".into()),
+                    focus,
+                    resume_scope: None,
+                    resume_reference: None,
+                },
+                None,
+            )
+            .unwrap();
+            assert_eq!(outcome.pane_id, "w9:p2");
+            let requests = server.requests.lock().unwrap();
+            assert_eq!(requests[0]["method"], "tab.create");
+            assert_eq!(requests[0]["params"]["focus"], focus);
+        }
+    }
+
+    #[test]
     fn migrate_branch_restores_on_failure() {
         let server = server(vec![
             json!({"error":{"code":"injected","message":"pane creation failed"}}),
@@ -3710,14 +3746,15 @@ mod tests {
     /// adapter. Every first prompt travels in argv, never as PTY input.
     #[test]
     fn a_first_prompt_travels_as_the_agents_own_argument() {
-        for (kind, prompt_flag, extra_roots) in [
-            ("claude", "--", true),
-            ("codex", "--", true),
-            ("grok", "--", false),
-            ("opencode", "--prompt", false),
-            ("pi", "--", false),
-            ("omp", "--", true),
-            ("cursor", "--", true),
+        // OpenCode takes no model, so its start names none.
+        for (kind, prompt_flag, extra_roots, model) in [
+            ("claude", "--", true, Some("fixture-model")),
+            ("codex", "--", true, Some("fixture-model")),
+            ("grok", "--", false, Some("fixture-model")),
+            ("opencode", "--prompt", false, None),
+            ("pi", "--", false, Some("fixture-model")),
+            ("omp", "--", true, Some("fixture-model")),
+            ("cursor", "--", true, Some("fixture-model")),
         ] {
             let server = server(vec![
                 shell_ready(),
@@ -3725,7 +3762,7 @@ mod tests {
             ]);
             let args = crate::runtime::agent_choice::agent_arguments(
                 Some(kind),
-                Some("fixture-model"),
+                model,
                 &["/work/my app".into()],
             );
             let outcome = launch_with_prompt(
@@ -3754,7 +3791,7 @@ mod tests {
                 ["pane.process_info", "agent.start"],
                 "{kind}"
             );
-            let mut expected = vec!["--model", "fixture-model"];
+            let mut expected: Vec<&str> = model.into_iter().flat_map(|m| ["--model", m]).collect();
             if extra_roots {
                 expected.extend(["--add-dir", "/work/my app"]);
             }
@@ -3766,6 +3803,52 @@ mod tests {
 
     /// PRD overview-request-view D-20: a Codex that has the shared daemon is
     /// started without it, ahead of its first prompt.
+    #[test]
+    fn a_device_worktree_start_records_trust_on_the_pane_node_or_refuses_without_one() {
+        let home = tempfile::tempdir().unwrap();
+        let tree = home.path().join("tree");
+        std::fs::create_dir_all(tree.join(".git")).unwrap();
+        let wire = hide_platform::path::to_wire(&tree).unwrap();
+        let resolved = hide_platform::fs::identity::canonical(&tree).unwrap();
+        let node = hide_node::Local::new(Some(home.path().to_path_buf()));
+        let make = || PendingAgentStart {
+            resume_reference: None,
+            resume_scope: None,
+            pane_id: "w1:p1".into(),
+            kind: "claude".into(),
+            prompt: None,
+            args: Vec::new(),
+            codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+            shell: crate::agent_start::ShellStart::Plain,
+            made_worktree: Some(wire.clone()),
+        };
+        // A device start: no agent node (its Herdr answers for its PATH), a
+        // pane node that is the device's.
+        let server = server(vec![
+            shell_ready(),
+            json!({"result":{"type":"agent_started","argv":[],"agent":agent("working")}}),
+        ]);
+        let outcome = launch_with_prompt_checked(&server, None, Some(&node), 7, make(), &|| Ok(()));
+        assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
+        let written: Value =
+            serde_json::from_slice(&std::fs::read(home.path().join(".claude.json")).unwrap())
+                .unwrap();
+        let key = resolved.to_str().unwrap().replace('\\', "/");
+        assert_eq!(
+            written["projects"][key.as_str()]["hasTrustDialogAccepted"],
+            true
+        );
+        // With no pane node the start refuses before Herdr is asked.
+        let server = self::server(vec![]);
+        let TaskAgentOutcome::Failed(reason) =
+            launch_with_prompt_checked(&server, None, None, 7, make(), &|| Ok(()))
+        else {
+            panic!("a start without the pane's machine went ahead")
+        };
+        assert!(reason.starts_with("agent_trust_unavailable"), "{reason}");
+        assert!(requests_of(&server).is_empty());
+    }
+
     #[test]
     fn an_unknown_codex_first_start_refuses_before_contacting_herdr() {
         let server = server(vec![]);
@@ -3788,7 +3871,7 @@ mod tests {
         let TaskAgentOutcome::Failed(reason) = outcome else {
             panic!("start succeeded")
         };
-        assert!(reason.contains("Settings"), "{reason}");
+        assert_eq!(reason, crate::codex_launch::CAPABILITY_UNKNOWN);
         assert!(requests_of(&server).is_empty());
     }
 

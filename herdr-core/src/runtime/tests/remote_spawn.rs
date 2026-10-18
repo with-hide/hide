@@ -69,6 +69,13 @@ impl NodeLink for Node {
                 self.trusted.lock().unwrap().push((agent, path));
                 Value::Null
             }
+            // The catalog's reads of the device's folders, which a session
+            // pass of the device asks for, are no part of a spawn.
+            Call::Project { .. } | Call::Worktrees { .. } => {
+                return Err(LinkError::NotConnected(
+                    "this node answers only the spawn's checks".to_owned(),
+                ));
+            }
             other => panic!("unexpected call {other:?}"),
         }))
     }
@@ -171,6 +178,11 @@ fn device_herdr(
                 json!({"type": "ok"})
             }
             "pane.report_metadata" => json!({"type": "ok"}),
+            // The lineage writer's naming of the spawn's workspace and tab,
+            // which these tests do not follow.
+            "session.snapshot" => {
+                return Err(("internal_error".into(), "not followed here".into()));
+            }
             other => panic!("unexpected {other}"),
         })
     })
@@ -359,6 +371,18 @@ impl Spawner {
         machine: Option<&str>,
         intent: &str,
     ) -> Result<Value, String> {
+        self.spawn_with(parent, machine, intent, Default::default(), Vec::new())
+    }
+
+    /// A spawn with a launch choice and the agent's native arguments.
+    fn spawn_with(
+        &self,
+        parent: Option<&str>,
+        machine: Option<&str>,
+        intent: &str,
+        launch: hide_agent_adapter::LaunchChoice,
+        args: Vec<String>,
+    ) -> Result<Value, String> {
         crate::coordination::run(
             self.client.clone(),
             authority(&self.actor),
@@ -372,7 +396,8 @@ impl Spawner {
                 repo: "/srv/repo".into(),
                 branch: "topic".into(),
                 path: None,
-                args: Vec::new(),
+                args,
+                launch,
                 task: None,
             },
         )
@@ -382,12 +407,55 @@ impl Spawner {
         ledger::load(&self.path).unwrap()
     }
 
+    /// The ledger the store last published, read while its worker may be
+    /// saving the next one.
+    fn published(&self) -> Arc<ledger::Ledger> {
+        self.runtime.lock().unwrap().delivery_state().unwrap()
+    }
+
     fn count(&self, method: &str) -> usize {
         self.herdr
             .methods()
             .iter()
             .filter(|seen| seen.as_str() == method)
             .count()
+    }
+
+    /// The device's lineage writer, as the device's session sync runs it,
+    /// with the delivery store it settles waits through.
+    fn writer(&self) -> crate::coordination::lineage::Writer {
+        self.runtime
+            .lock()
+            .unwrap()
+            .install_delivery_client(self.client.clone());
+        crate::coordination::lineage::Writer::new(
+            DEVICE.into(),
+            Arc::new(self.herdr.connector()),
+            Arc::downgrade(&self.runtime),
+        )
+        .unwrap()
+    }
+
+    /// Hands the writer the agent list the device's Herdr answers now, as
+    /// the session sync does on each refresh.
+    fn refresh(&self, writer: &mut crate::coordination::lineage::Writer) {
+        let listed = hide_herdr_client::request_with_connector(
+            &self.herdr.connector(),
+            "agent.list",
+            crate::wire::empty_params(),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        let agents = crate::wire::agents_response(listed).unwrap();
+        let ledger = self.runtime.lock().unwrap().delivery_state().unwrap();
+        writer.observe(
+            &ledger,
+            &agents,
+            &|_| true,
+            &std::collections::BTreeMap::new(),
+            true,
+            std::time::Instant::now(),
+        );
     }
 }
 
@@ -437,6 +505,153 @@ fn a_delegated_spawn_makes_the_child_on_the_device_under_the_caller() {
         .clone();
     assert_eq!(tokens["parent_pane"], "sender");
     assert_eq!(tokens["parent_machine"], "machine-local");
+}
+
+/// A spawn's launch choice reaches the agent as its own options, ahead of the
+/// native arguments that end with the first prompt after `--`, and the pane
+/// keeps it for the restarts Hide makes of that agent.
+#[test]
+fn a_spawn_starts_the_agent_with_its_choice_ahead_of_the_prompt() {
+    let spawner = spawner();
+    let launch = hide_agent_adapter::LaunchChoice {
+        model: Some("gpt-6-luna".into()),
+        effort: Some("low".into()),
+    };
+    let native = vec!["--".to_owned(), "review the diff".to_owned()];
+    spawner
+        .spawn_with(Some("here"), Some(DEVICE), "chosen", launch.clone(), native)
+        .unwrap();
+    let start = spawner
+        .herdr
+        .calls()
+        .into_iter()
+        .find(|(method, _)| method == "agent.start")
+        .expect("the agent was started")
+        .1;
+    assert_eq!(
+        start["args"],
+        json!([
+            "--no-daemon",
+            "--model",
+            "gpt-6-luna",
+            "-c",
+            "model_reasoning_effort=low",
+            "--",
+            "review the diff"
+        ])
+    );
+    let runtime = spawner.runtime.lock().unwrap();
+    let kept = &runtime.snapshot.ui_state.pane_launches["remote:mini:pane:w2:p1"];
+    assert_eq!(
+        (kept.kind.as_str(), kept.name.as_str()),
+        ("codex", "worker")
+    );
+    assert_eq!(kept.choice, launch);
+}
+
+/// An agent that reports its session only at its first turn keeps its
+/// launch choice: the pane's record is written before the spawn waits for
+/// the session, and binds to it on the device's pass that shows it.
+#[test]
+fn a_spawn_whose_session_comes_late_keeps_its_choice_and_binds_it_on_arrival() {
+    let spawner = spawner();
+    *spawner.session.lock().unwrap() = None;
+    let launch = hide_agent_adapter::LaunchChoice {
+        model: Some("gpt-6-luna".into()),
+        effort: Some("low".into()),
+    };
+    let error = spawner
+        .spawn_with(
+            Some("here"),
+            Some(DEVICE),
+            "late",
+            launch.clone(),
+            Vec::new(),
+        )
+        .expect_err("the agent has not reported its session");
+    assert_eq!(error, "native_identity_unavailable");
+    let pane_id = "remote:mini:pane:w2:p1";
+    let kept = spawner
+        .runtime
+        .lock()
+        .unwrap()
+        .snapshot
+        .ui_state
+        .pane_launches[pane_id]
+        .clone();
+    assert_eq!(
+        (kept.name.as_str(), &kept.choice, kept.session.as_deref()),
+        ("worker", &launch, None)
+    );
+    // The device's next pass shows the agent with its session.
+    let mut device_checkout = checkout(
+        "remote:mini:workspace:w2",
+        "remote:mini:checkout:w2",
+        WORKTREE,
+        Some(pane(pane_id, WORKTREE)),
+    );
+    device_checkout.tabs[0].id = Some("remote:mini:tab:w2:t1".to_owned());
+    let mut device_workspace = workspace(
+        "remote:mini:workspace:w2",
+        "repo",
+        WORKTREE,
+        vec![device_checkout],
+    );
+    device_workspace.remote_target_id = Some(DEVICE.to_owned());
+    device_workspace.device_id = DEVICE.to_owned();
+    let session = RemoteSessionSnapshot {
+        workspaces: vec![device_workspace],
+        agents: project_agents(
+            serde_json::from_value(json!({"agents": [{
+                "pane_id": pane_id, "agent": "codex", "name": "worker",
+                "agent_status": "idle", "state_change_seq": 2, "cwd": WORKTREE,
+                "agent_session": {"kind": "id", "value": "device-child-session"},
+            }]}))
+            .unwrap(),
+        )
+        .agents,
+        active_tab_ids: Default::default(),
+        focused_workspace_id: None,
+        focused_checkout_id: None,
+        focused_tab_id: None,
+        focused_pane_id: None,
+        pane_layouts: Vec::new(),
+        pane_hook_tokens: Default::default(),
+        issue_tokens: Default::default(),
+        issue_links: Default::default(),
+        herdr_version: None,
+    };
+    let mut runtime = spawner.runtime.lock().unwrap();
+    runtime.ingest_remote_session(DEVICE, Ok(session));
+    let bound = &runtime.snapshot.ui_state.pane_launches[pane_id];
+    assert_eq!(
+        (bound.name.as_str(), &bound.choice, bound.session.as_deref()),
+        ("worker", &launch, Some("device-child-session"))
+    );
+}
+
+/// A model or effort the agent does not take is refused with its reason
+/// before anything is made, so no pane starts on a choice it would drop.
+#[test]
+fn a_spawn_refuses_a_choice_the_agent_does_not_take_before_anything_is_made() {
+    let spawner = spawner();
+    let launch = hide_agent_adapter::LaunchChoice {
+        model: None,
+        effort: Some("ultra".into()),
+    };
+    assert_eq!(
+        spawner.spawn_with(
+            Some("here"),
+            Some(DEVICE),
+            "unknown-effort",
+            launch,
+            Vec::new()
+        ),
+        Err("invalid_launch_choice".into())
+    );
+    assert!(spawner.ledger().spawns.is_empty());
+    assert!(spawner.herdr.methods().is_empty());
+    assert_eq!(spawner.node.calls.load(Ordering::SeqCst), 0);
 }
 
 /// A device that cannot record Codex's trust of the worktree refuses the
@@ -756,6 +971,7 @@ fn a_spawn_by_a_device_caller_is_refused_before_anything_is_made() {
                 branch: "topic".into(),
                 path: None,
                 args: Vec::new(),
+                launch: Default::default(),
                 task: None,
             },
         )
@@ -815,6 +1031,104 @@ fn a_device_herdr_that_refuses_keeps_its_own_failure() {
         .expect_err("the device Herdr refuses");
     assert_ne!(error, "machine_unavailable");
     assert!(error.contains("repository_busy"), "{error}");
+}
+
+/// A Codex child spawned with no prompt rests without a session, so the
+/// spawn answers that it has not shown one and the registration waits in
+/// the ledger. Once Herdr shows the session the core binds the child to its
+/// parent with its watch, and the same intent asked again answers that one
+/// child, typing nothing.
+#[test]
+fn a_child_that_reports_its_session_late_is_bound_by_the_core_and_its_intent_answers_it() {
+    let spawner = spawner();
+    *spawner.session.lock().unwrap() = None;
+    let ask = || spawner.spawn(Some("here"), Some(DEVICE), "late");
+    assert_eq!(
+        ask().expect_err("no session yet"),
+        "native_identity_unavailable"
+    );
+    let ledger = spawner.published();
+    assert_eq!(ledger.identity_waits.len(), 1);
+    assert_eq!(ledger.spawns[0].child, None);
+    let mut writer = spawner.writer();
+    // At rest: the agent is listed under the spawn's name with no session.
+    spawner.refresh(&mut writer);
+    assert_eq!(spawner.published().spawns[0].child, None);
+    *spawner.session.lock().unwrap() = Some("device-child-session".into());
+    spawner.refresh(&mut writer);
+    wait_for("the core binds the late child", || {
+        spawner.published().spawns[0].completed
+    });
+    let ledger = spawner.published();
+    assert!(ledger.identity_waits.is_empty());
+    let child = ledger.spawns[0].child.clone().unwrap();
+    let record = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == child)
+        .unwrap();
+    assert_eq!(record.parent.as_deref(), Some("agent-1"));
+    assert_eq!(record.session, "device-child-session");
+    assert!(
+        ledger.spawns[0].auto_watch_id.is_some(),
+        "the parent watches it"
+    );
+    let answer = ask().expect("the same intent answers the bound child");
+    assert_eq!(answer["id"], child.as_str());
+    assert_eq!(answer["watch"]["parent"]["pane_id"], "sender");
+    assert_eq!(spawner.published().agents.len(), 2);
+    assert_eq!(spawner.count("agent.start"), 1);
+}
+
+/// The caller asking again after the session showed binds the child itself;
+/// the core's settle of the same wait then finds that child and registers
+/// nothing more, so either order leaves one registration and no wait.
+#[test]
+fn a_retry_that_binds_first_and_the_cores_settle_converge_on_one_child() {
+    let spawner = spawner();
+    *spawner.session.lock().unwrap() = None;
+    let ask = || spawner.spawn(Some("here"), Some(DEVICE), "race");
+    assert_eq!(
+        ask().expect_err("no session yet"),
+        "native_identity_unavailable"
+    );
+    *spawner.session.lock().unwrap() = Some("device-child-session".into());
+    let answer = ask().expect("the retry binds the child");
+    assert_eq!(spawner.published().identity_waits.len(), 1);
+    let mut writer = spawner.writer();
+    spawner.refresh(&mut writer);
+    wait_for("the core settles the wait", || {
+        spawner.published().identity_waits.is_empty()
+    });
+    let ledger = spawner.published();
+    assert_eq!(ledger.agents.len(), 2);
+    assert_eq!(ledger.spawns[0].child.as_deref(), answer["id"].as_str());
+    assert_eq!(ask().unwrap()["id"], answer["id"]);
+}
+
+/// A child whose session shows late but past what a registration keeps ends
+/// its wait by that reason when the core settles it, registers nothing, and
+/// its pane is closed, as the spawn's own answer does for the same session.
+#[test]
+fn a_late_child_whose_session_cannot_be_kept_ends_its_wait_and_its_pane_closes() {
+    let spawner = spawner();
+    *spawner.session.lock().unwrap() = None;
+    assert_eq!(
+        spawner
+            .spawn(Some("here"), Some(DEVICE), "late-too-long")
+            .expect_err("no session yet"),
+        "native_identity_unavailable"
+    );
+    let mut writer = spawner.writer();
+    *spawner.session.lock().unwrap() =
+        Some(format!("/{}", "s".repeat(crate::delivery::SESSION_LIMIT)));
+    spawner.refresh(&mut writer);
+    wait_for("the core ends the wait and closes the pane", || {
+        spawner.published().identity_waits.is_empty() && spawner.count("pane.close") == 1
+    });
+    let ledger = spawner.published();
+    assert_eq!(ledger.agents.len(), 1, "only the caller is registered");
+    assert!(ledger.spawns[0].child.is_none());
 }
 
 /// Pi and omp name a session by its file path, which a deep checkout makes

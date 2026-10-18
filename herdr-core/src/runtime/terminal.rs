@@ -658,7 +658,12 @@ impl Runtime {
             Ok(route) => route,
             Err(reason) => return self.ingest_agent_find(&pane_id, request_id, Err(reason)),
         };
-        if let Err(message) = live::spawn_agent_find(route, request_id.clone(), find) {
+        if let Err(message) = live::spawn_agent_find(
+            route,
+            request_id.clone(),
+            find,
+            Arc::clone(&self.input_gate),
+        ) {
             return self.ingest_agent_find(&pane_id, request_id, Err(message));
         }
         false
@@ -1556,6 +1561,25 @@ impl Runtime {
     /// Tells the nodes what changed among the panes on screen, the agents
     /// asleep and the panes closing, and asks a shown pane that was released
     /// to attach again. Whether a shown pane's state changed is returned.
+    /// The panes whose agent is ending, asleep, waking or failed to wake:
+    /// from the moment the end begins until the agent is back, they take no
+    /// input from a node's terminal or from a writer that asks the gate.
+    fn sleep_record_panes(&self) -> HashSet<String> {
+        self.snapshot
+            .ui_state
+            .agent_sleep
+            .records
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    /// Closes the input gate to exactly the panes the sleep records name,
+    /// for a change of records that does not reach the nodes' intents.
+    pub(super) fn sync_input_gate(&self) {
+        self.input_gate.set_closed(&self.sleep_record_panes());
+    }
+
     pub(super) fn sync_terminal_intents(&mut self) -> bool {
         let shown_tabs = self.shown_agent_tabs();
         let mut shown = self
@@ -1590,15 +1614,8 @@ impl Runtime {
                 changed = true;
             }
         }
-        let asleep = self
-            .snapshot
-            .ui_state
-            .agent_sleep
-            .records
-            .iter()
-            .filter(|(_, record)| record.phase != crate::agent_sleep::SleepPhase::Ending)
-            .map(|(pane_id, _)| pane_id.clone())
-            .collect::<HashSet<_>>();
+        let asleep = self.sleep_record_panes();
+        self.input_gate.set_closed(&asleep);
         if asleep != self.terminal_intents.asleep {
             for pane in asleep.difference(&self.terminal_intents.asleep) {
                 self.terminals.control(TerminalControl::Asleep {

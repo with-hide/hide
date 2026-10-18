@@ -21,6 +21,7 @@ fn shell(variable: &str) -> PathBuf {
 /// A shell started with `args` and `env` from the integration, reading
 /// `commands` on its input. Answers what the user's files, the mark and the
 /// commands wrote, in order, then the marks reported.
+#[allow(clippy::disallowed_methods)] // env_clear: the shell starts with only what the integration gives it (Unix only)
 fn run(
     bin: &Path,
     args: &[&str],

@@ -248,6 +248,11 @@ pub struct Ledger {
     pub agents: Vec<crate::coordination::AgentRecord>,
     #[serde(default)]
     pub spawns: Vec<crate::coordination::SpawnRecord>,
+    /// Registrations owed to agents Hide started that have not shown their
+    /// session yet. Left out of the file while there are none, so a ledger
+    /// without a wait reads the same to a build from before them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub identity_waits: Vec<crate::coordination::identity_wait::IdentityWait>,
     /// Changed only when durable spawn placement moves, never by letters or watches.
     #[serde(default)]
     pub spawn_placement_revision: u64,
@@ -268,6 +273,7 @@ impl Default for Ledger {
             watches: Vec::new(),
             agents: Vec::new(),
             spawns: Vec::new(),
+            identity_waits: Vec::new(),
             spawn_placement_revision: 0,
             node_clocks: BTreeMap::new(),
         }
@@ -577,12 +583,21 @@ pub fn load(path: &Path) -> Result<Ledger, String> {
     file.take(FILE_LIMIT as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| "ledger_unavailable")?;
+    let mut ledger = from_bytes(&bytes)?;
+    ledger.end_stretches_at_start();
+    Ok(ledger)
+}
+
+/// The ledger `bytes` hold, under the rules the core loads its file with:
+/// within the size limit, a ledger of this build's shape, and valid. A core
+/// move asks it of the copy it is about to place, so a copy the new core
+/// would refuse never leaves the machine that can still run (`node_migration::copy`).
+pub fn from_bytes(bytes: &[u8]) -> Result<Ledger, String> {
     if bytes.len() > FILE_LIMIT {
         return Err("ledger_unavailable".into());
     }
-    let mut ledger: Ledger = serde_json::from_slice(&bytes).map_err(|_| "ledger_unavailable")?;
+    let ledger: Ledger = serde_json::from_slice(bytes).map_err(|_| "ledger_unavailable")?;
     ledger.validate().map_err(|_| "ledger_unavailable")?;
-    ledger.end_stretches_at_start();
     Ok(ledger)
 }
 

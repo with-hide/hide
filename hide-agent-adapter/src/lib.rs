@@ -242,10 +242,16 @@ impl LaunchDialect {
     }
 
     /// How the CLI takes a model and a reasoning effort at launch; `{}` is
-    /// replaced by the value. Verified against Claude Code 2.1 and Codex 0.160,
-    /// and agy 1.4.0's model (`--model`, listed by `agy models`, which Hide
-    /// AI's agy backend reads and passes too); the other agents declare
-    /// neither, so a start of theirs takes none.
+    /// replaced by the value. This is the one rule every start and restart
+    /// follows (the start surfaces, `hide agent spawn`, a Factory worker, and
+    /// a wake, fork or reopen of any of them), so a model or effort an agent
+    /// does not declare is refused wherever it is asked for. Verified against
+    /// Claude Code 2.1 and Codex 0.160, agy 1.4.0's model (`--model`, listed
+    /// by `agy models`, which Hide AI's agy backend reads and passes too), and
+    /// the `--model` that the help of Grok 1.0.52, Pi 1.0.4, omp 18.7.0 and
+    /// Cursor CLI 2026.10.14 lists (read 2026-10-18; their efforts are not
+    /// declared yet). OpenCode 2.0.29's lists no model option, so it takes
+    /// neither.
     pub const fn options(self) -> LaunchOptions {
         match self {
             Self::Antigravity => LaunchOptions {
@@ -258,12 +264,18 @@ impl LaunchDialect {
                 effort: &["--effort", "{}"],
                 efforts: &["low", "medium", "high", "xhigh", "max"],
             },
+            // `-m` is the short form; every agent spells a model `--model`.
             Self::Codex => LaunchOptions {
-                model: &["-m", "{}"],
+                model: &["--model", "{}"],
                 effort: &["-c", "model_reasoning_effort={}"],
                 efforts: &["minimal", "low", "medium", "high", "xhigh"],
             },
-            Self::Grok | Self::OpenCode | Self::Pi | Self::Omp | Self::Cursor => LaunchOptions {
+            Self::Grok | Self::Pi | Self::Omp | Self::Cursor => LaunchOptions {
+                model: &["--model", "{}"],
+                effort: &[],
+                efforts: &[],
+            },
+            Self::OpenCode => LaunchOptions {
                 model: &[],
                 effort: &[],
                 efforts: &[],
@@ -343,8 +355,13 @@ pub struct LaunchOptions {
     pub efforts: &'static [&'static str],
 }
 
-/// A model name reaches a command line, so it is held to the characters
-/// model ids use; anything else is refused rather than quoted.
+/// The one check of a model name, wherever a start or a restart takes one.
+/// It reaches the agent's command line as one argument: the pinned Herdr
+/// types each argument into the pane's shell in single quotes, so a glob or
+/// a parameter in it stays literal (`opus[1m]` and `$HOME` reached the agent
+/// unchanged through zsh, measured on Herdr 0.9.5, 2026-10-18), and the name
+/// is held to the characters model ids use so it can never read as an option
+/// or carry a space or a control character.
 pub fn valid_model(model: &str) -> bool {
     // A leading dash would read as an option to the agent's CLI.
     !model.is_empty()
@@ -353,6 +370,37 @@ pub fn valid_model(model: &str) -> bool {
         && model
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b"-._:/[]".contains(&byte))
+}
+
+/// The model and reasoning effort an agent was started with; both empty is
+/// the CLI's own default. Hide keeps it with the pane it started the agent in
+/// and with every record a restart is made from, so a wake, a fork or a
+/// reopen starts the agent with the same choice: a CLI resuming a session
+/// does not bring them back by itself (Claude Code 2.1.302 resumes and forks
+/// with its configured effort, Codex 0.163.0 forks with its configured model
+/// and effort; measured 2026-10-18).
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LaunchChoice {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
+impl LaunchChoice {
+    pub fn is_default(&self) -> bool {
+        self.model.is_none() && self.effort.is_none()
+    }
+}
+
+impl LaunchDialect {
+    /// The arguments a start or a restart adds for `choice`, in the form this
+    /// dialect declares (`options`); refused with the reason for a model or
+    /// an effort it does not take.
+    pub fn choice_arguments(self, choice: &LaunchChoice) -> Result<Vec<String>, String> {
+        self.options()
+            .arguments(choice.model.as_deref(), choice.effort.as_deref())
+    }
 }
 
 impl LaunchOptions {

@@ -120,8 +120,8 @@ pub enum Moves {
     /// ledger's host scopes and spawn machines, the View layouts' tabs.
     Whole,
     /// Names its machine through a sibling machine id or a node id no owner
-    /// change touches (a path beside its `device_id`, a `project:` digest,
-    /// a native machine id), or by a project path every core reads the same
+    /// change touches (a path beside its `device_id`, a native machine id),
+    /// or by a project path every core reads the same
     /// whichever machine holds the project (an issue source, a base branch,
     /// an opened Inactive group, the Explorer's selection): it stays as it
     /// is.
@@ -263,6 +263,12 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
     ),
     (
         CORE_STATE,
+        "/pane_launches/{key}",
+        Mechanism::Owned,
+        Moves::Pane,
+    ),
+    (
+        CORE_STATE,
         "/request_verbs/{key}",
         Mechanism::Owned,
         Moves::Pane,
@@ -388,11 +394,27 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Owned,
         Moves::Stays,
     ),
+    // A Project choice is keyed by the digest of its machine's id and root
+    // and carries that id, so a move re-keys the records of the two
+    // machines (`reown`, project settings).
     (
         CORE_STATE,
         "/project_settings/{key}",
         Mechanism::Owned,
-        Moves::Stays,
+        Moves::Whole,
+    ),
+    (
+        CORE_STATE,
+        "/project_settings/*/device_id",
+        Mechanism::Owned,
+        Moves::Whole,
+    ),
+    // The names the operator gave tabs of the owner's own Herdr, by tab id.
+    (
+        CORE_STATE,
+        "/operator_tab_names/{key}",
+        Mechanism::Owned,
+        Moves::Tab,
     ),
     (
         CORE_STATE,
@@ -558,6 +580,21 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Owned,
         Moves::Stays,
     ),
+    // A registration waiting for its agent's session is judged by the writer
+    // of the machine it names, so that machine follows its id; its pane is
+    // that machine's own (`coordination::identity_wait`).
+    (
+        DELIVERY_LEDGER,
+        "/identity_waits/*/machine",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        DELIVERY_LEDGER,
+        "/identity_waits/*/pane",
+        Mechanism::Owned,
+        Moves::Stays,
+    ),
     (
         DELIVERY_LEDGER,
         "/agents/*/host_scope",
@@ -588,6 +625,14 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Rewritten,
         Moves::Whole,
     ),
+    // A promotion task names its card by number; a fold of Project Memory
+    // that renumbered the card is read through (`reown`, promotion targets).
+    (
+        DELIVERY_LEDGER,
+        "/spawns/*/task/target",
+        Mechanism::Owned,
+        Moves::Whole,
+    ),
     (
         DELIVERY_LEDGER,
         "/spawns/*/repo",
@@ -616,7 +661,7 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         PROJECT_MEMORY,
         "projects.device_id, every project_id column",
         Mechanism::Rewritten,
-        Moves::Stays,
+        Moves::Whole,
     ),
     (
         SESSION_SEARCH,
@@ -1207,6 +1252,9 @@ fn convert_delivery_ledger(value: &mut Value, node: &str, _: &BTreeMap<String, S
     for spawn in each(value, "spawns") {
         changed |= rewrite(spawn.get_mut("machine"), node);
     }
+    for wait in each(value, "identity_waits") {
+        changed |= rewrite(wait.get_mut("machine"), node);
+    }
     changed
 }
 
@@ -1391,6 +1439,7 @@ mod tests {
                 "pane_text_scales": {"w1:p1": 1.2},
                 "pane_read_records": {"w1:p1": {"seen_at_unix_ms": 1, "descendant_signals": [{"pane_id": "w1:p4"}]}},
                 "pane_completions": {"w1:p1": {"session": "s", "server": "m", "state_change_seq": 4}},
+                "pane_launches": {"w1:p1": {"kind": "claude", "choice": {"effort": "high"}, "session": "s"}},
                 "request_verbs": {"w1:p1": "review"},
                 "pane_terminal_sizes": {"w1:p1": {"cols": 80, "rows": 24}},
                 "agent_sleep": {
@@ -1399,6 +1448,7 @@ mod tests {
                     "dormant": {"sleep-1": {"node_id": "local", "old_pane_id": "w1:p5", "cwd": root}},
                 },
                 "expanded_paths": [root],
+                "operator_tab_names": {"w1:t1": "review"},
                 "project_base_branches": {root.clone(): "main"},
                 "project_issue_sources": {root.clone(): "github"},
                 "project_settings": {
@@ -1437,7 +1487,10 @@ mod tests {
                 "watches": [{"parent": actor("local"), "target": actor("local")}],
                 "agents": [{"machine": "local", "native_machine": "local", "actor": actor("local"), "pane": "w1:p1", "host_scope": "/tmp/herdr.sock",
                             "project": root, "session": "s1", "instance": "term_1"}],
-                "spawns": [{"repo": root, "path": root, "requested_path": root, "pane": "w1:p2", "machine": "mini"}],
+                "spawns": [{"repo": root, "path": root, "requested_path": root, "pane": "w1:p2", "machine": "mini",
+                            "task": {"kind": "memory_promote", "target": "m1"}}],
+                "identity_waits": [{"id": "wait-8", "machine": "local", "pane": "w1:p3", "name": "fork-w1-p1-1-1", "kind": "codex",
+                                    "owed": {"for": "fork", "origin": "agent-1"}}],
                 "node_clocks": {"mini": {"connected_ms": 60_000, "since": null}},
             }),
         );
@@ -1605,6 +1658,7 @@ mod tests {
         assert_eq!(ledger["letters"][0]["recipient"]["device_id"], "mini");
         assert_eq!(ledger["agents"][0]["machine"], NODE);
         assert_eq!(ledger["agents"][0]["actor"]["device_id"], NODE);
+        assert_eq!(ledger["identity_waits"][0]["machine"], NODE);
 
         let memory = hide_memory::MemoryStore::open(&legacy.state.join(PROJECT_MEMORY)).unwrap();
         assert!(!memory.has_device(LEGACY).unwrap());
@@ -1693,6 +1747,86 @@ mod tests {
         assert_eq!(count("SELECT COUNT(*) FROM meta WHERE key='listed_at'"), 1);
 
         assert_eq!(read(&legacy.state.join(MARKER_FILE))["node"], NODE);
+    }
+
+    /// The fields of the core state that hold no machine id, no Herdr id and
+    /// no digest of one: the operator's own appearance and layout choices,
+    /// whichever machine runs the core.
+    const CORE_STATE_NAMES_NO_MACHINE: &[&str] = &[
+        "schema_version",
+        "left_sidebar_visible",
+        "device_rail_visible",
+        "right_panel_visible",
+        "right_panel_section",
+        "sidebar_lens",
+        "task_view",
+        "focus_from_herdr",
+        "shortcut_bindings",
+        "shortcut_bindings_imported",
+        "browser_shortcut_bindings",
+        "pet_visible",
+        "pet_origin",
+        "pet_shortcut",
+        "machine_label",
+        "accent_hex",
+        "theme",
+        "agent_logo_mode",
+        "color_theme",
+        "interface_language",
+        "usage",
+        "agent_onboarding",
+        "agent_onboarding_agents",
+        "first_run",
+        "desktop_notifications",
+        "desktop_notifications_done",
+        "screen_intros_seen",
+        "sidebar_width",
+        "font_size",
+        "editor_text_scale",
+        "agent_sleep_after_hours",
+        "issue_settings",
+        "agent_start",
+    ];
+
+    /// A core state gains a field often, and a field that names a machine
+    /// (a device id, a Herdr pane or tab, a digest of either) must move with
+    /// the core or its move stops (`reown`). A field the core saves is
+    /// therefore either a row of `KEYS` or listed above with the fact that it
+    /// names no machine, so a new one cannot reach a move unclassified.
+    #[test]
+    fn every_field_the_core_saves_is_a_row_of_the_table_or_names_no_machine() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CORE_STATE);
+        crate::persistence::save(
+            &path,
+            &crate::model::UiStateSnapshot::default(),
+            &Default::default(),
+        )
+        .unwrap();
+        let saved = read(&path);
+        let rows: Vec<&str> = KEYS
+            .iter()
+            .filter(|(file, ..)| *file == CORE_STATE)
+            .map(|(_, pattern, ..)| pattern.trim_start_matches('/').split('/').next().unwrap())
+            .collect();
+        for field in saved.as_object().unwrap().keys() {
+            let covered = rows.contains(&field.as_str());
+            let unbound = CORE_STATE_NAMES_NO_MACHINE.contains(&field.as_str());
+            assert!(
+                covered != unbound,
+                "{CORE_STATE} saves `{field}`, which must be a row of KEYS or listed in \
+                 CORE_STATE_NAMES_NO_MACHINE, and only one of them"
+            );
+        }
+        for field in CORE_STATE_NAMES_NO_MACHINE {
+            // A field the core leaves out until it has a value is not in a
+            // default save; every other listed field is.
+            assert!(
+                saved.get(field).is_some()
+                    || matches!(*field, "focus_from_herdr" | "machine_label"),
+                "{field} is listed as machine-free but the core no longer saves it"
+            );
+        }
     }
 
     #[test]

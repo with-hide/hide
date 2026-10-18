@@ -21,8 +21,8 @@ use serde_json::{Map, Value};
 
 use super::{
     CORE_STATE, DELIVERY_LEDGER, FACTORY, KEYS, LABELS, LINKS, LOCAL_ISSUES, MARKER_FILE,
-    MARKER_VERSION, Marker, Moves, Refusal, SESSION_SEARCH, WORKSPACE_VIEWS, read_json,
-    read_marker, write,
+    MARKER_VERSION, Marker, Moves, PROJECT_MEMORY, Refusal, SESSION_SEARCH, WORKSPACE_VIEWS,
+    read_json, read_marker, write,
 };
 use crate::node::NodeId;
 
@@ -170,9 +170,22 @@ pub fn reown(staging: &Path, change: &OwnerChange, ids: &IdTable) -> Result<Reow
     NodeId::parse(&change.new_owner).map_err(|error| refuse(staging, error))?;
 
     let mut outcome = ReownOutcome::default();
+    // First, since the ledger names the cards of a Project folded into
+    // another by the numbers the fold changed.
+    let memory = staging.join(PROJECT_MEMORY);
+    let mut renumbered = Vec::new();
+    if memory.is_file() {
+        let (changed, folded) =
+            reown_memory(&memory, change).map_err(|reason| refuse(&memory, reason))?;
+        if changed {
+            outcome.files.push(PROJECT_MEMORY.to_owned());
+        }
+        renumbered = folded;
+    }
     let mut mapper = Mapper {
         change,
         ids,
+        renumbered: &renumbered,
         pruned: 0,
     };
     for file in [
@@ -265,7 +278,17 @@ pub fn reown(staging: &Path, change: &OwnerChange, ids: &IdTable) -> Result<Reow
 struct Mapper<'a> {
     change: &'a OwnerChange,
     ids: &'a IdTable,
+    /// The cards a fold of Project Memory gave other numbers (`reown_memory`).
+    renumbered: &'a [Renumbered],
     pruned: usize,
+}
+
+/// The cards of a Project that a move folded into another copy of it
+/// renumbered: the intent prefix its promotion starts carry, and each old
+/// card number with its new one.
+struct Renumbered {
+    intent_prefix: String,
+    numbers: BTreeMap<u64, u64>,
 }
 
 /// What a mapping makes of one value: the same, another, or nothing (an
@@ -375,8 +398,8 @@ impl Mapper<'_> {
     }
 
     /// The rows a pattern cannot express: the owner's path-keyed settings
-    /// and the `device_*` maps beside them, the device registrations, the
-    /// labels, the ledger's host scopes and spawn machines, the local issues
+    /// and the `device_*` maps beside them, the Project settings, the device
+    /// registrations, the labels, the ledger's host scopes and spawn machines, the local issues
     /// and the View layouts' tabs.
     fn whole_file(&mut self, file: &str, value: &mut Value) -> Result<(), String> {
         match file {
@@ -397,6 +420,7 @@ impl Mapper<'_> {
                 {
                     recent.retain(|row| row.get("checkout_id").is_some_and(Value::is_string));
                 }
+                self.project_settings(value)?;
                 self.device_registrations(value)
             }
             WORKSPACE_VIEWS => {
@@ -434,29 +458,138 @@ impl Mapper<'_> {
                         agent["host_scope"] = mapped;
                     }
                 }
-                for spawn in each(value, "spawns") {
-                    let Some(object) = spawn.as_object_mut() else {
-                        continue;
-                    };
-                    match object.get("machine").and_then(Value::as_str) {
-                        // A child on the owner's machine names none.
-                        None => {
-                            object.insert(
-                                "machine".to_owned(),
-                                Value::String(self.change.old_owner_as.clone()),
-                            );
-                        }
-                        Some(machine) if machine == self.change.new_owner_was => {
-                            object.remove("machine");
-                        }
-                        Some(_) => {}
-                    }
-                }
+                self.spawn_machines(value)?;
+                self.promotion_targets(value);
                 Ok(())
             }
             LOCAL_ISSUES => swap_own(value, "projects", "devices", self.change),
             _ => Ok(()),
         }
+    }
+
+    /// A Project's choices are kept at the digest of the id of the machine
+    /// that holds it and the project's root, and name that id
+    /// (`project_settings::key`). A machine the move gives another id takes
+    /// its records with it: the record names the new id and moves to the
+    /// digest of it, because a core reads a record only at the key its
+    /// device and root make. The old owner's records are the core's own
+    /// choices becoming a device's, the new owner's a device's becoming the
+    /// core's own, and a third machine's stay as they are.
+    fn project_settings(&mut self, value: &mut Value) -> Result<(), String> {
+        let Some(records) = value
+            .as_object_mut()
+            .and_then(|object| object.get_mut("project_settings"))
+        else {
+            return Ok(());
+        };
+        let records = match records {
+            Value::Object(records) => std::mem::take(records),
+            Value::Null => return Ok(()),
+            _ => return Err("project_settings is not a map".to_owned()),
+        };
+        let mut moved = Map::new();
+        for (key, mut record) in records {
+            let device = record.get("device_id").and_then(Value::as_str);
+            let new_key = match device.map(|device| self.map(Moves::Device, device)) {
+                Some(Mapped::To(device)) => {
+                    let Some(root) = record.get("root").and_then(Value::as_str) else {
+                        return Err(format!("/project_settings/{key} names no root"));
+                    };
+                    let new_key = crate::project_settings::key(&device, root);
+                    record["device_id"] = Value::String(device);
+                    new_key
+                }
+                _ => key,
+            };
+            if moved.insert(new_key.clone(), record).is_some() {
+                return Err(format!("two project settings would both be {new_key}"));
+            }
+        }
+        value["project_settings"] = Value::Object(moved);
+        Ok(())
+    }
+
+    /// A promotion task names its card by number (`m3`), and a fold of
+    /// Project Memory gave the cards of one copy new numbers, so the task is
+    /// read through the new ones: the screen opens a task's card from this
+    /// name. A start's intent carries the digest of its Project's id, which
+    /// tells whose card a number is; the intent itself stays as it was,
+    /// since it only has to be the same when asked again.
+    fn promotion_targets(&self, value: &mut Value) {
+        for spawn in each(value, "spawns") {
+            let Some(intent) = spawn.get("intent").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(renumbered) = self
+                .renumbered
+                .iter()
+                .find(|renumbered| intent.starts_with(&renumbered.intent_prefix))
+            else {
+                continue;
+            };
+            let Some(task) = spawn.get_mut("task").filter(|task| {
+                task.get("kind").and_then(Value::as_str)
+                    == Some(crate::coordination::MEMORY_PROMOTE_TASK)
+            }) else {
+                continue;
+            };
+            let moved = task
+                .get("target")
+                .and_then(Value::as_str)
+                .and_then(hide_memory::parse_card_name)
+                .and_then(|number| renumbered.numbers.get(&number))
+                .map(|number| hide_memory::card_name(*number));
+            if let Some(name) = moved {
+                task["target"] = Value::String(name);
+            }
+        }
+    }
+
+    /// A spawn's `machine` is the device its child lives on when that is not
+    /// its caller's own, and none when it is (`coordination::spawn_machine`:
+    /// the caller's machine stands in for it). So none says nothing about
+    /// the core's machine: a delegation an agent on a device made names none
+    /// and its child is on that device. The child's machine keeps its meaning
+    /// by being read against the caller's machine after the move, which the
+    /// agents' rows already carry: a machine the move renames is mapped, and
+    /// one that is now the caller's own is written as none, since the ledger
+    /// refuses a child whose machine is not the spawn's. A spawn whose caller
+    /// the ledger lacks stops the move, since its meaning cannot be read.
+    fn spawn_machines(&self, value: &mut Value) -> Result<(), String> {
+        let machines: BTreeMap<String, String> = each(value, "agents")
+            .filter_map(|agent| {
+                Some((
+                    agent.get("id")?.as_str()?.to_owned(),
+                    agent.get("machine")?.as_str()?.to_owned(),
+                ))
+            })
+            .collect();
+        for (index, spawn) in each(value, "spawns").enumerate() {
+            let Some(object) = spawn.as_object_mut() else {
+                continue;
+            };
+            let Some(machine) = object.get("machine").and_then(Value::as_str) else {
+                continue;
+            };
+            let caller = object
+                .get("parent")
+                .and_then(Value::as_str)
+                .and_then(|parent| machines.get(parent))
+                .ok_or_else(|| format!("/spawns/{index}/parent is not an agent of the ledger"))?;
+            match self.change.device(machine) {
+                Some(moved) if &moved == caller => {
+                    object.remove("machine");
+                }
+                Some(moved) => {
+                    object.insert("machine".to_owned(), Value::String(moved));
+                }
+                None if machine == caller => {
+                    object.remove("machine");
+                }
+                None => {}
+            }
+        }
+        Ok(())
     }
 
     /// The old owner gets the registration the change carries; the new
@@ -779,6 +912,60 @@ fn reown_factory(staging: &Path, change: &OwnerChange) -> Result<bool, String> {
         .map_err(|error| error.to_string())
 }
 
+/// Project Memory (PRD core-host-node-move): a Project is stored under the
+/// id of its machine and the digest of that id and its root, and so are the
+/// cards, receipts and cursors that follow it. A machine the move gives
+/// another id takes its Projects with it, by the same re-key the layer-1
+/// conversion makes (`MemoryStore::convert_device`), so a Project's Memory
+/// is the new core's for the same Project and not an empty one beside it.
+/// A store that does not open stops the move. A Project already stored under
+/// the id a move would give is that Project as another machine named it when
+/// its root is the same (a move made before Memory was re-keyed started a
+/// fresh one under its own machine's id and carried it home), and is folded
+/// into it (`MemoryStore::convert_device_merging`), the moving Project's
+/// choices and rows winning, with one record of what was folded. A different
+/// Project at that id stops the move.
+fn reown_memory(path: &Path, change: &OwnerChange) -> Result<(bool, Vec<Renumbered>), String> {
+    let store = crate::runtime::memory::open_memory_store(path)
+        .map_err(|error| format!("Project Memory does not open: {error}"))?;
+    let mut changed = false;
+    let mut renumbered = Vec::new();
+    for (from, to) in [
+        (&change.new_owner_was, &change.new_owner),
+        (&change.old_owner, &change.old_owner_as),
+    ] {
+        if from != to {
+            let moved = store
+                .convert_device_merging(from, to)
+                .map_err(|error| format!("Project Memory of {from}: {error}"))?;
+            for conversion in &moved {
+                let Some(folded) = &conversion.merged else {
+                    continue;
+                };
+                crate::diagnostic!(serde_json::json!({
+                    "component": "core_move",
+                    "kind": "memory.leftover_merged",
+                    "from_id": conversion.from,
+                    "into_id": conversion.to,
+                    "rows": folded.rows,
+                    "renumbered": folded.renumbered,
+                    "batch_dropped": folded.batch_dropped,
+                }));
+                if folded.renumbered.iter().any(|(old, new)| old != new) {
+                    renumbered.push(Renumbered {
+                        intent_prefix: crate::runtime::memory_promotion::intent_prefix(
+                            &conversion.to,
+                        ),
+                        numbers: folded.renumbered.clone(),
+                    });
+                }
+            }
+            changed |= !moved.is_empty();
+        }
+    }
+    Ok((changed, renumbered))
+}
+
 /// What a pattern reaches: a value, or the object whose keys it names.
 enum Slot<'a> {
     Value(&'a mut Value),
@@ -994,6 +1181,60 @@ mod tests {
         crate::device_catalog::checkout_id(device, path)
     }
 
+    /// The id Project Memory and the settings keep a project under.
+    fn device_digest(device: &str, root: &str) -> String {
+        crate::project_settings::key(device, root)
+    }
+
+    /// Each Project of the Memory store with its machine, and the project
+    /// id its receipt cursor names, in id order.
+    fn memory_projects(state: &Path) -> Vec<(String, String, String)> {
+        let connection = rusqlite::Connection::open_with_flags(
+            state.join(PROJECT_MEMORY),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let mut statement = connection
+            .prepare(
+                "SELECT p.id, p.device_id, c.project_id FROM projects p \
+                 JOIN receipt_cursors c ON c.project_id=p.id ORDER BY p.id",
+            )
+            .unwrap();
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    /// A Project's choices as the core saves them, with the protections a
+    /// device's project can carry.
+    fn project_settings(device: &str, root: &str) -> Value {
+        json!({
+            "version": 2, "device_id": device, "root": root,
+            "repository": {"mode": "repository", "repository": "acme/p"},
+            "issue_source": "github", "new_work": "worktree",
+            "base_branch": {"mode": "branch", "branch": "trunk"},
+            "guardrails": {"git_commands": true},
+        })
+    }
+
+    /// The saved choices of the projects `(device, root)`, each at the key
+    /// its device and root make.
+    fn settings_of(projects: &[(&str, &str)]) -> Value {
+        Value::Object(
+            projects
+                .iter()
+                .map(|(device, root)| {
+                    (
+                        crate::project_settings::key(device, root),
+                        project_settings(device, root),
+                    )
+                })
+                .collect(),
+        )
+    }
+
     /// The table the MacBook's core makes before it stops.
     fn forward_ids() -> IdTable {
         let own = own_workspace();
@@ -1154,6 +1395,8 @@ mod tests {
                 "expanded_paths": [M_ROOT],
                 "device_expanded_paths": {ALIAS: [C_ROOT], X: [X_ROOT]},
                 "selected_path": M_ROOT,
+                "operator_tab_names": keyed("tab", json!("review")),
+                "project_settings": settings_of(&[(M, M_ROOT), (ALIAS, C_ROOT), (X, X_ROOT)]),
                 "project_base_branches": {M_ROOT: "main", C_ROOT: "trunk", X_ROOT: "dev"},
                 "project_issue_sources": {M_ROOT: "github", C_ROOT: "local", X_ROOT: "github"},
                 "expanded_inactive_checkout_project_paths": [M_ROOT, C_ROOT, X_ROOT],
@@ -1171,6 +1414,7 @@ mod tests {
                     json!({"demand": "none", "activity": "idle", "descendant_signals": [{"pane_id": panes[index]}]}),
                 )).collect()),
                 "pane_completions": keyed("pane", json!({"session": "s", "server": "m", "state_change_seq": 4})),
+                "pane_launches": keyed("pane", json!({"kind": "claude", "choice": {"effort": "high"}, "session": "s"})),
                 "request_verbs": keyed("pane", json!({"verb": "review"})),
                 "pane_terminal_sizes": keyed("pane", json!([80, 24])),
                 "resolved_sessions": keyed("pane", json!({"at_unix_ms": 1})),
@@ -1241,15 +1485,19 @@ mod tests {
                 })).collect::<Vec<_>>(),
                 "watches": (0..3).map(|index| json!({"parent": actor(index), "target": actor((index + 2) % 3)})).collect::<Vec<_>>(),
                 "agents": [
-                    {"machine": M, "native_machine": M, "actor": actor(0), "pane": "w1:p1", "host_scope": M_SOCKET, "project": M_ROOT, "session": "s1", "instance": "t1"},
-                    {"machine": ALIAS, "native_machine": C, "actor": actor(1), "pane": "w2:p1", "host_scope": ALIAS, "project": C_ROOT, "session": "s2", "instance": "t2"},
-                    {"machine": X, "native_machine": "studio-machine", "actor": actor(2), "pane": "w3:p1", "host_scope": X, "project": X_ROOT, "session": "s3", "instance": "t3"},
+                    {"id": "agent-1", "machine": M, "native_machine": M, "actor": actor(0), "pane": "w1:p1", "host_scope": M_SOCKET, "project": M_ROOT, "session": "s1", "instance": "t1"},
+                    {"id": "agent-2", "machine": ALIAS, "native_machine": C, "actor": actor(1), "pane": "w2:p1", "host_scope": ALIAS, "project": C_ROOT, "session": "s2", "instance": "t2"},
+                    {"id": "agent-3", "machine": X, "native_machine": "studio-machine", "actor": actor(2), "pane": "w3:p1", "host_scope": X, "project": X_ROOT, "session": "s3", "instance": "t3"},
                 ],
                 "spawns": [
-                    {"repo": M_ROOT, "path": M_ROOT, "requested_path": M_ROOT, "pane": "w1:p2"},
-                    {"repo": C_ROOT, "path": C_ROOT, "requested_path": C_ROOT, "pane": "w2:p2", "machine": ALIAS},
-                    {"repo": X_ROOT, "path": X_ROOT, "requested_path": X_ROOT, "pane": "w3:p2", "machine": X},
+                    {"parent": "agent-1", "repo": M_ROOT, "path": M_ROOT, "requested_path": M_ROOT, "pane": "w1:p2", "task": {"kind": "memory_promote", "target": "m1"}},
+                    {"parent": "agent-1", "repo": C_ROOT, "path": C_ROOT, "requested_path": C_ROOT, "pane": "w2:p2", "machine": ALIAS},
+                    {"parent": "agent-1", "repo": X_ROOT, "path": X_ROOT, "requested_path": X_ROOT, "pane": "w3:p2", "machine": X},
                 ],
+                "identity_waits": ([M, ALIAS, X].iter().enumerate().map(|(index, machine)| json!({
+                    "id": format!("wait-{index}"), "machine": machine, "pane": format!("w{}:p3", index + 1),
+                    "name": format!("fork-{index}"), "kind": "codex", "owed": {"for": "fork", "origin": "agent-1"},
+                }))).collect::<Vec<_>>(),
                 "node_clocks": {
                     ALIAS: {"connected_ms": 600_000, "since": null},
                     X: {"connected_ms": 60_000, "since": null},
@@ -1261,6 +1509,23 @@ mod tests {
             json!({"version": 1, "projects": {M_ROOT: [{"number": 1}]}, "devices": {ALIAS: {C_ROOT: [{"number": 2}]}}}),
         );
         write(MARKER_FILE, json!({"version": 1, "node": M}));
+        let memory = hide_memory::MemoryStore::open(&state.join(PROJECT_MEMORY)).unwrap();
+        for (device, root) in [(M, M_ROOT), (ALIAS, C_ROOT), (X, X_ROOT)] {
+            memory
+                .ensure_project(&device_digest(device, root), Path::new(root), device)
+                .unwrap();
+        }
+        drop(memory);
+        let connection = rusqlite::Connection::open(state.join(PROJECT_MEMORY)).unwrap();
+        for (device, root) in [(M, M_ROOT), (ALIAS, C_ROOT), (X, X_ROOT)] {
+            connection
+                .execute(
+                    "INSERT INTO receipt_cursors VALUES(?1,'claude','s1',0,x'',NULL,1,0)",
+                    [device_digest(device, root)],
+                )
+                .unwrap();
+        }
+        drop(connection);
         let (links, _) = crate::links::store::LinkStore::open(&state.join(LINKS)).unwrap();
         links
             .set_meta(crate::links::worker::LISTED_AT, "100")
@@ -1371,6 +1636,26 @@ mod tests {
             core["device_expanded_paths"],
             json!({M: [M_ROOT], X: [X_ROOT]})
         );
+        // A Project's choices follow their machine to the id it has on the
+        // new core, record and key together, so the new core reads each one
+        // where it looks: the mini's become the core's own, the MacBook's
+        // keep the node id it links in by, a third machine's stay.
+        assert_eq!(
+            core["project_settings"],
+            settings_of(&[(M, M_ROOT), (C, C_ROOT), (X, X_ROOT)])
+        );
+        // Project Memory follows its machine the same way: the mini's
+        // Projects, cards and cursors become the core's own, the MacBook's
+        // keep the node id it links in by.
+        let mut expected: Vec<(String, String, String)> = [(M, M_ROOT), (C, C_ROOT), (X, X_ROOT)]
+            .iter()
+            .map(|(device, root)| {
+                let id = device_digest(device, root);
+                (id.clone(), (*device).to_owned(), id)
+            })
+            .collect();
+        expected.sort();
+        assert_eq!(memory_projects(state), expected);
         // Settings keyed by a project path are read the same on either
         // core, whichever machine holds the project: they stay.
         assert_eq!(core["selected_path"], json!(M_ROOT));
@@ -1426,9 +1711,20 @@ mod tests {
         assert_eq!(ledger["agents"][0]["host_scope"], json!(M));
         assert_eq!(ledger["agents"][1]["host_scope"], json!(C_SOCKET));
         assert_eq!(ledger["agents"][2]["host_scope"], json!(X));
-        assert_eq!(ledger["spawns"][0]["machine"], json!(M));
-        assert!(ledger["spawns"][1].get("machine").is_none());
+        // A spawn's machine is read against its caller's, which is the
+        // MacBook's agent on both cores: none stays none, the mini is now
+        // the core's own machine and so named by its node id, and a third
+        // device stays as it is.
+        assert!(ledger["spawns"][0].get("machine").is_none());
+        assert_eq!(ledger["spawns"][1]["machine"], json!(C));
         assert_eq!(ledger["spawns"][2]["machine"], json!(X));
+        // A wait still names the machine whose writer judges it, and its pane
+        // stays that machine's own.
+        let waits = &ledger["identity_waits"];
+        assert_eq!(waits[0]["machine"], json!(M));
+        assert_eq!(waits[1]["machine"], json!(C));
+        assert_eq!(waits[2]["machine"], json!(X));
+        assert_eq!(waits[1]["pane"], json!("w2:p3"));
         assert_eq!(ledger["letters"][0]["body"], json!("from mini to studio"));
         let labels = read(&state.join(LABELS));
         assert_eq!(labels["targets"], json!({C: {"w2:p1": {"owner": "mini"}}}));
@@ -1603,6 +1899,7 @@ mod tests {
             MARKER_FILE,
         ];
         let original: Vec<Value> = files.iter().map(|file| read(&state.join(file))).collect();
+        let memory = memory_projects(state);
         reown(state, &forward(), &forward_ids()).unwrap();
         // The mini's core takes the MacBook's records into memory and, when it
         // stops for the move back, writes them to `moved` again.
@@ -1633,6 +1930,7 @@ mod tests {
                 "{file}"
             );
         }
+        assert_eq!(memory_projects(state), memory, "Project Memory");
         let links = crate::links::store::LinkStore::open(&state.join(LINKS))
             .unwrap()
             .0;
@@ -1734,6 +2032,205 @@ mod tests {
         assert_eq!(refusal.file, state.join(CORE_STATE));
         assert!(
             refusal.reason.contains("/new_feature_panes/focus"),
+            "{refusal}"
+        );
+        assert_eq!(
+            read(&state.join(MARKER_FILE))["node"],
+            json!(M),
+            "the owner is unchanged"
+        );
+    }
+
+    #[test]
+    fn a_project_setting_that_cannot_be_given_its_new_key_stops_the_move() {
+        let dir = macbook_folder();
+        let state = dir.path();
+        let mut core = read(&state.join(CORE_STATE));
+        core["project_settings"][crate::project_settings::key(ALIAS, C_ROOT)]
+            .as_object_mut()
+            .unwrap()
+            .remove("root");
+        std::fs::write(state.join(CORE_STATE), serde_json::to_vec(&core).unwrap()).unwrap();
+        let refusal = reown(state, &forward(), &forward_ids()).unwrap_err();
+        assert_eq!(refusal.file, state.join(CORE_STATE));
+        assert!(refusal.reason.contains("names no root"), "{refusal}");
+    }
+
+    /// Plants the leftover of a move made before Memory was re-keyed: the
+    /// Project of `root` under `device`, with a receipt cursor the moving
+    /// Project has no row for.
+    fn plant_memory_leftover(state: &Path, device: &str, root: &str) {
+        let store = hide_memory::MemoryStore::open(&state.join(PROJECT_MEMORY)).unwrap();
+        store
+            .ensure_project(&device_digest(device, root), Path::new(root), device)
+            .unwrap();
+        drop(store);
+        rusqlite::Connection::open(state.join(PROJECT_MEMORY))
+            .unwrap()
+            .execute(
+                "INSERT INTO receipt_cursors VALUES(?1,'claude','left-over',0,x'',NULL,1,0)",
+                [device_digest(device, root)],
+            )
+            .unwrap();
+    }
+
+    fn memory_project_count(state: &Path) -> i64 {
+        rusqlite::Connection::open_with_flags(
+            state.join(PROJECT_MEMORY),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM projects", [], |row| row.get(0))
+        .unwrap()
+    }
+
+    fn memory_cursors(state: &Path, project: &str) -> Vec<String> {
+        let connection = rusqlite::Connection::open_with_flags(
+            state.join(PROJECT_MEMORY),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let mut statement = connection
+            .prepare("SELECT session_id FROM receipt_cursors WHERE project_id=?1 ORDER BY 1")
+            .unwrap();
+        statement
+            .query_map([project], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    /// A move made before Memory was re-keyed left a fresh Project of the
+    /// same root under the other machine's own id, and the core carried it
+    /// home: the next move, either way, folds it into the Project it
+    /// names instead of stopping on it, and a retry changes nothing.
+    #[test]
+    fn a_memory_project_the_move_would_land_on_is_folded_forward_and_back() {
+        let dir = macbook_folder();
+        let state = dir.path();
+        plant_memory_leftover(state, C, C_ROOT);
+
+        reown(state, &forward(), &forward_ids()).unwrap();
+        assert_eq!(memory_project_count(state), 3, "folded, not kept beside it");
+        let mini = device_digest(C, C_ROOT);
+        assert_eq!(
+            memory_cursors(state, &mini),
+            vec!["left-over".to_owned(), "s1".to_owned()]
+        );
+
+        // The move back lands on a leftover under the mini's registration.
+        plant_memory_leftover(state, ALIAS, C_ROOT);
+        reown(state, &back(), &back_ids()).unwrap();
+        assert_eq!(memory_project_count(state), 3);
+        assert_eq!(
+            memory_cursors(state, &device_digest(ALIAS, C_ROOT)),
+            vec!["left-over".to_owned(), "s1".to_owned()]
+        );
+        assert_eq!(read(&state.join(MARKER_FILE))["node"], json!(M));
+    }
+
+    /// A card of `root` under `device`, in a Project that is on.
+    fn plant_memory_card(state: &Path, device: &str, root: &str, text: &str) {
+        let mut store = hide_memory::MemoryStore::open(&state.join(PROJECT_MEMORY)).unwrap();
+        let id = device_digest(device, root);
+        store.set_enabled(&id, true, true).unwrap();
+        store
+            .apply_candidates(
+                &hide_memory::AnalysisBatch {
+                    id: format!("batch-{text}"),
+                    project_id: id.clone(),
+                    provider: "codex".into(),
+                    analysis_provider: "codex".into(),
+                    session_id: "session-1".into(),
+                    content_hash: text.into(),
+                    created_at_unix_ms: 100,
+                },
+                &[hide_memory::Candidate {
+                    text: text.into(),
+                    title: String::new(),
+                    aliases: Vec::new(),
+                    kind: hide_memory::CandidateKind::Rule,
+                    confidence: 0.9,
+                    salience: 0.8,
+                    source_offsets: vec![7],
+                    human_offsets: vec![7],
+                    source_times: BTreeMap::from([(7, 90)]),
+                    cited_paths: Vec::new(),
+                    relation: hide_memory::CandidateRelation::New,
+                }],
+            )
+            .unwrap();
+    }
+
+    /// A promotion task of a Project's card, as the ledger keeps it: the
+    /// intent carries the digest of the Project's id.
+    fn promotion_spawn(project_id: &str, target: &str) -> Value {
+        json!({
+            "parent": "agent-1", "repo": C_ROOT, "path": C_ROOT, "requested_path": C_ROOT,
+            "intent": format!(
+                "{}{target}-a1-x",
+                crate::runtime::memory_promotion::intent_prefix(project_id)
+            ),
+            "task": {"kind": "memory_promote", "target": target},
+        })
+    }
+
+    /// Both copies of a Project had an m1, so the leftover's became m2: the
+    /// promotion task that named m1 for it follows its card, and the task of
+    /// the moving Project's own m1 stays.
+    #[test]
+    fn a_promotion_task_follows_its_card_to_the_number_a_fold_gave_it() {
+        let dir = macbook_folder();
+        let state = dir.path();
+        plant_memory_leftover(state, C, C_ROOT);
+        plant_memory_card(state, ALIAS, C_ROOT, "the moving Project's card");
+        plant_memory_card(state, C, C_ROOT, "the leftover's card");
+        let leftover = device_digest(C, C_ROOT);
+        let moving = device_digest(ALIAS, C_ROOT);
+        let mut ledger = read(&state.join(DELIVERY_LEDGER));
+        let spawns = ledger["spawns"].as_array_mut().unwrap();
+        spawns.push(promotion_spawn(&leftover, "m1"));
+        spawns.push(promotion_spawn(&moving, "m1"));
+        spawns.push(promotion_spawn(&leftover, "m9"));
+        std::fs::write(
+            state.join(DELIVERY_LEDGER),
+            serde_json::to_vec(&ledger).unwrap(),
+        )
+        .unwrap();
+
+        reown(state, &forward(), &forward_ids()).unwrap();
+        let ledger = read(&state.join(DELIVERY_LEDGER));
+        let targets: Vec<&str> = ledger["spawns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|spawn| spawn.pointer("/task/target")?.as_str())
+            .collect();
+        assert_eq!(
+            targets[targets.len() - 3..],
+            ["m2", "m1", "m9"],
+            "the leftover's m1 is m2; the moving Project's m1 and a card the map lacks stay"
+        );
+    }
+
+    #[test]
+    fn a_memory_project_of_another_root_at_the_new_id_stops_the_move_and_names_the_store() {
+        let dir = macbook_folder();
+        let state = dir.path();
+        // Another Project's row at the id the mini's would take.
+        let store = hide_memory::MemoryStore::open(&state.join(PROJECT_MEMORY)).unwrap();
+        store
+            .ensure_project(
+                &device_digest(C, C_ROOT),
+                Path::new("/Users/remote/other"),
+                C,
+            )
+            .unwrap();
+        drop(store);
+        let refusal = reown(state, &forward(), &forward_ids()).unwrap_err();
+        assert_eq!(refusal.file, state.join(PROJECT_MEMORY));
+        assert!(
+            refusal.reason.contains("node_conversion_conflict"),
             "{refusal}"
         );
         assert_eq!(
@@ -2160,6 +2657,196 @@ mod tests {
         );
     }
 
+    /// A ledger the MacBook's core kept, in the shapes a core's spawns come
+    /// in, written through the ledger's own writer: a delegation an agent on
+    /// the mini made (the spawn names no machine, its child is on the mini),
+    /// a handoff the MacBook's agent made to the mini, a delegation on the
+    /// MacBook itself, and a delegation a mini agent made onto the MacBook.
+    /// Letters and a watch cross the two machines.
+    fn ledger_folder() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DELIVERY_LEDGER);
+        // (id, machine, pane, parent, origin): an agent on the owner has an
+        // unqualified pane, one on the mini a qualified one.
+        let rows = [
+            ("agent-1", M, "w1:p1", None, None),
+            ("agent-2", ALIAS, "w1:p2", None, None),
+            ("agent-3", ALIAS, "w2:p2", Some("agent-2"), None),
+            ("agent-4", ALIAS, "w3:p2", None, Some("agent-1")),
+            ("agent-5", M, "w2:p1", Some("agent-1"), None),
+            ("agent-6", M, "w3:p1", Some("agent-2"), None),
+        ];
+        let actor = |index: usize| {
+            let (_, machine, pane, ..) = rows[index];
+            let pane_id = if machine == M {
+                pane.to_owned()
+            } else {
+                format!("remote:{machine}:pane:{pane}")
+            };
+            json!({"pane_id": pane_id, "name": format!("a{index}"), "kind": "claude",
+                   "device_id": machine, "session": crate::wire::session_digest(&format!("s{index}"))})
+        };
+        let agents: Vec<Value> = rows
+            .iter()
+            .enumerate()
+            .map(|(index, (id, machine, pane, parent, origin))| {
+                let (native, scope, root) = if *machine == M {
+                    (M, M_SOCKET, M_ROOT)
+                } else {
+                    (C, ALIAS, C_ROOT)
+                };
+                json!({"id": id, "name": format!("a{index}"), "machine": machine, "host_scope": scope,
+                       "native_machine": native, "session": format!("s{index}"), "instance": format!("t{index}"),
+                       "pane": pane, "parent": parent, "origin": origin, "project": root,
+                       "actor": actor(index), "ended": false})
+            })
+            .collect();
+        // (id, parent, mode, machine, child, pane)
+        let spawn_rows = [
+            ("spawn-7", "agent-2", "delegation", None, "agent-3", "w2:p2"),
+            (
+                "spawn-8",
+                "agent-1",
+                "handoff",
+                Some(ALIAS),
+                "agent-4",
+                "w3:p2",
+            ),
+            ("spawn-9", "agent-1", "delegation", None, "agent-5", "w2:p1"),
+            (
+                "spawn-10",
+                "agent-2",
+                "delegation",
+                Some(M),
+                "agent-6",
+                "w3:p1",
+            ),
+        ];
+        let spawns: Vec<Value> = spawn_rows
+            .iter()
+            .map(|(id, parent, mode, machine, child, pane)| {
+                let mut row = json!({"id": id, "parent": parent, "mode": mode, "intent": id, "name": "child",
+                       "kind": "claude", "repo": C_ROOT, "branch": "main", "requested_path": null, "args": [],
+                       "path": C_ROOT, "pane": pane, "child": child, "completed": true});
+                if let Some(machine) = machine {
+                    row["machine"] = json!(machine);
+                }
+                row
+            })
+            .collect();
+        let letter = |id: &str, from: usize, to: usize| {
+            json!({"id": id, "intent": id, "sender": actor(from), "recipient": actor(to),
+                   "kind": "request", "body": "synthetic", "state": "delivered", "hook_confirmed": true,
+                   "waiting_answer": false, "reply_to": null, "created_at_unix_ms": 1,
+                   "finished_at_unix_ms": 2, "bell_errors": 0, "bell_sent": true})
+        };
+        store_with(
+            DELIVERY_LEDGER,
+            &path,
+            json!({
+                "next_id": 20,
+                "letters": [letter("letter-11", 0, 1), letter("letter-12", 2, 4), letter("letter-13", 5, 3)],
+                "watches": [{"id": "watch-14", "parent": actor(1), "target": actor(2),
+                             "last_activity_at_unix_ms": 1, "first_warning_at_unix_ms": null, "warning_count": 0,
+                             "activity_failures": 0, "last_status": "idle", "last_state_change_seq": null,
+                             "status_changed_at_unix_ms": 1}],
+                "agents": agents,
+                "spawns": spawns,
+            }),
+        );
+        write(
+            &dir.path().join(MARKER_FILE),
+            &serde_json::to_vec(&json!({"version": 1, "node": M})).unwrap(),
+        )
+        .unwrap();
+        // The fixture is a ledger the MacBook's core loads.
+        crate::delivery::ledger::load(&path).unwrap();
+        dir
+    }
+
+    /// The machine each spawn says its child is on after a move, read the way
+    /// the ledger reads it: its own, or its caller's.
+    fn spawn_machines(ledger: &Value) -> Vec<(String, String)> {
+        let machine_of = |agent: &str| {
+            ledger["agents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == agent)
+                .unwrap()["machine"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        ledger["spawns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|spawn| {
+                (
+                    spawn["id"].as_str().unwrap().to_owned(),
+                    spawn["machine"].as_str().map_or_else(
+                        || machine_of(spawn["parent"].as_str().unwrap()),
+                        str::to_owned,
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    /// The ledger a move writes is one the new core loads: every spawn's
+    /// machine is where its child is, whoever made it, on the way and on the
+    /// way back (the mini's core refused the copy of a real move because
+    /// a delegation its own agent made named the MacBook).
+    #[test]
+    fn the_ledger_a_move_writes_loads_and_every_spawn_keeps_its_childs_machine() {
+        let dir = ledger_folder();
+        let state = dir.path();
+        let path = state.join(DELIVERY_LEDGER);
+        let original = crate::delivery::ledger::load(&path).unwrap();
+
+        reown(state, &forward(), &IdTable::default()).unwrap();
+        crate::delivery::ledger::load(&path).expect("the mini's core loads the moved ledger");
+        let moved = read(&path);
+        // Children that were on the mini are on the core's own machine now,
+        // those on the MacBook are on a device under its node id.
+        assert_eq!(
+            spawn_machines(&moved),
+            [
+                ("spawn-7", C),
+                ("spawn-8", C),
+                ("spawn-9", M),
+                ("spawn-10", M)
+            ]
+            .map(|(id, machine)| (id.to_owned(), machine.to_owned()))
+        );
+        // Written only where the child is not its caller's machine.
+        assert!(moved["spawns"][0].get("machine").is_none());
+        assert_eq!(moved["spawns"][1]["machine"], json!(C));
+        assert!(moved["spawns"][2].get("machine").is_none());
+        assert_eq!(moved["spawns"][3]["machine"], json!(M));
+        // Letters and the watch name the machines of the agents they are
+        // between.
+        let devices = |rows: &str, side: &str| -> Vec<Value> {
+            moved[rows]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row[side]["device_id"].clone())
+                .collect()
+        };
+        assert_eq!(devices("letters", "sender"), [json!(M), json!(C), json!(M)]);
+        assert_eq!(
+            devices("letters", "recipient"),
+            [json!(C), json!(M), json!(C)]
+        );
+        assert_eq!(devices("watches", "parent"), [json!(C)]);
+        assert_eq!(devices("watches", "target"), [json!(C)]);
+
+        reown(state, &back(), &IdTable::default()).unwrap();
+        assert_eq!(crate::delivery::ledger::load(&path).unwrap(), original);
+    }
+
     /// The machine taking the core keeps the name the operator registered it
     /// under while the old core dialed it: the new core reads it from its
     /// store and its own device row carries it, so a window on the machine
@@ -2223,6 +2910,7 @@ mod tests {
         let mut mapper = Mapper {
             change: &change,
             ids: &ids,
+            renumbered: &[],
             pruned: 0,
         };
         let mut core = json!({"device_registrations": [

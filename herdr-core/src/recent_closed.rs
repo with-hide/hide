@@ -83,10 +83,13 @@ impl ClosedContext {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ClosedAgent {
     pub kind: String,
     pub session_id: Option<String>,
+    /// The model and effort it was started with, which its reopen starts it
+    /// with again after the resume arguments.
+    pub launch: hide_agent_adapter::LaunchChoice,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -471,6 +474,7 @@ mod tests {
             resume_arguments(&ClosedAgent {
                 kind: "grok".into(),
                 session_id: Some("0199b000-0000-7000-8000-000000000003".into()),
+                ..Default::default()
             }),
             Some(vec![
                 "--resume".to_owned(),
@@ -482,6 +486,7 @@ mod tests {
                 resume_arguments(&ClosedAgent {
                     kind: kind.into(),
                     session_id: Some("--yolo".into()),
+                    ..Default::default()
                 })
                 .is_none()
             );
@@ -490,6 +495,7 @@ mod tests {
             resume_arguments(&ClosedAgent {
                 kind: "opencode".into(),
                 session_id: Some("ses_native".into()),
+                ..Default::default()
             }),
             Some(vec!["-s".to_owned(), "ses_native".to_owned()])
         );
@@ -497,6 +503,7 @@ mod tests {
             resume_arguments(&ClosedAgent {
                 kind: "opencode".into(),
                 session_id: Some("--fork".into()),
+                ..Default::default()
             })
             .is_none(),
             "a flag-shaped id never reaches the command line"
@@ -505,6 +512,7 @@ mod tests {
             resume_arguments(&ClosedAgent {
                 kind: "claude".into(),
                 session_id: Some("session-c".into()),
+                ..Default::default()
             }),
             Some(
                 vec!["--resume", "session-c"]
@@ -517,6 +525,7 @@ mod tests {
             resume_arguments(&ClosedAgent {
                 kind: "codex".into(),
                 session_id: Some("session-x".into()),
+                ..Default::default()
             }),
             Some(
                 vec!["resume", "session-x"]

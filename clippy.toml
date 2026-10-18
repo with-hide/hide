@@ -1,4 +1,5 @@
-# The calls tests and production code may not make. `docs/TESTING.md`, "Writing a Rust test", owns the reasons.
+# The calls tests and production code may not make. `docs/TESTING.md`, "Writing a Rust test", owns the reasons, and `docs/ARCHITECTURE.md`, "The platform layer", the one for a cleared environment.
 disallowed-methods = [
     { path = "std::thread::sleep", reason = "a sleep stands in for a state: wait for the event or file the next line needs, or inject the clock (docs/TESTING.md, Writing a Rust test)" },
+    { path = "std::process::Command::env_clear", reason = "a child that must not inherit the environment gets the login variables through hide_platform::process::restrict_to_login_environment, because a Windows program does not start without SystemRoot and the rest (docs/ARCHITECTURE.md, The platform layer); a test or a system tool that needs an environment built from nothing says why in an allow" },
 ]

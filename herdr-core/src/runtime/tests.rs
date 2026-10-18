@@ -45,6 +45,8 @@ mod editor_reopen;
 mod factory_screen;
 #[path = "tests/first_run.rs"]
 mod first_run;
+#[path = "tests/fork_registration.rs"]
+mod fork_registration;
 #[path = "tests/github_reads.rs"]
 mod github_reads;
 mod guardrails;
@@ -58,6 +60,8 @@ mod issues;
 mod key_routing;
 #[path = "tests/labels.rs"]
 mod labels;
+#[path = "tests/launch_choice.rs"]
+mod launch_choice;
 #[path = "tests/lineage.rs"]
 mod lineage;
 #[path = "tests/links.rs"]

@@ -93,6 +93,7 @@ fn a_folder_owned_by_another_node_stops_the_daemon_and_logs_why() {
 /// the test above.
 #[cfg(unix)]
 #[test]
+#[allow(clippy::disallowed_methods)] // env_clear: nothing inherited may name a live Herdr, daemon or pane (Unix only)
 fn hide_connect_names_the_file_a_refused_start_stopped_on() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
