@@ -592,13 +592,17 @@ impl Runtime {
         } else {
             operations::remote_pane_id(&active.workspace.0, pane)
         };
-        let seen = self
-            .catalog_workspaces()
-            .filter(|workspace| workspace.device_id == active.workspace.0)
-            .flat_map(|workspace| &workspace.checkouts)
-            .filter(|checkout| checkout.path == active.workspace.1)
-            .flat_map(|checkout| &checkout.tabs)
-            .any(|item| item.id.as_deref() == Some(tab.as_str()));
+        let seen = !self
+            .provisional_tabs
+            .iter()
+            .any(|drawn| drawn.tab_id == tab)
+            && self
+                .catalog_workspaces()
+                .filter(|workspace| workspace.device_id == active.workspace.0)
+                .flat_map(|workspace| &workspace.checkouts)
+                .filter(|checkout| checkout.path == active.workspace.1)
+                .flat_map(|checkout| &checkout.tabs)
+                .any(|item| item.id.as_deref() == Some(tab.as_str()));
         let Some(store) = self.workspace_views.as_mut() else {
             return;
         };

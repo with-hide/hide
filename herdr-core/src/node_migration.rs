@@ -1554,7 +1554,29 @@ mod tests {
         write(
             WORKSPACE_VIEWS,
             json!({"schema_version": 3, "workspaces": [
-                {"device_id": "local", "path": root, "agent_layout": {"tabs": ["w1:t1"]}, "tab_views": {"w1:t1": "d1"}, "view_layout": {"root": {"area": {"displays": [{"id": "d1", "opener": {"device_id": "local", "terminal_id": "t1"}}]}}},
+                {"device_id": "local", "path": root, "agent_layout": {"tabs": ["w1:t1"]},
+                 "agent_groups": {
+                    "next_id": 3, "selected": "g1", "drafts": ["draft:3"],
+                    "items": [{"id": "g1", "name": "Review", "layout": {
+                        "root": {"area": {"id": "a1", "active": "draft:3", "displays": [{"id": "w1:t2"}, {"id": "draft:3"}]}},
+                        "active_area": "a1", "next_id": 2, "canvases": {"a1": "w1:tD"}
+                    }}]
+                 },
+                 "agent_starts": {
+                    "confirmed-start": {
+                        "group_id": "g1", "area_id": "a1", "draft_tab_id": "draft:2",
+                        "live_tab_id": "w1:t2", "pane_id": "w1:p2", "add_pane": false,
+                        "marker": "confirmed-claim", "state": "ready", "agent_kind": null,
+                        "agent_phase": null, "recorded_at": 1, "seen_in_topology": true
+                    },
+                    "awaiting-start": {
+                        "group_id": "g1", "area_id": "a1", "draft_tab_id": "draft:3",
+                        "live_tab_id": null, "pane_id": null, "add_pane": false,
+                        "marker": "pending-claim", "state": "pending", "agent_kind": null,
+                        "agent_phase": null, "recorded_at": 2, "seen_in_topology": false
+                    }
+                 },
+                 "tab_views": {"w1:t1": "d1"}, "view_layout": {"root": {"area": {"displays": [{"id": "d1", "opener": {"device_id": "local", "terminal_id": "t1"}}]}}},
                  "feedback": {"comments": [{"id": "c2", "recipient": {"device_id": "local"}, "shot": {"node": "local", "name": "shot.png"}}], "waiting": [{"to": {"device_id": "local"}}]}},
                 {"device_id": "mini", "path": "/srv/p"},
             ]}),

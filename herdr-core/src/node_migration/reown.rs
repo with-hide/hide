@@ -13,7 +13,7 @@
 //! file and place (engineering principle 4). The source folder is never
 //! written. A move back is the same change with the two machines swapped.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -425,13 +425,21 @@ impl Mapper<'_> {
             }
             WORKSPACE_VIEWS => {
                 for view in each(value, "workspaces") {
+                    let drafts: BTreeSet<String> = view
+                        .pointer("/agent_groups/drafts")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect();
                     if let Some(layout) = view.get_mut("agent_layout") {
-                        self.agent_layout(layout);
+                        self.agent_layout(layout, &drafts);
                     }
                     if let Some(groups) = view.get_mut("agent_groups") {
                         for group in each(groups, "items") {
                             if let Some(layout) = group.get_mut("layout") {
-                                self.agent_layout(layout);
+                                self.agent_layout(layout, &drafts);
                             }
                         }
                     }
@@ -668,37 +676,40 @@ impl Mapper<'_> {
 
     /// Every tab an Agent layout names: each area's front display and its
     /// displays, and each canvas's tab.
-    fn agent_layout(&mut self, layout: &mut Value) {
-        fn node(mapper: &Mapper<'_>, value: &mut Value) {
+    fn agent_layout(&mut self, layout: &mut Value, drafts: &BTreeSet<String>) {
+        fn node(mapper: &Mapper<'_>, value: &mut Value, drafts: &BTreeSet<String>) {
             if let Some(area) = value.get_mut("area") {
                 if let Some(active) = area.get_mut("active") {
-                    tab(mapper, active);
+                    tab(mapper, active, drafts);
                 }
                 for display in each(area, "displays") {
                     if let Some(id) = display.get_mut("id") {
-                        tab(mapper, id);
+                        tab(mapper, id, drafts);
                     }
                 }
             }
             if let Some(split) = value.get_mut("split") {
                 for side in ["first", "second"] {
                     if let Some(child) = split.get_mut(side) {
-                        node(mapper, child);
+                        node(mapper, child, drafts);
                     }
                 }
             }
         }
-        fn tab(mapper: &Mapper<'_>, value: &mut Value) {
+        fn tab(mapper: &Mapper<'_>, value: &mut Value, drafts: &BTreeSet<String>) {
+            if value.as_str().is_some_and(|id| drafts.contains(id)) {
+                return;
+            }
             if let Some(Mapped::To(id)) = value.as_str().map(|text| mapper.map(Moves::Tab, text)) {
                 *value = Value::String(id);
             }
         }
         if let Some(root) = layout.get_mut("root") {
-            node(self, root);
+            node(self, root, drafts);
         }
         if let Some(canvases) = layout.get_mut("canvases").and_then(Value::as_object_mut) {
             for canvas in canvases.values_mut() {
-                tab(self, canvas);
+                tab(self, canvas, drafts);
             }
         }
     }

@@ -1025,12 +1025,17 @@ fn the_list_and_the_bookmarks_survive_a_restart() {
     assert_eq!(fronts(&runtime, &directory), ["a.md"]);
 }
 
-/// A device Workspace has one visible tab that changes when its Herdr's
-/// answer lands, and the bookmark restore happens with it.
+/// Explicit device tab navigation restores its bookmark in the same frame,
+/// without waiting for Herdr's focus answer.
 #[test]
 fn a_device_workspace_restores_when_its_visible_tab_changes() {
     let (mut runtime, _checkout_id, _directory) = setup("bookmark-device");
     let device = "remote:fixture";
+    let tabs = [
+        format!("remote:{device}:tab:t1"),
+        format!("remote:{device}:tab:t2"),
+    ];
+    let key = (device.to_owned(), "/srv/remote".to_owned());
     let mut project = workspace(
         "remote-workspace",
         "Remote",
@@ -1045,10 +1050,10 @@ fn a_device_workspace_restores_when_its_visible_tab_changes() {
     project.device_id = device.to_owned();
     project.remote_target_id = Some(device.to_owned());
     let mut second = project.checkouts[0].tabs[0].clone();
-    project.checkouts[0].tabs[0].id = Some("remote-tab-1".to_owned());
-    second.id = Some("remote-tab-2".to_owned());
+    project.checkouts[0].tabs[0].id = Some(tabs[0].clone());
+    second.id = Some(tabs[1].clone());
     project.checkouts[0].tabs.push(second);
-    project.checkouts[0].active_tab_id = Some("remote-tab-1".to_owned());
+    project.checkouts[0].active_tab_id = Some(tabs[0].clone());
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
         target_id: device.to_owned(),
         state: "connected".to_owned(),
@@ -1060,7 +1065,7 @@ fn a_device_workspace_restores_when_its_visible_tab_changes() {
             active_tab_ids: Default::default(),
             focused_workspace_id: Some("remote-workspace".to_owned()),
             focused_checkout_id: Some("remote-checkout".to_owned()),
-            focused_tab_id: Some("remote-tab-1".to_owned()),
+            focused_tab_id: Some(tabs[0].clone()),
             focused_pane_id: None,
             pane_layouts: Vec::new(),
             pane_hook_tokens: Default::default(),
@@ -1072,7 +1077,22 @@ fn a_device_workspace_restores_when_its_visible_tab_changes() {
         catalog: Default::default(),
         unreachable_since_unix_ms: None,
     });
+    let mut device_row = runtime.snapshot.navigator.devices[0].clone();
+    device_row.id = device.to_owned();
+    device_row.kind = "remote".to_owned();
+    device_row.state = "connected".to_owned();
+    runtime.snapshot.navigator.devices.push(device_row);
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    runtime.install_remote_control(RemoteControlContext::new(
+        device,
+        Arc::new(super::device_catalog::RecordingHerdr { requests }),
+        Weak::new(),
+        ChangeNotifier::noop(),
+    ));
     runtime.snapshot.navigator.focused_device_id = Some(device.to_owned());
+    runtime
+        .reconcile_agent_topology(&key, &[(tabs[0].clone(), false), (tabs[1].clone(), false)])
+        .unwrap();
     let entry = runtime
         .workspace_views
         .as_mut()
@@ -1089,8 +1109,8 @@ fn a_device_workspace_restores_when_its_visible_tab_changes() {
         entry.layout.insert("a1", display, 1).unwrap();
     }
     let ids: Vec<String> = entry.layout.displays().map(|d| d.id.clone()).collect();
-    entry.view_bookmarks.record("remote-tab-1", &ids[0]);
-    entry.view_bookmarks.record("remote-tab-2", &ids[1]);
+    entry.view_bookmarks.record(&tabs[0], &ids[0]);
+    entry.view_bookmarks.record(&tabs[1], &ids[1]);
     entry.tool = Some(crate::workspace_views::Tool::Files);
     let front = |runtime: &Runtime| {
         runtime
@@ -1111,8 +1131,14 @@ fn a_device_workspace_restores_when_its_visible_tab_changes() {
         "the visible tab's own"
     );
 
-    let session = runtime.snapshot.status.remote[0].session.as_mut().unwrap();
-    session.workspaces[0].checkouts[0].active_tab_id = Some("remote-tab-2".to_owned());
+    super::device_catalog::dispatch(
+        &mut runtime,
+        "remote_control",
+        serde_json::json!({
+            "target_id": device, "request_id": "bookmark-second", "focus_device": true,
+            "action": "focus_tab", "tab_id": tabs[1],
+        }),
+    );
     runtime.sync_workspace_view();
     assert_eq!(front(&runtime), Some(ids[1].clone()));
     assert_eq!(
@@ -1120,8 +1146,14 @@ fn a_device_workspace_restores_when_its_visible_tab_changes() {
         Some(crate::workspace_views::Tool::Files),
         "the device tab's change keeps the lane"
     );
-    let session = runtime.snapshot.status.remote[0].session.as_mut().unwrap();
-    session.workspaces[0].checkouts[0].active_tab_id = Some("remote-tab-1".to_owned());
+    super::device_catalog::dispatch(
+        &mut runtime,
+        "remote_control",
+        serde_json::json!({
+            "target_id": device, "request_id": "bookmark-first", "focus_device": true,
+            "action": "focus_tab", "tab_id": tabs[0],
+        }),
+    );
     runtime.sync_workspace_view();
     assert_eq!(front(&runtime), Some(ids[0].clone()));
 }

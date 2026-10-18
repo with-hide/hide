@@ -55,6 +55,13 @@ impl Runtime {
         } else {
             0
         };
+        // Drawn-ahead tabs may already be in this catalog. They occupy their
+        // reserved slot but cannot confirm their own first real appearance.
+        let unconfirmed = self
+            .provisional_tabs
+            .iter()
+            .map(|tab| tab.tab_id.as_str())
+            .collect();
         let Some(store) = self.workspace_views.as_mut() else {
             return Ok(false);
         };
@@ -64,10 +71,12 @@ impl Runtime {
             .filter(|(_, (scope, _, _, _))| scope == key)
             .map(|(id, _)| id.clone())
             .collect();
-        let changed = store
-            .views
-            .entry(&key.0, &key.1)
-            .reconcile_agent_groups(topology, reserved, &admitted)?;
+        let changed = store.views.entry(&key.0, &key.1).reconcile_agent_groups(
+            topology,
+            reserved,
+            &admitted,
+            &unconfirmed,
+        )?;
         // A tab that left Herdr takes its View bookmark with it (D-11).
         let listed: Vec<&str> = topology.iter().map(|(id, _)| id.as_str()).collect();
         // Not `||`: the prune must run whether or not the layout changed.

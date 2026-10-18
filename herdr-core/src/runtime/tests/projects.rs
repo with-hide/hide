@@ -1987,9 +1987,17 @@ fn agent_start_remembers_its_choice_and_answers_its_own_request() {
     assert_eq!(restored.agent_start, choice);
 
     assert!(runtime.dispatch_json(&start("terminal", "opus", "r4")));
-    let error = runtime.snapshot.status.last_error.clone().expect("refusal");
-    assert_eq!(error.kind, "agent_start.unknown_model");
-    assert_eq!(error.request_id.as_deref(), Some("r4"));
+    let operation = runtime
+        .snapshot
+        .task_operation
+        .clone()
+        .expect("terminal operation");
+    assert_eq!(operation.request_id.as_deref(), Some("r4"));
+    assert_eq!(
+        operation.agent_kind, None,
+        "terminal ignores agent model fields"
+    );
+    assert_eq!(runtime.snapshot.ui_state.agent_start, choice);
 
     assert!(runtime.dispatch_json(&start("terminal", "", "r5")));
     let operation = runtime.snapshot.task_operation.clone().expect("operation");

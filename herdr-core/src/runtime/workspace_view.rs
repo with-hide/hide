@@ -346,6 +346,22 @@ impl WorkspaceViewStore {
 }
 
 impl Runtime {
+    /// Catalog comparisons include the same core-owned group projection as
+    /// the published frame, so rebuilding identical topology stays unchanged.
+    pub(super) fn project_catalog_agent_groups(&self, workspaces: &mut [WorkspaceSnapshot]) {
+        let Some(store) = &self.workspace_views else {
+            return;
+        };
+        for workspace in workspaces {
+            for checkout in &mut workspace.checkouts {
+                checkout.agent_groups = store
+                    .views
+                    .get(&workspace.device_id, &checkout.path)
+                    .map(|view| view.agent_groups_snapshot());
+            }
+        }
+    }
+
     pub(super) fn separate_view_areas(&self) -> bool {
         self.workspace_views.is_some()
     }
@@ -518,13 +534,6 @@ impl Runtime {
             pending.core_choice = true;
             pending.acknowledged = true;
         }
-    }
-
-    /// The request a waiting device choice belongs to.
-    #[cfg(test)]
-    pub(super) fn pending_choice_request(&self) -> Option<&str> {
-        let pending = self.workspace_views.as_ref()?.pending_choice.as_ref()?;
-        Some(pending.request_id.as_str())
     }
 
     /// The path of the checkout a connected device's Herdr has in front.

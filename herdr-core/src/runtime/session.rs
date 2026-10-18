@@ -769,6 +769,7 @@ impl Runtime {
             &self.snapshot.navigator.agents,
         );
         crate::project_context::sort_projects(&mut workspaces, &projected_agents);
+        self.project_catalog_agent_groups(&mut workspaces);
         self.snapshot.navigator.workspaces = workspaces;
         self.snapshot.navigator.devices = workspace::devices(
             &self.node,
@@ -1353,6 +1354,7 @@ impl Runtime {
     ) {
         let mut followed: Vec<(String, String, String)> = Vec::new();
         let mut follow_pane: Option<String> = None;
+        let mut clear_group_pane = false;
         // A changed value or a new focus event is an action to follow. Repeated
         // projections of the same event are only state; a later explicit focus
         // on the same Herdr tab still carries a fresh intent after creation.
@@ -1607,6 +1609,15 @@ impl Runtime {
                             .is_none_or(|id| v.agent_groups.drafts.contains(id))
                     });
                 let visible = if empty_group {
+                    if self.snapshot.navigator.focused_checkout_id.as_deref()
+                        == Some(checkout.id.as_str())
+                    {
+                        // A group's last tab can close while other groups
+                        // still have panes. Its now-empty canvas also owns
+                        // keyboard focus; a stale pane must not reveal another
+                        // group during the selection-alignment pass.
+                        clear_group_pane = selected_pane_id.is_some();
+                    }
                     None
                 } else {
                     match (hide_tab, herdr_tab) {
@@ -1652,10 +1663,19 @@ impl Runtime {
                                     .tabs
                                     .iter()
                                     .filter_map(|tab| tab.id.as_deref())
-                                    .find(|tab_id| herdr.is_active_in_its_workspace(tab_id))
+                                    .find(|tab_id| {
+                                        has_tab(tab_id) && herdr.is_active_in_its_workspace(tab_id)
+                                    })
                                     .map(str::to_owned)
                             })
-                            .or_else(|| checkout.tabs.first().and_then(|tab| tab.id.clone())),
+                            .or_else(|| {
+                                checkout
+                                    .tabs
+                                    .iter()
+                                    .filter_map(|tab| tab.id.as_deref())
+                                    .find(|tab_id| has_tab(tab_id))
+                                    .map(str::to_owned)
+                            }),
                     }
                 };
                 match visible {
@@ -1698,7 +1718,10 @@ impl Runtime {
         for error in agent_layout_errors {
             self.push_diagnostic("agent_layout.reconcile_refused", error);
         }
-        if let Some(pane_id) = follow_pane {
+        if clear_group_pane {
+            self.select_terminal_pane(None);
+            self.operator_focused_pane_id = None;
+        } else if let Some(pane_id) = follow_pane {
             self.select_terminal_pane(Some(pane_id));
             // Herdr moved the keyboard, not the operator. The read record
             // follows only a focus the operator made in Hide.

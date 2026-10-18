@@ -265,10 +265,22 @@ fn inbound_and_ssh_explicit_agent_navigation_reveals_its_group_and_releases_hidd
             !runtime.terminal_attach_requested.contains(&pane_id("t1")),
             "Herdr's stale focused tab is in a hidden group"
         );
-        let requested = runtime.terminal_attach_requested.iter()
-            .filter(|pane| pane.starts_with(&format!("remote:{DEVICE}:"))).cloned().collect::<HashSet<_>>();
+        let requested = runtime
+            .terminal_attach_requested
+            .iter()
+            .filter(|pane| pane.starts_with(&format!("remote:{DEVICE}:")))
+            .cloned()
+            .collect::<HashSet<_>>();
         assert_eq!(requested, HashSet::from([pane_id("t2")]));
-        assert!(runtime.snapshot().terminal.panes.iter().any(|pane| pane.pane_id == pane_id("t1")), "release keeps the live pane's projection");
+        assert!(
+            runtime
+                .snapshot()
+                .terminal
+                .panes
+                .iter()
+                .any(|pane| pane.pane_id == pane_id("t1")),
+            "release keeps the live pane's projection"
+        );
 
         dispatch(
             &mut runtime,

@@ -1199,7 +1199,7 @@ function CleanupRows({ workspaces, context, deviceId }: { workspaces: Workspace[
  */
 /** `otherLines` counts what the opened list draws besides agent rows: sleeping conversations and named tabs with no agent. */
 function checkoutDisclosure(checkout: Checkout, agentRows: BoardRow[], view: CheckoutPresentation, context: ListContext, t: TFunction<"translation">, otherLines: number, hideAi: HideAiCheckout | null) {
-  const hasRows = agentRows.length + otherLines > 0;
+  const hasRows = agentRows.length + otherLines > 0 || (checkout.agent_groups?.groups.length ?? 0) > 0;
   const foldable = context.disclosure && hasRows;
   const open = hasRows && !context.openCheckouts.includes(checkout.id);
   // A checkout Hide AI made names its task where the purpose stands, ahead of the purpose (D-03).

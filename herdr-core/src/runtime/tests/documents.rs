@@ -422,17 +422,32 @@ fn a_file_of_a_nodes_checkout_in_front_is_revealed_through_the_node() {
 #[test]
 fn a_file_of_a_nodes_checkout_behind_is_revealed_without_a_herdr_focus_ack() {
     let (f, requests, _held) = behind_reveal("documents-node-reveal");
-    f.wait("the device file read", |_| f.device.reads().iter().any(|read| read.ends_with("a.txt")));
+    f.wait("the device file read", |_| {
+        f.device.reads().iter().any(|read| read.ends_with("a.txt"))
+    });
     {
         let mut runtime = f.shared.lock().unwrap();
         assert_eq!(runtime.snapshot.status.last_error, None);
-        assert_eq!(runtime.snapshot.navigator.focused_device_id.as_deref(), Some(DEVICE));
-        assert!(revealing(&f, &runtime), "the core choice starts its file read");
+        assert_eq!(
+            runtime.snapshot.navigator.focused_device_id.as_deref(),
+            Some(DEVICE)
+        );
+        assert!(
+            revealing(&f, &runtime),
+            "the core choice starts its file read"
+        );
         let other = other_checkout(&runtime);
         land(&mut runtime, &other);
-        assert_eq!(runtime.front_checkout().map(|(_, checkout)| checkout), Some(f.checkout.as_str()), "stale Herdr focus cannot cancel the chosen checkout");
+        assert_eq!(
+            runtime.front_checkout().map(|(_, checkout)| checkout),
+            Some(f.checkout.as_str()),
+            "stale Herdr focus cannot cancel the chosen checkout"
+        );
     }
-    assert!(requests.lock().unwrap().is_empty(), "an empty checkout needs no PTY or focus mutation");
+    assert!(
+        requests.lock().unwrap().is_empty(),
+        "an empty checkout needs no PTY or focus mutation"
+    );
     f.device.release_read("a.txt");
     f.wait("the revealed file", |runtime| {
         runtime.snapshot.ui_state.selected_path.as_deref() == Some(f.path("a.txt").as_str())
@@ -445,26 +460,42 @@ fn a_file_of_a_nodes_checkout_behind_is_revealed_without_a_herdr_focus_ack() {
 #[test]
 fn a_core_chosen_remote_reveal_read_does_not_replace_a_newer_checkout_choice() {
     let (f, _, _held) = behind_reveal("documents-node-reveal-new-choice");
-    f.wait("the held file read", |_| f.device.reads().iter().any(|read| read.ends_with("a.txt")));
+    f.wait("the held file read", |_| {
+        f.device.reads().iter().any(|read| read.ends_with("a.txt"))
+    });
     let other;
     {
         let mut runtime = f.shared.lock().unwrap();
         other = other_checkout(&runtime);
         runtime.request_remote_control(RemoteControlPayload {
-            target_id: DEVICE.to_owned(), request_id: "later".to_owned(),
-            report_pane_focus_outcome: false, focus_device: true,
+            target_id: DEVICE.to_owned(),
+            request_id: "later".to_owned(),
+            report_pane_focus_outcome: false,
+            focus_device: true,
             request: RemoteControlRequest::FocusWorkspace {
-                workspace_id: OTHER_WORKSPACE.to_owned(), checkout_id: Some(other.clone()),
+                workspace_id: OTHER_WORKSPACE.to_owned(),
+                checkout_id: Some(other.clone()),
             },
         });
         runtime.sync_workspace_view();
-        assert_eq!(runtime.front_checkout().map(|(_, checkout)| checkout), Some(other.as_str()));
+        assert_eq!(
+            runtime.front_checkout().map(|(_, checkout)| checkout),
+            Some(other.as_str())
+        );
     }
     f.device.release_read("a.txt");
-    f.wait("the old read to settle", |runtime| runtime.snapshot.editor.opening.is_empty());
+    f.wait("the old read to settle", |runtime| {
+        runtime.snapshot.editor.opening.is_empty()
+    });
     let runtime = f.shared.lock().unwrap();
-    assert_eq!(runtime.front_checkout().map(|(_, checkout)| checkout), Some(other.as_str()));
-    assert_ne!(runtime.snapshot.ui_state.selected_path.as_deref(), Some(f.path("a.txt").as_str()));
+    assert_eq!(
+        runtime.front_checkout().map(|(_, checkout)| checkout),
+        Some(other.as_str())
+    );
+    assert_ne!(
+        runtime.snapshot.ui_state.selected_path.as_deref(),
+        Some(f.path("a.txt").as_str())
+    );
     assert!(runtime.snapshot.editor.document.is_none());
 }
 
@@ -473,7 +504,9 @@ fn a_core_chosen_remote_reveal_read_does_not_replace_a_newer_checkout_choice() {
 #[test]
 fn a_core_chosen_remote_reveal_read_is_dropped_when_its_device_is_removed() {
     let (f, _, _held) = behind_reveal("documents-node-reveal-removed");
-    f.wait("the held file read", |_| f.device.reads().iter().any(|read| read.ends_with("a.txt")));
+    f.wait("the held file read", |_| {
+        f.device.reads().iter().any(|read| read.ends_with("a.txt"))
+    });
     {
         let mut runtime = f.shared.lock().unwrap();
         runtime.retire_device_editor_tabs(DEVICE);
@@ -481,7 +514,9 @@ fn a_core_chosen_remote_reveal_read_is_dropped_when_its_device_is_removed() {
         assert!(runtime.snapshot.editor.opening.is_empty());
     }
     f.device.release_read("a.txt");
-    f.wait("the late reveal answer to be dropped", |runtime| diagnostic_count(runtime, "file.open_dropped") == 1);
+    f.wait("the late reveal answer to be dropped", |runtime| {
+        diagnostic_count(runtime, "file.open_dropped") == 1
+    });
     let runtime = f.shared.lock().unwrap();
     assert!(runtime.snapshot.editor.tabs.is_empty());
     assert!(runtime.snapshot.editor.document.is_none());
@@ -491,7 +526,9 @@ fn a_core_chosen_remote_reveal_read_is_dropped_when_its_device_is_removed() {
 /// joins its workers, so the test reports the failure rather than hanging.
 struct HeldRevealRead(Arc<FakeDevice>);
 impl Drop for HeldRevealRead {
-    fn drop(&mut self) { self.0.release_read("a.txt"); }
+    fn drop(&mut self) {
+        self.0.release_read("a.txt");
+    }
 }
 
 const OTHER_WORKSPACE: &str = "remote:device-a:workspace:2";
@@ -1934,6 +1971,7 @@ fn a_gui_file_read_opens_file_views_when_its_document_lands() {
 fn a_gui_file_read_cannot_recreate_its_closed_agent_tab() {
     let f = Fixture::new();
     let views_dir = f.runtime_dir("hide-gui-closed-read-");
+    let key = (DEVICE.to_owned(), f.root.to_string_lossy().into_owned());
     {
         let mut runtime = f.shared.lock().unwrap();
         studio_connecting(&mut runtime);
@@ -1950,6 +1988,12 @@ fn a_gui_file_read_cannot_recreate_its_closed_agent_tab() {
         checkout.active_tab_id = Some("tab-a".to_owned());
         runtime.workspace_views =
             Some(WorkspaceViewStore::open(views_dir.join("views.json"), Default::default()).0);
+        runtime
+            .reconcile_agent_topology(
+                &key,
+                &[("tab-a".to_owned(), false), ("tab-b".to_owned(), false)],
+            )
+            .unwrap();
         runtime.sync_workspace_view();
     }
     f.device.hold_read("a.txt");
@@ -1962,11 +2006,9 @@ fn a_gui_file_read_cannot_recreate_its_closed_agent_tab() {
             .tabs
             .retain(|tab| tab.id.as_deref() != Some("tab-a"));
         checkout.active_tab_id = Some("tab-b".to_owned());
-        runtime.sync_workspace_view();
-        runtime.prune_view_bookmarks(
-            &(DEVICE.to_owned(), f.root.to_string_lossy().into_owned()),
-            &["tab-b"],
-        );
+        runtime
+            .reconcile_agent_topology(&key, &[("tab-b".to_owned(), false)])
+            .unwrap();
         runtime.sync_workspace_view();
         runtime.snapshot.workspace_view.clone()
     };

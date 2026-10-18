@@ -347,7 +347,7 @@ fn a_node_that_dialed_in_splits_its_tabs_into_agent_areas_and_its_herdr_shows_th
 }
 
 /// A tab the node's Herdr opens joins the area in use without replacing
-/// what it shows, and a tab it closes leaves its area, collapsing it.
+/// what it shows, and closing the final tab in an area collapses it.
 #[test]
 fn a_node_s_own_tabs_join_and_leave_its_agent_areas() {
     let t = tree();
@@ -359,6 +359,14 @@ fn a_node_s_own_tabs_join_and_leave_its_agent_areas() {
     assert_eq!(shown(&runtime), [tab("t1"), tab("t2")]);
 
     runtime.ingest_remote_session(NODE, Ok(focused_on(&t.main, &["t1", "t3"], "t1")));
+    runtime.sync_workspace_view();
+    assert_eq!(
+        shown(&runtime),
+        [tab("t1"), tab("t3")],
+        "the arriving tab keeps its area"
+    );
+
+    runtime.ingest_remote_session(NODE, Ok(focused_on(&t.main, &["t1"], "t1")));
     runtime.sync_workspace_view();
     assert_eq!(shown(&runtime), [tab("t1")], "the emptied area closed");
 }
@@ -374,11 +382,10 @@ fn a_dialed_device_shows_agent_groups_but_refuses_a_second_area() {
         &t.main,
     );
     assert_eq!(
-        runtime
-            .snapshot()
-            .workspace_view
+        runtime.snapshot().workspace_view.as_ref().map(|view| view
+            .agent_layout
             .as_ref()
-            .map(|view| view.agent_layout.as_ref().is_some_and(|layout| layout.limits.areas == 1)),
+            .is_some_and(|layout| layout.limits.areas == 1)),
         Some(true)
     );
     split(&mut runtime, &t.main, "t2");

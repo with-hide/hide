@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { herdrGate } from "./herdr-gate";
+import { herdrTabs } from "./failure-dump";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot } from "./wire";
 import { quietFor } from "./wait";
@@ -18,8 +19,8 @@ const terminal = (page: Page) => page.locator("[data-group-start-terminal=true]"
 const blank = (page: Page) => page.locator("[data-agent-tab-start]");
 
 function topology(herdr: HerdrFixture) {
-  const answer = herdr.run(["tab", "list", "--workspace", herdr.workspace]) as { result: { tabs: { tab_id: string }[] } };
-  return answer.result.tabs.map((tab) => tab.tab_id);
+  const workspaces = herdrTabs(herdr) as { tabs: string[] }[];
+  return workspaces.flatMap((workspace) => workspace.tabs);
 }
 
 async function open(page: Page, daemon: Daemon) {
@@ -36,7 +37,20 @@ async function createGroup(page: Page, name: string) {
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(selector(page)).toContainText(name);
-  return (await selector(page).getAttribute("data-agent-group-selector"))!;
+  const group = (await selector(page).getAttribute("data-agent-group-selector"))!;
+  const row = page.locator(`[data-sidebar-group-select="${group}"]`);
+  if (!(await row.isVisible())) await page.locator("[data-checkout-toggle][aria-expanded=false]").click();
+  await expect(row).toBeVisible();
+  return group;
+}
+
+async function establishOwner(page: Page) {
+  await page.locator("[data-new-agent-tab=true]").click();
+  await expect(blank(page)).toBeVisible();
+  const draft = await blank(page).getAttribute("data-agent-tab-start");
+  await terminal(page).click();
+  await expect(page.locator(`[data-agent-tab-start="${draft}"]`)).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.locator("[data-pane-view]")).toHaveCount(1);
 }
 
 async function chooseGroup(page: Page, name: string) {
@@ -75,7 +89,7 @@ test("an empty group and draft survive navigation and restart without creating a
     await expect(selector(page)).toHaveAttribute("data-agent-group-selector", group);
     await expect(blank(page)).toHaveAttribute("data-agent-tab-start", draft!);
     expect(topology(herdr)).toEqual(original);
-  } finally { daemon?.stop(); herdr.stop(); }
+  } finally { try { daemon?.stop(); } finally { herdr.stop(); } }
 });
 
 test("terminal start fills the draft slot and duplicate intent delivery creates only one tab", async ({ page }) => {
@@ -95,6 +109,7 @@ test("terminal start fills the draft slot and duplicate intent delivery creates 
       });
     });
     await open(page, daemon);
+    await establishOwner(page);
     const original = topology(herdr);
     await createGroup(page, "Terminal work");
     await page.locator("[data-new-agent-tab=true]").click();
@@ -116,7 +131,7 @@ test("terminal start fills the draft slot and duplicate intent delivery creates 
     expect(topology(herdr)).toHaveLength(original.length + 1);
     expect(gate.params("tab.create")).toHaveLength(1);
     await screenshot(page, "group-tabs-terminal-promoted");
-  } finally { daemon?.stop(); await gate.stop(); herdr.stop(); }
+  } finally { try { daemon?.stop(); } finally { try { await gate.stop(); } finally { herdr.stop(); } } }
 });
 
 test("adding an agent keeps the live tab and its existing pane, with the chosen model and prompt", async ({ page }) => {
@@ -125,15 +140,18 @@ test("adding an agent keeps the live tab and its existing pane, with the chosen 
   try {
     daemon = await startHided(herdr, "group-add-agent");
     await open(page, daemon);
-    await createGroup(page, "Agent work");
+    const group = await createGroup(page, "Agent work");
     await terminal(page).click();
     await expect(blank(page)).toHaveCount(0, { timeout: 30_000 });
+    await expect(selector(page)).toHaveAttribute("data-agent-group-selector", group);
+    await expect(page.locator("[data-pane-view]")).toHaveCount(1);
     const tab = (await stripTabs(page).getAttribute("data-tab"))!;
     const originalPane = (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!;
     const originalTabs = topology(herdr);
     await page.locator(`[data-add-agent="${tab}"]`).click();
     await expect(blank(page)).toBeVisible();
     await blank(page).locator("[data-agent-kind]").click();
+    await expect(page.locator('[data-agent-kind-option="claude"]')).toBeEnabled({ timeout: 20_000 });
     await page.locator('[data-agent-kind-option="claude"]').click();
     const model = blank(page).locator("[data-agent-model-kind]");
     await expect(model).toBeEnabled();
@@ -149,7 +167,7 @@ test("adding an agent keeps the live tab and its existing pane, with the chosen 
     await expect.poll(() => JSON.stringify(herdr.run(["pane", "process-info", "--pane", added])), { timeout: 30_000 }).toContain("opus");
     await expect.poll(() => JSON.stringify(herdr.run(["pane", "read", added, "--source", "visible"])), { timeout: 30_000 }).toContain("같은 탭의 새 에이전트");
     await screenshot(page, "group-tabs-agent-added");
-  } finally { daemon?.stop(); herdr.stop(); }
+  } finally { try { daemon?.stop(); } finally { herdr.stop(); } }
 });
 
 test("a committed start with its answer lost across restart adopts the original shell", async ({ page }) => {
@@ -159,6 +177,7 @@ test("a committed start with its answer lost across restart adopts the original 
   try {
     daemon = await startHided(herdr, "group-recover", undefined, { HERDR_SOCKET_PATH: gate.socket });
     await open(page, daemon);
+    await establishOwner(page);
     const original = topology(herdr);
     await createGroup(page, "Recovery");
     const held = gate.arm("tab.create");
@@ -179,5 +198,5 @@ test("a committed start with its answer lost across restart adopts the original 
     await quietFor(page, 300, "a restored start must not create a replacement after its original shell was adopted");
     expect(topology(herdr)).toHaveLength(original.length + 1);
     expect(gate.params("tab.create")).toHaveLength(1);
-  } finally { daemon?.stop(); await gate.stop(); herdr.stop(); }
+  } finally { try { daemon?.stop(); } finally { try { await gate.stop(); } finally { herdr.stop(); } } }
 });

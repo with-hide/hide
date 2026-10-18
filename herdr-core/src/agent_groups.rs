@@ -89,6 +89,7 @@ impl WorkspaceView {
         topology: &[(String, bool)],
         reserved: usize,
         admitted: &HashSet<String>,
+        unconfirmed: &HashSet<&str>,
     ) -> Result<bool, LayoutError> {
         let before = (self.agent_layout.clone(), self.agent_groups.clone());
         let mut seen_changed = false;
@@ -101,10 +102,12 @@ impl WorkspaceView {
                 continue;
             }
             if let Some(id) = start.live_tab_id.as_ref() {
-                if actual_topology.iter().any(|(tab, _)| tab == id) {
+                if actual_topology.iter().any(|(tab, _)| tab == id)
+                    && !unconfirmed.contains(id.as_str())
+                {
                     start.seen_in_topology = true;
                     seen_changed = true;
-                } else {
+                } else if !actual_topology.iter().any(|(tab, _)| tab == id) {
                     // An acknowledged create can beat the next topology
                     // publication. Its receipt holds the slot only until the
                     // real tab has been observed once.
