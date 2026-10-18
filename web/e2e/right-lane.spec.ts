@@ -87,6 +87,13 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     await expect(page.locator("[data-lane-header]")).toContainText("Memory");
     await expect.poll(widened).toBe(Math.round(laneBox.width));
     await screenshot(page, "right-lane-memory-own-width");
+    // Memory's divider moves Memory's width alone.
+    const memoryGrip = (await grip.boundingBox())!;
+    await page.mouse.move(memoryGrip.x + memoryGrip.width / 2, memoryGrip.y + 200);
+    await page.mouse.down();
+    await page.mouse.move(memoryGrip.x + memoryGrip.width / 2 - 60, memoryGrip.y + 200, { steps: 6 });
+    await page.mouse.up();
+    await expect.poll(async () => Math.abs((await widened()) - (laneBox.width + 60))).toBeLessThanOrEqual(1);
     await railTool(page, "files").click();
     await expect(page.locator("[data-lane-header]")).toContainText("Files");
     await expect.poll(widened).toBe(wide);

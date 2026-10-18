@@ -640,7 +640,11 @@ fn each_lane_field_ends_at_its_sent_value_and_a_repeat_converges() {
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
     assert_eq!(
         (view.lane_width, view.panel_width, view.tree_width),
-        (Some(700), Some(440), Some(crate::workspace_views::MAX_WIDTH))
+        (
+            Some(700),
+            Some(440),
+            Some(crate::workspace_views::MAX_WIDTH)
+        )
     );
     let (saved, _) = crate::workspace_views::load(&state, 0);
     let saved = saved.get(&view.device_id, &view.path).unwrap();
@@ -1538,6 +1542,16 @@ fn workspace_width_requests_are_bounded_ephemeral_and_confirm_exact_intents() {
             .width_request_id
             .as_deref(),
         Some("divider:third")
+    );
+    // The other tools' divider confirms its intent the same way.
+    layout(
+        &mut runtime,
+        serde_json::json!({"panel_width": 448, "width_request_id": "divider:panel"}),
+    );
+    let published = runtime.snapshot.workspace_view.as_ref().unwrap();
+    assert_eq!(
+        (published.panel_width, published.width_request_id.as_deref()),
+        (Some(448), Some("divider:panel"))
     );
     layout(&mut runtime, serde_json::json!({"lane_width": 650}));
     assert_eq!(
