@@ -90,8 +90,10 @@ impl std::fmt::Display for EndError {
 /// it, so it puts back the terminal modes it set: Herdr wraps the wake's
 /// start line in bracketed paste while the pane's terminal says the mode is
 /// on, and a PowerShell prompt reads that wrapping as keys, so an agent ended
-/// without its own quit left a Windows pane whose next start never ran. Only
-/// an agent still running after `EXIT_GRACE` is ended by the node.
+/// without its own quit left a Windows pane whose next start never ran
+/// (herdrdev/herdr#5371; the Windows reason goes once it is closed and the
+/// pin moves past it). Only an agent still running after `EXIT_GRACE` is
+/// ended by the node.
 pub(crate) fn end_agent(
     connector: &dyn ApiConnector,
     node: &dyn NodeLink,

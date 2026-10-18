@@ -308,15 +308,16 @@ impl LaunchDialect {
     /// The keys, as Herdr names them, that make the idle agent quit on its
     /// own, as the operator quits it: a sleep in the agent's own pane presses
     /// them first, so the agent puts back the terminal modes it set (bracketed
-    /// paste, extended keys) before the shell takes the terminal again, and
-    /// ends it only when it does not quit. Each is a press of its own, read
-    /// within the agent's double-press window: Claude Code 2.1.302 quits on a
-    /// second Ctrl+C within 800 ms of the first ("Press Ctrl-C again to
-    /// exit"), Codex CLI on a second Ctrl+C ("again to quit") and agy 1.4.2
-    /// on "ctrl+c or ctrl+d twice"; Ctrl+D is never pressed, because a shell
-    /// that already holds the terminal ends on it. A first Ctrl+C clears a
-    /// draft instead, and that agent is then ended. Empty for an agent that
-    /// closes its pane when sleeping.
+    /// paste, extended keys) before the shell takes the terminal again
+    /// (herdrdev/herdr#5371: a Windows prompt reads a bracketed paste left on
+    /// as keys), and ends it only when it does not quit. Each is a press of
+    /// its own, read within the agent's double-press window: Claude Code
+    /// 2.1.302 quits on a second Ctrl+C within 800 ms of the first ("Press
+    /// Ctrl-C again to exit"), Codex CLI on a second Ctrl+C ("again to quit")
+    /// and agy 1.4.2 on "ctrl+c or ctrl+d twice"; Ctrl+D is never pressed,
+    /// because a shell that already holds the terminal ends on it. A first
+    /// Ctrl+C clears a draft instead, and that agent is then ended. Empty for
+    /// an agent that closes its pane when sleeping.
     pub const fn exit_keys(self) -> &'static [&'static str] {
         match self {
             Self::Claude | Self::Codex | Self::Antigravity => &["ctrl+c", "ctrl+c"],
