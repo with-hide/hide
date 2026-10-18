@@ -256,6 +256,7 @@ Every other area's tab bar uses the card background, and its selected tab keeps 
 The keyboard View area has a 2px accent content border outside any native page slot; the other areas reserve the same transparent border.
 The keyboard Agent pane has a 2px accent perimeter and a lightly accent-tinted header, in single, split and zoomed presentations.
 Menus, search, tools and an inactive app show no canvas input emphasis; returning input restores it without changing selection or geometry.
+A View's address and path controls retain that View as the target of Close and New tab while suppressing its canvas emphasis.
 The content stays readable and unfiltered; focus adds no content blur, opacity reduction, capture loop or geometry change.
 The same rule applies at every lane width, in the narrow single-area presentation and in both themes.
 A View area's tabs use the same continuous shrinking strip as Agent tabs, with the same preferred, title-minimum and icon-identity widths.
@@ -280,6 +281,7 @@ Closing an Agent tab keeps its Views and documents.
 Putting the lane away or closing it preserves its documents, unsaved text and save state.
 Closing the selected input View chooses its area's most recently visited surviving View, then the right neighbour and then the left when none was visited, and the keyboard follows the confirmed result.
 Closing a background View, including the selected View of another area, leaves input where it was.
+A View context menu borrows the current input without selecting its target, and its automatic focus return does not cancel a pending close follow.
 An emptied area collapses and input follows its surviving neighbour.
 The last View returns input to the existing tree if it is on, else closes the lane and returns to the existing Agent pane; with no pane there is no invented input target.
 A last document reference waits for save protection; failure or conflict leaves it open, and a newer input destination wins over a delayed close completion.

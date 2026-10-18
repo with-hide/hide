@@ -8975,7 +8975,7 @@
                                 },
                                 "hideui:lane-header-explorer": {
                                   "fill": "$--secondary",
-                                  "enabled": false
+                                  "enabled": true
                                 },
                                 "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
                                   "fill": "$--subtle-foreground"
@@ -11134,7 +11134,7 @@
                                 },
                                 "hideui:lane-header-explorer": {
                                   "fill": "$--secondary",
-                                  "enabled": false
+                                  "enabled": true
                                 },
                                 "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
                                   "fill": "$--subtle-foreground"
@@ -13264,7 +13264,7 @@
                                 },
                                 "hideui:lane-header-explorer": {
                                   "fill": "$--secondary",
-                                  "enabled": false
+                                  "enabled": true
                                 },
                                 "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
                                   "fill": "$--subtle-foreground"
@@ -16550,7 +16550,7 @@
                                 },
                                 "hideui:lane-header-explorer": {
                                   "fill": "$--secondary",
-                                  "enabled": false
+                                  "enabled": true
                                 },
                                 "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
                                   "fill": "$--subtle-foreground"
@@ -18516,7 +18516,7 @@
                                 },
                                 "hideui:lane-header-explorer": {
                                   "fill": "$--secondary",
-                                  "enabled": false
+                                  "enabled": true
                                 },
                                 "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
                                   "fill": "$--subtle-foreground"
@@ -24062,7 +24062,7 @@
                                 },
                                 "hideui:lane-header-explorer": {
                                   "fill": "$--secondary",
-                                  "enabled": false
+                                  "enabled": true
                                 },
                                 "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
                                   "fill": "$--subtle-foreground"
@@ -33199,7 +33199,7 @@
                                 },
                                 "hideui:lane-header-explorer": {
                                   "fill": "$--secondary",
-                                  "enabled": false
+                                  "enabled": true
                                 },
                                 "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
                                   "fill": "$--subtle-foreground"
@@ -35358,7 +35358,7 @@
                                 },
                                 "hideui:lane-header-explorer": {
                                   "fill": "$--secondary",
-                                  "enabled": false
+                                  "enabled": true
                                 },
                                 "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
                                   "fill": "$--subtle-foreground"
@@ -37488,7 +37488,7 @@
                                 },
                                 "hideui:lane-header-explorer": {
                                   "fill": "$--secondary",
-                                  "enabled": false
+                                  "enabled": true
                                 },
                                 "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
                                   "fill": "$--subtle-foreground"
@@ -40774,7 +40774,7 @@
                                 },
                                 "hideui:lane-header-explorer": {
                                   "fill": "$--secondary",
-                                  "enabled": false
+                                  "enabled": true
                                 },
                                 "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
                                   "fill": "$--subtle-foreground"
@@ -42740,7 +42740,7 @@
                                 },
                                 "hideui:lane-header-explorer": {
                                   "fill": "$--secondary",
-                                  "enabled": false
+                                  "enabled": true
                                 },
                                 "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
                                   "fill": "$--subtle-foreground"
@@ -48286,7 +48286,7 @@
                                 },
                                 "hideui:lane-header-explorer": {
                                   "fill": "$--secondary",
-                                  "enabled": false
+                                  "enabled": true
                                 },
                                 "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
                                   "fill": "$--subtle-foreground"

@@ -76,7 +76,7 @@ import type { FactoryCommand } from "./factory/commands";
 import { FACTORY_OPEN } from "./factory/launch";
 import { SECRETARY_PROMPT, paneListed } from "./factory/secretary";
 import type { DispatchFn } from "./ws";
-import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
+import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, newTabPolicy } from "./viewFocus";
 import { focusTerminal } from "./terminals";
 import { zoomViewer } from "./viewers/viewerZoom";
 import { submitDrop, type CapturedDrop } from "./explorerDrop";
@@ -792,7 +792,7 @@ export function createActions(send: DispatchFn) {
     stopCloseFocus?.();
     stopCloseFocus = null;
     const located = locateDisplay(frame.layout.root, displayId);
-    const owner = keyboardOwner().kind === "none" ? keyboardCommandOwner() : keyboardOwner();
+    const owner = keyboardCommandOwner();
     const checkout = frontCheckout(rest());
     if (!located || owner.kind !== "view" || owner.workspace !== checkout?.id) return;
     if (located.area.active !== displayId || owner.areaId !== located.area.id) {
@@ -2065,7 +2065,7 @@ export function createActions(send: DispatchFn) {
     },
 
     closeFocused() {
-      const owner = keyboardOwner();
+      const owner = keyboardCommandOwner();
       const frame = frameNow();
       const area = owner.kind === "view" && frame ? findArea(frame.layout.root, owner.areaId) : null;
       const checkout = frontCheckout(rest());
@@ -2098,7 +2098,7 @@ export function createActions(send: DispatchFn) {
         for (const pane of tabs.find((tab) => tab.id === shown)?.panes ?? []) paneAreas[pane.id] = area.id;
       }
       const target = newTabPolicy({
-        owner: keyboardOwner(),
+        owner: keyboardCommandOwner(),
         workspace: ui().screen?.kind === "workspace" ? frontCheckout(rest())?.id ?? null : null,
         viewAreaIds: drawn ? areasOf(drawn.layout.root).map((area) => area.id) : [],
         paneAreas,
@@ -2238,7 +2238,7 @@ export function createActions(send: DispatchFn) {
      * editor tab owns the canvas, else the focused terminal pane's. */
     textScale(direction: "in" | "out" | "reset") {
       // A viewer's zoom is its display's own, page-local and never sent.
-      const owner = keyboardOwner();
+      const owner = keyboardCommandOwner();
       const frame = frameNow();
       const area = owner.kind === "view" && frame ? findArea(frame.layout.root, owner.areaId) : null;
       if (area?.active && zoomViewer(area.active, direction)) return;
@@ -2595,7 +2595,7 @@ export function createActions(send: DispatchFn) {
       const agent = paneId ? contextAgents(rest(), rest()?.navigator?.agents ?? []).find((row) => row.pane_id === paneId) : undefined;
       if (paneId && agent?.own_find) {
         const requestId = remoteRequestId();
-        ui().setAgentFindRequest({ id: requestId, owner: keyboardOwner() });
+        ui().setAgentFindRequest({ id: requestId, owner: keyboardCommandOwner() });
         dispatch({ schema_version: 2, kind: "pane_find_open", payload: { pane_id: paneId, request_id: requestId } });
         return;
       }

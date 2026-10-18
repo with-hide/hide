@@ -20,7 +20,14 @@ const NO_OWNER: KeyboardOwner = { kind: "none" };
 let owner: KeyboardOwner = NO_OWNER;
 let inputRevision = 0;
 let windowActive = true;
+let returningFocus = false;
 export function keyboardInputRevision(): number { return inputRevision; }
+/** A layer returning borrowed focus is not a new input choice by the operator. */
+export function returnKeyboardFocus(restore: () => void): void {
+  const previous = returningFocus;
+  returningFocus = true;
+  try { restore(); } finally { returningFocus = previous; }
+}
 function visibleOwner(): KeyboardOwner { return windowActive ? owner : NO_OWNER; }
 const listeners = new Set<() => void>();
 let commandOwner: KeyboardOwner = owner;
@@ -40,6 +47,11 @@ export function keyboardCommandOwner(): KeyboardOwner { return commandOwner; }
 let handedBack: Element | null = null;
 
 export function noteKeyboardOwner(next: KeyboardOwner): void {
+  commandOwner = next;
+  publishKeyboardOwner(next);
+}
+
+function publishKeyboardOwner(next: KeyboardOwner): void {
   if (JSON.stringify(owner) === JSON.stringify(next)) return;
   owner = next;
   for (const listener of listeners) listener();
@@ -70,6 +82,16 @@ function ownerOf(target: Element | null): KeyboardOwner | null {
     : { kind: "none" };
 }
 
+// A View's address/path controls suppress its canvas emphasis while retaining
+// the containing View as the target of View commands such as Close and New tab.
+function commandOwnerOf(target: Element | null): KeyboardOwner {
+  const visual = ownerOf(target) ?? owner;
+  const area = target?.closest<HTMLElement>("[data-view-area-id]");
+  return visual.kind === "tool" && area?.dataset.viewAreaId
+    ? { kind: "view", workspace: visual.workspace, areaId: area.dataset.viewAreaId }
+    : visual;
+}
+
 /**
  * A menu command the host delivered has run. When it was pressed in a native
  * page, the keyboard is the shell's again, so the owner follows the element
@@ -78,8 +100,8 @@ function ownerOf(target: Element | null): KeyboardOwner | null {
 export function noteCommandDelivered(): void {
   if (!handedBack) return;
   handedBack = null;
-  noteKeyboardOwner(ownerOf(document.activeElement) ?? owner);
-  commandOwner = owner;
+  publishKeyboardOwner(ownerOf(document.activeElement) ?? owner);
+  commandOwner = commandOwnerOf(document.activeElement);
 }
 
 /** One bounded value per page; no core events or per-key DOM reads. */
@@ -90,10 +112,13 @@ export function installKeyboardOwner(): () => void {
     // A press on a control that leaves the keyboard where it was (the
     // sidebar's switch) is not the operator moving the keyboard.
     if (event.type === "pointerdown" && target?.closest("[data-keyboard-stays]")) return;
-    inputRevision++;
+    // A secondary press opens commands for another View without choosing it
+    // as the input owner. The menu returns the input it borrowed afterwards.
+    if (event.type === "pointerdown" && (event as PointerEvent).button !== 0) return;
+    if (!returningFocus) inputRevision++;
     handedBack = null;
-    if (!target?.closest('[data-palette], [role="menu"]')) commandOwner = ownerOf(target) ?? owner;
-    noteKeyboardOwner(ownerOf(target) ?? owner);
+    if (!target?.closest('[data-palette], [role="menu"]')) commandOwner = commandOwnerOf(target);
+    publishKeyboardOwner(ownerOf(target) ?? owner);
   };
   // Native browser pages are outside the renderer DOM. Their host reports
   // the same ownership transition when the operator enters a page.

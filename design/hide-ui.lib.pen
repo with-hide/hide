@@ -40327,7 +40327,8 @@
               "type": "ref",
               "ref": "lane-tree-button",
               "name": "Explorer",
-              "fill": "$--secondary"
+              "fill": "$--secondary",
+              "enabled": false
             },
             {
               "id": "lane-header-pin",

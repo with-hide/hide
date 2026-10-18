@@ -11,7 +11,7 @@ test("View close follows MRU, preserves background input and hands collapsed are
   const herdr = await startHerdr({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    for (const name of ["a.txt", "b.txt", "c.txt"]) fs.writeFileSync(path.join(herdr.root, "fixture", name), `${name}\n`);
+    for (const name of ["a.txt", "b.txt", "c.txt", "d.txt"]) fs.writeFileSync(path.join(herdr.root, "fixture", name), `${name}\n`);
     daemon = await startHided(herdr, "view-close-focus");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
@@ -24,7 +24,8 @@ test("View close follows MRU, preserves background input and hands collapsed are
     await tab("b.txt").click();
     await tab("a.txt").click();
     await editor.click();
-    await page.keyboard.press(chord("close_tab"));
+    await tab("a.txt").click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Close view", exact: true }).click();
     await expect(tab("b.txt")).toHaveAttribute("aria-selected", "true");
     await expect(editor).toBeFocused();
     // A background X must not win the window's capture-phase pointer handler.
@@ -35,7 +36,7 @@ test("View close follows MRU, preserves background input and hands collapsed are
     await page.keyboard.type("kept-input");
     await expect(editor).toContainText("kept-input");
 
-    // Split the only other document into a second area, then close it there.
+    // A context close in another area keeps the original editor's input.
     await page.locator("[data-lane-expand]").click();
     await page.locator('[data-explorer-row$="/c.txt"]').dblclick();
     await tab("c.txt").click({ button: "right" });
@@ -44,7 +45,20 @@ test("View close follows MRU, preserves background input and hands collapsed are
     await expect(page.locator("[data-view-area-id]")).toHaveCount(2);
     const right = page.locator("[data-view-area-id]").last();
     await right.locator(".cm-content").click();
-    await page.keyboard.press(chord("close_tab"));
+    await page.locator('[data-explorer-row$="/d.txt"]').dblclick();
+    await tab("c.txt").click();
+    const leftEditor = page.locator("[data-view-area-id]").first().locator(".cm-content");
+    await leftEditor.click();
+    await tab("c.txt").click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Close view", exact: true }).click();
+    await expect(tab("d.txt")).toHaveAttribute("aria-selected", "true");
+    await expect(leftEditor).toBeFocused();
+    await page.keyboard.type("still-left");
+    await expect(leftEditor).toContainText("still-left");
+    // Closing the remaining right area hands input to its surviving sibling.
+    await right.locator(".cm-content").click();
+    await right.locator("[data-view-overflow]").click();
+    await page.getByRole("menuitem", { name: "Close view", exact: true }).click();
     await expect(page.locator("[data-view-area-id]")).toHaveCount(1);
     await expect(tab("b.txt")).toHaveAttribute("aria-selected", "true");
     await expect(editor).toBeFocused();

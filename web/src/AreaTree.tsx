@@ -533,6 +533,7 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
           {area.displays.map((display) => (
             <EntryContextMenu
               key={display.id}
+              returnToInput={column === "view"}
               title={tree.adapter.label(display)}
               label={t(`panes.area.itemActions.${column}` as const, { label: tree.adapter.label(display) })}
               items={() => tree.menu(display.id)}

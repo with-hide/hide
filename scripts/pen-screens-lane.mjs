@@ -110,10 +110,10 @@ export function laneBoards(tokens, {themedXref, template, alias}, suffix) {
   }
 
   // -- the lane --
-  function header(id, tool, scope, {pinned, expanded}) {
+  function header(id, tool, scope, {pinned, expanded, files = false}) {
     return themedXref(id, 'lane-header', 'Lane header', {width: 'fill_container'}, {
       'lane-header-tool': {content: tool},
-      'lane-header-explorer': {enabled: tool === 'Files'},
+      'lane-header-explorer': {enabled: files},
       'lane-header-scope': {content: scope},
       // The scope's icon: a folder for the Project's tools, the default branch glyph for the checkout's (PRD work-tab-pr-lens D-37).
       ...(tool === 'PRs' ? {'lane-header-scope-glyph': {icon: 'folder'}} : {}),
@@ -214,7 +214,7 @@ export function laneBoards(tokens, {themedXref, template, alias}, suffix) {
   // A lane over the agents is set apart by a shadow and its left border (B3).
   const SHADOW = {type: 'shadow', shadowType: 'outer', offset: {x: -16, y: 0}, blur: 40, spread: 0, color: suffix === 'l' ? '#00000052' : '#000000f0'};
   function lane(id, {tool, tree: treeMode = 'off', pinned, expanded = false, overlay, width}) {
-    const head = tool === 'prs' ? header(`${id}-head`, 'PRs', 'hide 전체', {pinned, expanded}) : header(`${id}-head`, '파일', 'settings-ui', {pinned, expanded});
+    const head = tool === 'prs' ? header(`${id}-head`, 'PRs', 'hide 전체', {pinned, expanded}) : header(`${id}-head`, '파일', 'settings-ui', {pinned, expanded, files: true});
     let content;
     if (tool === 'prs') content = pulls(`${id}-prs`);
     else if (treeMode === 'only') content = tree(`${id}-tree`, 'fill_container', {only: true});

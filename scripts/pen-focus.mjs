@@ -15,7 +15,8 @@ export function updateFocusMasters(document) {
   required('lane-tree-button-chevron').enabled = false;
   const header = required('lane-header');
   if (!header.children.some(node => node.id === 'lane-header-explorer')) header.children.splice(3, 0,
-    {id: 'lane-header-explorer', type: 'ref', ref: 'lane-tree-button', name: 'Explorer', fill: '$--secondary'});
+    {id: 'lane-header-explorer', type: 'ref', ref: 'lane-tree-button', name: 'Explorer', fill: '$--secondary', enabled: false});
+  required('lane-header-explorer').enabled = false;
   required('GGXfK-tree').enabled = false;
 
   if (!document.children.some(node => node.id === 'cmp-view-opener')) document.children.push(frame('cmp-view-opener', 'Component / View opener', {

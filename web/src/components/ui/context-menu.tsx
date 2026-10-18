@@ -15,6 +15,7 @@ type ContextMenuState = {
   point: Point | null;
   openAt: (point: Point) => void;
   host: RefObject<HTMLElement | null>;
+  returnToInput: boolean;
 };
 
 const ContextMenuContext = createContext<ContextMenuState | null>(null);
@@ -26,7 +27,7 @@ function useContextMenu() {
 }
 
 /** `canOpen` is asked on every right-click or menu key; false keeps the menu closed, as a disabled trigger does. */
-function ContextMenu({ onOpenChange, canOpen, children }: { onOpenChange?: (open: boolean) => void; canOpen?: () => boolean; children: React.ReactNode }) {
+function ContextMenu({ onOpenChange, canOpen, returnToInput = false, children }: { onOpenChange?: (open: boolean) => void; canOpen?: () => boolean; returnToInput?: boolean; children: React.ReactNode }) {
   const [point, setPoint] = useState<Point | null>(null);
   const host = useRef<HTMLElement | null>(null);
   const change = (next: boolean) => {
@@ -40,7 +41,7 @@ function ContextMenu({ onOpenChange, canOpen, children }: { onOpenChange?: (open
     onOpenChange?.(true);
   };
   return (
-    <ContextMenuContext.Provider value={{ point, openAt, host }}>
+    <ContextMenuContext.Provider value={{ point, openAt, host, returnToInput }}>
       <MenuPrimitive.Root open={point !== null} onOpenChange={change}>
         {children}
       </MenuPrimitive.Root>
@@ -52,8 +53,8 @@ function ContextMenu({ onOpenChange, canOpen, children }: { onOpenChange?: (open
  * The target: a right-click opens the menu at the pointer, the menu key or ⇧F10 under the target.
  * A `disabled` target offers no menu: the right-click opens nothing, not even the browser's own.
  */
-function ContextMenuTrigger({ asChild = false, className, onContextMenu, onKeyDown, disabled = false, ...props }: ComponentProps<"div"> & { asChild?: boolean; disabled?: boolean }) {
-  const { point, openAt, host } = useContextMenu();
+function ContextMenuTrigger({ asChild = false, className, onContextMenu, onKeyDown, onPointerDown, disabled = false, ...props }: ComponentProps<"div"> & { asChild?: boolean; disabled?: boolean }) {
+  const { point, openAt, host, returnToInput } = useContextMenu();
   const Comp = asChild ? Slot.Root : "div";
   return (
     <>
@@ -64,6 +65,10 @@ function ContextMenuTrigger({ asChild = false, className, onContextMenu, onKeyDo
           host.current = node;
         }}
         className={className}
+        onPointerDown={(event) => {
+          onPointerDown?.(event);
+          if (returnToInput && event.button === 2) event.preventDefault();
+        }}
         onContextMenu={(event: MouseEvent<HTMLDivElement>) => {
           onContextMenu?.(event);
           if (event.defaultPrevented) return;
@@ -91,10 +96,10 @@ function ContextMenuTrigger({ asChild = false, className, onContextMenu, onKeyDo
 }
 
 function ContextMenuContent({ className, onCloseAutoFocus, ...props }: ComponentProps<typeof MenuPrimitive.Content>) {
-  const { point, host } = useContextMenu();
+  const { point, host, returnToInput } = useContextMenu();
   // Return to the real context target rather than the invisible anchor, unless
   // a newer control or layer already took the keyboard before Radix's timer.
-  const returnFocus = useReturnFocus(point !== null, {
+  const returnFocus = useReturnFocus(point !== null, returnToInput ? undefined : {
     target: () => host.current?.matches("[tabindex], button, a[href]") ? host.current : host.current?.querySelector<HTMLElement>("[tabindex], button, a[href]") ?? null,
   });
   return (

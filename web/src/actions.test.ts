@@ -98,9 +98,10 @@ describe("input after a confirmed View close", () => {
     document.body.innerHTML = '<div data-workspace-screen="c"><div data-view-area-id="a1"><button role="tab" aria-selected="true">next</button><div class="cm-content" tabindex="0" contenteditable="true"></div></div><input data-other /></div>';
     const content = document.querySelector<HTMLElement>(".cm-content")!;
     content.focus();
-    const actions = createActions(() => true);
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
     const land = () => useShellStore.setState({ rest: { ...useShellStore.getState().rest, workspace_view: frame(["d2"], "d2") } as never });
-    return { remove, actions, content, land };
+    return { remove, actions, content, land, sent };
   };
   afterEach(() => { useShellStore.setState({ rest: null }); vi.unstubAllGlobals(); document.body.innerHTML = ""; });
 
@@ -126,6 +127,71 @@ describe("input after a confirmed View close", () => {
       other.focus();
       land();
       expect(document.activeElement).toBe(other);
+    } finally { remove(); }
+  });
+
+  it("ends its pending focus follow when the save reports a failure", async () => {
+    const { remove, actions, content, land } = await setup();
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.push(callback); return 1; });
+    try {
+      actions.closeView("d1");
+      useShellStore.setState({ rest: { ...useShellStore.getState().rest, status: { last_error: { occurred_at: 1 } } } as never });
+      content.blur();
+      land();
+      expect(frames).toHaveLength(0);
+      expect(document.activeElement).not.toBe(content);
+    } finally { remove(); }
+  });
+
+  it("keeps View commands in its toolbar while suppressing canvas input ownership", async () => {
+    const { remove, actions, content, sent } = await setup();
+    const { keyboardOwner, keyboardCommandOwner, noteDrawnViews } = await import("./viewFocus");
+    const header = document.createElement("div");
+    header.dataset.browserToolbar = "";
+    header.innerHTML = "<input />";
+    content.parentElement!.append(header);
+    useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { tool: "files", mode: "pinned" } as never });
+    noteDrawnViews({ workspace, layout: frame(["d1", "d2"], "d1").layout } as never);
+    try {
+      header.querySelector("input")!.focus();
+      expect(keyboardOwner().kind).toBe("tool");
+      expect(keyboardCommandOwner()).toEqual({ kind: "view", workspace: "c", areaId: "a1" });
+      actions.newTabFocused();
+      expect(sent.at(-1)?.kind).toBe("browser_open");
+      actions.closeFocused();
+      expect(sent.at(-1)).toMatchObject({ kind: "view_layout", payload: { action: "close", display_id: "d1" } });
+    } finally { noteDrawnViews(null); remove(); }
+  });
+
+  it("continues a delayed menu close after automatic focus return", async () => {
+    const { remove, actions, content, land } = await setup();
+    const { act, createElement } = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const { useReturnFocus } = await import("./components/ui/layer");
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let handback: (event: Event) => void = () => {};
+    function Layer() { handback = useReturnFocus(true); return null; }
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.push(callback); return 1; });
+    try {
+      document.querySelector<HTMLElement>('[role="tab"]')!.focus();
+      act(() => root.render(createElement(Layer)));
+      const menu = document.createElement("button");
+      menu.setAttribute("role", "menu");
+      document.body.append(menu);
+      menu.focus();
+      actions.closeView("d1");
+      act(() => root.unmount());
+      menu.remove();
+      handback(new Event("focusScopeAutoFocusOnUnmount", { cancelable: true }));
+      expect(document.activeElement).toBe(document.querySelector('[role="tab"]'));
+      land();
+      frames.forEach((callback) => callback(0));
+      expect(document.activeElement).toBe(content);
     } finally { remove(); }
   });
 });
