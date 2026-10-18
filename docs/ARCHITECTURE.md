@@ -500,7 +500,7 @@ A display therefore reads from the checkout whose root holds its path, its Works
 The Explorer selection follows only a file of the checkout in front, since its tree holds no other.
 A file of the checkout in front, an HTML file of another checkout while the Overview is on screen, and a folder go through its checkout as before.
 An HTML file opens with one `browser_open` event naming that checkout and `reveal: true`; after the page is admitted, the core uses the existing Workspace reveal operation to bring its checkout and Browser View forward together.
-The active Agent tab remembers that page before the checkout comes forward, so a restored tab's previous View bookmark cannot hide the requested page.
+The checkout's View layout selects that page before the checkout comes forward; Agent tabs carry no separate View selection.
 Another file, a folder or the terminal menu's Open source sends `reveal_path`; the core then decides the focused checkout, the tree's expanded set and selection, the editor tab and the lane together: a file opens the lane on Files, and a folder, which no tab shows, opens it on Files with the tree on (PRD right-lane B16).
 A window on a node resolves the path against its own machine's checkouts, which the core lists in that node's session rather than its navigator, so the `file_open` or `reveal_path` names the node in `device_id`: hided then leaves the path to the node's helper instead of the core's machine's roots, and the core finds the checkout in its catalog (`catalog_checkout`).
 A checkout of a device's session is that device's Herdr's to bring forward, so the core moves no focus of its own for it: one in front there is revealed at once, and one behind, as a path clicked on the Overview names, is asked of the device's Herdr with the device brought forward (`Runtime::reveal_when_in_front`), held on the Workspace choice that waits for the device's front (`PendingChoice::reveal`), and revealed once the sync sees the front land there; nothing is read before, and the reveal dies with the request: a refusal or a lost answer, a later choice, the device leaving, the device's front moving to a third checkout, or its deadline passing, `CLOSE_STAGE_TIMEOUT_MS` (5 s) for the answer and, once the device accepts, `CHOICE_LANDING_TIMEOUT_MS` (15 s) for the landing, which waits on the device's Herdr and then its session's publish over the link (`Runtime::expire_pending_choice`), drops the choice and all it carries, a Memory visit as a reveal, so a later visit of the operator's own to that checkout opens nothing for the old click; the expiry reaches only the log (`workspace.choice_expired`), since the operator has nothing to act on.
@@ -2563,13 +2563,13 @@ The replica carries the creation cause and a focus-event revision with the autho
 One pending creation pairing per live tab is consumed by its first `tab_focused` event; a later `tab_focused` event gets a new revision and is followed.
 The pinned Herdr emits no event for a focus command that leaves its current tab unchanged; Hide cannot observe that no-op command.
 This metadata remains inside the core projection, adds no terminal-output work, and is removed with its tab; local New and Reopen intents retain their existing focus claim.
-Each Workspace stores one Files View list, `view_layout`, with its split, selection and active area, and one bookmark per Agent tab, `tab_views`, a map from a Herdr tab to the display it last put in front.
-The bookmark is one display id, never a layout, so it holds no View of its own and no tab owns the list.
-The earlier per-tab keys (`view_owner`, `view_presentations`, `view_next_id`, `view_bookmarks` and a schema 3 file's old `layout`) are not read and not written, while the schema 1 and 2 column files still convert through their own `layout`; the schema stays 3 and nothing converts them, so the first run after the update starts with an empty list while the lane's tool, pin, tree, widths, comments and the Agent layout survive.
-The shell receives the existing projected layout; none of these fields adds a wire field.
-`track_view_bookmarks` compares borrowed shown/active tab ids and the front with the last observation during the existing Workspace sync, and allocates only when one moved.
-A tab that was on no Agent area and now is the active one gets its bookmarked display brought to the front of its own area without moving the active area or the keyboard, and a bookmark naming a closed display is ignored; otherwise a change of the front of the area in use is recorded as the active tab's bookmark, and a tab that leaves Herdr drops its bookmark (`prune_view_bookmarks`).
-The lane's tool, pin, tree and widths stay checkout-wide, and ordinary focus among already shown Agent areas changes nothing in the list.
+Each Workspace stores one Files View list, `view_layout`, with its split, selection and active area, independent of Agent tabs.
+Obsolete `tab_views` bookmarks and the older per-tab keys are ignored; the existing `view_layout`, lane, documents, comments and Agent layout are retained, without a schema change.
+The shell receives the existing projected layout and Agent switches make no View-selection change.
+A focused View close follows the core-selected successor only after the removed display leaves the snapshot.
+The shell retains one bounded pending follow and rejects it after newer input, disconnection or a Workspace change.
+Desktop window activation is reported separately from native page focus, so a page taking input never makes the app appear inactive.
+The lane's tool, pin, tree and widths stay checkout-wide.
 
 Workspace control records the caller's actual tab and native session before an asynchronous read, validates them again at commit, and refuses stale identity without another-tab fallback.
 `caller_stays_behind` decides who is a background caller.
@@ -2578,15 +2578,13 @@ On a Workspace not on screen, a pane of a tab other than its active one is (B7);
 A desktop window's browser gateway never is, because a page its CDP client creates loads only in front; hided names it `gateway:<key>:<path>` (`gateway_caller_id`), which `Caller::parse` reads as a checkout caller with `gateway` set, so it resolves like any checkout caller and is told apart only here.
 No command option makes a background caller foreground.
 A background command records the selection first (`keep_front`) and puts it back after the commit (`restore_front`): a new display stays at the end of the area it landed in, in no area's front, and the area in use, the keyboard and the editor's active tab are as they were.
-A command records no bookmark itself; the bookmark follows the front of the active tab (`track_view_bookmarks`), so only what the operator had in front is remembered.
-GUI events act for the active tab, and a GUI browser open asked in a pane records that pane's tab's bookmark.
 An open or select from the foreground caller calls the lane on Files after the commit, decided before the open adds its view so a tree that showed alone stays beside it; a browser page's own area-bound target calls nothing.
 Reconcile, preview retirement, close guards, restart hydration and browser inventory read the checkout's one list.
 Admission counts the checkout's 32 displays (`MAX_VIEW_DISPLAYS`) in its six View areas.
 An open that would pass the cap first closes the display focused longest ago in the checkout (`make_view_room`); the search skips every area's front and never closes a document that holds work or a file still being read back; a display that was its document's last closes that document as `close_file_tab_now` does, and each close is one `view_layout.oldest_closed` diagnostic.
 Each layout retains depth three, and authoritative Agent topology keeps the existing 64-tab admission and prunes closed records.
-The same admission check covers a caller on an inbound node; an unanswered session or unresolved catalog grouping preserves saved state, while an empty checkout in a fully answered catalog prunes its final tab's bookmark.
-Pruning drops a closed tab's bookmark and pending reads and keeps its displays and clean documents in the list, so a tab close never closes a View.
+The same admission check covers a caller on an inbound node; an unanswered session or unresolved catalog grouping preserves saved state, while an empty checkout in a fully answered catalog prunes its final tab's pending reads.
+Pruning drops a closed tab's pending reads and keeps its displays and clean documents in the list, so a tab close never closes a View.
 Every tab-valued owner and tab-keyed map participates in `node_migration::KEYS` with `Moves::Tab` for core moves and returns.
 Changes use the existing coalesced off-lock save and notification path; identical state creates no additional save or publication, and there is no new polling, subprocess or blocking work under Runtime.
 Agent admission counts the shared 64-item limit together with pending creates, placements, reopen and replacement-close effects.

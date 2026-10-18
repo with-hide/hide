@@ -32,6 +32,9 @@ test("close follows the keyboard and the lane never renders an empty surface", a
     await expect(editor).toHaveCount(0);
     await expect(panes).toHaveCount(2);
     await expect(tree).toHaveAttribute("data-lane-tree", "only");
+    await expect(page.locator("[data-explorer-tree]")).toBeFocused();
+    await expect(page.locator("[data-lane-header] [data-lane-tree-toggle]")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator("[data-lane-header] [data-lane-tree-toggle]")).toBeDisabled();
     await expect(screen).toHaveAttribute("data-lane-mode", "overlay");
     await expect(page.locator("[data-lane-frame] [data-view-area]")).toHaveCount(0);
     await screenshot(page, "close-view-tree-only");

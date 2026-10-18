@@ -401,6 +401,8 @@ An evicted page reports its disappearance as disconnected until shown again.
 ## Keyboard ownership and cycling
 
 Only a visible native page can report keyboard focus to the shell; the shell resolves its complete Workspace identity and current View area.
+The host also reports desktop window activation separately from page focus, so an embedded page taking input does not make the app appear inactive.
+An inactive window retains its selection and logical keyboard destination while hiding canvas input emphasis.
 The page's `before-input-event` matches the shell's effective Electron shortcut registry for focused-area, global panel and project cycle commands before the page or menu sees them.
 One host slot holds the initiating page, actual release modifier and cycle identifier, including input received after the overlay hides that page.
 The first native cycle chord gives keyboard response to the shell in the same focused window, even when the overlay leaves the initiating page visible.

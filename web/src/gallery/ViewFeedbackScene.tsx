@@ -189,7 +189,7 @@ export function ViewFeedbackScene({ theme, scale, content, state }: SceneParams 
       const element = document.querySelector<HTMLElement>(selector);
       element?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerType: "mouse" }));
     };
-    const target = { "opener-tip": '[role="tab"][aria-selected="true"] [data-view-opener]', "views-list": '[data-pane-views="a1"]', "send-menu": "[data-view-feedback-send-menu]" }[state as string];
+    const target = { "opener-tip": '[data-browser-toolbar] [data-view-opener]', "views-list": '[data-pane-views="a1"]', "send-menu": "[data-view-feedback-send-menu]" }[state as string];
     if (!target) return undefined;
     const open = () => {
       const element = document.querySelector<HTMLElement>(target);

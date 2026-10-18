@@ -144,9 +144,10 @@ test("the rail draws one divider between the Project's tools and the checkout's,
     for (const [tool, name, icon] of [["memory", "Memory", "folder"], ["prs", "PRs", "folder"], ["files", "Files", "git-branch"], ["changes", "Changes", "git-branch"]] as const) {
       await showTool(page, tool);
       const header = page.locator("[data-lane-header]");
-      await expect(header.locator(`svg.lucide-${icon}[aria-hidden="true"]`)).toHaveCount(1);
-      await expect(header.locator("svg.lucide-folder, svg.lucide-git-branch")).toHaveCount(1);
-      const text = (await header.locator("[data-lane-scope]").textContent())!.replace(/\s+/g, " ").trim();
+      const scope = header.locator("[data-lane-scope]");
+      await expect(scope.locator(`svg.lucide-${icon}[aria-hidden="true"]`)).toHaveCount(1);
+      await expect(scope.locator("svg.lucide-folder, svg.lucide-git-branch")).toHaveCount(1);
+      const text = (await scope.textContent())!.replace(/\s+/g, " ").trim();
       expect(text, tool).toMatch(new RegExp(`^${name} · \\S`));
     }
   } finally {
@@ -183,7 +184,8 @@ test("the pin docks the lane once, keeps it through a terminal click, a tool and
     await expect(page.locator("[data-lane]")).toHaveAttribute("data-lane", "prs");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
 
-    // Another Agent tab keeps the lane and adds its view to the checkout's one list.
+    // Another Agent tab keeps the lane and adds its View to the checkout's
+    // one list; returning to the first Agent keeps the View just selected.
     await railTool(page, "files").click();
     const tab = (id: string) => page.locator(`[data-agent-tab-bar] [data-tab="${id}"]`);
     await tab(lane.second.tab).click();
@@ -191,13 +193,14 @@ test("the pin docks the lane once, keeps it through a terminal click, a tool and
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
     await tab(lane.herdr.tab).click();
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
-    await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
+    await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
     await expect(page.locator('[data-view-tab-bar] [role="tab"]')).toHaveCount(2);
 
     lane.daemon = await lane.daemon.restart();
     await page.goto("about:blank");
     await page.goto(`${lane.daemon.origin}/?probe=1#token=${lane.daemon.token}`);
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
+    await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
 
     // Unpinned, the lane goes back over Agent Views, and a restart brings it
     // back there: the operator never took it down.

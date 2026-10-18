@@ -435,7 +435,7 @@
     "judgment": [
       "Does exactly one area read as the keyboard owner while the other selected tab remains recognizable?",
       "Are Korean text and the native page content readable in the app, including narrow and expanded panels?",
-      "Does the foreground underline identify the keyboard area without a colored perimeter?"
+      "Do the chosen accent underline and 2px perimeter identify the input area, with stable geometry and no badge?"
     ]
   },
   "factory": {
@@ -1779,7 +1779,7 @@
     "judgment": ["Does the lane read as one surface over or beside the agents, its rail, header, pin, tree button and divider matching the boards?", "Does opening over the agents keep the terminals at their width, with only pinning narrowing them, once?"]
   },
   "view-opener-feedback": {
-    "description": "View opener mark and View feedback (PRD view-opener-feedback D-20, D-24, D-25): the opener's logo on a View tab, the pane header's N views, Comment mode on pages, diffs, files, images and PDFs, the feedback row with Send and its menu, and what follows Send.",
+    "description": "View opener mark and View feedback (PRD view-opener-feedback D-20, D-24, D-25): the selected View toolbar's opener and background tab tooltip, the pane header's N views, Comment mode on pages, diffs, files, images and PDFs, the feedback row with Send and its menu, and what follows Send.",
     "file": "design/hide-screens.pen",
     "sheet": "screen-workspace",
     "scene": "view-opener-feedback",
@@ -1802,7 +1802,7 @@
     ],
     "conditions": { "themes": ["light", "dark"], "widths": [1456], "contents": ["reference"], "scales": [1] },
     "states": {
-      "opener-tip": "A View tab's opener mark with its tooltip above the tab, unsent counts on the tabs (board 1).",
+      "opener-tip": "The selected View toolbar's opener mark with its tooltip, unsent counts on the tabs (board 1).",
       "views-list": "The pane header's `2 views` list open (board 2).",
       "comment-browser": "Comment mode on a page: the hint, an outlined element, numbered pins and a region (board 3).",
       "comment-diff": "A diff with a range note being written and a commented line with its bar and note (board 4).",
@@ -1813,7 +1813,7 @@
     "urlStates": ["opener-tip", "views-list", "comment-browser", "comment-diff", "comment-pdf", "send-menu", "sent"],
     "rules": { "noOverlap": true, "noSidewaysOverflow": true },
     "judgment": [
-      "Does the 10 px opener mark sit on the kind icon's lower right, keep the kind readable, and open its tooltip above the tab, in both themes?",
+      "Does the selected View toolbar retain its small opener and reachable provenance tooltip while background tabs keep provenance without a repeated logo, in both themes?",
       "Do pins and image/PDF regions show only while Comment is on, with the tab count and the feedback row carrying the comments otherwise?",
       "Do the feedback row, the Send button (always with its logo) and the ▾ menu (status mark and name; the logo only while the agent logo view mode shows it) match board 6?",
       "Each window is paired with one state; the state cells under it on its board (boards vof-<board>-l/d in the bundle's .pen) carry the rest, including Not delivered, Couldn't send and `Comment deleted · Undo`, and are judged in the state sheets."

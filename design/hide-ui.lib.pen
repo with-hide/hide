@@ -15501,6 +15501,12 @@
                       "fill": "$--foreground"
                     }
                   }
+                },
+                {
+                  "id": "eMlZD-opener",
+                  "type": "ref",
+                  "ref": "view-opener",
+                  "name": "Selected View opener"
                 }
               ]
             },
@@ -15757,6 +15763,12 @@
                   "icon": "ellipsis"
                 }
               }
+            },
+            {
+              "id": "hxdu7-opener",
+              "type": "ref",
+              "ref": "view-opener",
+              "name": "Selected View opener"
             }
           ]
         },
@@ -16438,8 +16450,8 @@
           "width": 740,
           "fill": "$--background",
           "cornerRadius": "$--radius-xs",
-          "stroke": "$--subtle-foreground",
-          "strokeWidth": "$--size-hairline",
+          "stroke": "$--primary",
+          "strokeWidth": 2,
           "layout": "vertical",
           "children": [
             {
@@ -16762,7 +16774,8 @@
                 }
               ]
             }
-          ]
+          ],
+          "strokeAlignment": "inner"
         },
         {
           "type": "frame",
@@ -39961,7 +39974,8 @@
               "id": "GGXfK-tree",
               "type": "ref",
               "ref": "lane-tree-button",
-              "name": "Tree button"
+              "name": "Tree button",
+              "enabled": false
             },
             {
               "type": "text",
@@ -40070,6 +40084,12 @@
                   "fill": "$--subtle-foreground"
                 }
               }
+            },
+            {
+              "id": "GGXfK-opener",
+              "type": "ref",
+              "ref": "view-opener",
+              "name": "Selected View opener"
             }
           ]
         },
@@ -40303,6 +40323,14 @@
               ]
             },
             {
+              "id": "lane-header-explorer",
+              "type": "ref",
+              "ref": "lane-tree-button",
+              "name": "Explorer",
+              "fill": "$--secondary",
+              "enabled": false
+            },
+            {
               "id": "lane-header-pin",
               "type": "ref",
               "ref": "lane-pin",
@@ -40406,7 +40434,7 @@
               "type": "text",
               "id": "lane-tree-button-label",
               "name": "settings-ui",
-              "content": "settings-ui",
+              "content": "Explorer",
               "fill": "$--subtle-foreground",
               "fontFamily": "$--font-ui",
               "fontSize": "$--text-caption",
@@ -40416,7 +40444,7 @@
               "type": "icon",
               "id": "lane-tree-button-chevron",
               "name": "Glyph",
-              "enabled": true,
+              "enabled": false,
               "width": 12,
               "height": 12,
               "icon": "chevron-down",
@@ -40434,7 +40462,7 @@
             "$--spacing-xs"
           ],
           "cornerRadius": "$--radius-sm",
-          "stroke": "$--border",
+          "stroke": [],
           "strokeWidth": "$--size-hairline",
           "strokeAlignment": "inner"
         },
@@ -40773,6 +40801,9 @@
                         },
                         "lane-header-scope": {
                           "content": "settings-ui"
+                        },
+                        "lane-header-explorer": {
+                          "enabled": true
                         }
                       }
                     }
@@ -41674,6 +41705,9 @@
                         },
                         "lane-header-scope": {
                           "content": "settings-ui"
+                        },
+                        "lane-header-explorer": {
+                          "enabled": true
                         }
                       }
                     }
@@ -69727,6 +69761,62 @@
       "width": "fit_content",
       "x": 16000,
       "y": 8281
+    },
+    {
+      "type": "frame",
+      "id": "cmp-view-opener",
+      "name": "Component / View opener",
+      "children": [
+        {
+          "type": "text",
+          "id": "view-opener-spec",
+          "name": "Selected View toolbar · tool",
+          "content": "Selected View toolbar · tooltip names the opener · press returns to its pane",
+          "fill": "$--subtle-foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-caption",
+          "fontWeight": "400"
+        },
+        {
+          "type": "frame",
+          "id": "view-opener",
+          "name": "Component / View opener mark",
+          "children": [],
+          "reusable": true,
+          "width": "$--size-view-opener-mark",
+          "height": "$--size-view-opener-mark",
+          "cornerRadius": "$--radius-xs",
+          "fill": {
+            "type": "image",
+            "url": "../web/src/assets/agent-codex.png",
+            "mode": "contain"
+          }
+        },
+        {
+          "id": "view-opener-closed",
+          "type": "ref",
+          "ref": "view-opener",
+          "name": "Closed opener · identity retained, jump disabled",
+          "opacity": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "view-opener-unknown",
+          "name": "Unknown provider · actual opener name in tooltip",
+          "children": [],
+          "width": "$--size-view-opener-mark",
+          "height": "$--size-view-opener-mark",
+          "stroke": "$--muted-foreground",
+          "strokeWidth": 1,
+          "cornerRadius": "$--radius-xs"
+        }
+      ],
+      "x": 12000,
+      "y": 0,
+      "layout": "vertical",
+      "gap": "$--spacing-md",
+      "padding": "$--spacing-xl",
+      "fill": "$--card"
     }
   ],
   "themes": {

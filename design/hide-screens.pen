@@ -8977,6 +8977,19 @@
                                   "fill": "$--subtle-foreground",
                                   "content": "settings-ui"
                                 },
+                                "hideui:lane-header-explorer": {
+                                  "fill": "$--secondary",
+                                  "enabled": true
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                  "fill": "$--muted-foreground"
+                                },
                                 "hideui:lane-header-pin/hideui:lane-pin-glyph": {
                                   "stroke": "$--muted-foreground"
                                 },
@@ -9090,9 +9103,6 @@
                                       "stroke": "$--border",
                                       "width": "fill_container",
                                       "descendants": {
-                                        "hideui:GGXfK-tree": {
-                                          "stroke": "$--border"
-                                        },
                                         "hideui:GGXfK-tree/hideui:lane-tree-button-glyph": {
                                           "fill": "$--subtle-foreground"
                                         },
@@ -9129,6 +9139,9 @@
                                         },
                                         "hideui:lEjtc/hideui:btn-lb": {
                                           "fill": "$--subtle-foreground"
+                                        },
+                                        "hideui:GGXfK-tree": {
+                                          "enabled": false
                                         }
                                       }
                                     },
@@ -9216,8 +9229,8 @@
                                             {
                                               "type": "text",
                                               "id": "rl-overlay-l-win-lane-doc-s1-b",
-                                              "name": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는",
-                                              "content": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는 끌 때까지 남고, View가 그만큼\n넓어져 문서는 작아지지 않는다.",
+                                              "name": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾",
+                                              "content": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾는다. 트리는 끌 때까지 남고,\nView가 그만큼 넓어져 문서는 작아지지 않는다.",
                                               "fill": "$--subtle-foreground",
                                               "fontFamily": "$--font-ui",
                                               "fontSize": "$--text-body",
@@ -11123,6 +11136,19 @@
                                   "fill": "$--subtle-foreground",
                                   "content": "settings-ui"
                                 },
+                                "hideui:lane-header-explorer": {
+                                  "fill": "$--secondary",
+                                  "enabled": true
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                  "fill": "$--muted-foreground"
+                                },
                                 "hideui:lane-header-pin/hideui:lane-pin-glyph": {
                                   "stroke": "$--primary",
                                   "fill": "$--primary"
@@ -11240,9 +11266,6 @@
                                       "stroke": "$--border",
                                       "width": "fill_container",
                                       "descendants": {
-                                        "hideui:GGXfK-tree": {
-                                          "stroke": "$--border"
-                                        },
                                         "hideui:GGXfK-tree/hideui:lane-tree-button-glyph": {
                                           "fill": "$--subtle-foreground"
                                         },
@@ -11279,6 +11302,9 @@
                                         },
                                         "hideui:lEjtc/hideui:btn-lb": {
                                           "fill": "$--subtle-foreground"
+                                        },
+                                        "hideui:GGXfK-tree": {
+                                          "enabled": false
                                         }
                                       }
                                     },
@@ -11366,8 +11392,8 @@
                                             {
                                               "type": "text",
                                               "id": "rl-pinned-l-win-lane-doc-s1-b",
-                                              "name": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는",
-                                              "content": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는 끌 때까지 남고, View가 그만큼\n넓어져 문서는 작아지지 않는다.",
+                                              "name": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾",
+                                              "content": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾는다. 트리는 끌 때까지 남고,\nView가 그만큼 넓어져 문서는 작아지지 않는다.",
                                               "fill": "$--subtle-foreground",
                                               "fontFamily": "$--font-ui",
                                               "fontSize": "$--text-body",
@@ -13240,6 +13266,19 @@
                                   "fill": "$--subtle-foreground",
                                   "content": "settings-ui"
                                 },
+                                "hideui:lane-header-explorer": {
+                                  "fill": "$--secondary",
+                                  "enabled": true
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                  "fill": "$--muted-foreground"
+                                },
                                 "hideui:lane-header-pin/hideui:lane-pin-glyph": {
                                   "stroke": "$--muted-foreground"
                                 },
@@ -14445,15 +14484,11 @@
                                           "stroke": "$--border",
                                           "width": "fill_container",
                                           "descendants": {
-                                            "hideui:GGXfK-tree": {
-                                              "stroke": "$--border",
-                                              "fill": "$--secondary"
-                                            },
                                             "hideui:GGXfK-tree/hideui:lane-tree-button-glyph": {
-                                              "fill": "$--foreground"
+                                              "fill": "$--subtle-foreground"
                                             },
                                             "hideui:GGXfK-tree/hideui:lane-tree-button-label": {
-                                              "fill": "$--foreground"
+                                              "fill": "$--subtle-foreground"
                                             },
                                             "hideui:GGXfK-tree/hideui:lane-tree-button-chevron": {
                                               "fill": "$--muted-foreground"
@@ -14485,6 +14520,9 @@
                                             },
                                             "hideui:lEjtc/hideui:btn-lb": {
                                               "fill": "$--subtle-foreground"
+                                            },
+                                            "hideui:GGXfK-tree": {
+                                              "enabled": false
                                             }
                                           }
                                         },
@@ -14572,8 +14610,8 @@
                                                 {
                                                   "type": "text",
                                                   "id": "rl-tree-overlay-l-win-lane-doc-s1-b",
-                                                  "name": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는",
-                                                  "content": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는 끌 때까지 남고, View가 그만큼\n넓어져 문서는 작아지지 않는다.",
+                                                  "name": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾",
+                                                  "content": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾는다. 트리는 끌 때까지 남고,\nView가 그만큼 넓어져 문서는 작아지지 않는다.",
                                                   "fill": "$--subtle-foreground",
                                                   "fontFamily": "$--font-ui",
                                                   "fontSize": "$--text-body",
@@ -16513,6 +16551,19 @@
                                 "hideui:lane-header-scope": {
                                   "fill": "$--subtle-foreground",
                                   "content": "settings-ui"
+                                },
+                                "hideui:lane-header-explorer": {
+                                  "fill": "$--secondary",
+                                  "enabled": true
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                  "fill": "$--muted-foreground"
                                 },
                                 "hideui:lane-header-pin/hideui:lane-pin-glyph": {
                                   "stroke": "$--primary",
@@ -18467,6 +18518,19 @@
                                   "fill": "$--subtle-foreground",
                                   "content": "settings-ui"
                                 },
+                                "hideui:lane-header-explorer": {
+                                  "fill": "$--secondary",
+                                  "enabled": true
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                  "fill": "$--muted-foreground"
+                                },
                                 "hideui:lane-header-pin/hideui:lane-pin-glyph": {
                                   "stroke": "$--muted-foreground"
                                 },
@@ -19676,15 +19740,11 @@
                                           "stroke": "$--border",
                                           "width": "fill_container",
                                           "descendants": {
-                                            "hideui:GGXfK-tree": {
-                                              "stroke": "$--border",
-                                              "fill": "$--secondary"
-                                            },
                                             "hideui:GGXfK-tree/hideui:lane-tree-button-glyph": {
-                                              "fill": "$--foreground"
+                                              "fill": "$--subtle-foreground"
                                             },
                                             "hideui:GGXfK-tree/hideui:lane-tree-button-label": {
-                                              "fill": "$--foreground"
+                                              "fill": "$--subtle-foreground"
                                             },
                                             "hideui:GGXfK-tree/hideui:lane-tree-button-chevron": {
                                               "fill": "$--muted-foreground"
@@ -19716,6 +19776,9 @@
                                             },
                                             "hideui:lEjtc/hideui:btn-lb": {
                                               "fill": "$--subtle-foreground"
+                                            },
+                                            "hideui:GGXfK-tree": {
+                                              "enabled": false
                                             }
                                           }
                                         },
@@ -19803,8 +19866,8 @@
                                                 {
                                                   "type": "text",
                                                   "id": "rl-expanded-l-win-lane-doc-s1-b",
-                                                  "name": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는",
-                                                  "content": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는 끌 때까지 남고, View가 그만큼 넓어져 문서는 작아지지 않는다.",
+                                                  "name": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾",
+                                                  "content": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾는다. 트리는 끌 때까지 남고, View가 그만큼 넓어져 문서는 작아지지 않는다.",
                                                   "fill": "$--subtle-foreground",
                                                   "fontFamily": "$--font-ui",
                                                   "fontSize": "$--text-body",
@@ -21715,6 +21778,19 @@
                                 "hideui:lane-header-scope": {
                                   "fill": "$--subtle-foreground",
                                   "content": "hide 전체"
+                                },
+                                "hideui:lane-header-explorer": {
+                                  "fill": "$--secondary",
+                                  "enabled": false
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                  "fill": "$--muted-foreground"
                                 },
                                 "hideui:lane-header-pin/hideui:lane-pin-glyph": {
                                   "stroke": "$--primary",
@@ -23988,6 +24064,19 @@
                                   "fill": "$--subtle-foreground",
                                   "content": "settings-ui"
                                 },
+                                "hideui:lane-header-explorer": {
+                                  "fill": "$--secondary",
+                                  "enabled": true
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                  "fill": "$--muted-foreground"
+                                },
                                 "hideui:lane-header-pin/hideui:lane-pin-glyph": {
                                   "stroke": "$--primary",
                                   "fill": "$--primary"
@@ -24105,9 +24194,6 @@
                                       "stroke": "$--border",
                                       "width": "fill_container",
                                       "descendants": {
-                                        "hideui:GGXfK-tree": {
-                                          "stroke": "$--border"
-                                        },
                                         "hideui:GGXfK-tree/hideui:lane-tree-button-glyph": {
                                           "fill": "$--subtle-foreground"
                                         },
@@ -24144,6 +24230,9 @@
                                         },
                                         "hideui:lEjtc/hideui:btn-lb": {
                                           "fill": "$--subtle-foreground"
+                                        },
+                                        "hideui:GGXfK-tree": {
+                                          "enabled": false
                                         }
                                       }
                                     },
@@ -24231,8 +24320,8 @@
                                             {
                                               "type": "text",
                                               "id": "rl-narrow-l-win-lane-doc-s1-b",
-                                              "name": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는",
-                                              "content": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는 끌 때까지 남고, View가 그만큼\n넓어져 문서는 작아지지 않는다.",
+                                              "name": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾",
+                                              "content": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾는다. 트리는 끌 때까지 남고,\nView가 그만큼 넓어져 문서는 작아지지 않는다.",
                                               "fill": "$--subtle-foreground",
                                               "fontFamily": "$--font-ui",
                                               "fontSize": "$--text-body",
@@ -28777,7 +28866,7 @@
                           "ref": "hideui:view-tab",
                           "name": "Selected Korean tab",
                           "fill": "$--background",
-                          "stroke": "$--foreground",
+                          "stroke": "$--primary",
                           "strokeWidth": {
                             "bottom": "$--size-tab-indicator"
                           },
@@ -28837,6 +28926,9 @@
                       "name": "Readable Korean content",
                       "width": "fill_container",
                       "height": "fill_container",
+                      "stroke": "$--primary",
+                      "strokeWidth": 2,
+                      "strokeAlignment": "inner",
                       "fill": "$--background",
                       "layout": "vertical",
                       "padding": "$--spacing-sm",
@@ -32879,6 +32971,19 @@
                                   "fill": "$--subtle-foreground",
                                   "content": "settings-ui"
                                 },
+                                "hideui:lane-header-explorer": {
+                                  "fill": "$--secondary",
+                                  "enabled": true
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                  "fill": "$--muted-foreground"
+                                },
                                 "hideui:lane-header-pin/hideui:lane-pin-glyph": {
                                   "stroke": "$--muted-foreground"
                                 },
@@ -32992,9 +33097,6 @@
                                       "stroke": "$--border",
                                       "width": "fill_container",
                                       "descendants": {
-                                        "hideui:GGXfK-tree": {
-                                          "stroke": "$--border"
-                                        },
                                         "hideui:GGXfK-tree/hideui:lane-tree-button-glyph": {
                                           "fill": "$--subtle-foreground"
                                         },
@@ -33031,6 +33133,9 @@
                                         },
                                         "hideui:lEjtc/hideui:btn-lb": {
                                           "fill": "$--subtle-foreground"
+                                        },
+                                        "hideui:GGXfK-tree": {
+                                          "enabled": false
                                         }
                                       }
                                     },
@@ -33118,8 +33223,8 @@
                                             {
                                               "type": "text",
                                               "id": "rl-overlay-d-win-lane-doc-s1-b",
-                                              "name": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는",
-                                              "content": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는 끌 때까지 남고, View가 그만큼\n넓어져 문서는 작아지지 않는다.",
+                                              "name": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾",
+                                              "content": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾는다. 트리는 끌 때까지 남고,\nView가 그만큼 넓어져 문서는 작아지지 않는다.",
                                               "fill": "$--subtle-foreground",
                                               "fontFamily": "$--font-ui",
                                               "fontSize": "$--text-body",
@@ -35025,6 +35130,19 @@
                                   "fill": "$--subtle-foreground",
                                   "content": "settings-ui"
                                 },
+                                "hideui:lane-header-explorer": {
+                                  "fill": "$--secondary",
+                                  "enabled": true
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                  "fill": "$--muted-foreground"
+                                },
                                 "hideui:lane-header-pin/hideui:lane-pin-glyph": {
                                   "stroke": "$--primary",
                                   "fill": "$--primary"
@@ -35142,9 +35260,6 @@
                                       "stroke": "$--border",
                                       "width": "fill_container",
                                       "descendants": {
-                                        "hideui:GGXfK-tree": {
-                                          "stroke": "$--border"
-                                        },
                                         "hideui:GGXfK-tree/hideui:lane-tree-button-glyph": {
                                           "fill": "$--subtle-foreground"
                                         },
@@ -35181,6 +35296,9 @@
                                         },
                                         "hideui:lEjtc/hideui:btn-lb": {
                                           "fill": "$--subtle-foreground"
+                                        },
+                                        "hideui:GGXfK-tree": {
+                                          "enabled": false
                                         }
                                       }
                                     },
@@ -35268,8 +35386,8 @@
                                             {
                                               "type": "text",
                                               "id": "rl-pinned-d-win-lane-doc-s1-b",
-                                              "name": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는",
-                                              "content": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는 끌 때까지 남고, View가 그만큼\n넓어져 문서는 작아지지 않는다.",
+                                              "name": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾",
+                                              "content": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾는다. 트리는 끌 때까지 남고,\nView가 그만큼 넓어져 문서는 작아지지 않는다.",
                                               "fill": "$--subtle-foreground",
                                               "fontFamily": "$--font-ui",
                                               "fontSize": "$--text-body",
@@ -37142,6 +37260,19 @@
                                   "fill": "$--subtle-foreground",
                                   "content": "settings-ui"
                                 },
+                                "hideui:lane-header-explorer": {
+                                  "fill": "$--secondary",
+                                  "enabled": true
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                  "fill": "$--muted-foreground"
+                                },
                                 "hideui:lane-header-pin/hideui:lane-pin-glyph": {
                                   "stroke": "$--muted-foreground"
                                 },
@@ -38347,15 +38478,11 @@
                                           "stroke": "$--border",
                                           "width": "fill_container",
                                           "descendants": {
-                                            "hideui:GGXfK-tree": {
-                                              "stroke": "$--border",
-                                              "fill": "$--secondary"
-                                            },
                                             "hideui:GGXfK-tree/hideui:lane-tree-button-glyph": {
-                                              "fill": "$--foreground"
+                                              "fill": "$--subtle-foreground"
                                             },
                                             "hideui:GGXfK-tree/hideui:lane-tree-button-label": {
-                                              "fill": "$--foreground"
+                                              "fill": "$--subtle-foreground"
                                             },
                                             "hideui:GGXfK-tree/hideui:lane-tree-button-chevron": {
                                               "fill": "$--muted-foreground"
@@ -38387,6 +38514,9 @@
                                             },
                                             "hideui:lEjtc/hideui:btn-lb": {
                                               "fill": "$--subtle-foreground"
+                                            },
+                                            "hideui:GGXfK-tree": {
+                                              "enabled": false
                                             }
                                           }
                                         },
@@ -38474,8 +38604,8 @@
                                                 {
                                                   "type": "text",
                                                   "id": "rl-tree-overlay-d-win-lane-doc-s1-b",
-                                                  "name": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는",
-                                                  "content": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는 끌 때까지 남고, View가 그만큼\n넓어져 문서는 작아지지 않는다.",
+                                                  "name": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾",
+                                                  "content": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾는다. 트리는 끌 때까지 남고,\nView가 그만큼 넓어져 문서는 작아지지 않는다.",
                                                   "fill": "$--subtle-foreground",
                                                   "fontFamily": "$--font-ui",
                                                   "fontSize": "$--text-body",
@@ -40415,6 +40545,19 @@
                                 "hideui:lane-header-scope": {
                                   "fill": "$--subtle-foreground",
                                   "content": "settings-ui"
+                                },
+                                "hideui:lane-header-explorer": {
+                                  "fill": "$--secondary",
+                                  "enabled": true
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                  "fill": "$--muted-foreground"
                                 },
                                 "hideui:lane-header-pin/hideui:lane-pin-glyph": {
                                   "stroke": "$--primary",
@@ -42369,6 +42512,19 @@
                                   "fill": "$--subtle-foreground",
                                   "content": "settings-ui"
                                 },
+                                "hideui:lane-header-explorer": {
+                                  "fill": "$--secondary",
+                                  "enabled": true
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                  "fill": "$--muted-foreground"
+                                },
                                 "hideui:lane-header-pin/hideui:lane-pin-glyph": {
                                   "stroke": "$--muted-foreground"
                                 },
@@ -43578,15 +43734,11 @@
                                           "stroke": "$--border",
                                           "width": "fill_container",
                                           "descendants": {
-                                            "hideui:GGXfK-tree": {
-                                              "stroke": "$--border",
-                                              "fill": "$--secondary"
-                                            },
                                             "hideui:GGXfK-tree/hideui:lane-tree-button-glyph": {
-                                              "fill": "$--foreground"
+                                              "fill": "$--subtle-foreground"
                                             },
                                             "hideui:GGXfK-tree/hideui:lane-tree-button-label": {
-                                              "fill": "$--foreground"
+                                              "fill": "$--subtle-foreground"
                                             },
                                             "hideui:GGXfK-tree/hideui:lane-tree-button-chevron": {
                                               "fill": "$--muted-foreground"
@@ -43618,6 +43770,9 @@
                                             },
                                             "hideui:lEjtc/hideui:btn-lb": {
                                               "fill": "$--subtle-foreground"
+                                            },
+                                            "hideui:GGXfK-tree": {
+                                              "enabled": false
                                             }
                                           }
                                         },
@@ -43705,8 +43860,8 @@
                                                 {
                                                   "type": "text",
                                                   "id": "rl-expanded-d-win-lane-doc-s1-b",
-                                                  "name": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는",
-                                                  "content": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는 끌 때까지 남고, View가 그만큼 넓어져 문서는 작아지지 않는다.",
+                                                  "name": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾",
+                                                  "content": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾는다. 트리는 끌 때까지 남고, View가 그만큼 넓어져 문서는 작아지지 않는다.",
                                                   "fill": "$--subtle-foreground",
                                                   "fontFamily": "$--font-ui",
                                                   "fontSize": "$--text-body",
@@ -45617,6 +45772,19 @@
                                 "hideui:lane-header-scope": {
                                   "fill": "$--subtle-foreground",
                                   "content": "hide 전체"
+                                },
+                                "hideui:lane-header-explorer": {
+                                  "fill": "$--secondary",
+                                  "enabled": false
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                  "fill": "$--muted-foreground"
                                 },
                                 "hideui:lane-header-pin/hideui:lane-pin-glyph": {
                                   "stroke": "$--primary",
@@ -47890,6 +48058,19 @@
                                   "fill": "$--subtle-foreground",
                                   "content": "settings-ui"
                                 },
+                                "hideui:lane-header-explorer": {
+                                  "fill": "$--secondary",
+                                  "enabled": true
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                  "fill": "$--subtle-foreground"
+                                },
+                                "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                  "fill": "$--muted-foreground"
+                                },
                                 "hideui:lane-header-pin/hideui:lane-pin-glyph": {
                                   "stroke": "$--primary",
                                   "fill": "$--primary"
@@ -48007,9 +48188,6 @@
                                       "stroke": "$--border",
                                       "width": "fill_container",
                                       "descendants": {
-                                        "hideui:GGXfK-tree": {
-                                          "stroke": "$--border"
-                                        },
                                         "hideui:GGXfK-tree/hideui:lane-tree-button-glyph": {
                                           "fill": "$--subtle-foreground"
                                         },
@@ -48046,6 +48224,9 @@
                                         },
                                         "hideui:lEjtc/hideui:btn-lb": {
                                           "fill": "$--subtle-foreground"
+                                        },
+                                        "hideui:GGXfK-tree": {
+                                          "enabled": false
                                         }
                                       }
                                     },
@@ -48133,8 +48314,8 @@
                                             {
                                               "type": "text",
                                               "id": "rl-narrow-d-win-lane-doc-s1-b",
-                                              "name": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는",
-                                              "content": "파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는 끌 때까지 남고, View가 그만큼\n넓어져 문서는 작아지지 않는다.",
+                                              "name": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾",
+                                              "content": "Files 최상단의 탐색기 버튼으로 트리를 켜고 찾는다. 트리는 끌 때까지 남고,\nView가 그만큼 넓어져 문서는 작아지지 않는다.",
                                               "fill": "$--subtle-foreground",
                                               "fontFamily": "$--font-ui",
                                               "fontSize": "$--text-body",
@@ -52679,7 +52860,7 @@
                           "ref": "hideui:view-tab",
                           "name": "Selected Korean tab",
                           "fill": "$--background",
-                          "stroke": "$--foreground",
+                          "stroke": "$--primary",
                           "strokeWidth": {
                             "bottom": "$--size-tab-indicator"
                           },
@@ -52739,6 +52920,9 @@
                       "name": "Readable Korean content",
                       "width": "fill_container",
                       "height": "fill_container",
+                      "stroke": "$--primary",
+                      "strokeWidth": 2,
+                      "strokeAlignment": "inner",
                       "fill": "$--background",
                       "layout": "vertical",
                       "padding": "$--spacing-sm",
@@ -498459,6 +498643,18 @@
                                     },
                                     "hideui:lane-header-close/hideui:ZIZFR": {
                                       "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer": {
+                                      "fill": "$--secondary"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                      "fill": "$--muted-foreground"
                                     }
                                   }
                                 },
@@ -499731,6 +499927,18 @@
                                         },
                                         "hideui:lane-header-close/hideui:ZIZFR": {
                                           "fill": "$--subtle-foreground"
+                                        },
+                                        "hideui:lane-header-explorer": {
+                                          "fill": "$--secondary"
+                                        },
+                                        "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                          "fill": "$--subtle-foreground"
+                                        },
+                                        "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                          "fill": "$--subtle-foreground"
+                                        },
+                                        "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                          "fill": "$--muted-foreground"
                                         }
                                       }
                                     },
@@ -501043,6 +501251,18 @@
                                     },
                                     "hideui:lane-header-close/hideui:ZIZFR": {
                                       "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer": {
+                                      "fill": "$--secondary"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                      "fill": "$--muted-foreground"
                                     }
                                   }
                                 },
@@ -501579,6 +501799,18 @@
                                     },
                                     "hideui:lane-header-close/hideui:ZIZFR": {
                                       "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer": {
+                                      "fill": "$--secondary"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                      "fill": "$--muted-foreground"
                                     }
                                   }
                                 },
@@ -502009,6 +502241,18 @@
                                     },
                                     "hideui:lane-header-close/hideui:ZIZFR": {
                                       "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer": {
+                                      "fill": "$--secondary"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                      "fill": "$--muted-foreground"
                                     }
                                   }
                                 },
@@ -502315,6 +502559,18 @@
                                     },
                                     "hideui:lane-header-close/hideui:ZIZFR": {
                                       "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer": {
+                                      "fill": "$--secondary"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                      "fill": "$--muted-foreground"
                                     }
                                   }
                                 },
@@ -503557,6 +503813,18 @@
                                     },
                                     "hideui:lane-header-close/hideui:ZIZFR": {
                                       "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer": {
+                                      "fill": "$--secondary"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                      "fill": "$--muted-foreground"
                                     }
                                   }
                                 },
@@ -504829,6 +505097,18 @@
                                         },
                                         "hideui:lane-header-close/hideui:ZIZFR": {
                                           "fill": "$--subtle-foreground"
+                                        },
+                                        "hideui:lane-header-explorer": {
+                                          "fill": "$--secondary"
+                                        },
+                                        "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                          "fill": "$--subtle-foreground"
+                                        },
+                                        "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                          "fill": "$--subtle-foreground"
+                                        },
+                                        "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                          "fill": "$--muted-foreground"
                                         }
                                       }
                                     },
@@ -506141,6 +506421,18 @@
                                     },
                                     "hideui:lane-header-close/hideui:ZIZFR": {
                                       "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer": {
+                                      "fill": "$--secondary"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                      "fill": "$--muted-foreground"
                                     }
                                   }
                                 },
@@ -506677,6 +506969,18 @@
                                     },
                                     "hideui:lane-header-close/hideui:ZIZFR": {
                                       "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer": {
+                                      "fill": "$--secondary"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                      "fill": "$--muted-foreground"
                                     }
                                   }
                                 },
@@ -507107,6 +507411,18 @@
                                     },
                                     "hideui:lane-header-close/hideui:ZIZFR": {
                                       "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer": {
+                                      "fill": "$--secondary"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                      "fill": "$--muted-foreground"
                                     }
                                   }
                                 },
@@ -507413,6 +507729,18 @@
                                     },
                                     "hideui:lane-header-close/hideui:ZIZFR": {
                                       "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer": {
+                                      "fill": "$--secondary"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                      "fill": "$--muted-foreground"
                                     }
                                   }
                                 },
@@ -512301,6 +512629,19 @@
                                     },
                                     "hideui:lane-header-close/hideui:ZIZFR": {
                                       "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer": {
+                                      "fill": "$--secondary",
+                                      "enabled": true
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                      "fill": "$--muted-foreground"
                                     }
                                   }
                                 },
@@ -516182,6 +516523,19 @@
                                     },
                                     "hideui:lane-header-close/hideui:ZIZFR": {
                                       "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer": {
+                                      "fill": "$--secondary",
+                                      "enabled": true
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-label": {
+                                      "fill": "$--subtle-foreground"
+                                    },
+                                    "hideui:lane-header-explorer/hideui:lane-tree-button-chevron": {
+                                      "fill": "$--muted-foreground"
                                     }
                                   }
                                 },

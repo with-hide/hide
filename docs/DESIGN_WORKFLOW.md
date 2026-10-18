@@ -115,6 +115,9 @@ Its selector is the scene root, not `[data-factory-screen]`, because the Pen fra
 A target's `urlStates` lists the states its scene sets up from its address (`state=<name>`), or maps each state to the query it sets, as `first-run-onboarding` does to put a state on Windows or Linux.
 `first-run-onboarding` pairs the approved boards (PRD first-run-onboarding D-20, D-27) with the onboarding scene at rest and captures every state the scene draws in the state sheets, since one board draws several states; it measures the wizard with `web/e2e/onboarding-geometry.mjs` (no overlapping parts, no sideways overflow, no letters cut off at the bottom, no squeezed agent mark, and the wizard inside the window) at text scale 1 and at 17/13, the largest Appearance offers (B41).
 `area-focus` measures the production shared area renderer and View tabs with read-only Korean content, enforcing one keyboard area, retained selections, stable geometry and unfiltered content; real terminal and native browser behavior still requires an isolated app capture.
+The input area's selected tab uses the runtime primary accent, and its content boundary uses a 2px primary perimeter.
+An Agent pane also uses the existing selected header wash; the window being inactive or a menu, search, address field or another tool holding input removes canvas input emphasis.
+Files keeps its Explorer toggle in the persistent top header, while only the selected View's path or address toolbar shows its opener; background tabs retain provenance in their tooltip.
 
 ### Keep the chosen design: `baseline`
 
@@ -184,6 +187,7 @@ No `System /` or `Component /` master carries a tab part, so `design/hide-ui.lib
 `design/hide-screens.pen` draws every area the web shell shows today, one `Screen / <Area>` sheet per area, imported from `design/hide-ui.lib.pen` the same way a `Component /` sheet is drawn from `System /` masters.
 Each sheet carries a `Light` and a `Dark` frame and uses realistic content, including Korean labels and a long path, to show real wrapping and truncation rather than an abstract state.
 `scripts/check-hide-screens.mjs` enforces the shape (`Screen / ` naming, both theme frames, every reference resolving against the library, every cross-library color restated locally, and local variables matching `design/tokens.json`) and `scripts/gen-screens.mjs` regenerates the file from `scripts/pen-screens.mjs`.
+When a master gains a child, scoped generation also fills missing imported color overrides on retained screens, without replacing their layout or explicit variant overrides.
 Because the file is generated and several megabytes of JSON, `.gitattributes` marks it `-diff linguist-generated=true`: `git diff` reports only that it changed and GitHub folds it in a pull request, so review reads `scripts/pen-screens.mjs`; `git diff --text` still shows its lines when they are needed.
 
 The device Overview is `Screen / Overview`, drawn by `scripts/pen-screens-overview.mjs` (PRD overview-device-tasks, sidebar-task-lens D-20): one device's `백로그 · 프로젝트 · 사용량` under the title and the device switch, the panel beside the tabs with an item or, at Home, a session's record, the device that does not answer, and the ⌘⇧M quick add.

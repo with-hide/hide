@@ -114,10 +114,10 @@ test("Comment on a page: the operator picks an element in the page and its agent
   const url = `${origin}/login`;
   const opened = JSON.parse(ok(await agent(["browser", "open", url, "--wait"])).trim().split("\n").at(-1)!) as { result: { view_id: string } };
   const display = opened.result.view_id;
-
-  // B1: the page's tab wears the agent's mark.
   const front = shell.locator('[data-view-tab-bar] [role="tab"][aria-selected="true"]');
-  await expect(front.locator("[data-view-opener]")).toHaveAttribute("data-view-opener", pane);
+
+  // The selected page's toolbar keeps the agent's identity outside its tab.
+  await expect(shell.locator("[data-browser-toolbar] [data-view-opener]")).toHaveAttribute("data-view-opener", pane);
 
   // B9: Comment draws hided's overlay in the page, and the page's own clicks stop.
   const comment = shell.locator('[data-browser-comment]');

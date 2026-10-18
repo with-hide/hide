@@ -64,7 +64,7 @@ mod tree_close;
 pub(crate) mod usage_ledger;
 mod usage_limit;
 mod view_areas;
-mod view_bookmarks;
+mod view_callers;
 mod view_feedback;
 mod workspace_control;
 mod workspace_view;

@@ -1020,14 +1020,6 @@ impl Runtime {
                 self.snapshot.ui_state.selected_path = Some(path.to_owned());
             }
         }
-        if let Some(owner) = &placement.owner {
-            let shown = self.view_displays(&placement.key).find_map(|display| {
-                (display.tab_id.as_deref() == Some(tab_id.as_str())).then(|| display.id.clone())
-            });
-            if let Some(shown) = shown {
-                self.record_tab_view(&placement.key, owner, &shown);
-            }
-        }
         if let Some(kept) = kept {
             self.restore_front(kept);
         }
@@ -1827,9 +1819,6 @@ impl Runtime {
                 return Err(error);
             }
         };
-        if let Some(tab) = self.control_caller_tab(&key, &caller) {
-            self.record_tab_view(&key, &tab, &display_id);
-        }
         match kept {
             Some(kept) => self.restore_front(kept),
             None => self.apply_area_intent_to(&key, AreaIntent::Files),
