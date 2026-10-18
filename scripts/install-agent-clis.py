@@ -172,6 +172,13 @@ def main(argv=None):
         program = programs[kind]
         if not program.is_file():
             raise SystemExit(f"{kind}: the installer left no program at {program}")
+        # The local journey runs --version only after applying the adapter's
+        # update policy in its private HOME and entering its stricter sandbox.
+        # Starting here would bypass config-based policies during installation.
+        if args.private_fake:
+            notes.append(f"{kind}: installed pin; journey must check version")
+            lines.append(f"{kind}={program}")
+            continue
         version = answered(program)
         notes.append(f"{kind} {version}")
         if not matches(rows[kind]["version"], version):

@@ -1,4 +1,4 @@
-"""The approved fake-only boundary: metadata changes stop, unproven routes do not launch.
+"""Metadata changes stop; unproven routes keep the existing HOME exception.
 
 Every filesystem case owns a fake operator root. None reads Path.home().
 """
@@ -53,7 +53,7 @@ class PrivateHome(unittest.TestCase):
 
     def test_a_missing_key_update_or_pin_proof_keeps_the_exception(self):
         row = {'fake_home': {'status': 'proven', 'key_env': 'KEY', 'evidence': 'vendor docs',
-                            'auto_update': {'kind': 'environment'}}}
+                            'auto_update': {'kind': 'environment', 'name': 'NO_UPDATE', 'value': '1'}}}
         pin = {'version': '1.0.0', 'installer': 'npm'}
         self.assertIsNone(fake_private.exception(row, pin))
         for missing in ('key_env', 'evidence', 'auto_update'):
@@ -61,6 +61,23 @@ class PrivateHome(unittest.TestCase):
             self.assertIsNotNone(fake_private.exception(incomplete, pin))
         self.assertIsNotNone(fake_private.exception(row, {**pin, 'pinned': 'installer takes no version'}))
         self.assertIsNotNone(fake_private.exception({}, pin))
+        for missing in ('name', 'value'):
+            update = {key: value for key, value in row['fake_home']['auto_update'].items() if key != missing}
+            self.assertIsNotNone(fake_private.exception({'fake_home': {**row['fake_home'], 'auto_update': update}}, pin))
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'private local runs use the macOS sandbox')
+    def test_private_sandbox_allows_the_probe_and_refuses_an_outside_write(self):
+        from agent_live_check.processes import OwnedProcesses
+        from agent_live_check.sandbox import WriteSandbox
+        from agent_live_check.runtime import clean_env
+        run, outside = self.root / 'run', self.root / 'outside'
+        run.mkdir()
+        outside.mkdir()
+        sandbox = WriteSandbox(run, self.root / 'sockets', self.root / 'operator',
+                               checkout=self.root / 'checkout', fake_private=True)
+        with OwnedProcesses() as owner:
+            sandbox.verify_private(owner, clean_env(), outside)
+        self.assertEqual((outside / 'forbidden').read_bytes(), b'unchanged')
 
     def test_a_cache_refuses_the_first_byte_past_its_cap(self):
         payload = self.root / 'payload'

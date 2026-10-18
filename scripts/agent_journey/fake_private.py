@@ -57,7 +57,9 @@ def exception(row, pin):
         return "The installer cannot select a pinned release."
     if not declaration.get("key_env") or not declaration.get("evidence"):
         return "The adapter declares no API-key environment proof."
-    if declaration.get("auto_update", {}).get("kind") not in ("environment", "config"):
+    update = declaration.get("auto_update") or {}
+    fields = {"environment": ("name", "value"), "config": ("path", "key", "value")}.get(update.get("kind"))
+    if not fields or any(not update.get(field) for field in fields):
         return "The adapter declares no auto-update disable policy."
     return None
 

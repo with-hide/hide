@@ -30,10 +30,10 @@ LIMITS = [
     "Usage is the fake's estimate in the provider's shape; a CLI's own accounting of a real answer is not seen.",
 ]
 
-# Each CLI's own update check and telemetry stay off, and its requests to
-# the fake skip any proxy the runner has.
+# Update policies come from the Rust adapters. Telemetry stays off, and
+# requests to the fake skip any proxy the runner has.
 QUIET = {"NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost",
-         "PI_OFFLINE": "1", "PI_SKIP_VERSION_CHECK": "1", "PI_TELEMETRY": "0",
+         "PI_TELEMETRY": "0",
          "GROK_TELEMETRY_ENABLED": "0",
          "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
 

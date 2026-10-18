@@ -262,11 +262,13 @@ class Handler(BaseHTTPRequestHandler):
                              or self.headers.get("x-api-key") == key
                              or self.headers.get("x-goog-api-key") == key)
             if not authenticated:
-                self.server.auth_failures += 1
+                with self.server.counts:
+                    self.server.auth_failures += 1
                 self.record(kind="auth_refused", authenticated=False)
                 self.send(401, {"error": {"message": "fake_api_key_required"}})
                 return
-            self.server.authenticated += 1
+            with self.server.counts:
+                self.server.authenticated += 1
         if not self.admitted(generation):
             return
         text, token = reply(request)
