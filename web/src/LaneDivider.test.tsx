@@ -10,7 +10,7 @@ import type { LaneFrame, LaneSizes } from "./workspace";
 // lane keeps: Files' and the one the other tools share (docs/UI_BEHAVIOR.md,
 // The right lane).
 
-const sizes: LaneSizes = { agentMin: 480, laneMin: 360, laneIdeal: 520, treeMin: 180, treeIdeal: 240, divider: 8 };
+const sizes: LaneSizes = { agentMin: 480, laneMin: 360, laneIdeal: 520, lanePage: 900, treeMin: 180, treeIdeal: 240, divider: 8 };
 const files: LaneFrame = { mode: "overlay", field: "lane_width", agents: 1600, width: 520, document: 520, tree: null, treeOnly: false, narrowPin: false };
 
 let unmount: (() => void) | null = null;

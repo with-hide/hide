@@ -41,6 +41,9 @@ const PAGES: Record<string, string> = {
   "/stay.html": '<!doctype html><meta charset="utf-8"><title>Stay</title><h1>Stay</h1>',
   // A title long enough that a tab's hint wraps over several lines.
   "/long.html": '<!doctype html><meta charset="utf-8"><title>Quarterly report draft with every section, appendix and reviewer note the team asked for</title><body style="background:lavender"><h1>Long</h1>',
+  // A site that lays out for phones below 768 CSS pixels, as most do.
+  "/site.html": '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Site</title><style>body{margin:0;font:16px system-ui}nav{display:flex;gap:16px;padding:12px;background:#1e293b;color:#fff}@media (max-width:767px){nav span+span{display:none}}</style><nav><span>Northwind</span><span>Docs</span><span>Pricing</span></nav><h1>Ship your storefront</h1>',
+  "/site-2.html": '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Site two</title><h1>Second page</h1>',
 };
 /** Answers with a server-side redirect to another app's link, the way a sign-in hands back to a native app. */
 const APP_REDIRECT = "/to-app";
@@ -1064,3 +1067,238 @@ async function widenFiles(page: Page): Promise<void> {
   if ((await screen.getAttribute("data-lane-mode")) !== "expanded") await page.locator("[data-lane-expand]").click();
   await expect(screen).toHaveAttribute("data-lane-mode", "expanded");
 }
+
+/**
+ * The window's body left of the rail at `width` CSS pixels, which a lane
+ * width rule needs wider than a CI screen: the shell is zoomed to fit what
+ * macOS grants, so a native page is `width`'s share of the window.
+ */
+async function bodyWidth(page: Page, width: number): Promise<number> {
+  const inset = await page.evaluate(() => innerWidth - document.querySelector<HTMLElement>("[data-lane-row]")!.clientWidth);
+  const zoom = await app!.evaluate(({ BrowserWindow, screen }, wanted) => {
+    const window = BrowserWindow.getAllWindows()[0]!;
+    const work = screen.getPrimaryDisplay().workArea;
+    // eslint-disable-next-line hide-e2e/window-size-through-fixture -- the lane is asserted in whole CSS pixels of bodies wider than a CI screen (as right-lane.spec.ts does); the shell's zoom keeps the CSS width whatever macOS grants, and nothing here orders the window out and in.
+    window.setBounds({ x: work.x, y: work.y, width: Math.min(wanted, work.width), height: Math.min(640, work.height) });
+    window.webContents.setZoomFactor(window.getContentBounds().width / wanted);
+    return window.webContents.getZoomFactor();
+  }, width + inset);
+  await expect.poll(() => page.locator("[data-lane-row]").evaluate((element) => element.clientWidth)).toBe(width);
+  return zoom;
+}
+
+/** A lane width as the core stores it for the checkout, absent until it is first set: Files' `lane_width` or the other tools' `panel_width`. */
+function storedLaneWidth(field: "lane_width" | "panel_width" = "lane_width"): number | undefined {
+  const views = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "workspace-views.json"), "utf8")) as { workspaces: ({ path: string } & Partial<Record<typeof field, number>>)[] };
+  return views.workspaces.find((entry) => entry.path.endsWith(`${path.sep}fixture`) || entry.path.endsWith("/fixture"))?.[field];
+}
+
+// @platform: the page view is placed in native window coordinates, which a
+// Windows or Linux display scale and the shell's fitted zoom change.
+test("page width: a page opened into the lane widens it to 900 beside Agent Views' 480, and a width the operator narrows it to stays", { tag: "@platform" }, async () => {
+  ({ app } = await launch(run.env));
+  const page = await shellPage(app);
+  await enterWorkspace(page, "fixture");
+  const zoom = await bodyWidth(page, 1800);
+  const notes = path.join(fs.realpathSync(herdr.root), "fixture", "page-width-notes.md");
+  fs.writeFileSync(notes, "# Notes\n");
+  const site = `${origin}/site.html`;
+  const divider = page.locator('[data-lane-divider="lane"]');
+
+  // A file opens the lane at its 520 default.
+  expect(await cliFromPane(["file", "open", notes])).toMatchObject({ ok: true });
+  await expect(divider).toHaveAttribute("aria-valuenow", "520");
+  await windowShot("page-width-before");
+
+  // A page opened from the operator's pane comes in front and the lane
+  // widens to 900, so the site draws its desktop layout (B1).
+  expect(await openFromCli(site, ["--wait"])).toMatchObject({ ok: true });
+  await expect(divider).toHaveAttribute("aria-valuenow", "900");
+  await expect.poll(() => storedLaneWidth()).toBe(900);
+  // Only Files widens; the width Memory and the other tools share is left as it was.
+  expect(storedLaneWidth("panel_width")).toBeUndefined();
+  const displayId = await displayIdOf(page, "Site");
+  // The page fills its slot, the lane's 900 less the area's edges; the shell
+  // is zoomed to fit the window, so its CSS width is the slot's share of it.
+  await expect.poll(async () => (await viewOf(site)).visible).toBe(true);
+  const slot = (await slotBounds(page, displayId)).width;
+  expect(slot).toBeGreaterThan(880);
+  await expect.poll(async () => Math.abs((await inPage<number>(site, "innerWidth")) - slot * zoom)).toBeLessThanOrEqual(1);
+  await windowShot("page-width-widened");
+
+  // The operator narrows it; a file in front and the page tab chosen again
+  // leave that width as it is (B3, B4).
+  await divider.focus();
+  for (let step = 0; step < 3; step += 1) await divider.press("ArrowRight");
+  await expect(divider).toHaveAttribute("aria-valuenow", "804");
+  expect(await cliFromPane(["file", "open", notes])).toMatchObject({ ok: true });
+  await expect(tab(page, "page-width-notes.md")).toHaveAttribute("aria-selected", "true");
+  await tab(page, "Site").click();
+  await shownAndSelected(page, site, displayId);
+  await quietFor(page, 300, "no widening follows a page tab chosen");
+  await expect(divider).toHaveAttribute("aria-valuenow", "804");
+  await expect.poll(() => storedLaneWidth()).toBe(804);
+});
+
+// @platform: the room left beside Agent Views comes from the body the host
+// measures, which each system's window frame and display scale change.
+test("page width: widening leaves Agent Views 480 pinned or not, never narrows, and leaves an expanded lane alone", { tag: "@platform" }, async () => {
+  ({ app } = await launch(run.env));
+  const page = await shellPage(app);
+  await enterWorkspace(page, "fixture");
+  const body = 1200;
+  await bodyWidth(page, body);
+  const divider = page.locator('[data-lane-divider="lane"]');
+  const tree = page.locator('[data-lane-divider="tree"]');
+  // What Agent Views keeps beside the lane and its tree (B2).
+  const room = async () => body - 8 - ((await tree.count()) ? Number(await tree.getAttribute("aria-valuenow")) + 8 : 0) - 480;
+
+  expect(await openFromCli(`${origin}/site.html`, ["--wait"])).toMatchObject({ ok: true });
+  await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "overlay");
+  await expect.poll(async () => Number(await divider.getAttribute("aria-valuenow"))).toBe(await room());
+
+  // Pinned and narrowed to its minimum, the next page widens it only as far again.
+  await page.locator("[data-lane-pin]").click();
+  await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
+  const box = (await divider.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + 100);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 600, box.y + 100, { steps: 6 });
+  await page.mouse.up();
+  await expect(divider).toHaveAttribute("aria-valuenow", "360");
+  expect(await openFromCli(`${origin}/site-2.html`, ["--wait"])).toMatchObject({ ok: true });
+  await expect.poll(async () => Number(await divider.getAttribute("aria-valuenow"))).toBe(await room());
+  const widened = await room();
+  await expect.poll(() => storedLaneWidth()).toBe(widened);
+
+  // A wider window and an expanded lane: a page opened there changes no width.
+  await page.locator("[data-lane-expand]").click();
+  await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "expanded");
+  expect(await openFromCli(`${origin}/a.html`, ["--wait"])).toMatchObject({ ok: true });
+  await expect(tab(page, "Page A")).toHaveAttribute("aria-selected", "true");
+  await quietFor(page, 300, "no widening in an expanded lane");
+  expect(storedLaneWidth()).toBe(widened);
+});
+
+// No `@platform`: the zoom arrives through the menu item, not a system key,
+// and a `@needs-focus` test under `--grep @platform` would run every
+// background test it depends on (playwright.config.ts).
+test("page zoom: a zoomed page shows its zoom in the address field, steps in the popover and loses the badge at 100%", { tag: NEEDS_FOCUS }, async () => {
+  ({ app } = await launch(run.env));
+  await fitWindow(app, WINDOW);
+  const page = await shellPage(app);
+  const sent = countSent(page);
+  await enterWorkspace(page, "fixture");
+  const first = `${origin}/site.html`;
+  const second = `${origin}/site-2.html`;
+  expect(await openFromCli(first, ["--wait"])).toMatchObject({ ok: true });
+  const firstId = await displayIdOf(page, "Site");
+  const badge = page.locator(`[data-browser-display="${firstId}"] [data-browser-zoom]`);
+  await expect.poll(async () => (await viewOf(first)).visible).toBe(true);
+  await expect(badge).toHaveCount(0);
+
+  // ⌘= on the focused page: the badge reads Chrome's next step (B6).
+  await focusPage(app, { url: first });
+  await menuClick("text_larger");
+  await expect(badge).toHaveText("110%");
+
+  // The popover steps the page and stays open, the keyboard left in the shell (B7).
+  await badge.click();
+  const popover = page.locator("[data-browser-zoom-popover]");
+  await expect(popover).toBeVisible();
+  await popover.locator('[data-browser-zoom-step="in"]').click();
+  await expect(popover.locator("[data-browser-zoom-level]")).toHaveText("125%");
+  await expect(badge).toHaveText("125%");
+  expect(await zoomOf(first)).toMatchObject({ factor: 1.25, focused: false });
+  await windowShot("page-zoom-popover");
+  await popover.locator('[data-browser-zoom-step="out"]').click();
+  await expect(badge).toHaveText("110%");
+  await page.keyboard.press("Escape");
+  await expect(popover).toHaveCount(0);
+
+  // Another page of the same host shows the zoom it shares (B9).
+  expect(await openFromCli(second, ["--wait"])).toMatchObject({ ok: true });
+  const secondId = await displayIdOf(page, "Site two");
+  await expect(page.locator(`[data-browser-display="${secondId}"] [data-browser-zoom]`)).toHaveText("110%");
+  await windowShot("page-zoom-badge");
+
+  // Back at 100% the badge and its popover go (B8).
+  await page.locator(`[data-browser-display="${secondId}"] [data-browser-zoom]`).click();
+  await page.locator('[data-browser-zoom-popover] [data-browser-zoom-step="reset"]').click();
+  await expect(page.locator("[data-browser-zoom-popover]")).toHaveCount(0);
+  await expect(page.locator(`[data-browser-display="${secondId}"] [data-browser-zoom]`)).toHaveCount(0);
+  expect((await zoomOf(second)).factor).toBe(1);
+  await page.locator(`[data-view-tab-bar] [role="tab"][data-display="${firstId}"]`).click();
+  await expect(badge).toHaveCount(0);
+
+  // At a device size the focused page takes ⌘= and zooms nothing, and no text size moves (B13).
+  const device = page.locator(`[data-browser-display="${firstId}"] [data-browser-device-button]`);
+  await device.click();
+  await page.locator('[data-browser-device-menu] [data-browser-device-choice="mobile"]').click();
+  await expect.poll(() => inPage<number>(first, "innerWidth")).toBe(390);
+  await focusPage(app, { url: first });
+  await menuClick("text_larger");
+  await quietFor(page, 300, "a zoom the device size took");
+  expect(await zoomOf(first)).toMatchObject({ factor: 1, focused: true });
+  expect((sent.get("pane_text_scale") ?? 0) + (sent.get("editor_text_scale") ?? 0)).toBe(0);
+  await expect(badge).toHaveCount(0);
+});
+
+// @platform: the host emulates the device viewport in each system's
+// renderer, and the scale it fits a wide size by depends on the display.
+test("device size: a page lays out at 390, 768 and 1280 CSS pixels at any zoom, keeps it across a navigation and fits again", { tag: "@platform" }, async () => {
+  ({ app } = await launch(run.env));
+  await fitWindow(app, WINDOW);
+  const page = await shellPage(app);
+  await enterWorkspace(page, "fixture");
+  const site = `${origin}/site.html`;
+  expect(await openFromCli(site, ["--wait"])).toMatchObject({ ok: true });
+  const displayId = await displayIdOf(page, "Site");
+  const toolbar = page.locator(`[data-browser-display="${displayId}"]`);
+  const button = toolbar.locator("[data-browser-device-button]");
+  const agent = await inPage<string>(site, "navigator.userAgent");
+  // The page's host zooms to 110%, which the device size must not move.
+  await app.evaluate(({ BrowserWindow }, url) => {
+    const child = BrowserWindow.getAllWindows()[0]!.contentView.children.find((view) => (view as { webContents?: Electron.WebContents }).webContents?.getURL() === url) as unknown as { webContents: Electron.WebContents };
+    child.webContents.setZoomFactor(1.1);
+  }, site);
+  await toolbar.locator('[data-browser-command="reload"]').click();
+  await expect(toolbar.locator("[data-browser-zoom]")).toHaveText("110%");
+  await expect(button).toHaveAttribute("data-browser-device-button", "fit");
+  await expect(button.locator("[data-browser-device-label]")).toHaveCount(0);
+
+  const choose = async (device: string) => {
+    await button.click();
+    await page.locator(`[data-browser-device-menu] [data-browser-device-choice="${device}"]`).click();
+    await expect(button).toHaveAttribute("data-browser-device-button", device);
+  };
+  for (const [device, width] of [["mobile", 390], ["tablet", 768], ["desktop", 1280]] as const) {
+    await choose(device);
+    await expect.poll(() => inPage<number>(site, "innerWidth"), { message: device }).toBe(width);
+    await expectOnSlot(page, site, displayId);
+    await expect(toolbar.locator("[data-browser-zoom]")).toHaveCount(0);
+    const frame = await page.locator(`[data-browser-slot="${displayId}"]`).evaluate((element) => element.clientWidth);
+    await expect(button.locator("[data-browser-device-label]")).toHaveText(frame < width ? `${width} · ${Math.round((frame / width) * 100)}%` : `${width}`);
+    await windowShot(`device-size-${device}`);
+  }
+  expect(await inPage<string>(site, "navigator.userAgent")).toBe(agent);
+
+  // The size survives a navigation inside the display (B14).
+  await choose("mobile");
+  const moved = `${origin}/site-2.html`;
+  await inPage(site, `location.href = ${JSON.stringify(moved)}`);
+  await viewOf(moved);
+  await expect.poll(() => inPage<number>(moved, "innerWidth")).toBe(390);
+  expect((await zoomOf(moved)).factor).toBe(1.1);
+
+  // Fit puts the page back on its area at its zoom, the badge with it.
+  await choose("fit");
+  await expect(toolbar.locator("[data-browser-zoom]")).toHaveText("110%");
+  await expectOnSlot(page, moved, displayId);
+  const slot = await slotBounds(page, displayId);
+  await expect.poll(async () => Math.abs((await inPage<number>(moved, "innerWidth")) - slot.width / 1.1)).toBeLessThanOrEqual(1);
+  await app.evaluate(({ BrowserWindow }, url) => {
+    const child = BrowserWindow.getAllWindows()[0]!.contentView.children.find((view) => (view as { webContents?: Electron.WebContents }).webContents?.getURL() === url) as unknown as { webContents: Electron.WebContents };
+    child.webContents.setZoomFactor(1);
+  }, moved);
+});
