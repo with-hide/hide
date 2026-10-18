@@ -493,8 +493,14 @@ def main(argv=None):
     # Each OpenCode agent's program, environment and private server port, whose server the run ends.
     services = {}
     try:
-        runtime = Runtime(checkout, run, operator, owner, herdr_bin=herdr,
-                          home=run / "probe/daemon-home")
+        home = run / "probe/daemon-home"
+        # The macOS sandbox opens the probe to agents, so a local run keeps the
+        # state outside it. A CI run keeps it where an operator's is, under
+        # HOME, which the kit trusts as its anchor: a state folder elsewhere it
+        # inspects from the drive root, and a Windows runner's D:\ lets every
+        # account change its entries.
+        runtime = Runtime(checkout, run, operator, owner, herdr_bin=herdr, home=home,
+                          state=None if local else home / ".hide/state")
         report["package"] = str(package(runtime))
         if fake:
             for key in measured:
