@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fixtureExecutable } from "./platform-fixture";
@@ -43,6 +44,58 @@ async function openFile(lane: Lane, paneId: string, name: string): Promise<void>
 }
 
 const resizes = (lane: Lane) => lane.sent.get("terminal_resize") ?? 0;
+
+type SavedRead = { bytes: Buffer } | { read_error: string };
+type SavedArea = { id: string; active: string | null; displays: { id: string; path?: string; kind?: string }[] };
+type SavedNode = { area: SavedArea } | { split: { first: SavedNode; second: SavedNode } };
+type SavedLayout = { active_area: string; root: SavedNode };
+
+/** Only read bytes in the crash window; parsing and evidence I/O happen after exit. */
+function readSavedViews(stateDir: string): SavedRead {
+  try { return { bytes: fs.readFileSync(path.join(stateDir, "workspace-views.json")) }; }
+  catch (error) { return { read_error: (error as NodeJS.ErrnoException).code ?? "unknown_read_error" }; }
+}
+
+/** Allowlisted fixture facts, never raw saved text, paths, prompts or error messages. */
+function savedViewFacts(read: SavedRead, fixture: string): unknown {
+  if ("read_error" in read) return { status: "read_error", code: read.read_error };
+  const hash = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
+  const metadata = { bytes: read.bytes.length, sha256: hash(read.bytes) };
+  try {
+    const saved = JSON.parse(read.bytes.toString("utf8")) as { schema_version: number; workspaces: { path: string; tool: string | null; pinned: boolean; view_layout: SavedLayout; agent_layout: SavedLayout }[] };
+    if (!Number.isInteger(saved.schema_version) || !Array.isArray(saved.workspaces)) throw new TypeError();
+    const views = saved.workspaces.filter((view) => view.path.replaceAll("\\", "/") === fixture.replaceAll("\\", "/"));
+    if (views.length !== 1) return { ...metadata, status: "workspace_match_error", schema_version: saved.schema_version, matches: views.length };
+    const view = views[0]!;
+    if (typeof view.pinned !== "boolean" || ![null, "files", "work", "memory", "changes"].includes(view.tool)) throw new TypeError();
+    const layout = (value: SavedLayout) => {
+      const areas: { id: string; active: string | null; displays: { id: string; basename?: string; kind?: string }[] }[] = [];
+      const identity = (id: string) => { if (typeof id !== "string") throw new TypeError(); return hash(id); };
+      const visit = (node: SavedNode, depth: number) => {
+        if (depth > 3) throw new TypeError();
+        if ("area" in node) {
+          const area = node.area;
+          areas.push({ id: identity(area.id), active: area.active === null ? null : identity(area.active), displays: area.displays.map((display) => {
+            const facts: { id: string; basename?: string; kind?: string } = { id: identity(display.id) };
+            if (display.path !== undefined) {
+              const name = path.basename(display.path);
+              if (!["a.md", "b.md", "c.md"].includes(name)) throw new TypeError();
+              facts.basename = name;
+              if (!["file", "diff"].includes(display.kind!)) throw new TypeError();
+              facts.kind = display.kind;
+            }
+            return facts;
+          }) });
+        } else { visit(node.split.first, depth + 1); visit(node.split.second, depth + 1); }
+      };
+      visit(value.root, 0);
+      return { active_area: identity(value.active_area), display_count: areas.reduce((count, area) => count + area.displays.length, 0), areas };
+    };
+    return { ...metadata, status: "read", schema_version: saved.schema_version, tool: view.tool, pinned: view.pinned, views: layout(view.view_layout), agents: layout(view.agent_layout) };
+  } catch (error) {
+    return { ...metadata, status: error instanceof SyntaxError ? "parse_error" : "shape_error" };
+  }
+}
 
 test("an opened file comes up over Agent Views without resizing a terminal, stays through a terminal click, and Escape puts it away with its document (B1, B3, B4, B16) @platform", async ({ page }) => {
   test.setTimeout(120_000);
@@ -196,7 +249,16 @@ test("the pin docks the lane once, keeps it through a terminal click, a tool and
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
     await expect(page.locator('[data-view-tab-bar] [role="tab"]')).toHaveCount(2);
 
-    lane.daemon = await lane.daemon.restart();
+    const savedBeforeExit = readSavedViews(lane.daemon.stateDir);
+    let savedAfterExit: SavedRead | undefined;
+    try {
+      lane.daemon = await lane.daemon.restart((stateDir) => { savedAfterExit = readSavedViews(stateDir); });
+    } finally {
+      if (savedAfterExit) {
+        const fixture = path.join(lane.herdr.root, "fixture");
+        await test.info().attach("first-restart-saved-views", { contentType: "application/json", body: JSON.stringify({ before_exit: savedViewFacts(savedBeforeExit, fixture), after_exit: savedViewFacts(savedAfterExit, fixture) }, null, 2) });
+      }
+    }
     await page.goto("about:blank");
     await page.goto(`${lane.daemon.origin}/?probe=1#token=${lane.daemon.token}`);
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
