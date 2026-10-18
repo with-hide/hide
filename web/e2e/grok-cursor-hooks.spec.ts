@@ -144,10 +144,10 @@ test("the switches write Hide's Grok file and Cursor entries beside the others, 
     // B1: Grok's own file appears with the five events; Cursor's entries join the operator's and Orca's.
     await switchOf("grok", "off").click();
     await expect(switchOf("grok", "on")).toBeVisible();
-    await expect.poll(() => read(grokFile(home)), { timeout: 60_000 }).toContain("hide-guidance@6");
+    await expect.poll(() => read(grokFile(home)), { timeout: 60_000 }).toContain("hide-guidance@7");
     await switchOf("cursor", "off").click();
     await expect(switchOf("cursor", "on")).toBeVisible();
-    await expect.poll(() => read(cursorFile(home)), { timeout: 60_000 }).toContain("hide-guidance@6");
+    await expect.poll(() => read(cursorFile(home)), { timeout: 60_000 }).toContain("hide-guidance@7");
     expect(Object.keys(json<Grouped>(grokFile(home)).hooks)).toEqual(["SessionStart", "PreToolUse", "SubagentStart", "SubagentStop", "Stop"]);
     // B6 (letters-to-busy-agents): the tool hook carries no matcher, so every tool call is a gap a due letter goes at.
     expect(json<Grouped>(grokFile(home)).hooks.PreToolUse![0]!.matcher).toBeUndefined();
@@ -190,7 +190,7 @@ test("a Grok file the operator removed or edited shows on its row until Reinstal
   const wire = watchWire(page);
   try {
     const list = await openAgents(page, daemon);
-    await expect.poll(() => read(grokFile(home)), { timeout: 60_000 }).toContain("hide-guidance@6");
+    await expect.poll(() => read(grokFile(home)), { timeout: 60_000 }).toContain("hide-guidance@7");
     // B8: the hook the operator took out is not put back; its row says so with Reinstall, on that row only.
     fs.rmSync(grokFile(home));
     await list.locator("[data-agents-check]").click();
@@ -199,7 +199,7 @@ test("a Grok file the operator removed or edited shows on its row until Reinstal
     await expect(list.locator("[data-agent-problem]")).toHaveCount(1);
     expect(fs.existsSync(grokFile(home))).toBe(false);
     await problem.locator("[data-hook-reinstall]").click();
-    await expect.poll(() => read(grokFile(home)), { timeout: 60_000 }).toContain("hide-guidance@6");
+    await expect.poll(() => read(grokFile(home)), { timeout: 60_000 }).toContain("hide-guidance@7");
     await expect(list.locator("[data-agent-problem]")).toHaveCount(0);
     expect(read(path.join(home, ".grok", "hooks", "herdr.json"))).toBe(HERDR_FILE);
 

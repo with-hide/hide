@@ -934,3 +934,55 @@ fn agys_tool_command_passes_the_helpers_own_answer_through_alone() {
     );
     assert_eq!(answer["decision"], "deny");
 }
+
+#[cfg(windows)]
+#[test]
+fn agys_legacy_windows_block_is_replaced_without_touching_other_blocks() {
+    let fixture = Fixture::new(GuidanceAgent::Antigravity);
+    let agent = GuidanceAgent::Antigravity;
+    let legacy = format!(
+        "if exist \"{}\" (\"{}\" hook --runtime antigravity --event SessionStart --source hide-guidance@6)",
+        fixture.helper.display(),
+        fixture.helper.display()
+    );
+    let other = json!({"SessionStart": [{"type": "command", "command": "echo other"}]});
+    fixture.write(
+        agent,
+        &json!({
+            "other": other,
+            "hide": {"SessionStart": [{"type": "command", "command": legacy, "timeout": 8}]},
+        })
+        .to_string(),
+    );
+    assert_eq!(
+        status(agent, fixture.home()),
+        HookStatus::Outdated { version: 6 }
+    );
+    assert_eq!(
+        installed_helper_path(agent, fixture.home()).as_deref(),
+        fixture.helper.to_str()
+    );
+    install(agent, fixture.home(), &fixture.helper).unwrap();
+    assert_eq!(
+        status(agent, fixture.home()),
+        HookStatus::Installed {
+            version: GUIDANCE_VERSION
+        }
+    );
+    assert_eq!(
+        installed_helper_path(agent, fixture.home()).as_deref(),
+        fixture.helper.to_str()
+    );
+    assert!(matches_install(agent, fixture.home(), &fixture.helper));
+    assert!(
+        !install(agent, fixture.home(), &fixture.helper)
+            .unwrap()
+            .changed
+    );
+    assert_eq!(fixture.read(agent)["other"], other);
+    assert_eq!(
+        remove(agent, fixture.home()).unwrap().removed_entries,
+        agent.slots().len()
+    );
+    assert_eq!(fixture.read(agent), json!({"other": other}));
+}
