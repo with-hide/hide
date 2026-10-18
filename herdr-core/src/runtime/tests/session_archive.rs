@@ -268,7 +268,7 @@ fn resuming_starts_the_root_with_its_resume_arguments_and_it_leaves_the_archive_
         .task_operation
         .as_ref()
         .expect("the next member's start");
-    assert!(runtime.task_stays_behind.contains(&next.id));
+    assert!(next.stays_behind);
 }
 
 #[test]

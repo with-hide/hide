@@ -5,8 +5,9 @@
 //! models the provider catalog lists, and the choice the last start
 //! remembered. A target travels as an id; the folder it names stays here in
 //! `Catalog::routes` and never reaches the phone. `start_agent` resolves the
-//! id, dispatches the same `agent_start_in_checkout` event the desktop sends,
-//! and answers with what the core's task slot or last error said about that
+//! id, dispatches the same `agent_start_in_checkout` event the desktop sends
+//! with `stay_behind`, so the desktop's screen does not follow it, and
+//! answers with what the core's task slot or last error said about that
 //! request id.
 
 use std::collections::{HashMap, VecDeque};
@@ -351,6 +352,9 @@ fn event(request: &Request<'_>, catalog: &Catalog) -> Result<Value, &'static str
         "provider": kind,
         "prompt": request.text,
         "request_id": request.request_id,
+        // The phone is a separate surface: its start never moves the
+        // desktop's visible tab or keyboard.
+        "stay_behind": true,
     });
     if let Some(model) = request.model {
         payload["model"] = json!(model);
@@ -678,6 +682,7 @@ mod tests {
             json!({
                 "provider": "claude", "prompt": "테스트 고쳐줘\n그리고 PR", "request_id": "r1",
                 "model": "opus", "checkout_path": "/Users/example/projects/hide.worktrees/a",
+                "stay_behind": true,
             })
         );
         let remote = event(&request("rc1", None), &catalog).unwrap();

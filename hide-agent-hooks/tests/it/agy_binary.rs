@@ -19,6 +19,7 @@ use hide_agent_hooks::guidance::{self, GuidanceAgent};
 
 #[test]
 #[ignore = "runs the real agy named by HIDE_AGY_BINARY in a throwaway home; the os contract lane installs it"]
+#[allow(clippy::disallowed_methods)] // env_clear: the real agy runs in a throwaway home with only what the test names
 fn the_real_agy_loads_hide_s_hook_block() {
     let agy = std::env::var_os("HIDE_AGY_BINARY")
         .expect("HIDE_AGY_BINARY names the agy binary this test runs");
@@ -135,6 +136,7 @@ esac
 #[cfg(unix)]
 #[test]
 #[ignore = "runs one real agy turn on HIDE_AGY_API_KEY in a throwaway home; the os contract lane's signed-in job runs it"]
+#[allow(clippy::disallowed_methods)] // env_clear: the real agy runs in a throwaway home with only what the test names
 fn a_signed_in_agy_turn_fires_hide_s_hooks() {
     use std::io::Write;
 

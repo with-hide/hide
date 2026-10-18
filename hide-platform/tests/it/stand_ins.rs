@@ -213,6 +213,7 @@ pub fn ready(program: &Path) {
     started.insert(id);
 }
 
+#[allow(clippy::disallowed_methods)] // env_clear: a Unix stand-in's first start gets no variable but PATH and its home
 fn start_once(program: &Path) {
     let scratch = tempfile::tempdir().unwrap();
     let deadline = Instant::now() + READY_GUARD;

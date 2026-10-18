@@ -4,6 +4,7 @@ import { agentProductName } from "../agentAdapters";
 import { useInterfaceTranslation } from "../i18n/client";
 import type { SleepingSession } from "../snapshot";
 import { sleepingCaption } from "../sleeping-session";
+import { startReasonText } from "../startReason";
 import { Button } from "./ui/button";
 import { StatusMark } from "./status-mark";
 import { Hint } from "./ui/tooltip";
@@ -29,7 +30,7 @@ export function SleepingSessionRow({ session, actions, inset = "var(--spacing-xs
           <StatusMark mark="asleep" data-agent-status-mark="asleep" />
           <AgentRowMark kind={session.kind} />
         </span>
-        <Hint label={[session.identity_label, agentProductName(session.kind), session.reason, caption].filter(Boolean).join("\n")}>
+        <Hint label={[session.identity_label, agentProductName(session.kind), session.reason ? startReasonText(session.reason, t) : null, caption].filter(Boolean).join("\n")}>
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="min-h-(--size-sidebar-line) truncate leading-(--size-sidebar-line) text-subtle-foreground">{session.identity_label}<span className="sr-only">{`, ${[agentProductName(session.kind), lineShown ? null : caption].filter(Boolean).join(", ")}`}</span></span>
             {lineShown ? <span className="truncate text-caption leading-(--size-sidebar-line-detail) text-subtle-foreground" data-sleeping-line={session.phase} aria-busy={session.checking || pending || undefined}>{caption}</span> : null}

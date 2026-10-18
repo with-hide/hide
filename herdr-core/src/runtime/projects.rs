@@ -3993,15 +3993,14 @@ impl Runtime {
         self.start_in_checkout(payload, true, None)
     }
 
-    /// A start in a checkout's new tab; `front` false opens the tab behind
-    /// what the screen shows and leaves the keyboard where it is (an archived
-    /// descendant resumed after its root, PRD session-archive B23). `cwd`
-    /// is a folder inside the checkout the resumed conversation ran in; one
-    /// outside it is ignored and the tab starts at the checkout.
+    /// A start in a checkout's new tab; `remember` false keeps the start out
+    /// of the remembered agent choice (an archive resume). `cwd` is a folder
+    /// inside the checkout the resumed conversation ran in; one outside it is
+    /// ignored and the tab starts at the checkout.
     pub(super) fn start_in_checkout(
         &mut self,
         payload: AgentStartInCheckoutPayload,
-        front: bool,
+        remember: bool,
         cwd: Option<String>,
     ) -> bool {
         let request_id = payload.request_id.clone();
@@ -4074,7 +4073,14 @@ impl Runtime {
         // A start names one place: a device's Home, or one of its checkouts.
         let checkout_path = match (payload.home, payload.checkout_path.clone()) {
             (true, None) => {
-                return self.start_in_home(&device, agent_kind, model, prompt, request_id);
+                return self.start_in_home(
+                    &device,
+                    agent_kind,
+                    model,
+                    prompt,
+                    request_id,
+                    payload.stay_behind,
+                );
             }
             (false, Some(path)) if !path.is_empty() => path,
             _ => {
@@ -4144,12 +4150,12 @@ impl Runtime {
         if let Some(operation) = self.snapshot.task_operation.as_mut() {
             operation.request_id = request_id;
             operation.device_id = (!local).then(|| device.clone());
+            operation.stays_behind = payload.stay_behind;
         }
-        if front {
+        // A resume Hide makes from the archive is not the operator's choice
+        // of agent.
+        if remember {
             self.remember_agent_choice(agent_kind.as_deref(), model.as_deref());
-        } else {
-            // A start behind the screen is not the operator's choice of agent.
-            self.task_stays_behind.insert(id);
         }
         let mut arguments = resume.unwrap_or_default();
         arguments.extend(agent_choice::agent_arguments(
@@ -4188,7 +4194,7 @@ impl Runtime {
             checkout_path,
             label,
             host,
-            focus: front,
+            focus: !payload.stay_behind,
         };
         let target = if local {
             self.live

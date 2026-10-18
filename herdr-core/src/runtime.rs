@@ -1139,9 +1139,6 @@ pub struct Runtime {
     archive_deletes_sent: HashSet<crate::session_archive::ArchiveId>,
     /// The archived sessions last handed to the link worker's retention.
     archive_retention_sent: Arc<Vec<crate::links::store::ArchivedSession>>,
-    /// Start tasks whose tab opens behind the screen: an archived
-    /// descendant resumed after its root (PRD session-archive B21, B23).
-    task_stays_behind: HashSet<u64>,
     /// When each resumed archived member's registration began waiting for
     /// the delivery store to see its new pane, by agent id.
     archive_registration_waits: HashMap<String, u64>,
@@ -2072,7 +2069,6 @@ impl Runtime {
             registration_rebinds: std::collections::BTreeMap::new(),
             archive_deletes_sent: HashSet::new(),
             archive_retention_sent: Arc::default(),
-            task_stays_behind: HashSet::new(),
             archive_registration_waits: HashMap::new(),
             node: options.node_id.clone(),
             machine_name: options.machine_name.clone(),

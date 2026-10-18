@@ -1235,8 +1235,10 @@ impl Runtime {
                 request_id: Some(request.to_owned()),
                 resume_session_id: Some(member.native_session_id.clone()),
                 resume_session_path,
+                // A descendant opens behind the root resumed before it (B23).
+                stay_behind: !front,
             },
-            front,
+            false,
             member.cwd.clone(),
         );
         if let Some(operation) = self

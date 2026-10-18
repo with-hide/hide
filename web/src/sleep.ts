@@ -5,6 +5,7 @@
 import type { TFunction } from "i18next";
 import { activityAge, ageText } from "./projects";
 import type { AgentSleep } from "./snapshot";
+import { startReasonText } from "./startReason";
 
 /** The pane header's caption beside the moon; a failed wake has no moon. */
 export function sleepCaption(sleep: AgentSleep, nowMs: number, t: TFunction<"translation">): { text: string; moon: boolean } {
@@ -18,4 +19,9 @@ export function sleepCaption(sleep: AgentSleep, nowMs: number, t: TFunction<"tra
 export function wakingLine(sleep: AgentSleep, nowMs: number, t: TFunction<"translation">): string {
   const age = activityAge(sleep.since_unix_ms, nowMs);
   return age && age.unit !== "now" ? t("panes.sleep.resumingAge", { age: ageText(age, t) }) : t("panes.sleep.resuming");
+}
+
+/** Why a wake failed, under its heading: the core's reason worded as every start reason is, or null when it gave none. */
+export function wakeFailureReason(sleep: AgentSleep, t: TFunction<"translation">): string | null {
+  return sleep.reason ? startReasonText(sleep.reason, t) : null;
 }

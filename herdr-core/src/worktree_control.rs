@@ -916,10 +916,11 @@ pub struct CheckoutTabRequest {
     pub checkout_path: String,
     pub label: String,
     pub host: crate::checkout_owner::TabHost,
+    /// Whether Herdr focuses the tab it makes; false for a start that stays
+    /// behind the operator's screen.
+    pub focus: bool,
     pub resume_scope: Option<hide_session::SessionReadScope>,
     pub(crate) resume_reference: Option<crate::sidebar::SessionAgentSessionPayload>,
-    /// Whether Herdr brings the new tab forward; false opens it behind.
-    pub focus: bool,
     /// The folder the tab's shell starts in: the checkout, or a folder inside
     /// it where a resumed conversation ran, since a CLI may find its
     /// conversations by folder; a folder that is gone refuses the start.
@@ -3481,6 +3482,37 @@ mod tests {
     }
 
     #[test]
+    fn a_checkout_tab_is_focused_in_herdr_only_when_the_request_asks() {
+        for focus in [true, false] {
+            let server = server(vec![json!({"result":{
+                "type":"tab_created",
+                "tab":{"tab_id":"w9:t2","workspace_id":"w9","number":2,"label":"Tab 2","focused":focus,"pane_count":1,"agent_status":"idle"},
+                "root_pane":{"pane_id":"w9:p2","terminal_id":"fixture-terminal","workspace_id":"w9","tab_id":"w9:t2","focused":focus,"agent_status":"idle","revision":1}
+            }})]);
+            let outcome = create_checkout_tab(
+                &server,
+                &CheckoutTabRequest {
+                    id: 1,
+                    agent_kind: None,
+                    checkout_path: "/repo".into(),
+                    label: "Tab 2".into(),
+                    host: crate::checkout_owner::TabHost::Workspace("w9".into()),
+                    focus,
+                    resume_scope: None,
+                    resume_reference: None,
+                    cwd: "/repo".into(),
+                },
+                None,
+            )
+            .unwrap();
+            assert_eq!(outcome.pane_id, "w9:p2");
+            let requests = server.requests.lock().unwrap();
+            assert_eq!(requests[0]["method"], "tab.create");
+            assert_eq!(requests[0]["params"]["focus"], focus);
+        }
+    }
+
+    #[test]
     fn migrate_branch_restores_on_failure() {
         let server = server(vec![
             json!({"error":{"code":"injected","message":"pane creation failed"}}),
@@ -3845,7 +3877,7 @@ mod tests {
         let TaskAgentOutcome::Failed(reason) = outcome else {
             panic!("start succeeded")
         };
-        assert!(reason.contains("Settings"), "{reason}");
+        assert_eq!(reason, crate::codex_launch::CAPABILITY_UNKNOWN);
         assert!(requests_of(&server).is_empty());
     }
 
