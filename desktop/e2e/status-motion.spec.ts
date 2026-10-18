@@ -8,7 +8,7 @@ import { fixtureProgram } from "../../web/e2e/platform-fixture";
 import { bundledExecutable, linkBundle } from "../../web/e2e/bundled-app";
 import { captureElectronWindow } from "./electron-window";
 import { captureNativeWindow } from "./native-window";
-import { hostLog, isolate, launch, launchNative, test, type Isolated } from "./fixture";
+import { fitWindow, hostLog, isolate, launch, launchNative, test, type Isolated } from "./fixture";
 
 const packaged = process.env.HIDE_E2E_PACKAGED_APP;
 let herdr: HerdrFixture;
@@ -61,7 +61,7 @@ test("the local flight draws offline, freezes live for reduced motion, and yield
   await expect(page.locator("#brand strong")).toHaveText("hide");
   await captureElectronWindow(app, "startup-flight", { packaged: Boolean(packaged), offline: true });
   await captureNativeWindow(app, "startup-flight-native", { method: "screencapture exact candidate window without activation", packaged: Boolean(packaged), privateSocket: herdr.socket });
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(720, 480));
+  expect(await fitWindow(app, { width: 720, height: 480 })).toEqual({ width: 720, height: 480 });
   const overflow = () => page.evaluate(() => ({
     width: innerWidth, html: document.documentElement.scrollWidth, body: document.body.scrollWidth,
   }));
