@@ -405,14 +405,16 @@ class Runtime:
                 processes_confirmed = True
             except Exception as error:
                 failures.append(str(error))
-            for _, output, label in self.servers:
+            for child, output, label in self.servers:
                 try:
                     output.finish()
                 except Exception as error:
                     failures.append(str(error))
-                # A resident its guardian ended mid-run fails the cells after it
-                # with an exit code alone; the report says why.
+                # A resident its guardian (its job, on Windows) ended mid-run
+                # fails the cells after it with an exit code alone; the report says why.
                 failures.extend(f"{label} guardian: {line}" for line in output.guardian_failures())
+                if child in self.owner.job_failures:
+                    failures.append(f"{label} job: {self.owner.job_failures[child]}")
             # A log or protocol failure must not retain disposable auth copies.
             # These exact roots were registered before copying, so even a
             # partially failed copy is removed without touching operator HOME.

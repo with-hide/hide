@@ -220,13 +220,13 @@ def job_over_budget(job):
     counts every page a process committed, touched or not, so a run within
     the cap on Linux and macOS would pass it."""
     try:
-        sizes = job.working_sets()
+        table = job.working_sets()
     except OSError as error:
         return "rss_samples_unavailable:" + str(error)[:MAX_FAILURE_REASON]
-    rss = sum(sizes)
+    rss = sum(process.rss for process in table.values())
     if rss > MAX_RSS_BYTES:
         return "owned_processes_over_budget:" + json.dumps(
-            {"descendants": len(sizes), "rss_bytes": rss}, separators=(",", ":"))
+            {"descendants": len(table), "rss_bytes": rss, "largest": largest(table)}, separators=(",", ":"))
     return None
 
 
@@ -256,6 +256,9 @@ class OwnedProcesses:
         self.port = None
         self.jobs = 0
         self.unconfirmed = []
+        # Windows: why each child's job ended it, kept past its end so the run
+        # can say what ended a resident, as a guardian's stderr says on Unix.
+        self.job_failures = {}
 
     def spawn(self, argv, *, env, cwd=None, stdin=subprocess.DEVNULL,
               stdout=subprocess.PIPE, stderr=subprocess.PIPE, _guarded=True, deadline=None):
@@ -506,6 +509,7 @@ class OwnedProcesses:
         self.port.forget(job)
         job.close()
         if job.failure:
+            self.job_failures[child] = job.failure
             raise ProcessSafetyError(job.failure)
 
     def usage(self):

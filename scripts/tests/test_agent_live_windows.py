@@ -136,7 +136,9 @@ class JobOwnership(unittest.TestCase):
                 """), env=dict(os.environ), check=False)
         reason, _, measured = str(raised.exception).partition(":")
         self.assertEqual(reason, "owned_processes_over_budget")
-        self.assertGreater(json.loads(measured)["rss_bytes"], cap)
+        measured = json.loads(measured)
+        self.assertGreater(measured["rss_bytes"], cap)
+        self.assertEqual(measured["largest"][0]["executable"].lower(), Path(sys.executable).name.lower())
 
     def test_memory_committed_but_never_touched_is_within_the_cap(self):
         cap = 256 * 1024 * 1024

@@ -18,6 +18,7 @@ import msvcrt
 import os
 import threading
 import time
+from typing import NamedTuple
 import winreg
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -130,6 +131,17 @@ PostQueuedCompletionStatus = declare(kernel32, "PostQueuedCompletionStatus", win
 GetConsoleCP = declare(kernel32, "GetConsoleCP", wintypes.UINT)
 K32GetProcessMemoryInfo = declare(kernel32, "K32GetProcessMemoryInfo", wintypes.BOOL,
                                   HANDLE, ctypes.POINTER(MemoryCounters), wintypes.DWORD)
+QueryFullProcessImageNameW = declare(kernel32, "QueryFullProcessImageNameW", wintypes.BOOL,
+                                     HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD))
+
+
+class Resident(NamedTuple):
+    """A process of a job and the memory it keeps resident, read as the
+    Unix process table's entries are. A Windows process is never a zombie: one
+    that ended is no longer listed by its job."""
+    name: str
+    rss: int
+    zombie: bool = False
 
 
 def console_flags():
@@ -194,13 +206,13 @@ class Job:
         return accounting.ActiveProcesses
 
     def working_sets(self):
-        """The resident memory (working set) of each process the job holds
-        now, in bytes; a process that ended since the job listed it is left
-        out."""
+        """Each process the job holds now, by pid, with its executable's name
+        and its resident memory (working set) in bytes; a process that ended
+        since the job listed it is left out."""
         if not QueryInformationJobObject(self.handle, JOB_BASIC_PROCESS_ID_LIST, ctypes.byref(self.ids),
                                          ctypes.sizeof(self.ids), None):
             raise failed("QueryInformationJobObject(process ids)")
-        sizes = []
+        residents = {}
         for pid in self.ids.ProcessIdList[:self.ids.NumberOfProcessIdsInList]:
             process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
             if not process:
@@ -212,10 +224,13 @@ class Job:
                 counters.cb = ctypes.sizeof(counters)
                 if not K32GetProcessMemoryInfo(process, ctypes.byref(counters), counters.cb):
                     raise failed("GetProcessMemoryInfo")
-                sizes.append(counters.WorkingSetSize)
+                image, length = ctypes.create_unicode_buffer(32768), wintypes.DWORD(32768)
+                if not QueryFullProcessImageNameW(process, 0, image, ctypes.byref(length)):
+                    raise failed("QueryFullProcessImageNameW")
+                residents[pid] = Resident(os.path.basename(image.value), counters.WorkingSetSize)
             finally:
                 CloseHandle(process)
-        return sizes
+        return residents
 
     def terminate(self):
         if not TerminateJobObject(self.handle, 1):
