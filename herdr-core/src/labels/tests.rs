@@ -500,10 +500,9 @@ fn an_opencode_transaction_keeps_proof_and_caps_its_pending_reread() {
     assert_eq!(harness.backend.calls(), 0);
 }
 
-#[test]
-fn an_agy_index_agy_is_writing_keeps_the_proven_conversation_until_it_is_gone() {
-    let harness = Harness::new();
-    let id = "a9c0e2f4-0000-4000-8000-000000000001";
+/// An idle agy pane on conversation `id`, which agy's index places in a
+/// checkout of the harness home.
+fn agy_conversation(harness: &Harness, id: &str) -> ObservedAgent {
     let cwd = harness.home.path().join("checkout");
     std::fs::create_dir(&cwd).unwrap();
     let cwd = hide_platform::fs::identity::canonical(&cwd).unwrap();
@@ -517,22 +516,31 @@ fn an_agy_index_agy_is_writing_keeps_the_proven_conversation_until_it_is_gone() 
         ),
     )
     .unwrap();
-    let (mut worker, woken, _) = harness.worker(harness.store());
-    worker.set_summaries(false, Instant::now());
-    let mut observed = ObservedAgent {
+    ObservedAgent {
         pane_id: "w1:p1".into(),
         agent: Some("agy".into()),
         status: Some("idle".into()),
         reference: Some(("id".into(), id.into())),
         cwd: Some(cwd.to_str().unwrap().into()),
         state_change_seq: 1,
-    };
-    let session = |worker: &LabelWorker, observed: &ObservedAgent| {
-        shown_facts(worker, observed).and_then(|facts| facts.native_session_id)
-    };
+    }
+}
+
+/// The native session id the row would carry for `observed`.
+fn shown_session(worker: &LabelWorker, observed: &ObservedAgent) -> Option<String> {
+    shown_facts(worker, observed).and_then(|facts| facts.native_session_id)
+}
+
+#[test]
+fn an_agy_index_agy_is_writing_keeps_the_proven_conversation_until_it_is_gone() {
+    let harness = Harness::new();
+    let id = "a9c0e2f4-0000-4000-8000-000000000001";
+    let mut observed = agy_conversation(&harness, id);
+    let (mut worker, woken, _) = harness.worker(harness.store());
+    worker.set_summaries(false, Instant::now());
     observe(&mut worker, &observed);
     settle(&mut worker, &woken);
-    assert_eq!(session(&worker, &observed).as_deref(), Some(id));
+    assert_eq!(shown_session(&worker, &observed).as_deref(), Some(id));
     // agy writes its index after a turn; a read that meets the write, here
     // its rollback journal, disproves nothing (CI run 39099935719: the row
     // lost its id and Fork was refused until the next read).
@@ -545,12 +553,12 @@ fn an_agy_index_agy_is_writing_keeps_the_proven_conversation_until_it_is_gone() 
     observed.state_change_seq += 1;
     observe(&mut worker, &observed);
     settle(&mut worker, &woken);
-    assert_eq!(session(&worker, &observed).as_deref(), Some(id));
+    assert_eq!(shown_session(&worker, &observed).as_deref(), Some(id));
     std::fs::remove_file(&journal).unwrap();
     observed.state_change_seq += 1;
     observe(&mut worker, &observed);
     settle(&mut worker, &woken);
-    assert_eq!(session(&worker, &observed).as_deref(), Some(id));
+    assert_eq!(shown_session(&worker, &observed).as_deref(), Some(id));
     // A conversation agy no longer indexes is gone, and its proof with it.
     rusqlite::Connection::open(&index)
         .unwrap()
@@ -562,7 +570,48 @@ fn an_agy_index_agy_is_writing_keeps_the_proven_conversation_until_it_is_gone() 
     observed.state_change_seq += 1;
     observe(&mut worker, &observed);
     settle(&mut worker, &woken);
-    assert_eq!(session(&worker, &observed), None);
+    assert_eq!(shown_session(&worker, &observed), None);
+    assert_eq!(harness.backend.calls(), 0);
+}
+
+/// A hold that outlasts every retry is no write in flight: agy died holding
+/// its index, and the row stops naming a conversation no read can prove is
+/// still there, until a read proves it again.
+#[test]
+fn an_agy_index_held_past_every_retry_stops_proving_the_conversation_until_it_is_read() {
+    let harness = Harness::new();
+    let id = "a9c0e2f4-0000-4000-8000-000000000001";
+    let mut observed = agy_conversation(&harness, id);
+    let (mut worker, woken, _) = harness.worker(harness.store());
+    worker.set_summaries(false, Instant::now());
+    observe(&mut worker, &observed);
+    settle(&mut worker, &woken);
+    assert_eq!(shown_session(&worker, &observed).as_deref(), Some(id));
+    let journal = harness
+        .home
+        .path()
+        .join(".gemini/antigravity-cli/conversation_summaries.db-journal");
+    std::fs::write(&journal, b"left by an agy that died writing").unwrap();
+    observed.state_change_seq += 1;
+    observe(&mut worker, &observed);
+    settle(&mut worker, &woken);
+    // Each tick lands just past the wait due, whatever the list holds; the
+    // read after the last wait is past every retry.
+    let (last, waits) = super::worker::READ_RETRY_BACKOFF.split_last().unwrap();
+    for wait in waits {
+        worker.tick(Instant::now() + *wait + Duration::from_secs(1));
+        settle(&mut worker, &woken);
+        assert_eq!(shown_session(&worker, &observed).as_deref(), Some(id));
+    }
+    worker.tick(Instant::now() + *last + Duration::from_secs(1));
+    settle(&mut worker, &woken);
+    assert_eq!(shown_session(&worker, &observed), None);
+    // The journal goes once agy writes its index again: the next read
+    // proves the conversation, with no state change to wait for.
+    std::fs::remove_file(&journal).unwrap();
+    worker.tick(Instant::now() + Duration::from_secs(16));
+    settle(&mut worker, &woken);
+    assert_eq!(shown_session(&worker, &observed).as_deref(), Some(id));
     assert_eq!(harness.backend.calls(), 0);
 }
 

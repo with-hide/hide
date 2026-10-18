@@ -65,13 +65,17 @@ const UNAVAILABLE_RETRY: Duration = Duration::from_secs(15);
 /// tried again: a transaction in flight, or a session file its agent has not
 /// written yet (Claude writes it with the first message). One entry per
 /// retry, so the list is also the cap; past it the pane waits for its next
-/// state change, which re-arms the schedule.
+/// state change, which re-arms the schedule, and a read that met the writer
+/// every time is refused as [`READ_STALE`].
 pub(crate) const READ_RETRY_BACKOFF: [Duration; 4] = [
     Duration::from_secs(15),
     Duration::from_secs(30),
     Duration::from_secs(60),
     Duration::from_secs(120),
 ];
+/// Why a read that met the agent writing its records on every retry is
+/// refused: a hold that outlasts the backoff is no write in flight.
+const READ_STALE: &str = "session_read_stale";
 /// The most sighted pull requests waiting between two takes; a read that
 /// finds more keeps the newest.
 const SIGHTED_LIMIT: usize = 32;
@@ -963,16 +967,14 @@ impl LabelWorker {
             }
             Err(ReadFailure::Pending(reason)) => {
                 let pane = self.panes.get_mut(pane_id).expect("checked above");
-                let capped = !pane.retry_later(now);
-                self.log_failure(
-                    pane_id,
-                    if capped {
-                        "read.retry_capped"
-                    } else {
-                        "read.pending"
-                    },
-                    &reason,
-                );
+                if !pane.retry_later(now) {
+                    // Met the writer on every retry: no write lasts that
+                    // long, but a writer that died holding its database
+                    // leaves it held for good, and the row would go on
+                    // naming a conversation no read can prove is still there.
+                    return self.refuse_read(pane_id, READ_STALE, now);
+                }
+                self.log_failure(pane_id, "read.pending", &reason);
                 // A transaction in flight says nothing about session identity.
                 // Its previous wait is not proof of the current turn, however.
                 let released = self.release_turn_end(pane_id);
@@ -984,17 +986,7 @@ impl LabelWorker {
                 self.dirty |= changed || released;
                 return changed || released;
             }
-            Err(ReadFailure::Refused(reason)) => {
-                self.log_failure(pane_id, "read.refused", &reason);
-                if let Some(pane) = self.panes.get_mut(pane_id) {
-                    if pane.agent.requires_native_file_proof() {
-                        pane.follow_up_at = Some(now + UNAVAILABLE_RETRY);
-                    } else if refusal_clears_by_itself(&reason) && !pane.retry_later(now) {
-                        self.log_failure(pane_id, "read.retry_capped", &reason);
-                    }
-                }
-                return self.invalidate_turn_read(pane_id);
-            }
+            Err(ReadFailure::Refused(reason)) => return self.refuse_read(pane_id, &reason, now),
         };
         let mut changed = false;
         if let Some(id) = transcript.confirmed.native_session_id.as_deref()
@@ -1283,6 +1275,20 @@ impl LabelWorker {
 
     /// A failed reread cannot certify the previous native wait for this state.
     /// Keep its bounded tracker/checkpoint for a later successful continuation.
+    /// A read that refused: what it proved of the session is gone, and the
+    /// pane is read again when its refusal can clear.
+    fn refuse_read(&mut self, pane_id: &str, reason: &str, now: Instant) -> bool {
+        self.log_failure(pane_id, "read.refused", reason);
+        if let Some(pane) = self.panes.get_mut(pane_id) {
+            if pane.agent.requires_native_file_proof() {
+                pane.follow_up_at = Some(now + UNAVAILABLE_RETRY);
+            } else if refusal_clears_by_itself(reason) && !pane.retry_later(now) {
+                self.log_failure(pane_id, "read.retry_capped", reason);
+            }
+        }
+        self.invalidate_turn_read(pane_id)
+    }
+
     fn invalidate_turn_read(&mut self, pane_id: &str) -> bool {
         let released = self.release_turn_end(pane_id);
         self.revoke_turn_read(pane_id) || released
