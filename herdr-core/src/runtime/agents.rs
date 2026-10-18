@@ -788,13 +788,15 @@ impl Runtime {
                 !(operation.scope_id == descriptor.scope_id
                     && matches!(operation.phase.as_str(), "failed" | "refused"))
             });
-            if self.remote_operations.values().any(|operation| {
-                operation.scope_id == descriptor.scope_id
-                    && matches!(
-                        operation.phase.as_str(),
-                        "transmitting" | "awaiting_topology" | "unknown"
-                    )
-            }) {
+            if self.geometry_tab_busy(&descriptor.scope_id)
+                || self.remote_operations.values().any(|operation| {
+                    operation.scope_id == descriptor.scope_id
+                        && matches!(
+                            operation.phase.as_str(),
+                            "transmitting" | "awaiting_topology" | "unknown"
+                        )
+                })
+            {
                 fail_request!(
                     "remote.control.in_progress",
                     format!(

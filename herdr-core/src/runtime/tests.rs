@@ -106,6 +106,7 @@ mod snapshot_delta;
 #[cfg(unix)]
 #[path = "tests/ssh_hosts.rs"]
 mod ssh_hosts_list;
+mod start_geometry;
 #[path = "tests/terminal.rs"]
 mod terminal;
 #[path = "tests/tree_close.rs"]
