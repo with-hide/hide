@@ -513,6 +513,8 @@ impl Runtime {
                 || previous.seed_tab_id != effect.seed_tab_id
                 || previous.target != effect.target
                 || previous.expected_command != effect.expected_command
+                || previous.shell_env != effect.shell_env
+                || previous.shell_readiness != effect.shell_readiness
                 || previous
                     .binding
                     .as_ref()

@@ -411,6 +411,7 @@ impl Fixture {
 fn launch() -> ShellLaunch {
     ShellLaunch {
         command: vec!["/bin/zsh".into(), "-l".into()],
+        readiness: hide_node_link::protocol::ShellReadiness::Integrated,
         env: BTreeMap::from([("SHELL_INTEGRATION".into(), "1".into())]),
     }
 }
@@ -522,17 +523,64 @@ fn unobserved_default_shell_stays_unknown_after_lost_create_answer() {
     let request = fixture.request(false);
     assert!(
         fixture
-            .run(&request, None, Some("layout.apply"))
+            .run(&request, Some(&launch()), Some("layout.apply"))
             .unwrap_err()
             .is_ambiguous()
     );
-    let error = fixture
-        .run(&fixture.recover(&request), None, None)
-        .unwrap_err();
+    // A receipt from before explicit normal-shell recipes were available
+    // has no command proof. It must never adopt a matching retained label.
+    let mut legacy = fixture.recover(&request);
+    legacy
+        .start
+        .as_mut()
+        .unwrap()
+        .effect
+        .as_mut()
+        .unwrap()
+        .expected_command = None;
+    let error = fixture.run(&legacy, None, None).unwrap_err();
     assert!(error.is_ambiguous());
     assert!(error.message().contains("continuity"));
     assert_eq!(fixture.mutations(), ["layout.apply"]);
     assert!(fixture.state.lock().unwrap().last_saved().binding.is_none());
+}
+
+#[test]
+fn a_missing_normal_shell_refuses_before_terminal_creation() {
+    let fixture = Fixture::new();
+    let error = fixture
+        .run(&fixture.request(false), None, None)
+        .unwrap_err();
+    assert!(!error.is_ambiguous());
+    assert!(error.message().contains("no terminal was started"));
+    assert!(fixture.mutations().is_empty());
+    assert!(fixture.state.lock().unwrap().saved.is_empty());
+}
+
+#[test]
+fn an_explicit_plain_shell_recovers_a_lost_answer_without_another_creation() {
+    let fixture = Fixture::new();
+    let request = fixture.request(false);
+    let plain = ShellLaunch {
+        readiness: hide_node_link::protocol::ShellReadiness::Plain,
+        ..launch()
+    };
+    assert!(
+        fixture
+            .run(&request, Some(&plain), Some("layout.apply"))
+            .unwrap_err()
+            .is_ambiguous()
+    );
+    let saved = fixture.state.lock().unwrap().last_saved();
+    assert_eq!(saved.shell_env, plain.env);
+    assert_eq!(saved.shell_readiness, plain.readiness);
+    let recovered = fixture.run(&fixture.recover(&request), None, None).unwrap();
+    assert!(matches!(
+        recovered.shell,
+        crate::agent_start::ShellStart::Plain
+    ));
+    assert_eq!(recovered.pane_id, "w1:p3");
+    assert_eq!(fixture.mutations(), ["layout.apply"]);
 }
 
 #[test]

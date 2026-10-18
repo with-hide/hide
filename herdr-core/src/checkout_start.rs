@@ -189,6 +189,9 @@ pub(super) fn run(
             ));
         }
         None => {
+            let launch = launch.filter(|launch| !launch.command.is_empty()).ok_or_else(|| {
+                ControlFailure::Definite("The device's normal shell could not be confirmed. Check its shell configuration and reconnect before retrying; no terminal was started.".into())
+            })?;
             let (workspace_id, seed) = match &request.host {
                 crate::checkout_owner::TabHost::Workspace(id) => (id.clone(), None),
                 crate::checkout_owner::TabHost::Open(owner) => {
@@ -217,7 +220,9 @@ pub(super) fn run(
                 workspace_id,
                 seed_tab_id: seed,
                 target,
-                expected_command: launch.map(|launch| launch.command.clone()),
+                expected_command: Some(launch.command.clone()),
+                shell_env: launch.env.clone(),
+                shell_readiness: launch.readiness,
                 binding: None,
             };
             save(control, &effect)?;
@@ -240,8 +245,8 @@ pub(super) fn run(
             effect.seed_tab_id.as_deref(),
             &request.cwd,
             &request.label,
-            launch.map(|launch| launch.env.clone()).unwrap_or_default(),
-            launch.map(|launch| launch.command.as_slice()),
+            effect.shell_env.clone(),
+            effect.expected_command.as_deref(),
             &claim,
         )?;
         match mutation_request(control.connector, "layout.apply", params) {
@@ -375,7 +380,8 @@ pub(super) fn run(
     verify_bound(control, bound)?;
     let saved_launch = effect.expected_command.map(|command| ShellLaunch {
         command,
-        env: Default::default(),
+        readiness: effect.shell_readiness,
+        env: effect.shell_env,
     });
     Ok(WorktreeTaskOutcome {
         path: request.checkout_path.clone(),

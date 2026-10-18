@@ -21,6 +21,12 @@ pub(crate) struct Effect {
     pub seed_tab_id: Option<String>,
     pub target: Option<BoundPane>,
     pub expected_command: Option<Vec<String>>,
+    #[serde(default)]
+    pub shell_env: std::collections::BTreeMap<String, String>,
+    /// Older explicit recipes were integrated; missing commands still
+    /// provide no creation proof and cannot be adopted after restart.
+    #[serde(default)]
+    pub shell_readiness: hide_node_link::protocol::ShellReadiness,
     pub binding: Option<BoundPane>,
 }
 

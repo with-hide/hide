@@ -1263,13 +1263,12 @@ pub fn handle_with_progress(
             to_value(())
         }
         Call::ShellIntegration => {
-            let home =
-                env.home("HOME is not set, so the shell integration has no place to live")?;
+            let executable = std::env::current_exe().ok();
             to_value(
-                crate::shell_integration::install(&home, &env.shell).map_err(|error| {
+                crate::shell_integration::prepare(env.home.as_deref(), &env.shell, executable.as_deref()).map_err(|error| {
                     HostError::new(
                         ErrorCode::Io,
-                        format!("the shell integration could not be written: {error}"),
+                        format!("The device's normal shell could not be prepared. Check its shell configuration and reconnect before retrying; no terminal was started. {error}"),
                     )
                 })?,
             )

@@ -1342,6 +1342,8 @@ fn pending_creation_occupies_its_draft_once_even_when_topology_beats_the_answer(
                     seed_tab_id: None,
                     target: None,
                     expected_command: Some(vec!["/bin/sh".into(), "-l".into()]),
+                    shell_env: Default::default(),
+                    shell_readiness: hide_node_link::protocol::ShellReadiness::Plain,
                     binding: None,
                 },
             )
