@@ -101,6 +101,10 @@ impl TabTarget {
     fn check_current(&self, id: u64) -> Result<(), String> {
         let runtime = self.runtime.upgrade().ok_or("runtime stopped")?;
         let runtime = runtime.lock().map_err(|_| "runtime unavailable")?;
+        self.check_current_in(&runtime, id)
+    }
+
+    fn check_current_in(&self, runtime: &Runtime, id: u64) -> Result<(), String> {
         if !runtime.task_session_control_is_current(id, &self.connector, self.connection_generation)
             || !runtime.group_start_target_is_current(id)
         {
@@ -1591,6 +1595,14 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
         return;
     };
     let saved = if let Ok(mut guard) = runtime.lock() {
+        // The server can be replaced while its creation answer is returning.
+        // Admit that answer and its focus under the same current-control check.
+        let result = result.and_then(|outcome| {
+            target
+                .check_current_in(&guard, request.id)
+                .map(|()| outcome)
+                .map_err(ControlFailure::Ambiguous)
+        });
         if let Some(lease) = lease {
             guard.finish_checkout_start_geometry(
                 request.id,

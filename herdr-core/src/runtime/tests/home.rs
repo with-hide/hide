@@ -123,7 +123,7 @@ fn agent(status: &str) -> Value {
 /// A Herdr with no workspace open that opens a marked Folder owner and
 /// starts whatever agent it is asked for.
 fn herdr(name: &str) -> FakeHerdr {
-    FakeHerdr::start(name, |method, _| match method {
+    FakeHerdr::start(name, |method, params| match method {
         "workspace.list" => {
             json!({"type": "workspace_list", "workspaces": [workspace_row("w1", "other")]})
         }
@@ -149,6 +149,20 @@ fn herdr(name: &str) -> FakeHerdr {
         }}),
         "agent.start" => json!({"type": "agent_started", "argv": [], "agent": agent("idle")}),
         "agent.prompt" => json!({"type": "agent_prompted", "agent": agent("working")}),
+        "pane.focus" => {
+            assert_eq!(params["pane_id"], "w4:p1");
+            json!({"type":"pane_info", "pane": agent("idle")})
+        }
+        "pane.layout" => {
+            assert_eq!(params["pane_id"], "w4:p1");
+            json!({"type":"pane_layout", "layout":{
+                "workspace_id":"w4", "tab_id":"w4:t1", "zoomed":false,
+                "area":{"x":0,"y":0,"width":80,"height":24}, "focused_pane_id":"w4:p1",
+                "panes":[{"pane_id":"w4:p1","focused":true,"rect":{"x":0,"y":0,"width":80,"height":24}}], "splits":[]}})
+        }
+        "workspace.get" => json!({"type":"workspace_info", "workspace":{
+            "workspace_id":"w4", "number":4, "label":"Home", "focused":true,
+            "pane_count":1, "tab_count":1, "active_tab_id":"w4:t1", "agent_status":"idle"}}),
         other => panic!("unexpected {other}"),
     })
 }
@@ -419,6 +433,17 @@ fn home_links_follow_registrations_once_home_exists() {
     });
     let home = machine.user_home.join("hide");
     assert!(home.join("app").is_symlink());
+    wait(
+        &shared,
+        "the Home terminal's focus is confirmed",
+        |runtime| {
+            runtime.pending_pane_focus.is_none()
+                && runtime.pane_focus_in_flight.is_none()
+                && runtime.snapshot.focused.pane_id.as_deref() == Some("w4:p1")
+        },
+    );
+    assert!(shared.lock().unwrap().snapshot.status.last_error.is_none());
+    assert!(herdr.methods().iter().any(|method| method == "pane.focus"));
     assert!(
         herdr
             .calls()

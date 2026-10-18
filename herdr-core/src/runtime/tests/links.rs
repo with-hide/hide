@@ -994,7 +994,13 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
         };
         runtime.task_agent_launch.as_mut().unwrap().resume_reference = Some(reference.clone());
         let shared = SharedRuntime::new(runtime);
-        let replacement = FakeHerdr::start("pi-resume-current", |method, _| {
+        let replacement_focus = std::sync::Mutex::new("wake-pane".to_owned());
+        let replacement = FakeHerdr::start("pi-resume-current", move |method, params| {
+            if case.ends_with("during-start-connect")
+                && let Some(answer) = focus_answer(method, params, &replacement_focus)
+            {
+                return answer;
+            }
             panic!("unexpected current-server request: {method}")
         });
         let replacement_connector: Arc<dyn hide_herdr_client::ApiConnector> =
@@ -1003,31 +1009,39 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
         let changed_connector = Arc::clone(&replacement_connector);
         let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let arm_start = Arc::clone(&armed);
-        let old = FakeHerdr::start("pi-resume-retired", move |method, _| match method {
-            "tab.create" => {
-                if case == "local-after-tab" {
-                    let runtime = changed_runtime.upgrade().unwrap();
-                    let mut runtime = runtime.lock().unwrap();
-                    let mut next = runtime.live.as_ref().unwrap().clone();
-                    next.api_connector = Arc::clone(&changed_connector);
-                    runtime.set_live(next);
-                }
-                serde_json::json!({"type":"tab_created", "tab":{
+        let old_focus = std::sync::Mutex::new("wake-pane".to_owned());
+        let old = FakeHerdr::start("pi-resume-retired", move |method, params| {
+            if (case == "current" || case.ends_with("during-start-connect"))
+                && let Some(answer) = focus_answer(method, params, &old_focus)
+            {
+                return answer;
+            }
+            match method {
+                "tab.create" => {
+                    if case == "local-after-tab" {
+                        let runtime = changed_runtime.upgrade().unwrap();
+                        let mut runtime = runtime.lock().unwrap();
+                        let mut next = runtime.live.as_ref().unwrap().clone();
+                        next.api_connector = Arc::clone(&changed_connector);
+                        runtime.set_live(next);
+                    }
+                    serde_json::json!({"type":"tab_created", "tab":{
                 "tab_id":"w-order:t3","workspace_id":"w-order","number":3,"label":"resume","focused":true,"pane_count":1,"agent_status":"idle"
             },"root_pane":{"pane_id":"wake-pane","terminal_id":"wake-terminal","workspace_id":"w-order","tab_id":"w-order:t3","focused":true,"agent_status":"idle","revision":0}})
-            }
-            "pane.process_info" => {
-                if case.ends_with("during-start-connect") {
-                    arm_start.store(true, Ordering::SeqCst);
                 }
-                serde_json::json!({"type":"pane_process_info","process_info":{
+                "pane.process_info" => {
+                    if case.ends_with("during-start-connect") {
+                        arm_start.store(true, Ordering::SeqCst);
+                    }
+                    serde_json::json!({"type":"pane_process_info","process_info":{
                         "pane_id":"wake-pane","shell_pid":4100,"foreground_process_group_id":4100,
                         "foreground_processes":[{"pid":4100,"name":"zsh"}]}})
-            }
-            "agent.start" => serde_json::json!({"type":"agent_started","argv":[],"agent":{
+                }
+                "agent.start" => serde_json::json!({"type":"agent_started","argv":[],"agent":{
                     "pane_id":"wake-pane","terminal_id":"wake-terminal","workspace_id":"w-order",
                     "tab_id":"w-order:t3","focused":true,"agent_status":"idle","revision":1}}),
-            other => panic!("unexpected retired-server request: {other}"),
+                other => panic!("unexpected retired-server request: {other}"),
+            }
         });
         let connect_runtime = shared.weak();
         let connect_replacement = Arc::clone(&replacement_connector);
@@ -1119,6 +1133,10 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
             operation.phase == "failed"
                 || matches!(operation.agent_phase.as_deref(), Some("failed" | "started"))
         });
+        wait_for("the archive start's accepted focus settles", || {
+            let runtime = shared.lock().unwrap();
+            runtime.pending_pane_focus.is_none() && runtime.pane_focus_in_flight.is_none()
+        });
         let runtime = shared.lock().unwrap();
         let operation = runtime.snapshot.task_operation.as_ref().unwrap();
         if case == "current" {
@@ -1149,7 +1167,7 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
             );
         }
         assert_eq!(
-            old.methods(),
+            fork_methods(&old),
             if case == "current" {
                 vec!["tab.create", "pane.process_info", "agent.start"]
             } else if case.ends_with("during-start-connect") {
@@ -1160,11 +1178,20 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
                 vec![]
             }
         );
-        // The fork worker never reaches the replacement; only a keyboard move
-        // queued on the lane before the swap can, which is the lane's
-        // accepted residual for any queued focus (`ingest_fork_pane` itself
-        // refuses a pane the replaced server made).
+        // A focus accepted before the start-connect transition may already
+        // be on the control lane. A retired creation result admits none.
         assert!(fork_methods(&replacement).is_empty());
+        if case != "current" && !case.ends_with("during-start-connect") {
+            assert_eq!(old.methods(), fork_methods(&old), "{case}");
+            assert!(replacement.methods().is_empty(), "{case}");
+            assert_ne!(
+                runtime.snapshot.focused.pane_id.as_deref(),
+                Some("wake-pane"),
+                "{case}"
+            );
+            assert_eq!(operation.phase, "failed", "{case}");
+            assert!(operation.pane_id.is_none(), "{case}");
+        }
         if case == "intent-during-start-connect" {
             assert_eq!(
                 runtime
@@ -1204,10 +1231,10 @@ fn focus_answer(
         *focused = pane.to_owned();
     }
     let pane = focused.as_str();
-    let tab = if pane == "child-pane" {
-        "w-order:t2"
-    } else {
-        "w-order:t1"
+    let tab = match pane {
+        "child-pane" => "w-order:t2",
+        "wake-pane" => "w-order:t3",
+        _ => "w-order:t1",
     };
     Some(match method {
         "pane.focus" => serde_json::json!({"type":"pane_info","pane":{
