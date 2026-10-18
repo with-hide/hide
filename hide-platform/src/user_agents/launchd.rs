@@ -78,6 +78,7 @@ impl Launchd {
 
     /// The `sleep` of `pmset -g custom`'s `AC Power:` section, in minutes,
     /// 0 for never.
+    #[allow(clippy::disallowed_methods)] // env_clear: pmset is a macOS system tool this module alone runs, and needs nothing but the home
     pub(super) fn sleeps_on_power(
         &self,
         home: &Path,
@@ -267,6 +268,7 @@ impl Launchd {
         self.run_within(args, home, stop, COMMAND_WITHIN)
     }
 
+    #[allow(clippy::disallowed_methods)] // env_clear: launchctl is a macOS system tool this module alone runs, and needs nothing but the home
     fn run_within(
         &self,
         args: &[&str],

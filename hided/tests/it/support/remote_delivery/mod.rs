@@ -128,6 +128,7 @@ impl Environment {
         Ok(Self { home, values })
     }
 
+    #[allow(clippy::disallowed_methods)] // env_clear: an SSH exec's environment, on Unix
     pub fn command(&self, program: impl AsRef<OsStr>) -> Command {
         let mut command = Command::new(program);
         command

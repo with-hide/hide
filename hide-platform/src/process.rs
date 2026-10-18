@@ -106,6 +106,7 @@ pub const LOGIN_CHILD_VARIABLES: &[&str] = if cfg!(windows) {
 /// Gives `command` exactly [`LOGIN_CHILD_VARIABLES`], each copied from this
 /// process when it is set, and removes every other inherited variable. A
 /// variable the caller sets on `command` afterwards is added to those.
+#[allow(clippy::disallowed_methods)] // env_clear: the one place a child's environment is cleared, to the login variables
 pub fn restrict_to_login_environment(command: &mut Command) {
     let kept: Vec<_> = LOGIN_CHILD_VARIABLES
         .iter()

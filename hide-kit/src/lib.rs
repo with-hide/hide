@@ -684,7 +684,7 @@ fn turn_codex_daemon_off(target: &KitTarget) -> CodexDaemonOff {
                 format!("codex still reports the shared server as {setting:?}"),
             );
         }
-        Err(message) => return failed(CodexDaemonOffFailure::CodexRefused, message),
+        Err(error) => return failed(CodexDaemonOffFailure::CodexRefused, error.message),
     }
     match stop(codex, &target.home, &target.stop) {
         Ok(Stopped::Stopped) => CodexDaemonOff::Done { no_daemon: None },
@@ -937,7 +937,9 @@ struct DaemonRead {
 }
 
 fn codex_daemon(target: &KitTarget) -> DaemonRead {
-    use hide_agent_hooks::codex_daemon::{DaemonSetting, daemon_running, read_setting};
+    use hide_agent_hooks::codex_daemon::{
+        DaemonSetting, ReadFailure, daemon_running, read_setting,
+    };
     let Some(codex) = target.codex.as_deref() else {
         return DaemonRead::default();
     };
@@ -945,7 +947,27 @@ fn codex_daemon(target: &KitTarget) -> DaemonRead {
         Ok(DaemonSetting::Unsupported) => (Some(false), None),
         Ok(DaemonSetting::On) => (Some(true), Some(true)),
         Ok(DaemonSetting::Off) => (Some(true), Some(false)),
-        Err(_) => (None, None),
+        // Every Codex start the core makes is refused until this reads, so
+        // why it did not goes to the log rather than only to "unknown".
+        Err(error) => {
+            let (cause, exit) = match error.failure {
+                ReadFailure::Run(failure) => (format!("{failure:?}"), None),
+                ReadFailure::Exited { code } => ("Exited".to_owned(), code),
+                ReadFailure::Unreadable => ("Unreadable".to_owned(), None),
+            };
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "component": "kit",
+                    "kind": "codex_capability_unread",
+                    "agent": "codex",
+                    "cause": cause,
+                    "exit": exit,
+                    "detail": error.message,
+                })
+            );
+            (None, None)
+        }
     };
     // A Codex older than the setting starts no shared daemon to ask about.
     if feature != Some(true) {

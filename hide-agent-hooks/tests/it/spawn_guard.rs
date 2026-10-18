@@ -523,6 +523,7 @@ fn a_checkout_with_a_detached_head_leaves_the_branch_for_the_agent() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)] // env_clear: the hook sees only the launch metadata the test names
 fn a_failed_owner_handshake_never_ends_the_guard_with_a_refusal_code() {
     // Exit 2 from a pre-tool hook blocks the call; the guard's own bookkeeping
     // failing must not do that.

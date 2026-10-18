@@ -64,12 +64,45 @@ pub fn find_codex(home: &Path) -> Option<PathBuf> {
 
 /// Reads the actual binary's feature capability without querying or starting
 /// a daemon and without changing the account's setting.
-pub fn read_setting(codex: &Path, home: &Path, stop: &AtomicBool) -> Result<DaemonSetting, String> {
-    let listed = run(codex, home, &["features", "list"], DEADLINE, stop)?;
+pub fn read_setting(
+    codex: &Path,
+    home: &Path,
+    stop: &AtomicBool,
+) -> Result<DaemonSetting, ReadError> {
+    let listed =
+        run(codex, home, &["features", "list"], DEADLINE, stop).map_err(|error| ReadError {
+            failure: ReadFailure::Run(error.failure),
+            message: error.message,
+        })?;
     if !listed.succeeded() {
-        return Err(failed(codex, "features list", &listed));
+        return Err(ReadError {
+            failure: ReadFailure::Exited { code: listed.code },
+            message: failed(codex, "features list", &listed),
+        });
     }
-    parse_feature_list(&listed.stdout)
+    parse_feature_list(&listed.stdout).map_err(|message| ReadError {
+        failure: ReadFailure::Unreadable,
+        message,
+    })
+}
+
+/// Why [`read_setting`] has no answer; the message is for the log.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReadError {
+    pub failure: ReadFailure,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReadFailure {
+    /// Codex was not run to its end: it could not start, did not answer in
+    /// time, or Hide was quitting (never [`SwitchFailure::Refused`]).
+    Run(SwitchFailure),
+    /// Codex ran and exited unsuccessfully; `code` is `None` when a signal
+    /// ended it.
+    Exited { code: Option<i32> },
+    /// Codex printed a `daemon_auto_start` row Hide cannot read.
+    Unreadable,
 }
 
 /// Why a switch did not happen, as the operator's popover tells it: the
@@ -274,10 +307,13 @@ fn parse_feature_list(stdout: &str) -> Result<DaemonSetting, String> {
 }
 
 /// Codex is run with the account's HOME and its own `.codex` named outright,
-/// in an environment built rather than inherited, so a `CODEX_HOME` the
-/// launching shell carried never redirects which setting is changed. Its
-/// `PATH` is the one it was found on ([`crate::diagnosis::cli_path`]), so a
-/// Codex installed by pnpm, a script that runs `node`, finds `node` there.
+/// in an environment built rather than inherited (the login variables and
+/// nothing else, as [`crate::codex_trust`] runs it), so a `CODEX_HOME` the
+/// launching shell carried never redirects which setting is changed, and a
+/// Windows Codex, a script that runs Node, has the `SystemRoot` Node needs
+/// to start. Its `PATH` is the one it was found on
+/// ([`crate::diagnosis::cli_path`]), so a Codex installed by pnpm, a script
+/// that runs `node`, finds `node` there.
 fn run(
     codex: &Path,
     home: &Path,
@@ -286,9 +322,9 @@ fn run(
     stop: &AtomicBool,
 ) -> Result<Finished, RunError> {
     let mut command = Command::new(codex);
+    hide_platform::process::restrict_to_login_environment(&mut command);
     command
         .args(args)
-        .env_clear()
         .env("HOME", home)
         .env("CODEX_HOME", home.join(".codex"))
         .env(
@@ -417,6 +453,28 @@ mod tests {
         assert_eq!(
             read_setting(&shim, home.path(), &AtomicBool::new(false)),
             Ok(DaemonSetting::Off)
+        );
+    }
+
+    /// Codex from npm on Windows is `codex.cmd`, a script that runs Node, and
+    /// Node aborts at start-up without `SystemRoot` (exit 134, "Assertion
+    /// failed: ncrypto::CSPRNG", seen with Codex 0.163.0 on a Windows
+    /// runner), which left every Codex start Hide makes refused. Node is
+    /// required, not optional: a run without it proves nothing about the
+    /// read.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_codex_that_runs_node_answers_its_features() {
+        let home = tempfile::tempdir().unwrap();
+        let codex = home.path().join("codex.cmd");
+        std::fs::write(
+            &codex,
+            "@echo off\r\nnode -e \"require('crypto').randomBytes(1); console.log('daemon_auto_start  stable  true')\"\r\n",
+        )
+        .unwrap();
+        assert_eq!(
+            read_setting(&codex, home.path(), &AtomicBool::new(false)),
+            Ok(DaemonSetting::On)
         );
     }
 
