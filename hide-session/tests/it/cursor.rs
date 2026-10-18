@@ -686,7 +686,7 @@ fn root_route_reader_role() {
     } else {
         assert_eq!(
             activity.unwrap_err(),
-            format!("session_checkpoint_invalid:{expected}")
+            hide_session::ReadRefusal::Refused(format!("session_checkpoint_invalid:{expected}"))
         );
         // Refusing lifecycle effects must not discard ordinary default-root reads.
         let read_only = hide_session::session_activity::read(
