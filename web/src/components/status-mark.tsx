@@ -7,7 +7,7 @@ import { Hint } from "./ui/tooltip";
 /**
  * An agent's status mark: whose move is next, one size on every surface that
  * lists agents (docs/status-model.md, One meaning across surfaces). The core
- * names the mark; this draws it. The four shapes differ without their
+ * names the mark; this draws it. The shapes differ without their
  * colours: the operator's turn is a `!` in a warning badge, in progress is a
  * static three-quarter ring (dashed while it waits on proven work, D-25), to read is a small dot (green only when the label
  * read the turn as finished), and quiet, an agent at rest, a faint hollow ring
