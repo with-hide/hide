@@ -355,8 +355,11 @@ impl Service {
     pub fn close(&self) {
         self.shared.run(|inner, _| {
             inner.closed = true;
+            for (pane, session) in &mut inner.panes {
+                session.hold.discard(pane, "service_closed");
+            }
             inner.panes.clear();
-            inner.requests = input::Requests::default();
+            inner.requests.close();
         });
         let live = self.shared.children.wait_gone(CLOSE_WITHIN);
         if live > 0 {

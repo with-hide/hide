@@ -2286,3 +2286,45 @@ fn herdr_reporting_a_fork_tab_before_its_answer_is_not_followed() {
     assert_eq!(diagnostic_count(&runtime, "pane.focus.followed"), 0);
     assert_eq!(diagnostic_count(&runtime, "tab.focus.followed"), 0);
 }
+
+/// A panicking worker and a vanished runtime both end the node's holder.
+#[test]
+fn fork_worker_panic_and_runtime_teardown_discard_the_node_request() {
+    let source = "w-order:t1:p";
+    for panic_worker in [true, false] {
+        let (mut runtime, _) = setup();
+        let terminals = record_terminals(&mut runtime);
+        pending_fork(&mut runtime, source, Some("fork-owner"));
+        assert!(terminals.take().contains(&TerminalControl::RequestOpen {
+            request: "fork-owner".into(),
+            fork: true,
+        }));
+        runtime.ingest_fork_pane(source, None, "w-order:t3:p");
+        terminals.take();
+        let runtime = Arc::new(Mutex::new(runtime));
+        let context = live::LiveContext {
+            socket_path: Default::default(),
+            runtime: Arc::downgrade(&runtime),
+            notifier: crate::handle::ChangeNotifier::noop(),
+            api_connector: Arc::new(hide_herdr_client::LocalSocketConnector::new(
+                std::path::PathBuf::new(),
+            )),
+            node: Arc::new(hide_node::Local::of_process()),
+        };
+        if panic_worker {
+            live::finish_fork_worker(&context, source, || panic!("fixture worker exit"));
+            let state = runtime.lock().unwrap();
+            assert!(state.forks_in_flight.is_empty());
+            assert_eq!(
+                input_state(&state, "fork-owner"),
+                Some(InputRequestState::Discarded)
+            );
+        } else {
+            drop(runtime);
+            live::finish_fork_worker(&context, source, || Ok("w-order:t3:p".into()));
+        }
+        assert!(terminals.take().iter().any(|control| matches!(control,
+            TerminalControl::RequestDiscard { request, .. } if request == "fork-owner"
+        )));
+    }
+}

@@ -424,6 +424,15 @@ impl Requests {
             .any(|request| matches!(&request.state, RequestState::Ready(pane) if pane == pane_id))
     }
 
+    pub(super) fn close(&mut self) {
+        for request in &mut self.requests {
+            if request.held_bytes > 0 {
+                request.discard("service_closed");
+            }
+        }
+        self.requests.clear();
+    }
+
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.requests.len()

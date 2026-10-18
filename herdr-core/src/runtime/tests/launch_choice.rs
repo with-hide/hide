@@ -287,7 +287,8 @@ fn a_fork_starts_with_the_model_and_effort_its_source_was_started_with() {
             vec!["--model", "gpt-6-luna", "-c", "model_reasoning_effort=low"],
         ),
     ] {
-        let (runtime, _folder) = started(kind, Some(&launch));
+        let (mut runtime, _folder) = started(kind, Some(&launch));
+        let terminals = record_terminals(&mut runtime);
         let (herdr, starts) = starting_herdr("launch-choice-fork");
         let shared = SharedRuntime::new(runtime);
         {
@@ -299,6 +300,13 @@ fn a_fork_starts_with_the_model_and_effort_its_source_was_started_with() {
                 "fork_pane",
                 json!({"pane_id": AGENT, "placement": "side", "origin": "operator"})
             )));
+            assert!(
+                terminals.take().iter().any(|control| matches!(
+                    control,
+                    TerminalControl::RequestOpen { fork: true, .. }
+                )),
+                "an id-less fork must open a fork holder on the node"
+            );
         }
         assert_eq!(
             next_start(&starts),

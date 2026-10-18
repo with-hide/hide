@@ -92,10 +92,9 @@ export function observeInputRequests(requests: InputRequest[] | undefined) {
     return;
   }
   if (row.state === "discarded") armed = null;
-  // Keys after the held pane can take them go to it as any keys do once it
-  // has the keyboard; those already sent against the request reach it first,
-  // in order. Until the keyboard gets there, keys typed where the request was
-  // made still follow the request to that pane.
+  // Once the pane has the keyboard, bare pane keys go straight to its node.
+  // That node owns the fork hold for every client. This mark only carries
+  // keys typed before focus arrives from the source to the creation request.
   else if (row.state === "ready" && armed.heldFor && focusedTerminalPane() === armed.heldFor) armed = null;
   else {
     armed.seen = true;

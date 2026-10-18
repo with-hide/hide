@@ -716,8 +716,9 @@ Every fork opens a request, including a non-shell caller that supplies no reques
 At completion the node releases the guard and hands valid queued keys to the pane; if its terminal is still attaching, that separate holder gets its ordinary 3 s window, while input facts retain the original wall time.
 A fork that yields focus discards the press's keys and opens a pane-only holder, so later bare keys into that pane still wait for its agent.
 A failed fork discards its input, closes its pane, drops its placement and gives the keyboard back to the source.
+A worker panic settles the fork as failed, and runtime teardown discards every pending input request even when a worker can no longer upgrade its weak owner.
 Phone input still calls Herdr directly and is outside this NodeLink guarantee; moving it through the same node boundary is a follow-up.
-The node scans a collection capped at sixteen request rows per key, publishes only failures or existing input facts, and reuses its clock for deadlines; no additional thread, I/O or Runtime lock is on the key path.
+The node scans a collection capped at eight known and eight early request rows per key, publishes only failures or existing input facts, and reuses its clock for deadlines; no additional thread, I/O or Runtime lock is on the key path.
 `wire.rs` is the only token conversion boundary.
 The consented helper supplies `hide_platform::host::machine_id` once in its connection greeting; the device worker applies it only to the established connection generation, outside `Mutex<Runtime>`, before resolving machine-qualified lineage.
 A failed identity read logs a lineage diagnostic and leaves the parent unresolved while the helper stays usable; there is no SSH-alias fallback or extra identity SSH command.

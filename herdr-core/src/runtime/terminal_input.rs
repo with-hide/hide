@@ -357,6 +357,18 @@ impl InputRequests {
     }
 
     /// The controls the node has not been sent yet.
+    pub(super) fn close(&mut self) {
+        for request in &mut self.requests {
+            if request.state == InputRequestState::Pending {
+                request.state = InputRequestState::Discarded;
+                self.controls.push(TerminalControl::RequestDiscard {
+                    request: request.request_id.clone(),
+                    reason: "runtime_closed".into(),
+                });
+            }
+        }
+    }
+
     pub(super) fn take_controls(&mut self) -> Vec<TerminalControl> {
         std::mem::take(&mut self.controls)
     }

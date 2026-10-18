@@ -3374,48 +3374,58 @@ pub fn spawn_agent_fork(context: LiveContext, request: ForkRequest) -> Result<()
     thread::Builder::new()
         .name("herdr-core-agent-fork".to_owned())
         .spawn(move || {
-            let started = Instant::now();
-            let parent_pane_id = request.parent_pane_id.clone();
-            let result = run_agent_fork_with_registration(
-                context.api_connector.as_ref(),
-                context.node.as_ref(),
-                &request,
-                &|| fork_execution_current(&context, &request),
-                |tab_id, pane_id| {
-                    let Some(runtime) = context.runtime.upgrade() else {
-                        return;
-                    };
-                    let changed = match runtime.lock() {
-                        Ok(mut guard) => {
-                            guard.ingest_fork_pane(&request.parent_pane_id, tab_id, pane_id)
+            finish_fork_worker(&context, &request.parent_pane_id, || {
+                run_agent_fork_with_registration(
+                    context.api_connector.as_ref(),
+                    context.node.as_ref(),
+                    &request,
+                    &|| fork_execution_current(&context, &request),
+                    |tab_id, pane_id| {
+                        let Some(runtime) = context.runtime.upgrade() else {
+                            return;
+                        };
+                        let changed = match runtime.lock() {
+                            Ok(mut guard) => {
+                                guard.ingest_fork_pane(&request.parent_pane_id, tab_id, pane_id)
+                            }
+                            Err(_) => return,
+                        };
+                        drop(runtime);
+                        if changed {
+                            context.notifier.notify();
                         }
-                        Err(_) => return,
-                    };
-                    drop(runtime);
-                    if changed {
-                        context.notifier.notify();
-                    }
-                },
-                |parent, child| {
-                    fork_execution_current(&context, &request)?;
-                    crate::coordination::link_fork(&context, parent, child, &request.name)
-                },
-            );
-            let elapsed_ms = started.elapsed().as_millis();
-            let Some(runtime) = context.runtime.upgrade() else {
-                return;
-            };
-            let changed = match runtime.lock() {
-                Ok(mut guard) => guard.ingest_fork_result(&parent_pane_id, result, elapsed_ms),
-                Err(_) => return,
-            };
-            drop(runtime);
-            if changed {
-                context.notifier.notify();
-            }
+                    },
+                    |parent, child| {
+                        fork_execution_current(&context, &request)?;
+                        crate::coordination::link_fork(&context, parent, child, &request.name)
+                    },
+                )
+            });
         })
         .map(|_| ())
         .map_err(|error| format!("fork worker could not be started: {error}"))
+}
+
+/// Every worker exit settles its input holder, including an unwinding provider
+/// or connector. Runtime teardown settles it if the weak owner has ended.
+pub(crate) fn finish_fork_worker(
+    context: &LiveContext,
+    parent_pane_id: &str,
+    work: impl FnOnce() -> Result<String, String>,
+) {
+    let started = Instant::now();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+        .unwrap_or_else(|_| Err("fork worker panicked".into()));
+    let Some(runtime) = context.runtime.upgrade() else {
+        return;
+    };
+    let changed = runtime
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .ingest_fork_result(parent_pane_id, result, started.elapsed().as_millis());
+    if changed {
+        context.notifier.notify();
+    }
 }
 
 fn fork_execution_current(context: &LiveContext, request: &ForkRequest) -> Result<(), String> {
@@ -3475,7 +3485,8 @@ fn run_agent_fork_with_registration(
     // the new tab, the agent's start, or the parent closed meanwhile), and the
     // session OpenCode's server made stays in OpenCode's list: it is named in
     // the reason and a diagnostic for the operator to find, never deleted.
-    let opened = (|| -> Result<String, String> {
+    let mut made_pane = None;
+    let opened = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<String, String> {
         // A split takes no command, so only a fork in its own tab runs the
         // integration's launch.
         let launch = matches!(request.placement, ForkPlacement::Tab)
@@ -3528,6 +3539,7 @@ fn run_agent_fork_with_registration(
                     launch.as_ref().map(|launch| launch.command.as_slice()),
                 )
                 .map_err(|error| error.message().to_owned())?;
+                made_pane = Some(tab.pane_id.clone());
                 created(Some(&tab.tab_id), &tab.pane_id);
                 tab.pane_id
             }
@@ -3543,6 +3555,7 @@ fn run_agent_fork_with_registration(
                     )?,
                 )
                 .and_then(wire::split_pane)?;
+                made_pane = Some(pane_id.clone());
                 created(None, &pane_id);
                 pane_id
             }
@@ -3595,7 +3608,18 @@ fn run_agent_fork_with_registration(
                 })
             }
         }
-    })();
+    })).unwrap_or_else(|_| {
+        if let Some(pane) = made_pane {
+            // Closing can fail too, but must never prevent settling the hold.
+            let closed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                control_request(connector, "pane.close", wire::pane_target_params(&pane)?)
+            }));
+            if !matches!(closed, Ok(Ok(_))) {
+                crate::diagnostic!(json!({"component": "pane_fork", "kind": "pane.fork.close_failed", "pane_id": pane}));
+            }
+        }
+        Err("fork worker panicked".into())
+    });
     opened.map_err(|error| match made {
         Some(session) => opencode_fork_left(request, &session, error),
         None => error,
@@ -4474,6 +4498,7 @@ mod tests {
         for case in [
             "success",
             "refused",
+            "panic-created",
             "duplicate-before",
             "duplicate-after",
             "execution-after",
@@ -4613,7 +4638,8 @@ mod tests {
                 |tab, pane| {
                     created
                         .borrow_mut()
-                        .push((tab.map(str::to_owned), pane.to_owned()))
+                        .push((tab.map(str::to_owned), pane.to_owned()));
+                    assert_ne!(case, "panic-created", "fixture callback panicked");
                 },
                 |_, _| Ok(()),
             );
@@ -4671,6 +4697,8 @@ mod tests {
                     expected.pop();
                 }
                 expected.push("pane.close");
+            } else if case == "panic-created" {
+                expected = vec!["session.snapshot", "layout.apply", "pane.close"];
             } else if refused {
                 expected.push("pane.close");
             }
