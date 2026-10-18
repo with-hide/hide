@@ -186,6 +186,17 @@ describe("a lane call that puts a page in front (PRD browser-width-zoom D-04)", 
     expect(pageCalled(view("d1", [file]), view("d3", [file, display("d3", "browser")]))).toBe(false);
     expect(pageCalled(view("d1", [file]), view("d4", [file, display("d4", "diff")]))).toBe(false);
   });
+
+  it("reads only the active area's front display", () => {
+    const split = (active_area: string, other: ViewDisplaySnapshot) => ({
+      device_id: "local",
+      path: "/a",
+      layout: { root: { split: { id: "s", axis: "row", ratio: 0.5, first: { area: { id: "area-1", active: "d1", displays: [file] } }, second: { area: { id: "area-2", active: other.id, displays: [other] } } } }, active_area, limits: { areas: 4, depth: 2, displays: 32 }, display_count: 2 } as unknown as ViewLayoutSnapshot,
+    });
+    // A page loading again in an area the call did not land in widens nothing.
+    expect(pageCalled(split("area-1", page), split("area-1", { ...page, load: 2 }))).toBe(false);
+    expect(pageCalled(split("area-1", page), split("area-2", page))).toBe(true);
+  });
 });
 
 describe("readCalls", () => {

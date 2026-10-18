@@ -137,7 +137,7 @@ function HostedPage({ display, workspace, actions }: { display: ViewDisplaySnaps
         <AddressField
           address={address}
           onSubmit={(url) => actions.navigateBrowser(display.id, url)}
-          trailing={size ? null : <ZoomBadge zoom={page?.zoom ?? 1} command={command} />}
+          trailing={size || !zoomed(page?.zoom ?? 1) ? null : <ZoomBadge zoom={page?.zoom ?? 1} command={command} />}
         />
         <DeviceButton device={device} drawn={drawn} onChoose={(next) => useUiStore.getState().setBrowserDevice(key, next)} />
         <BrowserCommentButton display={display} workspace={workspace} areaId={areaId} address={address} actions={actions} />
@@ -174,11 +174,15 @@ function HostedPage({ display, workspace, actions }: { display: ViewDisplaySnaps
  * B12): the page's frame sits at the top, centered with the sides left empty
  * when it is narrower than the area, and filling the area's width when it is
  * wider, where the host scales the page down to fit it. A page that fits its
- * area is its slot alone.
+ * area fills it.
  */
 function DeviceFrame({ width, children }: { width: number | null; children: ReactNode }) {
-  if (width === null) return <>{children}</>;
-  return <div className="flex min-h-0 min-w-0 flex-1 justify-center bg-card px-md pt-md" data-browser-device-area="true">{children}</div>;
+  // One element either way, so a size chosen keeps what the slot holds (a note being written).
+  return (
+    <div className={cn("flex min-h-0 min-w-0 flex-1", width === null ? "flex-col" : "justify-center bg-card px-md pt-md")} data-browser-device-area={width === null ? undefined : "true"}>
+      {children}
+    </div>
+  );
 }
 
 /** A zoom factor as the badge and the popover show it. */
@@ -191,21 +195,22 @@ const ZOOM_LEAST = 0.25;
 const ZOOM_MOST = 5;
 const ZOOM_EPSILON = 0.001;
 
+/** Whether a page's zoom is off 100%, which is when the badge shows. */
+function zoomed(zoom: number): boolean {
+  return Math.abs(zoom - 1) > ZOOM_EPSILON;
+}
+
 /**
  * The page's zoom inside the address field's right end, only while it is not
- * 100% (PRD browser-width-zoom B6-B9). It opens − · zoom · + · Reset, which
- * stays open while the operator steps, the number following the page, and
- * closes when the page is back at 100%. The page keeps zooming on ⌘= / ⌘- /
+ * 100% (PRD browser-width-zoom B6-B9), so it mounts only then. It opens
+ * − · zoom · + · Reset, which stays open while the operator steps, the
+ * number following the page, and goes with the badge once the page is back
+ * at 100%. The page keeps zooming on ⌘= / ⌘- /
  * ⌘0 as before; a press here leaves the keyboard in the shell.
  */
 function ZoomBadge({ zoom, command }: { zoom: number; command: (name: BrowserCommand) => void }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(false);
-  const zoomed = Math.abs(zoom - 1) > ZOOM_EPSILON;
-  useEffect(() => {
-    if (!zoomed) setOpen(false);
-  }, [zoomed]);
-  if (!zoomed) return null;
   const percent = zoomPercent(zoom);
   return (
     <Popover open={open} onOpenChange={setOpen}>

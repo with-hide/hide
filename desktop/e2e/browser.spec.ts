@@ -1153,7 +1153,8 @@ test("page width: widening leaves Agent Views 480 pinned or not, never narrows, 
   await expect(divider).toHaveAttribute("aria-valuenow", "360");
   expect(await openFromCli(`${origin}/site-2.html`, ["--wait"])).toMatchObject({ ok: true });
   await expect.poll(async () => Number(await divider.getAttribute("aria-valuenow"))).toBe(await room());
-  const widened = storedLaneWidth();
+  const widened = await room();
+  await expect.poll(storedLaneWidth).toBe(widened);
 
   // A wider window and an expanded lane: a page opened there changes no width.
   await page.locator("[data-lane-expand]").click();
@@ -1225,7 +1226,7 @@ test("page zoom: a zoomed page shows its zoom in the address field, steps in the
   await expect(badge).toHaveCount(0);
 });
 
-test("device size: a page lays out at 390, 768 and 1280 CSS pixels at any zoom, keeps it across a navigation and fits again", async () => {
+test("device size: a page lays out at 390, 768 and 1280 CSS pixels at any zoom, keeps it across a navigation and fits again", { tag: "@platform" }, async () => {
   ({ app } = await launch(run.env));
   await fitWindow(app, WINDOW);
   const page = await shellPage(app);

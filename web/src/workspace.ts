@@ -5,7 +5,7 @@
 // strip); these functions only read them, so they are testable without a
 // page. The View areas' own rules are `viewLayout.ts`.
 
-import { areasOf } from "./areaLayout";
+import { findArea } from "./areaLayout";
 import type { Checkout, DetailSlot, SnapshotRest, StripTab, ViewLayoutSnapshot } from "./snapshot";
 
 export { TOOLS, type Tool } from "./laneTools";
@@ -220,27 +220,26 @@ export function agentEntries(checkout: Checkout): StripTab[] {
 }
 
 /**
- * The pages in front of their View areas, each as its display and load
- * stamp, so a page that came forward or loaded again reads as new.
+ * The page in front of the active View area, as its Workspace, display and
+ * load stamp, so a page that came forward or loaded again reads as new; null
+ * when a file, a diff, a new tab or nothing is there.
  */
-function frontPages(view: Pick<WorkspaceView, "device_id" | "path" | "layout"> | null | undefined): Set<string> {
-  const pages = new Set<string>();
-  if (!view?.layout) return pages;
-  for (const area of areasOf(view.layout.root)) {
-    const display = area.displays.find((row) => row.id === area.active);
-    if (display?.kind === "browser" && display.url) pages.add(`${view.device_id}\u0000${view.path}\u0000${display.id}\u0000${display.load ?? 0}`);
-  }
-  return pages;
+function frontPage(view: Pick<WorkspaceView, "device_id" | "path" | "layout"> | null | undefined): string | null {
+  const layout = view?.layout;
+  if (!layout) return null;
+  const area = findArea(layout.root, layout.active_area);
+  const display = area?.displays.find((row) => row.id === area.active);
+  return display?.kind === "browser" && display.url ? `${view.device_id}\u0000${view.path}\u0000${display.id}\u0000${display.load ?? 0}` : null;
 }
 
 /**
- * Whether a lane call put a page in front (PRD browser-width-zoom D-04): an
- * area's front display is a page that was not in front, or loaded again,
- * before the call. The rail's Files or a reveal leaves the pages as they were.
+ * Whether a lane call put a page in front (PRD browser-width-zoom D-04): the
+ * active area's front display is a page that was not in front, or loaded
+ * again, before the call. The rail's Files or a reveal leaves it as it was.
  */
 export function pageCalled(previous: Pick<WorkspaceView, "device_id" | "path" | "layout"> | null | undefined, view: Pick<WorkspaceView, "device_id" | "path" | "layout"> | null | undefined): boolean {
-  const before = frontPages(previous);
-  return [...frontPages(view)].some((page) => !before.has(page));
+  const page = frontPage(view);
+  return page !== null && page !== frontPage(previous);
 }
 
 /** What the page has read of the core's lane calls. */

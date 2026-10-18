@@ -254,14 +254,21 @@ class BrowserSyncLoop {
   }
 
   /**
-   * A covered page whose zoom moved, from the zoom popover drawn over it:
-   * its still is taken again, so the operator sees each step (PRD
-   * browser-width-zoom B7). The host captures a page it hides for an
-   * overlay of the front Workspace.
+   * A page whose zoom moved. Covered, as by the zoom popover drawn over it,
+   * its still is taken again at once, so the operator sees each step (PRD
+   * browser-width-zoom B7); the host captures a page it hides for an overlay
+   * of the front Workspace.
    */
   zoomMoved(workspace: string, id: string): void {
     const front = this.front;
-    if (front?.workspace !== workspace || !this.frozen.has(id)) return;
+    if (front?.workspace !== workspace) return;
+    // An uncovered page's still is of the zoom before: it is taken again once
+    // the page is quiet, so a layer that covers it later draws the page as it is.
+    if (!this.frozen.has(id)) {
+      this.stale.add(id);
+      this.schedule();
+      return;
+    }
     const row = front.rows.find((candidate) => candidate.id === id);
     const element = this.slots.get(id)?.element;
     if (!row || !element?.isConnected) return;

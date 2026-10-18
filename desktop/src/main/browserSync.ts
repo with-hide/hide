@@ -5,6 +5,7 @@
 
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import type { Parameters as EmulationParameters } from "electron";
 import type { BrowserCommand, BrowserDevicePlacement, BrowserPlacement, BrowserRect, BrowserSync } from "../../../web/src/host";
 
 /** A Workspace holds at most this many displays (`MAX_VIEW_DISPLAYS` is 32);
@@ -362,7 +363,7 @@ export function overCap(views: readonly LiveView[], cap: number): string[] {
  * page's zoom, so its viewport is the zoomed width; a mobile one lays out at
  * the device's own width, which Chromium does not zoom.
  */
-export function deviceEmulation(device: BrowserDevicePlacement, bounds: BrowserRect, zoom: number): Electron.Parameters {
+export function deviceEmulation(device: BrowserDevicePlacement, bounds: BrowserRect, zoom: number): EmulationParameters {
   const factor = device.mobile || !Number.isFinite(zoom) || zoom <= 0 ? 1 : zoom;
   const fit = bounds.width > 0 ? bounds.width / device.width : 1;
   const view = { width: Math.round(device.width * factor), height: Math.max(1, Math.round((bounds.height / fit) * factor)) };
