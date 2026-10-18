@@ -163,7 +163,7 @@ function TaskList({ agent, progress, onRecord }: { agent: AgentRow; progress: Wo
               const state = shownTaskState(taskState(task, progress.outputs), agent.mark);
               return (
                 <li key={task.id} className="flex min-w-0 items-start gap-xs py-xxs" data-task-list-item={task.id}>
-                  <TaskMark state={state} live />
+                  <TaskMark state={state} live question={task.end === "question"} />
                   <TaskName state={state} name={task.name} data-task-list-name="true" />
                   <TaskWord state={state} live prShown={prs.length > 0} />
                   {prs.map((output) => {

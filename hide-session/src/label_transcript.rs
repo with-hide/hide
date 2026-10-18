@@ -27,7 +27,7 @@ use sha2::{Digest, Sha256};
 use crate::turns::TurnTracker;
 use crate::{
     Agent, ConfirmedLabelSession, ConversationCheckpoint, ConversationCursor, EventKind,
-    SessionError, SessionIdentity, SessionLocator,
+    ReadRefusal, SessionError, SessionIdentity, SessionLocator,
 };
 
 /// What the caller knows about the pane's conversation.
@@ -350,9 +350,9 @@ const CODEX_INDEX_TAIL_BYTES: u64 = 64 * 1024;
 /// The owner is proven before and after the read; a file replaced or
 /// shrunk in between is refused rather than analyzed across the change.
 /// An error is a stable reason code with no path or content in it.
-pub fn read(home: &Path, request: &LabelTranscriptRequest) -> Result<LabelTranscript, String> {
+pub fn read(home: &Path, request: &LabelTranscriptRequest) -> Result<LabelTranscript, ReadRefusal> {
     if request.reference_kind == "id" && !is_session_id(&request.reference_value) {
-        return Err("label_session_id_invalid".to_owned());
+        return Err("label_session_id_invalid".into());
     }
     if request.agent == Agent::OpenCode {
         return crate::opencode::read(home, request);
@@ -402,7 +402,7 @@ pub fn read(home: &Path, request: &LabelTranscriptRequest) -> Result<LabelTransc
         crate::SkipReason::UserTurnInvalid,
     ] {
         if parsed.skipped_reasons.contains_key(&reason) {
-            return Err(reason.as_str().to_owned());
+            return Err(reason.as_str().into());
         }
     }
     let after = crate::confirm_session_file(
@@ -412,9 +412,9 @@ pub fn read(home: &Path, request: &LabelTranscriptRequest) -> Result<LabelTransc
         reported_id,
         request.cwd.as_deref(),
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| ReadRefusal::of(&error))?;
     if !crate::label_owner::same_read(&path, &before, &after, stamp.as_deref()) {
-        return Err("label_session_read_changed".to_owned());
+        return Err("label_session_read_changed".into());
     }
     let mut events = Vec::with_capacity(parsed.events.len());
     let mut memory_receipts = Vec::new();
@@ -536,29 +536,30 @@ pub(crate) fn locate_confirmed(
     reference_kind: &str,
     reference_value: &str,
     cwd: Option<&str>,
-) -> Result<(PathBuf, ConfirmedLabelSession), String> {
+) -> Result<(PathBuf, ConfirmedLabelSession), ReadRefusal> {
     let identity = match reference_kind {
         "id" => SessionIdentity::id(reference_value),
         "path" => SessionIdentity::path(reference_value),
-        _ => return Err("session_kind_unsupported".to_owned()),
+        _ => return Err("session_kind_unsupported".into()),
     };
     if reference_value.trim().is_empty() {
-        return Err("label_session_reference_missing".to_owned());
+        return Err("label_session_reference_missing".into());
     }
     if reference_kind == "id" && !is_session_id(reference_value) {
-        return Err("label_session_id_invalid".to_owned());
+        return Err("label_session_id_invalid".into());
     }
     let located = SessionLocator::new(home)
         .locate("label", agent, Some(&identity), cwd)
         .map_err(|error| match error {
-            SessionError::SessionFileMissing => "session_file_missing".to_owned(),
-            SessionError::Capacity { .. } => "session_capacity".to_owned(),
-            _ => "label_session_location_unavailable".to_owned(),
+            SessionError::SessionFileMissing => "session_file_missing".into(),
+            SessionError::Capacity { .. } => "session_capacity".into(),
+            SessionError::InMotion(reason) => ReadRefusal::InMotion(reason),
+            _ => "label_session_location_unavailable".into(),
         })?;
     let path = inside_agent_root(home, agent, &located)?;
     let reported_id = (reference_kind == "id").then_some(reference_value);
     let confirmed = crate::confirm_session_file(home, agent, &path, reported_id, cwd)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| ReadRefusal::of(&error))?;
     Ok((path, confirmed))
 }
 
@@ -885,7 +886,7 @@ mod tests {
         let mut request = request(&transcript_path(root.path(), "missing.jsonl"), None);
         request.reference_kind = "pid".to_owned();
         assert_eq!(
-            read(root.path(), &request).unwrap_err(),
+            read(root.path(), &request).unwrap_err().reason(),
             "session_kind_unsupported"
         );
     }
@@ -898,7 +899,7 @@ mod tests {
         for id in ["../../secret", "a/b", "..", "id with space", "id\\x"] {
             request.reference_value = id.to_owned();
             assert_eq!(
-                read(root.path(), &request).unwrap_err(),
+                read(root.path(), &request).unwrap_err().reason(),
                 "label_session_id_invalid",
                 "{id}"
             );
@@ -916,7 +917,7 @@ mod tests {
         )
         .unwrap();
         let error = read(root.path(), &request(&elsewhere, None)).unwrap_err();
-        assert_eq!(error, "label_session_outside_roots");
+        assert_eq!(error.reason(), "label_session_outside_roots");
 
         // A Codex root is no root for a Claude session either.
         let codex = root.path().join(".codex/sessions");
@@ -924,7 +925,9 @@ mod tests {
         let in_codex = codex.join("session.jsonl");
         fs::copy(&elsewhere, &in_codex).unwrap();
         assert_eq!(
-            read(root.path(), &request(&in_codex, None)).unwrap_err(),
+            read(root.path(), &request(&in_codex, None))
+                .unwrap_err()
+                .reason(),
             "label_session_outside_roots"
         );
     }
@@ -948,14 +951,16 @@ mod tests {
         }
 
         assert_eq!(
-            read(root.path(), &request(&link, None)).unwrap_err(),
+            read(root.path(), &request(&link, None))
+                .unwrap_err()
+                .reason(),
             "label_session_outside_roots"
         );
         let mut by_id = request(&link, None);
         by_id.reference_kind = "id".to_owned();
         by_id.reference_value = "s1".to_owned();
         assert_eq!(
-            read(root.path(), &by_id).unwrap_err(),
+            read(root.path(), &by_id).unwrap_err().reason(),
             "label_session_outside_roots"
         );
     }

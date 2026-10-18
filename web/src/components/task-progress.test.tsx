@@ -57,3 +57,32 @@ it("draws a task left in progress as work left once its row stops", () => {
   for (const mark of ["unread", "quiet", "done", "turn", null] as const) expect(shownTaskState("working", mark)).toBe("unfinished");
   expect(shownTaskState("question", "quiet")).toBe("question");
 });
+
+// PRD task-continuation D-07, D-09: a done task whose turn ended on a
+// question keeps the `!` in front of its ☑; a task whose newest turn went
+// unjudged draws only its empty box, never `일 남음`.
+it("keeps `!` before a done task that asks and draws an unjudged task as a bare box", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  await clientI18n.changeLanguage("ko");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<TooltipProvider>
+    <div data-case="done-asks"><TaskMark state="done" live question /><TaskWord state="done" live prShown /></div>
+    <div data-case="done-ended"><TaskMark state="done" live={false} question /></div>
+    <div data-case="unjudged"><TaskMark state="unjudged" live /><TaskWord state="unjudged" live prShown={false} /></div>
+  </TooltipProvider>));
+  try {
+    const at = (name: string, selector: string) => container.querySelector(`[data-case="${name}"] ${selector}`);
+    expect(at("done-asks", "[data-task-box]")?.getAttribute("data-task-box")).toBe("checked");
+    expect(at("done-asks", "[data-task-asks]")).not.toBeNull();
+    expect(at("done-asks", "[data-task-word]")).toBeNull();
+    expect(at("done-ended", "[data-task-asks]")).toBeNull();
+    expect(at("unjudged", "[data-task-box]")?.getAttribute("data-task-box")).toBe("empty");
+    expect(at("unjudged", "[data-task-asks]")).toBeNull();
+    expect(at("unjudged", "[data-task-word]")).toBeNull();
+    expect(shownTaskState("unjudged", "quiet")).toBe("unjudged");
+  } finally {
+    await act(async () => root.unmount());
+  }
+});

@@ -16,9 +16,11 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 
 from agent_live_check.cli import default_herdr, operator_routing
+from agent_live_check.credential_snapshot import CredentialSnapshotUnavailable
 from agent_live_check.mid_turn import allow_hook_route
 from agent_live_check.overlay import prepare as prepare_overlay
 from agent_live_check.processes import OwnedProcesses, ProcessError
@@ -28,16 +30,36 @@ from agent_live_check.runtime import Runtime, clean_env
 from agent_live_check.sandbox import WriteSandbox
 from agent_live_check.system import STOP_SIGNALS, WINDOWS, exe, git as git_program, launcher
 
-from . import ci, cells, memory, quota
+if WINDOWS:
+    from agent_live_check.windows import UserPath
+
+from . import ci, clis, cells, fake_lane, fake_model, memory, opencode_service, quota
 from .controller import Controller
 from .daemon import Daemon
 from .journey import STEPS, Journey, token
-from .local import (ROUTES, allow_one_shot_references, claude_session_folders, codex_login_refusal, disable_hide_ai,
-                    operator_trust, route, trust_codex, wrapper)
+from .local import (ROUTES, TRUST, allow_one_shot_references, claude_session_folders, disable_hide_ai,
+                    opencode_model, operator_trust, route, wrapper)
 from .report import save, table_lines
 
 KIT_SECONDS = 90
+# The whole run's cap, every process under it included: the candidate's start
+# and kit, then each measured agent's cells. Keyless, on the fake model or the
+# stand-ins, an agent took 4 to 7 minutes on macOS and up to 9 on Windows,
+# whose failing cells wait out their windows (seven took 60 minutes in run
+# 39099935719 and ran past 61 in 39104633599), so seven get 75 minutes,
+# inside the CI step's 85. A real provider's turns are slower and
+# the journey waits up to 120 s for a title, so a signed-in or local run gives
+# each agent 15 minutes: seven make 110 minutes, inside the signed-in CI
+# step's 115. Either way the journey ends itself, writes its report and cleans
+# up before its step would (scripts/tests/test_agent_journey_workflow.py).
+SETUP_SECONDS = 5 * 60
+AGENT_SECONDS = {"keyless": 10 * 60, "provider": 15 * 60}
 SYSTEM_NAMES = {"darwin": "macOS", "linux": "Linux", "win32": "Windows"}
+
+
+def run_seconds(keyless, agents):
+    """The whole run's cap for `agents` measured agents."""
+    return SETUP_SECONDS + AGENT_SECONDS["keyless" if keyless else "provider"] * max(1, agents)
 
 
 def systems(mode):
@@ -47,9 +69,6 @@ def systems(mode):
                    "not measured: local mode runs on macOS only; the CI layer measures it" if mode == "local" else
                    "not measured: another CI leg measures it")
             for name in SYSTEM_NAMES.values()}
-CODEX_LOGIN_COPY = {"id": "codex", "overlay": {
-    "env": {"CODEX_HOME": "."}, "copies": [[".codex/auth.json", "auth.json"]], "settings": [],
-    "provenance": "A private CODEX_HOME holding a copy of the login (docs/AI_PROVIDERS.md); a refresh stays in the copy."}}
 
 
 def parser():
@@ -62,6 +81,13 @@ def parser():
     value.add_argument("--herdr-bin", type=Path, help="Previously fetched pinned Herdr; bytes are checked")
     value.add_argument("--fixture-bin", type=Path,
                        help="CI only: folder holding the compiled claude and codex stand-ins (web/e2e/shims)")
+    value.add_argument("--controller-provider", type=Path,
+                       help="The controller's spawn provider (web/e2e/shims/spawn-provider.c) already built; "
+                            "by default the run builds it")
+    value.add_argument("--unmeasured", action="append", default=[], metavar="ID=REASON",
+                       help="Leaves a selected agent unstarted, its cells not measured for REASON (a lane's quota rotation)")
+    value.add_argument("--fake-model", action="store_true",
+                       help="The real CLIs answered by the journey's fake model (fake_model.py), with no key or login")
     return value
 
 
@@ -88,30 +114,52 @@ def leftover_copies(checkout, run):
     return found
 
 
-def measured_repository(checkout):
-    """The main repository of the checkout the journey runs from (PRD D-43)."""
+def measured_source(checkout):
+    """The commit of the checkout the journey runs from, which the measured
+    repository is a clone of (PRD D-43)."""
     common = subprocess.run([git_program(), "-C", str(checkout), "rev-parse", "--path-format=absolute",
                              "--git-common-dir"], capture_output=True, text=True, timeout=15)
     if common.returncode:
         refuse("measured_repository_unreadable: run the journey from a Git checkout")
-    root = Path(common.stdout.strip())
-    if root.name != ".git":
+    if Path(common.stdout.strip()).name != ".git":
         refuse("measured_repository_is_bare: run the journey from a non-bare checkout")
-    return root.parent.resolve()
+    head = subprocess.run([git_program(), "-C", str(checkout), "rev-parse", "--verify", "HEAD"],
+                          capture_output=True, text=True, timeout=15)
+    if head.returncode:
+        refuse("measured_repository_has_no_commit: run the journey from a checkout with a commit")
+    return head.stdout.strip()
 
 
-def journey_leftovers(root, checkout, run):
-    """Branches and worktrees an uncatchable kill left in the measured
-    repository: named for the operator, never reused or removed."""
-    branches = subprocess.run([git_program(), "-C", str(root), "for-each-ref", "--format=%(refname:short)",
-                               "refs/heads/journey/"], capture_output=True, text=True, timeout=15).stdout.split()
-    listed = subprocess.run([git_program(), "-C", str(root), "worktree", "list", "--porcelain"],
-                            capture_output=True, text=True, timeout=15).stdout
-    runs = (checkout / "agents/runs").resolve()
-    worktrees = [line.removeprefix("worktree ") for line in listed.splitlines() if line.startswith("worktree ")
-                 and Path(line.removeprefix("worktree ")).is_relative_to(runs)
-                 and not Path(line.removeprefix("worktree ")).is_relative_to(run.resolve())]
-    return {"branches": branches, "worktrees": worktrees}
+def measured_clone(runtime, checkout, commit):
+    """The measured repository: a shared clone of the checkout's commit in the
+    candidate's HOME, on `main`, as an operator's project is in theirs. Hide
+    adds a project only inside its HOME (hided refuses another as
+    `outside_home`), and a Wake after a Sleep that closed the pane finds the
+    agent's checkout among the registered project's. The clone reads the
+    checkout's objects and writes only its own, so the run's branches and
+    worktrees never reach the operator's repository and go with the probe."""
+    path = runtime.home / "projects/measured"
+    private_directory(path.parent)
+    git(runtime, ["clone", "-q", "--shared", "--no-checkout", str(checkout), str(path)], runtime.home)
+    git(runtime, ["checkout", "-q", "-B", "main", commit], path)
+    return path.resolve()
+
+
+def register_measured(daemon, root):
+    """Adds the measured repository as a project, as Add project does, and
+    waits until the navigator lists it as a registered Git project."""
+    daemon.dispatch("create_workspace", {"path": str(root), "label": "measured", "initialize_git": False})
+    wanted = os.path.normcase(str(root))
+
+    def registered(rest):
+        for project in (rest.get("navigator") or {}).get("workspaces", []):
+            if (os.path.normcase(str(Path(project.get("path") or ""))) == wanted
+                    and project.get("registered") and project.get("is_git")):
+                return project
+        return None
+
+    project = daemon.wait(registered, KIT_SECONDS, "the measured repository added as a project")
+    return {"path": str(root), "checkouts": [checkout.get("path") for checkout in project.get("checkouts") or []]}
 
 
 def check_operator_trust(report, operator, run, when):
@@ -139,85 +187,15 @@ def check_operator_trust(report, operator, run, when):
 
 
 def claude_trusts(operator, root):
-    """Whether the operator's Claude trusts the measured repository, read only."""
+    """Whether the operator's Claude trusts the measured repository, read
+    only: Claude Code 2.1.302 takes a folder's trust from the folder or the
+    nearest one above it that is trusted."""
     try:
         projects = json.loads((operator / ".claude.json").read_text()).get("projects", {})
     except (OSError, ValueError):
         return False
-    return (projects.get(str(root)) or {}).get("hasTrustDialogAccepted") is True
-
-
-def taken_branches(root, branches):
-    """Which of `branches` the measured repository already has."""
-    return [branch for branch in branches
-            if not subprocess.run([git_program(), "-C", str(root), "rev-parse", "--verify", "-q", "refs/heads/" + branch],
-                                  capture_output=True, timeout=15).returncode]
-
-
-def plain_git(env, root, *args):
-    """Git in the measured repository, outside the owner: the repository
-    cleanup runs after the owner closed, and after a stop or the deadline."""
-    result = subprocess.run([git_program(), "-C", str(root), *args], env=env, capture_output=True, text=True,
-                            timeout=15)
-    return result.returncode, result.stdout, result.stderr
-
-
-def registered_worktrees(env, root):
-    """Each registered worktree's path and branch in the measured repository."""
-    code, out, err = plain_git(env, root, "worktree", "list", "--porcelain")
-    if code:
-        raise ProtectionError("worktree_list_failed: " + err.strip()[:200])
-    found, path = {}, None
-    for line in out.splitlines():
-        if line.startswith("worktree "):
-            path = line.removeprefix("worktree ")
-        elif line.startswith("branch ") and path:
-            found[path] = line.removeprefix("branch refs/heads/")
-    return found
-
-
-def remove_created(runtime, root, created, branches):
-    """Deletes the worktrees and branches this run made, each only while its
-    name and start commit still match the run's record; anything else stays
-    and is named. A branch the record lacks a start for (a spawn that raised
-    or was stopped) and one of the run's own `journey/<run_id>-<agent>` names
-    the record lacks are read now: that name is this run's alone."""
-    removed, kept = [], []
-    env = {**runtime.env, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
-    worktrees = registered_worktrees(env, root)
-    items = [dict(item) for item in created]
-    for branch in branches:
-        code, _, _ = plain_git(env, root, "rev-parse", "--verify", "-q", "refs/heads/" + branch)
-        if not code and not any(item["branch"] == branch for item in items):
-            path = next((path for path, name in worktrees.items() if name == branch), None)
-            items.append({"branch": branch, "start": None, "worktree": path, "swept": True})
-    probe = runtime.probe.resolve()
-    for item in items:
-        if not item["start"]:
-            code, tip, _ = plain_git(env, root, "rev-parse", "--verify", "-q", "refs/heads/" + item["branch"])
-            if code:
-                continue  # the spawn never made it
-            item.update(start=tip.strip(), start_read_at_cleanup=True)
-        worktree = item["worktree"]
-        registered = worktree and (worktree in worktrees or str(Path(worktree).resolve()) in worktrees)
-        if registered:
-            if not Path(worktree).resolve().is_relative_to(probe):
-                kept.append({**item, "reason": "worktree_outside_the_run"})
-                continue
-            code, _, err = plain_git(env, root, "worktree", "remove", "--force", worktree)
-            if code:
-                kept.append({**item, "reason": "worktree_remove_failed: " + err.strip()[:200]})
-                continue
-        code, tip, _ = plain_git(env, root, "rev-parse", "--verify", "-q", "refs/heads/" + item["branch"])
-        if code:
-            removed.append(item)
-            continue
-        if tip.strip() != item["start"]:
-            kept.append({**item, "reason": "branch_moved_since_the_run_made_it"})
-            continue
-        code, _, err = plain_git(env, root, "branch", "-D", item["branch"])
-        (kept if code else removed).append({**item, **({"reason": err.strip()[:200]} if code else {})})
-    return {"removed": removed, "kept": kept}
+    return any((projects.get(str(folder)) or {}).get("hasTrustDialogAccepted") is True
+               for folder in (root, *root.parents))
 
 
 def git(runtime, args, cwd):
@@ -254,7 +232,7 @@ def package(runtime):
             refuse(f"build_this_worktrees_{name.replace('-', '_')}_first")
         # On macOS an APFS clone: the probe's copy can change without touching the build.
         if sys.platform == "darwin":
-            runtime.owner.run(["/bin/cp", "-c", str(source), str(resources / name)], env=runtime.env, seconds=30)
+            runtime.owner.run(["/bin/cp", "-c", str(source), str(resources / name)], env=runtime.env)
         else:
             shutil.copyfile(source, resources / exe(name))
             (resources / exe(name)).chmod(0o700)
@@ -264,27 +242,42 @@ def package(runtime):
     return resources
 
 
-def wait_kit(runtime, kinds):
-    """The candidate kit installed Hide's hooks and Herdr's integration in the private home."""
-    files = {"claude": [runtime.home / ".claude/settings.json"],
-             "codex": [runtime.home / ".codex/hooks.json"]}
+def wait_kit(daemon, ids):
+    """The candidate kit's own report, as Settings reads it: Hide's hook and
+    Herdr's integration of each agent in the private home, once each is
+    installed or failed. Returns each failed piece's reason by agent."""
+    def report(rest):
+        devices = (rest.get("navigator") or {}).get("devices") or []
+        device = next((device for device in devices if device.get("kind") == "local"), None)
+        rows = {row.get("id"): row for row in ((device or {}).get("kit") or {}).get("agents") or []}
+        failed = {}
+        for key in ids:
+            row = rows.get(key)
+            if not row or not row.get("herdr"):
+                return None
+            for name, piece in (("hook", row.get("hook")), ("herdr", row["herdr"])):
+                # No hook: the agent takes the skill only.
+                if piece is None:
+                    continue
+                if piece.get("state") == "failed":
+                    failed.setdefault(key, []).append(f"{name}: {piece.get('reason')}")
+                elif piece.get("state") != "installed":
+                    return None
+        return {"failed": failed}
+    return daemon.wait(report, KIT_SECONDS, "the kit to install each agent's hook and Herdr integration")["failed"]
 
-    def installed():
-        for kind in kinds:
-            for file in files[kind]:
-                if not file.is_file():
-                    return False
-                content = file.read_text(errors="replace")
-                if "hide-agent-hooks" not in content or "herdr" not in content.lower():
-                    return False
-        return True
-    runtime.wait(installed, KIT_SECONDS)
 
-
-def prepare_local(runtime, report, table, rows, measured, operator, root):
+def prepare_local(runtime, report, table, rows, measured, operator, root, fake, services):
     """Local mode's guard, write sandbox and each agent's route; the agents
-    ready to measure."""
+    ready to measure. With `fake` (each agent's fake model URL) no login is
+    read or copied: each agent's private folder points it at the fake."""
     run, owner = runtime.run, runtime.owner
+    report["agents"].extend({"id": key} for key in measured)
+    for key in measured:
+        unmeasured = ROUTES[rows[key]["herdr_kind"]].get("unmeasured")
+        if unmeasured:
+            cells.settle_agent(table, key, unmeasured)
+    measured = [key for key in measured if "unmeasured" not in ROUTES[rows[key]["herdr_kind"]]]
     kinds = [rows[key]["herdr_kind"] for key in measured]
     known = list(dict.fromkeys(operator / rel for kind in kinds for rel in ROUTES[kind]["known"]))
     roots = list(dict.fromkeys(operator / rel for kind in kinds for rel in ROUTES[kind]["roots"]))
@@ -302,53 +295,75 @@ def prepare_local(runtime, report, table, rows, measured, operator, root):
     ready = []
     for key in measured:
         kind = rows[key]["herdr_kind"]
-        agent = {"id": key}
-        report["agents"].append(agent)
+        entry = ROUTES[kind]
+        agent = next(row for row in report["agents"] if row["id"] == key)
         if not executables[key]:
             cells.settle_agent(table, key, f"CLI not installed: {kind} is not on PATH")
             continue
+        extra = fake_lane.configure(kind, runtime.home, fake[key], root, local=True) if fake else None
+        if extra is not None:
+            agent["fake_env"] = sorted(extra)
+        elif kind == "opencode":
+            opencode_model(operator, runtime.home / opencode_service.CONFIG)
         launch = wrapper(runtime.bin, executables[key], operator, runtime.state, kind, runtime.home, sandbox,
-                         os.environ.get("PATH", ""))
+                         os.environ.get("PATH", ""), extra)
         environment = {**clean_env(), "HOME": str(operator), "TMPDIR": str(run / "agent-tmp")}
+        if kind == "opencode":
+            agent["service_port"] = opencode_service.configure(runtime.home / opencode_service.CONFIG)
+            services[key] = (launch, environment, agent["service_port"])
         _, version, _ = owner.run([str(launch), "--version"], env=environment, check=False)
         agent["version"] = version.strip()[:120]
-        if kind == "codex":
-            refusal = codex_login_refusal(operator / ".codex/auth.json")
-            if refusal:
-                agent["login"] = refusal
-                cells.settle_agent(table, key, refusal)
-                continue
-            codex_home = runtime.home / ".codex"
-            runtime.credential_roots.add(codex_home)
-            agent["private_configuration"] = prepare_overlay(CODEX_LOGIN_COPY, runtime.probe, operator,
-                                                             owner=owner, env=clean_env(), root=codex_home)["copies"]
-        if kind == "claude" and not claude_trusts(operator, root):
-            agent["trust"] = f"the measured repository {root} is not trusted in Claude"
-            cells.settle_agent(table, key, f"the measured repository is not trusted in Claude; open Claude once in {root} and accept")
+        agent["pin"] = clis.pin(kind, agent["version"])
+        if fake:
+            ready.append(key)
             continue
-        if kind == "claude":
-            code, output, _ = owner.run([str(launch), "auth", "status"], env=environment, check=False)
+        if kind == "claude" and not claude_trusts(operator, root):
+            agent["trust"] = f"Claude trusts neither the measured repository {root} nor a folder above it"
+            cells.settle_agent(table, key, "Claude trusts no folder above the measured repository; open Claude once in "
+                               f"{runtime.checkout} and accept")
+            continue
+        private = runtime.home / entry["config"] if entry["config"] else None
+        if entry["copies"]:
+            runtime.credential_roots.add(private)
+            recipe = {"id": key, "overlay": {"env": {}, "copies": entry["copies"], "settings": [],
+                                             "provenance": entry["provenance"]}}
             try:
-                logged_in = json.loads(output).get("loggedIn") is True
-            except ValueError:
-                logged_in = False
-            if code or not logged_in:
-                agent["login"] = "not logged in: run claude auth login yourself; the journey never logs in"
+                agent["private_configuration"] = prepare_overlay(recipe, runtime.probe, operator, owner=owner,
+                                                                 env=clean_env(), root=private)["copies"]
+            except CredentialSnapshotUnavailable as error:
+                # Another process has the login open; it is never ended for the journey.
+                agent["login"] = (f"{kind}'s login is open in another process ({error}); close that {kind} "
+                                  "yourself, then rerun; the journey never ends another session's agent")
                 cells.settle_agent(table, key, agent["login"])
                 continue
+
+        def status(args, launch=launch, environment=environment):
+            code, output, _ = owner.run([str(launch), *args], env=environment, check=False)
+            return code, output
+        # A copy must outlast what is left of the run, whose deadline ends every process in it.
+        refusal = entry["login"](private, status, owner.deadline - time.monotonic())
+        if refusal:
+            agent["login"] = refusal
+            cells.settle_agent(table, key, refusal)
+            # A login the run will not use leaves no copy behind.
+            for _, name in entry["copies"]:
+                for suffix in ("", "-wal", "-shm"):
+                    (private / (name + suffix)).unlink(missing_ok=True)
+            continue
         ready.append(key)
     return sandbox, guard, ready
 
 
-def prepare_ci(runtime, report, table, rows, measured, fixture_bin, root):
-    """CI mode's agents in the disposable HOME, signed in with the lane's keys
-    or replaced by the fixture stand-ins; the agents ready to measure."""
+def prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, fake, services):
+    """CI mode's agents in the disposable HOME, signed in with the lane's keys,
+    pointed at the fake model (`fake`, each agent's URL) or replaced by the
+    fixture stand-ins; the agents ready to measure."""
     ready = []
     for key in measured:
         kind = rows[key]["herdr_kind"]
         agent = {"id": key}
         report["agents"].append(agent)
-        secret = ci.not_configured(kind, fixture_bin)
+        secret = ci.not_configured(kind, fixture_bin, bool(fake))
         if secret:
             agent["not_configured"] = secret
             cells.settle_agent(table, key, f"not configured ({secret})")
@@ -358,16 +373,23 @@ def prepare_ci(runtime, report, table, rows, measured, fixture_bin, root):
             agent["cli_missing"] = kind
             cells.settle_agent(table, key, f"CLI not installed: {kind} is not on PATH")
             continue
-        launch = ci.wrapper(runtime, program, kind, os.environ.get("PATH", ""),
-                            runtime.probe / f"fixture-{kind}.config" if fixture_bin else None)
         # The kit installs an agent's hooks only where its own folder is, as
         # a CLI that has run once leaves it; a new runner has none. Made
         # before the CLI first runs, as Codex writes into it (CODEX_HOME).
-        private_directory(runtime.home / ci.HOME_FOLDERS[kind])
+        private_directory(runtime.home.joinpath(*rows[key]["home_folder"]))
+        fake_env = fake_lane.configure(kind, runtime.home, fake[key], root, local=False) if fake else None
+        if fake_env is not None:
+            agent["fake_env"] = sorted(fake_env)
+        launch = ci.wrapper(runtime, program, kind, os.environ.get("PATH", ""),
+                            runtime.probe / f"fixture-{kind}.config" if fixture_bin else None, fake_env)
         environment = {**clean_env(), "HOME": str(runtime.home), "TMPDIR": runtime.env["TMPDIR"]}
+        if kind == "opencode":
+            agent["service_port"] = opencode_service.configure(runtime.home / opencode_service.CONFIG)
+            services[key] = (launch, environment, agent["service_port"])
         _, version, _ = runtime.owner.run([str(launch), "--version"], env=environment, check=False)
         agent["version"] = version.strip()[:120]
-        if not fixture_bin:
+        agent["pin"] = None if fixture_bin else clis.pin(kind, agent["version"])
+        if not fixture_bin and not fake:
             refusal = ci.login(runtime, kind, launch, root)
             if refusal:
                 agent["login"] = refusal
@@ -396,8 +418,12 @@ def hide_ai_requests(log):
 def budget_failures(agents):
     """A signed-in run's agents over their request budget, by name (PRD B29)."""
     return [f"request_budget_exceeded: {agent['id']} made {agent['requests']} model requests, "
-            f"budget {agent['request_budget']}" for agent in agents
-            if agent.get("request_budget") is not None and agent.get("requests", 0) > agent["request_budget"]]
+            f"budget {agent['request_budget']}"
+            + (f", and the fake model refused {agent['refused_past_budget']} past it"
+               if agent.get("refused_past_budget") else "")
+            for agent in agents
+            if agent.get("request_budget") is not None
+            and (agent.get("requests", 0) > agent["request_budget"] or agent.get("refused_past_budget"))]
 
 
 def main(argv=None):
@@ -407,14 +433,19 @@ def main(argv=None):
     local = args.mode == "local"
     if local and args.fixture_bin:
         refuse("fixture_bin_is_ci_only: the stand-ins run with --mode ci")
+    if args.fake_model and args.fixture_bin:
+        refuse("fake_model_or_fixture_bin: the stand-ins answer for themselves")
+    fake = args.fake_model
     if local and sys.platform != "darwin":
         refuse("local_mode_runs_on_macos_only: it needs sandbox-exec and the keychain logins; the CI layer measures other systems")
     fixture_bin = args.fixture_bin.resolve() if args.fixture_bin else None
+    if args.controller_provider and not args.controller_provider.is_file():
+        refuse(f"controller_provider_missing: {args.controller_provider}")
     contract = load_contract(checkout)
     # A signed-in CI run reads which refusals leave a turn unmeasured before
     # it spends a request; a missing or misshapen contract stops it here.
     quota_rows = None
-    if not local and not fixture_bin:
+    if not local and not fixture_bin and not fake:
         try:
             quota_rows = quota.contract()
         except ValueError as error:
@@ -433,6 +464,19 @@ def main(argv=None):
                 or not next(row for row in contract if row["id"] == key)["model_flag"]):
             refuse("invalid_model_override")
         models[key] = model
+    unmeasured = {}
+    for entry in args.unmeasured:
+        key, separator, reason = entry.partition("=")
+        if not separator or key not in selected or not reason.strip() or key in unmeasured:
+            refuse("invalid_unmeasured")
+        unmeasured[key] = reason.strip()
+    if fixture_bin:
+        # The stand-ins imitate Claude Code and Codex only (web/e2e/shims/live-check.h).
+        for key in selected:
+            if key in cells.BUILT_AGENTS and key not in ci.FIXTURE_AGENTS and key not in unmeasured:
+                if args.agents:
+                    refuse(f"fixture_bin_imitates_claude_code_and_codex_only: {key}")
+                unmeasured[key] = ci.FIXTURE_ONLY
     herdr = args.herdr_bin or default_herdr(checkout, operator)
     if not herdr.is_file():
         refuse("pinned_herdr_missing: run zsh scripts/fetch-herdr-runtime.sh, or pass --herdr-bin")
@@ -447,43 +491,65 @@ def main(argv=None):
     run = (args.run_dir or checkout / "agents/runs" / slug).absolute()
     if run.exists() or run.is_symlink() or not beneath(run, checkout / "agents/runs"):
         refuse("report_directory_must_be_new_and_local_only")
-    root = measured_repository(checkout)
+    commit = measured_source(checkout)
     run_id = slug.removeprefix("agent-journey-") if not args.run_dir else run.name
-    measured = [key for key in selected if key in cells.BUILT_AGENTS]
-    # The cleanup deletes the run's branch names, so none may be there before it starts.
-    taken = taken_branches(root, [f"journey/{run_id}-{key}" for key in measured])
-    if taken:
-        refuse(f"journey_branch_exists: {', '.join(taken)} is in {root}; remove it or choose another --run-dir")
+    measured = [key for key in selected if key in cells.BUILT_AGENTS and key not in unmeasured]
     private_directory(run)
     rows = {row["id"]: row for row in contract}
     table = cells.plan(contract, selected)
     report = {"format": 1, "mode": args.mode, "fixture": bool(fixture_bin), "selected": selected, "models": models,
               "herdr": {}, "agents": [], "table": table, "systems": systems(args.mode), "configuration": {},
               **({"fixture_limits": ci.FIXTURE_LIMITS} if fixture_bin else {}),
-              "leftover_copies": leftover_copies(checkout, run), "measured_repository": str(root),
-              "leftovers": journey_leftovers(root, checkout, run), "created": [],
+              **({"fake_model": True, "fake_model_limits": fake_lane.LIMITS} if fake else {}),
+              "leftover_copies": leftover_copies(checkout, run), "measured_commit": commit, "created": [],
               "cleanup": {"confirmed": False}, "failures": []}
-    owner = OwnedProcesses(diagnostics=run / "process-diagnostics")
+    for key, reason in unmeasured.items():
+        report["agents"].append({"id": key, "unmeasured": reason})
+        cells.settle_agent(table, key, reason)
+    owner = OwnedProcesses(diagnostics=run / "process-diagnostics",
+                           run_seconds=run_seconds(fake or fixture_bin, len(measured)))
     previous = {signum: signal.signal(signum, lambda *_: owner.cancelled.set())
                 for signum in STOP_SIGNALS}
-    runtime = guard = daemon = None
+    runtime = guard = daemon = user_path = None
+    # One fake model per agent, so each one's log counts that agent's requests alone.
+    servers = {}
+    # Each OpenCode agent's program, environment and private server port, whose server the run ends.
+    services = {}
     try:
-        runtime = Runtime(checkout, run, operator, owner, herdr_bin=herdr,
-                          home=run / "probe/daemon-home")
+        home = run / "probe/daemon-home"
+        # The macOS sandbox opens the probe to agents, so a local run keeps the
+        # state outside it. A CI run keeps it where an operator's is, under
+        # HOME, which the kit trusts as its anchor: a state folder elsewhere it
+        # inspects from the drive root, and a Windows runner's D:\ lets every
+        # account change its entries.
+        runtime = Runtime(checkout, run, operator, owner, herdr_bin=herdr, home=home,
+                          state=None if local else home / ".hide/state")
         report["package"] = str(package(runtime))
+        if fake:
+            for key in measured:
+                servers[key] = fake_model.serve(run / f"fake-model-{key}.jsonl", rows[key]["request_budget"])[0]
+        urls = {key: f"http://127.0.0.1:{server.server_address[1]}" for key, server in servers.items()}
         # Codex's sessions belong in its private home, never the operator's, and
-        # in CI mode Claude's do too: its agents run in this home.
-        for relative in (".codex/sessions",) if local else (".codex/sessions", ".claude/projects"):
+        # in CI mode or with the fake model Claude's do too: it writes them there.
+        for relative in (".codex/sessions",) if local and not fake else (".codex/sessions", ".claude/projects"):
             sessions = runtime.home / relative
             if sessions.is_symlink():
                 sessions.unlink()
         launcher(runtime.bin / "hide", [runtime.hide])
-        if local:
+        root = measured_clone(runtime, checkout, commit)
+        report["measured_repository"] = str(root)
+        if local or fake:
             # Before hided starts, which reads the file once.
             disable_hide_ai(runtime.home)
-            sandbox, guard, ready = prepare_local(runtime, report, table, rows, measured, operator, root)
+        if local:
+            sandbox, guard, ready = prepare_local(runtime, report, table, rows, measured, operator, root, urls, services)
         else:
-            sandbox, ready = None, prepare_ci(runtime, report, table, rows, measured, fixture_bin, root)
+            sandbox, ready = None, prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, urls,
+                                              services)
+        if WINDOWS and not local:
+            # Before Herdr opens a pane, which reads its PATH from the
+            # account's registry: the agents' wrappers are found through it.
+            user_path = UserPath(runtime.bin)
         report["herdr"] = runtime.start()
         if sandbox:
             allow_hook_route(sandbox, runtime)
@@ -494,16 +560,21 @@ def main(argv=None):
             daemon.wait(lambda rest: (rest.get("ui_state") or {}).get("agent_onboarding") == "pending",
                         KIT_SECONDS, "the first-run agent question")
             daemon.dispatch("agent_onboarding_apply", {"agents": ready, "finish": True})
-            wait_kit(runtime, [rows[key]["herdr_kind"] for key in ready])
+            for key, pieces in wait_kit(daemon, ready).items():
+                # The product's own answer: the agent cannot start as Hide sets it up.
+                cells.settle(table, key, "start", cells.FAIL, "the kit did not install " + "; ".join(pieces))
+                ready.remove(key)
+            report["measured_project"] = register_measured(daemon, root)
             untrusted = repository(runtime, "repo-untrusted")
-            if "codex" in ready:
-                trust_codex(runtime.home / ".codex/config.toml", root)
+            for kind in {rows[key]["herdr_kind"] for key in ready} & TRUST.keys():
+                path, write = TRUST[kind]
+                write(runtime.home / path, root)
             if fixture_bin:
                 for key in ready:
                     ci.fixture_config(runtime, rows[key]["herdr_kind"])
                     for name, reason in ci.FIXTURE_UNIMITATED.items():
                         cells.settle(table, key, name, cells.NOT_MEASURED, reason)
-            controller = Controller(runtime)
+            controller = Controller(runtime, args.controller_provider.resolve() if args.controller_provider else None)
             report["controller"] = controller.start()
             # Before any agent starts, so each start's guidance carries it.
             card = report["memory"] = (memory.seed(runtime, daemon, root, card_writer, token())
@@ -514,23 +585,50 @@ def main(argv=None):
                 journey = Journey(runtime, daemon, controller, table, rows[key], root, agent, reader,
                                   branch=f"journey/{run_id}-{key}", created=report["created"],
                                   sessions=(ROUTES[rows[key]["herdr_kind"]]["sessions"](operator, runtime.home)
-                                            if local else runtime.home),
-                                  route=(route(rows[key]["herdr_kind"], runtime.home) if local
-                                         else {"args": [], "env": ci.route_names(rows[key]["herdr_kind"], fixture_bin)}),
+                                            if local and not fake else runtime.home),
+                                  route=({**route(rows[key]["herdr_kind"], runtime.home),
+                                          **({"fake_env": agent["fake_env"]} if fake else {})} if local
+                                         else {"args": [], "env": ci.route_names(rows[key]["herdr_kind"], fixture_bin,
+                                                                                 agent.get("fake_env"))}),
                                   model=rows[key]["model_flag"] and models.get(key),
                                   quota=quota_rows)
                 for step in STEPS:
                     journey.step(step, *((card,) if step == memory.CELL else ()))
-                untrusted_reason = (ROUTES[rows[key]["herdr_kind"]]["untrusted"] if local else
+                    journey.close(keep=journey.pane)
+                if key in services:
+                    # Its pane closed at Sleep and opened again at Wake: one server must still serve it.
+                    running = opencode_service.ours(str(runtime.home))
+                    agent["opencode_servers_after_wake"] = running
+                    if running is not None and len(running) > 1:
+                        report.setdefault("product_findings", []).append(
+                            f"{len(running)} OpenCode servers of the run ran after Sleep and Wake: {running}")
+                untrusted_reason = (ROUTES[rows[key]["herdr_kind"]]["untrusted"] if local and not fake else
                                     ci.FIXTURE_UNTRUSTED if fixture_bin else None)
                 if untrusted_reason:
                     cells.settle(table, key, "start_untrusted", cells.NOT_MEASURED,
                                  untrusted_reason.removeprefix("not measured: "))
                 else:
+                    # No later cell types into the agent's earlier panes.
+                    journey.close()
                     journey.step("untrusted", untrusted)
                 agent["requests"] = journey.requests()
+                if fake:
+                    # What a provider would have been asked; the session files may not show each one.
+                    agent["session_requests"] = agent["requests"]
+                    agent["requests"] = fake_lane.requests(run / f"fake-model-{key}.jsonl")
+                    agent["refused_past_budget"] = servers[key].refused
                 agent["request_budget"] = rows[key].get("request_budget")
                 journey.close()
+                if key in services:
+                    # Its panes are closed and no later agent uses it: ended now, so the
+                    # server, which outlives every terminal, holds no memory under the
+                    # run's cap while the next agents run.
+                    launch, environment, port = services[key]
+                    try:
+                        agent["opencode_service"] = opencode_service.stop(launch, environment, port,
+                                                                          str(runtime.home), runtime.owner)
+                    except Exception as error:
+                        agent["opencode_service"] = {"port": port, "left": [f"stop failed: {error}"]}
     except Exception as error:
         # A stop the operator asked for is not a failure; the cells say "interrupted".
         if not (owner.cancelled.is_set() and isinstance(error, ProcessError) and "cancelled" in str(error)):
@@ -539,14 +637,44 @@ def main(argv=None):
                                                  for frame in traceback.extract_tb(error.__traceback__)[-4:]],
                                           **({"path": error.path} if isinstance(error, ProtectionError) and error.path else {})})
     finally:
+        # First, so nothing that fails later in the cleanup leaves it behind.
+        path_left = None
+        if user_path:
+            try:
+                user_path.close()
+            except OSError as error:
+                path_left = f"user_path_not_restored: {error}"
+        for server in servers.values():
+            server.shutdown()
+            server.server_close()
         if daemon:
             daemon.close()
+        for key, (launch, environment, port) in services.items():
+            # Before the owner closes: the server outlives every terminal, and the run started it.
+            # Its own stop runs past the run's deadline too, as the rest of the teardown does.
+            agent = next(row for row in report["agents"] if row["id"] == key)
+            if "opencode_service" in agent and not agent["opencode_service"]["left"]:
+                # Already ended once its agent's cells settled.
+                continue
+            try:
+                with owner.teardown():
+                    agent["opencode_service"] = opencode_service.stop(launch, environment, port,
+                                                                      str(runtime.home), runtime.owner)
+            except Exception as error:
+                agent["opencode_service"] = {"port": port, "left": [f"stop failed: {error}"]}
         if runtime:
             # Herdr's own log lives in the private home the cleanup removes.
             log = runtime.home / "config/herdr/herdr-server.log"
             if log.is_file() and not log.is_symlink():
                 with open(log, "rb") as stream:
                     write_private(run / "herdr-server.log", ci.redact(stream.read(1024 * 1024)))
+            # Why a hook or plugin handed a prompt no letter or Memory: each cause the
+            # helper met (`cli`, `deadline`, ...) and when it last did. HOME is the
+            # private home only in CI mode; locally it stays the operator's.
+            causes = runtime.home / ".hide/agent-hooks/delivery-diagnostics.json"
+            if not local and causes.is_file() and not causes.is_symlink():
+                with open(causes, "rb") as stream:
+                    write_private(run / "delivery-diagnostics.json", ci.redact(stream.read(64 * 1024)))
         if local:
             # Before the cleanup, which removes the trust the candidate recorded with its worktrees.
             check_operator_trust(report, operator, run, "during")
@@ -562,18 +690,20 @@ def main(argv=None):
                 owner.close()
             except Exception as cleanup_error:
                 report["cleanup"]["failures"].append(str(cleanup_error))
-        if runtime and not report["cleanup"].get("processes_confirmed"):
-            # An agent that may still run keeps its worktree and branch.
-            report["repository_cleanup"] = {"removed": [], "kept": [
-                {**item, "reason": "processes_unconfirmed"} for item in report["created"]]}
-        elif runtime:
-            # After every process ended, so no agent still writes in a worktree.
-            try:
-                report["repository_cleanup"] = remove_created(runtime, root, report["created"],
-                                                              [f"journey/{run_id}-{key}" for key in measured])
-            except Exception as error:
-                report["repository_cleanup"] = {"removed": [], "failure": str(error), "kept": [
-                    {**item, "reason": "cleanup_failed: " + str(error)[:200]} for item in report["created"]]}
+        if path_left:
+            report["cleanup"]["confirmed"] = False
+            report["cleanup"].setdefault("failures", []).append(path_left)
+        for key, (_, _, port) in services.items():
+            # The owner's close ended every process the run owns, the server
+            # included; one still answering now outlived the run.
+            service = next(row for row in report["agents"] if row["id"] == key)["opencode_service"]
+            if service["left"]:
+                service["left"] = opencode_service.left(port, str(runtime.home))
+                if not service["left"]:
+                    service["stopped_by"] = "the run's close"
+            if service["left"]:
+                report["failures"].append({"type": "CleanupError", "reason": "opencode_server_left: "
+                                           + json.dumps(service["left"])})
         # Hide AI's model requests, apart from the agents' budget: none in
         # local mode, where it is off, and counted in CI mode, where it is on.
         try:
@@ -596,11 +726,10 @@ def main(argv=None):
     interrupted = owner.cancelled.is_set()
     cells.close(table, interrupted)
     setup_failed = bool(report["failures"] or report["configuration"].get("failures")
-                        or not report["cleanup"].get("confirmed")
-                        or (report.get("repository_cleanup") or {}).get("kept"))
+                        or not report["cleanup"].get("confirmed"))
     # An interrupted run says so with 3 whatever it measured, or 2 when its cleanup is unconfirmed.
     code = (2 if setup_failed else 3) if interrupted else cells.exit_code(table, selected, setup_failed=setup_failed)
-    report["budget_failures"] = budget_failures(report["agents"]) if not local and not fixture_bin else []
+    report["budget_failures"] = budget_failures(report["agents"]) if fake or (not local and not fixture_bin) else []
     if report["budget_failures"] and code in (0, 3):
         code = 1
     report["exit_code"] = code

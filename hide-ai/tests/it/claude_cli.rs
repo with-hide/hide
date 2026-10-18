@@ -58,6 +58,7 @@ fn request(deadline: Duration) -> AiRequest {
         pick: None,
         output_language: None,
         answer: hide_ai::AnswerMode::default(),
+        provider_efforts: Vec::new(),
     }
 }
 

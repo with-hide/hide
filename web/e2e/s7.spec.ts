@@ -209,6 +209,7 @@ function explorerRow(page: Page, stack: Stack, name: string): Locator {
 /** Opens a View tab's own menu (right-click) and picks one item. */
 async function tabMenu(scope: Page | Locator, page: Page, name: string, item: string): Promise<void> {
   await tab(scope, name).click({ button: "right" });
+  if (item.startsWith("split_") || item.startsWith("move_")) await page.locator(`[data-menu-group="${item.split("_")[0]}"]`).hover();
   await page.locator(`[role="menu"] [data-menu-item="${item}"]`).click();
 }
 
@@ -754,16 +755,21 @@ async function tabTo(page: Page, target: Locator, key: "Tab" | "Shift+Tab"): Pro
 /** Opens the focused tab's menu with ⇧F10 and chooses `item` with the arrow keys and Enter. */
 async function menuByKeyboard(page: Page, item: string): Promise<void> {
   await page.keyboard.press("Shift+F10");
-  const target = page.locator(`[role="menu"] [data-menu-item="${item}"]`);
-  await expect(target).toBeEnabled();
-  const focusedItem = () => page.evaluate(() => document.activeElement?.getAttribute("data-menu-item") ?? "");
-  for (let step = 0; step < 20 && !(await target.evaluate((node) => node === document.activeElement)); step += 1) {
-    const before = await focusedItem();
-    await page.keyboard.press("ArrowDown");
-    // The menu moves its focus on the next task, not inside the keydown.
-    await expect.poll(focusedItem).not.toBe(before);
+  const focusItem = async (target: Locator) => {
+    await expect(target).toBeEnabled();
+    for (let step = 0; step < 20 && !(await target.evaluate((node) => node === document.activeElement)); step += 1) {
+      const focused = () => page.evaluate(() => document.activeElement?.outerHTML ?? "");
+      const before = await focused();
+      await page.keyboard.press("ArrowDown");
+      await expect.poll(focused).not.toBe(before);
+    }
+    await expect(target).toBeFocused();
+  };
+  if (item.startsWith("split_") || item.startsWith("move_")) {
+    await focusItem(page.locator(`[data-menu-group="${item.split("_")[0]}"]`));
+    await page.keyboard.press("ArrowRight");
   }
-  await expect(target).toBeFocused();
+  await focusItem(page.locator(`[role="menu"] [data-menu-item="${item}"]`));
   await page.keyboard.press("Enter");
   await expect(page.locator('[role="menu"]')).toHaveCount(0);
 }
@@ -913,13 +919,26 @@ type MenuRow = { id: string; label: string; reason: string | null; disabled: boo
 
 /** The open menu's items as drawn: id, label, the reason under a disabled one. */
 async function menuRows(page: Page): Promise<MenuRow[]> {
-  return page.locator('[role="menu"] [data-menu-item]').evaluateAll((items) =>
-    items.map((button) => {
-      const label = button.querySelector("[data-menu-label]")?.textContent ?? "";
-      const reason = button.querySelector("[data-menu-reason]")?.textContent ?? null;
-      return { id: button.getAttribute("data-menu-item") ?? "", label, reason, disabled: button.getAttribute("aria-disabled") === "true" };
-    }),
-  );
+  const read = (locator: Locator) => locator.evaluateAll((items) => items.map((button) => ({
+    id: button.getAttribute("data-menu-item") ?? button.getAttribute("data-menu-group") ?? "",
+    label: button.querySelector("[data-menu-label]")?.textContent ?? "",
+    reason: button.querySelector("[data-menu-reason]")?.textContent ?? null,
+    disabled: button.getAttribute("aria-disabled") === "true",
+  })));
+  const rows = await read(page.locator('[role="menu"] [data-menu-item], [role="menu"] [data-menu-group]'));
+  const expanded: MenuRow[] = [];
+  for (const row of rows) {
+    if ((row.id === "split" || row.id === "move") && !row.disabled) {
+      await page.locator(`[data-menu-group="${row.id}"]`).focus();
+      await page.keyboard.press("ArrowRight");
+      const submenu = page.locator(`[data-menu-submenu="${row.id}"]`);
+      await expect(submenu).toBeVisible();
+      expanded.push(...await read(submenu.locator("[data-menu-item]")));
+      await page.keyboard.press("Escape");
+      await expect(submenu).toHaveCount(0);
+    } else expanded.push(row);
+  }
+  return expanded;
 }
 
 async function tabMenuRows(page: Page, scope: Page | Locator, name: string): Promise<MenuRow[]> {
@@ -1000,9 +1019,9 @@ test("a preview alone in its area offers its menu without the splits it cannot m
     // deletion (B11).
     const sentBefore = layoutEvents(stack);
     const alone = await tabMenuRows(page, page, "f01.txt");
-    expect(alone.map((row) => row.id)).toEqual(["new_tab", "keep_open", ...SPLITS, "copy_path", "select_in_tree", "close_view"]);
-    expect(alone.map((row) => row.label)).toEqual(["New tab", "Keep open", "Split right", "Split left", "Split up", "Split down", "Copy path", "Select in File Tree", "Close view"]);
-    for (const row of alone.filter((entry) => SPLITS.includes(entry.id))) expect(row).toMatchObject({ disabled: true, reason: "This is the only view in its area." });
+    expect(alone.map((row) => row.id)).toEqual(["new_tab", "keep_open", "split", "copy_path", "select_in_tree", "close_view"]);
+    expect(alone.map((row) => row.label)).toEqual(["New tab", "Keep open", "Split", "Copy path", "Select in File Tree", "Close view"]);
+    expect(alone.find((row) => row.id === "split")).toMatchObject({ disabled: true, reason: "This is the only view in its area." });
     expect(layoutEvents(stack)).toBe(sentBefore);
     await tab(page, "f01.txt").click({ button: "right" });
     await expect(page.locator('[role="menu"]')).not.toContainText(/Trash|Delete/);
@@ -1014,12 +1033,22 @@ test("a preview alone in its area offers its menu without the splits it cannot m
 test("a pinned view has no Keep open and, beside another area, can move there", async ({ page }) => {
   const stack = await startCaps(page, "s7-caps-pinned");
   try {
-    await pinNineAndSplit(page, stack);
+    // This menu needs two pinned views beside a single pinned view. Confirm
+    // each preview and Keep open action before preparing the next file.
+    for (const name of ["f02.txt", "f03.txt", "f04.txt"]) {
+      await explorerRow(page, stack, name).click();
+      await expect(tab(page, name)).toHaveAttribute("data-preview", "true");
+      await tabMenu(page, page, name, "keep_open");
+      await expect(tab(page, name)).toHaveAttribute("data-preview", "false");
+    }
+    await tabMenu(page, page, "f04.txt", "split_right");
+    await expect.poll(() => shape(page)).toBe("(f02.txt >f03.txt) | @(>f04.txt)");
     const left = await tabMenuRows(page, area(page, 0), "f02.txt");
     expect(left.map((row) => row.id)).toEqual(["new_tab", ...SPLITS, "move_right", "copy_path", "select_in_tree", "close_view"]);
     expect(left.every((row) => !row.disabled)).toBe(true);
-    const right = await tabMenuRows(page, area(page, 1), "f10.txt");
-    expect(right.map((row) => row.id)).toEqual(["new_tab", ...SPLITS, "move_left", "copy_path", "select_in_tree", "close_view"]);
+    const right = await tabMenuRows(page, area(page, 1), "f04.txt");
+    expect(right.map((row) => row.id)).toEqual(["new_tab", "split", "move_left", "copy_path", "select_in_tree", "close_view"]);
+    expect(right.find((row) => row.id === "split")).toMatchObject({ disabled: true, reason: "This is the only view in its area." });
   } finally { stopStack(stack); }
 });
 
@@ -1042,7 +1071,7 @@ test("an area three splits deep cannot split again and says why", async ({ page 
     // B9, B19
     await splitToDepth(page, stack);
     const deep = await tabMenuRows(page, area(page, 0), "f02.txt");
-    for (const row of deep.filter((entry) => SPLITS.includes(entry.id))) expect(row).toMatchObject({ disabled: true, reason: "View areas can be split only 3 levels deep." });
+    expect(deep.find((row) => row.id === "split")).toMatchObject({ disabled: true, reason: "View areas can be split only 3 levels deep." });
   } finally { stopStack(stack); }
 });
 
@@ -1054,7 +1083,7 @@ test("at six view areas every split is refused with its reason, in the menu and 
     const six = await shape(page);
     const splitsAtSix = stack.sent.get("view_layout.split") ?? 0;
     const capped = await tabMenuRows(page, area(page, 0), "f02.txt");
-    for (const row of capped.filter((entry) => SPLITS.includes(entry.id))) expect(row).toMatchObject({ disabled: true, reason: "This Workspace already shows 6 view areas, the most it can." });
+    expect(capped.find((row) => row.id === "split")).toMatchObject({ disabled: true, reason: "This Workspace already shows 6 view areas, the most it can." });
     await tab(area(page, 0), "f02.txt").click({ button: "right" });
     await screenshot(page, "s7-caps-area-limit-menu");
     await page.keyboard.press("Escape");

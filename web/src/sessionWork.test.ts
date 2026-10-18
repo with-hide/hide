@@ -2,7 +2,7 @@ import { legacyAgentRow } from "../test/legacyAgentRow";
 import type { BoardProject } from "./projectBoard";
 import { expect, it } from "vitest";
 import type { MissedWork, SessionRecord, SessionWorkSummary, WorkRequest, WorkTask } from "./snapshot";
-import { checklist, openMissedWork, outputPrState, recordTitle, sessionPlace } from "./sessionWork";
+import { checklist, openMissedWork, outputPrState, recordTitle, sessionPlace, taskState } from "./sessionWork";
 
 const missed = (id: string, at: number, status: MissedWork["status"] = "open"): MissedWork => ({ id, kind: "problem", text: id, status, at_unix_ms: at, turn_offset: 1, issue_repository: null, issue_number: null, creating: false, backlog_key: null });
 const work = (id: string, cwd: string, items: MissedWork[]): SessionWorkSummary => ({
@@ -24,7 +24,7 @@ it("titles a record by its manual name, else the model's goal or the native name
 });
 
 const SESSION = { device_id: "local", agent: "claude", session_id: "root" };
-const task = (id: string, chapter: string, at: number, done = false, end: WorkTask["end"] = "done"): WorkTask => ({ id, chapter_id: chapter, name: `task ${id}`, at_unix_ms: at, last_at_unix_ms: at, end, done });
+const task = (id: string, chapter: string, at: number, done = false, end: WorkTask["end"] = "done"): WorkTask => ({ id, chapter_id: chapter, name: `task ${id}`, at_unix_ms: at, last_at_unix_ms: at, end, done, unjudged: false });
 const request = (offset: number, at: number, task_ids: string[], judged = true): WorkRequest => ({ offset, at_unix_ms: at, text: `request ${offset}`, author: "operator", task_ids, chapter_id: null, judged });
 const record = (patch: Partial<SessionRecord>): SessionRecord => ({
   session: SESSION, title: "Goal", fallback_title: "Claude", native_title: null, manual_title: null, state: "idle", last_end: null, cwd: null, path: null, started_at_unix_ms: 0, ended_at_unix_ms: null,
@@ -38,6 +38,14 @@ it("lists tasks first-asked first, whatever chapters they fall in, and counts th
   }));
   expect(list.tasks.map((item) => item.task.id)).toEqual(["early", "late"]);
   expect([list.done, list.total]).toEqual([1, 2]);
+});
+
+it("reads an unjudged task that is not done as unjudged, while PR facts and done still win (PRD task-continuation D-09)", () => {
+  const unjudged = { ...task("t1", "c", 10, false, "unfinished"), unjudged: true };
+  expect(taskState(unjudged, [])).toBe("unjudged");
+  expect(taskState({ ...unjudged, done: true }, [])).toBe("done");
+  const open = { kind: "pr" as const, repository: "a/b", number: 1, title: "", url: "", state: "open", stale: false, last_read_at_unix_ms: null, created_at_unix_ms: 0, task_id: "t1", source: SESSION, source_name: "" };
+  expect(taskState(unjudged, [open])).toBe("review");
 });
 
 it("gives each task the request that asked for it and shows the newest unjudged request only while working", () => {

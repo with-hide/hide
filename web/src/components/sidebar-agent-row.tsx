@@ -165,6 +165,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
     <EntryContextMenu
       asChild
       label={t("common.entryActions", { name: agent.identity_label })}
+      title={agent.identity_label}
       items={() => menu.items(agent)}
       onSelect={(id) => menu.onSelect(agent, id)}
       data-agent-menu={agent.pane_id}

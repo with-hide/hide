@@ -414,7 +414,6 @@ impl Runtime {
                     pane,
                     agents.get(pane.id.as_str()).copied(),
                     transports.get(pane.id.as_str()).copied(),
-                    workspace,
                     offline,
                 );
                 headers.insert(

@@ -90,15 +90,9 @@ impl ApiStream for LocalStream {
     }
 
     fn set_write_timeout(&self, timeout: Option<Duration>) -> Result<(), ApiError> {
-        match LocalStream::set_write_timeout(self, timeout) {
-            // A Windows pipe has no write timeout. A request is one line that
-            // fits the pipe's buffer, the read that follows is bounded, and the
-            // shutdown handle frees a writer a stalled peer holds.
-            Err(error) if error.kind() == std::io::ErrorKind::Unsupported => Ok(()),
-            result => result.map_err(|error| {
-                ApiError::Transport(format!("write timeout could not be set: {error}"))
-            }),
-        }
+        LocalStream::set_write_timeout(self, timeout).map_err(|error| {
+            ApiError::Transport(format!("write timeout could not be set: {error}"))
+        })
     }
 
     fn read_line_with_timeout(&mut self, timeout: Duration) -> Result<String, ApiError> {

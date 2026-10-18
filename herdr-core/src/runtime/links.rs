@@ -519,9 +519,12 @@ impl Runtime {
         if self.links_work.parents_print == Some(print) {
             return;
         }
+        // The first facts go out even when empty: the links worker holds a
+        // descendant letter's turn until it has them.
+        let first = self.links_work.parents_print.is_none();
         self.links_work.parents_print = Some(print);
         let parents = self.link_parent_facts();
-        if *self.links_work.parents != parents {
+        if first || *self.links_work.parents != parents {
             self.links_work.parents = Arc::new(parents);
             client.parents(Arc::clone(&self.links_work.parents));
         }
@@ -552,6 +555,9 @@ impl Runtime {
                 .hash(&mut hasher);
         }
         if let Ok(ledger) = self.delivery_ledger.as_ref() {
+            // A new letter may be a child's report (`link_parent_facts`);
+            // every letter takes an id, so the next one moves the print.
+            ledger.next_id.hash(&mut hasher);
             for record in &ledger.agents {
                 (
                     &record.id,
@@ -641,6 +647,9 @@ impl Runtime {
                     parent_agent: session_agent(&parent.agent_kind)?.to_owned(),
                     parent_session_id: parent.session_id.clone()?,
                     parent_name: wire_name(parent, devices.get(parent.pane_id.as_str())?),
+                    name: wire_name(agent, devices.get(agent.pane_id.as_str())?),
+                    reported_at_unix_ms: None,
+                    live: true,
                 })
             })
             .map(|parent| {
@@ -662,6 +671,37 @@ impl Runtime {
             .iter()
             .map(|record| (record.id.as_str(), record))
             .collect::<HashMap<_, _>>();
+        // A child's report to its parent counts it finished while it rests
+        // (PRD task-continuation D-08); the ledger keeps a bounded tail of
+        // letters, so an older report is simply not known.
+        let identity = |actor: &crate::delivery::Actor| {
+            (
+                actor.pane_id.clone(),
+                actor.device_id.clone(),
+                actor.session.clone(),
+            )
+        };
+        let mut reports = HashMap::new();
+        for letter in ledger
+            .letters
+            .iter()
+            .filter(|letter| letter.kind == "report")
+        {
+            let at = reports
+                .entry((identity(&letter.sender), identity(&letter.recipient)))
+                .or_insert(letter.created_at_unix_ms);
+            *at = (*at).max(letter.created_at_unix_ms);
+        }
+        // A registered child is live while a pane runs its session.
+        let live = self
+            .link_lineage_agents()
+            .filter_map(|agent| {
+                Some((
+                    *devices.get(agent.pane_id.as_str())?,
+                    agent.session_id.as_deref()?,
+                ))
+            })
+            .collect::<std::collections::HashSet<_>>();
         let registered = ledger
             .agents
             .iter()
@@ -678,6 +718,12 @@ impl Runtime {
                     parent_agent: session_agent(&parent.actor.kind)?.to_owned(),
                     parent_session_id: parent.session.clone(),
                     parent_name: parent.wire_name().to_owned(),
+                    name: record.wire_name().to_owned(),
+                    reported_at_unix_ms: reports
+                        .get(&(identity(&record.actor), identity(&parent.actor)))
+                        .copied(),
+                    live: live
+                        .contains(&(record.actor.device_id.as_str(), record.session.as_str())),
                 })
             })
             .collect::<Vec<_>>();

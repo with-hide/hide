@@ -50,6 +50,8 @@ export function taskState(task: WorkTask, outputs: readonly WorkOutput[]) {
   if (prs.some((output) => output.state === "ci_failed")) return "ci_failed";
   if (prs.some((output) => ["open", "review"].includes(output.state))) return "review";
   if (task.done) return "done";
+  // The newest turn went unjudged: its END is an earlier turn's, so no word (PRD task-continuation D-09).
+  if (task.unjudged) return "unjudged";
   return task.end === "done" ? "unfinished" : task.end === "waiting" ? "working" : task.end;
 }
 const OUTPUT_ORDER: Record<string, number> = { ci_failed: 0, review: 1, open: 2, merged: 3, closed: 4 };

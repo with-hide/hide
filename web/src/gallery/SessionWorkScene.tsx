@@ -17,7 +17,7 @@ import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 const AT = 1_790_000_000_000;
 const SESSION: WorkSession = { device_id: "local", agent: "claude", session_id: "record-example" };
 const CHILD_SESSION: WorkSession = { ...SESSION, agent: "claude", session_id: "child-example" };
-const task = (id: string, chapter: string, name: string, end: WorkTask["end"], done: boolean, at: number): WorkTask => ({ id, chapter_id: chapter, name, end, done, at_unix_ms: at, last_at_unix_ms: at + 1000 });
+const task = (id: string, chapter: string, name: string, end: WorkTask["end"], done: boolean, at: number): WorkTask => ({ id, chapter_id: chapter, name, end, done, at_unix_ms: at, last_at_unix_ms: at + 1000, unjudged: false });
 const request = (offset: number, text: string, task_ids: string[], patch: Partial<WorkRequest> = {}): WorkRequest => ({ offset, text, at_unix_ms: AT + offset * 60_000, author: "operator", task_ids, chapter_id: "chapter-1", judged: true, ...patch });
 const missed = (id: string, text: string, turn_offset: number, status: MissedWork["status"]): MissedWork => ({ id, kind: "follow_up", text, status, at_unix_ms: AT, turn_offset, issue_repository: null, issue_number: null, creating: false, backlog_key: null });
 const pr = (number: number, title: string, state: string, source: WorkSession, sourceName: string, task_id: string | null): WorkOutput => ({ kind: "pr", repository: "example/hide", number, title, url: `https://example.invalid/pull/${number}`, state, stale: false, last_read_at_unix_ms: AT, created_at_unix_ms: AT + number, task_id, source, source_name: sourceName });

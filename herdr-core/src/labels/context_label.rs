@@ -7,7 +7,7 @@
 
 use super::analysis::{
     Analysis, AnalysisPhase, LabelEnd, LabelLimits, MIN_GOAL_CHARS, normalize_goal,
-    normalize_text_field,
+    normalize_text_field, truncate_phrase,
 };
 use crate::links::ledger::{MISSED_CHARS, NEW_TASK_LIMIT, TaskDecision};
 use anyhow::{Context, Result, anyhow};
@@ -19,7 +19,13 @@ use std::time::Duration;
 pub(crate) const FEATURE_ID: &str = "context_label";
 /// Bumped whenever a prompt or a schema changes, so a log line can be read
 /// against the pair that produced it.
-pub(crate) const SCHEMA_VERSION: &str = "context_label.v14";
+pub(crate) const SCHEMA_VERSION: &str = "context_label.v15";
+/// The effort a label asks of Codex, whether it is the first agent or the
+/// fallback (PRD label-judgment-fixes D-12): measured on gpt-5.6-luna over
+/// 104 label answers, `medium` turned no question into done, while the
+/// default turned one of 31 and `low` one the other way. Claude is asked no
+/// effort, so its thinking stays off.
+pub(crate) const CODEX_EFFORT: &str = "medium";
 /// Long enough for a provider that has to start a child process, short
 /// enough that a stuck turn does not hold the pane's slot for a whole event
 /// cycle series.
@@ -105,9 +111,10 @@ fn end_prompt(limits: LabelLimits) -> String {
         "work is {\"task\":{\"kind\":\"new\",\"names\":[\"task name\"]}|{\"kind\":\"continue\",\"ids\":[\"task-id\"]}|{\"kind\":\"none\"},\"missed\":[],\"resolved\":[],\"output_task_id\":null}. ",
         "Judge this human request as a task only when <work-author>true</work-author>: it is the request of the operator or of the parent that delegated the session, and letters from other agents are excluded. ",
         "If a concrete new deliverable was asked for, new with names holding one task name of at most 80 characters per deliverable; if it continues existing work in <open-tasks>, continue with at most 2 real IDs; questions, explanations and progress checks are none. ",
+        "A reply that answers, approves or chooses what the assistant asked or proposed at the end of its previous message (\"yes, do that\", \"the second one\", \"go ahead\") continues the task that message was working on: continue with its real ID from <open-tasks>, or from <finished-tasks> when the reply has the agent carry out more of that work. ",
         "Task IDs that share the part before the first dot (task-12, task-12.2) are the tasks of one request: one of its IDs continues or reopens all of them, so name one ID per request. ",
         "<finished-tasks> are the newest finished tasks. A request that orders the agent to carry out the work of one of them again (run it again, redo, measure again, reinstall) is a task, never none: continue with that task's real ID, which reopens it. ",
-        "A remark, a complaint, a doubt (\"this is confusing\", \"still slow\"), a question, an opinion, a proposal to discuss, an approval or a progress check is none even when it is about a finished task, and a different deliverable is new. ",
+        "A remark, a complaint, a doubt (\"this is confusing\", \"still slow\"), a question, an opinion, a proposal to discuss or a progress check is none even when it is about a finished task, and never reopens it; a different deliverable is new. ",
         "If work-author is false, task is none. Verifying, fixing bugs in, merging or installing the same work continues the existing task, open or finished. ",
         "When one request asks for several independent deliverables (a numbered list or separate bullets that each have their own result), names holds one name per deliverable, at most 6, bundling any extras into the last name. ",
         "Sub-steps, checks and details of the same deliverable are not separate tasks, and a request for one deliverable has exactly one name. ",
@@ -203,6 +210,7 @@ pub(crate) fn request(
         pick: None,
         output_language: Some(language),
         answer: hide_ai::AnswerMode::PlainJson,
+        provider_efforts: vec![(hide_ai::ProviderId::CODEX, CODEX_EFFORT.to_owned())],
     }
 }
 
@@ -299,12 +307,13 @@ pub(crate) fn parse(
         return Err(anyhow!("provider_invalid_goal_change"));
     }
     // Every surface draws it in one line, so the prompt's length rule is
-    // enforced here whatever the model did with it.
-    let line = normalize_text_field(&line, true)
-        .ok_or_else(|| anyhow!("provider_invalid_line"))?
-        .chars()
-        .take(limits.line)
-        .collect::<String>();
+    // enforced here whatever the model did with it: a longer line is cut
+    // between words and ends in `…`, never refused or emptied, so a question
+    // stays a question.
+    let line = truncate_phrase(
+        &normalize_text_field(&line, true).ok_or_else(|| anyhow!("provider_invalid_line"))?,
+        limits.line,
+    );
     // A question with no statable action is a surface-pattern match
     // (greeting, courtesy offer), not a real request. A block with no
     // statable cause is a stop without a stated reason, the unfinished turn
@@ -404,6 +413,18 @@ mod tests {
         }
         // The answer of an earlier schema names one task and is not read.
         assert!(end_with(json!({"kind": "new", "name": "가"})).is_err());
+    }
+
+    /// Both boundaries ask Codex for medium effort, an effort Codex takes,
+    /// and ask Claude for none (D-12, B17).
+    #[test]
+    fn a_label_asks_codex_for_medium_effort_and_claude_for_none() {
+        for phase in [AnalysisPhase::TurnStart, AnalysisPhase::TurnEnd] {
+            let request = request(phase, OutputLanguage::Korean, "w1:p1", "r".into(), "");
+            assert_eq!(request.effort(hide_ai::ProviderId::CODEX), Some("medium"));
+            assert!(hide_ai::ProviderId::CODEX.efforts().contains(&"medium"));
+            assert_eq!(request.effort(hide_ai::ProviderId::CLAUDE), None);
+        }
     }
 
     #[test]

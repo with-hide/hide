@@ -9,7 +9,7 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Agent, FileIdentity, label_transcript};
+use crate::{Agent, FileIdentity, ReadRefusal, label_transcript};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionActivityRequest {
@@ -32,7 +32,10 @@ pub struct SessionActivity {
     pub bytes: u64,
 }
 
-pub fn read(home: &Path, request: &SessionActivityRequest) -> Result<SessionActivity, String> {
+/// The session's activity, or why it cannot be read: a read that met the
+/// agent writing its records ([`ReadRefusal::InMotion`]) says nothing about
+/// the session or its route, and a read a moment later can answer.
+pub fn read(home: &Path, request: &SessionActivityRequest) -> Result<SessionActivity, ReadRefusal> {
     if request.agent == Agent::OpenCode {
         return crate::opencode::activity(home, request);
     }
@@ -52,7 +55,7 @@ pub fn read(home: &Path, request: &SessionActivityRequest) -> Result<SessionActi
     }
     if request.exact_route {
         if !request.agent.requires_native_file_proof() {
-            return Err("session_route_unsupported".to_owned());
+            return Err("session_route_unsupported".into());
         }
         let native_id = before
             .native_session_id
@@ -60,7 +63,7 @@ pub fn read(home: &Path, request: &SessionActivityRequest) -> Result<SessionActi
             .ok_or("session_route_unconfirmed")?;
         let cwd = request.cwd.as_deref().ok_or("session_route_unconfirmed")?;
         crate::native_file::confirm_route(home, request.agent, &path, native_id, Path::new(cwd))
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| ReadRefusal::of(&error))?;
     }
     if request.agent == Agent::Cursor {
         let native_id = before
@@ -72,7 +75,7 @@ pub fn read(home: &Path, request: &SessionActivityRequest) -> Result<SessionActi
             .map_err(|error| error.to_string())?;
         let after =
             crate::confirm_session_file(home, request.agent, &path, Some(native_id), Some(cwd))
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| ReadRefusal::of(&error))?;
         if before.owner != after.owner || before.incarnation != after.incarnation {
             return Err("session_activity_read_changed".into());
         }
@@ -101,7 +104,7 @@ pub fn read(home: &Path, request: &SessionActivityRequest) -> Result<SessionActi
         reported_id,
         request.cwd.as_deref(),
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| ReadRefusal::of(&error))?;
     if !metadata.is_file()
         || before.owner != after.owner
         || before.incarnation != sampled_incarnation
@@ -109,7 +112,7 @@ pub fn read(home: &Path, request: &SessionActivityRequest) -> Result<SessionActi
         || metadata.len() < before.bytes
         || after.bytes < metadata.len()
     {
-        return Err("session_activity_read_changed".to_owned());
+        return Err("session_activity_read_changed".into());
     }
     Ok(SessionActivity {
         modified_at_unix_ms,
@@ -195,24 +198,28 @@ mod tests {
         input.reference_kind = "opaque".to_owned();
         assert_eq!(
             read(home.path(), &input).unwrap_err(),
-            "session_kind_unsupported"
+            ReadRefusal::Refused("session_kind_unsupported".into())
         );
         input.reference_kind = "path".to_owned();
         input.reference_value.clear();
         assert_eq!(
             read(home.path(), &input).unwrap_err(),
-            "label_session_reference_missing"
+            ReadRefusal::Refused("label_session_reference_missing".into())
         );
         let outside = home.path().join("outside.jsonl");
         fs::copy(&path, &outside).unwrap();
         assert_eq!(
             read(home.path(), &request(&outside, Agent::Codex)).unwrap_err(),
-            "label_session_outside_roots"
+            ReadRefusal::Refused("label_session_outside_roots".into())
         );
         fs::remove_file(&path).unwrap();
         let error = read(home.path(), &request(&path, Agent::Codex)).unwrap_err();
-        assert!(!error.contains(&home.path().to_string_lossy().to_string()));
-        assert!(!error.contains("native-a"));
+        assert!(
+            !error
+                .reason()
+                .contains(&home.path().to_string_lossy().to_string())
+        );
+        assert!(!error.reason().contains("native-a"));
     }
 
     #[test]
@@ -235,7 +242,10 @@ mod tests {
             exact_route: false,
             expected_id: None,
         };
-        assert_eq!(read(home.path(), &input).unwrap_err(), "session_capacity");
+        assert_eq!(
+            read(home.path(), &input).unwrap_err(),
+            ReadRefusal::Refused("session_capacity".into())
+        );
         assert!(
             home.path()
                 .join(".codex/sessions/2026/01/01/skipped-0.txt")
@@ -280,7 +290,7 @@ mod tests {
         fs::write(&path, "{\"type\":\"event_msg\",\"payload\":{}}\n").unwrap();
         assert_eq!(
             read(home.path(), &request(&path, Agent::Codex)).unwrap_err(),
-            "label_session_metadata_unconfirmed"
+            ReadRefusal::Refused("label_session_metadata_unconfirmed".into())
         );
     }
 }

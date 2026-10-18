@@ -417,7 +417,7 @@ test("A delegated canvas's normal tab keeps the Agent commands in its menu", asy
     await tab(page, herdr.tab).click();
     await expect(page.locator(`[data-pane-view="${parent}"]`)).toHaveAttribute("data-focused", "true");
     await tab(page, herdr.tab).click({ button: "right" });
-    await expect(page.locator('[role="menu"] [data-menu-item="split_right"]')).toBeVisible();
+    await expect(page.locator('[role="menu"] [data-menu-group="split"]')).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.locator('[role="menu"]')).toHaveCount(0);
     await screenshot(page, "agent-groups-delegated-return");

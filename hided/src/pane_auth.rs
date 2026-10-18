@@ -1033,9 +1033,11 @@ fn answer_bootstrap(
     else {
         return;
     };
-    let _ = stream.set_read_timeout(Some(BOOTSTRAP_TIMEOUT));
-    // A Windows pipe has no write timeout; the answer is one short line.
-    let _ = stream.set_write_timeout(Some(BOOTSTRAP_TIMEOUT));
+    if stream.set_read_timeout(Some(BOOTSTRAP_TIMEOUT)).is_err()
+        || stream.set_write_timeout(Some(BOOTSTRAP_TIMEOUT)).is_err()
+    {
+        return;
+    }
     let mut line = String::new();
     let read = BufReader::new(&mut stream)
         .take(hide_node_link::panes::HOOK_REQUEST_LIMIT as u64 + 1)

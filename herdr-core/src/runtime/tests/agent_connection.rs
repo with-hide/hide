@@ -832,6 +832,11 @@ fn a_reopen_through_the_worker_waits_for_herdr_to_release_the_name() {
                 let gone = !process::is_alive(pid) || gone_flag.load(Ordering::SeqCst);
                 Ok(info(shell, if gone { shell } else { pid }))
             }
+            // The agent quits on its own keys, so the node never ends it.
+            "pane.send_keys" => {
+                let _ = process::terminate(pid);
+                Ok(json!({"type": "ok"}))
+            }
             "agent.start" => {
                 assert_eq!(params["args"], json!(["--resume", SESSION_ID]));
                 if attempts.fetch_add(1, Ordering::SeqCst) < 2 {
@@ -943,6 +948,10 @@ fn a_reopen_in_its_pane_resumes_with_the_choice_the_agent_was_started_with() {
                     "pane_id": "w1:p2", "shell_pid": shell, "foreground_process_group_id": foreground,
                     "foreground_processes": [{"pid": shell, "name": "zsh"}]
                 }})
+            }
+            "pane.send_keys" => {
+                let _ = process::terminate(pid);
+                json!({"type": "ok"})
             }
             "agent.start" => {
                 sent.send(params["args"].clone()).unwrap();

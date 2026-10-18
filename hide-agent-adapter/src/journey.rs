@@ -8,6 +8,11 @@ pub struct JourneyAdapter {
     pub id: &'static str,
     /// The agent kind `hide agent spawn --kind` takes and Herdr reports.
     pub herdr_kind: &'static str,
+    /// The source Herdr's own integration reports the agent's session under.
+    pub herdr_source: String,
+    /// The agent's own folder in its HOME, whose presence tells the kit the
+    /// agent is set up there, as a CLI that has run once leaves it.
+    pub home_folder: &'static [&'static str],
     /// What separates the spawn's native arguments from its first prompt;
     /// absent for an agent Hide cannot start.
     pub prompt_flag: Option<&'static str>,
@@ -20,9 +25,17 @@ pub struct JourneyAdapter {
     /// Every journey cell, `true` when the adapter declares what it measures;
     /// an undeclared cell reads N/A, never a failure.
     pub cells: JourneyCells,
+    /// How the core hands a letter to the agent at rest; absent when the
+    /// letter cell is not declared.
+    pub letter: Option<JourneyLetter>,
+    /// How a sleeping agent is woken; absent when it cannot sleep.
+    pub wake: Option<JourneyWake>,
+    /// Where the native title the `title` cell reads comes from, measured the
+    /// way the operator makes it; absent when the cell is not declared.
+    pub title: Option<JourneyTitle>,
     /// The most model requests a signed-in CI run of the journey may make
     /// for this agent, which its lane fails above: each turn the declared
-    /// cells start, at most `REQUESTS_PER_TURN` each; absent for an agent
+    /// cells start, at most `requests_per_turn` each; absent for an agent
     /// Hide cannot start.
     pub request_budget: Option<u32>,
 }
@@ -31,6 +44,59 @@ pub struct JourneyAdapter {
 /// agent that answers in more than one (a tool call it chose, a retry it
 /// makes itself), and a run past it means the journey's turns are wrong.
 pub const REQUESTS_PER_TURN: u32 = 3;
+
+/// The most model requests one token-only turn may take, declared for each
+/// agent's CLI: `REQUESTS_PER_TURN`, but Grok 1.0.52 makes four for every
+/// turn, three chat requests and one more (its title request to `grok-4.6`
+/// in a new session), measured with the journey's fake model on 2026-10-18.
+const fn requests_per_turn(start: super::LaunchDialect) -> u32 {
+    use super::LaunchDialect::*;
+    match start {
+        Grok => 4,
+        Claude | Codex | OpenCode | Pi | Omp | Cursor | Antigravity => REQUESTS_PER_TURN,
+    }
+}
+
+/// The path a letter takes to an agent at rest, as the core chooses it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JourneyLetter {
+    /// The doorbell types its line into the composer once the pane rests
+    /// (`bell`).
+    Bell,
+    /// The agent's prompt hook hands it over with the next prompt, whoever
+    /// types it: a prompt hook and no bell (the core's
+    /// `mailbox::next_prompt_letters`).
+    NextPrompt,
+    /// Only at a tool call the model makes while it works, or through a
+    /// `hide inbox` it runs: `tool_letters` and no prompt hook.
+    Tool,
+}
+
+/// How the operator's Wake reaches a sleeping agent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JourneyWake {
+    /// The pane stays and `agent_wake` restarts the agent in it.
+    Pane,
+    /// Sleep closes the pane and leaves a sleeping session, which
+    /// `wake_sleeping_session` opens in a new pane
+    /// (`LaunchDialect::closes_pane_when_sleeping`).
+    SleepingSession,
+}
+
+/// The native title source a `title` cell measures (docs/status-model.md,
+/// Task identity: the automatic or source-less slot of each format).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JourneyTitle {
+    /// The agent titles its session itself, with a model request of its own
+    /// that the journey's model answers.
+    Automatic,
+    /// Only a name the operator gives the session with this command: Pi's
+    /// `session_info.name`, which its `/name` writes.
+    Named(&'static str),
+}
 
 #[derive(serde::Serialize)]
 pub struct JourneyCells {
@@ -88,14 +154,36 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
         .into_iter()
         .filter(|&turn| turn)
         .count() as u32;
+        let letter = cells.letter.then(|| {
+            if row.bell {
+                JourneyLetter::Bell
+            } else if row.prompt_hook.is_some() {
+                JourneyLetter::NextPrompt
+            } else {
+                JourneyLetter::Tool
+            }
+        });
+        let wake = cells.sleep_wake.then(|| match row.sleep {
+            Some(dialect) if dialect.closes_pane_when_sleeping() => JourneyWake::SleepingSession,
+            _ => JourneyWake::Pane,
+        });
+        let title = cells.title.then_some(match row.titles {
+            Some(super::SessionFormat::Pi) => JourneyTitle::Named("/name"),
+            _ => JourneyTitle::Automatic,
+        });
         JourneyAdapter {
             id: row.id,
             herdr_kind: row.herdr.name,
+            herdr_source: row.herdr.session_source(),
+            home_folder: row.herdr.folder,
             prompt_flag: row.start.map(|start| start.prompt_flag()),
             model_flag: row.start.map_or(&[], |start| start.options().model),
             untitled: row.sidebar_label.unwrap_or(row.herdr.name),
             cells,
-            request_budget: start.then_some(turns * REQUESTS_PER_TURN),
+            request_budget: row.start.map(|start| turns * requests_per_turn(start)),
+            letter,
+            wake,
+            title,
         }
     })
 }

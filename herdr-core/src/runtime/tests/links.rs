@@ -312,9 +312,11 @@ fn native_lineage_reaches_the_ledger_on_remote_and_cross_device_sessions() {
         .apply_ledger_update(&LedgerUpdate::TurnEnd {
             session: owner.clone(),
             offset: 1,
+            started_at_unix_ms: CREATED + 1,
             at_unix_ms: CREATED + 1,
             end: crate::labels::analysis::LabelEnd::Done,
             work_author: true,
+            letter: None,
             turn_witness: None,
             judgment: TurnJudgment {
                 missed: vec![NewMissedWork {
@@ -1346,7 +1348,7 @@ fn native_fork_current_journey(kind: &'static str) {
             context.api_connector = connector;
             runtime.set_live(context);
             assert!(runtime.dispatch_json(&serde_json::to_vec(&serde_json::json!({
-                "schema_version":SCHEMA_VERSION,"kind":"fork_pane","payload":{"pane_id":parent,"placement":"tab"}
+                "schema_version":SCHEMA_VERSION,"kind":"fork_pane","payload":{"pane_id":parent,"placement":"tab","origin":"operator"}
             })).unwrap()));
         }
         wait_for("actual fork worker settles", || {
@@ -1600,6 +1602,40 @@ fn a_parents_request_stays_the_childs_work_when_the_parents_screen_title_changes
         header.contains("from agent-1 (claude) [request]"),
         "{header}"
     );
+    // The child's own name, its report and whether a pane runs it reach the
+    // ledger beside its parent (PRD task-continuation D-02, D-08, B23).
+    let worker_fact = |runtime: &Runtime| {
+        runtime
+            .link_parent_facts()
+            .into_iter()
+            .find(|fact| fact.session_id == "worker-native")
+            .expect("the worker's parent is known")
+    };
+    let fact = worker_fact(&runtime);
+    assert_eq!(
+        (fact.name.as_str(), fact.reported_at_unix_ms, fact.live),
+        ("worker", None, true)
+    );
+    let mut ledger = (**runtime.delivery_ledger.as_ref().unwrap()).clone();
+    mailbox::send(
+        &mut ledger,
+        &worker,
+        &lead,
+        "done",
+        "Finished",
+        "report",
+        None,
+        7,
+    )
+    .unwrap();
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    assert_eq!(worker_fact(&runtime).reported_at_unix_ms, Some(7));
+    runtime
+        .snapshot
+        .navigator
+        .agents
+        .retain(|agent| agent.pane_id != "worker");
+    assert!(!worker_fact(&runtime).live, "no pane runs the worker now");
 }
 
 #[test]
@@ -1624,6 +1660,7 @@ fn a_panes_task_progress_reaches_the_wire_once_and_an_equal_answer_publishes_not
                 last_at_unix_ms: 2,
                 end: LabelEnd::Waiting,
                 done: false,
+                unjudged: false,
             })
             .to_vec(),
         outputs: Vec::new(),

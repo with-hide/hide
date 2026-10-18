@@ -19,14 +19,15 @@ export function shownTaskState(state: TaskState, mark: RowMark | null): TaskStat
 /**
  * A task's mark, a checkbox (PRD record-card-readability D-05, B7, B8): ☑
  * once done, ☐ otherwise. A live session's question or block puts the
- * operator's `!` in front of the box; an ended session has no pane to answer,
- * so its task says it in words instead. The agents' rings and dots are the
- * agent rows' and never a task's.
+ * operator's `!` in front of the box, a done task's too when its last END is
+ * a question (`question`, PRD task-continuation D-07); an ended session has
+ * no pane to answer, so its task says it in words instead. The agents' rings
+ * and dots are the agent rows' and never a task's.
  */
-export function TaskMark({ state, live }: { state: TaskState; live: boolean }) {
+export function TaskMark({ state, live, question = false }: { state: TaskState; live: boolean; question?: boolean }) {
   const { t } = useInterfaceTranslation();
   const done = state === "done";
-  const asks = live && (state === "question" || state === "blocked");
+  const asks = live && (state === "question" || state === "blocked" || (done && question));
   return <span role="img" aria-label={t(done ? "sessionWork.done" : "sessionWork.left")} data-task-state={state} className="flex h-(--size-sidebar-line) shrink-0 items-center gap-xxs">
     {asks ? <span aria-hidden="true" className="font-semibold text-warning" data-task-asks="true">!</span> : null}
     {done
@@ -40,7 +41,7 @@ export function TaskMark({ state, live }: { state: TaskState; live: boolean }) {
  * B9): a live session's `내 차례 · 질문`, an ended one's `일 남음 · 질문하고
  * 끝남`, `일 남음` while work is left, and a pull request's state on a task
  * whose request's PR mark hangs on its first task (`prShown` false). Work in
- * progress and a done task say nothing.
+ * progress, a done task and an unjudged one say nothing.
  */
 export function TaskWord({ state, live, prShown }: { state: TaskState; live: boolean; prShown: boolean }) {
   const { t } = useInterfaceTranslation();

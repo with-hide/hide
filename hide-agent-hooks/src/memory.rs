@@ -204,13 +204,22 @@ pub fn memory_context_until(
 
 fn record(home: &Path, failure: &Failure) {
     if failure.code == "deadline" {
-        note(home, "memory_deadline", "memory.deadline", failure.code);
+        note(
+            home,
+            "memory_deadline",
+            "memory.deadline",
+            failure.code,
+            false,
+        );
     } else {
+        // Every other failure is one cause; the step it stopped at is kept
+        // beside it, so the record says where.
         note(
             home,
             "memory_unavailable",
             "memory.unavailable",
             failure.code,
+            true,
         );
     }
 }
@@ -218,11 +227,17 @@ fn record(home: &Path, failure: &Failure) {
 /// Records that the thread asking for Memory panicked, which the turn goes
 /// on without: the hook's other work never waits on it.
 pub fn record_panic(home: &Path) {
-    note(home, "memory_panicked", "memory.panicked", "panicked");
+    note(
+        home,
+        "memory_panicked",
+        "memory.panicked",
+        "panicked",
+        false,
+    );
 }
 
-fn note(home: &Path, cause: &str, kind: &str, code: &str) {
-    if delivery::claim(home, cause) {
+fn note(home: &Path, cause: &str, kind: &str, code: &str, step: bool) {
+    if delivery::claim_at(home, cause, step.then_some(code)) {
         eprintln!(
             "{}",
             serde_json::json!({"component":"memory_hook","kind":kind,"code":code,"diagnostic_saved":true})
@@ -240,6 +255,28 @@ mod tests {
         let (retained, exceeded) = read_bounded(bytes.as_slice()).unwrap();
         assert_eq!(retained.len(), HOOK_INPUT_LIMIT_BYTES);
         assert!(exceeded);
+    }
+
+    /// A Memory request that failed is one cause, with the step it stopped
+    /// at kept beside it; a panic and a deadline name themselves.
+    #[test]
+    fn a_failed_memory_request_records_the_step_it_stopped_at() {
+        let home = tempfile::tempdir().unwrap();
+        record(home.path(), &Failure::from("connect"));
+        record(home.path(), &Failure::from("deadline"));
+        record_panic(home.path());
+        let path = home
+            .path()
+            .join(".hide/agent-hooks/delivery-diagnostics.json");
+        let recorded: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        for cause in ["memory_unavailable", "memory_deadline", "memory_panicked"] {
+            assert!(recorded["last"][cause].is_u64(), "{cause}: {recorded}");
+        }
+        assert_eq!(
+            recorded["step"],
+            serde_json::json!({"memory_unavailable": "connect"})
+        );
     }
 
     /// A panic on the Memory thread leaves its record, once per ten minutes

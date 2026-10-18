@@ -23,7 +23,7 @@ afterEach(() => {
 const AT = 1_790_000_000_000;
 const SESSION: WorkSession = { device_id: "local", agent: "claude", session_id: "root" };
 const CHILD: WorkSession = { device_id: "local", agent: "codex", session_id: "child" };
-const task = (id: string, name: string, at: number, done: boolean, end: WorkTask["end"] = "done"): WorkTask => ({ id, chapter_id: "c", name, at_unix_ms: at, last_at_unix_ms: at, end, done });
+const task = (id: string, name: string, at: number, done: boolean, end: WorkTask["end"] = "done"): WorkTask => ({ id, chapter_id: "c", name, at_unix_ms: at, last_at_unix_ms: at, end, done, unjudged: false });
 const request = (offset: number, text: string, task_ids: string[], author: WorkRequest["author"] = "operator", judged = true): WorkRequest => ({ offset, at_unix_ms: AT + offset, text, author, task_ids, chapter_id: "c", judged });
 const missed = (id: string, text: string, turn_offset: number, status: MissedWork["status"] = "open"): MissedWork => ({ id, kind: "problem", text, status, at_unix_ms: AT, turn_offset, issue_repository: null, issue_number: null, creating: false, backlog_key: null });
 const output = (number: number, state: string, task_id: string | null, source: WorkSession): WorkOutput => ({ kind: "pr", repository: "acme/app", number, title: `PR title ${number}`, url: `https://example.invalid/pull/${number}`, state, stale: false, last_read_at_unix_ms: AT, created_at_unix_ms: AT, task_id, source, source_name: source.session_id });
@@ -55,6 +55,28 @@ async function mount(record: RecordValue | null, options: { summaries?: boolean 
 }
 
 const text = (element: Element | null | undefined) => element?.textContent ?? "";
+
+it("uses the core's child completion facts and never reuses an old END for an unjudged child", async () => {
+  const unfinished = { ...child, last_end: "done" as const, tasks: [task("child-task", "Deliver report", AT, false, "waiting")] };
+  for (const [progress, expected] of [["done", "Done"], ["unjudged", "Unavailable"], ["other", "Not done"]] as const) {
+    const record: RecordValue = { ...BASE, children: [unfinished], child_progress: { children: [progress], done: progress === "unjudged" ? null : Number(progress === "done") } };
+    const view = await mount(record);
+    try { expect(text(view.container.querySelector("[data-record-child-state]"))).toBe(expected); } finally { await view.unmount(); }
+    const off = await mount(record, { summaries: false });
+    try { expect(text(off.container.querySelector("[data-record-child-state]"))).toBe("Unavailable"); } finally { await off.unmount(); }
+  }
+});
+
+it("leaves an unjudged task without an old verdict and keeps a completed task's live question", async () => {
+  const view = await mount({ ...BASE, outputs: [], tasks: [{ ...task("unknown", "Not judged", AT, false, "unfinished"), unjudged: true }, task("finished", "Delivered", AT, true, "question")] });
+  try {
+    expect(text(view.container.querySelector('[data-record-task="unknown"]'))).toBe("Not judged");
+    expect(view.container.querySelector('[data-record-task="unknown"] [data-task-box="empty"]')).not.toBeNull();
+    await act(async () => useShellStore.setState({ agents: [legacyAgentRow({ pane_id: "w1:p1", session_id: SESSION.session_id, agent_kind: SESSION.agent, status: "question", status_code: "question", mark: "turn" }) as AgentRow] }));
+    expect(view.container.querySelector('[data-record-task="finished"] [data-task-box="checked"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-record-task="finished"] [data-task-asks]')).not.toBeNull();
+  } finally { await view.unmount(); }
+});
 
 it("asks for the record once when the slot draws one nothing has read, as after a relaunch, and not when it is read", async () => {
   const restored = await mount(null);

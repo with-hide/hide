@@ -345,7 +345,7 @@ function TaskRow({ item, mark }: { item: ChecklistTask; mark: RowMark | null }) 
   const state = shownTaskState(item.state, mark);
   return <div className="min-w-0 py-sm" data-record-task={item.task.id}>
     <div className="flex min-w-0 items-start gap-xs">
-      <TaskMark state={state} live={mark !== null} />
+      <TaskMark state={state} live={mark !== null} question={item.task.end === "question"} />
       <TaskName state={state} name={item.task.name} className="font-medium" data-record-task-name="true" />
       {state === "working" || state === "done" ? <span className={cn("shrink-0 text-micro leading-(--size-sidebar-line)", state === "working" ? "text-agent-working" : "text-muted-foreground")}>{t(state === "done" ? "sessionWork.done" : "agents.status.working")}</span> : <TaskWord state={state} live={mark !== null} prShown={false} />}
     </div>
@@ -393,13 +393,15 @@ function ChildRows({ parent, summaries, onOpen, actions }: { parent: RecordValue
   const agents = useShellStore((state) => state.agents);
   const rows = useMemo(() => [...everyAgent(rest, agents).values()], [rest, agents]);
   return <ol className="min-w-0" data-record-children={parent.children.length}>
-    {parent.children.slice(0, visible).map((child) => {
+    {parent.children.slice(0, visible).map((child, index) => {
       const key = workKey(child.session);
       const live = rows.find((row) => { const session = sessionOfAgentOn(row, localDeviceId(rest)); return session && workKey(session) === key; }) ?? null;
       const held = live ? null : archivedMemberOf(rest, child.session);
       const away = held ? held.row.members[held.index]!.resume : null;
-      const done = live ? live.status_code === "done" : summaries && !away && (child.tasks.length > 0 ? child.tasks.every((task) => task.done) : child.last_end === "done");
-      const state = away && away !== "resumed" ? archivedWord(t, away) : done ? t("sessionWork.done") : live ? statusText(t, live.status_code) : summaries && child.last_end ? (child.last_end === "done" && child.tasks.some((task) => !task.done) ? t("sessionWork.left") : statusText(t, END_STATUS[child.last_end])) : t("common.unavailable");
+      // The core also knows report completion and whether the newest turn was judged.
+      const progress = summaries ? parent.child_progress?.children[index] : undefined;
+      const done = live?.status_code === "working" ? false : progress !== undefined ? !away && progress === "done" : live ? live.status_code === "done" : summaries && !away && (child.tasks.length > 0 ? child.tasks.every((task) => task.done) : child.last_end === "done");
+      const state = away && away !== "resumed" ? archivedWord(t, away) : done ? t("sessionWork.done") : live ? statusText(t, live.status_code) : progress === "unjudged" ? t("common.unavailable") : summaries && child.last_end ? (child.last_end === "done" && (progress === "other" || child.tasks.some((task) => !task.done)) ? t("sessionWork.left") : statusText(t, END_STATUS[child.last_end])) : t("common.unavailable");
       const title = recordTitle(child, summaries);
       const outputs = childOutputs(parent, child).filter((output) => workKey(output.source) === key);
       const prs = outputs.filter((output) => output.kind === "pr").length;
@@ -408,7 +410,7 @@ function ChildRows({ parent, summaries, onOpen, actions }: { parent: RecordValue
       const device = child.session.device_id !== parent.session.device_id ? machineName(rest?.navigator?.devices, child.session.device_id, t) : null;
       return <li key={key} className="min-w-0 border-b border-border last:border-b-0" data-record-child={child.session.session_id}>
         <button type="button" className={cn(ROW, "flex w-full items-start gap-sm py-sm hover:bg-accent")} aria-expanded={expanded === key} title={[branch, device].filter(Boolean).join(" · ")} onClick={() => setExpanded(expanded === key ? null : key)}>
-          {done ? <CheckIcon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-success" /> : live ? <StatusMark mark={live.mark} className={cn("mt-xs shrink-0", markTone(live))} /> : summaries && child.last_end === "waiting" ? <Clock3Icon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-muted-foreground" /> : <SquareIcon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-muted-foreground" />}
+          {done ? <CheckIcon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-success" /> : live ? <StatusMark mark={live.mark} className={cn("mt-xs shrink-0", markTone(live))} /> : summaries && progress !== "unjudged" && child.last_end === "waiting" ? <Clock3Icon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-muted-foreground" /> : <SquareIcon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-muted-foreground" />}
           <span className="min-w-0 flex-1"><span className={cn("block whitespace-normal text-caption font-medium [overflow-wrap:anywhere]", done && "text-subtle-foreground")}>{title}</span><span className="mt-xs flex min-w-0 flex-wrap items-center gap-x-xs gap-y-xxs text-micro text-muted-foreground"><AgentMark kind={child.session.agent} />{agentProductName(child.session.agent)} · <span data-record-child-state="true">{state}</span>{prs ? <span>· {t("recordCard.prs")} {prs}</span> : null}{findings ? <span>· {t("recordCard.findings")} {findings}</span> : null}</span></span>
           <ChevronRightIcon aria-hidden="true" className={cn("mt-xs size-(--size-icon-sm) shrink-0 text-muted-foreground", expanded === key && "rotate-90")} />
         </button>

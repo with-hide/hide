@@ -18,15 +18,17 @@ import time
 from agent_live_check.processes import ProcessError
 from agent_live_check.protection import private_directory, write_private
 from agent_live_check.runtime import clean_env
-from agent_live_check.system import WINDOWS, exe, home_env, temp_env
+from agent_live_check.system import WINDOWS, exe, home_env, remove_pane_files, temp_env
 
 COMMAND_SECONDS = 25
 START_SECONDS = 60
 
 
 class Controller:
-    def __init__(self, runtime):
+    def __init__(self, runtime, provider=None):
         self.runtime = runtime
+        # The spawn provider built before the run (agent-journey.yml), or None to build it here.
+        self.provider = provider
         self.root = runtime.probe / "controller"
         private_directory(self.root)
         self.bin = self.root / "bin"
@@ -41,13 +43,18 @@ class Controller:
         runtime = self.runtime
         source = runtime.checkout / "web/e2e/shims/spawn-provider.c"
         shim = self.bin / exe("claude")
-        # The e2e's compilers (web/e2e/shims/build.ts), with the account's
-        # environment, where clang finds the Windows SDK and linker.
-        compiler = shutil.which("clang") if WINDOWS else "/usr/bin/cc"
-        if not compiler:
-            raise ProcessError("controller_compiler_missing: install clang (LLVM)")
-        runtime.owner.run([compiler, "-O2", "-o", str(shim), str(source)],
-                          env={**clean_env(), **temp_env(runtime.run / "agent-tmp")}, seconds=60)
+        if self.provider:
+            write_private(shim, self.provider.read_bytes())
+            shim.chmod(0o700)
+        else:
+            # The e2e's compilers (web/e2e/shims/build.ts), with the account's
+            # environment, where clang finds the Windows SDK and linker; a
+            # Windows link can outlast the command cap, so CI builds it first.
+            compiler = shutil.which("clang") if WINDOWS else "/usr/bin/cc"
+            if not compiler:
+                raise ProcessError("controller_compiler_missing: install clang (LLVM)")
+            runtime.owner.run([compiler, "-O2", "-o", str(shim), str(source)],
+                              env={**clean_env(), **temp_env(runtime.run / "agent-tmp")})
         driver = Path(__file__).resolve().with_name("controller_command.py")
         write_private(self.root / "provider.config", "\n".join(
             [str(runtime.herdr_bin), str(self.completed), sys.executable, "-I", str(driver), str(self.command)]).encode())
@@ -94,11 +101,10 @@ class Controller:
         """One `hide` command run by the controller agent; its JSON answer."""
         runtime = self.runtime
         self.sequence += 1
-        self.completed.unlink(missing_ok=True)
-        self.response.unlink(missing_ok=True)
+        remove_pane_files(self.completed, self.response)
         environment = {**home_env(runtime.home), "HIDE_STATE_DIR": str(runtime.state),
                        "PATH": runtime.env["PATH"], **temp_env(runtime.run / "agent-tmp")}
-        self.command.unlink(missing_ok=True)
+        remove_pane_files(self.command)
         write_private(self.command, json.dumps({"argv": [str(runtime.hide), *args], "env": environment,
                                                 "response": str(self.response)}).encode())
         runtime.command(["pane", "send-text", self.pane, "!"])
