@@ -1093,6 +1093,8 @@ function storedLaneWidth(): number | undefined {
   return views.workspaces.find((entry) => entry.path.endsWith(`${path.sep}fixture`) || entry.path.endsWith("/fixture"))?.lane_width;
 }
 
+// @platform: the page view is placed in native window coordinates, which a
+// Windows or Linux display scale and the shell's fitted zoom change.
 test("page width: a page opened into the lane widens it to 900 beside Agent Views' 480, and a width the operator narrows it to stays", { tag: "@platform" }, async () => {
   ({ app } = await launch(run.env));
   const page = await shellPage(app);
@@ -1136,6 +1138,8 @@ test("page width: a page opened into the lane widens it to 900 beside Agent View
   await expect.poll(storedLaneWidth).toBe(804);
 });
 
+// @platform: the room left beside Agent Views comes from the body the host
+// measures, which each system's window frame and display scale change.
 test("page width: widening leaves Agent Views 480 pinned or not, never narrows, and leaves an expanded lane alone", { tag: "@platform" }, async () => {
   ({ app } = await launch(run.env));
   const page = await shellPage(app);
@@ -1174,6 +1178,8 @@ test("page width: widening leaves Agent Views 480 pinned or not, never narrows, 
   expect(storedLaneWidth()).toBe(widened);
 });
 
+// @platform: the text-size menu items carry each system's accelerators, and
+// the page zoom is Chromium's per-host zoom in the host's session.
 test("page zoom: a zoomed page shows its zoom in the address field, steps in the popover and loses the badge at 100%", { tag: [NEEDS_FOCUS, "@platform"] }, async () => {
   ({ app } = await launch(run.env));
   await fitWindow(app, WINDOW);
@@ -1235,6 +1241,8 @@ test("page zoom: a zoomed page shows its zoom in the address field, steps in the
   await expect(badge).toHaveCount(0);
 });
 
+// @platform: the host emulates the device viewport in each system's
+// renderer, and the scale it fits a wide size by depends on the display.
 test("device size: a page lays out at 390, 768 and 1280 CSS pixels at any zoom, keeps it across a navigation and fits again", { tag: "@platform" }, async () => {
   ({ app } = await launch(run.env));
   await fitWindow(app, WINDOW);
