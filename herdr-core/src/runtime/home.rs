@@ -223,6 +223,7 @@ impl Runtime {
             checkout_path: synced.home,
             label,
             host,
+            focus: true,
         })
     }
 

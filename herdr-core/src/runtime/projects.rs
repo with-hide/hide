@@ -3986,6 +3986,17 @@ impl Runtime {
     /// worktree sheet already reports through. The shell starts the provider
     /// in the pane the slot names, so `terminal` needs nothing more from it.
     pub(super) fn agent_start_in_checkout(&mut self, payload: AgentStartInCheckoutPayload) -> bool {
+        self.start_in_checkout(payload, true)
+    }
+
+    /// A start in a checkout's new tab; `front` false opens the tab behind
+    /// what the screen shows and leaves the keyboard where it is (an archived
+    /// descendant resumed after its root, PRD session-archive B23).
+    pub(super) fn start_in_checkout(
+        &mut self,
+        payload: AgentStartInCheckoutPayload,
+        front: bool,
+    ) -> bool {
         let request_id = payload.request_id.clone();
         let agent_kind = match payload.provider.as_str() {
             "terminal" => None,
@@ -4127,6 +4138,9 @@ impl Runtime {
             operation.request_id = request_id;
             operation.device_id = (!local).then(|| device.clone());
         }
+        if !front {
+            self.task_stays_behind.insert(id);
+        }
         self.remember_agent_choice(agent_kind.as_deref(), model.as_deref());
         let mut arguments = resume.unwrap_or_default();
         arguments.extend(agent_choice::agent_arguments(
@@ -4153,6 +4167,7 @@ impl Runtime {
             checkout_path,
             label,
             host,
+            focus: front,
         };
         let target = if local {
             self.live

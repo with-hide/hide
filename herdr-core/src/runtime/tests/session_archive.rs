@@ -262,6 +262,13 @@ fn resuming_starts_the_root_with_its_resume_arguments_and_it_leaves_the_archive_
             .all(|member| member.resume != Resume::Idle),
         "its descendants were asked too"
     );
+    // The descendant's start opens behind the root (B23).
+    let next = runtime
+        .snapshot
+        .task_operation
+        .as_ref()
+        .expect("the next member's start");
+    assert!(runtime.task_stays_behind.contains(&next.id));
 }
 
 #[test]
@@ -320,4 +327,132 @@ fn a_pruned_root_takes_its_archived_session_away() {
     }];
     assert!(runtime.ingest_link_pruned(pruned));
     assert!(record(&runtime).is_none());
+}
+
+/// The root's registration and its delegated child's, as `hide agent spawn
+/// --parent` leaves them in the delivery ledger.
+fn with_registrations(runtime: &mut Runtime) -> String {
+    use super::agent_sleep::{delivery_agent, delivery_panes};
+    use crate::coordination::AgentRecord;
+    let node = runtime.node.as_str().to_owned();
+    let observed = |panes: &[(&str, &str)]| {
+        delivery_panes(
+            panes
+                .iter()
+                .map(|(name, pane)| delivery_agent(name, pane, "claude", &session_of(pane)))
+                .collect(),
+        )
+    };
+    let both = observed(&[("lead", "w1:p1"), ("reviewer", "w1:p2")]);
+    runtime.observe_delivery(&node, &both, Some("scope"), None);
+    let mut ledger = crate::delivery::ledger::Ledger::default();
+    for (id, name, pane, parent) in [
+        ("agent-1", "lead", "w1:p1", None),
+        ("agent-2", "reviewer", "w1:p2", Some("agent-1")),
+    ] {
+        ledger.agents.push(AgentRecord {
+            id: id.into(),
+            name: Some(name.into()),
+            machine: node.clone(),
+            host_scope: "scope".into(),
+            native_machine: "fixture-machine".into(),
+            session: session_of(pane),
+            instance: pane.into(),
+            pane: pane.into(),
+            parent: parent.map(Into::into),
+            origin: None,
+            project: None,
+            actor: runtime.delivery_observations[pane].actor.clone(),
+            ended: false,
+            forked: false,
+        });
+    }
+    ledger.next_id = 3;
+    ledger.validate().unwrap();
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    runtime.observe_delivery(&node, &both, Some("scope"), None);
+    node
+}
+
+/// B23: a delegated child archived with its root keeps its registration
+/// while its pane is gone, and the pane its resume runs in takes the
+/// registration over, so the root's watch and letters reach it there.
+#[test]
+fn an_archived_childs_registration_is_held_and_passes_to_the_pane_it_resumes_in() {
+    use super::agent_sleep::{delivery_agent, delivery_panes};
+    let mut runtime = archive_runtime(&[]);
+    let node = with_registrations(&mut runtime);
+    archive(&mut runtime, "w1:p1", false);
+    let (_, saved) = record(&runtime).unwrap();
+    let child = saved
+        .members
+        .iter()
+        .find(|member| member.pane_id == "w1:p2")
+        .unwrap();
+    assert_eq!(
+        child.registration.as_ref().map(|held| held.id.as_str()),
+        Some("agent-2")
+    );
+
+    leave(&mut runtime, &["w1:p1", "w1:p2", "w1:p4"]);
+    leave(&mut runtime, &["w1:p1"]);
+    leave(&mut runtime, &[]);
+    runtime.observe_delivery(&node, &delivery_panes(Vec::new()), Some("scope"), None);
+    let gone = runtime.delivery_registrations_gone();
+    assert!(
+        !gone.contains_key("agent-1") && !gone.contains_key("agent-2"),
+        "an archived session's registrations do not end with its panes"
+    );
+
+    // The root comes back in w1:p1 and the child in a new pane, w1:p8.
+    let layouts = ["w1:t1", "w1:t8"].iter().zip(["w1:p1", "w1:p8"]).map(|(tab, pane)| serde_json::json!({
+            "workspace_id": "w1", "tab_id": tab, "zoomed": false,
+            "area": {"x": 0, "y": 0, "width": 80, "height": 24}, "focused_pane_id": pane,
+            "panes": [{"pane_id": pane, "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}], "splits": []
+        })).collect::<Vec<_>>();
+    let resumed = crate::sidebar::owned_label_fixture(serde_json::json!({
+        "agents": [
+            {"id": "agent-w1:p1", "pane_id": "w1:p1", "agent": "claude", "agent_status": "idle",
+             "state_change_seq": 7, "agent_session": {"kind": "id", "value": session_of("w1:p1")}},
+            {"id": "agent-w1:p8", "pane_id": "w1:p8", "agent": "claude", "agent_status": "idle",
+             "spawned_from_pane_id": "w1:p1", "state_change_seq": 8,
+             "agent_session": {"kind": "id", "value": session_of("w1:p2")}}
+        ],
+        "focused_workspace_id": "w1",
+        "focused_pane_id": "w1:p1",
+        "workspaces": [{"workspace_id": "w1", "label": "a", "active_tab_id": "w1:t1"}],
+        "tabs": [
+            {"workspace_id": "w1", "tab_id": "w1:t1", "label": ""},
+            {"workspace_id": "w1", "tab_id": "w1:t8", "label": ""}
+        ],
+        "panes": [{"pane_id": "w1:p1", "cwd": A}, {"pane_id": "w1:p8", "cwd": A}],
+        "layouts": layouts
+    }))
+    .unwrap();
+    runtime.ingest_session_with_catalog(Ok(resumed), Some(tree_catalog()));
+    for row in &mut runtime.snapshot.navigator.agents {
+        row.row_facts.get_or_insert_with(Default::default);
+    }
+    let observed = delivery_panes(vec![
+        delivery_agent("lead", "w1:p1", "claude", &session_of("w1:p1")),
+        delivery_agent("reviewer", "w1:p8", "claude", &session_of("w1:p2")),
+    ]);
+    runtime.observe_delivery(&node, &observed, Some("scope"), None);
+    runtime.advance_session_archive();
+
+    let (_, held) = record(&runtime).unwrap();
+    let child = held
+        .members
+        .iter()
+        .find(|member| member.pane_id == "w1:p2")
+        .unwrap();
+    assert_eq!(
+        child.resume,
+        Resume::Done {
+            pane_id: "w1:p8".into()
+        }
+    );
+    let rebinds = runtime.delivery_registration_rebinds();
+    assert_eq!(rebinds["agent-2"].to.pane_id, "w1:p8");
+    assert_eq!(rebinds["agent-2"].to.name, "reviewer");
 }

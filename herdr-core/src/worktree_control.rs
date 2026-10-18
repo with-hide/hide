@@ -918,6 +918,8 @@ pub struct CheckoutTabRequest {
     pub host: crate::checkout_owner::TabHost,
     pub resume_scope: Option<hide_session::SessionReadScope>,
     pub(crate) resume_reference: Option<crate::sidebar::SessionAgentSessionPayload>,
+    /// Whether Herdr brings the new tab forward; false opens it behind.
+    pub focus: bool,
 }
 
 /// What the task's worker starts once the creation is settled: the pane, the
@@ -1507,7 +1509,7 @@ fn create_checkout_tab(
             workspace_id,
             &request.checkout_path,
             &request.label,
-            true,
+            request.focus,
             env,
             command,
         ),
@@ -1516,7 +1518,7 @@ fn create_checkout_tab(
             owner,
             &request.checkout_path,
             &request.label,
-            true,
+            request.focus,
             env,
             command,
         ),

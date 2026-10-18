@@ -2205,14 +2205,14 @@ fn a_pending_core_puts_no_agent_to_sleep_until_its_link_commits() {
 const WOKEN: &str = "w-order:t3:p";
 const CHILD_NATIVE: &str = "child-native";
 
-fn delivery_agent(id: &str, pane: &str, kind: &str, session: &str) -> serde_json::Value {
+pub(super) fn delivery_agent(id: &str, pane: &str, kind: &str, session: &str) -> serde_json::Value {
     serde_json::json!({
         "id": id, "pane_id": pane, "agent": kind, "agent_status": "idle",
         "state_change_seq": 4, "lineage_session": crate::wire::session_digest(session)
     })
 }
 
-fn delivery_panes(agents: Vec<serde_json::Value>) -> SessionSnapshotPayload {
+pub(super) fn delivery_panes(agents: Vec<serde_json::Value>) -> SessionSnapshotPayload {
     serde_json::from_value(serde_json::json!({ "agents": agents })).unwrap()
 }
 

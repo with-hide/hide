@@ -1079,28 +1079,27 @@ impl Runtime {
             .as_ref()
             .filter(|reference| reference.kind == "path")
             .map(|reference| reference.value.clone());
-        self.agent_start_in_checkout(super::events::AgentStartInCheckoutPayload {
-            checkout_path: Some(member.checkout_path.clone()),
-            device_id: (!local).then(|| member.machine.clone()),
-            home: false,
-            provider: member.kind.clone(),
-            prompt: None,
-            model: None,
-            request_id: Some(request.to_owned()),
-            resume_session_id: Some(member.native_session_id.clone()),
-            resume_session_path,
-        });
+        self.start_in_checkout(
+            super::events::AgentStartInCheckoutPayload {
+                checkout_path: Some(member.checkout_path.clone()),
+                device_id: (!local).then(|| member.machine.clone()),
+                home: false,
+                provider: member.kind.clone(),
+                prompt: None,
+                model: None,
+                request_id: Some(request.to_owned()),
+                resume_session_id: Some(member.native_session_id.clone()),
+                resume_session_path,
+            },
+            front,
+        );
         if let Some(operation) = self
             .snapshot
             .task_operation
             .as_mut()
             .filter(|operation| operation.request_id.as_deref() == Some(request))
         {
-            let id = operation.id;
-            if !front {
-                self.task_stays_behind.insert(id);
-            }
-            return Ok(id);
+            return Ok(operation.id);
         }
         Err(self
             .snapshot
