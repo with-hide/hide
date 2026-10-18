@@ -425,6 +425,7 @@ impl TerminalNode for Router {
                 }
             }
             TerminalControl::RequestOpen { .. }
+            | TerminalControl::RequestHold { .. }
             | TerminalControl::RequestResolve { .. }
             | TerminalControl::RequestDiscard { .. } => {
                 // The core opens creation requests for this machine's panes.

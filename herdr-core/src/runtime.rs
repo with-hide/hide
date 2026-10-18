@@ -2972,6 +2972,10 @@ fn unix_milliseconds() -> u64 {
 impl Drop for Runtime {
     fn drop(&mut self) {
         self.cancel_memory_pass();
+        self.input_requests.close();
+        for control in self.input_requests.take_controls() {
+            self.terminals.control(control);
+        }
     }
 }
 
