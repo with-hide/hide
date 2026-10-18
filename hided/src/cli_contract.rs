@@ -236,6 +236,8 @@ pub const COMMANDS: &[Spec] = &[
             "shell_starting",
             "agent_not_started",
             "worktree_unconfirmed",
+            "native_identity_unavailable",
+            "identity_waits_full",
             "session_too_long",
         ],
     },

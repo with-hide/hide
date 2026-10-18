@@ -149,13 +149,13 @@ fn actor_for(agent: &ProjectedAgent, device: &str, on_node: bool) -> Result<Acto
     actor.require_native_identity()?;
     Ok(actor)
 }
-struct HostIdentity<'a> {
-    machine: &'a str,
-    on_node: bool,
-    scope: &'a str,
-    native_machine: &'a str,
+pub(super) struct HostIdentity<'a> {
+    pub(super) machine: &'a str,
+    pub(super) on_node: bool,
+    pub(super) scope: &'a str,
+    pub(super) native_machine: &'a str,
 }
-fn record(
+pub(super) fn record(
     agent: &ProjectedAgent,
     host: HostIdentity<'_>,
     instance: String,
@@ -323,7 +323,11 @@ fn registration_machine(requested: Option<String>, caller: &str) -> Result<Strin
         Some(machine) => Ok(machine),
     }
 }
-fn publish_tokens(client: &Client, connector: &dyn ApiConnector, id: &str) -> Result<(), String> {
+pub(super) fn publish_tokens(
+    client: &Client,
+    connector: &dyn ApiConnector,
+    id: &str,
+) -> Result<(), String> {
     let ledger = state(client)?;
     let child = ledger
         .agents
@@ -983,7 +987,32 @@ fn spawn(
                 .map_err(|_| "delivery_unavailable")?
                 .record_pane_launch(&pane_id, kind, name, &reserved.launch, None);
         }
-        let native = wait_native_identity(connector.as_ref(), pane, Some(name), kind)?;
+        let native = match wait_native_identity(connector.as_ref(), pane, Some(name), kind) {
+            Err(reason) if reason == "native_identity_unavailable" => {
+                // The agent rests without a session (Codex and OpenCode 2
+                // report theirs at their first turn): the core binds it when
+                // Herdr shows one, and the caller hears it has not yet.
+                mutate(
+                    client,
+                    authority,
+                    actor,
+                    Mutation::AwaitIdentity {
+                        wait: super::identity_wait::IdentityWait {
+                            id: String::new(),
+                            machine: child_device.clone(),
+                            pane: pane.into(),
+                            name: name.clone(),
+                            kind: kind.clone(),
+                            owed: super::identity_wait::Owed::Spawn {
+                                spawn: reserved.id.clone(),
+                            },
+                        },
+                    },
+                )?;
+                return Err(reason);
+            }
+            native => native?,
+        };
         let session = native
             .agent_session
             .as_ref()
@@ -1149,7 +1178,7 @@ fn close_unstarted_attempts(
 /// Closes the pane `reserved` made, whose agent started but whose session a
 /// registration cannot keep (`reason`), when it is still the terminal the
 /// spawn recorded.
-fn close_refused_pane(
+pub(super) fn close_refused_pane(
     connector: &dyn ApiConnector,
     reserved: &SpawnRecord,
     pane: &str,
@@ -1219,10 +1248,17 @@ fn device_unreachable(
     }
 }
 
+/// Records the fork Hide started in pane `child` from the agent in pane
+/// `source`, under the Herdr name `name` the fork's start gave it. The
+/// source is registered now, while it is the execution that was forked; the
+/// fork is registered once Herdr shows its own session, which Codex reports
+/// only at the fork's first turn, so the registration waits for it in the
+/// ledger (`identity_wait`) rather than for a fixed time here.
 pub(crate) fn link_fork(
     context: &crate::live::LiveContext,
     source: &str,
     child: &str,
+    name: &str,
 ) -> Result<(), String> {
     let runtime = context.runtime.upgrade().ok_or("delivery_unavailable")?;
     let (client, authority, actor) = runtime
@@ -1276,43 +1312,22 @@ pub(crate) fn link_fork(
             .ok_or("parent_unavailable")?
             .to_owned()
     };
-    let native_child = wait_native_identity(
-        connector.as_ref(),
-        child,
-        None,
-        native_source.agent.as_deref().ok_or("parent_unavailable")?,
-    )?;
-    let mut child_record = record(
-        &native_child,
-        HostIdentity {
-            machine: &actor.device_id,
-            scope: &host_scope,
-            native_machine: &native_machine,
-            on_node,
-        },
-        child.into(),
-        native_child.name.clone(),
-        None,
-        native_child.cwd.clone(),
-    )?;
-    // The fork is the operator's own work: no parent supervises it, and the
-    // source it was forked from is its origin, which its fork mark names.
-    child_record.origin = Some(source_id);
-    child_record.forked = true;
-    let value = mutate(
+    mutate(
         &client,
         &authority,
         &actor,
-        Mutation::Register {
-            record: child_record,
-            check: false,
+        Mutation::AwaitIdentity {
+            wait: super::identity_wait::IdentityWait {
+                id: String::new(),
+                machine: actor.device_id.clone(),
+                pane: child.into(),
+                name: name.into(),
+                kind: native_source.agent.clone().ok_or("parent_unavailable")?,
+                owed: super::identity_wait::Owed::Fork { origin: source_id },
+            },
         },
-    )?;
-    publish_tokens(
-        &client,
-        connector.as_ref(),
-        value["id"].as_str().ok_or("child_unavailable")?,
     )
+    .map(drop)
 }
 
 /// Whether the existing worktree `existing` of `repo` is one this spawn

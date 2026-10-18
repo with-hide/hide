@@ -202,6 +202,49 @@ fn a_wake_resumes_the_agent_with_the_model_and_effort_it_was_started_with() {
     }
 }
 
+/// A spawn keeps its child's choice before the agent shows a session, which
+/// Codex CLI reports only at its first turn (the spawn's identity wait), so
+/// the record starts unbound; it binds to the session when that arrives, and
+/// a wake then resumes that conversation on the choice.
+#[test]
+fn a_choice_kept_before_the_session_arrives_reaches_the_wake() {
+    let launch = choice("gpt-6-luna", "low");
+    let folder = tempfile::tempdir().unwrap();
+    let checkout = checkout_of(&folder);
+    let (mut runtime, _) = live_tab_order_runtime(&checkout);
+    let mut kit = runtime.kit_state(crate::node::TEST_NODE);
+    kit.codex_daemon = Some(false);
+    runtime.set_kit_state(crate::node::TEST_NODE, kit);
+    // What the spawn writes once its start is typed, before any session.
+    runtime.record_pane_launch(AGENT, "codex", NAME, &launch, None);
+    runtime.ingest_session(Ok(hosting(&checkout, Some(("codex", Some(NAME), None)))));
+    assert_eq!(
+        runtime.snapshot().ui_state.pane_launches[AGENT].session,
+        None
+    );
+    // The agent's first turn reports its session.
+    runtime.ingest_session(Ok(session(&checkout, "codex", true)));
+    assert_eq!(
+        runtime.snapshot().ui_state.pane_launches[AGENT]
+            .session
+            .as_deref(),
+        Some(SESSION)
+    );
+    sleep(&mut runtime, &folder, "codex");
+    let (herdr, starts) = starting_herdr("launch-choice-late-wake");
+    wake(&mut runtime, &herdr);
+    assert_eq!(
+        next_start(&starts),
+        (
+            AGENT.to_owned(),
+            resumed(
+                "codex",
+                &["--model", "gpt-6-luna", "-c", "model_reasoning_effort=low"]
+            )
+        )
+    );
+}
+
 /// An agent of an older build left no launch record and a sleep record
 /// without the field; it wakes on the resume alone, as before.
 #[test]

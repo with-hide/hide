@@ -3387,7 +3387,7 @@ pub fn spawn_agent_fork(context: LiveContext, request: ForkRequest) -> Result<()
                 },
                 |parent, child| {
                     fork_execution_current(&context, &request)?;
-                    crate::coordination::link_fork(&context, parent, child)
+                    crate::coordination::link_fork(&context, parent, child, &request.name)
                 },
             );
             let elapsed_ms = started.elapsed().as_millis();

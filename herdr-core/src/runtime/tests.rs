@@ -45,6 +45,8 @@ mod editor_reopen;
 mod factory_screen;
 #[path = "tests/first_run.rs"]
 mod first_run;
+#[path = "tests/fork_registration.rs"]
+mod fork_registration;
 #[path = "tests/github_reads.rs"]
 mod github_reads;
 mod guardrails;

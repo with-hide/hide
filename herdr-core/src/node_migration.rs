@@ -564,6 +564,21 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Owned,
         Moves::Stays,
     ),
+    // A registration waiting for its agent's session is judged by the writer
+    // of the machine it names, so that machine follows its id; its pane is
+    // that machine's own (`coordination::identity_wait`).
+    (
+        DELIVERY_LEDGER,
+        "/identity_waits/*/machine",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        DELIVERY_LEDGER,
+        "/identity_waits/*/pane",
+        Mechanism::Owned,
+        Moves::Stays,
+    ),
     (
         DELIVERY_LEDGER,
         "/agents/*/host_scope",
@@ -1213,6 +1228,9 @@ fn convert_delivery_ledger(value: &mut Value, node: &str, _: &BTreeMap<String, S
     for spawn in each(value, "spawns") {
         changed |= rewrite(spawn.get_mut("machine"), node);
     }
+    for wait in each(value, "identity_waits") {
+        changed |= rewrite(wait.get_mut("machine"), node);
+    }
     changed
 }
 
@@ -1445,6 +1463,8 @@ mod tests {
                 "agents": [{"machine": "local", "native_machine": "local", "actor": actor("local"), "pane": "w1:p1", "host_scope": "/tmp/herdr.sock",
                             "project": root, "session": "s1", "instance": "term_1"}],
                 "spawns": [{"repo": root, "path": root, "requested_path": root, "pane": "w1:p2", "machine": "mini"}],
+                "identity_waits": [{"id": "wait-8", "machine": "local", "pane": "w1:p3", "name": "fork-w1-p1-1-1", "kind": "codex",
+                                    "owed": {"for": "fork", "origin": "agent-1"}}],
                 "node_clocks": {"mini": {"connected_ms": 60_000, "since": null}},
             }),
         );
@@ -1612,6 +1632,7 @@ mod tests {
         assert_eq!(ledger["letters"][0]["recipient"]["device_id"], "mini");
         assert_eq!(ledger["agents"][0]["machine"], NODE);
         assert_eq!(ledger["agents"][0]["actor"]["device_id"], NODE);
+        assert_eq!(ledger["identity_waits"][0]["machine"], NODE);
 
         let memory = hide_memory::MemoryStore::open(&legacy.state.join(PROJECT_MEMORY)).unwrap();
         assert!(!memory.has_device(LEGACY).unwrap());

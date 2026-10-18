@@ -178,6 +178,11 @@ fn device_herdr(
                 json!({"type": "ok"})
             }
             "pane.report_metadata" => json!({"type": "ok"}),
+            // The lineage writer's naming of the spawn's workspace and tab,
+            // which these tests do not follow.
+            "session.snapshot" => {
+                return Err(("internal_error".into(), "not followed here".into()));
+            }
             other => panic!("unexpected {other}"),
         })
     })
@@ -402,12 +407,55 @@ impl Spawner {
         ledger::load(&self.path).unwrap()
     }
 
+    /// The ledger the store last published, read while its worker may be
+    /// saving the next one.
+    fn published(&self) -> Arc<ledger::Ledger> {
+        self.runtime.lock().unwrap().delivery_state().unwrap()
+    }
+
     fn count(&self, method: &str) -> usize {
         self.herdr
             .methods()
             .iter()
             .filter(|seen| seen.as_str() == method)
             .count()
+    }
+
+    /// The device's lineage writer, as the device's session sync runs it,
+    /// with the delivery store it settles waits through.
+    fn writer(&self) -> crate::coordination::lineage::Writer {
+        self.runtime
+            .lock()
+            .unwrap()
+            .install_delivery_client(self.client.clone());
+        crate::coordination::lineage::Writer::new(
+            DEVICE.into(),
+            Arc::new(self.herdr.connector()),
+            Arc::downgrade(&self.runtime),
+        )
+        .unwrap()
+    }
+
+    /// Hands the writer the agent list the device's Herdr answers now, as
+    /// the session sync does on each refresh.
+    fn refresh(&self, writer: &mut crate::coordination::lineage::Writer) {
+        let listed = hide_herdr_client::request_with_connector(
+            &self.herdr.connector(),
+            "agent.list",
+            crate::wire::empty_params(),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        let agents = crate::wire::agents_response(listed).unwrap();
+        let ledger = self.runtime.lock().unwrap().delivery_state().unwrap();
+        writer.observe(
+            &ledger,
+            &agents,
+            &|_| true,
+            &std::collections::BTreeMap::new(),
+            true,
+            std::time::Instant::now(),
+        );
     }
 }
 
@@ -983,6 +1031,104 @@ fn a_device_herdr_that_refuses_keeps_its_own_failure() {
         .expect_err("the device Herdr refuses");
     assert_ne!(error, "machine_unavailable");
     assert!(error.contains("repository_busy"), "{error}");
+}
+
+/// A Codex child spawned with no prompt rests without a session, so the
+/// spawn answers that it has not shown one and the registration waits in
+/// the ledger. Once Herdr shows the session the core binds the child to its
+/// parent with its watch, and the same intent asked again answers that one
+/// child, typing nothing.
+#[test]
+fn a_child_that_reports_its_session_late_is_bound_by_the_core_and_its_intent_answers_it() {
+    let spawner = spawner();
+    *spawner.session.lock().unwrap() = None;
+    let ask = || spawner.spawn(Some("here"), Some(DEVICE), "late");
+    assert_eq!(
+        ask().expect_err("no session yet"),
+        "native_identity_unavailable"
+    );
+    let ledger = spawner.published();
+    assert_eq!(ledger.identity_waits.len(), 1);
+    assert_eq!(ledger.spawns[0].child, None);
+    let mut writer = spawner.writer();
+    // At rest: the agent is listed under the spawn's name with no session.
+    spawner.refresh(&mut writer);
+    assert_eq!(spawner.published().spawns[0].child, None);
+    *spawner.session.lock().unwrap() = Some("device-child-session".into());
+    spawner.refresh(&mut writer);
+    wait_for("the core binds the late child", || {
+        spawner.published().spawns[0].completed
+    });
+    let ledger = spawner.published();
+    assert!(ledger.identity_waits.is_empty());
+    let child = ledger.spawns[0].child.clone().unwrap();
+    let record = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == child)
+        .unwrap();
+    assert_eq!(record.parent.as_deref(), Some("agent-1"));
+    assert_eq!(record.session, "device-child-session");
+    assert!(
+        ledger.spawns[0].auto_watch_id.is_some(),
+        "the parent watches it"
+    );
+    let answer = ask().expect("the same intent answers the bound child");
+    assert_eq!(answer["id"], child.as_str());
+    assert_eq!(answer["watch"]["parent"]["pane_id"], "sender");
+    assert_eq!(spawner.published().agents.len(), 2);
+    assert_eq!(spawner.count("agent.start"), 1);
+}
+
+/// The caller asking again after the session showed binds the child itself;
+/// the core's settle of the same wait then finds that child and registers
+/// nothing more, so either order leaves one registration and no wait.
+#[test]
+fn a_retry_that_binds_first_and_the_cores_settle_converge_on_one_child() {
+    let spawner = spawner();
+    *spawner.session.lock().unwrap() = None;
+    let ask = || spawner.spawn(Some("here"), Some(DEVICE), "race");
+    assert_eq!(
+        ask().expect_err("no session yet"),
+        "native_identity_unavailable"
+    );
+    *spawner.session.lock().unwrap() = Some("device-child-session".into());
+    let answer = ask().expect("the retry binds the child");
+    assert_eq!(spawner.published().identity_waits.len(), 1);
+    let mut writer = spawner.writer();
+    spawner.refresh(&mut writer);
+    wait_for("the core settles the wait", || {
+        spawner.published().identity_waits.is_empty()
+    });
+    let ledger = spawner.published();
+    assert_eq!(ledger.agents.len(), 2);
+    assert_eq!(ledger.spawns[0].child.as_deref(), answer["id"].as_str());
+    assert_eq!(ask().unwrap()["id"], answer["id"]);
+}
+
+/// A child whose session shows late but past what a registration keeps ends
+/// its wait by that reason when the core settles it, registers nothing, and
+/// its pane is closed, as the spawn's own answer does for the same session.
+#[test]
+fn a_late_child_whose_session_cannot_be_kept_ends_its_wait_and_its_pane_closes() {
+    let spawner = spawner();
+    *spawner.session.lock().unwrap() = None;
+    assert_eq!(
+        spawner
+            .spawn(Some("here"), Some(DEVICE), "late-too-long")
+            .expect_err("no session yet"),
+        "native_identity_unavailable"
+    );
+    let mut writer = spawner.writer();
+    *spawner.session.lock().unwrap() =
+        Some(format!("/{}", "s".repeat(crate::delivery::SESSION_LIMIT)));
+    spawner.refresh(&mut writer);
+    wait_for("the core ends the wait and closes the pane", || {
+        spawner.published().identity_waits.is_empty() && spawner.count("pane.close") == 1
+    });
+    let ledger = spawner.published();
+    assert_eq!(ledger.agents.len(), 1, "only the caller is registered");
+    assert!(ledger.spawns[0].child.is_none());
 }
 
 /// Pi and omp name a session by its file path, which a deep checkout makes

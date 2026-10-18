@@ -485,7 +485,7 @@ An agent started through Herdr directly bypasses Hide's responsibility record.
 The Claude Code and Codex `PreToolUse` spawn guard refuses such a call in a registered checkout and offers two filled commands: delegation with `--parent here`, or operator handoff without it ([agent-hooks.md](agent-hooks.md#the-spawn-guard)).
 The guard remains bypassable guidance; it does not change either mode's authority or execution path.
 A launch chained behind another command is refused whole, and a launch inside `bash -c`, `$(...)`, a script or an alias is not seen, so a child started that way has no parent line, as before the guard.
-A first spawn of a new Codex or OpenCode 2 child can answer `native_identity_unavailable` until that agent has bound its session: Codex after its first turn, OpenCode 2 at its first prompt, since it creates no session before one (seen with 2.0.29: a spawn without `--prompt` answered after the 5 s wait, and the same intent asked again once a prompt was typed found the child at once); running the same `hide agent spawn` again with the same intent converges on the same child.
+A spawn whose child shows no session within 5 seconds (Codex before its first turn, OpenCode 2 before its first prompt) answers `native_identity_unavailable`, and the core binds the child when Herdr shows the session ([A registration that waits for its agent's session](#a-registration-that-waits-for-its-agents-session)).
 A spawn's tab runs the account's shell with Hide's shell integration where that shell is zsh, bash or fish (Windows PowerShell on Windows), and its start is typed only after the shell marked its first prompt ([ARCHITECTURE.md](ARCHITECTURE.md)); a shell stopped at a startup question within the 30 s wait is refused as `shell_starting` with that question's line, nothing typed, and the next action is to answer it in that pane and spawn again.
 A start Herdr typed whose agent never showed (a startup question took its first letter in a bash pane, or the program exited before Herdr saw it) leaves Herdr holding the agent's name in that pane until its 120 s deadline, and Herdr gives that name to any agent that appears there meanwhile.
 A spawn waits up to 30 seconds for Herdr to create the worktree, which runs `git worktree add` and can be slow on a large repository under load; when no answer comes in that time the spawn is refused `worktree_unconfirmed`, because Herdr may still finish the worktree, and the next action is to run the same command again with the same intent, which finds that worktree and continues in it; a Factory asks it again after five seconds.
@@ -515,6 +515,33 @@ Herdr is skipped only when that machine has no Herdr socket (`no_socket`), becau
 When neither channel reached the operator, one `human.channels_failed` record in `Logs/core.jsonl` carries the notice (`letter_undelivered` or `observer_unconfirmed`), the letter id, `push`, `herdr` and the machine whose Herdr was asked (`herdr_node`); it never carries a letter's text, a phone endpoint or a key.
 The claim stays consumed, so the same letter or warning is never announced again, and nothing is drawn on screen: an operator with phone push off and Herdr's toast off learns of a held letter from that record only.
 These cases add no Inbox screen or automatic escalation chain.
+
+### A registration that waits for its agent's session
+
+An agent Hide started is registered from the session Herdr shows in its pane, and some agents show none until their first turn.
+Codex 0.163.0 runs the session hook that Herdr's integration reports from only when its first turn starts, for `codex fork <id>` as for a new start, and OpenCode 2 makes no session before its first prompt; Claude Code runs its hook when it starts, so its spawns and forks register at once.
+Instead of failing after a fixed time, such a registration waits in the ledger (`identity_waits`, `coordination::identity_wait`) until Herdr shows the session, and the core finishes it then.
+
+`hide agent spawn` still waits up to 5 seconds for the child's session.
+When none shows in that time it records the wait and answers `native_identity_unavailable`, an error with no agent, whose next action says the agent started and Hide registers it when it reports its session; the pane and the agent stay as they are, and nothing is typed again.
+Until the child is bound, `hide agent list` does not show it, the parent has no watch on it and its pane carries no lineage tokens.
+Once Herdr shows the session in the spawn's pane under the spawn's agent name, the lineage writer binds the child as the spawn's own answer would: the registration with its parent, or for a handoff its origin, the initial watch of a delegated child, and the lineage tokens on its pane, logged as `identity_wait.bound` with the wait, the agent and the pane.
+Running the same command with the same intent then answers that child from the spawn's receipt and types nothing.
+Asked again before the session shows, it answers `native_identity_unavailable` and keeps the one wait; asked after the session shows but before the core settled the wait, it binds the child itself, and the core's settle finds that same child, so either order leaves one registration and no wait.
+
+Fork agent records the wait once the fork's agent has started: the source is registered then, while it is the execution that was forked, and the fork once Herdr shows the fork's own session, as the operator's root whose origin is the source ([status-model.md](status-model.md#where-a-parent-comes-from)).
+The source's consent is the wait, so a fork whose source closed while the fork rested still names it as its origin.
+
+A wait ends without a registration when its pane closes (`pane_closed`), when its agent ends and Herdr no longer lists the agent's name in the pane (`agent_ended`), or when another session shows in that pane (`pane_taken`).
+A bind the ledger refuses ends the wait with that refusal, such as `parent_unavailable` for a spawn whose parent registration ended, and so does a registration that cannot be made of the agent as Herdr shows it, so nothing is asked again for an agent that cannot be registered.
+A late session past what a registration keeps ends the wait as `session_too_long`, and the pane a spawn made for it is closed, as the spawn's own answer closes it; a fork's pane is the operator's and stays.
+Each end is logged as `identity_wait.ended` with the wait and the reason, and nothing reaches the screen.
+An agent's absence is judged only by an agent list read after the wait was recorded, because a list asked before may predate the agent's start.
+A settle that failed, such as one the store did not take while a core move held its effects, is logged as `identity_wait.settle_failed` and asked again at the next agent list, as a failed token write is; a settle converges, so a repeat binds or ends the wait once, and a queued settle is never asked twice.
+A core move carries each wait with the machine it names (`node_migration::KEYS`), so that machine's lineage writer judges it under its new id.
+At most 64 waits are held at once: a spawn past that answers `identity_waits_full`, whose next action is to give one of the waiting agents a first prompt or close its pane, and a fork past it is logged as `registration_failed` with that code.
+The waits ride on the existing one-second agent refresh, with no timer, no Herdr read of their own and no work under `Mutex<Runtime>`; an unchanged list with unchanged waits plans nothing.
+A ledger with no wait writes no `identity_waits` field, and a build from before waits ignores the field.
 
 ## Verification
 
