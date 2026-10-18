@@ -5,7 +5,8 @@ The candidate daemon's HOME is the agents' HOME, so the kit's hooks and
 Herdr's integration are where each agent reads its own configuration, as on
 a new machine. This table is CI mode's only per-agent CLI knowledge, as the
 route table is local mode's. With `--fixture-bin` the compiled stand-ins of
-`web/e2e/shims` run in place of the CLIs and no key is used.
+`web/e2e/shims` run in place of the CLIs, and with `--fake-model` the CLIs
+are pointed at the journey's fake model (fake_lane.py); neither uses a key.
 """
 
 import json
