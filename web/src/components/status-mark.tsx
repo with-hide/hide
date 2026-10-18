@@ -10,17 +10,21 @@ import { Hint } from "./ui/tooltip";
  * names the mark; this draws it. The four shapes differ without their
  * colours: the operator's turn is a `!` in a warning badge, in progress is a
  * static three-quarter ring (dashed while it waits on proven work, D-25), to read is a small dot (green only when the label
- * read the turn as finished), and quiet keeps its slot empty so titles line up.
+ * read the turn as finished), and quiet, an agent at rest, a faint hollow ring
+ * smaller and thinner than the in-progress one (sidebar-quiet-mark-indent D-02).
  * An agent Hide put to sleep keeps a grey moon, the one shape outside the four
- * (status-marks D-21). Each shape carries its own colour; a caller's class dims
- * a read turn. A surface with no second line passes `label`, the mark's words,
- * so its hover and accessible name tell a waiting ring from a working one (B36).
+ * (status-marks D-21). A row of unknown state, and a slot with no live agent
+ * behind it (`null`: an ended session, a disconnected device's row), keep the
+ * slot empty so titles line up (D-04, D-05). Each shape carries its own colour;
+ * a caller's class dims a read turn. A surface with no second line passes
+ * `label`, the mark's words, so its hover and accessible name tell a waiting
+ * ring from a working one (B36).
  */
-export function StatusMark({ mark, label, className, ...rest }: { mark: RowMark; label?: string } & HTMLAttributes<HTMLSpanElement>) {
+export function StatusMark({ mark, label, className, ...rest }: { mark: RowMark | null; label?: string } & HTMLAttributes<HTMLSpanElement>) {
   const shape = (
     <span
       {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true })}
-      data-mark={mark}
+      data-mark={mark ?? undefined}
       className={cn("inline-flex size-(--size-agent-mark) shrink-0 items-center justify-center", className)}
       {...rest}
     >
@@ -36,6 +40,10 @@ export function StatusMark({ mark, label, className, ...rest }: { mark: RowMark;
         </svg>
       ) : mark === "done" || mark === "unread" ? (
         <span className={cn("size-(--size-status-mark) rounded-full", mark === "done" ? "bg-success" : "bg-foreground")} />
+      ) : mark === "quiet" ? (
+        <svg viewBox="0 0 12 12" className="size-full">
+          <circle cx="6" cy="6" r="3.4" fill="none" strokeWidth="1.3" className="stroke-muted-foreground opacity-(--opacity-read-status)" />
+        </svg>
       ) : mark === "asleep" ? (
         <MoonIcon className="size-full text-muted-foreground" />
       ) : null}

@@ -327,7 +327,7 @@ function ChildRows({ parent, items, hang, summaries, onOpen, actions }: { parent
       const state = done ? null : live ? statusText(t, live.status_code) : child.state ? statusText(t, child.state as AgentStatusCode) : child.last_end ? statusText(t, END_STATUS[child.last_end]) : null;
       const status = live && !done ? <StatusMark mark={live.mark} className={markTone(live)} data-agent-status-mark={live.mark} />
         : done ? <span className="inline-flex size-(--size-agent-mark) items-center justify-center text-success" data-agent-status-mark="done-check"><CheckIcon className="size-full" /></span>
-          : <StatusMark mark="quiet" data-agent-status-mark="quiet" />;
+          : <StatusMark mark={null} data-agent-status-mark="ended" />;
       const branch = live ? branchChip(live) : child.cwd && child.cwd !== parent.cwd ? folderName(child.cwd) : null;
       const device = child.session.device_id !== parent.session.device_id ? machineName(rest?.navigator?.devices, child.session.device_id, t) : null;
       const below = recordTree(child).length - 1;

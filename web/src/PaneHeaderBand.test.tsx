@@ -84,6 +84,7 @@ function childrenFixture(): AgentRow[] {
   const seed = legacyAgentRow({ id: "parent", pane_id: "parent", identity_label: "Parent", agent_kind: "claude", mark: "going", group: "working", status_code: "working", detail: null, changed_at_unix_ms: null, emphasized: false, unread: false, demand: "none", activity: "working" });
   const children = ["working", "result", "idle", "unknown", "question"].map((id, index) => ({
     ...seed, id, pane_id: id, identity_label: `Child ${id}`,
+    mark: id === "unknown" ? "unknown" as const : id === "idle" || id === "question" ? "quiet" as const : seed.mark,
     status_code: id === "unknown" ? "unknown" as const : id === "question" ? "question" as const : id === "result" ? "done" as const : id === "idle" ? "idle" as const : seed.status_code,
     activity: id === "unknown" ? "unknown" : id === "result" || id === "idle" ? "stopped" : seed.activity, demand: id === "question" ? "question" : "none",
     lineage_parent_pane_id: "parent", lineage_child_pane_ids: [],

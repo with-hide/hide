@@ -21985,6 +21985,18 @@
                       "fill": "$--success"
                     },
                     {
+                      "type": "ellipse",
+                      "id": "sar-quiet",
+                      "name": "Quiet",
+                      "enabled": false,
+                      "width": 6.8,
+                      "height": 6.8,
+                      "fill": [],
+                      "stroke": "$--muted-foreground",
+                      "strokeWidth": 1.3,
+                      "opacity": 0.55
+                    },
+                    {
                       "type": "icon",
                       "id": "sar-moon",
                       "name": "Asleep",
@@ -22223,7 +22235,12 @@
               "type": "ref",
               "ref": "sidebar-agent-row",
               "width": "fill_container",
-              "name": "Row / rest"
+              "name": "Row / rest",
+              "descendants": {
+                "sar-quiet": {
+                  "enabled": true
+                }
+              }
             }
           ]
         },
@@ -22254,6 +22271,9 @@
               "descendants": {
                 "sar-letters": {
                   "enabled": true
+                },
+                "sar-quiet": {
+                  "enabled": true
                 }
               }
             }
@@ -22283,7 +22303,12 @@
               "ref": "sidebar-agent-row",
               "width": "fill_container",
               "name": "Row / hover",
-              "fill": "$--accent"
+              "fill": "$--accent",
+              "descendants": {
+                "sar-quiet": {
+                  "enabled": true
+                }
+              }
             }
           ]
         },
@@ -22315,6 +22340,9 @@
               "descendants": {
                 "sar-title": {
                   "fill": "$--foreground"
+                },
+                "sar-quiet": {
+                  "enabled": true
                 }
               }
             }
@@ -22346,7 +22374,12 @@
               "name": "Row / focus",
               "stroke": "$--ring",
               "strokeWidth": 1,
-              "strokeAlignment": "inner"
+              "strokeAlignment": "inner",
+              "descendants": {
+                "sar-quiet": {
+                  "enabled": true
+                }
+              }
             }
           ]
         },
@@ -43865,6 +43898,18 @@
                               "width": 7,
                               "height": 7,
                               "fill": "$--success"
+                            },
+                            {
+                              "type": "ellipse",
+                              "id": "agb-row1-quiet",
+                              "name": "Quiet",
+                              "enabled": false,
+                              "width": 6.8,
+                              "height": 6.8,
+                              "fill": [],
+                              "stroke": "$--muted-foreground",
+                              "strokeWidth": 1.3,
+                              "opacity": 0.55
                             }
                           ],
                           "width": 12,
@@ -44142,6 +44187,18 @@
                               "width": 7,
                               "height": 7,
                               "fill": "$--success"
+                            },
+                            {
+                              "type": "ellipse",
+                              "id": "agb-row2-quiet",
+                              "name": "Quiet",
+                              "enabled": false,
+                              "width": 6.8,
+                              "height": 6.8,
+                              "fill": [],
+                              "stroke": "$--muted-foreground",
+                              "strokeWidth": 1.3,
+                              "opacity": 0.55
                             }
                           ],
                           "width": 12,
@@ -44420,6 +44477,18 @@
                               "width": 7,
                               "height": 7,
                               "fill": "$--success"
+                            },
+                            {
+                              "type": "ellipse",
+                              "id": "agb-row3-quiet",
+                              "name": "Quiet",
+                              "enabled": false,
+                              "width": 6.8,
+                              "height": 6.8,
+                              "fill": [],
+                              "stroke": "$--muted-foreground",
+                              "strokeWidth": 1.3,
+                              "opacity": 0.55
                             }
                           ],
                           "width": 12,
@@ -44709,6 +44778,10 @@
                       "enabled": false,
                       "fill": "$--success"
                     },
+                    "agb-row1-quiet": {
+                      "enabled": true,
+                      "stroke": "$--muted-foreground"
+                    },
                     "agb-row1-title": {
                       "content": "SIGTERM 정리 오케스트레이션"
                     },
@@ -44768,6 +44841,10 @@
                     "agb-row2-dot": {
                       "enabled": false,
                       "fill": "$--success"
+                    },
+                    "agb-row2-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
                     },
                     "agb-row2-title": {
                       "content": "Overview 진입 흐름"
@@ -44908,6 +44985,10 @@
                       "enabled": false,
                       "fill": "$--success"
                     },
+                    "agb-row1-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
+                    },
                     "agb-row1-title": {
                       "content": "SIGTERM 처리와 자식 정리",
                       "fontWeight": "600"
@@ -44973,6 +45054,10 @@
                     "agb-row2-dot": {
                       "enabled": false,
                       "fill": "$--success"
+                    },
+                    "agb-row2-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
                     },
                     "agb-row2-title": {
                       "content": "리뷰: 종료 경로 회귀"
@@ -45103,6 +45188,10 @@
                       "enabled": false,
                       "fill": "$--success"
                     },
+                    "agb-row1-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
+                    },
                     "agb-row1-title": {
                       "content": "CI 복구 시도",
                       "fontWeight": "600"
@@ -45168,6 +45257,10 @@
                     "agb-row2-dot": {
                       "enabled": true,
                       "fill": "$--foreground"
+                    },
+                    "agb-row2-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
                     },
                     "agb-row2-title": {
                       "content": "어댑터 정리"
@@ -45315,6 +45408,10 @@
                       "enabled": false,
                       "fill": "$--success"
                     },
+                    "agb-row1-quiet": {
+                      "enabled": true,
+                      "stroke": "$--muted-foreground"
+                    },
                     "agb-row1-title": {
                       "content": "체크아웃 기능 구현 및 정리"
                     },
@@ -45446,6 +45543,10 @@
                     "agb-row1-dot": {
                       "enabled": false,
                       "fill": "$--success"
+                    },
+                    "agb-row1-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
                     },
                     "agb-row1-title": {
                       "content": "agent-tab-groups"
@@ -45579,6 +45680,10 @@
                       "enabled": false,
                       "fill": "$--success"
                     },
+                    "agb-row1-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
+                    },
                     "agb-row1-title": {
                       "content": "Lead"
                     },
@@ -45638,6 +45743,10 @@
                     "agb-row2-dot": {
                       "enabled": false,
                       "fill": "$--success"
+                    },
+                    "agb-row2-quiet": {
+                      "enabled": true,
+                      "stroke": "$--muted-foreground"
                     },
                     "agb-row2-title": {
                       "content": "명세 정리"
@@ -45768,6 +45877,10 @@
                     "agb-row1-dot": {
                       "enabled": false,
                       "fill": "$--success"
+                    },
+                    "agb-row1-quiet": {
+                      "enabled": true,
+                      "stroke": "$--muted-foreground"
                     },
                     "agb-row1-title": {
                       "content": "Agent tab groups 구현"
@@ -45918,6 +46031,10 @@
                       "enabled": false,
                       "fill": "$--success"
                     },
+                    "agb-row1-quiet": {
+                      "enabled": true,
+                      "stroke": "$--muted-foreground"
+                    },
                     "agb-row1-title": {
                       "content": "SIGTERM 정리 오케스트레이션"
                     },
@@ -45977,6 +46094,10 @@
                     "agb-row2-dot": {
                       "enabled": false,
                       "fill": "$--success"
+                    },
+                    "agb-row2-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
                     },
                     "agb-row2-title": {
                       "content": "Overview 진입 흐름"
@@ -46117,6 +46238,10 @@
                       "enabled": false,
                       "fill": "$--success"
                     },
+                    "agb-row1-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
+                    },
                     "agb-row1-title": {
                       "content": "SIGTERM 처리와 자식 정리",
                       "fontWeight": "600"
@@ -46182,6 +46307,10 @@
                     "agb-row2-dot": {
                       "enabled": false,
                       "fill": "$--success"
+                    },
+                    "agb-row2-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
                     },
                     "agb-row2-title": {
                       "content": "리뷰: 종료 경로 회귀"
@@ -46312,6 +46441,10 @@
                       "enabled": false,
                       "fill": "$--success"
                     },
+                    "agb-row1-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
+                    },
                     "agb-row1-title": {
                       "content": "CI 복구 시도",
                       "fontWeight": "600"
@@ -46377,6 +46510,10 @@
                     "agb-row2-dot": {
                       "enabled": true,
                       "fill": "$--foreground"
+                    },
+                    "agb-row2-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
                     },
                     "agb-row2-title": {
                       "content": "어댑터 정리"
@@ -46524,6 +46661,10 @@
                       "enabled": false,
                       "fill": "$--success"
                     },
+                    "agb-row1-quiet": {
+                      "enabled": true,
+                      "stroke": "$--muted-foreground"
+                    },
                     "agb-row1-title": {
                       "content": "체크아웃 기능 구현 및 정리"
                     },
@@ -46655,6 +46796,10 @@
                     "agb-row1-dot": {
                       "enabled": false,
                       "fill": "$--success"
+                    },
+                    "agb-row1-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
                     },
                     "agb-row1-title": {
                       "content": "agent-tab-groups"
@@ -46788,6 +46933,10 @@
                       "enabled": false,
                       "fill": "$--success"
                     },
+                    "agb-row1-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
+                    },
                     "agb-row1-title": {
                       "content": "Lead"
                     },
@@ -46847,6 +46996,10 @@
                     "agb-row2-dot": {
                       "enabled": false,
                       "fill": "$--success"
+                    },
+                    "agb-row2-quiet": {
+                      "enabled": true,
+                      "stroke": "$--muted-foreground"
                     },
                     "agb-row2-title": {
                       "content": "명세 정리"
@@ -46977,6 +47130,10 @@
                     "agb-row1-dot": {
                       "enabled": false,
                       "fill": "$--success"
+                    },
+                    "agb-row1-quiet": {
+                      "enabled": true,
+                      "stroke": "$--muted-foreground"
                     },
                     "agb-row1-title": {
                       "content": "Agent tab groups 구현"
@@ -47557,6 +47714,18 @@
                               "width": 7,
                               "height": 7,
                               "fill": "$--success"
+                            },
+                            {
+                              "type": "ellipse",
+                              "id": "ath-row-quiet",
+                              "name": "Quiet",
+                              "enabled": false,
+                              "width": 6.8,
+                              "height": 6.8,
+                              "fill": [],
+                              "stroke": "$--muted-foreground",
+                              "strokeWidth": 1.3,
+                              "opacity": 0.55
                             }
                           ],
                           "width": 12,
@@ -48417,6 +48586,10 @@
                       "enabled": false,
                       "fill": "$--success"
                     },
+                    "ath-row-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
+                    },
                     "ath-row-title": {
                       "content": "루트 에이전트",
                       "fill": "$--foreground"
@@ -48474,6 +48647,10 @@
                     "ath-row-dot": {
                       "enabled": false,
                       "fill": "$--success"
+                    },
+                    "ath-row-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
                     },
                     "ath-row-title": {
                       "content": "자식"
@@ -48541,6 +48718,10 @@
                       "enabled": false,
                       "fill": "$--success"
                     },
+                    "ath-row-quiet": {
+                      "enabled": true,
+                      "stroke": "$--muted-foreground"
+                    },
                     "ath-row-title": {
                       "content": "손자"
                     },
@@ -48603,6 +48784,10 @@
                     "ath-row-dot": {
                       "enabled": false,
                       "fill": "$--success"
+                    },
+                    "ath-row-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
                     },
                     "ath-row-title": {
                       "content": "CI 기다리는 자식"
@@ -48671,6 +48856,10 @@
                     "ath-row-dot": {
                       "enabled": false,
                       "fill": "$--success"
+                    },
+                    "ath-row-quiet": {
+                      "enabled": true,
+                      "stroke": "$--muted-foreground"
                     },
                     "ath-row-title": {
                       "content": "다른 기기의 자식"
@@ -49439,6 +49628,10 @@
                       "enabled": false,
                       "fill": "$--success"
                     },
+                    "ath-row-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
+                    },
                     "ath-row-title": {
                       "content": "루트 에이전트",
                       "fill": "$--foreground"
@@ -49496,6 +49689,10 @@
                     "ath-row-dot": {
                       "enabled": false,
                       "fill": "$--success"
+                    },
+                    "ath-row-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
                     },
                     "ath-row-title": {
                       "content": "자식"
@@ -49563,6 +49760,10 @@
                       "enabled": false,
                       "fill": "$--success"
                     },
+                    "ath-row-quiet": {
+                      "enabled": true,
+                      "stroke": "$--muted-foreground"
+                    },
                     "ath-row-title": {
                       "content": "손자"
                     },
@@ -49625,6 +49826,10 @@
                     "ath-row-dot": {
                       "enabled": false,
                       "fill": "$--success"
+                    },
+                    "ath-row-quiet": {
+                      "enabled": false,
+                      "stroke": "$--muted-foreground"
                     },
                     "ath-row-title": {
                       "content": "CI 기다리는 자식"
@@ -49693,6 +49898,10 @@
                     "ath-row-dot": {
                       "enabled": false,
                       "fill": "$--success"
+                    },
+                    "ath-row-quiet": {
+                      "enabled": true,
+                      "stroke": "$--muted-foreground"
                     },
                     "ath-row-title": {
                       "content": "다른 기기의 자식"

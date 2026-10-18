@@ -167,7 +167,7 @@ describe("snapshot merge", () => {
     const state = useShellStore.getState();
     expect(state.agents[0]?.unknown).toBe(true);
     // A state Hide cannot read draws no mark rather than a `!` (status-marks B16).
-    expect(state.agents[0]?.mark).toBe("quiet");
+    expect(state.agents[0]?.mark).toBe("unknown");
     expect(state.diagnostics[0]).toContain("brand_new");
   });
 
@@ -177,7 +177,7 @@ describe("snapshot merge", () => {
       payload: { rest: { navigator: { agents: [legacyAgentRow({ id: "a", pane_id: "p1", identity_label: "x", agent_kind: "x", mark: "sparkle" as never, group: "working", status_code: "working", changed_at_unix_ms: null, emphasized: false, unread: false })] } } },
     });
     const state = useShellStore.getState();
-    expect([state.agents[0]?.mark, state.agents[0]?.status_code]).toEqual(["quiet", "unknown"]);
+    expect([state.agents[0]?.mark, state.agents[0]?.status_code]).toEqual(["unknown", "unknown"]);
     expect(state.diagnostics.some((line) => line.includes("mark=sparkle"))).toBe(true);
   });
 

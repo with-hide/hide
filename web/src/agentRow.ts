@@ -174,32 +174,34 @@ export function markTone(agent: Pick<TabAgent, "state">): string {
   return agent.state.mark_tone.read ? "opacity-(--opacity-read-status)" : "";
 }
 
-/** The name of a mark, in the operator's language: 내 차례, 진행 중, 읽을 것, 조용함, 재움. */
-export function markName(t: TFunction<"translation">, mark: RowMark): string {
+/** The name of a mark, in the operator's language: 내 차례, 진행 중, 읽을 것, 조용함, 재움. An unknown row has no mark to name. */
+export function markName(t: TFunction<"translation">, mark: Exclude<RowMark, "unknown">): string {
   return t(`agents.mark.${mark}`);
 }
 
 /**
  * What a mark says on hover and in a row's accessible name (B3): the state,
  * then the word that leads its line, `내 차례 · 질문`, `읽을 것 · 일 남음`. A
- * quiet row adds the word only when it says something (상태 모름, 재움); an in
- * progress row names nothing more, its line says why. A sleeping row says its
+ * quiet row adds the word only when it says something (일 남음, 질문); an in
+ * progress row names nothing more, its line says why. A row of unknown state
+ * has no mark and says only `상태 모름`. A sleeping row says its
  * own words, `재움 · 열면 깨어남` (B31), and a finished turn with tasks left
  * adds them, `읽을 것 · 끝남 · 백그라운드 2개 남음` (B27).
  */
 export function markWords(t: TFunction<"translation">, agent: Pick<AgentRow, "mark" | "status_code"> & { background_left?: number }): string {
   if (agent.mark === "asleep") return statusText(t, agent.status_code);
+  if (agent.mark === "unknown") return statusText(t, "unknown");
   const name = markName(t, agent.mark);
   const word = agent.mark === "going" ? null : agent.mark === "waiting" ? statusText(t, "waiting") : agent.mark === "quiet" ? (QUIET_WORDS.has(agent.status_code) ? statusText(t, agent.status_code) : null) : agent.mark === "unread" && agent.status_code === "stopped" ? statusText(t, agent.status_code) : leadWord(t, agent);
   const left = agent.background_left ? t("agents.backgroundLeftWords", { count: agent.background_left }) : null;
   return [name, word, left].filter(Boolean).join(" · ");
 }
 
-const QUIET_WORDS = new Set<AgentStatusCode>(["unknown", "unfinished", "error", "question", "approval"]);
+const QUIET_WORDS = new Set<AgentStatusCode>(["unfinished", "error", "question", "approval"]);
 
-/** A row a surface draws dimmed with no mark: an agent whose state is unknown (B16). A disconnected device's rows are dimmed by their surface. */
-export function rowDimmed(agent: Pick<AgentRow, "status_code">): boolean {
-  return agent.status_code === "unknown";
+/** A row a surface draws dimmed with no mark: an agent the core marks unknown (B16). A disconnected device's rows are dimmed by their surface. */
+export function rowDimmed(agent: Pick<AgentRow, "mark">): boolean {
+  return agent.mark === "unknown";
 }
 
 /** A badge's counts: a project's or checkout's agents, or a parent's children. */

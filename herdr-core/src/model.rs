@@ -6516,6 +6516,7 @@ mod wire_enum_tests {
             RowMark::Done,
             RowMark::Unread,
             RowMark::Quiet,
+            RowMark::Unknown,
             RowMark::Asleep,
         ];
         for variant in marks {
@@ -6526,6 +6527,7 @@ mod wire_enum_tests {
                 | RowMark::Done
                 | RowMark::Unread
                 | RowMark::Quiet
+                | RowMark::Unknown
                 | RowMark::Asleep => {}
             }
         }

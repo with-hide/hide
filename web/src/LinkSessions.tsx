@@ -164,7 +164,7 @@ function MilestoneRow({ milestone }: { milestone: Milestone }) {
 /** `지금` at the end of an open pull request (B6; PRD record-card-readability D-12, B21): one line, `지금 · 검사 N개 도는 중` with the dashed ring of proven work it waits on while checks run (status-marks D-06, D-25), otherwise `지금` and an empty slot. */
 function NowRow({ running }: { running: number }) {
   const { t } = useInterfaceTranslation();
-  return <SessionRow mark={<span className={ON_RAIL}><StatusMark mark={running > 0 ? "waiting" : "quiet"} /></span>} title={running > 0 ? `${t("work.card.now")} · ${t("work.card.why.ci", { count: running })}` : t("work.card.now")} data-timeline-now={running} />;
+  return <SessionRow mark={<span className={ON_RAIL}><StatusMark mark={running > 0 ? "waiting" : null} /></span>} title={running > 0 ? `${t("work.card.now")} · ${t("work.card.why.ci", { count: running })}` : t("work.card.now")} data-timeline-now={running} />;
 }
 
 /** A resume in flight: the request it sent, then the core's refusal if it came. */
@@ -249,7 +249,7 @@ function SessionLineView({ entry, project, checkoutBranch, opener, actions }: { 
     line.device_id !== node ? deviceLabel(devices, line.device_id) : null,
   ].filter((part): part is string => part !== null).join(" · ");
   // The status mark on the rail, then the agent's logo, as a sidebar row (D-09, B17).
-  const mark = <><span className={ON_RAIL}>{live ? <StatusMark mark={live.agent.mark} className={markTone(live.agent)} data-agent-status-mark={live.agent.mark} /> : <StatusMark mark="quiet" data-agent-status-mark="ended" />}</span><AgentMark kind={line.agent} /></>;
+  const mark = <><span className={ON_RAIL}>{live ? <StatusMark mark={live.agent.mark} className={markTone(live.agent)} data-agent-status-mark={live.agent.mark} /> : <StatusMark mark={null} data-agent-status-mark="ended" />}</span><AgentMark kind={line.agent} /></>;
   const caption = asked ? { text: asked, className: "text-warning", wrap: true } : { text: `${agent} · ${live ? statusText(t, live.agent.status_code) : t("sessionWork.done")}` };
   const right = live ? <Elapsed since={line.started_at_unix_ms} className="font-mono text-caption text-muted-foreground" data-link-elapsed={line.id} /> : (() => {
     const span = spanText(line.started_at_unix_ms, line.ended_at_unix_ms);

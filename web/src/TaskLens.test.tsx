@@ -193,7 +193,7 @@ it("draws each task's row mark and line as the sidebar does, counts no folded ch
     row("left", { mark: "unread", status_code: "unfinished", activity: "stopped", unread: true }, { group: "done", line: "테스트 환경 연결 남음", unfinished: true }),
     row("read", { mark: "quiet", status_code: "unfinished", activity: "stopped" }, { group: "idle", line: "문서 정리 남음", unfinished: true }),
     row("sleep", { mark: "asleep", status_code: "sleeping", activity: "stopped" }, { line: "파서를 나눴어요" }),
-    row("lost", { mark: "quiet", status_code: "unknown", activity: "unknown" }),
+    row("lost", { mark: "unknown", status_code: "unknown", activity: "unknown" }),
     row("parent", { lineage_child_pane_ids: ["k1", "k2"], descendant_mark: { kind: "raised", count: 1 } }),
     row("k1", { lineage_parent_pane_id: "parent", delegated: true, mark: "quiet", status_code: "question", demand: "question" }),
     row("k2", { lineage_parent_pane_id: "parent", delegated: true, mark: "done", status_code: "done", activity: "stopped" }),

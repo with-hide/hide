@@ -2531,6 +2531,10 @@
                       "fill": "$--success",
                       "enabled": false
                     },
+                    "hideui:sar-quiet": {
+                      "stroke": "$--muted-foreground",
+                      "enabled": false
+                    },
                     "hideui:sar-moon": {
                       "fill": "$--muted-foreground",
                       "enabled": false
@@ -2619,6 +2623,10 @@
                     "hideui:sar-dot": {
                       "fill": "$--success",
                       "enabled": false
+                    },
+                    "hideui:sar-quiet": {
+                      "stroke": "$--muted-foreground",
+                      "enabled": true
                     },
                     "hideui:sar-moon": {
                       "fill": "$--muted-foreground",
@@ -4178,6 +4186,10 @@
                       "fill": "$--success",
                       "enabled": false
                     },
+                    "hideui:sar-quiet": {
+                      "stroke": "$--muted-foreground",
+                      "enabled": false
+                    },
                     "hideui:sar-moon": {
                       "fill": "$--muted-foreground",
                       "enabled": false
@@ -4266,6 +4278,10 @@
                     "hideui:sar-dot": {
                       "fill": "$--success",
                       "enabled": false
+                    },
+                    "hideui:sar-quiet": {
+                      "stroke": "$--muted-foreground",
+                      "enabled": true
                     },
                     "hideui:sar-moon": {
                       "fill": "$--muted-foreground",
@@ -104046,6 +104062,10 @@
                                               "fill": "$--success",
                                               "enabled": false
                                             },
+                                            "hideui:sar-quiet": {
+                                              "stroke": "$--muted-foreground",
+                                              "enabled": false
+                                            },
                                             "hideui:sar-moon": {
                                               "fill": "$--muted-foreground",
                                               "enabled": false
@@ -104134,6 +104154,10 @@
                                             },
                                             "hideui:sar-dot": {
                                               "fill": "$--success",
+                                              "enabled": false
+                                            },
+                                            "hideui:sar-quiet": {
+                                              "stroke": "$--muted-foreground",
                                               "enabled": false
                                             },
                                             "hideui:sar-moon": {
@@ -104264,6 +104288,10 @@
                                             "hideui:sar-dot": {
                                               "fill": "$--success",
                                               "enabled": true
+                                            },
+                                            "hideui:sar-quiet": {
+                                              "stroke": "$--muted-foreground",
+                                              "enabled": false
                                             },
                                             "hideui:sar-moon": {
                                               "fill": "$--muted-foreground",
@@ -104915,6 +104943,10 @@
                                                           "fill": "$--success",
                                                           "enabled": false
                                                         },
+                                                        "hideui:ath-row-quiet": {
+                                                          "stroke": "$--muted-foreground",
+                                                          "enabled": false
+                                                        },
                                                         "hideui:ath-row-title": {
                                                           "fill": "$--foreground",
                                                           "content": "사이드바 가독성 개선"
@@ -105031,6 +105063,10 @@
                                                         },
                                                         "hideui:ath-row-dot": {
                                                           "fill": "$--success",
+                                                          "enabled": false
+                                                        },
+                                                        "hideui:ath-row-quiet": {
+                                                          "stroke": "$--muted-foreground",
                                                           "enabled": false
                                                         },
                                                         "hideui:ath-row-title": {
@@ -105152,6 +105188,10 @@
                                                           "fill": "$--success",
                                                           "enabled": false
                                                         },
+                                                        "hideui:ath-row-quiet": {
+                                                          "stroke": "$--muted-foreground",
+                                                          "enabled": false
+                                                        },
                                                         "hideui:ath-row-title": {
                                                           "fill": "$--subtle-foreground",
                                                           "content": "테스트 작성"
@@ -105266,6 +105306,10 @@
                                                           "fill": "$--success",
                                                           "enabled": true
                                                         },
+                                                        "hideui:ath-row-quiet": {
+                                                          "stroke": "$--muted-foreground",
+                                                          "enabled": false
+                                                        },
                                                         "hideui:ath-row-title": {
                                                           "fill": "$--subtle-foreground",
                                                           "content": "문서 정리"
@@ -105378,6 +105422,10 @@
                                                         },
                                                         "hideui:ath-row-dot": {
                                                           "fill": "$--success",
+                                                          "enabled": false
+                                                        },
+                                                        "hideui:ath-row-quiet": {
+                                                          "stroke": "$--muted-foreground",
                                                           "enabled": false
                                                         },
                                                         "hideui:ath-row-title": {
@@ -105496,6 +105544,10 @@
                                                           "fill": "$--success",
                                                           "enabled": false
                                                         },
+                                                        "hideui:ath-row-quiet": {
+                                                          "stroke": "$--muted-foreground",
+                                                          "enabled": true
+                                                        },
                                                         "hideui:ath-row-title": {
                                                           "fill": "$--subtle-foreground",
                                                           "content": "미전달 편지 승격 해제"
@@ -105610,6 +105662,10 @@
                                                         "hideui:ath-row-dot": {
                                                           "fill": "$--success",
                                                           "enabled": false
+                                                        },
+                                                        "hideui:ath-row-quiet": {
+                                                          "stroke": "$--muted-foreground",
+                                                          "enabled": true
                                                         },
                                                         "hideui:ath-row-title": {
                                                           "fill": "$--subtle-foreground",
@@ -105728,6 +105784,10 @@
                                                         },
                                                         "hideui:ath-row-dot": {
                                                           "fill": "$--success",
+                                                          "enabled": false
+                                                        },
+                                                        "hideui:ath-row-quiet": {
+                                                          "stroke": "$--muted-foreground",
                                                           "enabled": false
                                                         },
                                                         "hideui:ath-row-title": {
@@ -105866,6 +105926,10 @@
                                                         },
                                                         "hideui:ath-row-dot": {
                                                           "fill": "$--success",
+                                                          "enabled": false
+                                                        },
+                                                        "hideui:ath-row-quiet": {
+                                                          "stroke": "$--muted-foreground",
                                                           "enabled": false
                                                         },
                                                         "hideui:ath-row-title": {
@@ -111546,6 +111610,10 @@
                                       "fill": "$--success",
                                       "enabled": false
                                     },
+                                    "hideui:sar-quiet": {
+                                      "stroke": "$--muted-foreground",
+                                      "enabled": false
+                                    },
                                     "hideui:sar-moon": {
                                       "fill": "$--muted-foreground",
                                       "enabled": false
@@ -112374,6 +112442,10 @@
                                               "fill": "$--success",
                                               "enabled": false
                                             },
+                                            "hideui:sar-quiet": {
+                                              "stroke": "$--muted-foreground",
+                                              "enabled": false
+                                            },
                                             "hideui:sar-moon": {
                                               "fill": "$--muted-foreground",
                                               "enabled": false
@@ -112462,6 +112534,10 @@
                                             },
                                             "hideui:sar-dot": {
                                               "fill": "$--success",
+                                              "enabled": false
+                                            },
+                                            "hideui:sar-quiet": {
+                                              "stroke": "$--muted-foreground",
                                               "enabled": false
                                             },
                                             "hideui:sar-moon": {
@@ -112554,6 +112630,10 @@
                                               "fill": "$--success",
                                               "enabled": false
                                             },
+                                            "hideui:sar-quiet": {
+                                              "stroke": "$--muted-foreground",
+                                              "enabled": false
+                                            },
                                             "hideui:sar-moon": {
                                               "fill": "$--muted-foreground",
                                               "enabled": false
@@ -112644,6 +112724,10 @@
                                               "fill": "$--success",
                                               "enabled": false
                                             },
+                                            "hideui:sar-quiet": {
+                                              "stroke": "$--muted-foreground",
+                                              "enabled": false
+                                            },
                                             "hideui:sar-moon": {
                                               "fill": "$--muted-foreground",
                                               "enabled": false
@@ -112732,6 +112816,10 @@
                                             },
                                             "hideui:sar-dot": {
                                               "fill": "$--success",
+                                              "enabled": false
+                                            },
+                                            "hideui:sar-quiet": {
+                                              "stroke": "$--muted-foreground",
                                               "enabled": false
                                             },
                                             "hideui:sar-moon": {
@@ -116518,6 +116606,10 @@
                                   "fill": "$--success",
                                   "enabled": false
                                 },
+                                "hideui:ath-row-quiet": {
+                                  "stroke": "$--muted-foreground",
+                                  "enabled": false
+                                },
                                 "hideui:ath-row-title": {
                                   "fill": "$--foreground",
                                   "content": "탭 경계·여백 정리"
@@ -116630,6 +116722,10 @@
                                 },
                                 "hideui:ath-row-dot": {
                                   "fill": "$--success",
+                                  "enabled": false
+                                },
+                                "hideui:ath-row-quiet": {
+                                  "stroke": "$--muted-foreground",
                                   "enabled": false
                                 },
                                 "hideui:ath-row-title": {
@@ -116765,6 +116861,10 @@
                                 },
                                 "hideui:ath-row-dot": {
                                   "fill": "$--success",
+                                  "enabled": false
+                                },
+                                "hideui:ath-row-quiet": {
+                                  "stroke": "$--muted-foreground",
                                   "enabled": false
                                 },
                                 "hideui:ath-row-title": {
@@ -116931,6 +117031,10 @@
                                   "fill": "$--success",
                                   "enabled": false
                                 },
+                                "hideui:ath-row-quiet": {
+                                  "stroke": "$--muted-foreground",
+                                  "enabled": false
+                                },
                                 "hideui:ath-row-title": {
                                   "fill": "$--subtle-foreground",
                                   "content": "PR 질문 표시 개선"
@@ -117044,6 +117148,10 @@
                                 "hideui:ath-row-dot": {
                                   "fill": "$--success",
                                   "enabled": false
+                                },
+                                "hideui:ath-row-quiet": {
+                                  "stroke": "$--muted-foreground",
+                                  "enabled": true
                                 },
                                 "hideui:ath-row-title": {
                                   "fill": "$--subtle-foreground",
@@ -117766,6 +117874,10 @@
                                               "fill": "$--success",
                                               "enabled": false
                                             },
+                                            "hideui:sar-quiet": {
+                                              "stroke": "$--muted-foreground",
+                                              "enabled": false
+                                            },
                                             "hideui:sar-moon": {
                                               "fill": "$--muted-foreground",
                                               "enabled": false
@@ -117854,6 +117966,10 @@
                                             },
                                             "hideui:sar-dot": {
                                               "fill": "$--success",
+                                              "enabled": false
+                                            },
+                                            "hideui:sar-quiet": {
+                                              "stroke": "$--muted-foreground",
                                               "enabled": false
                                             },
                                             "hideui:sar-moon": {
@@ -117984,6 +118100,10 @@
                                             "hideui:sar-dot": {
                                               "fill": "$--success",
                                               "enabled": true
+                                            },
+                                            "hideui:sar-quiet": {
+                                              "stroke": "$--muted-foreground",
+                                              "enabled": false
                                             },
                                             "hideui:sar-moon": {
                                               "fill": "$--muted-foreground",
@@ -118635,6 +118755,10 @@
                                                           "fill": "$--success",
                                                           "enabled": false
                                                         },
+                                                        "hideui:ath-row-quiet": {
+                                                          "stroke": "$--muted-foreground",
+                                                          "enabled": false
+                                                        },
                                                         "hideui:ath-row-title": {
                                                           "fill": "$--foreground",
                                                           "content": "사이드바 가독성 개선"
@@ -118751,6 +118875,10 @@
                                                         },
                                                         "hideui:ath-row-dot": {
                                                           "fill": "$--success",
+                                                          "enabled": false
+                                                        },
+                                                        "hideui:ath-row-quiet": {
+                                                          "stroke": "$--muted-foreground",
                                                           "enabled": false
                                                         },
                                                         "hideui:ath-row-title": {
@@ -118872,6 +119000,10 @@
                                                           "fill": "$--success",
                                                           "enabled": false
                                                         },
+                                                        "hideui:ath-row-quiet": {
+                                                          "stroke": "$--muted-foreground",
+                                                          "enabled": false
+                                                        },
                                                         "hideui:ath-row-title": {
                                                           "fill": "$--subtle-foreground",
                                                           "content": "테스트 작성"
@@ -118986,6 +119118,10 @@
                                                           "fill": "$--success",
                                                           "enabled": true
                                                         },
+                                                        "hideui:ath-row-quiet": {
+                                                          "stroke": "$--muted-foreground",
+                                                          "enabled": false
+                                                        },
                                                         "hideui:ath-row-title": {
                                                           "fill": "$--subtle-foreground",
                                                           "content": "문서 정리"
@@ -119098,6 +119234,10 @@
                                                         },
                                                         "hideui:ath-row-dot": {
                                                           "fill": "$--success",
+                                                          "enabled": false
+                                                        },
+                                                        "hideui:ath-row-quiet": {
+                                                          "stroke": "$--muted-foreground",
                                                           "enabled": false
                                                         },
                                                         "hideui:ath-row-title": {
@@ -119216,6 +119356,10 @@
                                                           "fill": "$--success",
                                                           "enabled": false
                                                         },
+                                                        "hideui:ath-row-quiet": {
+                                                          "stroke": "$--muted-foreground",
+                                                          "enabled": true
+                                                        },
                                                         "hideui:ath-row-title": {
                                                           "fill": "$--subtle-foreground",
                                                           "content": "미전달 편지 승격 해제"
@@ -119330,6 +119474,10 @@
                                                         "hideui:ath-row-dot": {
                                                           "fill": "$--success",
                                                           "enabled": false
+                                                        },
+                                                        "hideui:ath-row-quiet": {
+                                                          "stroke": "$--muted-foreground",
+                                                          "enabled": true
                                                         },
                                                         "hideui:ath-row-title": {
                                                           "fill": "$--subtle-foreground",
@@ -119448,6 +119596,10 @@
                                                         },
                                                         "hideui:ath-row-dot": {
                                                           "fill": "$--success",
+                                                          "enabled": false
+                                                        },
+                                                        "hideui:ath-row-quiet": {
+                                                          "stroke": "$--muted-foreground",
                                                           "enabled": false
                                                         },
                                                         "hideui:ath-row-title": {
@@ -119586,6 +119738,10 @@
                                                         },
                                                         "hideui:ath-row-dot": {
                                                           "fill": "$--success",
+                                                          "enabled": false
+                                                        },
+                                                        "hideui:ath-row-quiet": {
+                                                          "stroke": "$--muted-foreground",
                                                           "enabled": false
                                                         },
                                                         "hideui:ath-row-title": {
@@ -125266,6 +125422,10 @@
                                       "fill": "$--success",
                                       "enabled": false
                                     },
+                                    "hideui:sar-quiet": {
+                                      "stroke": "$--muted-foreground",
+                                      "enabled": false
+                                    },
                                     "hideui:sar-moon": {
                                       "fill": "$--muted-foreground",
                                       "enabled": false
@@ -126094,6 +126254,10 @@
                                               "fill": "$--success",
                                               "enabled": false
                                             },
+                                            "hideui:sar-quiet": {
+                                              "stroke": "$--muted-foreground",
+                                              "enabled": false
+                                            },
                                             "hideui:sar-moon": {
                                               "fill": "$--muted-foreground",
                                               "enabled": false
@@ -126182,6 +126346,10 @@
                                             },
                                             "hideui:sar-dot": {
                                               "fill": "$--success",
+                                              "enabled": false
+                                            },
+                                            "hideui:sar-quiet": {
+                                              "stroke": "$--muted-foreground",
                                               "enabled": false
                                             },
                                             "hideui:sar-moon": {
@@ -126274,6 +126442,10 @@
                                               "fill": "$--success",
                                               "enabled": false
                                             },
+                                            "hideui:sar-quiet": {
+                                              "stroke": "$--muted-foreground",
+                                              "enabled": false
+                                            },
                                             "hideui:sar-moon": {
                                               "fill": "$--muted-foreground",
                                               "enabled": false
@@ -126364,6 +126536,10 @@
                                               "fill": "$--success",
                                               "enabled": false
                                             },
+                                            "hideui:sar-quiet": {
+                                              "stroke": "$--muted-foreground",
+                                              "enabled": false
+                                            },
                                             "hideui:sar-moon": {
                                               "fill": "$--muted-foreground",
                                               "enabled": false
@@ -126452,6 +126628,10 @@
                                             },
                                             "hideui:sar-dot": {
                                               "fill": "$--success",
+                                              "enabled": false
+                                            },
+                                            "hideui:sar-quiet": {
+                                              "stroke": "$--muted-foreground",
                                               "enabled": false
                                             },
                                             "hideui:sar-moon": {
@@ -130238,6 +130418,10 @@
                                   "fill": "$--success",
                                   "enabled": false
                                 },
+                                "hideui:ath-row-quiet": {
+                                  "stroke": "$--muted-foreground",
+                                  "enabled": false
+                                },
                                 "hideui:ath-row-title": {
                                   "fill": "$--foreground",
                                   "content": "탭 경계·여백 정리"
@@ -130350,6 +130534,10 @@
                                 },
                                 "hideui:ath-row-dot": {
                                   "fill": "$--success",
+                                  "enabled": false
+                                },
+                                "hideui:ath-row-quiet": {
+                                  "stroke": "$--muted-foreground",
                                   "enabled": false
                                 },
                                 "hideui:ath-row-title": {
@@ -130485,6 +130673,10 @@
                                 },
                                 "hideui:ath-row-dot": {
                                   "fill": "$--success",
+                                  "enabled": false
+                                },
+                                "hideui:ath-row-quiet": {
+                                  "stroke": "$--muted-foreground",
                                   "enabled": false
                                 },
                                 "hideui:ath-row-title": {
@@ -130651,6 +130843,10 @@
                                   "fill": "$--success",
                                   "enabled": false
                                 },
+                                "hideui:ath-row-quiet": {
+                                  "stroke": "$--muted-foreground",
+                                  "enabled": false
+                                },
                                 "hideui:ath-row-title": {
                                   "fill": "$--subtle-foreground",
                                   "content": "PR 질문 표시 개선"
@@ -130764,6 +130960,10 @@
                                 "hideui:ath-row-dot": {
                                   "fill": "$--success",
                                   "enabled": false
+                                },
+                                "hideui:ath-row-quiet": {
+                                  "stroke": "$--muted-foreground",
+                                  "enabled": true
                                 },
                                 "hideui:ath-row-title": {
                                   "fill": "$--subtle-foreground",
@@ -140918,7 +141118,20 @@
                                               "type": "frame",
                                               "id": "mob-list-b-l-s0-m",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "mob-list-b-l-s0-m-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -141060,7 +141273,20 @@
                                               "type": "frame",
                                               "id": "mob-list-b-l-s1-m",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "mob-list-b-l-s1-m-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -141202,7 +141428,20 @@
                                               "type": "frame",
                                               "id": "mob-list-b-l-s2-m",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "mob-list-b-l-s2-m-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -144032,7 +144271,20 @@
                                               "type": "frame",
                                               "id": "mob-unreach-b-l-s0-m",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "mob-unreach-b-l-s0-m-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -144174,7 +144426,20 @@
                                               "type": "frame",
                                               "id": "mob-unreach-b-l-s1-m",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "mob-unreach-b-l-s1-m-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -144316,7 +144581,20 @@
                                               "type": "frame",
                                               "id": "mob-unreach-b-l-s2-m",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "mob-unreach-b-l-s2-m-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -146389,7 +146667,20 @@
                                                       "type": "frame",
                                                       "id": "mob-start-b-l-l-s0-m",
                                                       "name": "Status mark",
-                                                      "children": [],
+                                                      "children": [
+                                                        {
+                                                          "type": "ellipse",
+                                                          "id": "mob-start-b-l-l-s0-m-quiet",
+                                                          "name": "Quiet",
+                                                          "enabled": true,
+                                                          "width": 6.8,
+                                                          "height": 6.8,
+                                                          "fill": [],
+                                                          "stroke": "$--muted-foreground",
+                                                          "strokeWidth": 1.3,
+                                                          "opacity": 0.55
+                                                        }
+                                                      ],
                                                       "width": 12,
                                                       "height": 12,
                                                       "layout": "horizontal",
@@ -146531,7 +146822,20 @@
                                                       "type": "frame",
                                                       "id": "mob-start-b-l-l-s1-m",
                                                       "name": "Status mark",
-                                                      "children": [],
+                                                      "children": [
+                                                        {
+                                                          "type": "ellipse",
+                                                          "id": "mob-start-b-l-l-s1-m-quiet",
+                                                          "name": "Quiet",
+                                                          "enabled": true,
+                                                          "width": 6.8,
+                                                          "height": 6.8,
+                                                          "fill": [],
+                                                          "stroke": "$--muted-foreground",
+                                                          "strokeWidth": 1.3,
+                                                          "opacity": 0.55
+                                                        }
+                                                      ],
                                                       "width": 12,
                                                       "height": 12,
                                                       "layout": "horizontal",
@@ -146673,7 +146977,20 @@
                                                       "type": "frame",
                                                       "id": "mob-start-b-l-l-s2-m",
                                                       "name": "Status mark",
-                                                      "children": [],
+                                                      "children": [
+                                                        {
+                                                          "type": "ellipse",
+                                                          "id": "mob-start-b-l-l-s2-m-quiet",
+                                                          "name": "Quiet",
+                                                          "enabled": true,
+                                                          "width": 6.8,
+                                                          "height": 6.8,
+                                                          "fill": [],
+                                                          "stroke": "$--muted-foreground",
+                                                          "strokeWidth": 1.3,
+                                                          "opacity": 0.55
+                                                        }
+                                                      ],
                                                       "width": 12,
                                                       "height": 12,
                                                       "layout": "horizontal",
@@ -157193,7 +157510,20 @@
                                               "type": "frame",
                                               "id": "mob-list-b-d-s0-m",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "mob-list-b-d-s0-m-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -157335,7 +157665,20 @@
                                               "type": "frame",
                                               "id": "mob-list-b-d-s1-m",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "mob-list-b-d-s1-m-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -157477,7 +157820,20 @@
                                               "type": "frame",
                                               "id": "mob-list-b-d-s2-m",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "mob-list-b-d-s2-m-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -160307,7 +160663,20 @@
                                               "type": "frame",
                                               "id": "mob-unreach-b-d-s0-m",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "mob-unreach-b-d-s0-m-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -160449,7 +160818,20 @@
                                               "type": "frame",
                                               "id": "mob-unreach-b-d-s1-m",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "mob-unreach-b-d-s1-m-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -160591,7 +160973,20 @@
                                               "type": "frame",
                                               "id": "mob-unreach-b-d-s2-m",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "mob-unreach-b-d-s2-m-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -162664,7 +163059,20 @@
                                                       "type": "frame",
                                                       "id": "mob-start-b-d-l-s0-m",
                                                       "name": "Status mark",
-                                                      "children": [],
+                                                      "children": [
+                                                        {
+                                                          "type": "ellipse",
+                                                          "id": "mob-start-b-d-l-s0-m-quiet",
+                                                          "name": "Quiet",
+                                                          "enabled": true,
+                                                          "width": 6.8,
+                                                          "height": 6.8,
+                                                          "fill": [],
+                                                          "stroke": "$--muted-foreground",
+                                                          "strokeWidth": 1.3,
+                                                          "opacity": 0.55
+                                                        }
+                                                      ],
                                                       "width": 12,
                                                       "height": 12,
                                                       "layout": "horizontal",
@@ -162806,7 +163214,20 @@
                                                       "type": "frame",
                                                       "id": "mob-start-b-d-l-s1-m",
                                                       "name": "Status mark",
-                                                      "children": [],
+                                                      "children": [
+                                                        {
+                                                          "type": "ellipse",
+                                                          "id": "mob-start-b-d-l-s1-m-quiet",
+                                                          "name": "Quiet",
+                                                          "enabled": true,
+                                                          "width": 6.8,
+                                                          "height": 6.8,
+                                                          "fill": [],
+                                                          "stroke": "$--muted-foreground",
+                                                          "strokeWidth": 1.3,
+                                                          "opacity": 0.55
+                                                        }
+                                                      ],
                                                       "width": 12,
                                                       "height": 12,
                                                       "layout": "horizontal",
@@ -162948,7 +163369,20 @@
                                                       "type": "frame",
                                                       "id": "mob-start-b-d-l-s2-m",
                                                       "name": "Status mark",
-                                                      "children": [],
+                                                      "children": [
+                                                        {
+                                                          "type": "ellipse",
+                                                          "id": "mob-start-b-d-l-s2-m-quiet",
+                                                          "name": "Quiet",
+                                                          "enabled": true,
+                                                          "width": 6.8,
+                                                          "height": 6.8,
+                                                          "fill": [],
+                                                          "stroke": "$--muted-foreground",
+                                                          "strokeWidth": 1.3,
+                                                          "opacity": 0.55
+                                                        }
+                                                      ],
                                                       "width": 12,
                                                       "height": 12,
                                                       "layout": "horizontal",
@@ -393079,7 +393513,20 @@
                                               "type": "frame",
                                               "id": "cm-mark-686-l",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "cm-mark-686-l-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -393791,7 +394238,20 @@
                                               "type": "frame",
                                               "id": "cm-mark-720-l",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "cm-mark-720-l-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -394433,7 +394893,20 @@
                                               "type": "frame",
                                               "id": "cm-mark-771-l",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "cm-mark-771-l-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -395145,7 +395618,20 @@
                                               "type": "frame",
                                               "id": "cm-mark-828-l",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "cm-mark-828-l-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -395857,7 +396343,20 @@
                                               "type": "frame",
                                               "id": "cm-mark-885-l",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "cm-mark-885-l-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -396691,7 +397190,20 @@
                                               "type": "frame",
                                               "id": "cm-mark-952-l",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "cm-mark-952-l-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -409920,7 +410432,20 @@
                                               "type": "frame",
                                               "id": "cm-mark-686-d",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "cm-mark-686-d-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -410632,7 +411157,20 @@
                                               "type": "frame",
                                               "id": "cm-mark-720-d",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "cm-mark-720-d-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -411274,7 +411812,20 @@
                                               "type": "frame",
                                               "id": "cm-mark-771-d",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "cm-mark-771-d-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -411986,7 +412537,20 @@
                                               "type": "frame",
                                               "id": "cm-mark-828-d",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "cm-mark-828-d-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -412698,7 +413262,20 @@
                                               "type": "frame",
                                               "id": "cm-mark-885-d",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "cm-mark-885-d-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -413532,7 +414109,20 @@
                                               "type": "frame",
                                               "id": "cm-mark-952-d",
                                               "name": "Status mark",
-                                              "children": [],
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "cm-mark-952-d-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "opacity": 0.55
+                                                }
+                                              ],
                                               "width": 12,
                                               "height": 12,
                                               "layout": "horizontal",
@@ -417068,7 +417658,20 @@
                           "type": "frame",
                           "id": "swr-states-l-del-k-mark",
                           "name": "Status mark",
-                          "children": [],
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "swr-states-l-del-k-mark-quiet",
+                              "name": "Quiet",
+                              "enabled": true,
+                              "width": 6.8,
+                              "height": 6.8,
+                              "fill": [],
+                              "stroke": "$--muted-foreground",
+                              "strokeWidth": 1.3,
+                              "opacity": 0.55
+                            }
+                          ],
                           "width": 12,
                           "height": 12,
                           "layout": "horizontal",
@@ -419266,7 +419869,20 @@
                           "type": "frame",
                           "id": "swr-states-d-del-k-mark",
                           "name": "Status mark",
-                          "children": [],
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "swr-states-d-del-k-mark-quiet",
+                              "name": "Quiet",
+                              "enabled": true,
+                              "width": 6.8,
+                              "height": 6.8,
+                              "fill": [],
+                              "stroke": "$--muted-foreground",
+                              "strokeWidth": 1.3,
+                              "opacity": 0.55
+                            }
+                          ],
                           "width": 12,
                           "height": 12,
                           "layout": "horizontal",
