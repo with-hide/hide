@@ -27,7 +27,6 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::view_bookmarks::Bookmarks;
 use crate::view_layout::{DisplayKind, Layout};
 
 pub const SCHEMA_VERSION: u32 = 3;
@@ -183,11 +182,6 @@ pub struct WorkspaceView {
     #[serde(rename = "view_layout")]
     pub layout: Layout,
     pub agent_layout: crate::agent_layout::Layout,
-    /// The View each Agent tab last put in front (PRD lane-files-checkout-views
-    /// D-03, D-16). Left out of the file while empty; stored as `tab_views`,
-    /// so the per-area bookmark of earlier builds is never read.
-    #[serde(rename = "tab_views", skip_serializing_if = "Bookmarks::is_empty")]
-    pub view_bookmarks: Bookmarks,
     /// The operator's comments on this checkout's Views (PRD
     /// view-opener-feedback D-13). Left out of the file while empty.
     #[serde(skip_serializing_if = "crate::view_feedback::Feedback::is_empty")]
@@ -222,8 +216,6 @@ struct StoredLane {
     layout: Layout,
     #[serde(default)]
     agent_layout: crate::agent_layout::Layout,
-    #[serde(default, rename = "tab_views")]
-    view_bookmarks: Bookmarks,
     #[serde(default)]
     feedback: crate::view_feedback::Feedback,
 }
@@ -246,7 +238,6 @@ impl StoredLane {
             last_used_unix_ms: self.last_used_unix_ms,
             layout: self.layout,
             agent_layout: self.agent_layout,
-            view_bookmarks: self.view_bookmarks,
             feedback: self.feedback,
         }
     }
@@ -319,7 +310,6 @@ impl StoredColumns {
             last_used_unix_ms: self.last_used_unix_ms,
             layout: self.layout,
             agent_layout: self.agent_layout,
-            view_bookmarks: Bookmarks::default(),
             feedback: Default::default(),
         }
     }
@@ -386,7 +376,6 @@ impl WorkspaceView {
             last_used_unix_ms: 0,
             layout: Layout::default(),
             agent_layout: crate::agent_layout::Layout::default(),
-            view_bookmarks: Bookmarks::default(),
             feedback: Default::default(),
         }
     }
@@ -1309,12 +1298,11 @@ mod tests {
         assert_eq!(fs::read_to_string(preserved).unwrap(), body);
     }
 
-    /// PRD lane-files-checkout-views B14, D-20: the checkout's View list and
-    /// each tab's bookmark come back after a save under their own keys, and a
+    /// The checkout's View list and selection survive obsolete tab bookmarks. A
     /// schema 3 file written by an earlier build, with its per-tab keys, loads
     /// the lane and the Agent layout with an empty View list and no repair.
     #[test]
-    fn the_checkout_views_and_tab_bookmarks_survive_a_save_and_the_per_tab_keys_are_ignored() {
+    fn the_checkout_views_survive_a_save_and_obsolete_tab_keys_are_ignored() {
         let folder = scratch("bookmarks");
         let path = folder.path().join("workspace-views.json");
         let mut views = WorkspaceViews::default();
@@ -1324,18 +1312,27 @@ mod tests {
             .new_display("/repo/a.md", DisplayKind::File, None, false);
         let shown = display.id.clone();
         entry.layout.insert("a1", display, 1).unwrap();
-        entry.view_bookmarks.record("w:t1", &shown);
-        entry.view_bookmarks.record("w:t2", &shown);
         save(&path, &views).unwrap();
 
         let written = fs::read_to_string(&path).unwrap();
-        assert!(written.contains("\"view_layout\"") && written.contains("\"tab_views\""));
+        assert!(written.contains("\"view_layout\"") && !written.contains("\"tab_views\""));
         assert!(!written.contains("\"view_bookmarks\"") && !written.contains("\"layout\": {"));
+        fs::write(
+            &path,
+            written.replacen(
+                "\"view_layout\":",
+                "\"tab_views\": {\"w:t1\":\"removed-view\"}, \"view_layout\":",
+                1,
+            ),
+        )
+        .unwrap();
         let (loaded, outcome) = load(&path, 1);
         let entry = loaded.get("local", "/repo").unwrap();
         assert_eq!(entry.layout.display_count(), 1);
-        assert_eq!(entry.view_bookmarks.of("w:t1"), Some(shown.as_str()));
-        assert_eq!(entry.view_bookmarks.of("w:t2"), Some(shown.as_str()));
+        assert_eq!(
+            entry.layout.active_area().active.as_deref(),
+            Some(shown.as_str())
+        );
         assert_eq!(outcome, current());
 
         fs::write(
@@ -1362,7 +1359,6 @@ mod tests {
             0,
             "the per-tab lists are not read"
         );
-        assert!(old.view_bookmarks.is_empty());
         assert_eq!((old.tool, old.pinned), (Some(Tool::Changes), true));
         assert_eq!(
             (

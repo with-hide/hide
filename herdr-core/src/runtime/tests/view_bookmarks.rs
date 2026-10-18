@@ -342,17 +342,6 @@ fn open_page(url: &str) -> Action {
     }
 }
 
-/// The View the tab remembers, by display id.
-fn bookmark(runtime: &Runtime, directory: &Path, tab: &str) -> Option<String> {
-    runtime
-        .workspace_views
-        .as_ref()
-        .unwrap()
-        .views
-        .get(crate::node::TEST_NODE, &directory.to_string_lossy())
-        .and_then(|entry| entry.view_bookmarks.of(tab).map(str::to_owned))
-}
-
 fn active_area(runtime: &Runtime, directory: &Path) -> String {
     layout(runtime, directory).active_area.clone()
 }
@@ -378,7 +367,11 @@ fn every_tab_sees_the_checkouts_one_list_and_the_lane_stays_the_workspaces() {
     );
     focus_tab(&mut runtime, &checkout, &directory, TABS[0]);
     assert_eq!(strip(&runtime, &directory), ["a.md", "b.md"]);
-    assert_eq!(published_front_ids(&runtime), [a], "the tab's own View");
+    assert_eq!(
+        fronts(&runtime, &directory),
+        ["b.md"],
+        "Agent switching preserves the front View"
+    );
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
     assert_eq!(
         (view.tool, view.pinned, view.lane_width),
@@ -390,7 +383,7 @@ fn every_tab_sees_the_checkouts_one_list_and_the_lane_stays_the_workspaces() {
 /// its own area while the area in use stays, and the bookmark follows the
 /// front only while its tab is the one on screen.
 #[test]
-fn a_tab_that_appears_gets_its_view_back_without_moving_the_area_in_use() {
+fn a_tab_that_appears_preserves_all_view_selections_and_the_area_in_use() {
     let (mut runtime, checkout, directory) = setup("appears");
     for name in ["a.md", "c.md", "b.md"] {
         open(&mut runtime, &checkout, &directory, name);
@@ -415,7 +408,6 @@ fn a_tab_that_appears_gets_its_view_back_without_moving_the_area_in_use() {
         &directory,
         serde_json::json!({"action": "focus", "display_id": a}),
     );
-    assert_eq!(bookmark(&runtime, &directory, TABS[0]), Some(a.clone()));
     // The second tab shows c.md there and leaves the keyboard on the right.
     focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
     view_act(
@@ -428,21 +420,15 @@ fn a_tab_that_appears_gets_its_view_back_without_moving_the_area_in_use() {
         &directory,
         serde_json::json!({"action": "focus_area", "area_id": right}),
     );
-    assert_eq!(
-        bookmark(&runtime, &directory, TABS[1]),
-        Some(b.clone()),
-        "the front of the area in use"
-    );
     assert_eq!(fronts(&runtime, &directory), ["c.md", "b.md"]);
 
     focus_tab(&mut runtime, &checkout, &directory, TABS[0]);
-    assert_eq!(fronts(&runtime, &directory), ["a.md", "b.md"], "B2");
-    assert_eq!(active_area(&runtime, &directory), right, "D-19");
     assert_eq!(
-        bookmark(&runtime, &directory, TABS[1]),
-        Some(b),
-        "the second tab's bookmark is not moved by the first tab's return"
+        fronts(&runtime, &directory),
+        ["c.md", "b.md"],
+        "Agent switching preserves both selections"
     );
+    assert_eq!(active_area(&runtime, &directory), right, "D-19");
     assert_ne!(left, right);
 }
 
@@ -455,7 +441,6 @@ fn a_tab_without_a_living_bookmark_leaves_the_screen_as_it_is() {
     open(&mut runtime, &checkout, &directory, "b.md");
     let b = display_id(&runtime, &directory, "b.md");
     focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
-    assert_eq!(bookmark(&runtime, &directory, TABS[1]), None);
     assert_eq!(fronts(&runtime, &directory), ["b.md"]);
     view_act(
         &mut runtime,
@@ -537,7 +522,6 @@ fn a_background_agents_open_joins_the_list_and_moves_nothing() {
             lane,
             "no lane call"
         );
-        assert_eq!(bookmark(&runtime, &directory, TABS[1]), None);
         focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
         assert_eq!(fronts(&runtime, &directory), ["a.md"], "B3 on its tab");
         assert_eq!(
@@ -644,7 +628,6 @@ fn only_the_operators_pane_brings_its_open_forward() {
     let (mut runtime, checkout, directory) = setup("operator-pane");
     herdr_splits_first_tab(&mut runtime, &directory);
     open(&mut runtime, &checkout, &directory, "a.md");
-    let a = display_id(&runtime, &directory, "a.md");
     let calls = |runtime: &Runtime| runtime.snapshot.workspace_view.as_ref().unwrap().lane_calls;
     let before = calls(&runtime);
     control_file(
@@ -663,7 +646,6 @@ fn only_the_operators_pane_brings_its_open_forward() {
         "the operator's View"
     );
     assert_eq!(calls(&runtime), before, "no lane call");
-    assert_eq!(bookmark(&runtime, &directory, TABS[0]), Some(a));
 
     let shell = checkout_caller_id("fixture", &directory.to_string_lossy());
     control_file(
@@ -696,7 +678,7 @@ fn only_the_operators_pane_brings_its_open_forward() {
         ["https://example.test/gateway"]
     );
 
-    let mine = control(
+    control(
         &mut runtime,
         "w-order:t1:p",
         open_page("https://example.test/mine"),
@@ -707,11 +689,6 @@ fn only_the_operators_pane_brings_its_open_forward() {
     assert!(
         calls(&runtime) > before,
         "the gateway and the operator's pane call the lane"
-    );
-    assert_eq!(
-        bookmark(&runtime, &directory, TABS[0]),
-        Some(mine.view_id),
-        "what the operator had in front"
     );
 
     // The same pane is another pane once the operator leaves its tab.
@@ -769,7 +746,7 @@ fn a_background_select_moves_nothing_and_a_repeat_converges() {
 /// the Views it opened stay in the list, a clean document stays open and a
 /// draft keeps its protection.
 #[test]
-fn closing_an_agent_tab_keeps_its_views_and_drops_its_bookmark() {
+fn closing_an_agent_tab_keeps_its_views() {
     let (mut runtime, checkout, directory) = setup("tab-close");
     open(&mut runtime, &checkout, &directory, "a.md");
     focus_tab(&mut runtime, &checkout, &directory, TABS[2]);
@@ -782,7 +759,6 @@ fn closing_an_agent_tab_keeps_its_views_and_drops_its_bookmark() {
         "front-c",
     );
     runtime.sync_workspace_view();
-    assert!(bookmark(&runtime, &directory, TABS[2]).is_some());
     runtime.ingest_session(Ok(tab_order_payload(
         &directory.to_string_lossy(),
         &TABS[..2],
@@ -790,7 +766,6 @@ fn closing_an_agent_tab_keeps_its_views_and_drops_its_bookmark() {
         TABS[1],
     )));
     runtime.sync_workspace_view();
-    assert_eq!(bookmark(&runtime, &directory, TABS[2]), None);
     assert_eq!(strip(&runtime, &directory), ["a.md", "c.md"]);
     assert!(
         runtime
@@ -869,7 +844,7 @@ fn an_open_past_the_cap_spares_the_front_of_every_area() {
 /// B5: a background agent's open into an empty list is not the operator's
 /// choice, so it is no tab's bookmark, though it is the list's only View.
 #[test]
-fn a_background_open_into_an_empty_list_is_not_the_active_tabs_bookmark() {
+fn a_background_open_into_an_empty_list_survives_agent_switch() {
     let (mut runtime, checkout, directory) = setup("background-empty");
     control_file(
         &mut runtime,
@@ -881,8 +856,6 @@ fn a_background_open_into_an_empty_list_is_not_the_active_tabs_bookmark() {
     );
     runtime.sync_workspace_view();
     assert_eq!(strip(&runtime, &directory), ["c.md"]);
-    assert_eq!(bookmark(&runtime, &directory, TABS[0]), None);
-    assert_eq!(bookmark(&runtime, &directory, TABS[1]), None);
     focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
     assert_eq!(fronts(&runtime, &directory), ["c.md"]);
 }
@@ -986,7 +959,7 @@ fn the_same_address_from_two_tabs_is_one_page() {
 /// B14: the list, the selection and every tab's bookmark come back after a
 /// restart.
 #[test]
-fn the_list_and_the_bookmarks_survive_a_restart() {
+fn the_list_and_selection_survive_a_restart_and_agent_switch() {
     let (mut runtime, checkout, directory) = setup("restart");
     open(&mut runtime, &checkout, &directory, "a.md");
     focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
@@ -1014,21 +987,15 @@ fn the_list_and_the_bookmarks_survive_a_restart() {
     runtime.sync_workspace_view();
     assert_eq!(strip(&runtime, &directory), ["a.md", "b.md", "c.md"]);
     assert_eq!(lane_tool(&runtime), None);
-    for tab in TABS {
-        assert_eq!(
-            bookmark(&runtime, &directory, tab).is_some(),
-            before.view_bookmarks.of(tab).is_some(),
-            "{tab}"
-        );
-    }
+    assert_eq!(layout(&runtime, &directory), &before.layout);
     focus_tab(&mut runtime, &checkout, &directory, TABS[0]);
-    assert_eq!(fronts(&runtime, &directory), ["a.md"]);
+    assert_eq!(fronts(&runtime, &directory), ["b.md"]);
 }
 
 /// A device Workspace has one visible tab that changes when its Herdr's
-/// answer lands, and the bookmark restore happens with it.
+/// answer lands, while its Files selection remains independent.
 #[test]
-fn a_device_workspace_restores_when_its_visible_tab_changes() {
+fn a_device_workspace_keeps_its_view_when_its_visible_tab_changes() {
     let (mut runtime, _checkout_id, _directory) = setup("bookmark-device");
     let device = "remote:fixture";
     let mut project = workspace(
@@ -1089,8 +1056,6 @@ fn a_device_workspace_restores_when_its_visible_tab_changes() {
         entry.layout.insert("a1", display, 1).unwrap();
     }
     let ids: Vec<String> = entry.layout.displays().map(|d| d.id.clone()).collect();
-    entry.view_bookmarks.record("remote-tab-1", &ids[0]);
-    entry.view_bookmarks.record("remote-tab-2", &ids[1]);
     entry.tool = Some(crate::workspace_views::Tool::Files);
     let front = |runtime: &Runtime| {
         runtime
@@ -1107,7 +1072,7 @@ fn a_device_workspace_restores_when_its_visible_tab_changes() {
     );
     assert_eq!(
         front(&runtime),
-        Some(ids[0].clone()),
+        Some(ids[1].clone()),
         "the visible tab's own"
     );
 
@@ -1123,7 +1088,7 @@ fn a_device_workspace_restores_when_its_visible_tab_changes() {
     let session = runtime.snapshot.status.remote[0].session.as_mut().unwrap();
     session.workspaces[0].checkouts[0].active_tab_id = Some("remote-tab-1".to_owned());
     runtime.sync_workspace_view();
-    assert_eq!(front(&runtime), Some(ids[0].clone()));
+    assert_eq!(front(&runtime), Some(ids[1].clone()));
 }
 
 /// An asynchronous completion belongs to the pane that asked: a read finishing
@@ -1167,8 +1132,6 @@ fn async_completion_is_bound_to_the_original_tab_and_failure_is_atomic() {
     assert_eq!(strip(&runtime, &directory), ["a.md", "c.md"]);
     assert_eq!(fronts(&runtime, &directory), ["a.md"]);
     assert_eq!(active_area(&runtime, &directory), area);
-    let a = display_id(&runtime, &directory, "a.md");
-    assert_eq!(bookmark(&runtime, &directory, TABS[0]), Some(a));
     // A native pane moved within the same checkout is no longer the caller
     // captured at prepare, even though its checkout capability still matches.
     let id = format!("{}-moved", unix_milliseconds());

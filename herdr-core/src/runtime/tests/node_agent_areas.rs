@@ -126,7 +126,7 @@ fn authoritative_final_node_tab_close_keeps_its_page_and_drops_its_bookmark() {
     assert_eq!(runtime.snapshot.browser_views.len(), 1);
     let before = runtime.workspace_views.as_ref().unwrap().views.clone();
     let saved_session = runtime.snapshot.status.remote[0].session.take().unwrap();
-    runtime.prune_device_view_bookmarks(NODE);
+    runtime.prune_device_view_callers(NODE);
     assert_eq!(
         runtime.workspace_views.as_ref().unwrap().views,
         before,
@@ -145,7 +145,7 @@ fn authoritative_final_node_tab_close_keeps_its_page_and_drops_its_bookmark() {
     );
     runtime.snapshot.status.remote[0].catalog.state = "resolving".to_owned();
     runtime.reconcile_node_agent_topology(NODE);
-    runtime.prune_device_view_bookmarks(NODE);
+    runtime.prune_device_view_callers(NODE);
     assert_eq!(
         runtime.workspace_views.as_ref().unwrap().views,
         before,
@@ -182,11 +182,6 @@ fn authoritative_final_node_tab_close_keeps_its_page_and_drops_its_bookmark() {
         entry.layout.display_count(),
         1,
         "the page stays in the list"
-    );
-    assert_eq!(
-        entry.view_bookmarks.of("t1"),
-        None,
-        "the tab took its bookmark"
     );
     assert_eq!(entry.agent_layout.tree.display_count(), 0);
     assert_eq!(runtime.snapshot.browser_views.len(), 1);
