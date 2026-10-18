@@ -255,7 +255,7 @@ Control characters become spaces, characters that draw nothing or reorder text a
 
 The reservation that spends one of a letter's three bells saves the exact line on the letter (`bell_line`) before it is typed.
 A prompt hook's pull is the bell's exactly when its digest is that of the saved line of a `pending` letter whose recipient is the caller's own pane and native session (`mailbox::rang`).
-The core and hook share `hide_agent_hooks::delivery::prompt_digest`: remove every character above U+FFFF, trim the result, then compare its SHA-256 exactly, with no agent or system branch.
+The core and hook share `hide_agent_hooks::delivery::prompt_digest`: remove every character above U+FFFF, trim Unicode `White_Space` from its ends, then compare its SHA-256 exactly, with no agent or system branch.
 Codex CLI 0.163.0's Windows input reader can drop non-BMP characters, so losing the owl or another such character leaves the bell recognizable; every BMP character, including U+FE0F, remains significant.
 Older hooks' whole-line digests remain accepted against the saved line, including an existing `🔔` reservation, without migrating the ledger.
 New hooks send only the canonical digest.
