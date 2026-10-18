@@ -42,7 +42,6 @@ import {onboardingBoards} from './pen-screens-onboarding.mjs';
 import {settingsBoards, settingsParts} from './pen-screens-settings.mjs';
 import {projectSettingsScreens} from './pen-screens-project-settings.mjs';
 import {sessionScreens} from './pen-screens-sessions.mjs';
-import {sessionWorkScreens} from './pen-screens-session-work.mjs';
 import {overviewScreens} from './pen-screens-overview.mjs';
 import {AGENT_TREE_MASTERS, PR_STATES} from './pen-agent-tree.mjs';
 
@@ -2759,6 +2758,7 @@ function buildOnboarding(tokens, root) {
 // D-20; the Work tool, sidebar-task-lens D-16, D-17): gen-screens removes them
 // from design/hide-screens.pen.
 export const RETIRED_SHEETS = [
+  'Screen / Session record',
   'Screen / Project Overview', 'Screen / Project Sessions',
   'Screen / Work A. Window', 'Screen / Work B. PR card states', 'Screen / Work C. Tools column', 'Screen / Work D. Group rules',
   'Screen / Work E. Merge and update', 'Screen / Work F. Lens and card states', 'Screen / Work G. Elsewhere',
@@ -2791,9 +2791,6 @@ export function screenSheets(tokens, root) {
     {name: 'Screen / Onboarding', build: () => buildOnboarding(tokens, root)},
     {name: 'Screen / Factory', build: () => buildFactory(tokens)},
     {name: 'Screen / Core move', build: () => buildCoreMove(tokens, root)},
-    {name: 'Screen / Session record', build: () => {
-      const build = sessionWorkScreens({frame,text,icon,screenButton,themedXref});
-      return screenSheet('screen-session-record','Screen / Session record','Session work record (PRD session-record-redesign; opens in the lane\'s 보기 slot, PRD sidebar-task-lens D-44): every PR the session and its descendants made, assigned work as a checklist of boxes with each delegated child under the task that handed it on (PRD record-card-readability), open missed work, the operator\'s requests under 내 말, summaries off, and states. Production SessionRecord and NewIssueDialog.',build,build);
-    }},
+
   ];
 }

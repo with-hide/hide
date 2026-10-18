@@ -1,6 +1,8 @@
+import { legacyAgentRow } from "../test/legacyAgentRow";
+import type { BoardProject } from "./projectBoard";
 import { expect, it } from "vitest";
 import type { MissedWork, SessionRecord, SessionWorkSummary, WorkRequest, WorkTask } from "./snapshot";
-import { checklist, openMissedWork, outputPrState, recordTitle } from "./sessionWork";
+import { checklist, openMissedWork, outputPrState, recordTitle, sessionPlace } from "./sessionWork";
 
 const missed = (id: string, at: number, status: MissedWork["status"] = "open"): MissedWork => ({ id, kind: "problem", text: id, status, at_unix_ms: at, turn_offset: 1, issue_repository: null, issue_number: null, creating: false, backlog_key: null });
 const work = (id: string, cwd: string, items: MissedWork[]): SessionWorkSummary => ({
@@ -38,33 +40,6 @@ it("lists tasks first-asked first, whatever chapters they fall in, and counts th
   expect([list.done, list.total]).toEqual([1, 2]);
 });
 
-const child = (id: string, started: number | null): SessionRecord => record({ session: { ...SESSION, session_id: id }, title: id, started_at_unix_ms: started });
-
-it("hangs each child under the task whose time it started in, a request's tasks counting as their first, and the rest at the end", () => {
-  const list = checklist(record({
-    tasks: [task("task-1", "c", 10), task("task-1.2", "c", 10), task("task-4", "c", 40)],
-    children: [child("late", 45), child("early", 5), child("in-split", 20), child("unknown", null), child("at-start", 10), child("at-next", 40)],
-  }));
-  expect(list.tasks.map((item) => item.children.map((one) => one.session.session_id))).toEqual([["at-start", "in-split"], [], ["at-next", "late"]]);
-  expect(list.delegated.map((one) => one.session.session_id)).toEqual(["early", "unknown"]);
-});
-
-it("lists every child at the end of a record with no task", () => {
-  const list = checklist(record({ children: [child("b", 20), child("a", 10)] }));
-  expect(list.delegated.map((one) => one.session.session_id)).toEqual(["b", "a"]);
-});
-
-it("keeps only open missed work, named by the task its turn's request carries, the descendants' last", () => {
-  const own = (id: string, turn_offset: number, status: MissedWork["status"] = "open"): MissedWork => ({ ...missed(id, turn_offset, status), turn_offset });
-  const below = record({ session: { ...SESSION, session_id: "child" }, title: "Child", missed: [missed("from-child", 2), missed("child-handled", 3, "backlog")] });
-  const list = checklist(record({
-    tasks: [task("t1", "c", 10), task("t2", "c", 20)],
-    requests: [request(1, 10, ["t1"]), request(2, 20, ["t2"]), request(3, 30, [])],
-    missed: [own("under-t2", 2), own("no-task-turn", 3), own("dismissed", 2, "dismissed"), own("resolved", 1, "resolved")],
-  }), [below]);
-  expect(list.missed.map(({ missed: one, task: name, named }) => [one.id, name, named])).toEqual([["under-t2", "task t2", false], ["no-task-turn", null, false], ["from-child", null, true]]);
-});
-
 it("gives each task the request that asked for it and shows the newest unjudged request only while working", () => {
   const requests = [request(1, 10, ["t1"]), request(2, 20, []), request(3, 30, [], false)];
   const base = { tasks: [task("t1", "c", 10)], requests };
@@ -78,19 +53,28 @@ it("maps a recorded PR state to the PR mark's state", () => {
   expect(["ci_failed", "review", "merged", "closed"].map(outputPrState)).toEqual(["failed", "pending", "merged", "closed"]);
 });
 
-it("hangs a split request's pull requests and children once, from its first task, and gives its tasks one state", () => {
+it("gives a split request one shared PR state and original request", () => {
   const pr = (number: number, task_id: string, state: string) => ({ kind: "pr" as const, repository: "acme/app", number, title: `#${number}`, url: `u${number}`, state, stale: false, last_read_at_unix_ms: null, created_at_unix_ms: 1, task_id, source: SESSION, source_name: "root" });
   const list = checklist(record({
     tasks: [task("task-3", "c", 10, false, "waiting"), task("task-3.2", "c", 10, false, "waiting"), task("task-3.3", "c", 10, false, "waiting"), task("task-9", "c", 90)],
     requests: [request(3, 10, ["task-3", "task-3.2", "task-3.3"]), request(5, 50, ["task-3", "task-3.2", "task-3.3"]), request(9, 90, ["task-9"])],
     outputs: [pr(7, "task-3", "open")],
-    children: [child("helper", 50)],
   }));
   const items = list.tasks;
   expect(items.map((item) => item.task.id)).toEqual(["task-3", "task-3.2", "task-3.3", "task-9"]);
   expect(items.map((item) => item.request?.offset)).toEqual([3, 3, 3, 9]);
-  expect(items.map((item) => item.prs.map((one) => one.number))).toEqual([[7], [], [], []]);
-  expect(items.map((item) => item.children.length)).toEqual([1, 0, 0, 0]);
   // The open pull request on the group's first task is the whole group's.
   expect(items.map((item) => item.state)).toEqual(["review", "review", "review", "unfinished"]);
+});
+
+it("resolves the live pane by device, provider and native session together", () => {
+  const agents = [
+    legacyAgentRow({ pane_id: "wrong", agent_kind: "codex", session_id: "shared", device_id: "local" }),
+    legacyAgentRow({ pane_id: "right", agent_kind: "claude", session_id: "shared", device_id: "local" }),
+  ];
+  const workspace = { device_id: "local", path: "/repo", checkouts: [], agent_scope: { members: agents.map((row) => ({ pane_id: row.pane_id, checkout_id: "c" })) } };
+  const projects = [{ workspace, agents, device: null }] as unknown as BoardProject[];
+  const session = { device_id: "local", agent: "claude", session_id: "shared" };
+  expect(sessionPlace(projects, session, null, null)?.agent?.pane_id).toBe("right");
+  expect(sessionPlace(projects, { ...session, agent: "opencode" }, null, null)).toBeNull();
 });

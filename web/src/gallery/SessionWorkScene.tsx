@@ -2,6 +2,8 @@
 // These examples prove layout; the isolated daemon tests own runtime policy.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
+import { legacyAgentRow } from "../../test/legacyAgentRow";
+import { requireInterfaceLanguage } from "../i18n/locale";
 import { TaskLens } from "../TaskLens";
 import { Palette } from "../Palette";
 import { SlotSessionRecord } from "../SessionRecord";
@@ -19,26 +21,26 @@ const task = (id: string, chapter: string, name: string, end: WorkTask["end"], d
 const request = (offset: number, text: string, task_ids: string[], patch: Partial<WorkRequest> = {}): WorkRequest => ({ offset, text, at_unix_ms: AT + offset * 60_000, author: "operator", task_ids, chapter_id: "chapter-1", judged: true, ...patch });
 const missed = (id: string, text: string, turn_offset: number, status: MissedWork["status"]): MissedWork => ({ id, kind: "follow_up", text, status, at_unix_ms: AT, turn_offset, issue_repository: null, issue_number: null, creating: false, backlog_key: null });
 const pr = (number: number, title: string, state: string, source: WorkSession, sourceName: string, task_id: string | null): WorkOutput => ({ kind: "pr", repository: "example/hide", number, title, url: `https://example.invalid/pull/${number}`, state, stale: false, last_read_at_unix_ms: AT, created_at_unix_ms: AT + number, task_id, source, source_name: sourceName });
-// The approved record: three tasks, two PRs (one a child's), the child under the task that delegated it, the requests at the end.
+// Invented content matching the user-approved PR/session cards.
+const CHILDREN = [
+  ["agent-journey 브리프 실행 및 검증 결과물", "claude", [1372, 1371, 1369, 1368, 1333, 1326, 1370, 1361, 1360, 1357, 1356, 1354, 1335, 1340]],
+  ["agent-folder-trust 브리프 작업 수행", "claude", [1306]],
+  ["agy CI 쿼터 브리프 수행 결과물", "codex", [1312, 1309]],
+  ["데스크톱 E2E 마친 브리프 이행 결과", "opencode", [1324, 1315]],
+  ["agy 가용성 probe 실행 결과 보고서", "claude", [1331]],
+] as const;
+const children: RecordValue[] = CHILDREN.map(([title, agent, numbers], i) => {
+  const session = { ...CHILD_SESSION, agent, session_id: `child-${i}` };
+  return { session, title, fallback_title: agent, native_title: title, manual_title: null, state: "idle", last_end: i ? "done" : "waiting", cwd: "/work/hide", path: null, started_at_unix_ms: AT + 2, ended_at_unix_ms: null, chapters: [], tasks: [task("child-task", "chapter-1", "에이전트별·OS별 E2E 검증", i ? "done" : "waiting", i > 0, AT)], requests: [request(1, "에이전트별·OS별 E2E 검증을 진행하고 결과를 정리해줘.", ["child-task"], { author: "parent" })], missed: i === 0 ? [missed("child-problem", "Windows 저장 시 백신·색인 잠금에 대한 재시도 장치 추가", 1, "open"), { ...missed("child-suggestion", "실패한 검증을 다시 실행할 명령 함께 표시", 1, "open"), kind: "problem" }] : [], outputs: numbers.map((number, n) => pr(number, "에이전트별·OS별 검증 결과 정리", i === 0 && n < 5 ? "pending" : "merged", session, title, "child-task")), children: [] };
+});
 const BASE: RecordValue = {
-  session: SESSION, title: "성능 최적화 리뷰와 서비스 개선안", fallback_title: "Claude", native_title: "성능 최적화 리뷰", manual_title: null, state: "idle", last_end: "unfinished", cwd: "/work/hide", path: null, started_at_unix_ms: AT, ended_at_unix_ms: null,
-  chapters: [{ id: "chapter-1", goal: "성능 최적화 리뷰와 서비스 개선안", at_unix_ms: AT }],
-  tasks: [
-    task("task-1", "chapter-1", "codex 성능 최적화 작업 리뷰 및 서비스 개선안 도출", "done", true, AT),
-    task("task-2", "chapter-1", "설치 빌드 실측 및 개선 제안 안전성 평가", "done", true, AT + 120_000),
-    task("task-3", "chapter-1", "버그 3건 한 PR로 묶어 수정 (Opus 에이전트)", "waiting", false, AT + 180_000),
-  ],
-  requests: [
-    request(1, "옆 codex pane의 퍼포먼스 최적화 작업을 리뷰하고 그다음에 실제로 우리 서비스에서 느려지거나 할 때 (herdr 병목은 우선 어쩔 수 없음) 어떻게 개선할 수 있을지 고민해보자", ["task-1"]),
-    request(2, "설치가 됐으니 이제 너가 직접 하나 hide 실측을 진행해보고 너가 제안한것들 혹시 코드 구조나 앱이 불안정해지는 건 없는지 평가해줘", ["task-2"]),
-    request(3, "버그 3건 한 PR로 묶어서 진행해줘 opus 5.5로 하나 띄워서 진행시키자", ["task-3"]),
-    request(4, "PR 열리면 리뷰하고 머지까지 진행해줘", ["task-3"]),
-    request(5, "그러면 지금 처리하는 작업들 말고 그다음에 너가 해야할것들 정리좀 해줘봐 ~", []),
-    request(6, "잘 되고 있어?", []),
-  ],
-  missed: [missed("missed-1", "Codex developer role 매핑 수정", 2, "resolved"), missed("missed-2", "links ledger 세션 불일치 수정", 2, "resolved")],
-  outputs: [pr(1100, "Measure the install build after the fixes", "review", SESSION, "성능 최적화 리뷰와 서비스 개선안", null), pr(1093, "Stop three resident hided loops", "merged", CHILD_SESSION, "상주 데몬 버그 3건 수정 PR", "task-3")],
-  children: [{ session: CHILD_SESSION, title: "상주 데몬 버그 3건 수정 PR", fallback_title: "Claude", native_title: "상주 데몬 버그 3건 수정 PR", manual_title: null, state: "idle", last_end: "done", cwd: "/work/hide/task", path: null, started_at_unix_ms: AT + 190_000, ended_at_unix_ms: null, chapters: [{ id: "child-chapter", goal: "상주 데몬 버그 수정", at_unix_ms: AT }], tasks: [task("child-task", "child-chapter", "links ledger 루프 멈추기", "done", true, AT)], requests: [request(1, "links ledger 루프를 멈추는 변경을 만들어줘", ["child-task"], { author: "parent", chapter_id: "child-chapter" })], missed: [], outputs: [], children: [] }],
+  session: SESSION, title: "릴리스 스킬과 로컬 검증 체계", fallback_title: "Claude Code", native_title: "릴리스 스킬과 로컬 검증 체계", manual_title: null, state: "working", last_end: "working", cwd: "/work/hide", path: null, started_at_unix_ms: AT, ended_at_unix_ms: null,
+  chapters: [{ id: "chapter-1", goal: "릴리스 스킬과 로컬 검증 체계", at_unix_ms: AT }],
+  tasks: [task("task-1", "chapter-1", "릴리스 절차를 스킬로 정리", "done", true, AT), task("task-2", "chapter-1", "Mac에서 로컬 검증", "working", false, AT + 120_000)],
+  requests: [request(1, "릴리스 절차를 재사용할 수 있는 스킬로 정리해줘.", ["task-1"]), request(2, "이 Mac에서 검증하고, 결과와 남은 작업을 정리해줘.", ["task-2"]), request(3, "진행 상황과 확인이 필요한 점을 알려줘.", [])],
+  missed: [{ ...missed("missed-1", "릴리스 검증 실패 시 멈춘 단계를 알기 어려움", 2, "open"), kind: "problem" }, missed("missed-2", "검증 결과에 OS·에이전트별 통과 여부 표시", 2, "open"), missed("missed-3", "실패한 검증을 다시 실행할 명령 함께 표시", 2, "open")],
+  outputs: [pr(1365, "릴리스 스킬과 로컬 검증 체계", "merged", SESSION, "릴리스 스킬과 로컬 검증 체계", "task-1"), ...children.flatMap((child) => child.outputs)],
+  children,
 };
 
 /** The scene's record for a `case`: the default, or one that shows a state the record draws. */
@@ -61,7 +63,7 @@ function recordFor(base: RecordValue, kind: string | null): RecordValue {
 }
 
 export function SessionWorkScene({ params }: { params: URLSearchParams }) {
-  useFollowInterfaceLanguage("ko");
+  useFollowInterfaceLanguage(requireInterfaceLanguage(params.get("lang") ?? "ko"));
   const state = params.get("state") ?? "rest";
   const theme = params.get("theme") === "light" ? "light" : "dark";
   const scale = Number(params.get("scale") ?? 1);
@@ -69,11 +71,19 @@ export function SessionWorkScene({ params }: { params: URLSearchParams }) {
     const base = sidebarScene("reference", REFERENCE_FOLDS, AT);
     const project = base.rest.navigator!.workspaces!.find((row) => row.id === "hide")!;
     const record = recordFor(BASE, params.get("case"));
+    project.tasks = { source: { kind: "local", label: "Local", name: null, reading: false, failure: null, last_read_at_unix_ms: AT }, tasks: [], overflow: false };
     record.cwd = project.checkouts[0]!.path;
     if (params.get("content") === "long") record.title += " - 긴 한국어 제목과 요청의 줄바꿈 확인";
     base.rest.status = { ...base.rest.status, background_ai: { provider: "claude", providers: [], unavailable_reason: null, enabled: state !== "off", chosen: true, agent_summary: true } };
     base.rest.navigator!.focused_workspace_id = project.id;
     base.rest.navigator!.focused_checkout_id = project.checkouts[0]!.id;
+    base.agents = [legacyAgentRow({ ...base.agents.find((row) => row.pane_id === "a1")!, pane_id: "a1", agent_kind: "claude", session_id: SESSION.session_id, identity_label: record.title!, group: "working", mark: "going", activity: "working", status_code: "working", detail: "Mac 로컬 검증 결과와 남은 항목을 정리하고 있어요.", message: "Mac 로컬 검증 결과와 남은 항목을 정리하고 있어요.", changed_at_unix_ms: Date.now() - 60_000 })];
+    if (state === "off" || state === "pending" || state === "question") {
+      record.title = "";
+      record.tasks = [];
+      record.missed = [];
+      record.requests = [request(1, state === "question" ? "이 프로젝트 구조가 어떻게 되어 있어?" : "이 Mac에서 검증하고 결과를 정리해줘.", [], { judged: state === "question" })];
+    }
     return { base, record, project };
   }, [params, state]);
   const actions = useMemo(() => createActions((event) => {
@@ -87,7 +97,7 @@ export function SessionWorkScene({ params }: { params: URLSearchParams }) {
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));
   }, [fixture, state, theme, scale, params]);
-  return <TooltipProvider><div className="flex h-full min-w-0 flex-col bg-background text-foreground" data-gallery-scene="session-record">
+  return <TooltipProvider><div style={{ width: Number(params.get("width") ?? 680) }} className="flex h-full min-w-0 flex-col bg-background text-foreground" data-gallery-scene="session-record">
     {state === "ended" ? <TaskLens actions={actions} /> : <SlotSessionRecord actions={actions} target={SESSION} />}
     {state === "search" ? <Palette actions={actions} /> : null}
   </div></TooltipProvider>;

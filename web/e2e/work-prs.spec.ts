@@ -221,10 +221,12 @@ test("the card opens in the 보기 slot and Merge goes out on the head it showed
     expect(rail).toEqual(["detail", "divider", "memory", "prs", "divider", "files", "changes"]);
     await expect(page.locator('[data-lane-tool="detail"] [data-detail-mark]')).toHaveAttribute("data-detail-mark", "mergeable");
     await expect(card.locator('[data-pr-card-reason="merge"]')).toBeVisible();
-    // The head's ⋯ hands the pull request to an agent, makes an issue for it
-    // or copies its branch name (D-28).
+    // Issue linking lives in the menu and hands focus to its picker.
+    // The other actions still assign, create an issue or copy the branch.
     await card.locator('[data-pr-card-menu="31"]').click();
-    await expect(page.getByRole("menuitem")).toHaveText(["Assign", "Create new issue", "Copy branch name"]);
+    await expect(page.getByRole("menuitem")).toHaveText(["Link issue", "Assign", "Create new issue", "Copy branch name"]);
+    await page.getByRole("menuitem", { name: "Link issue", exact: true }).click();
+    await expect(page.locator('[data-pr-link-picker="31"]').getByRole("combobox")).toBeFocused();
     await page.keyboard.press("Escape");
     // The timeline holds the pull request's milestones oldest first, with no
     // session yet (PRD pr-card-and-session-record-redesign B4, B5); the body

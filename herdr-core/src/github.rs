@@ -669,6 +669,7 @@ fn list_pull_requests(
                     pull_request.checks = open.rollup;
                     pull_request.work.failed_checks = open.failed;
                     pull_request.work.pending_checks = open.pending;
+                    pull_request.work.check_counts = open.counts;
                     pull_request.work.running_checks = open.running;
                 }
                 None => pull_request.checks = PullRequestChecks::Unknown,
@@ -2119,6 +2120,7 @@ fn parse_open_checks(output: &str) -> Result<HashMap<u32, OpenChecks>, String> {
                 row.number,
                 OpenChecks {
                     rollup: rollup_checks(rollup),
+                    counts: rollup.map(count_checks),
                     failed: rollup
                         .into_iter()
                         .flatten()
@@ -2144,10 +2146,41 @@ fn parse_open_checks(output: &str) -> Result<HashMap<u32, OpenChecks>, String> {
 /// checks that failed by name, and how many are still running.
 struct OpenChecks {
     rollup: PullRequestChecks,
+    counts: Option<crate::model::PrCheckCounts>,
     failed: Vec<PrFailedCheck>,
     pending: u32,
     /// The pending checks that reported: all but `EXPECTED`.
     running: u32,
+}
+
+fn count_checks(checks: &[GhCheck]) -> crate::model::PrCheckCounts {
+    let mut counts = crate::model::PrCheckCounts {
+        total: checks.len() as u32,
+        ..Default::default()
+    };
+    for check in checks {
+        match check {
+            GhCheck::CheckRun {
+                status, conclusion, ..
+            } if status == "COMPLETED" => match conclusion.as_deref() {
+                Some("SUCCESS") => counts.passed += 1,
+                Some("SKIPPED" | "NEUTRAL") => counts.skipped += 1,
+                Some(value) if FAILED_CONCLUSIONS.contains(&value) => counts.failed += 1,
+                _ => counts.unknown += 1,
+            },
+            GhCheck::CheckRun { status, .. } if status == "IN_PROGRESS" => counts.running += 1,
+            GhCheck::CheckRun { .. } if check.is_pending() => counts.waiting += 1,
+            GhCheck::StatusContext { state, .. } => match state.as_str() {
+                "SUCCESS" => counts.passed += 1,
+                value if FAILED_STATES.contains(&value) => counts.failed += 1,
+                "PENDING" => counts.running += 1,
+                "EXPECTED" => counts.waiting += 1,
+                _ => counts.unknown += 1,
+            },
+            _ => counts.unknown += 1,
+        }
+    }
+    counts
 }
 
 fn project(listed: GhPullRequest) -> Result<PullRequestSnapshot, String> {
@@ -3585,6 +3618,73 @@ mod tests {
             ["unit", "lint"]
         );
         assert_eq!(seven.pending, 2);
+        assert_eq!(
+            seven.counts,
+            Some(crate::model::PrCheckCounts {
+                total: 5,
+                passed: 1,
+                failed: 2,
+                running: 2,
+                ..Default::default()
+            })
+        );
+    }
+
+    #[test]
+    fn check_counts_keep_waiting_skipped_and_unread_distinct_from_success() {
+        let checks = parse_open_checks(
+            r#"[
+          {"number":1}, {"number":2,"statusCheckRollup":[]},
+          {"number":3,"statusCheckRollup":[
+            {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"},
+            {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SKIPPED"},
+            {"__typename":"CheckRun","status":"COMPLETED","conclusion":"NEUTRAL"},
+            {"__typename":"CheckRun","status":"COMPLETED","conclusion":"TIMED_OUT"},
+            {"__typename":"CheckRun","status":"IN_PROGRESS"},
+            {"__typename":"CheckRun","status":"QUEUED"},
+            {"__typename":"StatusContext","state":"EXPECTED"},
+            {"__typename":"StatusContext","state":"PENDING"},
+            {"__typename":"StatusContext","state":"SUCCESS"},
+            {"__typename":"StatusContext","state":"ERROR"},
+            {"__typename":"CheckRun","status":"COMPLETED","conclusion":"FUTURE_CONCLUSION"}
+          ]}]
+        "#,
+        )
+        .unwrap();
+        assert_eq!(
+            checks[&1].counts, None,
+            "an omitted rollup is unread, not zero checks"
+        );
+        assert_eq!(
+            checks[&2].counts,
+            Some(crate::model::PrCheckCounts::default())
+        );
+        let counts = checks[&3].counts.as_ref().unwrap();
+        assert_eq!(
+            *counts,
+            crate::model::PrCheckCounts {
+                total: 11,
+                passed: 2,
+                failed: 2,
+                running: 2,
+                waiting: 2,
+                skipped: 2,
+                unknown: 1,
+            }
+        );
+        let wire = serde_json::to_value(PullRequestWork {
+            check_counts: Some(counts.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(wire["check_counts"]["total"], 11);
+        assert_eq!(wire["check_counts"]["passed"], 2);
+        assert!(
+            serde_json::to_value(PullRequestWork::default())
+                .unwrap()
+                .get("check_counts")
+                .is_none()
+        );
     }
 
     const ASKED: &str = r#"[{"number":7},{"number":8}]"#;
