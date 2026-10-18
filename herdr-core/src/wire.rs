@@ -557,6 +557,7 @@ impl From<res::AgentInfo> for ProjectedAgent {
             lineage_session: own_session,
             state_change_seq: v.state_change_seq,
             completion_seq: v.completion_seq,
+            launch_pending: v.launch_pending == Some(true),
             tokens: v
                 .tokens
                 .into_iter()

@@ -63,6 +63,10 @@ pub(crate) struct ProjectedAgent {
     /// looked at it since: Herdr's `done` turning `idle` when it marks the
     /// tab seen leaves it in place.
     pub(crate) completion_seq: Option<u64>,
+    /// Herdr still holds open the start it made of this agent
+    /// (`agent.start`). The core reads it while it is also at rest
+    /// (`launch_settle.rs`); it never reaches the shell.
+    pub(crate) launch_pending: bool,
     pub(crate) tokens: BTreeMap<String, Value>,
 }
 

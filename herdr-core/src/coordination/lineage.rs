@@ -740,6 +740,7 @@ mod tests {
             lineage_session: record.actor.session.clone(),
             state_change_seq: 1,
             completion_seq: None,
+            launch_pending: false,
             tokens,
         }
     }

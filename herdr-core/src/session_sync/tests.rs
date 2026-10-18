@@ -3037,3 +3037,117 @@ mod lineage_sessions {
         );
     }
 }
+
+/// herdrdev/herdr#3853, end to end through the coordinator: Herdr lists an
+/// agent at rest whose start it still holds open, and settles that start only
+/// when the agent is read with `agent.get`, as Herdr 0.9.5 does. The core
+/// reads it once, the next lists show it settled, it is not read again, and
+/// the start's state never reaches the shell.
+#[test]
+fn an_agent_at_rest_with_its_start_pending_is_read_until_herdr_settles_it() {
+    use std::sync::mpsc;
+
+    struct Server {
+        closer: hide_platform::ipc::ListenerCloser,
+        worker: Option<thread::JoinHandle<()>>,
+    }
+    impl Drop for Server {
+        fn drop(&mut self) {
+            self.closer.close();
+            self.worker.take().unwrap().join().unwrap();
+        }
+    }
+    #[derive(Default)]
+    struct Herdr {
+        settled: bool,
+        reads: Vec<Value>,
+        lists_after_settle: usize,
+    }
+
+    let folder = tempfile::Builder::new()
+        .prefix("launch-settle-")
+        .tempdir_in(socket_parent())
+        .unwrap();
+    let socket = folder.path().join("herdr.sock");
+    let listener = LocalListener::bind(&socket).unwrap();
+    let closer = listener.closer();
+    let herdr = Arc::new(Mutex::new(Herdr::default()));
+    let server_herdr = Arc::clone(&herdr);
+    let (streams, subscription) = mpsc::channel();
+    let server = Server {
+        closer,
+        worker: Some(thread::spawn(move || {
+            while let Ok(stream) = listener.accept() {
+                let mut reader = std::io::BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                let mut stream = reader.into_inner();
+                let mut herdr = server_herdr.lock().unwrap();
+                let mut agent = json!({
+                    "pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1",
+                    "terminal_id": "fixture-terminal", "focused": false, "revision": 1,
+                    "name": "pi-agent", "agent": "pi", "agent_status": "idle",
+                    "state_change_seq": 4, "tokens": {}
+                });
+                let result = match request["method"].as_str().unwrap() {
+                    "events.subscribe" => json!({"type": "subscription_started"}),
+                    "session.snapshot" => {
+                        json!({"type": "session_snapshot", "snapshot": snapshot()})
+                    }
+                    "agent.list" => {
+                        if herdr.settled {
+                            herdr.lists_after_settle += 1;
+                            agent["interactive_ready"] = json!(true);
+                        } else {
+                            agent["launch_pending"] = json!(true);
+                        }
+                        json!({"type": "agent_list", "agents": [agent]})
+                    }
+                    "agent.get" => {
+                        herdr.reads.push(request["params"].clone());
+                        herdr.settled = true;
+                        agent["interactive_ready"] = json!(true);
+                        json!({"type": "agent_info", "agent": agent})
+                    }
+                    "pane.process_info" => json!({"type": "pane_process_info", "process_info": {
+                        "pane_id": request["params"]["pane_id"], "foreground_processes": []
+                    }}),
+                    method => panic!("unexpected fixture method {method}"),
+                };
+                drop(herdr);
+                let response = wire::checked_response_fixture(&request["id"], result);
+                writeln!(stream, "{response}").unwrap();
+                if request["method"] == "events.subscribe" {
+                    streams.send(stream).unwrap();
+                }
+            }
+        })),
+    };
+    let runtime = runtime_for_fixture(&socket, &folder.path().join("state.json"));
+    let handle = spawn(context_for_fixture(&runtime, &socket), None).unwrap();
+    let stream = subscription
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the core subscribes");
+
+    // Two lists after the settle: the core has seen the agent settled, and
+    // had a list on which a second read would have gone.
+    wait_until(Instant::now() + Duration::from_secs(10), || {
+        herdr.lock().unwrap().lists_after_settle >= 2
+    });
+    assert_eq!(
+        herdr.lock().unwrap().reads,
+        [json!({"target": "w1:p1"})],
+        "the pane is read once, by its pane id"
+    );
+    let shell = serde_json::to_string(&runtime.lock().unwrap().snapshot()).unwrap();
+    assert!(
+        !shell.contains("launch_pending"),
+        "the start's state stays in the core"
+    );
+
+    drop(handle);
+    drop(stream);
+    drop(server);
+    remove_fixture(folder, runtime);
+}

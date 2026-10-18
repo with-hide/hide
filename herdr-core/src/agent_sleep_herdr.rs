@@ -219,7 +219,8 @@ pub(crate) enum WakeOutcome {
 
 /// Starts the agent again in the same pane, through Herdr's `agent.start`
 /// once the pane's shell holds its terminal (`agent_start`); Herdr answers
-/// once the agent is ready.
+/// when it has taken the start, and the session sync settles the start once
+/// the agent rests (`session_sync/launch_settle.rs`, herdrdev/herdr#3853).
 pub(crate) fn start_agent(
     connector: &dyn ApiConnector,
     node: &dyn NodeLink,
