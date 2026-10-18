@@ -43,11 +43,15 @@ from .report import save, table_lines
 
 KIT_SECONDS = 90
 # The whole run's cap, every process under it included: the candidate's start
-# and kit, then each measured agent's cells, 4 to 7 minutes an agent on macOS
-# (2026-10-18). Seven agents make 61 minutes, inside the CI step's 75, so the
-# journey ends itself, writes its report and cleans up before the step would.
+# and kit, then each measured agent's cells. Keyless, on the fake model or the
+# stand-ins, an agent took 4 to 7 minutes on macOS (2026-10-18), so seven make
+# 61 minutes, inside the CI step's 75. A real provider's turns are slower and
+# the journey waits up to 120 s for a title, so a signed-in or local run gives
+# each agent about twice that: seven make 110 minutes, inside the signed-in CI
+# step's 115. Either way the journey ends itself, writes its report and cleans
+# up before its step would.
 SETUP_SECONDS = 5 * 60
-AGENT_SECONDS = 8 * 60
+AGENT_SECONDS = {"keyless": 8 * 60, "provider": 15 * 60}
 SYSTEM_NAMES = {"darwin": "macOS", "linux": "Linux", "win32": "Windows"}
 
 
@@ -496,7 +500,8 @@ def main(argv=None):
         report["agents"].append({"id": key, "unmeasured": reason})
         cells.settle_agent(table, key, reason)
     owner = OwnedProcesses(diagnostics=run / "process-diagnostics",
-                           run_seconds=SETUP_SECONDS + AGENT_SECONDS * max(1, len(measured)))
+                           run_seconds=SETUP_SECONDS + AGENT_SECONDS["keyless" if fake or fixture_bin else "provider"]
+                           * max(1, len(measured)))
     previous = {signum: signal.signal(signum, lambda *_: owner.cancelled.set())
                 for signum in STOP_SIGNALS}
     runtime = guard = daemon = user_path = None
