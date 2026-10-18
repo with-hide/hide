@@ -2325,7 +2325,7 @@ The core stores separate desktop Needs You (`desktop_notifications`) and Done (`
 A missing Done choice in an older store inherits the former shared choice; new installs default both off and the wizard enables Needs You only.
 Each toggle is one event; Not now disables both in one event, repeated choices publish nothing, and both use the existing coalesced off-lock UI-state writer.
 A window asks for notices while either is on, filters each notice by its own group, words it in the interface language and hands it to the host, which drops it while a Hide window has the keyboard and closes the ones `clear` names.
-The app icon count follows Needs You only; phone push settings stay independent.
+The app icon count sums the device scopes' raised Needs You and unread Done groups, including folded rows, while each group's own switch is on; reading Done removes it from the count, and phone push settings stay independent.
 While Mobile is on with a phone paired, hided skips the ten-minute idle exit.
 The records are `mobile_transport`, `mobile_pairing`, `mobile_phone`, `mobile_push` and `mobile_store` in `Logs/core.jsonl`, and none carries a code, a credential or a subscription key.
 The operator notice for a held letter or an unanswered inactivity warning uses the same delivery: `push::notice_route` judges, from values only and under the Mobile mutex rather than `Mutex<Runtime>`, whether a phone can be reached at all (key, mode against the connected renderers, the Mobile switch, a subscription), and a phone that cannot be reached is not sent to; Herdr is tried next unless this Mac has no socket for it.
