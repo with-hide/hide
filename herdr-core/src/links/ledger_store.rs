@@ -82,30 +82,28 @@ pub(super) fn capture_session_origin(
     {
         return Ok(());
     }
-    let mut statement = tx.prepare("SELECT DISTINCT p.root,c.repository,c.since_at,p.root FROM projects p JOIN ledger_project_connections c ON c.project=p.key WHERE p.device=?1 UNION SELECT DISTINCT p.root,c.repository,c.since_at,w.path FROM projects p JOIN ledger_project_connections c ON c.project=p.key JOIN worktrees w ON w.project=p.key WHERE p.device=?1 LIMIT ?2").map_err(failed)?;
-    let candidates = statement
-        .query_map(
-            params![session.device_id, (LEDGER_QUEUE_LIMIT + 1) as i64],
-            |row| {
+    // The owner is the deepest project root or recorded worktree on the
+    // session's device whose folder holds its cwd (`super::within`), chosen
+    // by SQLite: the record keeps every worktree a project has had, so
+    // loading them all to choose here bounded new sessions by that history.
+    let owner = match cwd {
+        Some(cwd) => tx
+            .prepare_cached(
+                "SELECT root,repository,since_at FROM (SELECT p.root,c.repository,c.since_at,rtrim(p.root,'/') AS path FROM projects p JOIN ledger_project_connections c ON c.project=p.key WHERE p.device=?1 UNION SELECT p.root,c.repository,c.since_at,rtrim(w.path,'/') FROM projects p JOIN ledger_project_connections c ON c.project=p.key JOIN worktrees w ON w.project=p.key WHERE p.device=?1) WHERE path!='' AND (?2=path OR substr(?2,1,length(path)+1)=path||'/') ORDER BY length(path) DESC,root DESC,repository DESC,since_at DESC LIMIT 1",
+            )
+            .map_err(failed)?
+            .query_row(params![session.device_id, cwd], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, u64>(2)?,
-                    row.get::<_, String>(3)?,
                 ))
-            },
-        )
-        .map_err(failed)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(failed)?;
-    if candidates.len() > LEDGER_QUEUE_LIMIT {
-        return Err("ledger_project_capacity".into());
-    }
-    let owner = candidates
-        .into_iter()
-        .filter(|(_, _, _, path)| cwd.is_some_and(|cwd| super::within(cwd, path)))
-        .max_by_key(|(_, _, _, path)| path.len());
-    let (project, repository) = owner.map_or((None, None), |(root, repository, since, _)| {
+            })
+            .optional()
+            .map_err(failed)?,
+        None => None,
+    };
+    let (project, repository) = owner.map_or((None, None), |(root, repository, since)| {
         if started_at.is_some_and(|at| at >= since) {
             (Some(root), repository)
         } else {
