@@ -4,6 +4,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { setInterval, setTimeout, clearInterval, clearTimeout } = require("node:timers");
 const { app, BrowserWindow } = require("electron");
+// This case measures native visibility with motion allowed. GitHub's macOS
+// image enables Reduce Motion; unlike Playwright pages this raw host inherits it.
+// Scope the preference to this owned candidate, leaving OS settings untouched.
+app.commandLine.appendSwitch("force-prefers-no-reduced-motion");
 const root = process.env.HIDE_DESKTOP_USER_DATA_DIR;
 if (!root) throw new Error("native owl probe requires isolated userData");
 fs.mkdirSync(root, { recursive: true });
@@ -31,7 +35,8 @@ const timer = setInterval(async () => {
     if (request.action === "restore") { window.restore(); window.showInactive(); }
     const state = await window.webContents.executeJavaScript(`(() => {
       const owl = document.querySelector('[data-brand-owl]');
-      return {hidden: document.hidden, motion: document.body.dataset.owlMotion ?? owl?.dataset.owlMotion,
+      return {hidden: document.hidden, reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+        motion: document.body.dataset.owlMotion ?? owl?.dataset.owlMotion,
         pose: owl?.dataset.brandOwl, owls: document.querySelectorAll('[data-brand-owl]').length,
         connecting: !!document.getElementById('connecting'), shell: !!document.querySelector('[data-main-screen]')};
     })()`);

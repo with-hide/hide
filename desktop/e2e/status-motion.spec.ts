@@ -190,7 +190,7 @@ test("the native dev host pauses startup and first-run owls without renderer foc
   }
   try {
     await command("show");
-    await expect.poll(command).toMatchObject({ visible: true, hidden: false, motion: "playing" });
+    await expect.poll(command).toMatchObject({ reducedMotion: false, visible: true, hidden: false, motion: "playing" });
     await command("hide");
     await expect.poll(command).toMatchObject({ visible: false, hidden: true, motion: "paused" });
     await command("show");
@@ -202,8 +202,9 @@ test("the native dev host pauses startup and first-run owls without renderer foc
     await command("show");
     await expect.poll(command).toMatchObject({ hidden: false, motion: "playing" });
   } finally {
-    const evidence = process.env.HIDE_E2E_SCREENSHOT_DIR;
-    if (evidence) fs.writeFileSync(path.join(evidence, "native-owl-visibility.json"), JSON.stringify({ surface: "isolated native dev host with shipped fuses and built status bytes", packaged: false, observations }, null, 2));
-    await close();
+    try {
+      const evidence = process.env.HIDE_E2E_SCREENSHOT_DIR;
+      if (evidence) fs.writeFileSync(path.join(evidence, "native-owl-visibility.json"), JSON.stringify({ surface: "isolated native dev host with shipped fuses and built status bytes", packaged: false, observations }, null, 2));
+    } finally { await close(); }
   }
 });
