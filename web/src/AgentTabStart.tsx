@@ -12,7 +12,7 @@ import { inlineStartKey, startFailure, useInlineStarts, type InlineStartDraft } 
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { catalogWorkspaces } from "./snapshot";
-import { inlineReceipts, inlineStartAnswer, receiptTarget } from "./inlineStart";
+import { failedReceiptMoved, inlineReceipts, inlineStartAnswer, receiptTarget } from "./inlineStart";
 import type { ViewWorkspace } from "./viewLayout";
 
 const ANSWER_TIMEOUT_MS = 90_000;
@@ -25,12 +25,15 @@ export function InlineStartHost() {
       const store = useInlineStarts.getState();
       const rest = useShellStore.getState().rest;
       const receipts = inlineReceipts(rest);
+      store.retainRetired(new Set(receipts.map(({ receipt }) => receipt.request_id)));
+      const movedFailures = new Set(receipts.filter(({ device, path, receipt }) => useShellStore.getState().connection === "live" && deviceConnected(rest, device) && failedReceiptMoved(rest, device, path, receipt)).map(({ receipt }) => receipt.request_id));
       for (const [request, close] of Object.entries(store.closing)) {
         if (rest?.status?.last_error?.request_id === request) { store.settleClose(request, false); continue; }
         const groups = catalogWorkspaces(rest).find((workspace) => workspace.device_id === close.device && workspace.checkouts.some((checkout) => checkout.path === close.path))?.checkouts.find((checkout) => checkout.path === close.path)?.agent_groups;
         if (groups && !groups.drafts.includes(close.tab)) store.settleClose(request, true);
       }
       for (const { device, path, receipt } of receipts) {
+        if (useInlineStarts.getState().retired.has(receipt.request_id) || movedFailures.has(receipt.request_id)) continue;
         if (receipt.state === "ready" && (!receipt.agent_phase || receipt.agent_phase === "started")) continue;
         const target = receiptTarget(receipt);
         const key = inlineStartKey(device, path, target);
@@ -42,7 +45,7 @@ export function InlineStartHost() {
         if (!draft.request) continue;
         const receipt = receipts.find((row) => row.receipt.request_id === draft.request!.id)?.receipt;
         const answer = inlineStartAnswer(rest, draft.request.id, receipt);
-        if (answer.phase === "pending" || (draft.phase === "pending" && draft.request.beforeAnswer === JSON.stringify(answer))) continue;
+        if (answer.phase === "pending" || ((draft.phase === "pending" || draft.phase === "unknown") && draft.request.beforeAnswer === JSON.stringify(answer))) continue;
         if (answer.phase === "ready" && answer.agentPhase) useUiStore.getState().setWatchedTask(answer.taskId);
         if (answer.phase === "ready" && (answer.agentPhase === "starting" || answer.agentPhase === "unknown")) {
           const phase = answer.agentPhase === "unknown" || Date.now() - draft.request.sentAt >= ANSWER_TIMEOUT_MS ? "unknown" : "pending";
@@ -55,11 +58,12 @@ export function InlineStartHost() {
           store.put(key, { ...draft, phase: "failed", request: answer.phase === "refused" ? null : draft.request, failure: startFailure(answer.message) });
         }
       }
+      for (const requestId of movedFailures) store.retireFailed(requestId);
     };
     settle();
     const unsubscribe = useShellStore.subscribe((state, previous) => {
       // Terminal output does not rescan forms. Only catalog/receipt changes can settle a start.
-      if (state.rest?.navigator?.workspaces !== previous.rest?.navigator?.workspaces || state.rest?.status?.remote !== previous.rest?.status?.remote || state.rest?.task_operation !== previous.rest?.task_operation || state.rest?.status?.last_error !== previous.rest?.status?.last_error) settle();
+      if (state.connection !== previous.connection || state.rest?.workspace_view?.agent_layout !== previous.rest?.workspace_view?.agent_layout || state.rest?.navigator?.workspaces !== previous.rest?.navigator?.workspaces || state.rest?.status?.remote !== previous.rest?.status?.remote || state.rest?.task_operation !== previous.rest?.task_operation || state.rest?.status?.last_error !== previous.rest?.status?.last_error) settle();
     });
     return unsubscribe;
   }, []);
@@ -88,7 +92,9 @@ export function AgentTabStart({ workspace, target, groupName, actions, onCancel 
   const connected = useShellStore((state) => state.connection === "live" && deviceConnected(state.rest, workspace.device_id));
   const busy = draft.phase === "pending" || draft.phase === "unknown";
   const locked = draft.request !== null;
-  const editingRestored = draft.request?.restored && draft.phase !== "pending";
+  const terminalIntent = draft.request?.provider === "terminal";
+  const terminalRetry = terminalIntent && draft.phase === "failed";
+  const editingRestored = draft.request?.restored && !terminalIntent && (draft.phase === "failed" || draft.phase === "agent_failed");
   const update = (next: InlineStartDraft) => { const ok = useInlineStarts.getState().put(key, next); setFull(!ok); return ok; };
   useEffect(() => {
     if (held?.request) sent.current = true;
@@ -101,13 +107,14 @@ export function AgentTabStart({ workspace, target, groupName, actions, onCancel 
   }, [onCancel, locked]);
   const start = (terminal: boolean, confirmOnly = false) => {
     const latest = useInlineStarts.getState().drafts[key] ?? draft;
-    if (!connected || latest.phase === "pending") return;
+    if (!connected || latest.phase === "pending" || (latest.phase === "unknown" && !confirmOnly)) return;
+    if (!confirmOnly && latest.request && (latest.request.provider === "terminal") !== terminal) return;
     const beforeAnswer = latest.request ? JSON.stringify(inlineStartAnswer(useShellStore.getState().rest, latest.request.id, inlineReceipts(useShellStore.getState().rest).find((row) => row.receipt.request_id === latest.request!.id)?.receipt)) : undefined;
     if (latest.phase === "agent_failed" && latest.taskId !== null && !latest.request?.restored) {
       if (update({ ...latest, request: latest.request ? { ...latest.request, sentAt: Date.now(), beforeAnswer } : null, phase: "pending", failure: null })) actions.retryTaskAgent(latest.taskId);
       return;
     }
-    const request = latest.request ? { ...latest.request, sentAt: Date.now(), beforeAnswer, ...(latest.request.restored && !confirmOnly ? { prompt: latest.text.trim() || null, model: modelToSend(latest.selection), restored: false } : {}) } : { id: startRequestId(), sentAt: Date.now(), provider: terminal ? "terminal" : latest.selection.kind, model: terminal ? null : modelToSend(latest.selection), prompt: terminal ? null : latest.text.trim() || null, target };
+    const request = latest.request ? { ...latest.request, sentAt: Date.now(), beforeAnswer, ...(latest.request.restored && !confirmOnly ? { prompt: latest.request.provider === "terminal" ? null : latest.text.trim() || null, model: latest.request.provider === "terminal" ? null : modelToSend(latest.selection), restored: false } : {}) } : { id: startRequestId(), sentAt: Date.now(), provider: terminal ? "terminal" : latest.selection.kind, model: terminal ? null : modelToSend(latest.selection), prompt: terminal ? null : latest.text.trim() || null, target };
     if (!update({ ...latest, request, phase: "pending", failure: null })) return;
     actions.startAgent({ target: { checkoutPath: workspace.path }, deviceId: workspace.device_id, provider: request.provider, model: request.model, prompt: request.prompt, requestId: request.id, tabTarget: request.target, confirmOnly });
   };
@@ -116,10 +123,10 @@ export function AgentTabStart({ workspace, target, groupName, actions, onCancel 
     <div className="flex w-full max-w-(--size-worktree-dialog) flex-col gap-md">
       <div className="flex items-start justify-between gap-sm"><div className="min-w-0"><p className="flex items-center gap-xs text-caption text-muted-foreground" title={groupName}><BriefcaseBusinessIcon className="size-(--size-icon-sm) shrink-0" /><span className="truncate">{groupName}</span></p><h2 className="mt-xs text-title font-semibold">{t(target.add_pane ? "groups.addAgent" : target.tab_id ? "groups.draftTitle" : "groups.firstTitle")}</h2><p className="mt-xs text-caption text-muted-foreground">{t("groups.startHint")}</p></div>{onCancel && !locked ? <Button variant="ghost" size="icon-sm" aria-label={t("common.cancel")} onClick={onCancel}><XIcon /></Button> : null}</div>
       <div className="overflow-hidden rounded-lg border border-input bg-background focus-within:ring-1 focus-within:ring-ring">
-        <textarea ref={field} rows={3} value={draft.text} readOnly={locked && !editingRestored} aria-label={t("shell.firstInstruction")} placeholder={t("groups.prompt")} className="block w-full resize-none bg-transparent p-md text-body text-foreground outline-none placeholder:text-muted-foreground" onChange={(event) => update({ ...draft, text: event.target.value, phase: editingRestored ? "unknown" : "editing", failure: null })} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); if (!busy) start(false); } }} />
-        <div className="flex flex-wrap items-center justify-between gap-sm px-sm pb-sm"><AgentPicker actions={actions} value={draft.selection} onChange={(selection) => update({ ...draft, selection, phase: "editing", failure: null })} disabled={locked} /><Button disabled={!connected || busy || draft.selection.kind === "terminal"} onClick={() => start(false)} data-group-start-agent="true">{t(busy ? "shell.starting" : "common.start")}</Button></div>
+        <textarea ref={field} rows={3} value={draft.text} readOnly={locked && !editingRestored} aria-label={t("shell.firstInstruction")} placeholder={t("groups.prompt")} className="block w-full resize-none bg-transparent p-md text-body text-foreground outline-none placeholder:text-muted-foreground" onChange={(event) => update({ ...draft, text: event.target.value, phase: editingRestored ? "unknown" : "editing", failure: null })} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); if (!busy && !terminalIntent) start(false); } }} />
+        <div className="flex flex-wrap items-center justify-between gap-sm px-sm pb-sm"><AgentPicker actions={actions} value={draft.selection} onChange={(selection) => update({ ...draft, selection, phase: "editing", failure: null })} disabled={locked} /><Button disabled={!connected || busy || terminalIntent || draft.selection.kind === "terminal"} onClick={() => start(false)} data-group-start-agent="true">{t(busy ? "shell.starting" : "common.start")}</Button></div>
       </div>
-      <Button variant="secondary" className="w-full" disabled={!connected || locked} onClick={() => start(true)} data-group-start-terminal="true"><TerminalIcon />{t("groups.terminal")}</Button>
+      <Button variant="secondary" className="w-full" disabled={!connected || (locked && !terminalRetry)} onClick={() => start(true)} data-group-start-terminal="true"><TerminalIcon />{t(terminalRetry ? "groups.retryTerminal" : "groups.terminal")}</Button>
       <p className="truncate text-center text-caption text-muted-foreground" title={workspace.path}>{workspace.path}</p>
       {!connected ? <p role="status" className="text-caption text-muted-foreground">{t("groups.notConnected")}</p> : null}
       {failure ? <p role="alert" className="whitespace-pre-line text-caption text-destructive">{failure}</p> : null}

@@ -40,6 +40,7 @@ export function GroupTabsScene({ params }: { params: URLSearchParams }) {
     checkout.tabs.slice(0, 3).forEach((tab, index) => {
       tab.sidebar = { number: index + 1, manual_name: names[index]!, named_by_operator: true };
     });
+    checkout.strip = checkout.tabs.map(tab => ({ id: `strip:${tabId(tab)}`, kind: "herdr", source_id: tabId(tab), label: tab.sidebar?.manual_name ?? "탭 4", preview: false }));
     if (!plain) groups.push({ id: "login", name: content === "long" ? "로그인 개편과 여러 작업의 진행 상황을 함께 확인하는 긴 그룹 이름" : "로그인 개편", tabs: checkout.tabs.slice(0, 3).map(tabId) }, { id: "release", name: "릴리스 준비", tabs: [] });
     const selected = plain ? null : empty ? "release" : "login";
     const selectedGroup = groups.find(group => group.id === selected)!;
@@ -65,11 +66,12 @@ export function GroupTabsScene({ params }: { params: URLSearchParams }) {
   }, [content, state]);
   const actions = useMemo(() => createActions(() => false), []);
   useLayoutEffect(() => {
-    useShellStore.setState({ rest: scene.rest, agents: scene.agents, connection: "live", focusedPaneId: "a1" });
+    const focusedPaneId = state === "work" || state === "plain" ? "a1" : null;
+    useShellStore.setState({ rest: scene.rest, agents: scene.agents, connection: "live", focusedPaneId });
     useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false, laneShown: false, laneExpanded: false });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));
-  }, [scene, theme, scale]);
+  }, [scene, theme, scale, state]);
   return <TooltipProvider><div className="flex h-full min-w-0 flex-col bg-background text-foreground" data-gallery-scene="group-tabs" data-group-scene-state={state}><TitleRow actions={actions} /><div className="flex min-h-0 min-w-0 flex-1"><Sidebar actions={actions} /><WorkspaceScreen actions={actions} /></div></div></TooltipProvider>;
 }

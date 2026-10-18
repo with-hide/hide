@@ -99,10 +99,15 @@ export type InlineStartDraft = {
   failure: StartFailure | null;
 };
 const INLINE_DRAFT_LIMIT = 256;
-export const inlineStartKey = (device: string, path: string, target: AgentStartTarget) => JSON.stringify([device, path, target.group_id, target.tab_id ?? target.area_id, target.add_pane]);
+// A real draft/live tab keeps its page input when core membership changes.
+// Only an empty group's form needs group+area identity before a tab exists.
+export const inlineStartKey = (device: string, path: string, target: AgentStartTarget) => JSON.stringify([device, path, target.tab_id === null ? ["area", target.group_id] : "tab", target.tab_id ?? target.area_id, target.add_pane]);
 export const useInlineStarts = create<{
   drafts: Readonly<Record<string, InlineStartDraft>>;
   closing: Readonly<Record<string, { device: string; path: string; tab: string }>>;
+  retired: ReadonlySet<string>;
+  retireFailed: (requestId: string) => void;
+  retainRetired: (requestIds: ReadonlySet<string>) => void;
   noteClose: (request: string, device: string, path: string, tab: string) => void;
   settleClose: (request: string, confirmed: boolean) => void;
   put: (key: string, draft: InlineStartDraft) => boolean;
@@ -111,6 +116,22 @@ export const useInlineStarts = create<{
 }>((set, get) => ({
   drafts: {},
   closing: {},
+  retired: new Set(),
+  // These are dismissed answers, never topology. Keep them only while the core
+  // still publishes those bounded receipts, so an old failure cannot rehydrate.
+  retainRetired: (requestIds) => {
+    const retired = get().retired;
+    if ([...retired].some((id) => !requestIds.has(id))) set({ retired: new Set([...retired].filter((id) => requestIds.has(id))) });
+  },
+  retireFailed: (requestId) => {
+    const state = get();
+    if (state.retired.has(requestId)) return;
+    const matches = Object.entries(state.drafts).filter(([, draft]) => draft.request?.id === requestId);
+    if (matches.some(([, draft]) => draft.phase !== "failed")) return;
+    const drafts = { ...state.drafts };
+    for (const [key, draft] of matches) drafts[key] = { ...draft, request: null, phase: "editing", taskId: null, failure: null };
+    set({ drafts, retired: new Set([...state.retired, requestId]) });
+  },
   noteClose: (request, device, path, tab) => set((state) => ({ closing: { ...state.closing, [request]: { device, path, tab } } })),
   settleClose: (request, confirmed) => set((state) => {
     const closed = state.closing[request];

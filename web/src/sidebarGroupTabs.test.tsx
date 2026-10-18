@@ -39,6 +39,14 @@ it("opens groups and drafts in a checkout with no live tabs or agents, and foldi
     await act(async () => root.render(<TooltipProvider><Sidebar actions={actions} /></TooltipProvider>));
     expect(container.querySelector('[data-checkout-toggle="checkout"]')).not.toBeNull();
     expect(container.querySelector('[data-sidebar-group-select="empty"]')?.textContent).toContain("Preparation");
+    const selectedGroup = () => container.querySelector('[data-sidebar-group-select][aria-current="true"]');
+    expect(selectedGroup()?.getAttribute("data-sidebar-group-select")).toBe("work");
+    const rest = useShellStore.getState().rest!;
+    await act(async () => useShellStore.setState({ rest: { ...rest, navigator: { ...rest.navigator, workspaces: [{ ...workspace, checkouts: [{ ...checkout, agent_groups: { ...checkout.agent_groups!, selected: "empty" } }] }] } } }));
+    expect(selectedGroup()?.getAttribute("data-sidebar-group-select")).toBe("empty");
+    expect(selectedGroup()?.classList.contains("font-medium")).toBe(true);
+    expect(selectedGroup()?.querySelector("svg")?.classList.contains("text-foreground")).toBe(true);
+    expect(container.querySelector('[data-sidebar-group-select="work"]')?.hasAttribute("aria-current")).toBe(false);
     const group = container.querySelector('[data-sidebar-named-group="work"]')!;
     expect(group.querySelector('[data-sidebar-tab="draft-1"]')).not.toBeNull();
     const before = events.length;
