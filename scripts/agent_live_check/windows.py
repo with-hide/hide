@@ -479,9 +479,14 @@ class UserPath:
     portable-pty reads HKLM's and HKCU's Environment over the server's own),
     so a PATH given to Herdr never reaches a pane Hide opens, and an agent the
     run starts there is found only through this Path, as an operator's is.
-    The caller holds it only on a disposable account (CI mode)."""
+    It changes the account, so it is held only on a disposable CI runner and
+    refused anywhere else."""
 
     def __init__(self, folder):
+        from .protection import ProtectionError
+        if os.environ.get("GITHUB_ACTIONS") != "true":
+            raise ProtectionError("user_path_changed_only_on_a_ci_runner: GITHUB_ACTIONS is not true, "
+                                  "and this account's registry is not the run's to change")
         self.folder = str(folder)
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
                             winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as key:

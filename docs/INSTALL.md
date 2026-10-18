@@ -188,6 +188,7 @@ Unverified on Windows and Linux (the macOS assumptions below are left as they ar
 Hide never changes PATH; on Windows the only registry key is the notification registration the first launch makes ([What differs from the macOS app](#what-differs-from-the-macos-app)).
 On Linux, if your shell does not already include `~/.local/bin`, add `export PATH="$HOME/.local/bin:$PATH"` to your shell's startup file and open a new shell.
 On Windows, add `%USERPROFILE%\.local\bin` to your user Path using **Edit environment variables for your account**, then open a new terminal.
+On Windows a pane takes its PATH from the system Path and your user Path, not from the environment Hide was started in, so put an agent CLI's folder on one of them for a pane to find it.
 Run `hide status --json` to check that the installed command resolves.
 You can also call the command by its full path without changing PATH.
 

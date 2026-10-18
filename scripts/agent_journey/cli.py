@@ -610,6 +610,13 @@ def main(argv=None):
                                                  for frame in traceback.extract_tb(error.__traceback__)[-4:]],
                                           **({"path": error.path} if isinstance(error, ProtectionError) and error.path else {})})
     finally:
+        # First, so nothing that fails later in the cleanup leaves it behind.
+        path_left = None
+        if user_path:
+            try:
+                user_path.close()
+            except OSError as error:
+                path_left = f"user_path_not_restored: {error}"
         for server in servers.values():
             server.shutdown()
             server.server_close()
@@ -653,12 +660,9 @@ def main(argv=None):
                 owner.close()
             except Exception as cleanup_error:
                 report["cleanup"]["failures"].append(str(cleanup_error))
-        if user_path:
-            try:
-                user_path.close()
-            except OSError as error:
-                report["cleanup"]["confirmed"] = False
-                report["cleanup"].setdefault("failures", []).append(f"user_path_not_restored: {error}")
+        if path_left:
+            report["cleanup"]["confirmed"] = False
+            report["cleanup"].setdefault("failures", []).append(path_left)
         if omp_sessions is not None and report["cleanup"].get("processes_confirmed"):
             # After every process ended, so no omp still writes its state.
             projects = [Path(item["worktree"]) for item in report["created"] if item.get("worktree")]

@@ -286,6 +286,15 @@ class UserPathHold(unittest.TestCase):
         expected = ";".join(filter(None, [before[0] if before else "", "C:\\installed\\bin"]))
         self.assertEqual(self.read(), (expected, before[1] if before else kind))
 
+    def test_it_is_refused_outside_a_ci_runner(self):
+        from agent_live_check.protection import ProtectionError
+        from agent_live_check.windows import UserPath
+        before = self.read()
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}):
+            with self.assertRaisesRegex(ProtectionError, "only_on_a_ci_runner"):
+                UserPath(Path(tempfile.gettempdir()) / "journey-run/bin")
+        self.assertEqual(self.read(), before)
+
     def test_a_path_that_did_not_exist_is_removed_again(self):
         from agent_live_check.windows import UserPath
         before = self.read()
