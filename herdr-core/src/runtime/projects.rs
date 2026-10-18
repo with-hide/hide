@@ -1028,6 +1028,7 @@ impl Runtime {
             &mut self.snapshot.navigator.workspaces,
             &self.snapshot.navigator.agents,
         );
+        self.refresh_unowned_dormant_rows();
         self.refresh_inactive_groups();
 
         let focused_project = self
@@ -4514,31 +4515,38 @@ pub(super) fn tab_host(
     }
 }
 
-/// How `checkout` of `project` gets its owner opened. A workspace Hide opens
-/// is named as the sidebar names the checkout: a linked worktree by its
-/// branch, the primary checkout and a plain folder by the project (D-14).
+/// How `checkout` of `project` gets its owner opened.
 pub(super) fn owner_open(
     project: &WorkspaceSnapshot,
     checkout: &crate::model::CheckoutSnapshot,
     device_id: &str,
     node: &crate::node::NodeId,
 ) -> OwnerOpen {
-    let label = if checkout.is_worktree {
-        &checkout.label
-    } else {
-        &project.label
-    };
     let owner = OwnerOpen::for_checkout(
         device_id,
         &checkout.path,
         &project.path,
         project.is_git,
-        label,
+        owner_label(project, checkout),
     );
     if *node == device_id {
         owner.on_node()
     } else {
         owner
+    }
+}
+
+/// The name a workspace Hide opens for `checkout` takes, as the sidebar names
+/// the checkout: a linked worktree by its branch, the primary checkout and a
+/// plain folder by the project (D-14).
+pub(super) fn owner_label<'a>(
+    project: &'a WorkspaceSnapshot,
+    checkout: &'a crate::model::CheckoutSnapshot,
+) -> &'a str {
+    if checkout.is_worktree {
+        &checkout.label
+    } else {
+        &project.label
     }
 }
 

@@ -26,8 +26,8 @@ mod dormant;
 #[cfg(test)]
 pub(crate) use dormant::fixture_record;
 pub use dormant::{
-    DORMANT_BUDGET_SPENT, DormantPhase, DormantRecord, DormantRegistration, FactoryWorker, SleepId,
-    SleepingSessionSnapshot,
+    DORMANT_BUDGET_SPENT, DormantOwner, DormantPhase, DormantRecord, DormantRegistration,
+    FactoryWorker, SleepId, SleepingSessionSnapshot,
 };
 
 /// The Settings choices besides Never, in hours (PRD D-10).

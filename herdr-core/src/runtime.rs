@@ -1394,6 +1394,10 @@ pub struct Runtime {
     /// One bounded read-only sleeping-session inspection, independent of
     /// durable transition admission. A generation fences its late reply.
     dormant_status_check: Option<(crate::agent_sleep::SleepId, u64)>,
+    /// The local checkout paths the project list showed when the rows of
+    /// owner-less sleeping sessions were last derived, as an order-free
+    /// fingerprint: those rows follow the list only when it changes.
+    unowned_dormant_listing: Option<u64>,
     pane_operations: HashMap<String, PendingPaneOperation>,
     /// The last complete raw layout Herdr confirmed for each tab. Mutation
     /// operations compare fresh geometry with this value, because a model
@@ -2143,6 +2147,7 @@ impl Runtime {
             close_operations: HashMap::new(),
             close_status_checks_in_flight: HashSet::new(),
             dormant_status_check: None,
+            unowned_dormant_listing: None,
             pane_operations: HashMap::new(),
             confirmed_pane_layout_signatures: HashMap::new(),
             op_timings: op_timing::OpTimings::default(),
@@ -2398,6 +2403,8 @@ impl Runtime {
     pub fn set_live(&mut self, context: LiveContext) {
         self.live_generation = self.live_generation.saturating_add(1);
         self.live = Some(context);
+        // A sleeping session can wake only over a connection.
+        self.refresh_dormant_rows();
     }
 
     pub fn install_remote_control(&mut self, context: RemoteControlContext) {
