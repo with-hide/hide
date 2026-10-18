@@ -229,9 +229,9 @@ test("Project and Overview menus return Settings focus to their own trigger", as
     await expect(page.locator('[data-project-settings]')).toContainText("Automatic (Local)");
     await page.keyboard.press("Escape");
     await expect(more).toBeFocused();
-    // The Overview's Projects tab: a project's panel carries Project settings.
+    // The Overview's Projects tab: a project's home carries Project settings.
     await (await projectRow(page, "sample")).getByRole("button").first().click();
-    const panelSettings = page.locator("[data-overview-panel] [data-project-panel-settings]");
+    const panelSettings = page.locator("[data-overview-project-home] [data-project-panel-settings]");
     await panelSettings.focus();
     await page.keyboard.press("Enter");
     await expect(page.locator('[data-project-settings]')).toBeVisible();
