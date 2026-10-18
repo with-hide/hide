@@ -30,9 +30,10 @@ export async function startDraftTerminal(page: Page | Locator, expectedDraft?: s
   await form.locator("[data-group-start-terminal=true]").click();
   await expect(page.locator("[data-agent-tab-start]")).toHaveCount(0, { timeout: 30_000 });
   await expect(tabs).toHaveCount(before.length);
+  await expect(tabs.nth(slot)).not.toHaveAttribute("data-tab", draft);
+  const tab = (await tabs.nth(slot).getAttribute("data-tab"))!;
+  await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", tab);
   await expect(page.locator("[data-canvas]")).toBeVisible();
-  const tab = (await page.locator("[data-canvas]").getAttribute("data-canvas"))!;
-  expect(tab).not.toMatch(/^draft:/);
   const after = [...before];
   after[slot] = tab;
   await expect.poll(() => tabs.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-tab")!))).toEqual(after);
