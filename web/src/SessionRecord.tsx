@@ -29,6 +29,8 @@ import { statusText } from "./agentStatus";
 import { useShellStore } from "./store";
 import { summariesEnabled } from "./hideAi";
 import { PR_LOOK } from "./prMark";
+import { archivedChildrenOf, archivedMemberOf } from "./archive";
+import type { ArchivedMember, ArchivedSession } from "./snapshot";
 
 const ROW = "min-w-0 rounded-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring";
 /** Under a task's line: the icon column's width and its gap, so what hangs from a task lines up with its name. */
@@ -157,6 +159,11 @@ function RecordPlace({ record, actions }: { record: RecordValue; actions: Action
   const card = place?.agent ? cardOfPane(projects, place.agent.pane_id) : null;
   const root = card && place?.agent?.pane_id === card.card.root ? card.card : null;
   const device = machineName(rest?.navigator?.devices, record.session.device_id, t);
+  // An archived session's record says it is archived, and nothing runs (PRD session-archive B19); a live
+  // root whose close left members archived lists them to resume (B24).
+  const member = place?.agent ? null : archivedMemberOf(rest, record.session);
+  const archived = member && (member.row.listed || member.index > 0) ? member : null;
+  const left = archivedChildrenOf(rest, record.session);
   const checkouts = card && root
     ? root.checkouts.map((id) => card.project.checkouts.find((row) => row.id === id)).filter((row): row is NonNullable<typeof row> => row !== undefined)
     : place?.checkout ? [place.checkout] : [];
@@ -165,7 +172,9 @@ function RecordPlace({ record, actions }: { record: RecordValue; actions: Action
       {[device, place?.project.label ?? null].filter(Boolean).join(" · ")}
       {checkouts.map((checkout) => <span key={checkout.id} className={cn("inline-flex min-w-0 items-center gap-xxs", !checkout.exists && "text-muted-foreground/70")} data-record-checkout={checkout.id} data-removed={checkout.exists ? undefined : "true"}>· <HouseIcon aria-hidden="true" className="size-(--size-icon-sm)" /><span className="truncate">{checkout.exists ? checkout.label : t("record.worktreeGone", { label: checkout.label })}</span></span>)}
     </p>
-    {root || place?.agent || record.ended_at_unix_ms !== null ? <NowBox record={record} agent={place?.agent ?? null} line={root ? cardLine(root, rows) : null} question={root ? cardQuestion(root, rows) : null} actions={actions} /> : null}
+    {archived ? <ArchivedNow row={archived.row} member={archived.row.members[archived.index]!} connected={deviceConnected(rest, archived.row.device_id)} actions={actions} />
+      : root || place?.agent || record.ended_at_unix_ms !== null ? <NowBox record={record} agent={place?.agent ?? null} line={root ? cardLine(root, rows) : null} question={root ? cardQuestion(root, rows) : null} actions={actions} /> : null}
+    {left ? <ArchivedChildren row={left.row} members={left.members} connected={deviceConnected(rest, left.row.device_id)} actions={actions} /> : null}
   </>;
 }
 
@@ -205,6 +214,61 @@ function NowBox({ record, agent, line, question, actions }: { record: RecordValu
   </StateBox>;
 }
 
+/**
+ * The 지금 box of an archived session (PRD session-archive B19-B23, B34):
+ * `보관됨 · <경과>` and its last line, with 이어가기 as the one button;
+ * 이어가는 중… while it resumes, the reason and 이어가기 again when it could
+ * not, 상태 확인 when Hide cannot say. A device that is gone dims it and
+ * waits for the device.
+ */
+function ArchivedNow({ row, member, connected, actions }: { row: ArchivedSession; member: ArchivedMember; connected: boolean; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const resuming = row.members.some((one) => one.resume === "queued" || one.resume === "starting");
+  const failed = member.resume === "failed" ? member : row.members.find((one) => one.resume === "failed") ?? null;
+  const unknown = row.phase === "unknown" || member.resume === "unknown";
+  const busy = row.phase === "archiving" || row.phase === "deleting";
+  const word = row.phase === "deleting" ? t("archive.deleting") : row.phase === "archiving" ? t("archive.archiving") : unknown ? t("archive.unknown") : resuming ? t("archive.resuming") : failed ? t("archive.resumeFailed") : t("archive.state");
+  const button = unknown ? (
+    <Button size="sm" variant="secondary" disabled={!connected} onClick={() => actions.checkArchived(row.id)} data-record-now-button="check">{t("workspace.checkStatus")}</Button>
+  ) : (
+    <Button size="sm" disabled={!connected || resuming || busy} onClick={() => actions.resumeArchived(row.id)} data-record-now-button="resume">
+      {resuming ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : null}{resuming ? t("archive.resuming") : t("archive.resume")}
+    </Button>
+  );
+  const reason = failed?.reason ?? row.reason;
+  return <StateBox tone={failed ? "failed" : "done"} className={cn("mb-sm", !connected && "opacity-(--opacity-disabled)")} aria-label={t("sessionWork.now")} data-record-now="archived" data-archived-phase={row.phase}>
+    <div className="flex min-w-0 flex-wrap items-center gap-sm">
+      <p className={cn("flex min-w-0 flex-1 items-center gap-xs font-medium", failed ? "text-destructive" : "text-foreground")}>
+        <span>{word}</span>
+        <Elapsed since={row.archived_at_unix_ms} className="font-mono text-caption font-normal text-muted-foreground" data-record-now-elapsed="true" />
+      </p>
+      {button}
+    </div>
+    {failed && reason ? <p className="whitespace-normal text-caption text-destructive [overflow-wrap:anywhere]" data-record-now-reason="true">{reason}</p> : null}
+    {member.last_line ? <p className="whitespace-normal text-caption text-subtle-foreground [overflow-wrap:anywhere]" title={member.last_line} data-record-now-words="true">{member.last_line}</p> : null}
+  </StateBox>;
+}
+
+/** The members a live root's close or resume left archived (B24): each with its state and its own 이어가기. */
+function ArchivedChildren({ row, members, connected, actions }: { row: ArchivedSession; members: readonly ArchivedMember[]; connected: boolean; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  return <ul className={cn("mb-sm flex min-w-0 flex-col gap-xxs", !connected && "opacity-(--opacity-disabled)")} data-record-archived-children={row.id}>
+    {members.map((member) => {
+      const resuming = member.resume === "queued" || member.resume === "starting";
+      const word = resuming ? t("archive.resuming") : member.resume === "failed" ? t("archive.resumeFailed") : member.resume === "unknown" ? t("archive.unknown") : t("archive.state");
+      return <li key={member.session.session_id} className="flex min-w-0 items-center gap-xs" data-record-archived-child={member.session.session_id} data-archived-resume={member.resume}>
+        <AgentMark kind={member.agent_kind} />
+        <span className="min-w-0 flex-1 truncate" title={[member.title, member.reason].filter(Boolean).join("\n")}>{member.title}</span>
+        <span className={cn("shrink-0 text-micro", member.resume === "failed" ? "text-destructive" : "text-muted-foreground")}>{word}</span>
+        {member.resume === "unknown" ? (
+          <Button size="sm" variant="ghost" disabled={!connected} onClick={() => actions.checkArchived(row.id)} data-record-archived-check={member.session.session_id}>{t("workspace.checkStatus")}</Button>
+        ) : (
+          <Button size="sm" variant="ghost" disabled={!connected || resuming} onClick={() => actions.resumeArchived(row.id, member.session.session_id)} data-record-archived-resume={member.session.session_id}>{t("archive.resume")}</Button>
+        )}
+      </li>;
+    })}
+  </ul>;
+}
 
 /** A section's head (PRD record-card-readability D-01): a small quiet label, a strong count, and what the count leaves out in words. */
 function SectionHead({ label, count, summary, className }: { label: string; count?: string | number; summary?: string | null; className?: string }) {

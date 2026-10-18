@@ -709,7 +709,9 @@ impl Runtime {
             .filter(|member| member.closed)
             .map(|member| crate::links::ledger::SessionIdentity {
                 device_id: member.machine.clone(),
-                agent: hide_agent_adapter::canonical_kind(&member.kind).to_owned(),
+                agent: super::links::session_agent(&member.kind)
+                    .unwrap_or(member.kind.as_str())
+                    .to_owned(),
                 session_id: member.native_session_id.clone(),
             })
             .collect::<Vec<_>>();
@@ -1233,7 +1235,9 @@ impl Runtime {
                     crate::links::store::ArchivedSession {
                         session: crate::links::ledger::SessionIdentity {
                             device_id: member.machine.clone(),
-                            agent: hide_agent_adapter::canonical_kind(&member.kind).to_owned(),
+                            agent: super::links::session_agent(&member.kind)
+                                .unwrap_or(member.kind.as_str())
+                                .to_owned(),
                             session_id: member.native_session_id.clone(),
                         },
                         project_root: record.project_root.clone(),

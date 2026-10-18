@@ -121,6 +121,7 @@ section!(NavigatorSections, NavigatorSnapshot, s, {
     hide_ai_checkouts: Vec<HideAiCheckoutSnapshot> => s.hide_ai_checkouts,
     sleeping_sessions: Vec<crate::agent_sleep::SleepingSessionSnapshot> => s.sleeping_sessions,
     archived_sessions: Vec<crate::session_archive::ArchivedSessionSnapshot> => s.archived_sessions,
+    factory_worker_panes: Vec<String> => s.factory_worker_panes,
 }, {});
 
 section!(TerminalSections, TerminalSnapshot, s, {

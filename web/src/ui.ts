@@ -264,6 +264,10 @@ type UiStore = {
   /** Settings was opened from the window's strip to give up a move's wait: the Devices tab opens the move dialog at its confirm once and clears this. */
   moveGiveUpRequested: boolean;
   pendingClose: PendingClose | null;
+  /** The working session whose Archive session waits for Stop work and archive (PRD session-archive B6). */
+  pendingArchive: { paneId: string } | null;
+  /** The archived session whose delete waits for its confirmation (B28). */
+  pendingArchiveDelete: { id: string } | null;
   cycle: Cycle | null;
   /** A notice the operator can act on. */
   notice: Notice | null;
@@ -343,6 +347,8 @@ type UiStore = {
   openMoveGiveUp: () => void;
   clearMoveGiveUpRequest: () => void;
   setPendingClose: (pending: PendingClose | null) => void;
+  setPendingArchive: (pending: { paneId: string } | null) => void;
+  setPendingArchiveDelete: (pending: { id: string } | null) => void;
   setCycle: (cycle: Cycle | null) => void;
   setNotice: (notice: Notice | null) => void;
   setWorkspaceDialog: (dialog: WorkspaceDialog | null) => void;
@@ -398,6 +404,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   addDeviceRequested: false,
   moveGiveUpRequested: false,
   pendingClose: null,
+  pendingArchive: null,
+  pendingArchiveDelete: null,
   cycle: null,
   notice: null,
   workspaceDialog: null,
@@ -459,6 +467,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   openMoveGiveUp: () => set({ overlay: "settings", settingsTab: "devices", moveGiveUpRequested: true }),
   clearMoveGiveUpRequest: () => set({ moveGiveUpRequested: false }),
   setPendingClose: (pendingClose) => set({ pendingClose }),
+  setPendingArchive: (pendingArchive) => set({ pendingArchive }),
+  setPendingArchiveDelete: (pendingArchiveDelete) => set({ pendingArchiveDelete }),
   setCycle: (cycle) => set({ cycle }),
   setNotice: (notice) => set({ notice }),
   setWorkspaceDialog: (workspaceDialog) => set({ workspaceDialog }),

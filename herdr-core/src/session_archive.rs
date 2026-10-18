@@ -388,10 +388,12 @@ impl SessionArchive {
     /// Drops the members whose link-record lines were pruned (B31): a root
     /// takes its record with it, a descendant leaves alone.
     pub fn drop_pruned(&mut self, pruned: &[(String, String, String)]) -> bool {
+        // The record names an agent by its session format, which several
+        // kinds share; the conversation id on its machine is the identity.
         let gone = |member: &ArchivedMember| {
             pruned
                 .iter()
-                .any(|(device, agent, id)| member.is(device, agent, id))
+                .any(|(device, _, id)| member.machine == *device && member.native_session_id == *id)
         };
         let before = self.clone();
         self.records.retain(|_, record| {

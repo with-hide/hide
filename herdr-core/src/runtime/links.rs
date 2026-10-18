@@ -165,7 +165,7 @@ pub(crate) fn spawn_worker(
 }
 
 /// A session file's agent name for a Hide agent kind.
-fn session_agent(kind: &str) -> Option<&'static str> {
+pub(super) fn session_agent(kind: &str) -> Option<&'static str> {
     hide_agent_adapter::adapter(kind)?
         .session
         .map(|format| format.adapter().herdr.name)

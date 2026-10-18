@@ -758,6 +758,9 @@ impl Runtime {
     /// changes. A close-pane sleep that lands for one of them is bound to its
     /// worker (#857).
     pub(crate) fn set_factory_panes(&mut self, panes: HashMap<String, FactoryPane>) {
+        let mut ids = panes.keys().cloned().collect::<Vec<_>>();
+        ids.sort();
+        self.snapshot.navigator.factory_worker_panes = ids;
         self.factory_panes = panes;
     }
 

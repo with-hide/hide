@@ -709,6 +709,11 @@ pub struct NavigatorSnapshot {
     /// D-09); a row whose root is live again only feeds that root's record.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub archived_sessions: Vec<crate::session_archive::ArchivedSessionSnapshot>,
+    /// The panes a Factory runs its workers in, sorted: their lifecycle is
+    /// the Factory's, so the shell offers no `세션 보관` there (PRD
+    /// session-archive D-25).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub factory_worker_panes: Vec<String>,
 }
 
 /// Hide AI started this agent, read from the coordination ledger's record of
@@ -5932,6 +5937,7 @@ impl Snapshot {
                 hide_ai_checkouts: Vec::new(),
                 sleeping_sessions: Vec::new(),
                 archived_sessions: Vec::new(),
+                factory_worker_panes: Vec::new(),
             },
             overlay: OverlaySnapshot {
                 kind: None,

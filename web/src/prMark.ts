@@ -148,7 +148,7 @@ export function sessionStaleness(rest: SnapshotRest | null, pulls: SessionPull[]
 export type PrMarkParts = { state: PrState; number: number } | { counts: { state: PrState; count: number }[] };
 
 /** The mark of a row's own PRs or a root's family; null for none. */
-export function prMarkParts(pulls: readonly { pull: AgentPullRequest; state: PrState }[]): PrMarkParts | null {
+export function prMarkParts(pulls: readonly { pull: Pick<AgentPullRequest, "number">; state: PrState }[]): PrMarkParts | null {
   const [first] = pulls;
   if (!first) return null;
   if (pulls.length === 1) return { state: first.state, number: first.pull.number };

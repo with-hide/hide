@@ -15,7 +15,10 @@ import { RowLineText } from "./components/row-line-text";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { Keycap } from "./components/ui/keycap";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuShortcut, DropdownMenuTrigger } from "./components/ui/dropdown-menu";
+import { EntryContextMenu, EntryDropdown, type MenuEntry } from "./components/entry-menu";
+import { PartsMark } from "./components/pr-mark";
+import { archivedRows, archiveOffer } from "./archive";
+import { prMarkParts } from "./prMark";
 import { Hint } from "./components/ui/tooltip";
 import { deviceConnected, frontDeviceId } from "./devices";
 import { hideAiWords, homeTurnLine } from "./hideAiOrigin";
@@ -34,7 +37,7 @@ import { revealRow, sidebarFocusPane } from "./sidebarFocus";
 import type { SidebarTreeLine } from "./sidebarTree";
 import { catalogWorkspaces, localDeviceId, type AgentRow, type TaskView } from "./snapshot";
 import { useShellStore } from "./store";
-import { drawnTasks, TASK_GROUPS, taskFoldKey, taskList, taskSections, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
+import { drawnTasks, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
 import { useUiStore } from "./ui";
 import type { TaskState } from "./agentScope";
 
@@ -89,7 +92,8 @@ export function TaskLens({ actions }: { actions: Actions }) {
   const agents = useMemo(() => everyPaneAgent(localAgents, rest?.status?.remote), [localAgents, rest?.status?.remote]);
   const byPane = useMemo(() => agentsByPane(agents), [agents]);
   const projects = useMemo(() => catalogWorkspaces(rest), [rest]);
-  const list = useMemo(() => taskList(scope?.tasks, byPane, projects, view), [scope?.tasks, byPane, projects, view]);
+  const archived = useMemo(() => archivedRows(rest, deviceId), [rest, deviceId]);
+  const list = useMemo(() => taskList(scope?.tasks, byPane, projects, view, archived), [scope?.tasks, byPane, projects, view, archived]);
   const noProject = rest !== null && projects.every((project) => project.is_home || project.device_id !== deviceId);
   const unresponsive = rest !== null && !connected ? (rest.navigator?.devices?.find((device) => device.id === deviceId) ? machineName(rest.navigator?.devices, deviceId, t) : deviceId) : null;
   return (
@@ -104,7 +108,7 @@ export function TaskLens({ actions }: { actions: Actions }) {
           <span className="min-w-0 truncate">{t("taskLens.unresponsive", { device: unresponsive })}</span>
         </p>
       ) : null}
-      {rest === null || !scope ? <TaskSkeleton /> : noProject ? <NoProject actions={actions} /> : list.total === 0 && list.groups.length === 0 && list.resting.length === 0 && list.cleanup.length === 0 ? <NoTasks actions={actions} /> : (
+      {rest === null || !scope ? <TaskSkeleton /> : noProject ? <NoProject actions={actions} /> : list.total === 0 && list.groups.length === 0 && list.resting.length === 0 && list.cleanup.length === 0 && list.archived.length === 0 ? <NoTasks actions={actions} /> : (
         <TaskGroups list={list} view={view} byPane={byPane} agents={agents} folds={folds} focusedPane={inWorkspace ? focusedPane : null} disabled={!connected} actions={actions} />
       )}
     </div>
@@ -183,7 +187,7 @@ const TaskGroups = memo(function TaskGroups({ list, view, byPane, agents, folds,
   const numbered = useUiStore((s) => s.hint === "agents");
   const numbers = numbered ? numberedPanes(drawnTasks(shown).map(({ agent }) => agent.pane_id)) : null;
   const treesOf = (entries: TaskEntry[]) => entries.map((entry) => ({ entry, lines: sessionTreeLines(entry.agent, byPane, opened, shownAll) }));
-  const sections = shown.sections.map(({ group, resting, cleanup }) => ({ group, bands: group.bands.map((band) => ({ state: band.state, trees: treesOf(band.entries) })), resting: treesOf(resting), cleanup: treesOf(cleanup) }));
+  const sections = shown.sections.map(({ group, resting, cleanup, archived }) => ({ group, bands: group.bands.map((band) => ({ state: band.state, trees: treesOf(band.entries) })), resting: treesOf(resting), cleanup: treesOf(cleanup), archived }));
   const restingTrees = treesOf(shown.resting);
   const cleanupTrees = treesOf(shown.cleanup);
   const drawn = new Set([...sections.flatMap(({ bands, resting, cleanup }) => [...bands.flatMap((band) => band.trees), ...resting, ...cleanup]), ...restingTrees, ...cleanupTrees]
@@ -204,9 +208,10 @@ const TaskGroups = memo(function TaskGroups({ list, view, byPane, agents, folds,
   const rows = (trees: ReturnType<typeof treesOf>) => trees.map(({ entry, lines }) => (
     <TaskTree key={entry.card.root} entry={entry} lines={lines} byPane={byPane} opened={opened} selected={selected} number={numbers ? numberOf(numbers, entry.agent.pane_id) : null} showProject={view === "status"} disabled={disabled} actions={actions} onShowAll={showAll} />
   ));
+  const archivedList = (entries: ArchivedEntry[]) => entries.map((entry) => <ArchivedRow key={entry.row.id} entry={entry} showProject={view === "status"} disabled={disabled} actions={actions} />);
   return (
     <div ref={scroller} className={cn("min-h-0 flex-1 overflow-y-auto px-sm pb-md", disabled && "opacity-(--opacity-disabled)")} data-task-list="true" onKeyDown={moveFocus}>
-      {sections.map(({ group, bands, resting, cleanup }) => (
+      {sections.map(({ group, bands, resting, cleanup, archived }) => (
         <section key={group.key} data-task-group={group.state ?? group.project?.id ?? ""} aria-label={groupName(group, t)}>
           <GroupHead group={group} />
           {bands.map((band) => (
@@ -215,10 +220,10 @@ const TaskGroups = memo(function TaskGroups({ list, view, byPane, agents, folds,
               <ul className="flex min-w-0 flex-col" aria-label={view === "project" ? t(`taskLens.group.${band.state}`) : undefined} data-task-band-list={view === "project" ? band.state : undefined}>{rows(band.trees)}</ul>
             </Fragment>
           ))}
-          {view === "project" ? <Folds group={group} resting={resting} cleanup={cleanup} open={openFolds} onToggle={toggleFold} rows={rows} /> : null}
+          {view === "project" ? <Folds group={group} resting={resting} cleanup={cleanup} archived={archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} /> : null}
         </section>
       ))}
-      {view === "status" ? <Folds group={{ key: "", resting: list.resting, cleanup: list.cleanup }} resting={restingTrees} cleanup={cleanupTrees} open={openFolds} onToggle={toggleFold} rows={rows} /> : null}
+      {view === "status" ? <Folds group={{ key: "", resting: list.resting, cleanup: list.cleanup, archived: list.archived }} resting={restingTrees} cleanup={cleanupTrees} archived={shown.archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} /> : null}
     </div>
   );
 }, (before, after) => before.list === after.list && before.view === after.view && before.byPane === after.byPane && before.folds === after.folds && before.focusedPane === after.focusedPane && before.disabled === after.disabled && before.actions === after.actions);
@@ -265,17 +270,19 @@ function GroupHead({ group }: { group: TaskGroup }) {
   );
 }
 
-/** `쉬는 중 N ›` and `정리할 것 N ›` (B5): folded, opened in place, closed with `접기`. */
-function Folds({ group, resting, cleanup, open, onToggle, rows }: {
-  group: Pick<TaskGroup, "key" | "resting" | "cleanup">;
+/** `쉬는 중 N ›`, `정리할 것 N ›` and, last, `보관됨 N ›` (B5; PRD session-archive B14, B15): folded, opened in place, closed with `접기`. */
+function Folds({ group, resting, cleanup, archived, open, onToggle, rows, archivedRows: drawArchived }: {
+  group: Pick<TaskGroup, "key" | "resting" | "cleanup" | "archived">;
   resting: { entry: TaskEntry; lines: SidebarTreeLine[] }[];
   cleanup: { entry: TaskEntry; lines: SidebarTreeLine[] }[];
+  archived: ArchivedEntry[];
   open: ReadonlySet<string>;
   onToggle: (key: string) => void;
   rows: (trees: { entry: TaskEntry; lines: SidebarTreeLine[] }[]) => ReactNode;
+  archivedRows: (entries: ArchivedEntry[]) => ReactNode;
 }) {
   const { t } = useInterfaceTranslation();
-  const fold = (kind: "rest" | "cleanup", count: number, trees: typeof resting) => {
+  const fold = (kind: "rest" | "cleanup" | "archived", count: number, drawn: ReactNode) => {
     if (count === 0) return null;
     const key = taskFoldKey(kind, group.key);
     const expanded = open.has(key);
@@ -284,16 +291,16 @@ function Folds({ group, resting, cleanup, open, onToggle, rows }: {
         <button type="button" data-task-focus="fold" aria-expanded={expanded} onClick={() => onToggle(key)}
           className="flex w-full items-center gap-xs rounded-xs px-xs py-xs text-left text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring">
           {expanded ? <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
-          <span>{t(kind === "rest" ? "taskLens.fold.resting" : "taskLens.fold.cleanup", { count })}</span>
+          <span>{t(kind === "rest" ? "taskLens.fold.resting" : kind === "cleanup" ? "taskLens.fold.cleanup" : "archive.fold", { count })}</span>
         </button>
         {expanded ? <>
-          <ul className="flex min-w-0 flex-col">{rows(trees)}</ul>
+          <ul className="flex min-w-0 flex-col">{drawn}</ul>
           <button type="button" data-task-focus="fold-close" onClick={() => onToggle(key)} className="ml-lg rounded-xs px-xs py-xxs text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring">{t("taskLens.fold.close")}</button>
         </> : null}
       </div>
     );
   };
-  return <>{fold("rest", group.resting.length, resting)}{fold("cleanup", group.cleanup.length, cleanup)}</>;
+  return <>{fold("rest", group.resting.length, rows(resting))}{fold("cleanup", group.cleanup.length, rows(cleanup))}{fold("archived", group.archived.length, drawArchived(archived))}</>;
 }
 
 /** A task's row and, through every opened row, its descendants (B10). */
@@ -323,12 +330,15 @@ function TaskRow({ entry, family, open, selected, number, showProject, disabled,
   const go = () => { if (!disabled) actions.openListedAgent(agent.pane_id); };
   const record = session ? () => actions.openSessionRecord(session) : null;
   const toggle = () => actions.toggleSessionTree(agent.pane_id);
+  // The ⋯ and a right-click on the row open the same menu (PRD session-archive B1, D-27).
+  const menu = useTaskMenu(agent, record, go, !agent.resolved, disabled, actions, true);
   // The row's own mark words, as the sidebar row says them (status-marks B3, B33); a fold's rows say the fold.
   const words = card.state === "resting" || card.state === "cleanup" ? t(`taskLens.state.${card.state}`) : markWords(t, agent);
   const sentence = rowSentence(t, agent);
   // The visible second line follows the button and is read after it, so the name leaves the sentence to it.
   const name = [agent.identity_label, forkLabel(t, agent), agentProductName(agent.agent_kind), words, hideAiWords(t, agent.hide_ai)].filter(Boolean).join(", ");
   return (
+    <EntryContextMenu asChild label={t("taskLens.more", { name: agent.identity_label })} items={menu.items} onSelect={menu.select} disabled={disabled} data-task-context={agent.pane_id}>
     <li className={cn("group/task relative flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(agent) && "opacity-(--opacity-dimmed)")}
       data-task-row={agent.pane_id} data-task-state={card.state} data-selected={selected ? "true" : undefined} onClick={go}>
       <TreeChevron name={agent.identity_label} open={open} onToggle={toggle} hangs={false} disabled={disabled} data-task-chevron={agent.pane_id} />
@@ -346,25 +356,134 @@ function TaskRow({ entry, family, open, selected, number, showProject, disabled,
           </button>
           {open ? null : <DescendantMark agent={agent} />}
           <AgentPrMark agent={agent} family={family} staleness={staleness} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
-          <TimeSlot agent={agent} record={record} onPane={go} resolvable={!agent.resolved} disabled={disabled} actions={actions} />
+          <TimeSlot agent={agent} record={record} menu={menu} />
         </div>
         <SecondLine entry={entry} showProject={showProject} />
       </div>
       {number !== null ? <Keycap number={number} /> : null}
     </li>
+    </EntryContextMenu>
   );
+}
+
+type ArchivedMenuId = "record" | "resume" | "check" | "delete";
+
+/**
+ * An archived session in `보관됨` (PRD session-archive B14-B18): its title,
+ * the project in 상태별, its PR marks and how long ago it was archived, with
+ * no status mark because nothing runs. Pressing it opens its record; ⋯ and a
+ * right-click offer 기록 보기 · 이어가기 · 보관함에서 지우기…, and 상태 확인
+ * while the core cannot say whether its close finished.
+ */
+function ArchivedRow({ entry, showProject, disabled, actions }: { entry: ArchivedEntry; showProject: boolean; disabled: boolean; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const { row, project } = entry;
+  const [root] = row.members;
+  const [open, setOpen] = useState(false);
+  const indent = detailIndent(useAgentLogosShown());
+  // A row of a device that is gone keeps its record and its delete; resuming waits for the device (B13).
+  const away = useShellStore((s) => row.device_id !== localDeviceId(s.rest) && !deviceConnected(s.rest, row.device_id));
+  if (!root) return null;
+  const record = () => actions.openSessionRecord(root.session);
+  const pending = row.phase === "archiving" || row.phase === "deleting" || row.members.some((member) => member.resume === "queued" || member.resume === "starting");
+  const failed = row.members.some((member) => member.resume === "failed");
+  const state = row.phase === "deleting" ? t("archive.deleting") : row.phase === "archiving" ? t("archive.archiving") : row.phase === "unknown" ? t("archive.unknown")
+    : row.members.some((member) => member.resume === "queued" || member.resume === "starting") ? t("archive.resuming") : failed ? t("archive.resumeFailed") : null;
+  const parts = prMarkParts(row.members.flatMap((member) => member.pulls.map((pull) => ({ pull, state: pull.state }))));
+  const items = (): MenuEntry<ArchivedMenuId>[] => [
+    { id: "record", label: t("taskLens.menu.record"), unavailable: null, shortcut: "Space" },
+    { id: "resume", label: t("archive.resume"), unavailable: disabled || pending || away ? "" : null },
+    ...(row.phase === "unknown" ? [{ id: "check" as const, label: t("workspace.checkStatus"), unavailable: disabled || away ? "" : null }] : []),
+    { id: "delete", label: t("archive.menu.delete"), unavailable: disabled || pending ? "" : null, separated: true, destructive: true },
+  ];
+  const select = (id: ArchivedMenuId) => {
+    if (id === "record") return record();
+    if (id === "resume") return actions.resumeArchived(row.id);
+    if (id === "check") return actions.checkArchived(row.id);
+    return actions.deleteArchived(row.id);
+  };
+  const label = t("taskLens.more", { name: root.title });
+  const shown = open ? "opacity-100" : "opacity-0 group-hover/task:opacity-100 group-focus-within/task:opacity-100 hoverless:opacity-100";
+  const hidden = open ? "opacity-0" : "group-hover/task:opacity-0 group-focus-within/task:opacity-0 hoverless:opacity-0";
+  return (
+    <EntryContextMenu asChild label={label} items={items} onSelect={select} data-archived-context={row.id}>
+      <li className={cn("group/task relative flex min-w-0 items-stretch rounded-xs pr-xs hover:bg-accent focus-within:bg-accent", (pending || away) && "opacity-(--opacity-dimmed)")}
+        data-archived-row={row.id} data-archived-phase={row.phase} data-archived-resume={failed ? "failed" : pending ? "pending" : undefined} onClick={record}>
+        <TreeChevron name={root.title} open={null} onToggle={() => {}} hangs={false} />
+        <div className="flex min-w-0 flex-1 flex-col gap-xxs py-xs pl-xs">
+          <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
+            <button type="button" data-task-focus="row" aria-label={[root.title, agentProductName(root.agent_kind), t("archive.state"), state].filter(Boolean).join(", ")}
+              title={[root.title, agentProductName(root.agent_kind), root.last_line].filter(Boolean).join("\n")}
+              onClick={(event) => { event.stopPropagation(); record(); }}
+              onKeyDown={(event) => { if (event.key === " ") { event.preventDefault(); record(); } }}
+              className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring">
+              <AgentRowMark kind={root.agent_kind} hideAi={null} />
+              <span className="min-w-0 truncate text-caption font-medium text-muted-foreground">{root.title}</span>
+            </button>
+            {parts ? <PartsMark parts={parts} /> : null}
+            <span className="grid shrink-0 items-center justify-items-end" onClick={(event) => event.stopPropagation()}>
+              <Elapsed since={row.archived_at_unix_ms} className={cn("pointer-events-none col-start-1 row-start-1 text-micro text-muted-foreground tabular-nums", hidden)} />
+              <span className={cn("col-start-1 row-start-1 flex items-center", shown)}>
+                <EntryDropdown label={label} items={items} onSelect={select} onOpenChange={setOpen} data-archived-menu={row.id}
+                  trigger={
+                    <button type="button" aria-label={label} data-archived-more={row.id} className="rounded-xs p-xxs text-muted-foreground outline-none hover:bg-secondary focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary">
+                      <EllipsisIcon className="size-(--size-icon-sm)" />
+                    </button>
+                  } />
+              </span>
+            </span>
+          </div>
+          {showProject || state ? (
+            <div className={cn(indent, "flex min-w-0 items-baseline gap-xs text-micro")} data-archived-line="">
+              {showProject ? <span className="shrink-0 text-muted-foreground" data-task-project={project?.id ?? row.project_root}>{project?.label ?? row.project_label}</span> : null}
+              {state ? <span className={cn("min-w-0 truncate", failed ? "text-destructive" : "text-subtle-foreground")}>{state}</span> : null}
+            </div>
+          ) : null}
+        </div>
+      </li>
+    </EntryContextMenu>
+  );
+}
+
+type TaskMenuId = "record" | "pane" | "resolve" | "archive";
+type TaskMenu = { items: () => MenuEntry<TaskMenuId>[]; select: (id: TaskMenuId) => void };
+
+/**
+ * A row's menu (B15, B18; PRD session-archive B1): 기록 보기 · pane으로 ·
+ * Resolve and, on a root task, 세션 보관, disabled with why where Hide cannot
+ * archive it now.
+ */
+function useTaskMenu(agent: AgentRow, record: (() => void) | null, onPane: () => void, resolvable: boolean, disabled: boolean, actions: Actions, root: boolean): TaskMenu {
+  const { t } = useInterfaceTranslation();
+  const items = (): MenuEntry<TaskMenuId>[] => {
+    const entries: MenuEntry<TaskMenuId>[] = [
+      { id: "record", label: t("taskLens.menu.record"), unavailable: record ? null : "", shortcut: "Space" },
+      { id: "pane", label: t("taskLens.menu.pane"), unavailable: disabled ? "" : null, shortcut: "↩" },
+    ];
+    if (resolvable) entries.push({ id: "resolve", label: t("agentSessions.resolve"), unavailable: disabled ? "" : null });
+    const archive = root ? archiveOffer(useShellStore.getState().rest, agent, t) : { kind: "hidden" as const };
+    if (archive.kind === "offered") entries.push({ id: "archive", label: t("archive.menu.archive"), unavailable: archive.unavailable, separated: true });
+    return entries;
+  };
+  const select = (id: TaskMenuId) => {
+    if (id === "record") return record?.();
+    if (id === "pane") return onPane();
+    if (id === "resolve") return actions.resolveSession(agent.pane_id);
+    return actions.archiveSession(agent.pane_id);
+  };
+  return { items, select };
 }
 
 /**
  * The time, and in its place under the pointer or focus the record button
- * and `⋯` (B15, B18): 기록 보기 · pane으로 · Resolve. Both share one cell, so
- * the slot is as wide as the wider and neither is drawn over the title.
+ * and `⋯` (B15, B18). Both share one cell, so the slot is as wide as the
+ * wider and neither is drawn over the title.
  */
-function TimeSlot({ agent, record, onPane, resolvable, disabled, actions }: { agent: AgentRow; record: (() => void) | null; onPane: () => void; resolvable: boolean; disabled: boolean; actions: Actions }) {
+function TimeSlot({ agent, record, menu }: { agent: AgentRow; record: (() => void) | null; menu: TaskMenu }) {
   const { t } = useInterfaceTranslation();
-  const [menu, setMenu] = useState(false);
-  const shown = menu ? "opacity-100" : "opacity-0 group-hover/task:opacity-100 group-focus-within/task:opacity-100 hoverless:opacity-100";
-  const hidden = menu ? "opacity-0" : "group-hover/task:opacity-0 group-focus-within/task:opacity-0 hoverless:opacity-0";
+  const [open, setOpen] = useState(false);
+  const shown = open ? "opacity-100" : "opacity-0 group-hover/task:opacity-100 group-focus-within/task:opacity-100 hoverless:opacity-100";
+  const hidden = open ? "opacity-0" : "group-hover/task:opacity-0 group-focus-within/task:opacity-0 hoverless:opacity-0";
   return (
     <span className="grid shrink-0 items-center justify-items-end" onClick={(event) => event.stopPropagation()}>
       <Elapsed since={agent.state.request_since} className={cn("pointer-events-none col-start-1 row-start-1 text-micro text-muted-foreground tabular-nums", hidden)} />
@@ -376,18 +495,12 @@ function TimeSlot({ agent, record, onPane, resolvable, disabled, actions }: { ag
             </button>
           </Hint>
         ) : null}
-        <DropdownMenu onOpenChange={setMenu}>
-          <DropdownMenuTrigger asChild>
+        <EntryDropdown label={t("taskLens.more", { name: agent.identity_label })} items={menu.items} onSelect={menu.select} onOpenChange={setOpen} data-task-menu={agent.pane_id}
+          trigger={
             <button type="button" aria-label={t("taskLens.more", { name: agent.identity_label })} data-task-more={agent.pane_id} className="rounded-xs p-xxs text-muted-foreground outline-none hover:bg-secondary focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary">
               <EllipsisIcon className="size-(--size-icon-sm)" />
             </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" data-task-menu={agent.pane_id}>
-            <DropdownMenuItem disabled={!record} onSelect={() => record?.()} data-task-menu-item="record">{t("taskLens.menu.record")}<DropdownMenuShortcut>Space</DropdownMenuShortcut></DropdownMenuItem>
-            <DropdownMenuItem disabled={disabled} onSelect={onPane} data-task-menu-item="pane">{t("taskLens.menu.pane")}<DropdownMenuShortcut>↩</DropdownMenuShortcut></DropdownMenuItem>
-            {resolvable ? <DropdownMenuItem disabled={disabled} onSelect={() => actions.resolveSession(agent.pane_id)} data-task-menu-item="resolve">{t("agentSessions.resolve")}</DropdownMenuItem> : null}
-          </DropdownMenuContent>
-        </DropdownMenu>
+          } />
       </span>
     </span>
   );
@@ -449,6 +562,7 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
   const go = () => { if (!disabled) actions.openListedAgent(child.pane_id); };
   const record = session ? () => actions.openSessionRecord(session) : null;
   const toggle = () => actions.toggleSessionTree(child.pane_id);
+  const menu = useTaskMenu(child, record, go, false, disabled, actions, false);
   const quiet = !child.state.title_emphasized && !(selected && child.state.selection_emphasizes_title);
   return (
     <li className={cn("group/task flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(child) && "opacity-(--opacity-dimmed)")}
@@ -470,7 +584,7 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
           {device ? <span className="flex shrink-0 items-center gap-xxs rounded-xs border border-border px-xxs text-micro text-muted-foreground" data-task-device={device}><ServerIcon aria-hidden="true" className="size-(--size-icon-sm)" />{device}</span> : null}
           {open ? null : <DescendantMark agent={child} />}
           <AgentPrMark agent={child} staleness={staleness} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: workspace, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
-          <TimeSlot agent={child} record={record} onPane={go} resolvable={false} disabled={disabled} actions={actions} />
+          <TimeSlot agent={child} record={record} menu={menu} />
         </div>
         <ChildLine child={child} />
         {child.state.branch_badge ? <BranchLine agent={child} branch={child.state.branch_badge} /> : null}
