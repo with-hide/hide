@@ -325,8 +325,20 @@ int main(int argc, char **argv) {
 #ifdef _WIN32
   flags |= _O_BINARY;
 #endif
+  char fork_log[4096];
+  const int forked = has_option(argc, argv, "--fork-session");
+  if (forked) {
+    const char *root = getenv("HIDE_E2E_ROOT");
+    if (!root || snprintf(fork_log, sizeof fork_log, "%s/fork-input.log", root) >= (int)sizeof fork_log) return 1;
+    log_path = fork_log;
+  }
   int log = log_path ? open(log_path, flags, 0644) : -1;
+  if (forked && log < 0) return 1;
   raw_terminal();
+  if (forked) {
+    static const char ready[] = "\r\nFORK_INPUT_READY\r\n";
+    if (terminal_write(ready, sizeof ready - 1) != (fixture_count_t)(sizeof ready - 1)) return 1;
+  }
   if (run_as_codex(argv[0])) {
     static const char composer[] = "\xe2\x80\xba Ask Codex to do anything\r\n";
     if (terminal_write(composer, sizeof composer - 1) != (fixture_count_t)(sizeof composer - 1)) return 1;

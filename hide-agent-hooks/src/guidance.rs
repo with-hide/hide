@@ -62,15 +62,6 @@ use crate::runtime::{HookEvent, PURPOSE_CONTEXT, marker_version_of};
 /// the `--source` argument of the command like the other hooks' marker.
 pub const GUIDANCE_SOURCE_NAME: &str = "hide-guidance";
 
-/// Raise it when the command or entry Hide writes changes shape. Version 2
-/// added the guard and subagent events beside Cursor's session start;
-/// version 3 stopped writing Cursor's `subagentStart`, `subagentStop` and
-/// `stop`, which only fed a count Cursor no longer reports (issue 940).
-/// Version 4 prepares Cursor's PowerShell input before starting the helper.
-/// Version 5 selects the file tools for the guardrails.
-/// Version 7 encodes agy's Windows command across its Go-to-cmd boundary.
-pub const GUIDANCE_VERSION: u32 = 7;
-
 /// The one line every guidance hook adds after the shared instruction, so an
 /// agent that Hide cannot place in a Workspace still learns where the usage
 /// lives. The text itself is read from the binary, not written here.
@@ -97,6 +88,26 @@ pub enum GuidanceAgent {
 }
 
 impl GuidanceAgent {
+    /// Raise this agent's marker when its installed entry changes shape;
+    /// unrelated agents keep byte-identical hook entries.
+    /// Version 7 adds prompt observation and turn-end letters for Grok,
+    /// and encodes Antigravity commands on Windows across its Go-to-cmd boundary.
+    pub const fn version(self) -> u32 {
+        match self {
+            Self::Grok => 7,
+            Self::Antigravity if cfg!(windows) => 7,
+            Self::Gemini
+            | Self::Qwen
+            | Self::Droid
+            | Self::Copilot
+            | Self::Kiro
+            | Self::Cursor
+            | Self::Augment
+            | Self::Junie
+            | Self::Antigravity => 6,
+        }
+    }
+
     pub const ALL: [GuidanceAgent; 10] = [
         Self::Gemini,
         Self::Qwen,
@@ -172,6 +183,7 @@ impl GuidanceAgent {
             Slot::new(HookEvent::PreToolUse, "preToolUse", None),
         ];
         const GROK: &[Slot] = &[
+            Slot::new(HookEvent::UserPromptSubmit, "UserPromptSubmit", None),
             Slot::new(HookEvent::SessionStart, "SessionStart", None),
             // Every tool call, which Grok's guide reads an omitted matcher
             // as: the guardrails read the shell and file calls, and the
@@ -451,8 +463,9 @@ pub fn stdout(agent: GuidanceAgent, context: &str) -> Option<String> {
 // --- Writing the entry -----------------------------------------------------------
 
 fn arguments(agent: GuidanceAgent, event: HookEvent) -> String {
+    let version = agent.version();
     format!(
-        "hook --runtime {} --event {} --source {GUIDANCE_SOURCE_NAME}@{GUIDANCE_VERSION}",
+        "hook --runtime {} --event {} --source {GUIDANCE_SOURCE_NAME}@{version}",
         agent.id(),
         event.name()
     )
@@ -907,7 +920,7 @@ pub fn status(agent: GuidanceAgent, home: &Path) -> HookStatus {
             },
         };
     }
-    if missing_event || version < GUIDANCE_VERSION {
+    if missing_event || version < agent.version() {
         HookStatus::Outdated { version }
     } else {
         HookStatus::Installed { version }

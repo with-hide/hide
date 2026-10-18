@@ -39,9 +39,8 @@ CONFIRM_SECONDS = 60
 # A letter's path at rest is the contract's `letter` form (contracts/agent-journey.json).
 TOOL_LETTER = ("this agent takes a letter only at a tool call its model makes while it works, or through a "
                "hide inbox it runs, and the journey never asks a model to choose an action (PRD agent-journey-check D-11); "
-               "it closes once the adapter gives the agent a prompt hook or a bell (Grok 1.0.52 and 1.0.62 pass none of "
-               "an allowing UserPromptSubmit hook's added context to the model, so a bell's turn carries no letter, and "
-               "Grok's plan approval screen reads as working, so a bell while it works lands on that screen)")
+               "it closes once the adapter declares a measured path at rest: a prompt hook that carries the letter "
+               "or a bell whose turn can take it")
 LETTER_BODY = "Reply with exactly the token on the next line of this letter.\n"
 LETTER_PROMPT = "Reply with exactly the token on the second line of the letter attached to this prompt."
 # The cells each measured by a module of its own, judging what Hide shows.

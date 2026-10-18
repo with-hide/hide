@@ -193,10 +193,15 @@ Regression owners are `hide-agent-hooks/tests/it/spawn_guard.rs` (nothing spawne
 
 ## Letters at a tool event
 
-While an agent works its letters reach it at a tool event ([delivery.md](delivery.md#letters-while-the-agent-works)), which makes a tool call a high-frequency path for five agents.
+While an agent works its letters reach it at a tool event ([delivery.md](delivery.md#letters-while-the-agent-works)), which makes a tool call a high-frequency path for six agents.
 Per tool result, OpenCode's plugin and the Pi and omp extension start one helper (`hide-agent-hooks <agent> letters`), which starts one sibling `hide inbox --hook --session <id> --tool`, a credential bootstrap and one typed hook request to the daemon; the core hands it to the delivery worker like a prompt pull, which reads the ledger it holds and renders at most five letters, with no subprocess and no network, and writes the ledger only when the pull's maintenance changed a letter.
 The scripts bound it: only the pane's root session asks, with a 1.5 second budget past which the result goes on unchanged, inside the cap of eight running helpers, and a result that comes while letters the script handed over wait for their receipt pays a map read and no helper.
-Grok's and Cursor's hook runs per tool call (their entries carry no matcher from `hide-guidance@6`); a call that runs adds the same `hide inbox` call inside the guard's 2.5 second budget, and a refused call adds nothing.
+Grok's and Cursor's hook runs per tool call (their entries carry no matcher from version 6; Grok now uses `hide-guidance@7`, Cursor stays at 6); a call that runs adds the same `hide inbox` call inside the guard's 2.5 second budget, and a refused call adds nothing.
+Grok's version 7 also starts one helper per `UserPromptSubmit`, which calls `hide inbox --hook --session <id> --prompt-digest <digest>` but prints and confirms nothing.
+A root `Stop` with a session and `stopHookActive: false` adds one `hide inbox --hook --session <id> --turn-end`, and one confirmation command only when it printed letters.
+Both events share the helper's total 2.5 second budget, including a 400 ms confirmation reserve; the subagent count runs after the Stop intake, so a stalled intake can delay that count by up to 2.5 seconds.
+A repeated Stop with `stopHookActive: true` makes no pull and still updates the count.
+The core saves only changed bell claims or handover counts; repeated observation of the same bell turn adds no claim write.
 agy's `PreInvocation` hook already runs per model call; a call after the prompt's first adds the same `hide inbox` call inside the prompt hook's 1.65 second budget.
 On Windows, agy's command starts one Windows PowerShell process between its existing `cmd` shell and the helper, at each selected hook event, to carry the command through agy's quote escaping ([agent-hooks.md](agent-hooks.md#antigravity-hides-hook-block)).
 This shell runs only for that event; it adds no resident worker, timer, retained state, pending queue or notification, and leaves the helper's input and deadlines unchanged.
