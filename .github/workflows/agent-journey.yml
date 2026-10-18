@@ -194,7 +194,8 @@ jobs:
     name: agent journey fake model (${{ matrix.system }})
     if: ${{ inputs.fake }}
     runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
-    timeout-minutes: 60
+    # Seven agents of eleven cells each, about 4 to 7 minutes an agent on macOS (2026-10-18).
+    timeout-minutes: 95
     strategy:
       fail-fast: false
       matrix:
@@ -249,7 +250,7 @@ jobs:
           fi
           echo "bin=$bin" >> "$GITHUB_OUTPUT"
       - name: The journey against the fake model
-        timeout-minutes: 40
+        timeout-minutes: 75
         run: |
           set +e
           "$PYTHON" scripts/agent-journey-check.py --mode ci --fake-model --agents claude-code,codex,grok,opencode,pi,omp,antigravity \
