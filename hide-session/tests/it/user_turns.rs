@@ -400,7 +400,7 @@ fn a_native_call_id_past_its_bound_is_a_reported_read_failure() {
         session.append(&session.native_question(&"x".repeat(257), question("Q", &["A"])));
         assert_eq!(
             read(session.home.path(), &session.request).unwrap_err(),
-            "user_turn_capacity"
+            hide_session::ReadRefusal::Refused("user_turn_capacity".into())
         );
     }
 }
@@ -628,7 +628,7 @@ fn a_native_question_without_a_valid_correlation_is_a_reported_read_failure() {
             session.append(&record);
             assert_eq!(
                 read(session.home.path(), &session.request).unwrap_err(),
-                "user_turn_invalid"
+                hide_session::ReadRefusal::Refused("user_turn_invalid".into())
             );
         }
     }

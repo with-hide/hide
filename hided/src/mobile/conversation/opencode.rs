@@ -48,11 +48,13 @@ fn changed() -> SessionError {
     SessionError::Checkpoint("label_session_read_changed".to_owned())
 }
 
-fn refused(reason: String) -> SessionError {
-    if reason == "session_file_missing" {
-        SessionError::SessionFileMissing
-    } else {
-        SessionError::Checkpoint(reason)
+fn refused(refusal: impl Into<hide_session::ReadRefusal>) -> SessionError {
+    match refusal.into() {
+        hide_session::ReadRefusal::InMotion(reason) => SessionError::InMotion(reason),
+        hide_session::ReadRefusal::Refused(reason) if reason == "session_file_missing" => {
+            SessionError::SessionFileMissing
+        }
+        hide_session::ReadRefusal::Refused(reason) => SessionError::Checkpoint(reason),
     }
 }
 
