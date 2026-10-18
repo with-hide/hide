@@ -431,17 +431,17 @@ The journey reads what hide, Herdr and the agents write as UTF-8 and refuses to 
 `scripts/agent-journey-lane.py` turns a report into the lane's verdict and its annotations, and the lane keeps the report as an artifact.
 The journey alone runs by hand with the repository's secrets: `gh workflow run agent-journey.yml --ref <branch> -f systems='["linux","macos","windows"]' -f fake=true -f live=true -f agy=rotation`; a hand run's agy requests come out of the same 20 a day as the nightly's.
 
-Each agent on the fake model lane on Linux and macOS on 2026-10-18 (run 39097395133, both systems the same but where a row says), with where its `title` cell's native title comes from, its model requests (each prompt's, a CLI's own title and helper requests included) against the budget `contracts/agent-journey.json` gives a signed-in run, and each cell that did not pass with its cause:
+Each agent on the fake model lane on Linux and macOS on 2026-10-18 (runs 39097395133 and 39099935719, both systems and both runs the same but where a row says), with where its `title` cell's native title comes from, its model requests (each prompt's, a CLI's own title and helper requests included) against the budget `contracts/agent-journey.json` gives a signed-in run, and each cell that did not pass with its cause:
 
 | Agent | CLI | Title source | Requests | Cells not passing, and why |
 | --- | --- | --- | --- | --- |
 | Claude Code | 2.1.302 | automatic: its own title request, which the fake model answers | 8 of 18: 1 per prompt and 1 title request per new session | none |
 | Codex | 0.163.0 | automatic, as Claude Code | 8 of 18 | none |
-| Grok | 1.0.52 | automatic: its title request to `grok-4.6` | 16 of 20: 4 for every prompt, 3 chat requests and 1 more (12 on macOS, whose fork turn never started) | `letter` not measured: Grok takes a letter only at a tool call its model chooses; on macOS `fork` failed once: Hide focused the fork's pane before its checkout held it and kept its terminal waiting (`pane.projection_unavailable`) past the 30 s the journey waits to type, while on Linux the same wait cleared in time; the fork pane's projection wait is a product fix in progress (fix/fork-pane-projection-wait) |
+| Grok | 1.0.52 | automatic: its title request to `grok-4.6` | 16 of 20: 4 for every prompt, 3 chat requests and 1 more (12 on macOS, whose fork turn never started) | `letter` not measured: Grok takes a letter only at a tool call its model chooses; on macOS `fork` failed once (run 39097395133): Hide focused the fork's pane before its checkout held it and kept its terminal waiting (`pane.projection_unavailable`) past the 30 s the journey waits to type, while on Linux the same wait cleared in time; the fork pane's projection wait is a product fix in progress (fix/fork-pane-projection-wait) |
 | OpenCode | 2.0.29 | automatic: its own title request | 8 of 18 | none, `fork` included since its fork goes through the OpenCode server (#1356) |
 | Pi | 1.0.4 | named: `/name <name>`, typed as the operator names a session | 6 of 18 | none, since Herdr's `launch_pending` settles (#1354) |
 | omp | 18.7.0 | automatic: its own title request | 8 of 18 | none, as Pi |
-| agy | 1.4.2 | automatic: its own title request | 8 of 18 | none, once the lanes write the onboarding status a set-up agy keeps |
+| agy | 1.4.2 | automatic: its own title request | 8 of 18 (7 on macOS in run 39099935719, whose fork turn never started) | none on Linux, once the lanes write the onboarding status a set-up agy keeps; on macOS `fork` failed once (run 39099935719): Hide's row lost agy's session id between the start and the fork, so the core refused the fork (`pane.fork_unsupported_agent`) and opened no pane, while `resume` later found the same session; a product fix in progress (fix/agy-session-id-lost) |
 
 Hide AI's goal title is a separate path this table does not measure: Hide AI is off in the journey (D-54).
 Product follow-up: agy's first-run onboarding holds the first prompt of an agy that was never set up, as Hide's spawn of it on a new machine would meet it.
