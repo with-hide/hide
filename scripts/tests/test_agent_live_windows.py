@@ -145,7 +145,7 @@ class JobOwnership(unittest.TestCase):
         with patch.object(processes, "MAX_RSS_BYTES", cap):
             self.owner = OwnedProcesses()
             # Committed and never written: Windows charges it, RSS does not hold it.
-            result = self.owner.run(self.python(f"""
+            code, _, stderr = self.owner.run(self.python(f"""
                 import ctypes, time
                 VirtualAlloc = ctypes.windll.kernel32.VirtualAlloc
                 VirtualAlloc.restype = ctypes.c_void_p
@@ -154,7 +154,7 @@ class JobOwnership(unittest.TestCase):
                     raise SystemExit("VirtualAlloc failed")
                 time.sleep(1)
             """), env=dict(os.environ), check=False)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(code, 0, stderr)
 
     def test_output_past_the_cap_ends_the_command(self):
         with self.assertRaisesRegex(ProcessError, "command_output_over_budget"):
