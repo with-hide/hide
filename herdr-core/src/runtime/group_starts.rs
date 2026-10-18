@@ -40,6 +40,8 @@ pub(crate) struct StartIntent {
     pub recorded_at: u64,
     #[serde(default)]
     pub seen_in_topology: bool,
+    #[serde(default)]
+    pub effect: Option<crate::start_claim::Effect>,
 }
 
 impl StartIntent {
@@ -91,6 +93,51 @@ pub(crate) fn receipts(
             },
         )
         .collect()
+}
+
+/// A physical staging tab consumes the already admitted draft/start, not a
+/// second visible tab. Hide only its own exact claim, never unrelated panes
+/// that somebody subsequently placed beside the staged terminal.
+pub(super) fn staged_tab(
+    view: &workspace_views::WorkspaceView,
+    local: bool,
+    device: &str,
+    owner: Option<&str>,
+    tab: &TabSnapshot,
+) -> bool {
+    let scoped = |id: &str| {
+        if local {
+            id.to_owned()
+        } else {
+            crate::session_sync::remote_tab_id(device, id)
+        }
+    };
+    view.agent_starts.values().any(|start| {
+        let Some(effect) = start.effect.as_ref().filter(|_| start.is_pending()) else {
+            return false;
+        };
+        if owner != Some(effect.workspace_id.as_str())
+            || effect
+                .target
+                .as_ref()
+                .is_some_and(|target| tab.id.as_deref() == Some(scoped(&target.tab_id).as_str()))
+        {
+            return false;
+        }
+        let claim = crate::start_claim::label(&start.marker);
+        let seed = effect.seed_tab_id.as_ref().is_some_and(|id| {
+            tab.id.as_deref() == Some(scoped(id).as_str())
+                && effect.binding.is_none()
+                && tab.panes.len() == 1
+                && !tab.naming.by_operator
+                && tab.agent.is_none()
+        });
+        seed || (!tab.panes.is_empty()
+            && tab
+                .panes
+                .iter()
+                .all(|pane| pane.start_claim.as_deref() == Some(claim.as_str())))
+    })
 }
 
 impl Runtime {
@@ -363,6 +410,7 @@ impl Runtime {
                     agent_phase: None,
                     recorded_at: unix_milliseconds(),
                     seen_in_topology: false,
+                    effect: None,
                 },
                 false,
             )
@@ -410,6 +458,7 @@ impl Runtime {
                 agent_already_attempted: already_ready,
                 agent_phase: intent.agent_phase,
                 confirm_only,
+                effect: intent.effect,
             },
             saved,
         })
@@ -438,6 +487,53 @@ impl Runtime {
             }
             !matches
         });
+    }
+
+    pub(crate) fn save_group_start_effect(
+        &mut self,
+        task: u64,
+        effect: crate::start_claim::Effect,
+    ) -> Result<Receiver<Result<(), String>>, String> {
+        let active = self
+            .group_start
+            .as_ref()
+            .filter(|active| active.task == task)
+            .ok_or("The start is no longer current. Check its original tab.")?;
+        let store = self
+            .workspace_views
+            .as_mut()
+            .ok_or("The start cannot be saved. Retry its status check.")?;
+        let start = store
+            .views
+            .get_mut(&active.workspace.0, &active.workspace.1)
+            .and_then(|view| view.agent_starts.get_mut(&active.key))
+            .ok_or("The start has no saved intent. Check its original tab.")?;
+        if let Some(previous) = &start.effect
+            && (previous.workspace_id != effect.workspace_id
+                || previous.seed_tab_id != effect.seed_tab_id
+                || previous.target != effect.target
+                || previous.expected_command != effect.expected_command
+                || previous
+                    .binding
+                    .as_ref()
+                    .is_some_and(|bound| effect.binding.as_ref() != Some(bound)))
+        {
+            return Err(
+                "The original start's identity changed. Inspect its tab before continuing.".into(),
+            );
+        }
+        start.effect = Some(effect);
+        let intent = start.clone();
+        let (sender, receiver) = sync_channel(1);
+        self.group_start_saves.push(SaveWaiter {
+            workspace: active.workspace.clone(),
+            key: active.key.clone(),
+            intent,
+            sender,
+        });
+        store.generation = store.generation.wrapping_add(1);
+        self.persist_workspace_views();
+        Ok(receiver)
     }
 
     pub(crate) fn group_agent_start_save(
@@ -687,6 +783,7 @@ impl Runtime {
         }
         store.generation = store.generation.wrapping_add(1);
         self.persist_workspace_views();
+        self.request_republish();
     }
 
     pub(super) fn save_group_agent_result(&mut self, task: u64, phase: &str) {

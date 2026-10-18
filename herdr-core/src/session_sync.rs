@@ -412,7 +412,7 @@ pub(crate) use coordinator::agent_tick_needs_publish;
 pub(crate) use coordinator::spawn;
 pub(crate) use projection::{
     ProjectedAgent, ProjectedPane, ProjectedTab, ProjectedWorkspace, ProjectedWorktree,
-    ProjectionState, non_blank, project_snapshot,
+    ProjectionState, project_snapshot,
 };
 #[cfg(test)]
 pub(crate) use replica::SNAPSHOT_FIELDS_THE_REPLICA_READS;

@@ -108,6 +108,92 @@ impl TabTarget {
         }
         Ok(())
     }
+
+    fn save_start_effect(
+        &self,
+        id: u64,
+        effect: &crate::start_claim::Effect,
+    ) -> Result<(), String> {
+        self.check_current(id)?;
+        let saved = {
+            let runtime = self.runtime.upgrade().ok_or("runtime stopped")?;
+            runtime
+                .lock()
+                .map_err(|_| "runtime unavailable")?
+                .save_group_start_effect(id, effect.clone())?
+        };
+        saved.recv_timeout(Duration::from_secs(10)).map_err(|_| {
+            "The terminal proof could not be saved. Check this start's status again.".to_owned()
+        })?
+    }
+
+    fn acquire_start_geometry(
+        &self,
+        request: &CheckoutTabRequest,
+    ) -> Result<Option<String>, String> {
+        let Some(start) = request
+            .start
+            .as_ref()
+            .filter(|start| start.tab_id.is_some())
+        else {
+            return Ok(None);
+        };
+        self.check_current(request.id)?;
+        let layout = export_reopen_layout(
+            self.connector.as_ref(),
+            &start.marker,
+            start.tab_id.as_deref().expect("checked"),
+        )?;
+        let ready = {
+            let runtime = self.runtime.upgrade().ok_or("runtime stopped")?;
+            let mut runtime = runtime.lock().map_err(|_| "runtime unavailable")?;
+            let device = runtime
+                .snapshot()
+                .task_operation
+                .as_ref()
+                .filter(|task| task.id == request.id)
+                .and_then(|task| task.device_id.as_deref());
+            let pane = device.map_or_else(
+                || layout.focused_pane_id.clone(),
+                |device| crate::session_sync::remote_pane_id(device, &layout.focused_pane_id),
+            );
+            runtime.queue_checkout_start_geometry(request.id, &pane)?
+        };
+        match ready.recv_timeout(Duration::from_secs(120)) {
+            Ok(Ok(id)) => Ok(Some(id)),
+            answer => {
+                if let Some(runtime) = self.runtime.upgrade()
+                    && let Ok(mut runtime) = runtime.lock()
+                {
+                    runtime.cancel_checkout_start_geometry(request.id);
+                }
+                match answer {
+                    Ok(Err(message)) => Err(message),
+                    _ => Err(
+                        "The tab's layout is still busy. Check the same start's status again."
+                            .into(),
+                    ),
+                }
+            }
+        }
+    }
+
+    fn check_start_geometry(&self, task: u64, lease: Option<&str>) -> Result<(), String> {
+        self.check_current(task)?;
+        if let Some(lease) = lease {
+            let runtime = self.runtime.upgrade().ok_or("runtime stopped")?;
+            if !runtime
+                .lock()
+                .map_err(|_| "runtime unavailable")?
+                .checkout_start_geometry_is_current(task, lease)
+            {
+                return Err(
+                    "The tab's layout changed. Check the original start's status again.".into(),
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One off-lock host check admits the entire close sequence, including
@@ -938,6 +1024,7 @@ pub(crate) struct CheckoutStart {
     pub agent_already_attempted: bool,
     pub agent_phase: Option<String>,
     pub confirm_only: bool,
+    pub effect: Option<crate::start_claim::Effect>,
 }
 
 /// What the task's worker starts once the creation is settled: the pane, the
@@ -1389,6 +1476,9 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
         .runtime
         .upgrade()
         .and_then(|runtime| task_pane_node(&runtime, request.id).ok());
+    let geometry = target.acquire_start_geometry(request);
+    let lease = geometry.as_ref().ok().and_then(|lease| lease.as_deref());
+    let current_geometry = || target.check_start_geometry(request.id, lease);
     let launch = if request
         .start
         .as_ref()
@@ -1402,7 +1492,10 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
         )
     };
     let result: Result<WorktreeTaskOutcome, ControlFailure> = (|| {
-        target.check_current(request.id)?;
+        geometry
+            .as_ref()
+            .map_err(|message| ControlFailure::Definite(message.clone()))?;
+        current_geometry()?;
         if let Some(node) = node.as_deref() {
             folder_present(node, request)?;
         }
@@ -1437,28 +1530,55 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
                 }
                 Ok(())
             };
-            return create_checkout_tab(
-                &CurrentSessionConnector {
-                    connector: target.connector.as_ref(),
-                    current: &current,
-                },
+            let connector = CurrentSessionConnector {
+                connector: target.connector.as_ref(),
+                current: &current,
+            };
+            return create_checked_checkout_tab(
+                target,
+                &connector,
+                node.as_ref(),
                 request,
                 launch.as_ref(),
+                &current_geometry,
             );
         }
-        create_checkout_tab(
-            &CurrentSessionConnector {
-                connector: target.connector.as_ref(),
-                current: &|| target.check_current(request.id),
-            },
-            request,
-            launch.as_ref(),
-        )
+        let connector = CurrentSessionConnector {
+            connector: target.connector.as_ref(),
+            current: &current_geometry,
+        };
+        if request.start.is_some() {
+            let node = node.as_deref().ok_or_else(|| {
+                ControlFailure::Definite(
+                    "The device cannot check terminal identity. Reconnect it and retry.".into(),
+                )
+            })?;
+            create_checked_checkout_tab(
+                target,
+                &connector,
+                node,
+                request,
+                launch.as_ref(),
+                &current_geometry,
+            )
+        } else {
+            create_checkout_tab(&connector, request, launch.as_ref())
+        }
     })();
     let Some(runtime) = target.runtime.upgrade() else {
         return;
     };
     let saved = if let Ok(mut guard) = runtime.lock() {
+        if let Some(lease) = lease {
+            guard.finish_checkout_start_geometry(
+                request.id,
+                lease,
+                result
+                    .as_ref()
+                    .map(|_| ())
+                    .map_err(|failure| failure.message().to_owned()),
+            );
+        }
         if let Err(failure) = &result {
             guard.group_start_failed(
                 request.id,
@@ -1534,6 +1654,29 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
         request.id,
         &|| target.check_current(request.id),
     );
+}
+
+fn create_checked_checkout_tab(
+    target: &TabTarget,
+    connector: &dyn ApiConnector,
+    node: &dyn crate::node_access::NodeLink,
+    request: &CheckoutTabRequest,
+    launch: Option<&hide_node_link::protocol::ShellLaunch>,
+    check: &dyn Fn() -> Result<(), String>,
+) -> Result<WorktreeTaskOutcome, ControlFailure> {
+    if request.start.is_none() {
+        return create_checkout_tab(connector, request, launch);
+    }
+    super::checkout_start::run(
+        &super::checkout_start::Control {
+            connector,
+            node,
+            check,
+            save: &|effect| target.save_start_effect(request.id, effect),
+        },
+        request,
+        launch,
+    )
 }
 
 /// A tab asked for a folder inside its checkout opens there or not at all:
@@ -1683,77 +1826,28 @@ fn create_checkout_tab(
     request: &CheckoutTabRequest,
     launch: Option<&hide_node_link::protocol::ShellLaunch>,
 ) -> Result<WorktreeTaskOutcome, ControlFailure> {
-    let mut env = launch.map(|launch| launch.env.clone()).unwrap_or_default();
-    if let Some(start) = &request.start {
-        env.extend(super::checkout_start_env(&start.marker));
-    }
+    let env = launch.map(|launch| launch.env.clone()).unwrap_or_default();
     let command = launch.map(|launch| launch.command.as_slice());
-    let result = if let Some(start) = request.start.as_ref().filter(|start| start.recovery_only) {
-        super::recover_checkout_start(
+    let tab = match &request.host {
+        crate::checkout_owner::TabHost::Workspace(workspace_id) => super::create_tab_in(
             connector,
-            &start.marker,
-            match &request.host {
-                crate::checkout_owner::TabHost::Workspace(id) => Some(id.as_str()),
-                _ => None,
-            },
-            start.tab_id.as_deref().or(start.settled_tab_id.as_deref()),
-        )
-        .map_err(ControlFailure::Ambiguous)
-    } else if let Some(start) = request
-        .start
-        .as_ref()
-        .filter(|start| start.tab_id.is_some())
-    {
-        super::split_checkout_start(
-            connector,
-            start.tab_id.as_deref().expect("checked"),
+            workspace_id,
             &request.cwd,
-            &start.marker,
-        )
-    } else {
-        match &request.host {
-            crate::checkout_owner::TabHost::Workspace(workspace_id) => super::create_tab_in(
-                connector,
-                workspace_id,
-                &request.cwd,
-                &request.label,
-                request.focus,
-                env,
-                command,
-            ),
-            crate::checkout_owner::TabHost::Open(owner) => super::open_owner_tab(
-                connector,
-                owner,
-                &request.cwd,
-                &request.label,
-                request.focus,
-                env,
-                command,
-            ),
-        }
-    };
-    let tab = match result {
-        Err(failure)
-            if failure.is_ambiguous()
-                && request
-                    .start
-                    .as_ref()
-                    .is_some_and(|start| !start.recovery_only) =>
-        {
-            let start = request.start.as_ref().expect("checked");
-            super::recover_checkout_start(
-                connector,
-                &start.marker,
-                match &request.host {
-                    crate::checkout_owner::TabHost::Workspace(id) => Some(id.as_str()),
-                    _ => None,
-                },
-                start.tab_id.as_deref().or(start.settled_tab_id.as_deref()),
-            )
-            .map_err(ControlFailure::Ambiguous)?
-        }
-        result => result?,
-    };
+            &request.label,
+            request.focus,
+            env,
+            command,
+        ),
+        crate::checkout_owner::TabHost::Open(owner) => super::open_owner_tab(
+            connector,
+            owner,
+            &request.cwd,
+            &request.label,
+            request.focus,
+            env,
+            command,
+        ),
+    }?;
     // A tab that does not run the launch (Herdr's own shell, or no launch
     // for this shell) gives no mark.
     let shell = crate::agent_start::ShellStart::of_tab(tab.launched, launch);
@@ -2545,134 +2639,6 @@ mod tests {
         }
     }
 
-    fn targeted_start_request(recovery: bool, tab: Option<&str>) -> CheckoutTabRequest {
-        CheckoutTabRequest {
-            start: Some(CheckoutStart {
-                marker: "fixture-intent".into(),
-                recovery_only: recovery,
-                tab_id: tab.map(str::to_owned),
-                settled_tab_id: None,
-                agent_already_attempted: false,
-                agent_phase: None,
-                confirm_only: false,
-            }),
-            id: 1,
-            agent_kind: None,
-            checkout_path: "/fixture".into(),
-            label: "Tab 2".into(),
-            host: crate::checkout_owner::TabHost::Workspace("w1".into()),
-            focus: false,
-            resume_scope: None,
-            resume_reference: None,
-            cwd: "/fixture".into(),
-        }
-    }
-
-    fn start_snapshot() -> Value {
-        json!({"result":{"type":"session_snapshot","snapshot":{
-            "version":"fixture","protocol":hide_herdr_client::HERDR_PROTOCOL_REVISION,
-            "workspaces":[],"tabs":[{"tab_id":"w1:t2","workspace_id":"w1","number":2,
-                "label":"Tab 2","focused":false,"pane_count":1,"agent_status":"idle"}],
-            "panes":[],"layouts":[],"agents":[]
-        }}})
-    }
-
-    fn start_export(marked: bool) -> Value {
-        let env = if marked {
-            super::checkout_start_env("fixture-intent")
-        } else {
-            BTreeMap::new()
-        };
-        json!({"result":{"type":"layout_export","layout":{
-            "workspace_id":"w1","tab_id":"w1:t2","focused_pane_id":"w1:p2","zoomed":false,
-            "root":{"type":"pane","pane_id":"w1:p2","cwd":"/fixture","env":env}
-        }}})
-    }
-
-    #[test]
-    fn checkout_start_adds_a_pane_to_the_exact_tab_without_replacing_its_layout() {
-        let server = server(vec![
-            start_export(false),
-            json!({"result":{"type":"pane_info","pane":{
-                "pane_id":"w1:p3","terminal_id":"fixture-terminal","workspace_id":"w1","tab_id":"w1:t2",
-                "focused":false,"agent_status":"idle","revision":1
-            }}}),
-        ]);
-        let result =
-            create_checkout_tab(&server, &targeted_start_request(false, Some("w1:t2")), None)
-                .unwrap();
-        assert_eq!(result.created_tab_id.as_deref(), Some("w1:t2"));
-        assert_eq!(result.pane_id, "w1:p3");
-        let requests = server.requests.lock().unwrap();
-        assert_eq!(
-            requests
-                .iter()
-                .map(|r| r["method"].as_str().unwrap())
-                .collect::<Vec<_>>(),
-            ["layout.export", "pane.split"]
-        );
-        assert_eq!(requests[1]["params"]["target_pane_id"], "w1:p2");
-        assert_eq!(requests[1]["params"]["focus"], false);
-        assert_eq!(
-            requests[1]["params"]["env"][super::REOPEN_INTENT_ENV],
-            "fixture-intent:checkout-start"
-        );
-    }
-
-    #[test]
-    fn checkout_start_recovers_an_unreadable_creation_answer_by_its_exact_claim() {
-        let server = server(vec![
-            json!({"result":{"type":"ok"}}),
-            start_snapshot(),
-            start_export(true),
-        ]);
-        let result =
-            create_checkout_tab(&server, &targeted_start_request(false, None), None).unwrap();
-        assert_eq!(result.pane_id, "w1:p2");
-        assert_eq!(result.created_tab_id.as_deref(), Some("w1:t2"));
-        let requests = server.requests.lock().unwrap();
-        assert_eq!(
-            requests
-                .iter()
-                .map(|r| r["method"].as_str().unwrap())
-                .collect::<Vec<_>>(),
-            ["tab.create", "session.snapshot", "layout.export"]
-        );
-        assert_eq!(
-            requests[0]["params"]["env"][super::REOPEN_INTENT_ENV],
-            "fixture-intent:checkout-start"
-        );
-    }
-
-    #[test]
-    fn checkout_start_retry_only_reads_and_never_adopts_an_unmarked_same_folder_tab() {
-        let server = server(vec![
-            start_snapshot(),
-            start_export(false),
-            start_snapshot(),
-            start_export(true),
-        ]);
-        let request = targeted_start_request(true, None);
-        let first = create_checkout_tab(&server, &request, None).unwrap_err();
-        assert!(first.is_ambiguous());
-        let confirmed = create_checkout_tab(&server, &request, None).unwrap();
-        assert_eq!(confirmed.pane_id, "w1:p2");
-        assert_eq!(
-            server
-                .requests
-                .lock()
-                .unwrap()
-                .iter()
-                .map(|r| r["method"].as_str().unwrap())
-                .collect::<Vec<_>>(),
-            [
-                "session.snapshot",
-                "layout.export",
-                "session.snapshot",
-                "layout.export"
-            ]
-        );
-    }
     fn snapshot(ids: &[&str]) -> Value {
         json!({"result":{"type":"session_snapshot","snapshot":{"panes":ids.iter().map(|id|json!({"pane_id":id})).collect::<Vec<_>>()}}})
     }

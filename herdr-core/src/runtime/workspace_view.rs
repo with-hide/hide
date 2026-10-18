@@ -354,10 +354,20 @@ impl Runtime {
         };
         for workspace in workspaces {
             for checkout in &mut workspace.checkouts {
-                checkout.agent_groups = store
-                    .views
-                    .get(&workspace.device_id, &checkout.path)
-                    .map(|view| view.agent_groups_snapshot());
+                let view = store.views.get(&workspace.device_id, &checkout.path);
+                if let Some(view) = view {
+                    checkout.tabs.retain(|tab| {
+                        !super::group_starts::staged_tab(
+                            view,
+                            workspace.device_id == self.node.as_str(),
+                            &workspace.device_id,
+                            checkout.owner_workspace_id.as_deref(),
+                            tab,
+                        )
+                    });
+                    checkout.has_panes = checkout.tabs.iter().any(|tab| !tab.panes.is_empty());
+                }
+                checkout.agent_groups = view.map(|view| view.agent_groups_snapshot());
             }
         }
     }

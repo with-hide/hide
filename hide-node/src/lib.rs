@@ -35,6 +35,7 @@ pub const MAX_IN_FLIGHT: usize = 64;
 #[derive(Clone, Debug)]
 pub struct Local {
     env: Env,
+    herdr_socket: Option<PathBuf>,
     in_flight: Arc<AtomicUsize>,
     pending: Arc<Mutex<PendingCalls>>,
 }
@@ -68,6 +69,7 @@ impl Local {
     pub fn new(home: Option<PathBuf>) -> Self {
         Self {
             env: Env::standalone(home),
+            herdr_socket: None,
             in_flight: Arc::default(),
             pending: Arc::default(),
         }
@@ -103,6 +105,13 @@ impl Local {
         self
     }
 
+    /// Binds pane inspection to this node's configured Herdr, never a
+    /// socket supplied by a pane or inherited from the caller's environment.
+    pub fn with_herdr_socket(mut self, socket: PathBuf) -> Self {
+        self.herdr_socket = Some(socket);
+        self
+    }
+
     /// This process's own account, as a device's helper answers. Its stop
     /// is its own: closing it ends the work it started, never the work of
     /// another node value in the same process, which a helper's process-wide
@@ -112,6 +121,7 @@ impl Local {
         env.stop = Arc::default();
         Self {
             env,
+            herdr_socket: None,
             in_flight: Arc::default(),
             pending: Arc::default(),
         }
@@ -180,6 +190,8 @@ impl NodeLink for Local {
         }
         let admitted = Admitted(Arc::clone(&self.in_flight));
         let env = self.env.clone();
+        let herdr_socket = self.herdr_socket.clone();
+        let deadline = Instant::now() + timeout;
         let (answered, answer) = mpsc::sync_channel(1);
         let answered = Arc::new(answered);
         if !cleanup {
@@ -205,7 +217,7 @@ impl NodeLink for Local {
                         "This machine's node closed before its work started".to_owned(),
                     ))
                 } else {
-                    hide_host::serve::handle_in(call, &env)
+                    handle_local(call, &env, herdr_socket.as_deref(), deadline, &mut |_| true)
                         .map(LinkAnswer::Parsed)
                         .map_err(LinkError::Refused)
                 };
@@ -257,9 +269,15 @@ impl NodeLink for Local {
                 && deadline.is_none_or(|end| Instant::now() < end)
                 && progress(report)
         };
-        hide_host::serve::handle_with_progress(call, &self.env, &mut within)
-            .map(LinkAnswer::Parsed)
-            .map_err(LinkError::Refused)
+        handle_local(
+            call,
+            &self.env,
+            self.herdr_socket.as_deref(),
+            deadline.unwrap_or_else(Instant::now),
+            &mut within,
+        )
+        .map(LinkAnswer::Parsed)
+        .map_err(LinkError::Refused)
     }
 
     fn in_process(&self) -> bool {
@@ -296,6 +314,29 @@ impl NodeLink for Local {
             let _ = answered.try_send(Err(LinkError::Unknown(reason.to_owned())));
         }
     }
+}
+
+/// Local and linked nodes use the same owning-machine pane proof.
+fn handle_local(
+    call: Call,
+    env: &Env,
+    socket: Option<&std::path::Path>,
+    deadline: Instant,
+    progress: &mut dyn FnMut(serde_json::Value) -> bool,
+) -> hide_host::HostResult<serde_json::Value> {
+    let Call::PaneInspect { pane_id } = call else {
+        return hide_host::serve::handle_with_progress(call, env, progress);
+    };
+    let socket = socket.ok_or_else(|| {
+        hide_host::HostError::new(
+            hide_host::ErrorCode::Unsupported,
+            "This node has no Herdr server",
+        )
+    })?;
+    let identity = hide_host::pane_peer::inspect_until(socket, &pane_id, deadline)
+        .map_err(|reason| hide_host::HostError::new(hide_host::ErrorCode::NotFound, reason))?;
+    serde_json::to_value(identity)
+        .map_err(|error| hide_host::HostError::new(hide_host::ErrorCode::Io, error.to_string()))
 }
 
 /// A request's name for a record (`save`, or `factory.verify_poll`), read

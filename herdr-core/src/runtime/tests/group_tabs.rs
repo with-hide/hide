@@ -1301,3 +1301,87 @@ fn a_stored_delegated_canvas_waits_for_its_canonical_lineage() {
     );
     assert_eq!(ordered_tab_ids(&runtime, &checkout), before);
 }
+
+#[test]
+fn pending_creation_occupies_its_draft_once_even_when_topology_beats_the_answer() {
+    for ordinary_count in [3, 63] {
+        let (mut runtime, checkout) = setup();
+        let existing: Vec<String> = (1..=ordinary_count)
+            .map(|n| format!("w-order:t{n}"))
+            .collect();
+        let existing_ids: Vec<&str> = existing.iter().map(String::as_str).collect();
+        ingest(&mut runtime, &existing_ids);
+        let target = create(&mut runtime, "pending-placement", "Starting");
+        group(
+            &mut runtime,
+            "pending-draft",
+            json!({"action":"new_tab","group_id":target}),
+        );
+        let draft = tabs(&runtime, Some(&target))[0].clone();
+        let prepared = runtime
+            .prepare_group_start(
+                130,
+                (crate::node::TEST_NODE, PATH),
+                Some(super::super::group_starts::StartTarget {
+                    group_id: Some(target.clone()),
+                    area_id: "a1".into(),
+                    tab_id: Some(draft.clone()),
+                    add_pane: false,
+                }),
+                Some("creation-before-answer"),
+                None,
+                false,
+            )
+            .expect("draft has exactly one admitted start");
+        assert_eq!(prepared.saved.try_recv().unwrap(), Ok(()));
+        let saved = runtime
+            .save_group_start_effect(
+                130,
+                crate::start_claim::Effect {
+                    workspace_id: "w-order".into(),
+                    seed_tab_id: None,
+                    target: None,
+                    expected_command: Some(vec!["/bin/sh".into(), "-l".into()]),
+                    binding: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(saved.try_recv().unwrap(), Ok(()));
+        let stage = "w-order:t100";
+        let mut all = existing_ids.clone();
+        all.push(stage);
+        let mut payload = tab_order_payload(PATH, &all, &all, TABS[0]);
+        payload.workspaces[0].tokens.insert(
+            crate::checkout_owner::OWNER_TOKEN.into(),
+            json!(crate::checkout_owner::owner_mark(
+                crate::node::TEST_NODE,
+                PATH
+            )),
+        );
+        payload
+            .panes
+            .iter_mut()
+            .find(|pane| pane.pane_id == format!("{stage}:p"))
+            .unwrap()
+            .start_claim = Some(crate::start_claim::label(&prepared.request.marker));
+        runtime.ingest_session(Ok(payload.clone()));
+        runtime.sync_workspace_view();
+        assert_eq!(
+            ordered_tab_ids(&runtime, &checkout),
+            existing,
+            "the staging tab is neither a second visible tab nor overflow"
+        );
+        assert_eq!(tabs(&runtime, None), existing);
+        assert_eq!(tabs(&runtime, Some(&target)), [draft.clone()]);
+        runtime.complete_group_start(130, Some(stage), &format!("{stage}:p"));
+        runtime.ingest_session(Ok(payload));
+        runtime.sync_workspace_view();
+        assert_eq!(tabs(&runtime, Some(&target)), [stage]);
+        assert_eq!(tabs(&runtime, None), existing);
+        assert_eq!(
+            ordered_tab_ids(&runtime, &checkout).len(),
+            ordinary_count + 1
+        );
+        assert!(!published(&runtime).drafts.contains(&draft));
+    }
+}

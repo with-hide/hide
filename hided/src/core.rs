@@ -770,6 +770,9 @@ fn owner_loop(
     own_node = own_node
         .keeping_worktree_facts_in(hide_kit::layout::worktree_facts(&state_dir))
         .keeping_feedback_in(state_dir);
+    if let Some(socket) = options.herdr_socket_path.as_deref() {
+        own_node = own_node.with_herdr_socket(std::path::PathBuf::from(socket));
+    }
     // The install kit's parts ship beside this binary: in the app bundle, or
     // in the build folder a move or a core update placed in this account's
     // helper root, which a moved core's login item runs. A daemon anywhere

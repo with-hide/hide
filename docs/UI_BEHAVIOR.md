@@ -175,6 +175,9 @@ An empty group creates its first draft when a start is requested.
 Empty groups and grouped or ungrouped drafts show the instruction field, the shared provider/model picker and Start, with a terminal icon and secondary `Start with terminal` button always visible beside that start flow.
 Terminal start needs neither an instruction nor an agent selection.
 The first start fills that draft's position with the live tab; Add agent on a live tab starts another pane in that same tab.
+Starting in an enlarged pane returns that tab to its split layout and keeps its existing terminals running.
+While a start is being confirmed its temporary terminal occupies the existing reservation and does not appear as another tab.
+The internal creation label is never shown as a pane or tab name and is not copied into a reopened terminal.
 The picker uses the same supported kinds, model validation and remembered defaults as the [Start panel](#start-panel), with no effort choice.
 Pending starts keep the submitted inputs, prevent another submission, and show their progress or actionable failure where the start was requested.
 An uncertain result offers Check status for the original intent, never a fresh start merely because an answer was lost; a definite failure can retry that intent.
@@ -183,6 +186,7 @@ If a definitely failed start's tab has since moved, the form keeps its inputs an
 Unsent input follows the same draft or live tab through moves, ungrouping and Undo.
 The text survives navigation and failure for this page's lifetime, as the start panel's text does, but is not saved across an app restart.
 After restart the saved intent can still be checked without recovering or resending its prompt.
+If the original terminal's identity cannot be proven, the check keeps the result uncertain and never starts a replacement process.
 A disconnected device disables the start controls and sends no start; Enter during IME composition does not submit.
 
 Electron's numbered tab shortcuts and hold keycaps share the selected group's saved Agent area tree order, then each bar's left-to-right tab order.

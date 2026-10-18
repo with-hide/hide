@@ -575,12 +575,18 @@ Every start supported by the shared adapter writes that kind and the kind's mode
 A start carries the surface's `request_id`, stamped on the task receipt and on a refusal's `last_error`, so each surface reads only its own answer.
 A group start additionally names `target { group_id, area_id, tab_id, add_pane }`; the checkout and device qualify that target, because different groups can each have an area named `a1`.
 Without an explicit target the start reserves a new draft in the checkout's selected group, preserving the independent meaning of the global start panel.
-`runtime/group_starts.rs` keeps the stable request's receipt in `WorkspaceView.agent_starts`: its group, area, draft/live tab, pane, recovery marker, provider kind and completion phase, with no instruction text or serialized launch arguments.
+`runtime/group_starts.rs` keeps the stable request's receipt in `WorkspaceView.agent_starts`: its group, area, draft/live tab, pane, recovery marker, provider kind and completion phase, with no instruction text or agent launch arguments.
 There are at most 64 receipts per checkout; the oldest settled receipt can leave, while 64 unresolved receipts refuse another start instead of dropping an uncertain effect.
 The existing Workspace-view save worker must acknowledge the exact claim before its worker creates a tab or pane, and acknowledge the agent-start phase before the worker starts the agent.
 Filesystem work and both save waits stay outside Runtime's mutex.
-First start replaces the draft's slot with the confirmed live tab; adding an agent splits a pane inside the exact existing tab, preserving the other panes and their processes.
-A lost creation answer receives a bounded marker lookup through the existing recovery reader, never another creation merely because the call timed out.
+`checkout_start.rs` saves the exact owning Herdr workspace, optional fresh owner seed tab, original target pane incarnation and normal integrated-shell command before `layout.apply` creates a terminal carrying the opaque `start_claim` label in that same mutation.
+The claim is a reserved creation descriptor, never a human title or an exported environment variable; pane and terminal titles, sidebar labels, closed-item capture and reopen discard it while preserving human names.
+First start replaces the draft's slot with the confirmed live tab; Add agent creates the claimed terminal separately, durably binds its pane, terminal id, shell pid and kernel start time through the owning node's existing `PaneInspect`, then joins it to the exact existing tab with `pane.move` in the same workspace.
+Joining holds that tab's existing geometry FIFO through confirmation, including the existing automatic zoom-off behavior, and never reapplies or recreates the target's existing terminals.
+A lost creation or move answer receives a bounded inspection of at most 128 physical tabs in that owner, accounting for at most 64 admitted logical tabs and 64 retained starts, never another creation merely because the call timed out.
+An exact claim must be unique and its learned incarnation must remain identical; before an incarnation was saved, a missing creation answer also requires continuity of the recorded normal shell command, which the pinned Herdr clears on cold restore or respawn.
+A default-shell start without that command or a changed, missing or duplicated proof remains unknown with an actionable status check; no cwd, human name or newly observed id substitutes for proof.
+The catalog excludes a pending start's exactly claimed staging tab from display and admission, while retaining its draft reservation; a staging tab that contains unrelated panes stays visible.
 Pending receipts, including those loaded after restart, recover by inspection only; `confirm_only` loads the receipt's original provider and ignores replacement prompt/model choices.
 A definite failure may retry its stable intent, and a definite agent failure retries the existing pane; an unknown launch is not blindly repeated.
 The answer fills its original group even when hidden, but a late answer does not take focus from a group the operator has since selected.
@@ -1785,6 +1791,7 @@ The core decides and keeps state; it never touches a machine (PRD core-host-node
 Every file, process, socket and session-file read is a node's, asked through one contract, `NodeLink` (`hide-node-link`), addressed by node id (`Runtime::node_link`): the core's own node answers today, and a device's helper answers for its machine.
 The contract crate sits below both sides, so the core holds only the trait and the wire types, and the machine side (`hide-node`, over `hide-host`) never depends on the core.
 The core's own node is `hide_node::Local`, which answers in hided's process through `hide_host::serve`; the core gets it in `Core::create`, with the Herdr connector the same node opens.
+The daemon binds that node's `PaneInspect` to its configured Herdr socket; local and linked nodes read the same `hide_host::pane_peer` terminal id, shell pid and kernel start proof on the machine that owns the pane, without accepting a caller-selected socket.
 Closing it refuses new calls and wakes pending callers with `Unknown` through their existing one-answer channels; it neither polls nor starts a cancellation thread.
 There are at most 64 admitted machine calls, and a timed-out or closed caller does not free its slot until the actual work ends.
 The weak answer-sender list is pruned on admission and bounded by those same slots; closing one node affects its clones, never another node.

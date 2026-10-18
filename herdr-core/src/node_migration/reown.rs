@@ -2077,7 +2077,15 @@ mod tests {
             "group_id": "g5", "area_id": "a1", "draft_tab_id": "draft:6",
             "live_tab_id": "w1:t9", "pane_id": "w1:p9", "add_pane": false,
             "marker": "original-claim", "state": "pending", "agent_kind": null,
-            "agent_phase": null, "recorded_at": 1, "seen_in_topology": false
+            "agent_phase": null, "recorded_at": 1, "seen_in_topology": false,
+            "effect": {
+                "workspace_id": "w1", "seed_tab_id": "w1:t8",
+                "target": {"tab_id":"w1:t9", "pane_id":"w1:p9",
+                    "identity":{"terminal_id":"original-target","shell_pid":41,"shell_started":400}},
+                "expected_command": ["/bin/sh", "-l"],
+                "binding": {"tab_id":"w1:t10", "pane_id":"w1:p10",
+                    "identity":{"terminal_id":"created-terminal","shell_pid":42,"shell_started":500}}
+            }
         }});
         std::fs::write(&path, serde_json::to_vec(&views).unwrap()).unwrap();
         let original = views["workspaces"][0].clone();
@@ -2097,6 +2105,12 @@ mod tests {
         assert_eq!(start["live_tab_id"], format!("remote:{M}:tab:w1:t9"));
         assert_eq!(start["pane_id"], format!("remote:{M}:pane:w1:p9"));
         assert_eq!(start["marker"], "original-claim");
+        // Effect proofs name native identities at the owning node, unlike
+        // UI references. Moving the core must never scope or rebind them.
+        assert_eq!(
+            start["effect"],
+            original["agent_starts"]["same-intent"]["effect"]
+        );
         reown(dir.path(), &back(), &back_ids()).unwrap();
         let restored = read(&path);
         assert_eq!(

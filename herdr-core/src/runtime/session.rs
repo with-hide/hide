@@ -719,6 +719,9 @@ impl Runtime {
                 ),
             );
         }
+        // A pending creation already owns its draft's logical slot. Keep its
+        // physical staging tab out of focus/admission and the published list.
+        self.project_catalog_agent_groups(&mut workspaces);
         let mut unresolved_active_tabs = BTreeSet::new();
         let herdr_tabs = HerdrTabView::from_payload(payload);
         for session_workspace in &payload.workspaces {
@@ -769,7 +772,6 @@ impl Runtime {
             &self.snapshot.navigator.agents,
         );
         crate::project_context::sort_projects(&mut workspaces, &projected_agents);
-        self.project_catalog_agent_groups(&mut workspaces);
         self.snapshot.navigator.workspaces = workspaces;
         self.snapshot.navigator.devices = workspace::devices(
             &self.node,
