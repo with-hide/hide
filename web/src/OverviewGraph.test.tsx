@@ -65,6 +65,6 @@ it.each([
     expect(events[0]).toMatchObject(device === "local"
       ? { kind: "focus_pane", payload: { pane_id: pane, origin: "operator", focus_device: front !== device } }
       : { kind: "remote_control", payload: { target_id: "mini", action: "focus_pane", pane_id: pane } });
-    expect(Boolean((events[0].payload as { focus_device?: boolean }).focus_device)).toBe(front !== device);
+    expect(Boolean((events[0]!.payload as { focus_device?: boolean }).focus_device)).toBe(front !== device);
   } finally { await act(async () => root.unmount()); }
 });

@@ -30,10 +30,11 @@ const requestB = "Private original request from device B";
 const responseA = "Private original answer from device A";
 const responseB = "Private original answer from device B";
 const task = (title: string): Task => ({ key, source: "local", id: "L-1", url: null, title, open: true, labels: [], author: null, assignees: [], created_at_unix_ms: null, updated_at_unix_ms: null });
-const project = (id: string, device: string, title: string): Workspace => ({
+const project = (id: string, device: string, title: string): Workspace & { tasks: NonNullable<Workspace["tasks"]> } => ({
   id, device_id: device, path: "/repo", label: id, is_git: true, branches: ["main"], default_branch: "main",
+  registered: true, temporary: false, pinned: false, inactive_checkouts: { expanded: false, checkout_ids: [] },
   checkouts: [], agent_scope: emptyScope(), tasks: { source: null, tasks: [task(title)], overflow: false },
-} as Workspace);
+});
 const a = project("project-a", "device-a", "Memo on A");
 const b = project("project-b", "device-b", "Memo on B");
 const projects: BoardProject[] = [a, b].map((workspace) => ({ workspace, agents: [], device: null }));
@@ -103,7 +104,7 @@ it("keeps a same-key device switch and late answer out of the detail, Start prom
     expect(prompt()).toContain(requestA);
     expect(prompt()).toContain(responseA);
     expect(suggestions().map((event) => event.payload.body)).toEqual([bodyA]);
-    const aNameRequest = suggestions()[0].payload.request_id as string;
+    const aNameRequest = suggestions()[0]!.payload.request_id as string;
 
     // Switch the actual dialog host while A's ready slot is still global.
     await act(async () => {
@@ -131,7 +132,7 @@ it("keeps a same-key device switch and late answer out of the detail, Start prom
     expect(prompt()).not.toContain(bodyB);
     expect(prompt()).not.toContain(bodyA);
     expect(suggestions().map((event) => event.payload.body)).toEqual([bodyA, bodyB]);
-    const bNameRequest = suggestions()[1].payload.request_id as string;
+    const bNameRequest = suggestions()[1]!.payload.request_id as string;
     expect(bNameRequest).not.toBe(aNameRequest);
     expect(name()).toBe("L-1-memo-on-b");
     await deliverName(aNameRequest, "L-1-private-name-on-a");
