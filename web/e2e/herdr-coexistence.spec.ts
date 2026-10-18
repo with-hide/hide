@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startDraftTerminal } from "./group-start-helper";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
 import { countSent, enterWorkspace, screenshot } from "./wire";
@@ -16,7 +17,7 @@ type Snapshot = {
 const snapshot = (herdr: HerdrFixture) => (herdr.run(["api", "snapshot"]) as { result: { snapshot: Snapshot } }).result.snapshot;
 test.describe.configure({ timeout: 120_000 });
 
-test("Hide New tab and Split right keep one real Herdr tab and both terminal identities", async ({ page }) => {
+test("Starting a terminal in a new draft and splitting it keeps one real Herdr tab and both terminal identities", async ({ page }) => {
   const herdr = await startHerdr({ agents: false });
   let daemon: Daemon | null = null;
   try {
@@ -24,7 +25,11 @@ test("Hide New tab and Split right keep one real Herdr tab and both terminal ide
     const sent = countSent(page);
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page);
+    const before = snapshot(herdr).panes.map((pane) => pane.pane_id).sort();
     await page.locator("[data-new-agent-tab]").first().click();
+    await expect(page.locator("[data-agent-tab-start]")).toHaveAttribute("data-agent-tab-start", /^draft:/);
+    expect(snapshot(herdr).panes.map((pane) => pane.pane_id).sort()).toEqual(before);
+    await startDraftTerminal(page);
     await expect(page.locator("[data-pane-view]")).toHaveCount(1);
     const tab = await page.locator("[data-canvas]").getAttribute("data-canvas");
     const first = await page.locator("[data-pane-view]").getAttribute("data-pane-view");

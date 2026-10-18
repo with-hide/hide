@@ -2,9 +2,9 @@
 // pinned Herdr and hided: a Git project Herdr shows without a registration,
 // with an agent in its main checkout and one in a linked worktree. The
 // project row's menu lists the board's items and Pin registers the row and
-// pins it; New tab in main opens a tab in the default checkout and brings it
-// to the front; Set as default checkout moves the home glyph and the first
-// place to the worktree; the agent row's Copy session id puts Herdr's
+// pins it; New tab in main opens a draft in the default checkout and brings
+// it to the front, where an explicit start creates its terminal; Set as default
+// checkout moves the home glyph and the first place to the worktree; the agent row's Copy session id puts Herdr's
 // session id on the clipboard, and its Close tab… closes that agent's tab.
 // Each contract is its own spec on its own fixture. Light and Dark captures of
 // the menus land in HIDE_E2E_SCREENSHOT_DIR.
@@ -14,6 +14,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { claudeProjects, labelAgent, setFixtureSession, writeFixtureTranscript, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startDraftTerminal } from "./group-start-helper";
 import { startHided } from "./hided-fixture";
 import { rest, screenshot } from "./wire";
 import { chord, commandLabel } from "./chords";
@@ -248,7 +249,7 @@ test("a checkout row's menu offers worktree actions, and the default checkout ca
     };
     await expect
       .poll(checkoutLines, { timeout: 30_000 })
-      .toEqual(["Open", `New tab here ${commandLabel("new_tab")}`, "─", "Set purpose…", "Set as default checkout", "Copy branch name", "Copy path", "─", "Delete worktree…"]);
+      .toEqual(["Open", `New tab here ${commandLabel("new_tab")}`, "New group…", "─", "Set purpose…", "Set as default checkout", "Copy branch name", "Copy path", "─", "Delete worktree…"]);
     await openMenu(page, feature.locator("[data-checkout-menu]"), `${BRANCH} actions`);
     await screenshot(page, "sidebar-menus-checkout-dark");
     await page.keyboard.press("Escape");
@@ -259,12 +260,16 @@ test("a checkout row's menu offers worktree actions, and the default checkout ca
   } finally { stop(); }
 });
 
-test("New tab in main opens a tab in the default checkout and brings it to the front", async ({ page }) => {
+test("New tab in main opens a draft in the default checkout and its terminal starts there", async ({ page }) => {
   const { projectRow, main, stop } = await startMenus(page);
   try {
     const menu = await openMenu(page, projectRow, "repo actions");
     await menu.locator('[data-menu-item="new_tab_primary"]').click();
     await expect(page.locator("[data-workspace-screen]")).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator("[data-agent-tab-start]")).toHaveAttribute("data-agent-tab-start", /^draft:/);
+    await expect(page.locator('[data-tab-bar] [data-tab-kind="herdr"]')).toHaveCount(1);
+    await expect(main.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
+    await startDraftTerminal(page);
     await expect(page.locator(`[data-tab-bar] [data-tab-kind="herdr"]`)).toHaveCount(2, { timeout: 20_000 });
     await expect(main.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
   } finally { stop(); }

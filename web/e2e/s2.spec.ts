@@ -14,6 +14,7 @@ import path from "node:path";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { altScreenProgram, bytesReceived } from "./alt-screen-program";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startDraftTerminal } from "./group-start-helper";
 import { startHided, type Daemon } from "./hided-fixture";
 import { projectRow } from "./overview-entry";
 import { FACTORY_OPEN } from "../src/factory/launch";
@@ -224,7 +225,7 @@ test("switching checkouts is one focus_checkout, and a plain folder is a row of 
 });
 
 // @platform: ⌥T and ⌥` are chords the platform's browser keeps or moves, the new tab's label is the process name Herdr reads on that platform, and a tab closes through its Herdr.
-test("a tab switch mounts the new tab, ⌥T is one create_tab, ⌥` walks the recent agent panes, and the strip reorders locally and closes a tab", { tag: "@platform" }, async ({ page }) => {
+test("a tab switch mounts the new tab, ⌥T creates one draft, its terminal starts explicitly, and recent agents, reorder and close still work", { tag: "@platform" }, async ({ page }) => {
   const flow = await startFlow(page);
   try {
     const { herdr, tabs, sent } = flow;
@@ -239,18 +240,23 @@ test("a tab switch mounts the new tab, ⌥T is one create_tab, ⌥` walks the re
     await expect.poll(() => sent.get("agent_layout.focus")).toBe(1);
     await expect.poll(() => screen(page), { timeout: 15_000 }).toContain("fixture %");
 
-    // ⌥T is one create_tab; the new tab is active with the core's next label.
-    const nextLabel = (await page.locator("[data-new-agent-tab]").first().getAttribute("aria-label"))!.replace("New tab ", "");
+    // Group-tabs B5/B7: ⌥T creates one selected draft without a PTY;
+    // the explicit terminal start fills that slot in the marked owner.
     await page.keyboard.press(chord("new_tab"));
     await expect(page.locator("[data-tab]")).toHaveCount(4);
-    // The fourth tab belongs to the marked owner, not a second workspace.
+    await expect(page.locator("[data-agent-tab-start]")).toHaveAttribute("data-agent-tab-start", /^draft:/);
+    await expect.poll(() => sent.get("agent_group.new_tab")).toBe(1);
+    expect(sent.get("create_tab") ?? 0).toBe(0);
+    expect((herdr.run(["tab", "list", "--workspace", herdr.workspace]) as { result: { tabs: unknown[] } }).result.tabs).toHaveLength(3);
+    const startedTab = await startDraftTerminal(page);
     await expect.poll(() => (herdr.run(["tab", "list", "--workspace", herdr.workspace]) as { result: { tabs: unknown[] } }).result.tabs.length).toBe(4);
-    // The label is Herdr's: the strip shows an automatic label only until
-    // Herdr reports the pane's process, which then names the tab.
-    const labelled = () => (herdr.run(["api", "snapshot"]) as { result: { snapshot: { tabs: { tab_id: string; label?: string }[] } } }).result.snapshot.tabs.find((tab) => tab.label === nextLabel)?.tab_id;
+    // The promoted native tab has Herdr's label, independent of the draft's
+    // New tab caption and the old numbered new-tab button label.
+    const labelled = () => (herdr.run(["api", "snapshot"]) as { result: { snapshot: { tabs: { tab_id: string; label?: string }[] } } }).result.snapshot.tabs.find((tab) => tab.tab_id === startedTab)?.label;
     await expect.poll(labelled).toBeTruthy();
-    await expect(page.locator("[data-tab][aria-selected=true]")).toHaveAttribute("data-tab", labelled()!);
-    await expect.poll(() => sent.get("create_tab")).toBe(1);
+    await expect(page.locator("[data-tab][aria-selected=true]")).toHaveAttribute("data-tab", startedTab);
+    await page.locator("[data-terminal-host]").click();
+    await expect.poll(() => screen(page), { timeout: 15_000 }).toContain("fixture %");
 
     // ⌥` in the Agent area walks the recent agent panes. The new tab and the
     // second one run plain shells, so the first candidate is the agent pane
