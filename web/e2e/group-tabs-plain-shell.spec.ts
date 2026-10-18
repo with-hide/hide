@@ -198,8 +198,8 @@ for (const scenario of [
       if (!scenario.blockIntegration) {
         await createGroup(page, "First plain agent");
         await page.locator("[data-new-agent-tab=true]").click();
+        await expect(blank(page)).toHaveAttribute("data-agent-tab-start", /^draft:/);
         const draft = await blank(page).getAttribute("data-agent-tab-start");
-        expect(draft).toMatch(/^draft:/);
         const firstPrompt = "Plain shell first draft agent prompt";
         await startClaude(page, firstPrompt);
         await expect(stripTabs(page)).toHaveCount(1);
