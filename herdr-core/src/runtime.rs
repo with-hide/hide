@@ -1577,7 +1577,6 @@ pub struct Runtime {
     /// The tabs Herdr most recently reported active in their own workspaces.
     /// A pane layout remembers a focused pane even while its tab is hidden,
     /// so the layout alone cannot confirm a pane-focus request.
-    herdr_active_tab_ids: BTreeSet<String>,
     /// First moment each currently-unseen pane became unseen. Memory only by
     /// decision (D-21): after a restart snapshot order decides instead.
     pet_unseen_observed: std::collections::BTreeMap<String, u64>,
@@ -2247,7 +2246,6 @@ impl Runtime {
             control_lane: ControlLane::default(),
             last_view_intent_serial: 0,
             next_pane_focus_serial: 0,
-            herdr_active_tab_ids: BTreeSet::new(),
             pet_unseen_observed: std::collections::BTreeMap::new(),
             restore_hint_pending: true,
             last_session_spaces: Vec::new(),

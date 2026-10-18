@@ -147,14 +147,10 @@ impl Runtime {
                     // Update the focus memory from the authoritative reads;
                     // geometry still belongs to the sequenced session stream.
                     for stored in &mut self.snapshot.pane_layouts {
-                        if stored.workspace_id == layout.workspace_id {
-                            self.herdr_active_tab_ids.remove(&stored.tab_id);
-                        }
                         if stored.tab_id == layout.tab_id {
                             stored.focused_pane_id = layout.focused_pane_id.clone();
                         }
                     }
-                    self.herdr_active_tab_ids.insert(layout.tab_id.clone());
                     self.finish_pane_focus_request(
                         pending.request_id.as_deref(),
                         &pending.target_id,

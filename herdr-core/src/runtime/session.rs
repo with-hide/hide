@@ -1761,6 +1761,7 @@ impl Runtime {
             self.operator_focused_pane_id = None;
         }
         for (checkout_id, hide_tab, herdr_tab) in followed {
+            self.supersede_start_navigation();
             crate::diagnostic!(serde_json::json!({
                 "component": "view_state",
                 "kind": "tab.focus.followed",
@@ -2584,9 +2585,6 @@ impl Runtime {
                     && herdr_tabs.is_active_in_its_workspace(&layout.tab_id)
             })
         });
-        if let Ok(payload) = &fetched {
-            self.herdr_active_tab_ids = HerdrTabView::from_payload(payload).active_tab_ids();
-        }
         // What Hide draws ahead of Herdr is laid over the session only now,
         // after every confirmation above has read Herdr's own layout, so
         // every reader below sees one layout and nothing Hide drew confirms
@@ -3426,8 +3424,10 @@ impl Runtime {
         // Settled means Herdr's own layout agrees too. A checkout coming
         // forward selects a pane locally without telling Herdr, and skipping
         // the notification then let Herdr's next layout take the focus back.
+        // A tab active only in a background workspace is not global focus.
         let herdr_agrees = self.layout_holding_pane(&pane_id).is_none_or(|layout| {
-            layout.focused_pane_id == pane_id && self.herdr_active_tab_ids.contains(&layout.tab_id)
+            layout.focused_pane_id == pane_id
+                && self.herdr_focused_tab_seen.as_deref() == Some(layout.tab_id.as_str())
         });
         let notify = !already_focused
             || !herdr_agrees
@@ -3918,6 +3918,7 @@ impl Runtime {
     /// Rule 9: the record names the panes and where the change came from, and
     /// carries nothing about what is in them.
     pub(super) fn report_followed_pane_focus(&mut self, previous: Option<&str>, arriving: &str) {
+        self.supersede_start_navigation();
         let from = previous.unwrap_or("<none>").to_owned();
         crate::diagnostic!(serde_json::json!({
             "component": "view_state",

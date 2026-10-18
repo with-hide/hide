@@ -594,6 +594,9 @@ fn finished_tab_payload(panes: &[(&str, u64)], focused: &str) -> SessionSnapshot
         .collect::<Vec<_>>();
     crate::sidebar::owned_label_fixture(serde_json::json!({
         "agents": agents,
+        "focused_workspace_id": "w1",
+        "focused_pane_id": focused,
+        "workspaces": [{"workspace_id": "w1", "label": "fixture", "active_tab_id": "t1"}],
         "tabs": [{"workspace_id": "w1", "tab_id": "t1", "label": ""}],
         "layouts": [{
             "workspace_id": "w1", "tab_id": "t1", "zoomed": false,

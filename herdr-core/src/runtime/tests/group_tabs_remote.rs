@@ -443,6 +443,84 @@ fn a_first_local_home_result_waits_for_its_catalog_and_respects_a_newer_visit() 
 }
 
 #[test]
+fn a_start_follow_notifies_herdr_when_its_tab_is_only_active_in_a_background_workspace() {
+    let t = tree();
+    for focused in ["wa", "wb"] {
+        let (mut runtime, _) = live_tab_order_runtime(&t.main);
+        let workspaces: [(&str, &[&str], &str); 2] =
+            [("wa", &["wa:t1"], "wa:t1"), ("wb", &["wb:t1"], "wb:t1")];
+        runtime.ingest_session(Ok(split_checkout_payload(&t.main, &workspaces, focused)));
+        // Catalog restoration may have already selected this pane locally.
+        runtime.select_terminal_pane(Some("wb:t1:p".into()));
+        runtime.focus_pane("wb:t1:p".into(), PaneFocusOrigin::Restore, None);
+        assert_eq!(
+            diagnostic_count(&runtime, "pane.focus.requested"),
+            usize::from(focused != "wb"),
+            "a remembered active tab is not Herdr's global keyboard focus"
+        );
+    }
+}
+
+#[test]
+fn a_global_start_respects_a_later_external_tab_or_pane_visit() {
+    let t = tree();
+    for external in ["unchanged", "tab", "pane"] {
+        let (mut runtime, _) = live_tab_order_runtime(&t.main);
+        let payload = |second: bool| {
+            if external != "pane" {
+                return tab_order_payload(
+                    &t.main,
+                    &["w-order:t1", "w-order:t2"],
+                    &["w-order:t1", "w-order:t2"],
+                    if second { "w-order:t2" } else { "w-order:t1" },
+                );
+            }
+            let ids = [("w1:p1", 6018), ("w1:p2", 6019), ("w1:p3", 6020)];
+            let mut payload = finished_tab_payload(&ids, if second { "w1:p2" } else { "w1:p1" });
+            let pane = tab_order_payload(&t.main, &["w-order:t1"], &["w-order:t1"], "w-order:t1")
+                .panes[0]
+                .clone();
+            payload.panes = ids
+                .iter()
+                .map(|(id, _)| {
+                    let mut pane = pane.clone();
+                    pane.pane_id = (*id).into();
+                    pane
+                })
+                .collect();
+            payload
+        };
+        runtime.ingest_session(Ok(payload(false)));
+        let task = runtime
+            .begin_task_operation("agent_start", None, None, None, None)
+            .unwrap();
+        runtime.ingest_session(Ok(payload(external != "unchanged")));
+        let visited = runtime.snapshot.focused.pane_id.clone();
+        runtime.ingest_task_operation_result(
+            task,
+            Ok(live::WorktreeTaskOutcome {
+                path: t.main.clone(),
+                pane_id: "w-order:t3:p".into(),
+                created_tab_id: Some("w-order:t3".into()),
+                purpose_error: None,
+                unconfirmed_purpose_token: None,
+                issue_error: None,
+                shell: crate::agent_start::ShellStart::Plain,
+            }),
+        );
+        assert_eq!(
+            runtime.snapshot.focused.pane_id,
+            if external == "unchanged" {
+                Some("w-order:t3:p".into())
+            } else {
+                visited
+            },
+            "{external}: a late start must preserve an accepted external visit"
+        );
+    }
+}
+
+#[test]
 fn a_local_start_from_an_empty_checkout_keeps_its_visit_through_catalog_restore() {
     for boundary in ["catalog", "newer-visit", "reconnect"] {
         let t = tree();
