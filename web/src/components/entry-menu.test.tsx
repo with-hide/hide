@@ -21,12 +21,15 @@ afterEach(async () => {
   document.body.replaceChildren();
 });
 
-async function open(items: MenuEntry[], selected: string[]) {
+async function render(items: MenuEntry[], selected: string[]) {
   await act(async () => root.render(
     <EntryContextMenu label="Session actions" title="Review API" items={() => items} onSelect={(id) => selected.push(id)}>
       <button>Review API</button>
     </EntryContextMenu>,
   ));
+}
+async function open(items: MenuEntry[], selected: string[]) {
+  await render(items, selected);
   const target = document.querySelector("button")!;
   target.focus();
   await act(async () => {
@@ -45,6 +48,22 @@ const copies: MenuEntry[] = [
   { id: "copy_title", label: "Session title", icon: "copy", group: "copy", unavailable: null },
   { id: "copy_id", label: "Session ID", icon: "id", group: "copy", unavailable: "Conversation not reported yet" },
 ];
+
+it("closes a newly unavailable submenu and keeps it closed when availability returns", async () => {
+  const selected: string[] = [];
+  await open(copies, selected);
+  const group = document.querySelector<HTMLElement>("[data-menu-group]")!;
+  group.focus();
+  await key(group, "ArrowRight");
+  expect(document.querySelectorAll('[role="menu"]')).toHaveLength(2);
+  await render(copies.map((item) => ({ ...item, unavailable: "Device disconnected" })), selected);
+  await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+  expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1);
+  expect(document.activeElement).toBe(group);
+  await render(copies, selected);
+  expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1);
+  expect(selected).toEqual([]);
+});
 
 it("opens a group by keyboard and executes only the chosen original action", async () => {
   const selected: string[] = [];

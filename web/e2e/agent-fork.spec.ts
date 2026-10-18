@@ -49,6 +49,11 @@ async function fork(page: Page, herdr: HerdrFixture, forker: string, item: "fork
   await page.locator('[data-menu-group="fork"]').hover();
   await expect(page.locator('[data-menu-item="fork_agent"]')).toBeEnabled();
   await expect(page.locator('[data-menu-item="fork_agent_side"]')).toBeEnabled();
+  // The source is the rightmost pane: the submenu flips left at the window
+  // edge. Moving directly into it must not dismiss it or lose the target.
+  await expect(page.locator('[data-menu-submenu="fork"]')).toHaveAttribute("data-side", "left");
+  await page.locator(`[data-menu-item="${item}"]`).hover();
+  await expect(page.locator('[data-menu-submenu="fork"]')).toBeVisible();
   if (item === "fork_agent") await screenshot(page, "agent-fork-menu");
   const pressed = Date.now();
   await page.locator(`[data-menu-item="${item}"]`).click();

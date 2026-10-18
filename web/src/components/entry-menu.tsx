@@ -5,7 +5,7 @@
 // reason, never hidden behind an action that would fail.
 
 import { DropdownMenu as MenuPrimitive } from "radix-ui";
-import { Fragment, useRef, useState, type ReactNode } from "react";
+import { Fragment, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "../lib/utils";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger } from "./ui/context-menu";
 import {
@@ -114,6 +114,12 @@ function ActionSubmenu<Id extends string>({ group, items, onSelect, parts }: { g
   const reason = items[0]!.unavailable;
   // Collapse an identical refusal once; different reasons remain beside each choice.
   const unavailable = reason !== null && items.every((item) => item.unavailable === reason) ? reason : null;
+  useLayoutEffect(() => {
+    if (open && unavailable !== null) {
+      setOpen(false);
+      trigger.current?.focus();
+    }
+  }, [open, unavailable]);
   useEscapeLayer(open && unavailable === null, () => { setOpen(false); trigger.current?.focus(); });
   const label = t(`menus.group.${group}`);
   const { Separator } = parts;

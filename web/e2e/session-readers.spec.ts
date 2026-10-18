@@ -93,7 +93,7 @@ test(`${kind} ${kind === "cursor" ? "generated goal" : "native title"} and durab
     await row.click();
     await page.locator(`[data-pane-menu="${sourcePane}"]`).click();
     if (kind === "cursor") {
-      await expect(page.locator('[data-menu-item="fork_agent"]')).toHaveCount(0);
+      await expect(page.locator('[data-menu-group="fork"]')).toHaveCount(0);
       expect(agents.find(agent => agent.pane_id === sourcePane)?.user_turn).toBeUndefined();
     }
     await expect(page.locator('[data-menu-item="sleep_agent"]')).toBeEnabled({ timeout: 20_000 });

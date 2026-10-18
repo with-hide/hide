@@ -66486,7 +66486,8 @@
                           "enabled": false
                         },
                         "mnu-item-shortcut": {
-                          "enabled": false
+                          "content": "⇧⌘↩",
+                          "enabled": true
                         }
                       }
                     },
@@ -66981,7 +66982,7 @@
                       "id": "action-view-1-l",
                       "type": "ref",
                       "ref": "mnu-item-m",
-                      "name": "열어두기",
+                      "name": "열어 두기",
                       "opacity": 1,
                       "descendants": {
                         "mnu-item-icon": {
@@ -66990,7 +66991,7 @@
                           "fill": "$--muted-foreground"
                         },
                         "mnu-item-label": {
-                          "content": "열어두기",
+                          "content": "열어 두기",
                           "fill": "$--foreground"
                         },
                         "mnu-item-reason": {
@@ -67432,7 +67433,7 @@
                       "id": "action-task-2-l",
                       "type": "ref",
                       "ref": "mnu-item-m",
-                      "name": "Resolve",
+                      "name": "해결",
                       "opacity": 1,
                       "descendants": {
                         "mnu-item-icon": {
@@ -67441,7 +67442,7 @@
                           "fill": "$--muted-foreground"
                         },
                         "mnu-item-label": {
-                          "content": "Resolve",
+                          "content": "해결",
                           "fill": "$--foreground"
                         },
                         "mnu-item-reason": {
@@ -68299,7 +68300,8 @@
                           "enabled": false
                         },
                         "mnu-item-shortcut": {
-                          "enabled": false
+                          "content": "⇧⌘↩",
+                          "enabled": true
                         }
                       }
                     },
@@ -68794,7 +68796,7 @@
                       "id": "action-view-1-d",
                       "type": "ref",
                       "ref": "mnu-item-m",
-                      "name": "열어두기",
+                      "name": "열어 두기",
                       "opacity": 1,
                       "descendants": {
                         "mnu-item-icon": {
@@ -68803,7 +68805,7 @@
                           "fill": "$--muted-foreground"
                         },
                         "mnu-item-label": {
-                          "content": "열어두기",
+                          "content": "열어 두기",
                           "fill": "$--foreground"
                         },
                         "mnu-item-reason": {
@@ -69245,7 +69247,7 @@
                       "id": "action-task-2-d",
                       "type": "ref",
                       "ref": "mnu-item-m",
-                      "name": "Resolve",
+                      "name": "해결",
                       "opacity": 1,
                       "descendants": {
                         "mnu-item-icon": {
@@ -69254,7 +69256,7 @@
                           "fill": "$--muted-foreground"
                         },
                         "mnu-item-label": {
-                          "content": "Resolve",
+                          "content": "해결",
                           "fill": "$--foreground"
                         },
                         "mnu-item-reason": {

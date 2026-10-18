@@ -1012,14 +1012,14 @@ function buildActionMenus(tokens) {
     return [
       menu('terminal', 'Terminal', [
         ['복사', 'copy', {shortcut: '⌘C'}], ['붙여넣기', 'clipboard-paste', {shortcut: '⌘V'}], ['모두 선택', 'square-dashed'], ['찾기', 'search', {shortcut: '⌘F'}], null,
-        ['오른쪽으로 분할', 'panel-right', {shortcut: '⌘D'}], ['아래로 분할', 'panel-bottom', {shortcut: '⇧⌘D'}], ['확대', 'maximize'], null,
+        ['오른쪽으로 분할', 'panel-right', {shortcut: '⌘D'}], ['아래로 분할', 'panel-bottom', {shortcut: '⇧⌘D'}], ['확대', 'maximize', {shortcut: '⇧⌘↩'}], null,
         ['관련 세션', 'network', {shortcut: '›'}], null, ['잠자기', 'moon'], ['세션 보관', 'archive'], ['세션 분기', 'git-fork', {shortcut: '›'}], null,
         ['정보 복사', 'copy', {shortcut: '›'}], null, ['터미널 닫기', 'x'],
       ]),
       menu('tab', 'Agent tab', [['새 탭', 'plus'], ['이름 변경…', 'pencil'], null, ['분할', 'panel-right', {shortcut: '›'}], ['이동', 'arrow-right', {shortcut: '›'}], null, ['이름 복사', 'copy'], null, ['탭 닫기…', 'x']]),
-      menu('view', 'File tab', [['새 탭', 'plus'], ['열어두기', 'pin'], null, ['분할', 'panel-right', {shortcut: '›'}], ['이동', 'arrow-right', {shortcut: '›'}], null, ['경로 복사', 'copy'], ['파일 트리에서 선택', 'folder-open'], ['Finder에서 보기', 'external-link'], null, ['보기 닫기', 'x']]),
+      menu('view', 'File tab', [['새 탭', 'plus'], ['열어 두기', 'pin'], null, ['분할', 'panel-right', {shortcut: '›'}], ['이동', 'arrow-right', {shortcut: '›'}], null, ['경로 복사', 'copy'], ['파일 트리에서 선택', 'folder-open'], ['Finder에서 보기', 'external-link'], null, ['보기 닫기', 'x']]),
       menu('session', 'Session row', [['보기', 'square-terminal'], null, ['정보 복사', 'copy', {shortcut: '›'}], null, ['탭 닫기…', 'x']]),
-      menu('task', 'Live task', [['기록 보기', 'file-text', {shortcut: 'Space'}], ['터미널로 이동', 'square-terminal', {shortcut: '↩'}], ['Resolve', 'check'], null, ['세션 보관', 'archive']]),
+      menu('task', 'Live task', [['기록 보기', 'file-text', {shortcut: 'Space'}], ['터미널로 이동', 'square-terminal', {shortcut: '↩'}], ['해결', 'check'], null, ['세션 보관', 'archive']]),
       menu('archived', 'Archived task', [['기록 보기', 'file-text', {shortcut: 'Space'}], ['이어가기', 'play'], null, ['보관함에서 지우기…', 'trash-2', {destructive: true}]]),
       menu('unavailable', 'Shared refusal', [['세션 분기', 'git-fork', {disabled: true, reason: '세션 정보를 아직 받지 못했습니다', shortcut: '›'}]]),
       menu('directions', 'Direction submenu', [['오른쪽', 'panel-right'], ['왼쪽', 'panel-left'], ['위쪽', 'panel-top'], ['아래쪽', 'panel-bottom']]),

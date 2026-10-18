@@ -214,7 +214,7 @@ export function terminalMenuItems(pane: PaneRow, title: string, context: Termina
     if (html && context.link?.inCheckout) items.push({ id: "link_source", icon: "source", label: translate("panes.menu.openSource"), unavailable: null });
     items.push({ id: "link_external", icon: "external", label: translate("panes.menu.openDefaultApp"), unavailable: null });
     const host = context.reveal === undefined ? revealHost() : context.reveal;
-    if (host) items.push({ id: "link_reveal", icon: "folder", label: translate(host.label), unavailable: null });
+    if (host) items.push({ id: "link_reveal", icon: "external", label: translate(host.label), unavailable: null });
     items.push({ id: "link_copy", icon: "copy", label: translate("workspace.menu.copyPath"), unavailable: null });
   }
   const editingStart = items.length;
