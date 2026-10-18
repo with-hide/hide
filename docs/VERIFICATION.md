@@ -293,8 +293,8 @@ The letter's first line carries `@`, `$`, `/`, `!`, `#`, backticks, Korean and a
 The tool's agents run Herdr's integration hooks, not Hide's, so the letter reaches them through `hide inbox`, which their probe guidance says to read when a `🔔` prompt brings none; that a prompt hook recognizes the line and hands the letter over is what the remote mailbox lane and the manual checks in [delivery.md](delivery.md#verification) prove.
 The controller generates the marker after the earlier prompt and holds it only in memory; it writes no helper or marker receipt for the agent to read.
 The native sandbox denies other-process argument inspection and private mailbox storage access; its exact candidate capability and claim files remain available for ordinary `hide inbox`.
-Only the run root's own metadata is readable so native settings readers can vet every ancestor of a private probe path.
-The run root's directory listing and controller-file contents remain denied, and the pre-provider self-test checks both denials alongside ancestor metadata access.
+Of the run root only the folder itself is readable, its metadata and its names, so native settings readers can vet every ancestor of a private probe path and Bun's `realpath` can open it: OpenCode resolves its project folder that way, and on 2026-10-18, with only the metadata readable, it fell back to HOME and recorded its sessions there.
+The run root's folders and controller-file contents remain denied, and the pre-provider self-test checks both denials alongside ancestor metadata access.
 For omp's credential database, the tool queries the system's open-file table and copies the DB, WAL and SHM together only when no opener is observed and every source's identity, size, mtime and bytes remain unchanged.
 It never opens the original through SQLite or checkpoints it; any recovery happens in the private copy.
 An open or changing bundle leaves all omp scenes UNKNOWN without launching omp, prints guidance to close all omp instances and rerun, and lets the other providers continue.

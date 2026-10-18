@@ -1258,7 +1258,9 @@ class NativeWriteProtection(unittest.TestCase):
                            # Metadata access must not disclose controller data.
                            f"\nfor parent in Path({str(settings)!r}).parents: parent.lstat()"
                            f"\nassert Path({str(settings)!r}).read_text() == 'fixture-settings'"
-                           f"\ntry: list(Path({str(run)!r}).iterdir())"
+                           # The run root lists (Bun's realpath opens it); the capabilities folder does not.
+                           f"\nlist(Path({str(run)!r}).iterdir())"
+                           f"\ntry: list(Path({str(caps)!r}).iterdir())"
                            "\nexcept PermissionError: pass"
                            "\nelse: raise SystemExit(33)"
                            f"\nassert Path({str(reference)!r}).read_text() == 'fixture-reference'"
