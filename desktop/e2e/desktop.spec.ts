@@ -12,7 +12,9 @@ import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
 import "../../web/src/host";
 import { chord, commandLabel } from "../../web/e2e/chords";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
+import { herdrTabs } from "../../web/e2e/failure-dump";
 import { countSent, enterWorkspace } from "../../web/e2e/wire";
+import { toPage } from "../src/main/wirePath";
 import { detachedApp, DESKTOP_DIR, HIDE_CLI, hostLog, isolate, launch, relaunch, screenshot, test, type Isolated } from "./fixture";
 
 let herdr: HerdrFixture;
@@ -48,7 +50,6 @@ async function shellShown(page: Page): Promise<void> {
 test("attach: the app starts hided, shows the shell, and runs the native chords and the menu", { tag: "@platform" }, async () => {
   ({ app } = await launch(run.env));
   const page = await app.firstWindow();
-  const sent = countSent(page);
   // B1: the host's own screen while it looks, then the shell hided serves.
   await shellShown(page);
   expect(new URL(page.url()).hostname).toBe("127.0.0.1");
@@ -85,18 +86,6 @@ test("attach: the app starts hided, shows the shell, and runs the native chords 
   await sidebarSwitch.click();
   await expect(page.locator("nav[data-sidebar]")).toBeVisible();
 
-  // B9: the app's New tab chord is one create_tab here; the browser's is not a chord in the app.
-  const tabs = await page.locator("[role=tab]").count();
-  await page.locator("[data-pane-view] .xterm-helper-textarea").first().focus();
-  await page.keyboard.press(chord("new_tab", "electron"));
-  await expect(page.locator("[role=tab]")).toHaveCount(tabs + 1);
-  await expect.poll(() => sent.get("create_tab")).toBe(1);
-  await page.keyboard.press(chord("new_tab"));
-  // A menu click runs the same action through the bridge.
-  await app.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById("new_tab")?.click());
-  await expect(page.locator("[role=tab]")).toHaveCount(tabs + 2);
-  await expect.poll(() => sent.get("create_tab")).toBe(2);
-
   // View > Toggle device rail hides and brings back the rail (quick device-rail-badges B6); the item has no chord.
   await expect(page.locator("[data-device-rail]")).toBeVisible();
   expect(await app.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById("toggle_device_rail")?.accelerator ?? null)).toBeNull();
@@ -128,6 +117,54 @@ test("attach: the app starts hided, shows the shell, and runs the native chords 
   await screenshot(page, "desktop-shortcut-sheet");
   await page.keyboard.press("Escape");
   await expect(sheet).toHaveCount(0);
+});
+
+// @platform: the native accelerator and menu bridge reach the same draft contract on each system.
+test("New tab: the native chord and menu each select one draft without starting a terminal", { tag: "@platform" }, async () => {
+  ({ app } = await launch(run.env));
+  const page = await app.firstWindow();
+  const last = new Map<string, Record<string, unknown>>();
+  const sent = countSent(page, last);
+  await shellShown(page);
+  await enterWorkspace(page);
+  const tabs = page.locator("[data-agent-tab-bar] [role=tab][data-tab]");
+  const start = page.locator("[data-agent-tab-start]");
+  await expect(page.locator("[data-pane-view]").first()).toBeVisible();
+  const before = await tabs.count();
+  const topology = herdrTabs(herdr);
+  const area = await page.locator("[data-agent-area-id]").getAttribute("data-agent-area-id");
+  const request = {
+    workspace: { device_id: expect.any(String), path: toPage(path.join(herdr.root, "fixture")) },
+    group_id: null, action: "new_tab", area_id: area, request_id: expect.any(String),
+  };
+
+  // Group-tabs B5/B6: creating a tab selects a durable draft and offers an explicit terminal start.
+  await page.locator("[data-pane-view] .xterm-helper-textarea").first().focus();
+  await page.keyboard.press(chord("new_tab", "electron"));
+  await expect(tabs).toHaveCount(before + 1);
+  await expect(start).toHaveAttribute("data-agent-tab-start", /^draft:/);
+  const first = await start.getAttribute("data-agent-tab-start");
+  await expect(page.locator('[data-agent-tab-bar] [role=tab][aria-selected="true"]')).toHaveAttribute("data-tab", first!);
+  await expect(page.locator("[data-group-start-terminal=true]")).toBeEnabled();
+  await expect.poll(() => sent.get("agent_group.new_tab")).toBe(1);
+  expect(last.get("agent_group.new_tab")).toMatchObject(request);
+  const firstRequest = last.get("agent_group.new_tab")!.request_id;
+  expect(herdrTabs(herdr)).toEqual(topology);
+
+  // The browser-only chord must not create a tab; the native menu adds exactly the second draft.
+  await page.keyboard.press(chord("new_tab"));
+  await app.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById("new_tab")?.click());
+  await expect(tabs).toHaveCount(before + 2);
+  await expect(start).toHaveAttribute("data-agent-tab-start", /^draft:/);
+  const second = await start.getAttribute("data-agent-tab-start");
+  expect(second).not.toBe(first);
+  await expect(page.locator('[data-agent-tab-bar] [role=tab][aria-selected="true"]')).toHaveAttribute("data-tab", second!);
+  await expect.poll(() => sent.get("agent_group.new_tab")).toBe(2);
+  expect(last.get("agent_group.new_tab")).toMatchObject(request);
+  expect(last.get("agent_group.new_tab")!.request_id).not.toBe(firstRequest);
+  expect(sent.get("create_tab") ?? 0).toBe(0);
+  expect(herdrTabs(herdr)).toEqual(topology);
+  await screenshot(page, "desktop-new-tab-drafts");
 });
 
 test("links: external links open in the default browser and the window stays on the daemon", async () => {
