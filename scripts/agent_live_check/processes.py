@@ -33,6 +33,9 @@ else:
 MAX_CHILDREN = 16
 MAX_DESCENDANTS = 128
 MAX_RSS_BYTES = 2 * 1024 * 1024 * 1024
+# Windows: the job's own limit on committed memory, the hard stop behind the
+# sampled resident cap, so an allocation between two samples ends there.
+MAX_COMMITTED_BYTES = 2 * MAX_RSS_BYTES
 MAX_OUTPUT = 1024 * 1024
 MAX_FAILURE_REASON = 512
 MAX_COMMANDS = 4096
@@ -336,15 +339,18 @@ class OwnedProcesses:
     def spawn_in_job(self, argv, *, env, cwd, stdin, stdout, stderr, admit):
         """Windows: the child starts suspended, joins a job of its own, and
         only then runs, so everything it starts is in the job. The job refuses
-        a process past the cap, the port ends a job whose memory passes it
-        (`job_over_budget`), and closing its handle, which no child inherits,
-        ends whatever it still holds."""
+        a process or an allocation past its caps, the port ends a job whose
+        resident memory passes MAX_RSS_BYTES (`job_over_budget`), and closing
+        its handle, which no child inherits, ends whatever it still holds."""
         if self.port is None:
             self.port = windows.JobPort({
                 windows.JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT: "owned_processes_over_budget:" + json.dumps(
-                    {"descendants": MAX_DESCENDANTS}, separators=(",", ":"))}, job_over_budget, POLL_SECONDS)
+                    {"descendants": MAX_DESCENDANTS}, separators=(",", ":")),
+                windows.JOB_OBJECT_MSG_JOB_MEMORY_LIMIT: "owned_processes_over_budget:" + json.dumps(
+                    {"committed_bytes": MAX_COMMITTED_BYTES}, separators=(",", ":"))},
+                job_over_budget, POLL_SECONDS)
         self.jobs += 1
-        job = windows.Job(self.port.handle, self.jobs, processes=MAX_DESCENDANTS)
+        job = windows.Job(self.port.handle, self.jobs, processes=MAX_DESCENDANTS, committed=MAX_COMMITTED_BYTES)
         self.port.register(job)
         try:
             admit()

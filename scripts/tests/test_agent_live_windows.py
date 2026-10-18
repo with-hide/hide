@@ -140,6 +140,22 @@ class JobOwnership(unittest.TestCase):
         self.assertGreater(measured["rss_bytes"], cap)
         self.assertEqual(measured["largest"][0]["executable"].lower(), Path(sys.executable).name.lower())
 
+    def test_memory_committed_past_the_hard_stop_is_a_named_failure(self):
+        committed = 256 * 1024 * 1024
+        with patch.object(processes, "MAX_COMMITTED_BYTES", committed):
+            self.owner = OwnedProcesses()
+            with self.assertRaisesRegex(ProcessSafetyError,
+                                        rf'owned_processes_over_budget:\{{"committed_bytes":{committed}\}}'):
+                # Refused by Windows at the allocation, before any of it is resident.
+                self.owner.run(self.python(f"""
+                    import time
+                    try:
+                        held = bytearray({2 * committed})
+                    except MemoryError:
+                        pass
+                    time.sleep(600)
+                """), env=dict(os.environ), check=False)
+
     def test_memory_committed_but_never_touched_is_within_the_cap(self):
         cap = 256 * 1024 * 1024
         with patch.object(processes, "MAX_RSS_BYTES", cap):

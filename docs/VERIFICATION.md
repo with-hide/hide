@@ -226,10 +226,11 @@ This ownership boundary follows the explicitly recorded B8/D-09 scope decision; 
 Linux fixture supervision uses a child subreaper and validates its procfs namespace and visibility before using process identities.
 The subreaper keeps an adopted process that ended as a zombie until the run's cleanup, and Herdr's pane close on Linux asks `kill(pid, 0)`, which a zombie answers, so Herdr logs `pane session still alive after forced shutdown` for an agent it did end; the warning is the harness's, and a desktop's init reaps the same process at once.
 On Windows each child starts suspended and joins a job object of its own before it runs, so everything it starts is in the job (`scripts/agent_live_check/windows.py`, after hide-platform's `process`).
-The job holds the same caps, measured the same way: 128 processes, which the job itself refuses, and 2 GiB of resident memory, the working set of the job's processes summed every 0.1 s as a guardian sums RSS.
-The job's own limit on committed memory is not used: Windows counts every page a process committed, touched or not, so it ended a run that Linux and macOS pass within the cap.
+The job holds the same caps, measured as Linux and macOS measure them: 128 processes, which the job itself refuses, and 2 GiB of resident memory, the working set of every process in the job summed every 0.1 s as a guardian sums RSS, so the three systems judge a run by one measure.
+This replaces the committed memory #1327 capped on Windows: Windows counts every page a process committed, touched or not, so that cap ended a run Linux and macOS pass within theirs.
+Between two samples the sum can pass 2 GiB by what the job's processes touch in 0.1 s; the job's own limit on committed memory stays behind it as the hard stop, at twice the cap (4 GiB), which Windows applies to each allocation, so a runaway ends there whatever a sample saw.
 Its handle is never inheritable, and closing it ends what the job holds, so an owner that dies takes the tree with it.
-A refused process reaches the owner through the job's completion port, and memory past the cap is found by the thread that reads that port; either ends the job, and the owner's next end of that child fails with the cap's name, as a guardian's refusal does.
+A refused process or allocation reaches the owner through the job's completion port, and resident memory past the cap is found by the thread that reads that port; either ends the job, and the owner's next end of that child fails with the cap's name, as a guardian's refusal does.
 Output, the command time and the run time are capped by the same code as on Unix.
 A program Windows starts on a child's behalf (a service, a COM server, a scheduled task) is outside the job, and the report says so.
 Private files there carry an access list naming only this account and are checked by owner and access list (hide-platform's `fs`).

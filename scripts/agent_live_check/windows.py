@@ -42,6 +42,7 @@ THREAD_SUSPEND_RESUME = 0x0002
 TH32CS_SNAPTHREAD = 0x00000004
 
 JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
+JOB_OBJECT_LIMIT_JOB_MEMORY = 0x00000200
 JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION = 0x00000400
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 JOB_BASIC_ACCOUNTING = 1
@@ -49,6 +50,7 @@ JOB_BASIC_PROCESS_ID_LIST = 3
 JOB_ASSOCIATE_COMPLETION_PORT = 7
 JOB_EXTENDED_LIMIT = 9
 JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT = 3
+JOB_OBJECT_MSG_JOB_MEMORY_LIMIT = 10
 
 
 def failed(call):
@@ -169,11 +171,12 @@ def console_flags():
 
 
 class Job:
-    """One child's process tree. `processes` is the job's own limit; a
-    process past it is refused by Windows, and the refusal arrives at `port`
-    named by `key`. Its memory is measured from outside (`working_sets`)."""
+    """One child's process tree. `processes` and `committed` (bytes of
+    committed memory) are the job's own limits; a process or an allocation
+    past them is refused by Windows, and the refusal arrives at `port` named
+    by `key`. Its resident memory is measured from outside (`working_sets`)."""
 
-    def __init__(self, port, key, *, processes):
+    def __init__(self, port, key, *, processes, committed):
         # No security attributes: the handle is not inheritable.
         handle = CreateJobObjectW(None, None)
         if not handle:
@@ -189,8 +192,9 @@ class Job:
             limits = ExtendedLimit()
             limits.BasicLimitInformation.LimitFlags = (
                 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
-                | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION)
+                | JOB_OBJECT_LIMIT_JOB_MEMORY | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION)
             limits.BasicLimitInformation.ActiveProcessLimit = processes
+            limits.JobMemoryLimit = committed
             if not SetInformationJobObject(handle, JOB_EXTENDED_LIMIT, ctypes.byref(limits), ctypes.sizeof(limits)):
                 raise failed("SetInformationJobObject(limits)")
             link = CompletionPortLink(key, port)
