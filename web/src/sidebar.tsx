@@ -1607,7 +1607,7 @@ function OpenAgentRows({ checkout, groupTabs, deviceId, agentRows, sleeping, ins
         {open ? <ul>{group.tabs.map((id) => {
           if (drafts.includes(id)) return <li key={id}><button type="button" data-sidebar-tab={id} className="flex h-(--size-sidebar-line) w-full min-w-0 items-center gap-xs rounded-sm pr-xs text-left text-caption text-subtle-foreground outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" style={{ paddingLeft: childInset }} onClick={() => context.actions.agentGroup({ device_id: deviceId, path: checkout.path }, group.id, { action: "select", tab_id: id })}><PanelsTopLeftIcon className="size-(--size-icon-sm) shrink-0" /><span className="truncate">{t("groups.newTab")}</span></button></li>;
           const segment = segments.find((segment) => segment.tab?.id === id);
-          return segment ? <li key={id} className="relative" data-sidebar-tab-group={id}><TabSegmentHead group={segment} checkout={checkout} deviceId={deviceId} inset={childInset} glyphColumn={inset} context={context} /><AgentTreeRows checkoutId={checkout.id} deviceId={deviceId} agentRows={segment.rows} inset={childInset} context={context} /></li> : null;
+          return segment ? <li key={id} className="relative" data-sidebar-tab-group={id}><TabSegmentHead group={segment} checkout={checkout} deviceId={deviceId} inset={childInset} glyphColumn={inset} glyphSize="var(--size-icon-sm)" context={context} /><AgentTreeRows checkoutId={checkout.id} deviceId={deviceId} agentRows={segment.rows} inset={childInset} context={context} /></li> : null;
         })}{segments.filter((segment) => segment.tab === null || !group.tabs.includes(segment.tab.id!)).map((segment) => <li key={segment.tab?.id ?? "unplaced"}><AgentTreeRows checkoutId={checkout.id} deviceId={deviceId} agentRows={segment.rows} inset={childInset} context={context} /></li>)}</ul> : null}
       </li>;
     })}
@@ -1636,7 +1636,7 @@ const TAB_LINE = "calc(var(--size-sidebar-line) + var(--spacing-xxs))";
  * the checkout rather than beside it. The line opens the real tab, and the hint says its name and agent count, or only its name with no agent. An unnamed single-agent
  * tab draws nothing: its row alone is the segment, and the gap between segments is the tab boundary.
  */
-function TabSegmentHead({ group, checkout, deviceId, inset, glyphColumn, context }: { group: SidebarTabGroup; checkout: Checkout; deviceId: string; inset: string; glyphColumn: string; context: TreeContext }) {
+function TabSegmentHead({ group, checkout, deviceId, inset, glyphColumn, glyphSize = "var(--size-checkout-icon)", context }: { group: SidebarTabGroup; checkout: Checkout; deviceId: string; inset: string; glyphColumn: string; glyphSize?: string; context: TreeContext }) {
   const { t } = useInterfaceTranslation();
   const removing = useShellStore((s) => checkoutRemoving(s.rest?.worktree_removal, deviceId, checkout.path, localDeviceId(s.rest)));
   const tab = group.tab;
@@ -1644,7 +1644,7 @@ function TabSegmentHead({ group, checkout, deviceId, inset, glyphColumn, context
   const name = naming ? naming.manual_name ?? t("sidebar.tabNumber", { number: naming.number }) : checkout.strip.find((entry) => entry.source_id === tab?.id)?.label ?? t("groups.newTab");
   // A tab the operator kept with no agent left says its name alone, never a count of none.
   const label = group.count === 0 ? name : t("sidebar.tabAgents", { name, count: group.count });
-  const center = `calc(${glyphColumn} + var(--size-checkout-icon) / 2)`;
+  const center = `calc(${glyphColumn} + ${glyphSize} / 2)`;
   const open = () => context.actions.openSurface(tabSurface(checkout, tab!.id!, deviceId));
   if (!group.glyph) return null;
   return (
