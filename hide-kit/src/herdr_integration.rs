@@ -11,8 +11,8 @@
 //! Hide only ever takes out what it put there: the kit's record names the
 //! integrations it installed (`herdr:<agent>`), and an integration that was
 //! already in place when Hide first looked is the operator's and stays, on and
-//! off. Every call is one owned child with a deadline and a cleared
-//! environment but `HOME` and `PATH` (`crate::process::run`), so a daemon
+//! off. Every call is one owned child with a deadline and only the
+//! account's login variables and `HOME` (`crate::process::run`), so a daemon
 //! started from a Herdr pane never aims it at that pane's server. Only the
 //! kit pass calls it, never anything holding the runtime lock.
 //!

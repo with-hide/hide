@@ -3822,7 +3822,7 @@ mod tests {
         let TaskAgentOutcome::Failed(reason) = outcome else {
             panic!("start succeeded")
         };
-        assert!(reason.contains("Settings"), "{reason}");
+        assert_eq!(reason, crate::codex_launch::CAPABILITY_UNKNOWN);
         assert!(requests_of(&server).is_empty());
     }
 

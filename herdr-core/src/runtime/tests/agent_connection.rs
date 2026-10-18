@@ -505,6 +505,7 @@ fn report_with(on: bool, off: Option<hide_kit::CodexDaemonOff>) -> hide_kit::Kit
         codex_daemon_on: Some(on),
         codex_daemon_running: None,
         codex_daemon_unreadable: None,
+        codex_capability_unread: None,
         codex_daemon_off: off,
         ..hide_kit::KitReport::default()
     }
@@ -737,6 +738,35 @@ fn an_unreadable_daemon_answer_is_no_answer_and_is_logged_once() {
     assert_eq!(logged.len(), 1, "{records:?}");
     assert_eq!(logged[0]["device_id"], local);
     assert!(!runtime.kit_state(local).shares_codex_server());
+}
+
+/// A Codex the kit could not read goes to the log once per cause, with the
+/// machine it was on and the cause and exit code alone (engineering rule 9).
+#[test]
+fn an_unread_codex_is_logged_once_with_its_machine_cause_and_exit_code() {
+    let local = crate::node::TEST_NODE;
+    let mut runtime = runtime();
+    let unread = hide_kit::KitReport {
+        codex_daemon: None,
+        codex_capability_unread: Some(hide_kit::CodexReadFailure::Exited { code: 134 }),
+        ..report_with(false, None)
+    };
+    let ((), records) = crate::diagnostics::capture(|| {
+        for _ in 0..3 {
+            runtime.ingest_kit_report(local, &unread);
+        }
+    });
+    let logged: Vec<_> = records
+        .iter()
+        .filter(|record| record["kind"] == "codex_capability_unread")
+        .collect();
+    assert_eq!(logged.len(), 1, "{records:?}");
+    assert_eq!(logged[0]["device_id"], local);
+    assert_eq!(logged[0]["agent"], "codex");
+    assert_eq!(
+        logged[0]["failure"],
+        serde_json::json!({"cause": "exited", "code": 134})
+    );
 }
 
 #[test]

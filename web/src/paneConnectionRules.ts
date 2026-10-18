@@ -55,7 +55,7 @@ export function offersSharedServerOff(connection: PaneConnection & { reason: Pan
 const REOPEN_FAILURE: Record<PaneReopenFailure, MessageKey> = {
   agent_busy: "panes.connection.reopenFailed.agentBusy",
   session_gone: "panes.connection.reopenFailed.sessionGone",
-  codex_unread: "panes.connection.reopenFailed.codexUnread",
+  codex_unread: "agents.codexUnread",
   start_refused: "panes.connection.reopenFailed.startRefused",
   end_refused: "panes.connection.reopenFailed.endRefused",
 };

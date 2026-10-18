@@ -36,6 +36,7 @@ struct Account {
 }
 
 impl ssh_server::Account for Account {
+    #[allow(clippy::disallowed_methods)] // env_clear: an SSH exec's environment (Unix only)
     fn command(&self, program: &OsStr) -> Command {
         let mut command = Command::new(program);
         command

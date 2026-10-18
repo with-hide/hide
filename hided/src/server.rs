@@ -1290,6 +1290,9 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "session_too_long" => {
             "The agent names its session by a file path longer than 4096 bytes; spawn it with a new intent in a checkout with a shorter path"
         }
+        "codex_capability_unknown" => {
+            "Hide has not read whether that machine's Codex runs a shared server; ask the operator to press Check again in Settings > Agents for that machine, then run the same command again with the same intent"
+        }
         _ => "Check the current agent pane and retry the same intent",
     }
 }
@@ -4502,6 +4505,7 @@ mod tests {
             "native_identity_unavailable",
             "identity_waits_full",
             "session_too_long",
+            "codex_capability_unknown",
         ] {
             let (reason, next) = refusal_answer(code.to_owned(), delivery_next_action(code));
             assert_eq!(reason, code);
