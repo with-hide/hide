@@ -115,6 +115,7 @@ fn starting_herdr(
     std::sync::mpsc::Receiver<(String, serde_json::Value)>,
 ) {
     let (sent, starts) = std::sync::mpsc::channel();
+    let observed = std::sync::Mutex::new(json!({}));
     let herdr = FakeHerdr::start_with_errors(name, move |method, params| match method {
         "pane.process_info" => Ok(json!({"type": "pane_process_info", "process_info": {
             "pane_id": params["pane_id"], "shell_pid": 42, "foreground_process_group_id": 42,
@@ -125,7 +126,13 @@ fn starting_herdr(
             "workspace_id": "w-order", "tab_id": "w-order:t2", "focused": false,
             "agent_status": "idle", "revision": 1
         }})),
+        "agent.get" => Ok(json!({"type":"agent_info", "agent": *observed.lock().unwrap()})),
         "agent.start" => {
+            *observed.lock().unwrap() = json!({
+                "pane_id":params["pane_id"], "terminal_id":"term", "workspace_id":"w-order",
+                "tab_id":"w-order:t2", "name":params["name"], "agent":params["kind"],
+                "interactive_ready":true, "focused":false, "agent_status":"idle", "revision":3
+            });
             sent.send((
                 params["pane_id"].as_str().unwrap().to_owned(),
                 params["args"].clone(),
