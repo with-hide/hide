@@ -7,6 +7,7 @@ mod adapter_contract;
 mod agy_binary;
 mod agy_hooks;
 mod bell_intake;
+mod captured_route;
 mod claude_subagent_counts;
 mod codex_binary;
 mod codex_folder_trust;

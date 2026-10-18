@@ -36,6 +36,7 @@ pub mod opencode;
 pub mod pi_extension;
 pub mod plugin;
 pub mod report;
+pub mod route;
 pub mod runtime;
 pub mod spawn_guard;
 #[cfg(all(test, unix))]

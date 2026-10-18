@@ -69,8 +69,8 @@ PROVIDER_KEYS = ("ANTHROPIC_AUTH_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "AWS_
                  "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")
 
 
-# The XDG folders under the probe's home that every process it starts reads,
-# the daemon and Hide's reader included.
+# The shell's private XDG folders. The daemon is started without a shell's
+# XDG_STATE_HOME, like an app opened from the Dock.
 XDG_FOLDERS = {"XDG_CONFIG_HOME": "config", "XDG_STATE_HOME": "state", "XDG_DATA_HOME": "data",
                "XDG_CACHE_HOME": "cache"}
 
@@ -186,11 +186,8 @@ class Runtime:
                 raise ProtectionError("herdr_binary_does_not_match_pin")
             self.expected_version = manifest["version"]
             base = clean_env()
-            # Native starts can bypass an agent wrapper; every child needs
-            # the same private state route as the daemon, not an XDG fallback.
             base.update(**home_env(self.home), **self.shell.environment(self.home),
                         **{name: str(self.home / folder) for name, folder in XDG_FOLDERS.items()},
-                        HIDE_STATE_DIR=str(self.state),
                         HERDR_SOCKET_PATH=str(self.socket), HERDR_BIN_PATH=str(self.herdr_bin),
                         HERDR_CONFIG_PATH=str(run / "herdr.toml"),
                         HERDR_SESSION_PATH=str(run / "herdr-session.json"),
@@ -203,6 +200,11 @@ class Runtime:
                                                + self.shell.herdr_config()).encode())
             self.daemon_env = {**base, "HIDE_PORT": "0",
                                "HIDE_KEEP_ALIVE": "1", "HIDED_UI_DIR": str(checkout / "web/dist")}
+            self.daemon_env.pop("XDG_STATE_HOME", None)
+            # CI uses the account's default; a local sandbox keeps the state
+            # outside its writable probe and therefore needs an explicit route.
+            if self.state != self.home / ".hide/state":
+                self.daemon_env["HIDE_STATE_DIR"] = str(self.state)
             # hided observes native session identity using its usual reader.
             # These read-only references do not change the operator's trees.
             for relative in (() if fixture_bin else (".claude/projects", ".codex/sessions")):

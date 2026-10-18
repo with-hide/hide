@@ -38,13 +38,20 @@ Six events are registered: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `Su
 `PreToolUse` selects `Bash|AskUserQuestion|ExitPlanMode|Edit|Write|MultiEdit|NotebookEdit|Read` in Claude Code and `Bash|request_user_input|request_user_input_async|apply_patch|Edit|Write` in Codex (`install::hook_matcher`, the one function the writer and Codex's trust check both read): the shell, the native questions, and the file tools the [project guardrails](#project-guardrails) judge; a search never starts the helper.
 Codex matches a tool by its whole name: with a hook on `request_user_input` alone, the async question tool of 0.162.1 never reached the helper (measured 2026-10-15 in an isolated `CODEX_HOME`), so each question tool is named.
 An entry of Hide's whose matcher differs from the one written today reads Outdated at its own version, so the next kit pass rewrites it and records its Codex trust.
-The version-eight marker makes earlier entries Outdated until the normal kit pass at launch, connection or Reinstall replaces Hide's entries and records their exact Codex trust.
+The version-nine marker makes earlier entries Outdated until the normal kit pass at launch, connection or Reinstall replaces Hide's entries and records their exact Codex trust.
 Already-running sessions pick up the changed hooks when restarted.
 
 Every entry carries `--runtime claude-code|codex` and `--source hide-subagents@<version>` inside its command (in Claude Code's Windows entry, inside its `args`).
 The runtime argument selects that runtime's stdout envelope; the current marker also replaces commands not guarded against a missing helper.
-That marker is the whole basis for judging what is installed: the source name proves the entry is Hide's, and the version after the `@` separates a current hook from an outdated one.
-Nothing else is read from the command but the helper's quoted path, and the helper does not pass the marker on: it is an install marker, not the metadata source (see below).
+The source name proves the entry is Hide's, and the version after the `@` separates a current hook from an outdated one.
+The kit also compares the generated command, including its helper and state route; an unedited command for another state folder is stale, while an operator edit stays until Reinstall.
+The helper does not pass the marker on: it is an install marker, not the metadata source (see below).
+
+Every active agent's hook or extension carries the installing daemon's state folder as `--state-dir-b64`, a URL-safe base64 argument that preserves spaces, quotes and non-ASCII names across POSIX shells, PowerShell and JavaScript argument arrays.
+The helper gives this route to each sibling `hide` call when `HIDE_STATE_DIR` is absent; an explicit pane route and the CLI's capability reference retain their existing priority and authentication checks.
+A malformed, relative or duplicate captured route fails the call rather than falling back to another daemon.
+This covers an app opened from the Dock without `XDG_STATE_HOME` while an agent's shell exports it, and agents whose hooks do not inherit Hide's environment.
+The current Grok and agy entries, Cursor entries, Pi and omp extensions, and both OpenCode server plugins use the same rule; the kit updates their owned entries through its normal pass and records the exact route-bearing Codex command as trusted.
 
 ## What the hook returns and reports back
 
@@ -598,8 +605,9 @@ Two pieces are written per agent into the agent's own files, and nothing else; a
   An agent's own folder (`~/.claude`, `~/.gemini/config`) is never created for the stub: the hook code reads that folder as the agent's settings being there, so a pass that made it would write a hook on the next pass that it did not write on this one, and a second apply would not be a no-op; the row says the agent has not created its folder yet, and the stub goes in on the pass after it has.
 - The agent hook, for the agents below marked as done; for OpenCode this piece is Hide's plugin, and for Pi and omp Hide's extension, which carry the guidance with the rest ([OpenCode: Hide's plugin](#opencode-hides-plugin), [Pi and omp: Hide's extension](#pi-and-omp-hides-extension)).
   It is one entry per event the agent's documentation names, in the agent's own format, whose command is `hide-agent-hooks hook --runtime <agent id> --event <event>`.
-  `hide-agent-hooks` writes it (`src/guidance.rs`) and nothing else does, under the per-agent marker (`hide-guidance@7` for Grok and Windows Antigravity, `@6` for the others) that proves an entry is Hide's and separates a current one from an older one; an entry of `@1`, which only knew the session start, of `@2`, `@3`, of `@4`, whose `PreToolUse` matchers did not select the file tools, or of `@5`, whose matchers let only the shell, question and file tools reach the hook, is Hide's own and replaced by the next pass.
-  Antigravity version 7 encodes its Windows hook command; version 6's quoted cmd guard is replaced on the next pass, while its macOS and Linux entries stay at version 6.
+  `hide-agent-hooks` writes it (`src/guidance.rs`) and nothing else does, under the per-agent marker (`hide-guidance@8` for Grok and Antigravity, `@7` for Cursor) that proves an entry is Hide's and separates a current one from an older one.
+  These entries capture the installing daemon's state route; an earlier owned entry is replaced by the next pass.
+  Antigravity retains the encoded Windows command introduced in version 7 across its Go-to-cmd boundary.
   Version 4 prepares Cursor's Windows payload before starting the helper; the next pass replaces version 3's lazy PowerShell pipe too.
   Where the session start adds context (Cursor), its output is the worktree-purpose instruction, including the sentence that points at `hide factory add`, one fixed line that points at `hide browser help`, and the live Workspace guidance when the daemon answers, in the field the agent documents.
   It prints no Memory index, because a Memory receipt is read back only from a session Hide reads it from: Claude Code's, Codex's, Pi's and omp's files and OpenCode's database.
@@ -662,8 +670,8 @@ It asks `hide inbox --hook --session <id> --turn-end`, prints `{"decision":"bloc
 A Stop with `stopHookActive: true` makes no letter pull and allows the turn to end even if confirmation failed; it still updates the subagent count.
 Prompt, tool and Stop intake share the session parser: either `sessionId` or `session_id` is accepted, equal pairs are accepted, and conflicting pairs take no letters and record `session_conflict` without either value.
 The core recognizes a bell's turn and keeps the normal five-minute wait for letters arriving during an operator's turn ([delivery.md](delivery.md#safe-intake-and-manual-fallback)).
-`GuidanceAgent::version()` is per agent: Grok writes `hide-guidance@7`; Cursor, Antigravity and every other guidance agent stay at 6, leaving their expected entries unchanged.
-Grok's version 6 file reads Outdated until the kit replaces it; `HOOK_VERSION` stays unchanged, so this does not change the pane's connection chip.
+`GuidanceAgent::version()` is per agent: Grok and Antigravity write `hide-guidance@8`, Cursor writes `@7`, and retired guidance agents stay at 6 for removal only.
+An older active entry reads Outdated until the kit replaces it with the captured state route.
 The bell line names `hide inbox` for a session still running older hook entries.
 Grok 1.0.62 keeps the loaded entries after the file changes; `/hooks`, then `r`, reloads them without restarting the session (measured with separate command tags before and after reload in an isolated session).
 
@@ -925,7 +933,7 @@ The helper drops every leading mark before reading the JSON.
 PowerShell starts before the helper on every Windows hook, which Codex does for any hook there; the 1,250 ms Memory wait above counts from the helper's own start.
 PowerShell can read what the helper prints in the console code page and write it out again (no runtime documents whether it does, and Windows PowerShell 5.1 does when the helper's output crosses a pipe inside Cursor's wrapper, as the runner test showed), so on Windows the helper prints every hook's JSON in ASCII, every other character as a `\u` escape that decodes to the same text.
 The marker is looked for in an entry's `command` and in each of its `args`, where Claude Code's Windows entry carries it, so a second install on Windows recognises its entries and converges as it does elsewhere.
-The marker stays at version 6: the macOS and Linux bytes are the ones version 6 wrote (`the_posix_entry_is_exactly_what_macos_and_linux_have_installed` pins them), and no earlier build installed anything on Windows.
+The current marker also captures the daemon state route; the shell guards and quoting remain the same on each system.
 `hide-agent-hooks/tests/it/windows_hook_command.rs` runs the Windows entries the way their runtimes start them, under Windows PowerShell and PowerShell 7, with the real helper in a folder whose name has a space, a quote, brackets and a `$`, in the `windows check` lane: Claude Code's and Codex's prove stdin reached the helper by the Memory request only the session it read makes (with no `hide` beside it, recorded as `memory_unavailable`), and Grok's and Cursor's by the spawn guard's `daemon.unreachable` line, which the helper writes only after reading a launch from the event; Cursor's runs inside the script its CLI writes, and its answers parse as JSON.
 Version 6 is the first guarded command, so an older entry reads outdated and the next launch or connection replaces it.
 The kit folder is a path that survives a rebuild: the installed app bundle's `Contents/Resources` on macOS, the unpacked package's `resources` on Windows/Linux, and the helper root's `current` link on a device, which each new build of the helper points at itself, as a moved core does at the build it runs.

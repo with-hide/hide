@@ -971,6 +971,24 @@ fn grok_gets_its_own_hook_file_beside_the_others_and_only_inside_its_own_folder(
         herdr
     );
 
+    // A generated entry for a previous daemon state is safe to refresh;
+    // the operator edit below must still be left alone by an automatic pass.
+    let helper = fixture.target.kit_dir.join("hide-agent-hooks");
+    let previous = fixture.home().join("previous-daemon-state");
+    hide_agent_hooks::guidance::install(
+        hide_agent_hooks::guidance::GuidanceAgent::Grok,
+        fixture.home(),
+        hide_agent_hooks::route::HookTarget::new(&helper, &previous),
+    )
+    .unwrap();
+    let old = std::fs::read_to_string(grok_hooks(&fixture)).unwrap();
+    let report = apply(&fixture.target, &Scope::automatic());
+    assert_eq!(
+        agent(&report, "grok").hook.as_ref().unwrap().state,
+        ComponentState::Installed
+    );
+    assert_ne!(std::fs::read_to_string(grok_hooks(&fixture)).unwrap(), old);
+
     // An entry the operator edited reads Outdated and is theirs until
     // Reinstall, which puts Hide's back (B8).
     let edited = std::fs::read_to_string(grok_hooks(&fixture))
@@ -1042,7 +1060,10 @@ fn opencode_switched_on_gets_hides_plugin_beside_herdrs_and_reads_installed() {
     assert_eq!(hook.location.as_deref(), opencode_plugin(&fixture).to_str());
     assert_eq!(
         std::fs::read_to_string(opencode_plugin(&fixture)).unwrap(),
-        hide_agent_hooks::opencode::V1.text(&fixture.target.kit_dir.join("hide-agent-hooks"))
+        hide_agent_hooks::opencode::V1.text(hide_agent_hooks::route::HookTarget::new(
+            &fixture.target.kit_dir.join("hide-agent-hooks"),
+            &crate::layout::state_dir_from_process(fixture.home()),
+        ))
     );
     assert_eq!(std::fs::read(&herdr).unwrap(), b"herdr's plugin");
     assert!(

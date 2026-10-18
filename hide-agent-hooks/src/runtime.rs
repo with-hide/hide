@@ -25,8 +25,8 @@ pub const HELPER_BINARY_NAME: &str = if cfg!(windows) {
 /// The version of the installed entry. Raise it when the command Hide writes
 /// changes shape, so an older entry is reported as outdated and the operator
 /// is offered a reinstall rather than being silently left with a hook that
-/// reports nothing. Version 8 selects the file tools for the guardrails.
-pub const HOOK_VERSION: u32 = 8;
+/// reports nothing. Version 9 captures the daemon state route in the command.
+pub const HOOK_VERSION: u32 = 9;
 
 /// The one sentence SessionStart adds to either agent runtime inside Hide.
 /// Both runtimes accept the same `hookSpecificOutput.additionalContext`

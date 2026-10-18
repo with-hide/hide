@@ -45,7 +45,14 @@ fn behaves_as_the_host_runs_it(file: &PluginFile, agent: &str) {
     crate::stand_ins::program(&helper, HELPER);
     // `.mjs`: Node reads the extension as the ES module both hosts load.
     let extension = dir.path().join("hide.mjs");
-    std::fs::write(&extension, file.text(&helper)).unwrap();
+    std::fs::write(
+        &extension,
+        file.text(hide_agent_hooks::route::HookTarget::new(
+            &helper,
+            Path::new("/captured-state"),
+        )),
+    )
+    .unwrap();
 
     let output = Command::new("node")
         .args(["--test", "--test-timeout=60000"])

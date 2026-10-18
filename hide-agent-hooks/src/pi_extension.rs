@@ -20,8 +20,8 @@ use crate::plugin::{Plugin, PluginFile};
 
 /// The extension's version: the marker's, and the one the extension tells the
 /// helper. Raise both when the text or the helper protocol changes.
-pub const VERSION: u32 = 7;
-const VERSION_TEXT: &str = "7";
+pub const VERSION: u32 = 8;
+const VERSION_TEXT: &str = "8";
 
 /// The marker's name, one for both files: they differ only in the agent's name.
 pub const SOURCE_NAME: &str = "hide-extension";

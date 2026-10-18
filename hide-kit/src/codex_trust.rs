@@ -45,7 +45,10 @@ pub(crate) fn ensure(target: &KitTarget, herdr: &[HookEntry]) -> Option<String> 
         Some(codex) => match trust_own_hooks(
             codex,
             &target.home,
-            &target.kit_dir.join(hide_agent_hooks::HELPER_BINARY_NAME),
+            hide_agent_hooks::route::HookTarget::new(
+                &target.kit_dir.join(hide_agent_hooks::HELPER_BINARY_NAME),
+                &crate::layout::state_dir_from_process(&target.home),
+            ),
             herdr,
             &target.stop,
         ) {

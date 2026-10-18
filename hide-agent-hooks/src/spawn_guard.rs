@@ -1096,6 +1096,9 @@ pub fn question_decision(
         return QuestionDecision::Unreachable("deadline");
     }
     let mut command = Command::new(program);
+    if let Err(reason) = crate::route::apply(&mut command) {
+        return QuestionDecision::Unreachable(reason);
+    }
     command
         .args([
             "workspace",
@@ -1145,6 +1148,9 @@ pub fn question_decision(
 /// missing daemon, a timeout and an unreadable answer are not.
 pub fn registration(program: &OsStr, deadline: Instant) -> Registration {
     let mut command = Command::new(program);
+    if let Err(reason) = crate::route::apply(&mut command) {
+        return Registration::Unreachable(reason);
+    }
     command
         .args(["workspace", "bootstrap"])
         .stdin(Stdio::null())

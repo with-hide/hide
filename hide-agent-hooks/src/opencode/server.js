@@ -11,6 +11,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 const HELPER = __HIDE_HELPER__;
+const ROUTE = __HIDE_ROUTE__;
 
 // The budgets are the 1.x plugin's (`../hide.js`): the prompt one is Claude Code's prompt hook's, the tool one the
 // spawn guard's. A question to the TUI half spends the same budget, its trip included.
@@ -128,7 +129,7 @@ export function helper(state, operation, input, budgetMs, env = process.env) {
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(HELPER, ["opencode", operation], { stdio: ["pipe", "pipe", "ignore"], env });
+      child = spawn(HELPER, ["opencode", operation, ...ROUTE], { stdio: ["pipe", "pipe", "ignore"], env });
     } catch {
       resolve(null);
       return;

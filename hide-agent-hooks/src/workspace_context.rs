@@ -43,6 +43,7 @@ pub fn cli_program() -> Option<OsString> {
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
 fn run_cli(program: &OsString, arguments: &[&str]) -> Option<Value> {
     let mut command = Command::new(program);
+    hide_agent_hooks::route::apply(&mut command).ok()?;
     command
         .args(arguments)
         .stdin(Stdio::null())

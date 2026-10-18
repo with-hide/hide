@@ -21,9 +21,9 @@ from agent_live_check.system import exe, remove_tree
 
 
 class RuntimeRouting(unittest.TestCase):
-    def test_a_child_without_an_agent_wrapper_reads_the_candidates_bootstrap_record(self):
-        # A native start need not pass through an agent wrapper. Its hook
-        # still needs the daemon's route, rather than the unrelated XDG default.
+    def test_the_daemon_and_shell_keep_the_dock_and_shell_state_environment(self):
+        # A native start can bypass an agent wrapper. Giving every child an
+        # explicit Hide route would hide the installed hook's routing bug.
         with tempfile.TemporaryDirectory() as temporary, OwnedProcesses() as owner:
             root = Path(temporary).resolve()
             checkout, run, operator = root / "checkout", root / "run", root / "operator"
@@ -37,19 +37,15 @@ class RuntimeRouting(unittest.TestCase):
             manifest.write_text('{"version":"fixture"}')
             with mock.patch("agent_live_check.runtime.herdr_matches_pin", return_value=True):
                 runtime = Runtime(checkout, run, operator, owner, herdr_bin=root / exe("herdr"),
-                                  state=run / "probe/daemon-home/.hide/state")
+                                  state=run / "daemon-home/.hide/state")
             self.addCleanup(remove_tree, runtime.short)
-            record = runtime.state / "pane-capabilities/bootstrap-socket"
-            record.parent.mkdir()
-            record.write_text("candidate-endpoint")
             code, output, error = owner.run([sys.executable, "-c", (
-                "import os; from pathlib import Path; "
-                "print((Path(os.environ['HIDE_STATE_DIR']) / "
-                "'pane-capabilities/bootstrap-socket').read_text())"
+                "import os; print('XDG_STATE_HOME' in os.environ, 'HIDE_STATE_DIR' in os.environ)"
             )], env=runtime.env, check=False)
             self.assertEqual(code, 0, error)
-            self.assertEqual(output.strip(), "candidate-endpoint")
-            self.assertEqual(runtime.env["HIDE_STATE_DIR"], runtime.daemon_env["HIDE_STATE_DIR"])
+            self.assertEqual(output.strip(), "True False")
+            self.assertNotIn("XDG_STATE_HOME", runtime.daemon_env)
+            self.assertNotIn("HIDE_STATE_DIR", runtime.daemon_env)
 
 
 def safe_agent():

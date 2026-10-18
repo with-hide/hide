@@ -230,7 +230,7 @@ test("a new session's first prompt carries the guidance and the letters in one h
   // `lost` counts calls an earlier budget gave up on; a loaded machine may add it. Letters know the session by its
   // file, as Herdr does; Memory by the host's own id, which its session reader keys a receipt by.
   const { lost: _lost, ...input } = call.input;
-  assert.deepEqual(input, { session_id: file, native_session: id, prompt: "Fix the failing parser test", cwd: "/checkouts/fixture", first: true, memory_first: true, version: 7 });
+  assert.deepEqual(input, { session_id: file, native_session: id, prompt: "Fix the failing parser test", cwd: "/checkouts/fixture", first: true, memory_first: true, version: 8 });
   assert.equal(call.env.HERDR_PANE_ID, "w1:p1");
 
   // Once the host wrote it, the session's guidance is given.
@@ -535,7 +535,7 @@ test("a shell call that starts an agent through Herdr is refused with the helper
   assert.deepEqual(await host.emit("tool_call", launch, context("tool_call.bash")), { block: true, reason: "Use hide agent spawn --parent here" });
   const [call] = await until("tool");
   const { lost: _lost, ...input } = call.input;
-  assert.deepEqual(input, { tool: "bash", command: "herdr agent start helper --kind claude", cwd: "/checkouts/fixture", version: 7 });
+  assert.deepEqual(input, { tool: "bash", command: "herdr agent start helper --kind claude", cwd: "/checkouts/fixture", version: 8 });
 
   assert.equal(await host.emit("tool_call", sample("tool_call.bash").event, context("tool_call.bash")), undefined);
   await settled(host);
@@ -554,7 +554,7 @@ test("while a project has a protection on, file and shell calls ask the helper w
     const shell = { ...sample("tool_call.bash").event, input: { command: "cat .env" } };
     assert.deepEqual(await host.emit("tool_call", shell, context("tool_call.bash")), { block: true, reason: "Not run: Guard files is on" });
     const sent = (await until("tool", 2)).map(({ input: { lost: _lost, ...input } }) => input);
-    assert.deepEqual(sent[0], { tool: "write", args: { path: "/checkouts/fixture/.env" }, cwd: "/checkouts/fixture", version: 7 });
+    assert.deepEqual(sent[0], { tool: "write", args: { path: "/checkouts/fixture/.env" }, cwd: "/checkouts/fixture", version: 8 });
     assert.equal(sent[1].command, "cat .env");
 
     // Every protection off again: no file or shell call starts the helper (B27).
@@ -591,7 +591,7 @@ if (AGENT === "omp") {
     assert.deepEqual(await host.emit("tool_call", ask.event, context("tool_call.ask")), { block: true, reason: "Ask with hide factory ask" });
     const [call] = await until("tool");
     const { lost: _lost, ...input } = call.input;
-    assert.deepEqual(input, { session_id: ask.ctx.sessionFile, tool: "ask", version: 7 });
+    assert.deepEqual(input, { session_id: ask.ctx.sessionFile, tool: "ask", version: 8 });
     answer({ tool: {} });
     assert.equal(await host.emit("tool_call", ask.event, context("tool_call.ask")), undefined, "outside a worker the question shows");
 
