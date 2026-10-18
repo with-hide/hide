@@ -1306,7 +1306,14 @@ impl Runtime {
             operation.pane_id = Some(pane.to_owned());
             operation.agent_phase = Some("starting".into());
         }
-        self.set_task_agent_launch(id, None, arguments);
+        // As the checkout start an archived member's first attempt went
+        // through: no model or effort of its own.
+        self.set_task_agent_launch(
+            id,
+            None,
+            arguments,
+            hide_agent_adapter::LaunchChoice::default(),
+        );
         if let Some(launch) = self.task_agent_launch.as_mut() {
             launch.resume_reference = member.source_reference.clone();
         }
