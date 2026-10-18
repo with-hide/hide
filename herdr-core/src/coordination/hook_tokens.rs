@@ -485,6 +485,7 @@ mod tests {
             lineage_session: None,
             state_change_seq: 1,
             completion_seq: None,
+            launch_pending: false,
             tokens: tokens
                 .iter()
                 .map(|(key, value)| ((*key).to_owned(), json!(value)))

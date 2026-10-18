@@ -1,5 +1,7 @@
 //! The socket reads the coordinator needs besides the event stream: the agent
-//! list, a new pane's cwd, and a workspace's replacement active tab.
+//! list, a new pane's cwd, a workspace's replacement active tab, and the
+//! agent of a start Herdr still holds open while the agent is at rest
+//! (`launch_settle.rs`).
 //!
 //! Each opens a fresh connection to Herdr, so they run on worker threads,
 //! one per kind, and the thread that applies Herdr's events never waits on
@@ -15,6 +17,9 @@ pub(crate) enum SyncRead {
     Agents,
     PaneCwds(Vec<String>),
     ActiveTabs(Vec<String>),
+    /// `agent.get` of each pane, which is what lets Herdr settle its start
+    /// (herdrdev/herdr#3853, `launch_settle.rs`).
+    Launches(Vec<String>),
 }
 
 pub(crate) enum SyncReadAnswer {
@@ -24,6 +29,8 @@ pub(crate) enum SyncReadAnswer {
     },
     PaneCwds(Result<Vec<(String, Option<String>)>, SessionFetchError>),
     ActiveTabs(Result<Vec<(String, String)>, SessionFetchError>),
+    /// Each pane read, with the reason a read failed.
+    Launches(Vec<(String, Result<(), SessionFetchError>)>),
 }
 
 impl SyncRead {
@@ -32,6 +39,7 @@ impl SyncRead {
             Self::Agents => 0,
             Self::PaneCwds(_) => 1,
             Self::ActiveTabs(_) => 2,
+            Self::Launches(_) => 3,
         }
     }
 }
@@ -42,6 +50,7 @@ impl SyncReadAnswer {
             Self::Agents { .. } => 0,
             Self::PaneCwds(_) => 1,
             Self::ActiveTabs(_) => 2,
+            Self::Launches(_) => 3,
         }
     }
 }
@@ -51,12 +60,12 @@ impl SyncReadAnswer {
 pub(crate) struct SyncReader {
     context: SessionSyncContext,
     coordinator: Sender<CoordinatorMessage>,
-    workers: [Sender<(u64, SyncRead)>; 3],
+    workers: [Sender<(u64, SyncRead)>; 4],
     /// The generation each kind's read in flight was asked under.
-    inflight: [Option<u64>; 3],
+    inflight: [Option<u64>; 4],
 }
 
-const KIND_NAMES: [&str; 3] = ["agents", "pane-cwds", "active-tabs"];
+const KIND_NAMES: [&str; 4] = ["agents", "pane-cwds", "active-tabs", "launches"];
 
 impl SyncReader {
     pub(crate) fn start(
@@ -67,12 +76,13 @@ impl SyncReader {
             spawn_worker(context, &coordinator, 0)?,
             spawn_worker(context, &coordinator, 1)?,
             spawn_worker(context, &coordinator, 2)?,
+            spawn_worker(context, &coordinator, 3)?,
         ];
         Ok(Self {
             context: context.clone(),
             coordinator,
             workers,
-            inflight: [None; 3],
+            inflight: [None; 4],
         })
     }
 
@@ -185,7 +195,10 @@ fn failed_answer(kind: usize, started_at: Instant) -> SyncReadAnswer {
             result: Err(failure()),
         },
         1 => SyncReadAnswer::PaneCwds(Err(failure())),
-        _ => SyncReadAnswer::ActiveTabs(Err(failure())),
+        2 => SyncReadAnswer::ActiveTabs(Err(failure())),
+        // Which panes the panicked read had reached is not known; none is
+        // read again before the next agent list asks for it.
+        _ => SyncReadAnswer::Launches(Vec::new()),
     }
 }
 
@@ -210,6 +223,15 @@ fn run(context: &SessionSyncContext, read: SyncRead) -> SyncReadAnswer {
                 .map(|workspace_id| {
                     fetch_workspace_active_tab(context, &workspace_id)
                         .map(|tab_id| (workspace_id, tab_id))
+                })
+                .collect(),
+        ),
+        SyncRead::Launches(pane_ids) => SyncReadAnswer::Launches(
+            pane_ids
+                .into_iter()
+                .map(|pane_id| {
+                    let read = fetch_agent_launch(context, &pane_id);
+                    (pane_id, read)
                 })
                 .collect(),
         ),

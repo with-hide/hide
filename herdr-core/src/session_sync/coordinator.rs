@@ -57,6 +57,7 @@ fn run_coordinator(
     };
     let mut replica: Option<SessionReplica> = None;
     let mut active_tab_reads: BTreeMap<String, u32> = BTreeMap::new();
+    let mut launch_settle = super::launch_settle::LaunchSettle::default();
     let mut subscription: Option<ActiveSubscription> = None;
     let mut subscription_generation = 0_u64;
     // Until when a line off the stream is reconciled against the bootstrap
@@ -223,6 +224,7 @@ fn run_coordinator(
                     catalog_cache.connection = subscription_generation;
                     reconcile_until = snapshot_at + RECONCILE_GRACE;
                     active_tab_reads.clear();
+                    launch_settle = super::launch_settle::LaunchSettle::default();
                     if let Err(message) = sync_reader.reset() {
                         crate::diagnostic!(json!({
                             "component": "session_sync",
@@ -799,6 +801,12 @@ fn run_coordinator(
                             }
                             let (native_changed, requested) =
                                 agent_tick_changes(current, &agents, catalog_cache.as_ref());
+                            launch_settle.observe(
+                                context.log_target(),
+                                &agents,
+                                Instant::now(),
+                                |panes| sync_reader.ask(generation, SyncRead::Launches(panes)),
+                            );
                             if let Some(writer) = lineage_writer.as_mut()
                                 && let Some((state, marks)) = lineage_inputs(&context)
                             {
@@ -915,6 +923,9 @@ fn run_coordinator(
                                 reconnect_delay = next_reconnect_delay(reconnect_delay);
                             }
                         }
+                    }
+                    SyncReadAnswer::Launches(reads) => {
+                        launch_settle.answered(context.log_target(), &reads);
                     }
                     SyncReadAnswer::ActiveTabs(result) => {
                         let current = replica

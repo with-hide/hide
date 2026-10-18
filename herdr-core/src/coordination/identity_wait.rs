@@ -494,6 +494,7 @@ mod tests {
             lineage_session: session.and_then(crate::wire::session_digest),
             state_change_seq: 1,
             completion_seq: None,
+            launch_pending: false,
             tokens: Default::default(),
         }
     }

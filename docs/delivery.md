@@ -86,6 +86,9 @@ It is typed when every one of these hide-owned facts holds, and the verdict read
   Herdr reports readiness only for an agent it launched itself (`herdr agent start`, which `hide agent spawn` uses): `launch_pending: true` while that start settles or is blocked, then `interactive_ready: true`.
   An agent the operator started by typing its program in a Herdr shell, the usual way a lead is started, carries neither flag; its readiness is unreported, not refused, and the facts above decide it.
   Only `launch_pending: true` or an explicit `interactive_ready: false` holds the letter.
+  The pinned Herdr settles a start only when the agent's state moves again or it is read with `agent.get` (herdrdev/herdr#3853), so the core reads every agent that rests with its start pending, a bounded number of times, and a pane that is not a bell target settles too ([ARCHITECTURE.md](ARCHITECTURE.md#the-core-the-shell-and-herdr)).
+  A start Herdr reads as blocked (a trust or login prompt at launch) stays pending until the agent goes idle, by Herdr's contract, and its letter waits until then.
+  A read after the start's deadline (120 s) is where Herdr applies the deadline and clears the agent's name, as the agent's next state change would; the read does not hold that off.
 
 Herdr's `blocked` status guards every permission and selection menu Herdr reads as `blocked`, so only kinds whose menus were observed to read `blocked` are bell targets.
 Today those are Claude Code and Codex.
