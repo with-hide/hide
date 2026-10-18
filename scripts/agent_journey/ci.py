@@ -130,7 +130,7 @@ def key_file(runtime, kind):
     return runtime.probe / "keys" / kind
 
 
-def wrapper(runtime, program, kind, path, journey_config=None, fake_env=None):
+def wrapper(runtime, program, kind, path, journey_config=None, fake_env=None, sandbox=None):
     """The program a pane runs as `kind`: the agent in the disposable HOME,
     with the runner's PATH behind the candidate's `hide` and its key, or the
     fake model's environment (fake_lane.py) in place of a key. Its PATH and
@@ -145,7 +145,8 @@ def wrapper(runtime, program, kind, path, journey_config=None, fake_env=None):
     environment.update(fake_env or {})
     key_env = LOGINS[kind]["key_env"]
     keyed = key_env and not journey_config and fake_env is None
-    return launcher(runtime.bin / kind, [program], environment=environment, unset=["CLAUDE_CONFIG_DIR"],
+    command = sandbox.command([str(program)]) if sandbox else [program]
+    return launcher(runtime.bin / kind, command, environment=environment, unset=["CLAUDE_CONFIG_DIR"],
                     file_variables=[(key_env, key_file(runtime, kind))] if keyed else [])
 
 

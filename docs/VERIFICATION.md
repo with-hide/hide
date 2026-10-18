@@ -344,6 +344,9 @@ Every prompt asks only for a fresh token (`Reply with exactly <token>`), so a mo
 The measured repository is a shared clone (`git clone --shared`) of this checkout's commit, on `main`, at `projects/measured` in the candidate's HOME, added as a project the way Add project adds one, and the journey starts its agents only once the navigator lists it as a registered Git project.
 An operator starts agents in a project they added inside their HOME, and Hide adds none outside it (`outside_home`); a Wake after a Sleep that closed the pane (Grok, Pi, omp, OpenCode) finds the agent's checkout among that project's, so a repository outside the candidate's HOME left those Wakes with no checkout to open.
 The clone reads this checkout's objects and writes only its own, so the run's branches and worktrees never reach the operator's repository; each agent's folder trust names the clone.
+The private pane's `.zshenv` saves its incoming PATH and `.zshrc` restores it after system login profiles run, preserving each pane's provider directory and keeping the run's wrappers before system programs.
+macOS's `path_helper` otherwise moves system folders ahead of them, so an installer's `/usr/local/bin` link can bypass the wrapper's private HOME and fake key even though the preflight version check passed.
+`test_agent_live_bootstrap.py` checks the program actually executed by both login and non-login shells against a private executable that shares a system command's name.
 
 | Step | Passes when |
 | --- | --- |
@@ -411,10 +414,101 @@ Never run a cargo build or test while it runs: either relinks `target/debug` und
 
 ### The fake model (`--fake-model`)
 
-With `--fake-model`, in either mode, each real CLI with Hide's real kit and Herdr's integration is answered by the journey's fake model (`scripts/agent_journey/fake_model.py`) instead of a provider, and no login is read, copied or used.
+With `--fake-model`, in either mode, each real CLI with Hide's real kit and Herdr's integration is answered by the journey's fake model (`scripts/agent_journey/fake_model.py`) instead of a provider, and no login is supplied to an agent or a provider.
 It speaks OpenAI Chat Completions and Responses, Anthropic Messages and Gemini `generateContent`, streamed or whole, with usage in each provider's shape, and answers a turn with the last token of what the request sends after the model's own last turn, a token inside Hide's Project Memory blocks left out, or with the token of the Project Memory index the session started with when the turn carries none; a request that asks for JSON of a schema, as Claude Code's and Codex's title requests do, is answered with an object of that schema.
 `scripts/agent_journey/fake_lane.py` writes each CLI's provider configuration into the run's daemon home, and each agent gets its own server, so its log counts that agent's model requests exactly.
-Locally Claude then reads a private `CLAUDE_CONFIG_DIR` in the daemon home instead of the operator's `~/.claude.json`, so its never-trusted start is measured there too; the candidate's Hide AI is off in both modes, and the native titles are what the title cell reads.
+Local fake mode uses a private HOME only for an adapter whose four guards can be enforced; real-login mode always keeps the operator's HOME.
+Build its layout reader first with `bash scripts/verify-cargo.sh build -p hide-kit --example journey_cache`.
+The local fake runner installs only the selected CLIs from `contracts/agent-clis.json` into `~/.hide/cache/journey-clis/`, whose path and 4 GiB total cap are owned by `hide_kit::layout`.
+Each entry is keyed by the CLI pin, installer specification, operating system and architecture; later runs reuse its receipt and verify the executable digest and answered version.
+The cap includes in-progress installations and cached downloads; crossing it fails with exit 2 and asks the operator to remove unused pins, never silently evicts another run's CLI or increases the cap.
+A lease holds the cache until the run's children have ended, so another local fake run refuses a busy cache.
+An unconfirmed child cleanup leaves a cache marker that refuses reuse until that run has been inspected and the marker cleared.
+A failed installation removes its incomplete pin after confirming its children have ended.
+An uncatchable kill can leave an incomplete pin that must be removed before retrying.
+Native executables linked into the installer's temporary HOME are retained in the pin before that HOME is removed.
+
+The four guards are enforced before or during every admitted agent's journey:
+
+1. The executable comes only from the pinned cache, never the operator's PATH or aliases.
+   The installer itself has a private HOME and a write sandbox permitting only that cache entry; the agent's controlled PATH contains the candidate wrappers, the Node runtime and system tools.
+   Before installation, that exact sandbox must allow a cache write and deny both a write and a link in a disposable fixture outside the cache; otherwise installation fails.
+   Grok's installer receives its target directory on PATH so it does not attempt additional links in `~/.local/bin` or `/usr/local/bin`; the sandbox still denies every write outside the pin.
+2. The Rust adapter declares how automatic updates are disabled, projected into `contracts/agent-journey.json` and applied before any CLI starts.
+   The agent's write sandbox also denies changes to the cached program, operator agent folders and keychain files, and permits model traffic only to loopback.
+3. The run inspects the following operator watch at its start and after cleanup for traces of this run: its directory, fake server addresses with ports, and a per-run fake key (including the tail Claude stores).
+   A trace in a watched file, selected database row or new top-level entry, or a watched link pointing inside the run, fails with exit 2.
+   Content changes without those markers, including concurrent token refreshes and temporary entries, are reported as external changes and do not fail.
+   Run paths include HOME-relative `~/` spelling and macOS `/var` and `/tmp` aliases, in plain or JSON-escaped form; a path boundary excludes similarly named sibling runs.
+   Fake server addresses include both `127.0.0.1:PORT` and `localhost:PORT`, with a boundary excluding longer ports.
+   A configuration file moving during a read retries at most three times; continued movement still fails with exit 2.
+   Unreadable marker checks still fail with exit 2.
+   Reports retain fixed item names and pass/fail only, never hashes, link targets, entry lists or configuration/login bytes; the watch never restores or changes operator files.
+4. The adapter declares an API-key environment route, the provider configuration names that variable, and the fake server accepts a model request only when it carries that key.
+   Missing or rejected key evidence stops the run with exit 2 after the start attempt; reports record only environment names, authenticated request counts and source references.
+
+The watch covers the `.local/bin/claude` link, the configuration/login files below, and the top-level names under `.claude`, `.codex`, `.gemini`, `.grok`, `.omp`, `.pi` and `.local/share/opencode`.
+Existing session/history append records are not compared.
+New top-level entries are scanned recursively for run markers, within a shared budget of 50,000 entries and 1 GiB per snapshot; exceeding either cap fails the run.
+An entry disappearing during enumeration or open, and a socket, FIFO or other special entry, contains no file trace and does not fail the watch.
+Internal snapshots retain hashes and names in memory only.
+The private lane admits only the process environment basics named in `PRIVATE_ENV`; provider, package-manager and agent settings come from its explicit route.
+Keychain file access is denied, but access through the securityd Mach service has not been verified; no operator keychain item is queried as a probe.
+
+The exact configuration/login paths, relative to the operator's HOME, are:
+
+| Agent | Configuration and login paths | Source for the file boundary |
+| --- | --- | --- |
+| Claude Code | selected login/install keys and run-project paths in `.claude.json`; `.claude/settings.json`, `.claude/settings.local.json`, `.claude/.credentials.json` | [Official settings guide](https://code.claude.com/docs/en/settings), configuration files and authentication storage; keychain files are denied by the sandbox; securityd access is unverified. |
+| Codex | `.codex/config.toml`, `.codex/auth.json`, `.codex/hooks.json`, `.codex/.credentials.json` | [Pinned core sources](https://github.com/openai/codex/tree/rust-v0.163.0/codex-rs/core/src), config, auth storage and hooks. |
+| Grok | `.grok/config.toml`, `.grok/auth.json`, `.grok/trusted_folders.toml`, `.grok/mcp_credentials.json` | [Official settings reference](https://docs.x.ai/build/settings/reference) and [published authentication source](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-login); the public source is 1.0.45, without a tag for the selected 1.0.52 CLI pin. |
+| Pi | `.pi/agent/settings.json`, `models.json`, `auth.json`, `oauth.json`, `mcp-auth.json`, `keybindings.json`, `trust.json`, `mcp.json` in the same folder | [Pinned package](https://www.npmjs.com/package/@earendil-works/pi-coding-agent/v/1.0.4), `dist/migrations.js`, `dist/core/auth-storage.js` and `dist/extensions/mcp/oauth.js`; startup can migrate the legacy OAuth and keybinding files. |
+| omp | `.omp/agent/config.yml`, `.omp/agent/config.yaml`, `.omp/agent/models.yml`, `.omp/agent/settings.json`, `.omp/agent/secrets.yml`, `.omp/agent/secret-placeholder.key`; credential and settings rows of `.omp/agent/agent.db`, read from a private copy | [Pinned paths](https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/utils/src/dirs.ts), [settings storage](https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/coding-agent/src/session/agent-storage.ts) and [credential storage](https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/ai/src/auth/sqlite-credential-store.ts). |
+| OpenCode | `.config/opencode/opencode.json`, `opencode.jsonc`, `tui.json`, `cli.json`, `service.json` in the same folder; credential rows of `.local/share/opencode/opencode.db`, read from a private copy | [Pinned credential schema](https://github.com/anomalyco/opencode/blob/v2.0.29/packages/core/src/credential/sql.ts), [database path](https://github.com/anomalyco/opencode/blob/v2.0.29/packages/cli/src/database-path.ts), [configuration migration](https://github.com/anomalyco/opencode/blob/v2.0.29/packages/cli/src/config/migrate.ts); v2 reads the old `auth.json` only for migration. |
+
+Claude Code's mixed global file is scanned for run markers, including normalized absolute project paths.
+Its login/install keys below are compared in memory to identify external changes; unrelated project entries and live counters do not produce external-change notices.
+Every report uses the same privacy boundary: fixed item names and pass/fail, with external changes named separately.
+Copies are kept only inside the run and removed immediately after each database read and again at unconditional cleanup.
+A later run reports a leftover `watch-private` directory after an uncatchable kill; it never reuses it.
+
+The selected keys are `oauthAccount`, `primaryApiKey`, `customApiKeyResponses`, `installMethod`, `autoUpdates`, `hasCompletedOnboarding` and `lastOnboardingVersion`.
+The whole selected object is hashed canonically in memory, including the absence of a key; evidence retains only the compared key names and pass/fail, not values, project paths or hashes.
+Claude Code is closed source: these names follow its configuration/onboarding format, while its official settings documentation is live rather than version-pinned.
+Every absolute `projects` key is checked against the run directory, which contains the private HOME and both worktree roots; any such key at the end fails even if it was already present at the start.
+
+OpenCode is also covered: the top-level entry names of `~/.local/share/opencode` and its configuration/login rows are watched.
+The six original roots, including `~/.gemini`, remain watched.
+These are the standard home paths; candidate routing overrides are stripped or point to its private home.
+For omp, the comparison hashes `settings(key, value, updated_at)` ordered by `key`, and `auth_credentials(id, provider, credential_type, data, disabled_cause, identity_key, created_at, updated_at)` ordered by `id`.
+For OpenCode, it hashes `credential(id, integration_id, label, value, connector_id, method_id, active, time_created, time_updated)` ordered by `id`.
+Usage counters, refresh leases and session records are excluded.
+The reader copies each raw database and any WAL to a private run folder, checks their identity, size, mode and modification time before and after copying, opens only that copy with SQLite, and removes it before reading the next database.
+On macOS, the already-open source descriptor is cloned with `fclonefileat`; unsupported or cross-volume cloning falls back to a 1 MiB chunked copy, without streaming the cloned database to hash it.
+The database plus WAL has a fixed 1 GiB cap, separate from the 16 MiB cap for configuration bytes and returned credential/settings rows.
+The larger database cap accounts for session records sharing the database; those records are never returned or hashed into the comparison.
+Only one database bundle exists in the private copy directory at a time, and an out-of-space failure reports its errno with exit 2.
+It never opens the operator database with SQLite, including read-only mode, and never copies or creates its SHM.
+A concurrent change during copying retries the whole bundle at most three times; continued movement, an unreadable schema, a corrupt queried row or a crossed copy/row budget fails with exit 2.
+Only the selected row queries run; a whole-database integrity scan is unnecessary for this watch.
+Top-level entry enumeration and database row reads use the existing configuration-file count cap.
+
+Claude Code, Codex, Grok, OpenCode, Pi and omp declare these routes.
+Their update policies are respectively `DISABLE_AUTOUPDATER`, `check_for_update_on_startup = false`, `GROK_DISABLE_AUTOUPDATER`, `update: disable`, `PI_OFFLINE` and `startup.checkUpdate: false` (omp checks for a version but does not automatically install it).
+agy keeps the local exception and is not started: its installer cannot select the pinned release; CI's disposable runner still measures it with its existing version check.
+Cursor remains excluded by operator decision.
+A missing key or update declaration, or a non-version-selecting installer, keeps an adapter on its existing local fake route with the operator HOME, and the report names the exception.
+This preserves existing coverage: a route already measured still runs, while an existing local limitation such as agy remains `not measured`.
+The private fake sandbox denies reads of the operator's `~/.agents`, including metadata reads.
+Pi 1.0.4 searches a project's ancestors for `.agents/skills`, excluding only the current HOME's skills; without this boundary, a changed HOME makes the operator's skills look like project resources and adds an unrelated trust question.
+Operator skills must neither enter a fake run nor alter its folder-trust measurement.
+The fixture seeds no Pi trust decision, and the untrusted-start path remains untrusted.
+Private fake runs use the bounded before/after watch above instead of the real-login route's trust-entry inventory, which includes project paths.
+The candidate's Hide AI is off in both fake modes, and native titles are what the title cell reads.
+The macOS fake CI lane temporarily records Grok's authentication method, key-variable name/presence, and wrapper HOME/config paths relative to the run to distinguish a key-route failure from bypassing the wrapper.
+It streams the native debug log through a private FIFO, retains only the selected facts, and removes the FIFO at cleanup; the reader has a 32 MiB input cap, a 4 MiB line cap and a 64-event cap.
+The configured route and the native model-config observation are separate evidence; this diagnostic does not trace filesystem opens.
+`scripts/tests/test_agent_journey_private_home.py` exercises content, top-level entry and link changes on fake watch roots, concurrent SQLite copies, unchanged source bytes, missing proof, cache refusal and authenticated requests; no test watches or changes the operator's folders.
 The report is marked as a fake model run with what a fake model cannot show: it proves the CLI, Hide's kit and Herdr's integration, never a provider, a login or a quota, and its rows are kept apart from a signed-in run's.
 
 ### The CI lanes

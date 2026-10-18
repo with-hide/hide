@@ -75,7 +75,15 @@ XDG_FOLDERS = {"XDG_CONFIG_HOME": "config", "XDG_STATE_HOME": "state", "XDG_DATA
                "XDG_CACHE_HOME": "cache"}
 
 
-def clean_env() -> dict[str, str]:
+# Only process basics cross the private fake boundary; provider, package-manager
+# and runtime configuration must be supplied explicitly by the route.
+PRIVATE_ENV = frozenset(("PATH", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "COLORTERM",
+                         "SYSTEMROOT", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT"))
+
+
+def clean_env(*, private=False) -> dict[str, str]:
+    if private:
+        return {key: value for key, value in os.environ.items() if key in PRIVATE_ENV}
     return {key: value for key, value in os.environ.items()
             if not key.startswith(("HERDR_", "HIDE_", "HCOORD_"))
             and not key.endswith("_API_KEY") and key not in PROVIDER_KEYS
@@ -147,7 +155,7 @@ class ResidentOutput:
 class Runtime:
     def __init__(self, checkout: Path, run: Path, operator: Path, owner: OwnedProcesses,
                  *, herdr_bin: Path, fixture_bin: Path | None = None,
-                 socket: Path | None = None, state: Path | None = None, home: Path | None = None):
+                 socket: Path | None = None, state: Path | None = None, home: Path | None = None, private_env=False):
         self.checkout, self.run, self.operator, self.owner = checkout, run, operator, owner
         # The journey keeps the daemon home under the probe, where a sandboxed
         # agent may read the candidate's hooks; the bell check keeps it apart.
@@ -185,7 +193,7 @@ class Runtime:
             if not herdr_matches_pin(self.herdr_bin, manifest):
                 raise ProtectionError("herdr_binary_does_not_match_pin")
             self.expected_version = manifest["version"]
-            base = clean_env()
+            base = clean_env(private=private_env)
             base.update(**home_env(self.home), **self.shell.environment(self.home),
                         **{name: str(self.home / folder) for name, folder in XDG_FOLDERS.items()},
                         HERDR_SOCKET_PATH=str(self.socket), HERDR_BIN_PATH=str(self.herdr_bin),

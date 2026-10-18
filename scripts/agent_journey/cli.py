@@ -28,12 +28,12 @@ from agent_live_check.protection import (ConfigGuard, ProtectionError, beneath, 
                                          write_private)
 from agent_live_check.runtime import Runtime, clean_env
 from agent_live_check.sandbox import WriteSandbox
-from agent_live_check.system import STOP_SIGNALS, WINDOWS, exe, git as git_program, launcher
+from agent_live_check.system import STOP_SIGNALS, WINDOWS, exe, git as git_program, launcher, tool_path
 
 if WINDOWS:
     from agent_live_check.windows import UserPath
 
-from . import ci, clis, cells, fake_lane, fake_model, memory, opencode_service, quota
+from . import ci, clis, cells, fake_lane, fake_model, fake_private, cli_cache, memory, opencode_service, quota
 from .controller import Controller
 from .daemon import Daemon
 from .journey import STEPS, Journey, token
@@ -108,9 +108,10 @@ def leftover_copies(checkout, run):
     for folder in sorted((checkout / "agents/runs").iterdir()):
         if folder == run or folder.is_symlink() or not folder.is_dir():
             continue
-        copy = folder / "probe/daemon-home/.codex/auth.json"
-        if copy.exists() or copy.is_symlink():
-            found.append(str(copy))
+        for relative in ("probe/daemon-home/.codex/auth.json", "watch-private"):
+            copy = folder / relative
+            if copy.exists() or copy.is_symlink():
+                found.append(str(copy))
     return found
 
 
@@ -354,7 +355,78 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
     return sandbox, guard, ready
 
 
-def prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, fake, services):
+def prepare_fake_local(runtime, report, table, rows, measured, operator, root, urls, services, fake_key):
+    """Only pinned, declared key-only CLIs may enter a private local HOME."""
+    helper = runtime.checkout / "target/debug/examples/journey_cache"
+    if not helper.is_file():
+        refuse("build_cache_layout_first: bash scripts/verify-cargo.sh build -p hide-kit --example journey_cache")
+    _, output, _ = runtime.owner.run([str(helper), str(operator)], env=clean_env(private=True))
+    layout = json.loads(output)
+    cache = cli_cache.Cache(Path(layout["path"]), layout["cap_bytes"])
+    runtime.journey_cache = cache
+    report["cli_cache"] = {**layout, "bytes_before": cache.check()}
+    sandbox = WriteSandbox(runtime.run, runtime.short, operator, runtime.state, checkout=runtime.checkout,
+                           routing=operator_routing(os.environ), fake_private=True)
+    runtime.sandbox = sandbox
+    report["fake_model_limits"].append(
+        "The private fake sandbox denies reads, including metadata, of the operator's .agents folder: "
+        "ancestor skills must not enter the run or create Pi's project-trust question.")
+    # A controlled PATH exposes the runtime, never an operator agent binary.
+    with tempfile.TemporaryDirectory(prefix="ajc-fake-guard-", dir="/tmp") as outside:
+        sandbox.verify_private(runtime.owner, clean_env(private=True), Path(outside).resolve())
+    node = shutil.which("node")
+    if node:
+        (runtime.bin / "node").symlink_to(Path(node).resolve())
+    fallback = [key for key in measured if fake_private.exception(rows[key], clis.table().get(rows[key]["herdr_kind"]))]
+    guard = None
+    legacy_ready = []
+    if fallback:
+        legacy_sandbox, guard, legacy_ready = prepare_local(runtime, report, table, rows, fallback, operator,
+                                                           root, urls, services)
+        runtime.journey_sandboxes = [legacy_sandbox, sandbox]
+        runtime.sandbox = sandbox
+        for key in fallback:
+            agent = next(agent for agent in report["agents"] if agent["id"] == key)
+            agent["private_home"] = {"enabled": False,
+                                     "exception": fake_private.exception(rows[key], clis.table().get(rows[key]["herdr_kind"]))}
+    ready = []
+    for key in measured:
+        if key in fallback:
+            continue
+        row = rows[key]
+        kind = row["herdr_kind"]
+        pin = clis.table().get(kind)
+        agent = {"id": key}
+        report["agents"].append(agent)
+        declaration = row["fake_home"]
+        private_directory(runtime.home.joinpath(*row["home_folder"]))
+        extra = fake_lane.configure(kind, runtime.home, urls[key], root, local=False, key=fake_key)
+        if not extra.get(declaration["key_env"]):
+            refuse("fake_api_key_environment_missing: " + kind)
+        # Installation runs under its own private HOME and write sandbox too.
+        update = declaration["auto_update"]
+        update_env = {update["name"]: update["value"]} if update["kind"] == "environment" else {}
+        program = cache.install(runtime, kind, pin, update_env)
+        launch = ci.wrapper(runtime, program, kind, tool_path(None), fake_env=extra, sandbox=sandbox)
+        environment = {**clean_env(private=True), "HOME": str(runtime.home), "TMPDIR": runtime.env["TMPDIR"]}
+        if kind == "opencode":
+            agent["service_port"] = opencode_service.configure(runtime.home / opencode_service.CONFIG)
+            services[key] = (launch, environment, agent["service_port"])
+        _, version, _ = runtime.owner.run([str(launch), "--version"], env=environment)
+        agent["version"] = version.strip()[:120]
+        agent["pin"] = clis.pin(kind, agent["version"])
+        if not agent["pin"]["matches"]:
+            refuse("cached_cli_version_mismatch: " + kind)
+        agent["fake_env"] = sorted(extra)
+        agent["private_home"] = {"enabled": True, "program": str(program),
+                                 "key_env": declaration["key_env"], "auto_update": declaration["auto_update"],
+                                 "evidence": declaration["evidence"]}
+        ready.append(key)
+    report["cli_cache"]["bytes_after"] = cache.check()
+    return sandbox, guard, ready + legacy_ready
+
+
+def prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, fake, services, diagnostics=None):
     """CI mode's agents in the disposable HOME, signed in with the lane's keys,
     pointed at the fake model (`fake`, each agent's URL) or replaced by the
     fixture stand-ins; the agents ready to measure."""
@@ -380,6 +452,11 @@ def prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, fake, 
         fake_env = fake_lane.configure(kind, runtime.home, fake[key], root, local=False) if fake else None
         if fake_env is not None:
             agent["fake_env"] = sorted(fake_env)
+        if fake and kind == "grok" and sys.platform == "darwin" and diagnostics is not None:
+            from .grok_diagnostic import Diagnostic
+            diagnostic = Diagnostic(runtime)
+            diagnostics.append((agent, diagnostic))
+            program = diagnostic.launcher(runtime, program)
         launch = ci.wrapper(runtime, program, kind, os.environ.get("PATH", ""),
                             runtime.probe / f"fixture-{kind}.config" if fixture_bin else None, fake_env)
         environment = {**clean_env(), "HOME": str(runtime.home), "TMPDIR": runtime.env["TMPDIR"]}
@@ -511,10 +588,12 @@ def main(argv=None):
     previous = {signum: signal.signal(signum, lambda *_: owner.cancelled.set())
                 for signum in STOP_SIGNALS}
     runtime = guard = daemon = user_path = None
+    watch = None
     # One fake model per agent, so each one's log counts that agent's requests alone.
     servers = {}
     # Each OpenCode agent's program, environment and private server port, whose server the run ends.
     services = {}
+    diagnostics = []
     try:
         home = run / "probe/daemon-home"
         # The macOS sandbox opens the probe to agents, so a local run keeps the
@@ -523,12 +602,18 @@ def main(argv=None):
         # inspects from the drive root, and a Windows runner's D:\ lets every
         # account change its entries.
         runtime = Runtime(checkout, run, operator, owner, herdr_bin=herdr, home=home,
-                          state=None if local else home / ".hide/state")
-        report["package"] = str(package(runtime))
+                          state=None if local else home / ".hide/state", private_env=local and fake)
+        fake_key = "journey-fake-key-" + os.urandom(24).hex() if local and fake else fake_lane.KEY
         if fake:
             for key in measured:
-                servers[key] = fake_model.serve(run / f"fake-model-{key}.jsonl", rows[key]["request_budget"])[0]
+                servers[key] = fake_model.serve(run / f"fake-model-{key}.jsonl", rows[key]["request_budget"],
+                                                api_key=fake_key if local else None)[0]
         urls = {key: f"http://127.0.0.1:{server.server_address[1]}" for key, server in servers.items()}
+        if local and fake:
+            watch = fake_private.OperatorWatch(operator, run / "watch-private", run,
+                                                markers=(fake_key, fake_key[-20:], *urls.values()))
+            watch.check(watch.result(watch.before))
+        report["package"] = str(package(runtime))
         # Codex's sessions belong in its private home, never the operator's, and
         # in CI mode or with the fake model Claude's do too: it writes them there.
         for relative in (".codex/sessions",) if local and not fake else (".codex/sessions", ".claude/projects"):
@@ -541,19 +626,22 @@ def main(argv=None):
         if local or fake:
             # Before hided starts, which reads the file once.
             disable_hide_ai(runtime.home)
-        if local:
+        if local and fake:
+            sandbox, guard, ready = prepare_fake_local(runtime, report, table, rows, measured, operator, root, urls, services, fake_key)
+        elif local:
             sandbox, guard, ready = prepare_local(runtime, report, table, rows, measured, operator, root, urls, services)
         else:
             sandbox, ready = None, prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, urls,
-                                              services)
+                                              services, diagnostics)
         if WINDOWS and not local:
             # Before Herdr opens a pane, which reads its PATH from the
             # account's registry: the agents' wrappers are found through it.
             user_path = UserPath(runtime.bin)
         report["herdr"] = runtime.start()
         if sandbox:
-            allow_hook_route(sandbox, runtime)
-            allow_one_shot_references(sandbox, runtime)
+            for current in getattr(runtime, "journey_sandboxes", [sandbox]):
+                allow_hook_route(current, runtime)
+                allow_one_shot_references(current, runtime)
         if ready:
             daemon = Daemon(runtime.state, owner.cancelled)
             # The operator's first-run answer, once the daemon asks for it.
@@ -582,18 +670,26 @@ def main(argv=None):
                                        else None)
             for key in ready:
                 agent = next(row for row in report["agents"] if row["id"] == key)
+                legacy = local and not agent.get("private_home", {}).get("enabled", False)
+                if local:
+                    runtime.sandbox = (runtime.journey_sandboxes[0]
+                                       if legacy and hasattr(runtime, "journey_sandboxes") else sandbox)
                 journey = Journey(runtime, daemon, controller, table, rows[key], root, agent, reader,
                                   branch=f"journey/{run_id}-{key}", created=report["created"],
                                   sessions=(ROUTES[rows[key]["herdr_kind"]]["sessions"](operator, runtime.home)
-                                            if local and not fake else runtime.home),
+                                            if legacy else runtime.home),
                                   route=({**route(rows[key]["herdr_kind"], runtime.home),
-                                          **({"fake_env": agent["fake_env"]} if fake else {})} if local
+                                          **({"fake_env": agent["fake_env"]} if fake else {})} if legacy
                                          else {"args": [], "env": ci.route_names(rows[key]["herdr_kind"], fixture_bin,
                                                                                  agent.get("fake_env"))}),
                                   model=rows[key]["model_flag"] and models.get(key),
                                   quota=quota_rows)
                 for step in STEPS:
                     journey.step(step, *((card,) if step == memory.CELL else ()))
+                    if watch and agent.get("private_home", {}).get("enabled") and step == "start":
+                        agent["private_home"]["authenticated_requests"] = servers[key].authenticated
+                        if not servers[key].authenticated or servers[key].auth_failures:
+                            refuse("fake_api_key_route_not_proven: " + key)
                     journey.close(keep=journey.pane)
                 if key in services:
                     # Its pane closed at Sleep and opened again at Wake: one server must still serve it.
@@ -602,7 +698,7 @@ def main(argv=None):
                     if running is not None and len(running) > 1:
                         report.setdefault("product_findings", []).append(
                             f"{len(running)} OpenCode servers of the run ran after Sleep and Wake: {running}")
-                untrusted_reason = (ROUTES[rows[key]["herdr_kind"]]["untrusted"] if local and not fake else
+                untrusted_reason = (ROUTES[rows[key]["herdr_kind"]]["untrusted"] if legacy else
                                     ci.FIXTURE_UNTRUSTED if fixture_bin else None)
                 if untrusted_reason:
                     cells.settle(table, key, "start_untrusted", cells.NOT_MEASURED,
@@ -672,10 +768,10 @@ def main(argv=None):
             # helper met (`cli`, `deadline`, ...) and when it last did. HOME is the
             # private home only in CI mode; locally it stays the operator's.
             causes = runtime.home / ".hide/agent-hooks/delivery-diagnostics.json"
-            if not local and causes.is_file() and not causes.is_symlink():
+            if (not local or fake) and causes.is_file() and not causes.is_symlink():
                 with open(causes, "rb") as stream:
                     write_private(run / "delivery-diagnostics.json", ci.redact(stream.read(64 * 1024)))
-        if local:
+        if local and not fake:
             # Before the cleanup, which removes the trust the candidate recorded with its worktrees.
             check_operator_trust(report, operator, run, "during")
         try:
@@ -690,6 +786,13 @@ def main(argv=None):
                 owner.close()
             except Exception as cleanup_error:
                 report["cleanup"]["failures"].append(str(cleanup_error))
+        for agent, diagnostic in diagnostics:
+            try:
+                agent["authentication_diagnostic"] = diagnostic.close()
+                if diagnostic.result.get("failure"):
+                    report["failures"].append({"type": "DiagnosticError", "reason": diagnostic.result["failure"]})
+            except Exception as error:
+                report["failures"].append({"type": "DiagnosticError", "reason": type(error).__name__})
         if path_left:
             report["cleanup"]["confirmed"] = False
             report["cleanup"].setdefault("failures", []).append(path_left)
@@ -719,8 +822,35 @@ def main(argv=None):
                 report["configuration"] = guard.finish()
             except Exception as error:
                 report["configuration"] = {"failures": [{"reason": str(error)}]}
-        if local:
+        if local and not fake:
             check_operator_trust(report, operator, run, "after")
+        if watch:
+            try:
+                report["operator_watch"] = watch.compare()
+                watch.check(report["operator_watch"])
+            except Exception as error:
+                report["failures"].append({"type": "ProtectionError", "reason": str(error)})
+        if local and fake:
+            # Runs even if the initial snapshot failed before assigning watch.
+            try:
+                shutil.rmtree(run / "watch-private", ignore_errors=False)
+                report["cleanup"]["watch_copies_removed"] = True
+            except FileNotFoundError:
+                report["cleanup"]["watch_copies_removed"] = True
+            except OSError as error:
+                report["cleanup"]["confirmed"] = False
+                report["cleanup"]["watch_copies_removed"] = False
+                report["failures"].append({"type": "CleanupError", "reason": str(error)})
+        if runtime and getattr(runtime, "journey_cache", None):
+            try:
+                report["cli_cache"]["bytes_after"] = runtime.journey_cache.check()
+            except Exception as error:
+                report["failures"].append({"type": "ProtectionError", "reason": str(error)})
+            finally:
+                try:
+                    runtime.journey_cache.close(confirmed=report["cleanup"].get("processes_confirmed", False))
+                except Exception as error:
+                    report["failures"].append({"type": "ProtectionError", "reason": str(error)})
         for signum, handler in previous.items():
             signal.signal(signum, handler)
     interrupted = owner.cancelled.is_set()

@@ -38,6 +38,37 @@ pub struct JourneyAdapter {
     /// cells start, at most `requests_per_turn` each; absent for an agent
     /// Hide cannot start.
     pub request_budget: Option<u32>,
+    pub fake_home: FakeHome,
+}
+
+/// A private HOME is admitted only with a declared key route and update policy.
+/// An unavailable policy remains an explicit exception, never an inferred default.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum FakeHome {
+    Proven {
+        key_env: &'static str,
+        auto_update: AutoUpdate,
+        evidence: &'static str,
+    },
+    Exception {
+        auto_update: Option<AutoUpdate>,
+        reason: &'static str,
+    },
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AutoUpdate {
+    Environment {
+        name: &'static str,
+        value: &'static str,
+    },
+    Config {
+        path: &'static str,
+        key: &'static str,
+        value: &'static str,
+    },
 }
 
 /// A token-only turn takes one model response; the rest is room for an
@@ -173,6 +204,7 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
         });
         JourneyAdapter {
             id: row.id,
+            fake_home: row.fake_home,
             herdr_kind: row.herdr.name,
             herdr_source: row.herdr.session_source(),
             home_folder: row.herdr.folder,
