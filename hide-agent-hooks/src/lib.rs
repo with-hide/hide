@@ -36,6 +36,7 @@ pub mod opencode;
 pub mod pi_extension;
 pub mod plugin;
 pub mod report;
+pub mod route;
 pub mod runtime;
 pub mod spawn_guard;
 #[cfg(all(test, unix))]
@@ -52,6 +53,6 @@ pub use install::{
     remove,
 };
 pub use runtime::{
-    AgentRuntime, HELPER_BINARY_NAME, HOOK_SOURCE_NAME, HOOK_VERSION, HookEvent, PURPOSE_CONTEXT,
-    hook_source_id, hook_stdout,
+    AgentRuntime, HELPER_BINARY_NAME, HOOK_ENTRY_VERSION, HOOK_SOURCE_NAME, HOOK_VERSION,
+    HookEvent, PURPOSE_CONTEXT, hook_source_id, hook_stdout,
 };

@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_live_check.contracts import SCENES, recipes, source_contract
@@ -16,6 +17,35 @@ from agent_live_check.runtime import Runtime
 from agent_live_check.processes import OwnedProcesses
 from agent_live_check.authentication import AuthenticationRequired
 from agent_live_check.scenes import arrived, matches, observe
+from agent_live_check.system import exe, remove_tree
+
+
+class RuntimeRouting(unittest.TestCase):
+    def test_the_daemon_and_shell_keep_the_dock_and_shell_state_environment(self):
+        # A native start can bypass an agent wrapper. Giving every child an
+        # explicit Hide route would hide the installed hook's routing bug.
+        with tempfile.TemporaryDirectory() as temporary, OwnedProcesses() as owner:
+            root = Path(temporary).resolve()
+            checkout, run, operator = root / "checkout", root / "run", root / "operator"
+            for name in ("hided", "hide"):
+                binary = checkout / "target/debug" / exe(name)
+                binary.parent.mkdir(parents=True, exist_ok=True)
+                binary.write_bytes(b"unused fixture executable")
+                binary.chmod(0o700)
+            manifest = checkout / "contracts/herdr-bundle.json"
+            manifest.parent.mkdir()
+            manifest.write_text('{"version":"fixture"}')
+            with mock.patch("agent_live_check.runtime.herdr_matches_pin", return_value=True):
+                runtime = Runtime(checkout, run, operator, owner, herdr_bin=root / exe("herdr"),
+                                  state=run / "daemon-home/.hide/state")
+            self.addCleanup(remove_tree, runtime.short)
+            code, output, error = owner.run([sys.executable, "-c", (
+                "import os; print('XDG_STATE_HOME' in os.environ, 'HIDE_STATE_DIR' in os.environ)"
+            )], env=runtime.env, check=False)
+            self.assertEqual(code, 0, error)
+            self.assertEqual(output.strip(), "True False")
+            self.assertNotIn("XDG_STATE_HOME", runtime.daemon_env)
+            self.assertNotIn("HIDE_STATE_DIR", runtime.daemon_env)
 
 
 def safe_agent():

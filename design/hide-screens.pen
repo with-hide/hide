@@ -2186,18 +2186,6 @@
       "type": "number",
       "value": 960
     },
-    "--size-overview-projects-min": {
-      "type": "number",
-      "value": 960
-    },
-    "--size-overview-usage-content": {
-      "type": "number",
-      "value": 1120
-    },
-    "--size-overview-usage-plot": {
-      "type": "number",
-      "value": 180
-    },
     "--size-add-device-sheet-w": {
       "type": "number",
       "value": 470
@@ -2331,6 +2319,62 @@
     "--size-usage-year": {
       "type": "number",
       "value": 800
+    },
+    "--size-owl-onboarding": {
+      "type": "number",
+      "value": 64
+    },
+    "--size-owl-intro": {
+      "type": "number",
+      "value": 64
+    },
+    "--size-owl-empty": {
+      "type": "number",
+      "value": 144
+    },
+    "--size-brand-flight": {
+      "type": "number",
+      "value": 800
+    },
+    "--size-brand-clearance": {
+      "type": "number",
+      "value": 160
+    },
+    "--size-brand-word": {
+      "type": "number",
+      "value": 104
+    },
+    "--size-brand-word-min": {
+      "type": "number",
+      "value": 62
+    },
+    "--tracking-brand": {
+      "type": "number",
+      "value": -7
+    },
+    "--size-brand-track": {
+      "type": "number",
+      "value": 144
+    },
+    "--size-brand-track-h": {
+      "type": "number",
+      "value": 3
+    },
+    "--motion-brand-sweep": {
+      "type": "number",
+      "value": 1.8
+    },
+    "--size-overview-projects-min": {
+      "type": "number",
+      "value": 960
+    },
+    "--size-overview-usage-content": {
+      "type": "number",
+      "value": 1120
+    },
+    "--size-overview-usage-plot": {
+      "type": "number",
+      "value": 180
     },
     "--size-overview-graph-root-width": {
       "type": "number",
@@ -197135,6 +197179,19 @@
                                               "children": [],
                                               "width": "fill_container",
                                               "height": 1
+                                            },
+                                            {
+                                              "type": "frame",
+                                              "id": "onb-a-l-w-owl",
+                                              "name": "Decorative owl / agents / static",
+                                              "children": [],
+                                              "width": 64,
+                                              "height": 64,
+                                              "fill": {
+                                                "type": "image",
+                                                "url": "./assets/owls/owl-agents.png",
+                                                "mode": "contain"
+                                              }
                                             }
                                           ],
                                           "layout": "horizontal",
@@ -197199,7 +197256,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agent-claude.png",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -197318,7 +197375,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agent-codex.png",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -197437,7 +197494,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/grok.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -197515,7 +197572,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/opencode.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -197623,7 +197680,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/pi.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -197722,7 +197779,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/omp.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -197807,7 +197864,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/cursor.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -198718,6 +198775,19 @@
                                               "children": [],
                                               "width": "fill_container",
                                               "height": 1
+                                            },
+                                            {
+                                              "type": "frame",
+                                              "id": "onb-s1-l-w-owl",
+                                              "name": "Decorative owl / agents / static",
+                                              "children": [],
+                                              "width": 64,
+                                              "height": 64,
+                                              "fill": {
+                                                "type": "image",
+                                                "url": "./assets/owls/owl-agents.png",
+                                                "mode": "contain"
+                                              }
                                             }
                                           ],
                                           "layout": "horizontal",
@@ -198782,7 +198852,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agent-claude.png",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -198901,7 +198971,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agent-codex.png",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -199020,7 +199090,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/grok.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -199098,7 +199168,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/opencode.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -199206,7 +199276,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/pi.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -199305,7 +199375,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/omp.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -199390,7 +199460,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/cursor.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -200171,6 +200241,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-s1f-l-w-owl",
+                                                  "name": "Decorative owl / agents / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-agents.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -200235,7 +200318,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agent-claude.png",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -200354,7 +200437,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agent-codex.png",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -200473,7 +200556,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/grok.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -200551,7 +200634,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/opencode.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -200659,7 +200742,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/pi.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -200758,7 +200841,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/omp.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -200843,7 +200926,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/cursor.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -201172,6 +201255,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-s1n-l-w-owl",
+                                                  "name": "Decorative owl / agents / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-agents.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -201296,7 +201392,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agent-claude.png",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -201374,7 +201470,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agent-codex.png",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -201452,7 +201548,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/grok.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -201530,7 +201626,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/opencode.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -201617,7 +201713,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/pi.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -201695,7 +201791,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/omp.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -201773,7 +201869,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/cursor.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -202064,6 +202160,19 @@
                                                   "height": 1
                                                 },
                                                 {
+                                                  "type": "frame",
+                                                  "id": "onb-s1h-l-w-owl",
+                                                  "name": "Decorative owl / agents / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-agents.png",
+                                                    "mode": "contain"
+                                                  }
+                                                },
+                                                {
                                                   "id": "onb-s1h-l-w-x",
                                                   "type": "ref",
                                                   "ref": "hideui:Nyvom",
@@ -202138,7 +202247,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agent-claude.png",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -202257,7 +202366,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agent-codex.png",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -202376,7 +202485,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/grok.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -202454,7 +202563,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/opencode.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -202562,7 +202671,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/pi.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -202661,7 +202770,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/omp.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -202746,7 +202855,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/cursor.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -203101,6 +203210,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-s2i-l-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -203319,6 +203441,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-s2w-l-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -203579,6 +203714,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-s2o-l-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -203862,6 +204010,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-s2b-l-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -204158,6 +204319,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-s2u-l-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -204441,6 +204615,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-s2x-l-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -205339,6 +205526,19 @@
                                               "children": [],
                                               "width": "fill_container",
                                               "height": 1
+                                            },
+                                            {
+                                              "type": "frame",
+                                              "id": "onb-s3-l-w-owl",
+                                              "name": "Decorative owl / ai / static",
+                                              "children": [],
+                                              "width": 64,
+                                              "height": 64,
+                                              "fill": {
+                                                "type": "image",
+                                                "url": "./assets/owls/owl-ai.png",
+                                                "mode": "contain"
+                                              }
                                             }
                                           ],
                                           "layout": "horizontal",
@@ -206515,7 +206715,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agent-claude.png",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     },
                                                     {
@@ -207448,7 +207648,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agent-codex.png",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     },
                                                     {
@@ -208242,6 +208442,19 @@
                                               "id": "onb-eh0-l-main-c",
                                               "name": "Empty Home",
                                               "children": [
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-eh0-l-main-c-owl",
+                                                  "name": "Decorative owl / ai / static",
+                                                  "children": [],
+                                                  "width": 144,
+                                                  "height": 144,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-ai.png",
+                                                    "mode": "contain"
+                                                  }
+                                                },
                                                 {
                                                   "type": "text",
                                                   "id": "onb-eh0-l-main-c-msg",
@@ -212169,15 +212382,17 @@
                                               "name": "First visit line",
                                               "children": [
                                                 {
-                                                  "type": "icon",
+                                                  "type": "frame",
                                                   "id": "onb-fvf-l-li",
-                                                  "name": "Glyph",
-                                                  "enabled": true,
-                                                  "width": 14,
-                                                  "height": 14,
-                                                  "icon": "factory",
-                                                  "library": "lucide",
-                                                  "fill": "$--subtle-foreground"
+                                                  "name": "Decorative owl / factory / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-factory.png",
+                                                    "mode": "contain"
+                                                  }
                                                 },
                                                 {
                                                   "type": "text",
@@ -212324,13 +212539,13 @@
                                 {
                                   "type": "frame",
                                   "id": "onb-cell-sus-l",
-                                  "name": "Starting",
+                                  "name": "Starting · packaged default is Hide dark",
                                   "children": [
                                     {
                                       "type": "text",
                                       "id": "onb-cell-sus-l-cap",
-                                      "name": "Starting",
-                                      "content": "Starting",
+                                      "name": "Starting · packaged default ",
+                                      "content": "Starting · packaged default is Hide dark",
                                       "fill": "$--muted-foreground",
                                       "fontFamily": "$--font-ui",
                                       "fontSize": "$--text-caption",
@@ -212347,14 +212562,113 @@
                                           "name": "Center",
                                           "children": [
                                             {
-                                              "type": "text",
-                                              "id": "onb-sus-l-t",
-                                              "name": "Starting Hide…",
-                                              "content": "Starting Hide…",
-                                              "fill": "$--subtle-foreground",
-                                              "fontFamily": "$--font-ui",
-                                              "fontSize": "$--text-subhead",
-                                              "fontWeight": "400"
+                                              "type": "frame",
+                                              "id": "onb-sus-l-flight",
+                                              "name": "Local owl-roam / reduced-motion still",
+                                              "children": [
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-sus-l-brand",
+                                                  "name": "Brand",
+                                                  "children": [
+                                                    {
+                                                      "type": "text",
+                                                      "id": "onb-sus-l-word",
+                                                      "name": "hide",
+                                                      "content": "hide",
+                                                      "fill": "$--foreground",
+                                                      "fontFamily": "$--font-ui",
+                                                      "fontSize": "$--size-brand-word",
+                                                      "fontWeight": "800",
+                                                      "letterSpacing": -7
+                                                    },
+                                                    {
+                                                      "type": "text",
+                                                      "id": "onb-sus-l-tagline",
+                                                      "name": "Run more agents. Hold less.",
+                                                      "content": "Run more agents. Hold less.",
+                                                      "fill": "$--subtle-foreground",
+                                                      "fontFamily": "$--font-ui",
+                                                      "fontSize": "$--text-body",
+                                                      "fontWeight": "400"
+                                                    },
+                                                    {
+                                                      "type": "frame",
+                                                      "id": "onb-sus-l-loading",
+                                                      "name": "Preparing / localized host state",
+                                                      "children": [
+                                                        {
+                                                          "type": "frame",
+                                                          "id": "onb-sus-l-track",
+                                                          "name": "Indeterminate / static in reduced motion",
+                                                          "children": [
+                                                            {
+                                                              "type": "frame",
+                                                              "id": "onb-sus-l-sweep",
+                                                              "name": "Sweep",
+                                                              "children": [],
+                                                              "width": 48,
+                                                              "height": 3,
+                                                              "fill": "$--primary"
+                                                            }
+                                                          ],
+                                                          "width": 144,
+                                                          "height": 3,
+                                                          "cornerRadius": "$--radius-sm",
+                                                          "fill": "$--border",
+                                                          "layout": "horizontal",
+                                                          "justifyContent": "center"
+                                                        },
+                                                        {
+                                                          "type": "text",
+                                                          "id": "onb-sus-l-preparing",
+                                                          "name": "Starting Hide…",
+                                                          "content": "Starting Hide…",
+                                                          "fill": "$--muted-foreground",
+                                                          "fontFamily": "$--font-ui",
+                                                          "fontSize": "$--text-caption",
+                                                          "fontWeight": "400"
+                                                        }
+                                                      ],
+                                                      "layout": "vertical",
+                                                      "gap": "$--spacing-sm",
+                                                      "alignItems": "center",
+                                                      "padding": [
+                                                        "$--spacing-md",
+                                                        0,
+                                                        0,
+                                                        0
+                                                      ]
+                                                    }
+                                                  ],
+                                                  "width": 800,
+                                                  "height": 450,
+                                                  "layout": "vertical",
+                                                  "gap": "$--spacing-md",
+                                                  "alignItems": "center",
+                                                  "justifyContent": "center",
+                                                  "x": 0,
+                                                  "y": 0
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-sus-l-owl",
+                                                  "name": "owl-roam / resting beside the brand",
+                                                  "children": [],
+                                                  "width": 800,
+                                                  "height": 450,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-roam.png",
+                                                    "mode": "contain"
+                                                  },
+                                                  "x": 192,
+                                                  "y": 0
+                                                }
+                                              ],
+                                              "width": 800,
+                                              "height": 450,
+                                              "layout": "none"
                                             }
                                           ],
                                           "width": 900,
@@ -212375,7 +212689,11 @@
                                       "clip": true,
                                       "stroke": "$--border",
                                       "strokeWidth": 1,
-                                      "strokeAlignment": "inner"
+                                      "strokeAlignment": "inner",
+                                      "theme": {
+                                        "Mode": "Dark",
+                                        "Palette": "Hide"
+                                      }
                                     }
                                   ],
                                   "layout": "vertical",
@@ -212834,6 +213152,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-lxi-l-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -213052,6 +213383,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-lxo-l-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -213401,6 +213745,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-nsw-l-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -217092,6 +217449,19 @@
                                               "name": "Empty Home",
                                               "children": [
                                                 {
+                                                  "type": "frame",
+                                                  "id": "onb-ehp0-l-main-c-owl",
+                                                  "name": "Decorative owl / ai / static",
+                                                  "children": [],
+                                                  "width": 144,
+                                                  "height": 144,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-ai.png",
+                                                    "mode": "contain"
+                                                  }
+                                                },
+                                                {
                                                   "type": "text",
                                                   "id": "onb-ehp0-l-main-c-msg",
                                                   "name": "Add a project to start an ag",
@@ -218511,6 +218881,19 @@
                                               "children": [],
                                               "width": "fill_container",
                                               "height": 1
+                                            },
+                                            {
+                                              "type": "frame",
+                                              "id": "onb-w1-l-w-owl",
+                                              "name": "Decorative owl / agents / static",
+                                              "children": [],
+                                              "width": 64,
+                                              "height": 64,
+                                              "fill": {
+                                                "type": "image",
+                                                "url": "./assets/owls/owl-agents.png",
+                                                "mode": "contain"
+                                              }
                                             }
                                           ],
                                           "layout": "horizontal",
@@ -218575,7 +218958,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agent-claude.png",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -218694,7 +219077,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agent-codex.png",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -218813,7 +219196,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/grok.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -218891,7 +219274,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/opencode.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -218968,7 +219351,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/pi.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -219067,7 +219450,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/omp.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -219145,7 +219528,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/cursor.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -220998,6 +221381,19 @@
                                               "name": "Empty Home",
                                               "children": [
                                                 {
+                                                  "type": "frame",
+                                                  "id": "onb-can-l-main-c-owl",
+                                                  "name": "Decorative owl / ai / static",
+                                                  "children": [],
+                                                  "width": 144,
+                                                  "height": 144,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-ai.png",
+                                                    "mode": "contain"
+                                                  }
+                                                },
+                                                {
                                                   "type": "text",
                                                   "id": "onb-can-l-main-c-msg",
                                                   "name": "Add a project to start an ag",
@@ -221239,6 +221635,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-ko1-l-w-owl",
+                                                  "name": "Decorative owl / agents / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-agents.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -221303,7 +221712,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agent-claude.png",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -221422,7 +221831,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agent-codex.png",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -221541,7 +221950,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/grok.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -221619,7 +222028,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/opencode.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -221727,7 +222136,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/pi.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -221826,7 +222235,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/omp.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -221911,7 +222320,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/cursor.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -222678,6 +223087,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-ko2-l-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -222898,6 +223320,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-ko3-l-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -223197,6 +223632,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-ko4-l-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -223483,6 +223931,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-ko5-l-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -224376,6 +224837,19 @@
                                               "children": [],
                                               "width": "fill_container",
                                               "height": 1
+                                            },
+                                            {
+                                              "type": "frame",
+                                              "id": "onb-a-d-w-owl",
+                                              "name": "Decorative owl / agents / static",
+                                              "children": [],
+                                              "width": 64,
+                                              "height": 64,
+                                              "fill": {
+                                                "type": "image",
+                                                "url": "./assets/owls/owl-agents.png",
+                                                "mode": "contain"
+                                              }
                                             }
                                           ],
                                           "layout": "horizontal",
@@ -224440,7 +224914,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agent-claude.png",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -224559,7 +225033,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agent-codex.png",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -224678,7 +225152,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/grok.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -224756,7 +225230,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/opencode.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -224864,7 +225338,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/pi.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -224963,7 +225437,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/omp.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -225048,7 +225522,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/cursor.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -225959,6 +226433,19 @@
                                               "children": [],
                                               "width": "fill_container",
                                               "height": 1
+                                            },
+                                            {
+                                              "type": "frame",
+                                              "id": "onb-s1-d-w-owl",
+                                              "name": "Decorative owl / agents / static",
+                                              "children": [],
+                                              "width": 64,
+                                              "height": 64,
+                                              "fill": {
+                                                "type": "image",
+                                                "url": "./assets/owls/owl-agents.png",
+                                                "mode": "contain"
+                                              }
                                             }
                                           ],
                                           "layout": "horizontal",
@@ -226023,7 +226510,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agent-claude.png",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -226142,7 +226629,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agent-codex.png",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -226261,7 +226748,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/grok.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -226339,7 +226826,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/opencode.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -226447,7 +226934,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/pi.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -226546,7 +227033,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/omp.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -226631,7 +227118,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/cursor.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -227412,6 +227899,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-s1f-d-w-owl",
+                                                  "name": "Decorative owl / agents / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-agents.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -227476,7 +227976,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agent-claude.png",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -227595,7 +228095,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agent-codex.png",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -227714,7 +228214,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/grok.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -227792,7 +228292,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/opencode.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -227900,7 +228400,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/pi.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -227999,7 +228499,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/omp.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -228084,7 +228584,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/cursor.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -228413,6 +228913,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-s1n-d-w-owl",
+                                                  "name": "Decorative owl / agents / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-agents.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -228537,7 +229050,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agent-claude.png",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -228615,7 +229128,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agent-codex.png",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -228693,7 +229206,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/grok.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -228771,7 +229284,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/opencode.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -228858,7 +229371,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/pi.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -228936,7 +229449,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/omp.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -229014,7 +229527,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/cursor.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -229305,6 +229818,19 @@
                                                   "height": 1
                                                 },
                                                 {
+                                                  "type": "frame",
+                                                  "id": "onb-s1h-d-w-owl",
+                                                  "name": "Decorative owl / agents / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-agents.png",
+                                                    "mode": "contain"
+                                                  }
+                                                },
+                                                {
                                                   "id": "onb-s1h-d-w-x",
                                                   "type": "ref",
                                                   "ref": "hideui:Nyvom",
@@ -229379,7 +229905,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agent-claude.png",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -229498,7 +230024,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agent-codex.png",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -229617,7 +230143,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/grok.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -229695,7 +230221,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/opencode.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -229803,7 +230329,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/pi.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -229902,7 +230428,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/omp.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -229987,7 +230513,7 @@
                                                             "type": "image",
                                                             "enabled": true,
                                                             "url": "../web/src/assets/agents/cursor.svg",
-                                                            "mode": "fit"
+                                                            "mode": "contain"
                                                           }
                                                         }
                                                       ],
@@ -230342,6 +230868,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-s2i-d-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -230560,6 +231099,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-s2w-d-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -230820,6 +231372,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-s2o-d-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -231103,6 +231668,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-s2b-d-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -231399,6 +231977,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-s2u-d-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -231682,6 +232273,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-s2x-d-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -232580,6 +233184,19 @@
                                               "children": [],
                                               "width": "fill_container",
                                               "height": 1
+                                            },
+                                            {
+                                              "type": "frame",
+                                              "id": "onb-s3-d-w-owl",
+                                              "name": "Decorative owl / ai / static",
+                                              "children": [],
+                                              "width": 64,
+                                              "height": 64,
+                                              "fill": {
+                                                "type": "image",
+                                                "url": "./assets/owls/owl-ai.png",
+                                                "mode": "contain"
+                                              }
                                             }
                                           ],
                                           "layout": "horizontal",
@@ -233756,7 +234373,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agent-claude.png",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     },
                                                     {
@@ -234689,7 +235306,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agent-codex.png",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     },
                                                     {
@@ -235483,6 +236100,19 @@
                                               "id": "onb-eh0-d-main-c",
                                               "name": "Empty Home",
                                               "children": [
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-eh0-d-main-c-owl",
+                                                  "name": "Decorative owl / ai / static",
+                                                  "children": [],
+                                                  "width": 144,
+                                                  "height": 144,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-ai.png",
+                                                    "mode": "contain"
+                                                  }
+                                                },
                                                 {
                                                   "type": "text",
                                                   "id": "onb-eh0-d-main-c-msg",
@@ -239410,15 +240040,17 @@
                                               "name": "First visit line",
                                               "children": [
                                                 {
-                                                  "type": "icon",
+                                                  "type": "frame",
                                                   "id": "onb-fvf-d-li",
-                                                  "name": "Glyph",
-                                                  "enabled": true,
-                                                  "width": 14,
-                                                  "height": 14,
-                                                  "icon": "factory",
-                                                  "library": "lucide",
-                                                  "fill": "$--subtle-foreground"
+                                                  "name": "Decorative owl / factory / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-factory.png",
+                                                    "mode": "contain"
+                                                  }
                                                 },
                                                 {
                                                   "type": "text",
@@ -239565,13 +240197,13 @@
                                 {
                                   "type": "frame",
                                   "id": "onb-cell-sus-d",
-                                  "name": "Starting",
+                                  "name": "Starting · packaged default is Hide dark",
                                   "children": [
                                     {
                                       "type": "text",
                                       "id": "onb-cell-sus-d-cap",
-                                      "name": "Starting",
-                                      "content": "Starting",
+                                      "name": "Starting · packaged default ",
+                                      "content": "Starting · packaged default is Hide dark",
                                       "fill": "$--muted-foreground",
                                       "fontFamily": "$--font-ui",
                                       "fontSize": "$--text-caption",
@@ -239588,14 +240220,113 @@
                                           "name": "Center",
                                           "children": [
                                             {
-                                              "type": "text",
-                                              "id": "onb-sus-d-t",
-                                              "name": "Starting Hide…",
-                                              "content": "Starting Hide…",
-                                              "fill": "$--subtle-foreground",
-                                              "fontFamily": "$--font-ui",
-                                              "fontSize": "$--text-subhead",
-                                              "fontWeight": "400"
+                                              "type": "frame",
+                                              "id": "onb-sus-d-flight",
+                                              "name": "Local owl-roam / reduced-motion still",
+                                              "children": [
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-sus-d-brand",
+                                                  "name": "Brand",
+                                                  "children": [
+                                                    {
+                                                      "type": "text",
+                                                      "id": "onb-sus-d-word",
+                                                      "name": "hide",
+                                                      "content": "hide",
+                                                      "fill": "$--foreground",
+                                                      "fontFamily": "$--font-ui",
+                                                      "fontSize": "$--size-brand-word",
+                                                      "fontWeight": "800",
+                                                      "letterSpacing": -7
+                                                    },
+                                                    {
+                                                      "type": "text",
+                                                      "id": "onb-sus-d-tagline",
+                                                      "name": "Run more agents. Hold less.",
+                                                      "content": "Run more agents. Hold less.",
+                                                      "fill": "$--subtle-foreground",
+                                                      "fontFamily": "$--font-ui",
+                                                      "fontSize": "$--text-body",
+                                                      "fontWeight": "400"
+                                                    },
+                                                    {
+                                                      "type": "frame",
+                                                      "id": "onb-sus-d-loading",
+                                                      "name": "Preparing / localized host state",
+                                                      "children": [
+                                                        {
+                                                          "type": "frame",
+                                                          "id": "onb-sus-d-track",
+                                                          "name": "Indeterminate / static in reduced motion",
+                                                          "children": [
+                                                            {
+                                                              "type": "frame",
+                                                              "id": "onb-sus-d-sweep",
+                                                              "name": "Sweep",
+                                                              "children": [],
+                                                              "width": 48,
+                                                              "height": 3,
+                                                              "fill": "$--primary"
+                                                            }
+                                                          ],
+                                                          "width": 144,
+                                                          "height": 3,
+                                                          "cornerRadius": "$--radius-sm",
+                                                          "fill": "$--border",
+                                                          "layout": "horizontal",
+                                                          "justifyContent": "center"
+                                                        },
+                                                        {
+                                                          "type": "text",
+                                                          "id": "onb-sus-d-preparing",
+                                                          "name": "Starting Hide…",
+                                                          "content": "Starting Hide…",
+                                                          "fill": "$--muted-foreground",
+                                                          "fontFamily": "$--font-ui",
+                                                          "fontSize": "$--text-caption",
+                                                          "fontWeight": "400"
+                                                        }
+                                                      ],
+                                                      "layout": "vertical",
+                                                      "gap": "$--spacing-sm",
+                                                      "alignItems": "center",
+                                                      "padding": [
+                                                        "$--spacing-md",
+                                                        0,
+                                                        0,
+                                                        0
+                                                      ]
+                                                    }
+                                                  ],
+                                                  "width": 800,
+                                                  "height": 450,
+                                                  "layout": "vertical",
+                                                  "gap": "$--spacing-md",
+                                                  "alignItems": "center",
+                                                  "justifyContent": "center",
+                                                  "x": 0,
+                                                  "y": 0
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-sus-d-owl",
+                                                  "name": "owl-roam / resting beside the brand",
+                                                  "children": [],
+                                                  "width": 800,
+                                                  "height": 450,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-roam.png",
+                                                    "mode": "contain"
+                                                  },
+                                                  "x": 192,
+                                                  "y": 0
+                                                }
+                                              ],
+                                              "width": 800,
+                                              "height": 450,
+                                              "layout": "none"
                                             }
                                           ],
                                           "width": 900,
@@ -239616,7 +240347,11 @@
                                       "clip": true,
                                       "stroke": "$--border",
                                       "strokeWidth": 1,
-                                      "strokeAlignment": "inner"
+                                      "strokeAlignment": "inner",
+                                      "theme": {
+                                        "Mode": "Dark",
+                                        "Palette": "Hide"
+                                      }
                                     }
                                   ],
                                   "layout": "vertical",
@@ -240075,6 +240810,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-lxi-d-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -240293,6 +241041,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-lxo-d-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -240642,6 +241403,19 @@
                                                   "children": [],
                                                   "width": "fill_container",
                                                   "height": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-nsw-d-w-owl",
+                                                  "name": "Decorative owl / devices / static",
+                                                  "children": [],
+                                                  "width": 64,
+                                                  "height": 64,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-devices.png",
+                                                    "mode": "contain"
+                                                  }
                                                 }
                                               ],
                                               "layout": "horizontal",
@@ -244333,6 +245107,19 @@
                                               "name": "Empty Home",
                                               "children": [
                                                 {
+                                                  "type": "frame",
+                                                  "id": "onb-ehp0-d-main-c-owl",
+                                                  "name": "Decorative owl / ai / static",
+                                                  "children": [],
+                                                  "width": 144,
+                                                  "height": 144,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-ai.png",
+                                                    "mode": "contain"
+                                                  }
+                                                },
+                                                {
                                                   "type": "text",
                                                   "id": "onb-ehp0-d-main-c-msg",
                                                   "name": "Add a project to start an ag",
@@ -245752,6 +246539,19 @@
                                               "children": [],
                                               "width": "fill_container",
                                               "height": 1
+                                            },
+                                            {
+                                              "type": "frame",
+                                              "id": "onb-w1-d-w-owl",
+                                              "name": "Decorative owl / agents / static",
+                                              "children": [],
+                                              "width": 64,
+                                              "height": 64,
+                                              "fill": {
+                                                "type": "image",
+                                                "url": "./assets/owls/owl-agents.png",
+                                                "mode": "contain"
+                                              }
                                             }
                                           ],
                                           "layout": "horizontal",
@@ -245816,7 +246616,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agent-claude.png",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -245935,7 +246735,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agent-codex.png",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -246054,7 +246854,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/grok.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -246132,7 +246932,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/opencode.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -246209,7 +247009,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/pi.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -246308,7 +247108,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/omp.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -246386,7 +247186,7 @@
                                                         "type": "image",
                                                         "enabled": true,
                                                         "url": "../web/src/assets/agents/cursor.svg",
-                                                        "mode": "fit"
+                                                        "mode": "contain"
                                                       }
                                                     }
                                                   ],
@@ -248238,6 +249038,19 @@
                                               "id": "onb-can-d-main-c",
                                               "name": "Empty Home",
                                               "children": [
+                                                {
+                                                  "type": "frame",
+                                                  "id": "onb-can-d-main-c-owl",
+                                                  "name": "Decorative owl / ai / static",
+                                                  "children": [],
+                                                  "width": 144,
+                                                  "height": 144,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "url": "./assets/owls/owl-ai.png",
+                                                    "mode": "contain"
+                                                  }
+                                                },
                                                 {
                                                   "type": "text",
                                                   "id": "onb-can-d-main-c-msg",

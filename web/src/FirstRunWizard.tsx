@@ -24,6 +24,7 @@ import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, Dia
 import { Kbd } from "./components/ui/kbd";
 import { accountHome, failedAgents, firstRunStep, firstStartAgent, noAgentInstalled, SUGGESTED_INSTALLS, tileStatus, whatChanges, type TileStatus, type WizardStep } from "./firstRun";
 import { firstRunAgent } from "./hideAi";
+import { BrandOwl } from "./components/brand-owl";
 import { hostBridge, keySystem } from "./host";
 import { useInterfaceTranslation } from "./i18n/client";
 import type { MessageKey } from "./i18n/catalogs";
@@ -105,8 +106,9 @@ function Wizard({ actions, step, reopened, desktop }: { actions: Actions; step: 
         onPointerDownOutside={(event) => event.preventDefault()}
         onInteractOutside={(event) => event.preventDefault()}
       >
+          <div className="flex shrink-0 items-center gap-sm px-lg pt-lg pr-xxl">
         {desktop ? (
-          <div className="flex items-center gap-sm px-lg pt-lg" data-first-run-progress={number}>
+          <div className="flex flex-wrap items-center gap-sm" data-first-run-progress={number}>
             <div className="flex gap-xs" aria-hidden="true">
               {STEPS.map((row, index) => (
                 <span key={row} className={cn("h-xs w-xl rounded-full", index < number ? "bg-primary" : "bg-secondary")} />
@@ -115,6 +117,8 @@ function Wizard({ actions, step, reopened, desktop }: { actions: Actions; step: 
             <span className="text-caption text-muted-foreground">{t("firstRun.progress", { step: number })}</span>
           </div>
         ) : null}
+            <BrandOwl key={step} pose={step === "agents" ? "agents" : step === "notifications" ? "devices" : "ai"} className="ml-auto h-(--size-owl-onboarding) w-(--size-owl-onboarding)" />
+          </div>
         {step === "agents" ? (
           <AgentsStep actions={actions} reopened={reopened} desktop={desktop} primary={primary} />
         ) : step === "notifications" ? (

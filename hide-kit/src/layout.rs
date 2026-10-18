@@ -25,6 +25,15 @@ pub fn hide_home(home: &Path) -> PathBuf {
     home.join(HIDE_HOME)
 }
 
+/// Pinned CLIs shared by local keyless journey runs, never operator executables.
+pub fn journey_cli_cache(home: &Path) -> PathBuf {
+    hide_home(home).join("cache/journey-clis")
+}
+
+/// Four GiB across all pins, including an in-progress installation.
+/// Crossing it refuses the run; it never evicts a CLI another run may use.
+pub const JOURNEY_CLI_CACHE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
 /// The file that declares a HOME a test fixture's ([`fixture_home`]).
 pub const FIXTURE_HOME_MARKER: &str = ".hide-e2e-device-home";
 
@@ -121,6 +130,11 @@ pub fn state_dir_choice_from_process(home: &Path) -> (PathBuf, Option<StateVaria
 /// Where a device's helper and the `hide` command beside it meet (D-06).
 pub fn workspace_bridges(state_dir: &Path) -> PathBuf {
     state_dir.join("workspace-bridges")
+}
+
+/// The daemon's lifetime lock, shared with the account kit's route ownership check.
+pub fn daemon_lock(state_dir: &Path) -> PathBuf {
+    state_dir.join("hided.lock")
 }
 
 /// Durable local requests and watches; its owner is the core delivery worker.

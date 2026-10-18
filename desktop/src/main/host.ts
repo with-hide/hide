@@ -11,6 +11,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, screen, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type NativeImage } from "electron";
 import { DebUpdater, MacUpdater, NsisUpdater, RpmUpdater } from "electron-updater";
 import { CHECK_UPDATES_COMMAND, SETUP_COMMAND } from "../../../web/src/host";
@@ -1326,6 +1327,14 @@ export class DesktopHost {
       },
     });
     this.window = window;
+    // Decoration failure is diagnostic only. Accept a fixed event from our
+    // local status document, never arbitrary renderer text or personal data.
+    window.webContents.on("console-message", (details) => {
+      if (details.message === '{"event":"brand_owl.unavailable","scene":"startup","asset":"owl-roam"}'
+        && window.webContents.getURL().startsWith(pathToFileURL(STATUS_PAGE).href + "?")) {
+        this.log.event("brand_owl.unavailable", { scene: "startup", asset: "owl-roam" });
+      }
+    });
     this.browsers?.attach(window);
     window.once("ready-to-show", () => this.present(window, false));
     window.on("close", () => {

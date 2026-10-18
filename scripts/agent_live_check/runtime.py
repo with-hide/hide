@@ -69,13 +69,21 @@ PROVIDER_KEYS = ("ANTHROPIC_AUTH_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "AWS_
                  "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")
 
 
-# The XDG folders under the probe's home that every process it starts reads,
-# the daemon and Hide's reader included.
+# The shell's private XDG folders. The daemon is started without a shell's
+# XDG_STATE_HOME, like an app opened from the Dock.
 XDG_FOLDERS = {"XDG_CONFIG_HOME": "config", "XDG_STATE_HOME": "state", "XDG_DATA_HOME": "data",
                "XDG_CACHE_HOME": "cache"}
 
 
-def clean_env() -> dict[str, str]:
+# Only process basics cross the private fake boundary; provider, package-manager
+# and runtime configuration must be supplied explicitly by the route.
+PRIVATE_ENV = frozenset(("PATH", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "COLORTERM",
+                         "SYSTEMROOT", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT"))
+
+
+def clean_env(*, private=False) -> dict[str, str]:
+    if private:
+        return {key: value for key, value in os.environ.items() if key in PRIVATE_ENV}
     return {key: value for key, value in os.environ.items()
             if not key.startswith(("HERDR_", "HIDE_", "HCOORD_"))
             and not key.endswith("_API_KEY") and key not in PROVIDER_KEYS
@@ -147,7 +155,7 @@ class ResidentOutput:
 class Runtime:
     def __init__(self, checkout: Path, run: Path, operator: Path, owner: OwnedProcesses,
                  *, herdr_bin: Path, fixture_bin: Path | None = None,
-                 socket: Path | None = None, state: Path | None = None, home: Path | None = None):
+                 socket: Path | None = None, state: Path | None = None, home: Path | None = None, private_env=False):
         self.checkout, self.run, self.operator, self.owner = checkout, run, operator, owner
         # The journey keeps the daemon home under the probe, where a sandboxed
         # agent may read the candidate's hooks; the bell check keeps it apart.
@@ -185,7 +193,7 @@ class Runtime:
             if not herdr_matches_pin(self.herdr_bin, manifest):
                 raise ProtectionError("herdr_binary_does_not_match_pin")
             self.expected_version = manifest["version"]
-            base = clean_env()
+            base = clean_env(private=private_env)
             base.update(**home_env(self.home), **self.shell.environment(self.home),
                         **{name: str(self.home / folder) for name, folder in XDG_FOLDERS.items()},
                         HERDR_SOCKET_PATH=str(self.socket), HERDR_BIN_PATH=str(self.herdr_bin),
@@ -198,8 +206,13 @@ class Runtime:
                 write_private(self.home / name, data)
             write_private(run / "herdr.toml", ("[update]\nversion_check = false\n[sound]\nenabled = false\n"
                                                + self.shell.herdr_config()).encode())
-            self.daemon_env = {**base, "HIDE_STATE_DIR": str(self.state), "HIDE_PORT": "0",
+            self.daemon_env = {**base, "HIDE_PORT": "0",
                                "HIDE_KEEP_ALIVE": "1", "HIDED_UI_DIR": str(checkout / "web/dist")}
+            self.daemon_env.pop("XDG_STATE_HOME", None)
+            # CI uses the account's default; a local sandbox keeps the state
+            # outside its writable probe and therefore needs an explicit route.
+            if self.state != self.home / ".hide/state":
+                self.daemon_env["HIDE_STATE_DIR"] = str(self.state)
             # hided observes native session identity using its usual reader.
             # These read-only references do not change the operator's trees.
             for relative in (() if fixture_bin else (".claude/projects", ".codex/sessions")):

@@ -530,7 +530,7 @@ fn turning_memory_on_updates_the_hooks_first_and_then_turns_it_on() {
             label: "Codex".to_owned(),
             path: "/fixture/.codex/hooks.json".to_owned(),
             status,
-            current_version: hide_agent_hooks::HOOK_VERSION,
+            current_version: hide_agent_hooks::HOOK_ENTRY_VERSION,
             memory_compatibility: hide_agent_hooks::MemoryCompatibility::Supported {
                 version: "999.0.0".to_owned(),
             },
@@ -578,7 +578,7 @@ fn turning_memory_on_updates_the_hooks_first_and_then_turns_it_on() {
     assert!(opened(&guard).unwrap().preparing_hooks);
 
     guard.ingest_hook_diagnosis(diagnosis(hide_agent_hooks::HookStatus::Installed {
-        version: hide_agent_hooks::HOOK_VERSION,
+        version: hide_agent_hooks::HOOK_ENTRY_VERSION,
     }));
     assert_eq!(
         pending(&guard),
@@ -586,7 +586,7 @@ fn turning_memory_on_updates_the_hooks_first_and_then_turns_it_on() {
         "the switch turns on once the hooks carry Memory"
     );
     guard.ingest_hook_diagnosis(diagnosis(hide_agent_hooks::HookStatus::Installed {
-        version: hide_agent_hooks::HOOK_VERSION,
+        version: hide_agent_hooks::HOOK_ENTRY_VERSION,
     }));
     assert_eq!(
         guard.snapshot.status.last_error, None,
@@ -624,9 +624,9 @@ fn a_switch_pressed_before_the_hooks_are_read_turns_memory_on_once_they_are() {
             label: "Codex".to_owned(),
             path: "/fixture/.codex/hooks.json".to_owned(),
             status: hide_agent_hooks::HookStatus::Installed {
-                version: hide_agent_hooks::HOOK_VERSION,
+                version: hide_agent_hooks::HOOK_ENTRY_VERSION,
             },
-            current_version: hide_agent_hooks::HOOK_VERSION,
+            current_version: hide_agent_hooks::HOOK_ENTRY_VERSION,
             memory_compatibility: hide_agent_hooks::MemoryCompatibility::Supported {
                 version: "999.0.0".to_owned(),
             },
@@ -667,9 +667,9 @@ fn one_unsupported_runtime_does_not_disable_another_supported_runtime() {
                 label: "Claude Code".to_owned(),
                 path: "/fixture/.claude/settings.json".to_owned(),
                 status: hide_agent_hooks::HookStatus::Installed {
-                    version: hide_agent_hooks::HOOK_VERSION,
+                    version: hide_agent_hooks::HOOK_ENTRY_VERSION,
                 },
-                current_version: hide_agent_hooks::HOOK_VERSION,
+                current_version: hide_agent_hooks::HOOK_ENTRY_VERSION,
                 memory_compatibility: hide_agent_hooks::MemoryCompatibility::UpdateRequired {
                     installed_version: Some("2.1.277".to_owned()),
                     minimum_version: "2.1.278".to_owned(),
@@ -680,9 +680,9 @@ fn one_unsupported_runtime_does_not_disable_another_supported_runtime() {
                 label: "Codex".to_owned(),
                 path: "/fixture/.codex/hooks.json".to_owned(),
                 status: hide_agent_hooks::HookStatus::Installed {
-                    version: hide_agent_hooks::HOOK_VERSION,
+                    version: hide_agent_hooks::HOOK_ENTRY_VERSION,
                 },
-                current_version: hide_agent_hooks::HOOK_VERSION,
+                current_version: hide_agent_hooks::HOOK_ENTRY_VERSION,
                 memory_compatibility: hide_agent_hooks::MemoryCompatibility::Supported {
                     version: "0.155.1".to_owned(),
                 },
@@ -692,6 +692,15 @@ fn one_unsupported_runtime_does_not_disable_another_supported_runtime() {
     });
 
     assert!(runtime.hooks_support_memory());
+    for row in &mut runtime.hook_diagnosis.as_mut().unwrap().runtimes {
+        row.status = hide_agent_hooks::HookStatus::Installed {
+            version: hide_agent_hooks::HOOK_VERSION,
+        };
+    }
+    assert!(
+        !runtime.hooks_support_memory(),
+        "the pane protocol version does not prove current installed commands"
+    );
 }
 
 #[test]

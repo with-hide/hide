@@ -28,7 +28,12 @@ fn the_real_agy_loads_hide_s_hook_block() {
         std::fs::create_dir_all(home.path().join(folder)).unwrap();
     }
     let helper = Path::new(env!("CARGO_BIN_EXE_hide-agent-hooks"));
-    guidance::install(GuidanceAgent::Antigravity, home.path(), helper).unwrap();
+    guidance::install(
+        GuidanceAgent::Antigravity,
+        home.path(),
+        crate::hook_target(helper),
+    )
+    .unwrap();
     let workspace = tempfile::tempdir().unwrap();
     let log = workspace.path().join("agy.log");
 
@@ -171,7 +176,12 @@ fn a_signed_in_agy_turn_fires_hide_s_hooks() {
     let helper = bin.join("hide-agent-hooks");
     stand_ins::place(programs::hook(), &helper);
     stand_ins::program(&bin.join("hide"), TURN_HIDE);
-    guidance::install(GuidanceAgent::Antigravity, &home, &helper).unwrap();
+    guidance::install(
+        GuidanceAgent::Antigravity,
+        &home,
+        crate::hook_target(&helper),
+    )
+    .unwrap();
     let log = root.join("agy.log");
     let prompt = serde_json::json!({
         "event": "user",
@@ -385,7 +395,12 @@ fn writes_hide_s_block_into_a_live_check_workspace() {
     );
     let home = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(home.path().join(".gemini/config")).unwrap();
-    guidance::install(GuidanceAgent::Antigravity, home.path(), &helper).unwrap();
+    guidance::install(
+        GuidanceAgent::Antigravity,
+        home.path(),
+        crate::hook_target(&helper),
+    )
+    .unwrap();
     let installed: serde_json::Value = serde_json::from_slice(
         &std::fs::read(home.path().join(".gemini/config/hooks.json")).unwrap(),
     )

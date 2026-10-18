@@ -103,7 +103,14 @@ class PaneShell:
         """(name, bytes) the private home holds for the shell."""
         if WINDOWS:
             return []
-        return [(".zshrc", f"skip_global_compinit=1\nPS1='{READY} '\n".encode())]
+        # A login shell's global profile can reorder the inherited PATH
+        # (macOS path_helper does). Save each pane's incoming path before
+        # that profile, including the controller's own provider directory,
+        # and restore it before any command resolves an installed CLI.
+        return [(".zshenv", b"journey_pane_path=$PATH\n"),
+                (".zshrc", ("export PATH=${journey_pane_path:?missing pane PATH}\n"
+                            "unset journey_pane_path\n"
+                            f"skip_global_compinit=1\nPS1='{READY} '\n").encode())]
 
     def herdr_config(self):
         """The lines of Herdr's configuration that name the pane shell."""

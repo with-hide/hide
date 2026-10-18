@@ -15,6 +15,32 @@ const PLUGINS: [&Plugin; 3] = [
     &crate::pi_extension::OMP_PLUGIN,
 ];
 
+#[test]
+fn extension_routes_are_updated_without_treating_operator_edits_as_generated() {
+    for plugin in PLUGINS {
+        let fixture = Fixture::new(plugin);
+        let state = fixture.home().join("daemon ' $경로");
+        let target = HookTarget::new(&fixture.helper, &state).unwrap();
+        plugin.install(fixture.home(), target).unwrap();
+        assert_eq!(
+            plugin.observe(fixture.home(), target),
+            PluginObserved::Current
+        );
+        assert!(matches!(
+            plugin.observe(fixture.home(), &fixture.helper),
+            PluginObserved::Stale(_)
+        ));
+        let path = plugin.path(fixture.home());
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("--state-dir-b64"));
+        fs::write(path, format!("{text}\n// operator edit\n")).unwrap();
+        assert_eq!(
+            plugin.observe(fixture.home(), target),
+            PluginObserved::Edited
+        );
+    }
+}
+
 fn files() -> impl Iterator<Item = &'static PluginFile> {
     PLUGINS.into_iter().flat_map(|plugin| plugin.files)
 }

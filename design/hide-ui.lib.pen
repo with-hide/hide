@@ -72206,6 +72206,50 @@
       "type": "number",
       "value": 440
     },
+    "--motion-brand-sweep": {
+      "type": "number",
+      "value": 1.8
+    },
+    "--size-brand-clearance": {
+      "type": "number",
+      "value": 160
+    },
+    "--size-brand-flight": {
+      "type": "number",
+      "value": 800
+    },
+    "--size-brand-track": {
+      "type": "number",
+      "value": 144
+    },
+    "--size-brand-track-h": {
+      "type": "number",
+      "value": 3
+    },
+    "--size-brand-word": {
+      "type": "number",
+      "value": 104
+    },
+    "--size-brand-word-min": {
+      "type": "number",
+      "value": 62
+    },
+    "--size-owl-empty": {
+      "type": "number",
+      "value": 144
+    },
+    "--size-owl-intro": {
+      "type": "number",
+      "value": 64
+    },
+    "--size-owl-onboarding": {
+      "type": "number",
+      "value": 64
+    },
+    "--tracking-brand": {
+      "type": "number",
+      "value": -7
+    },
     "--size-overview-graph-child-height": {
       "type": "number",
       "value": 160

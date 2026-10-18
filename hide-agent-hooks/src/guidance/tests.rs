@@ -83,6 +83,49 @@ fn collect(value: &Value, found: &mut Vec<String>) {
     }
 }
 
+#[test]
+fn active_agents_capture_the_daemon_route_and_preserve_operator_edits() {
+    for agent in [
+        GuidanceAgent::Grok,
+        GuidanceAgent::Cursor,
+        GuidanceAgent::Antigravity,
+    ] {
+        let fixture = Fixture::new(agent);
+        let state = fixture.home().join("daemon ' $경로");
+        let target = HookTarget::new(&fixture.helper, &state).unwrap();
+        super::install(agent, fixture.home(), target).unwrap();
+        assert!(matches_install(agent, fixture.home(), target));
+        assert!(!matches_install(agent, fixture.home(), &fixture.helper));
+        assert!(matches_helper(agent, fixture.home(), &fixture.helper));
+        let path = agent.config_path(fixture.home());
+        let mut document = fixture.read(agent);
+        // Timeout is operator-owned once edited, even though the marker and
+        // captured route still name this build.
+        fn edit(value: &mut Value) {
+            match value {
+                Value::Object(map) => {
+                    if map.contains_key("timeout") {
+                        map.insert("timeout".into(), json!(99));
+                    }
+                    for item in map.values_mut() {
+                        edit(item);
+                    }
+                }
+                Value::Array(items) => items.iter_mut().for_each(edit),
+                _ => {}
+            }
+        }
+        edit(&mut document);
+        fs::write(path, serde_json::to_string(&document).unwrap()).unwrap();
+        assert!(!matches_helper(agent, fixture.home(), &fixture.helper));
+        super::install(agent, fixture.home(), &fixture.helper).unwrap();
+        assert!(
+            !matches_helper(agent, fixture.home(), &fixture.helper),
+            "removing the captured route is an edit"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn gemini_writes_the_documented_settings_shape_with_milliseconds() {
@@ -662,7 +705,7 @@ fn grok_writes_its_own_file_of_the_events_its_documentation_names() {
         assert_eq!(hook["timeout"], 8, "{event}");
         let command = hook["command"].as_str().unwrap();
         assert!(command.starts_with("if [ -x '"), "{command}");
-        assert!(command.contains("hide-guidance@7"), "{command}");
+        assert!(command.contains("hide-guidance@8"), "{command}");
         assert!(
             command.contains(&format!("--runtime grok --event {event} ")),
             "{command}"
@@ -684,7 +727,7 @@ fn grok_writes_its_own_file_of_the_events_its_documentation_names() {
     );
     let old = fs::read_to_string(&path)
         .unwrap()
-        .replace("hide-guidance@7", "hide-guidance@6");
+        .replace("hide-guidance@8", "hide-guidance@6");
     fs::write(&path, old).unwrap();
     assert!(matches!(
         status(GuidanceAgent::Grok, fixture.home()),
@@ -741,7 +784,7 @@ fn a_missing_event_or_an_edited_entry_is_not_current() {
     install(GuidanceAgent::Cursor, fixture.home(), &fixture.helper).unwrap();
     assert!(matches!(
         status(GuidanceAgent::Cursor, fixture.home()),
-        HookStatus::Installed { version: 6 }
+        HookStatus::Installed { version: 7 }
     ));
     assert!(matches_install(
         GuidanceAgent::Cursor,
@@ -840,7 +883,7 @@ fn installing_over_version_two_takes_out_the_subagent_and_turn_entries_and_only_
     );
     assert!(matches!(
         status(GuidanceAgent::Cursor, fixture.home()),
-        HookStatus::Installed { version: 6 }
+        HookStatus::Installed { version: 7 }
     ));
     assert!(matches_install(
         GuidanceAgent::Cursor,

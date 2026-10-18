@@ -27,6 +27,13 @@ A connected device recipient uses its node's pane service over that device's exi
 The only ledger remains on the controlling daemon.
 A disconnected device hook finishes within its two-second budget with no letters, leaving them pending in that ledger.
 
+An installed hook carries the state folder of the daemon whose kit wrote it, independent of the agent shell's `XDG_STATE_HOME`.
+The helper gives that captured route to sibling `hide` calls only when `HIDE_STATE_DIR` is absent or empty; capability validation and caller binding remain the CLI's responsibility.
+This keeps a Dock-launched app reachable when the shell uses another state home or the agent omits Hide's environment from a hook.
+After a state move, the next kit pass rewrites an unedited generated route to the running daemon's folder, while an operator-edited command waits for Reinstall.
+Until then, a missing old daemon leaves the letter pending and records the helper's existing `intake.failed` diagnostic with code `unavailable`, rather than confirming mail it did not deliver.
+See [agent-hooks.md](agent-hooks.md#what-is-written-and-where) for the argument, install versions and the separate pane-report protocol, which stays at 8 through this update.
+
 ```sh
 hide request send child-name --intent task-question-1 --body 'Please report the check result.'
 hide request reply letter-1 --intent task-answer-1 --body 'The check passed.'
