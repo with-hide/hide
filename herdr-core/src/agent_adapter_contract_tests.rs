@@ -79,6 +79,7 @@ fn all_core_gates_accept_the_same_aliases_without_enabling_other_agents() {
             let closed = crate::recent_closed::ClosedAgent {
                 kind: spelling,
                 session_id: Some("session".into()),
+                ..Default::default()
             };
             assert_eq!(
                 crate::recent_closed::resume_arguments(&closed).is_some(),

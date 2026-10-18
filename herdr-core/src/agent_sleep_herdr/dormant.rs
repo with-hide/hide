@@ -308,6 +308,17 @@ impl ApiStream for CurrentWorkStream {
     }
 }
 
+/// The name a dormant session wakes under. One that held a registration
+/// wakes under the name Herdr knew it by, so the registration the wake
+/// continues still names its agent; one that held none is a new execution of
+/// the conversation, named as a fork.
+pub(crate) fn wake_name(work: &DormantWork) -> String {
+    work.record.registration.as_ref().map_or_else(
+        || crate::fork::fork_name("sleep", work.id.as_str()),
+        |registration| registration.actor.name.clone(),
+    )
+}
+
 fn start_dormant(
     connector: &dyn ApiConnector,
     node: &dyn NodeLink,
@@ -320,13 +331,7 @@ fn start_dormant(
     if !crate::node_access::is_directory(node, &work.record.cwd) {
         return DormantStartOutcome::NotStarted;
     }
-    // A session that held a registration wakes under the name Herdr knew it
-    // by, so the registration the wake continues still names its agent; one
-    // that held none is a new execution of the conversation, named as a fork.
-    let name = work.record.registration.as_ref().map_or_else(
-        || crate::fork::fork_name("sleep", work.id.as_str()),
-        |registration| registration.actor.name.clone(),
-    );
+    let name = wake_name(work);
     let params = match wire::agent_start_params(
         pane,
         &name,

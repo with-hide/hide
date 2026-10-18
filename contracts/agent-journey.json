@@ -28,7 +28,7 @@
     "herdr_kind": "codex",
     "prompt_flag": "--",
     "model_flag": [
-      "-m",
+      "--model",
       "{}"
     ],
     "untitled": "Codex",
@@ -51,7 +51,10 @@
     "id": "grok",
     "herdr_kind": "grok",
     "prompt_flag": "--",
-    "model_flag": [],
+    "model_flag": [
+      "--model",
+      "{}"
+    ],
     "untitled": "grok",
     "cells": {
       "start": true,
@@ -93,7 +96,10 @@
     "id": "pi",
     "herdr_kind": "pi",
     "prompt_flag": "--",
-    "model_flag": [],
+    "model_flag": [
+      "--model",
+      "{}"
+    ],
     "untitled": "pi",
     "cells": {
       "start": true,
@@ -114,7 +120,10 @@
     "id": "omp",
     "herdr_kind": "omp",
     "prompt_flag": "--",
-    "model_flag": [],
+    "model_flag": [
+      "--model",
+      "{}"
+    ],
     "untitled": "omp",
     "cells": {
       "start": true,
@@ -135,7 +144,10 @@
     "id": "cursor",
     "herdr_kind": "cursor",
     "prompt_flag": "--",
-    "model_flag": [],
+    "model_flag": [
+      "--model",
+      "{}"
+    ],
     "untitled": "cursor",
     "cells": {
       "start": true,

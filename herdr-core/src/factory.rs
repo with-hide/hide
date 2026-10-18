@@ -2239,6 +2239,10 @@ fn start_worker(
             branch: request.branch.clone(),
             path,
             args,
+            launch: hide_agent_adapter::LaunchChoice {
+                model: request.model.clone(),
+                effort: request.effort.clone(),
+            },
             task: None,
         },
     )
@@ -3578,6 +3582,52 @@ mod tests {
                 ui.agent_sleep
             );
         }
+    }
+
+    /// A worker's model and effort reach the core's spawn as its launch
+    /// choice: one the agent does not take is refused there with the reason,
+    /// before Herdr is asked for anything.
+    #[test]
+    fn a_workers_model_and_effort_reach_the_spawn_as_its_launch_choice() {
+        let (home, runtime) = factory_runtime(&Default::default());
+        let herdr = crate::fake_herdr::FakeHerdr::start(
+            "factory-choice",
+            |method, _| json!({"type": "unexpected", "method": method}),
+        );
+        let path = hide_kit::layout::delivery_ledger(&home.path().join("state"));
+        crate::delivery::ledger::save(&path, &Default::default()).unwrap();
+        let (_store, client) = crate::delivery::worker::Worker::store(
+            Arc::downgrade(&runtime),
+            crate::handle::ChangeNotifier::noop(),
+            path,
+        )
+        .unwrap();
+        {
+            let mut current = guard(&runtime);
+            current.set_factory_recipients([("f-1".into(), 30 * 60_000)].into());
+            current.install_delivery_client(client);
+            current.set_live(crate::live::LiveContext {
+                socket_path: herdr.socket_path().into(),
+                runtime: Arc::downgrade(&runtime),
+                notifier: crate::handle::ChangeNotifier::noop(),
+                api_connector: Arc::new(herdr.connector()),
+                node: Arc::new(hide_node::Local::of_process()),
+            });
+        }
+        for (agent, model, effort) in [
+            ("codex", None, Some("ultra")),
+            ("opencode", Some("fixture-model"), None),
+        ] {
+            let mut job = request("T-1", None);
+            // The name a Factory gives its worker, which Herdr accepts.
+            job.name = "factory-p-t-1".into();
+            job.runtime = AgentRuntime::parse(agent).unwrap();
+            job.model = model.map(str::to_owned);
+            job.effort = effort.map(str::to_owned);
+            let failure = start_worker(&Arc::downgrade(&runtime), &job).unwrap_err();
+            assert_eq!(failure.detail, "invalid_launch_choice", "{agent}");
+        }
+        assert!(herdr.methods().is_empty(), "{:?}", herdr.methods());
     }
 
     #[test]

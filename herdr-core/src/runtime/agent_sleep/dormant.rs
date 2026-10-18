@@ -152,6 +152,7 @@ impl Runtime {
                     == hide_agent_adapter::canonical_kind(&agent.agent_kind)
             })
             .map(|pane| pane.worker.clone());
+        let launch = self.launch_choice_of(&agent);
         let record = DormantRecord {
             phase: DormantPhase::SavingClose,
             revision: 1,
@@ -178,6 +179,7 @@ impl Runtime {
             transition_started_unix_ms: now,
             reason: None,
             registration: self.delivery_registration_of(pane_id),
+            launch,
             owner: Some(owner),
         };
         if let Err(reason) = self.snapshot.ui_state.agent_sleep.admit_dormant(record) {
@@ -713,6 +715,7 @@ impl Runtime {
         let args = crate::recent_closed::resume_arguments(&ClosedAgent {
             kind: record.kind.clone(),
             session_id: Some(record.native_session_id.clone()),
+            ..Default::default()
         });
         if args.is_none()
             || record.validate().is_err()
@@ -1070,9 +1073,10 @@ impl Runtime {
 
     fn start_saved_dormant_agent(&mut self, id: &SleepId) {
         let record = self.snapshot.ui_state.agent_sleep.dormant[id].clone();
-        let Some(args) = crate::recent_closed::resume_arguments(&ClosedAgent {
+        let Some(mut args) = crate::recent_closed::resume_arguments(&ClosedAgent {
             kind: record.kind.clone(),
             session_id: Some(record.native_session_id.clone()),
+            ..Default::default()
         }) else {
             self.fail_dormant(
                 id,
@@ -1080,6 +1084,20 @@ impl Runtime {
             );
             return;
         };
+        match crate::runtime::agent_choice::launch_arguments(&record.kind, &record.launch) {
+            Ok(launch) => args.extend(launch),
+            Err(detail) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "agent_sleep", "kind": "agent_sleep.launch_choice_refused",
+                    "sleep_id": id, "provider": record.kind, "detail": detail,
+                }));
+                self.fail_dormant(
+                    id,
+                    "The model or effort it was started with is not one this agent takes",
+                );
+                return;
+            }
+        }
         let Some(context) = self.live.clone() else {
             self.fail_dormant(id, "The sleeping session's connection is unavailable");
             return;
@@ -1214,6 +1232,22 @@ impl Runtime {
                 }
             } else {
                 self.snapshot.ui_state.agent_sleep.dormant.remove(&id);
+            }
+            // The woken pane keeps the choice for the agent's next restart.
+            // It is kept here, where the wake is confirmed once, because
+            // Herdr can show the woken agent before the start's own answer.
+            if let Some(pane) = record.wake_pane_id.as_deref() {
+                let name = agent_sleep_herdr::dormant_wake_name(&agent_sleep_herdr::DormantWork {
+                    id: id.clone(),
+                    record: record.clone(),
+                });
+                self.put_pane_launch(
+                    pane,
+                    &record.kind,
+                    &name,
+                    &record.launch,
+                    Some(&record.native_session_id),
+                );
             }
             self.finish_agent_effect(
                 &record.context.checkout_path,

@@ -1269,6 +1269,9 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "intent_conflict" => {
             "Use a new intent, or repeat the request this intent was first used for"
         }
+        "invalid_launch_choice" => {
+            "Pass a --model that is a model name, and an --effort the agent's CLI takes (Claude Code: low, medium, high, xhigh, max; Codex: minimal, low, medium, high, xhigh), then run the command again"
+        }
         "worktree_unconfirmed" => {
             "Herdr had not confirmed the new worktree in time and may still finish it; run the same command again with the same intent"
         }
