@@ -297,7 +297,7 @@ fn a_fork_starts_with_the_model_and_effort_its_source_was_started_with() {
             live.runtime = shared.weak();
             assert!(runtime.dispatch_json(&event(
                 "fork_pane",
-                json!({"pane_id": AGENT, "placement": "side"})
+                json!({"pane_id": AGENT, "placement": "side", "origin": "operator"})
             )));
         }
         assert_eq!(
@@ -344,7 +344,7 @@ fn a_fork_on_a_choice_its_agent_does_not_take_is_refused_before_a_pane_is_made()
     runtime.live.as_mut().unwrap().api_connector = Arc::new(herdr.connector());
     runtime.dispatch_json(&event(
         "fork_pane",
-        json!({"pane_id": AGENT, "placement": "side"}),
+        json!({"pane_id": AGENT, "placement": "side", "origin": "operator"}),
     ));
     let error = runtime.snapshot().status.last_error.clone().unwrap();
     assert_eq!(error.kind, "pane.fork_invalid_launch_choice");

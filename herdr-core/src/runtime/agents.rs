@@ -2461,7 +2461,13 @@ impl Runtime {
             return false;
         }
         pending.tab_id = tab_id.map(str::to_owned);
-        let (issued_serial, press) = (pending.issued_serial, pending.press);
+        pending.pane_id = Some(pane_id.to_owned());
+        let (issued_serial, press, tab_label, fork_origin) = (
+            pending.issued_serial,
+            pending.press,
+            pending.tab_label.clone(),
+            pending.origin,
+        );
         // Another fork's own focus is not the operator choosing a view: it
         // supersedes this one only when it was pressed later, or when the
         // operator chose a view after this press and before that focus.
@@ -2472,13 +2478,43 @@ impl Runtime {
             Some(focus) => focus.press > press || focus.prior_intent_serial > issued_serial,
             None => self.last_view_intent_serial > issued_serial,
         };
+        let source_workspace_id = self
+            .layout_holding_pane(source_pane_id)
+            .map(|layout| layout.workspace_id.clone());
         let checkout_path = tab_id.and_then(|tab_id| self.place_fork_tab(source_pane_id, tab_id));
+        // The fork's pane is drawn from Herdr's answer, its own tab as a
+        // created tab is and a split as a split Hide asked for is, so its
+        // checkout holds it before Herdr's layout lists it
+        // (`created_pane_place`). A device's pane is drawn by that device.
+        if !crate::agent_hooks::is_remote_pane(source_pane_id) {
+            match (tab_id, checkout_path.as_deref(), source_workspace_id) {
+                (Some(tab_id), Some(path), Some(workspace_id)) => {
+                    self.draw_created_tab(super::drawn_ahead::ProvisionalTab {
+                        workspace_id: Some(workspace_id),
+                        tab_id: tab_id.to_owned(),
+                        pane_id: pane_id.to_owned(),
+                        cwd: path.to_owned(),
+                        label: tab_label.unwrap_or_default(),
+                        timing_id: None,
+                        recorded_at_unix_ms: unix_milliseconds(),
+                    });
+                }
+                (None, ..) => self.draw_answered_split(source_pane_id, pane_id),
+                _ => {}
+            }
+        }
+        let origin = super::terminal_input::InputOrigin::Fork(source_pane_id.to_owned());
+        // Only the operator's own press brings the fork forward with the
+        // keyboard; any other caller's fork waits where it was put (#1271).
+        if fork_origin != super::events::ForkOrigin::Operator {
+            self.discard_input_request(&origin, "not_shown");
+            return true;
+        }
         // A tab the Agent area has no room for waits in the strip, as a new
         // tab does, and is not where the operator's keys go.
         let waiting = tab_id
             .zip(checkout_path.as_deref())
             .is_some_and(|(tab_id, path)| !self.agent_can_show_created(path, tab_id));
-        let origin = super::terminal_input::InputOrigin::Fork(source_pane_id.to_owned());
         if chosen_since || waiting {
             self.push_diagnostic(
                 "pane.fork.focus_superseded",
@@ -2621,13 +2657,27 @@ impl Runtime {
             }
             Err(message) => {
                 self.discard_input_request(&origin, "failed");
-                let (tab_id, focused, generation) = pending
-                    .map(|pending| (pending.tab_id, pending.focused, Some(pending.generation)))
+                let (tab_id, pane_id, focused, generation) = pending
+                    .map(|pending| {
+                        (
+                            pending.tab_id,
+                            pending.pane_id,
+                            pending.focused,
+                            Some(pending.generation),
+                        )
+                    })
                     .unwrap_or_default();
-                if let Some(tab_id) = tab_id
-                    && let Some(store) = self.workspace_views.as_mut()
-                {
-                    store.agent_placements.remove(&tab_id);
+                // The worker closed the pane it made, so what was drawn for
+                // it goes now rather than at its bound.
+                match (tab_id, pane_id) {
+                    (Some(tab_id), _) => {
+                        self.take_back_created_tab(&tab_id);
+                        if let Some(store) = self.workspace_views.as_mut() {
+                            store.agent_placements.remove(&tab_id);
+                        }
+                    }
+                    (None, Some(pane_id)) => self.take_back_answered_split(&pane_id),
+                    (None, None) => {}
                 }
                 // The worker closed the pane the keyboard went to; it goes
                 // back to the source the operator forked, unless they have
@@ -3322,9 +3372,15 @@ pub(super) struct PendingFork {
     /// The control lane's last serial at the press. A view chosen after it is
     /// the operator's, and the fork does not take the keyboard from it.
     pub(super) issued_serial: u64,
+    /// Who asked for it: only the operator's press takes the keyboard.
+    pub(super) origin: super::events::ForkOrigin,
     /// The fork's tab once Herdr named it, so a fork that fails leaves no
-    /// placement waiting for a tab that was closed.
+    /// placement or drawing waiting for a tab that was closed.
     pub(super) tab_id: Option<String>,
+    /// The fork's pane once Herdr named it, so a failed split is taken back.
+    pub(super) pane_id: Option<String>,
+    /// The name the fork's tab is made with, which its drawing carries.
+    pub(super) tab_label: Option<String>,
     /// The fork's pane, once Herdr made it and it took the keyboard.
     pub(super) focused: Option<String>,
     /// The source's agent kind and launch choice, and the name the fork

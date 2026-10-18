@@ -235,7 +235,7 @@ export function landingWorkspace(nowMs: number, width: number, tool: "prs" | "me
       device_id: "local", path: main.path, tool, last_tool: tool, prs: { only_checkout: false }, pinned: true, tree: false, lane_width: HERO_LANE_WIDTH, panel_width: HERO_LANE_WIDTH, tree_width: null, lane_called: 0, lane_calls: 0,
       layout: { root: { area: { id: "v1", active: null, displays: [] } }, active_area: "v1", limits: { areas: 4, depth: 3, displays: 32 }, display_count: 0 },
     },
-    terminal: { headers: { a1: { working: true, band: null } } },
+    terminal: { headers: { a1: { working: true, notice: null, band: null } } },
   };
   return { rest, agents: scene.agents };
 }

@@ -7,7 +7,7 @@
 
 use super::analysis::{
     Analysis, AnalysisPhase, LabelEnd, LabelLimits, MIN_GOAL_CHARS, normalize_goal,
-    normalize_text_field,
+    normalize_text_field, truncate_phrase,
 };
 use crate::links::ledger::{MISSED_CHARS, NEW_TASK_LIMIT, TaskDecision};
 use anyhow::{Context, Result, anyhow};
@@ -20,6 +20,12 @@ pub(crate) const FEATURE_ID: &str = "context_label";
 /// Bumped whenever a prompt or a schema changes, so a log line can be read
 /// against the pair that produced it.
 pub(crate) const SCHEMA_VERSION: &str = "context_label.v14";
+/// The effort a label asks of Codex, whether it is the first agent or the
+/// fallback (PRD label-judgment-fixes D-12): measured on gpt-5.6-luna over
+/// 104 label answers, `medium` turned no question into done, while the
+/// default turned one of 31 and `low` one the other way. Claude is asked no
+/// effort, so its thinking stays off.
+pub(crate) const CODEX_EFFORT: &str = "medium";
 /// Long enough for a provider that has to start a child process, short
 /// enough that a stuck turn does not hold the pane's slot for a whole event
 /// cycle series.
@@ -203,6 +209,7 @@ pub(crate) fn request(
         pick: None,
         output_language: Some(language),
         answer: hide_ai::AnswerMode::PlainJson,
+        provider_efforts: vec![(hide_ai::ProviderId::CODEX, CODEX_EFFORT.to_owned())],
     }
 }
 
@@ -299,12 +306,13 @@ pub(crate) fn parse(
         return Err(anyhow!("provider_invalid_goal_change"));
     }
     // Every surface draws it in one line, so the prompt's length rule is
-    // enforced here whatever the model did with it.
-    let line = normalize_text_field(&line, true)
-        .ok_or_else(|| anyhow!("provider_invalid_line"))?
-        .chars()
-        .take(limits.line)
-        .collect::<String>();
+    // enforced here whatever the model did with it: a longer line is cut
+    // between words and ends in `…`, never refused or emptied, so a question
+    // stays a question.
+    let line = truncate_phrase(
+        &normalize_text_field(&line, true).ok_or_else(|| anyhow!("provider_invalid_line"))?,
+        limits.line,
+    );
     // A question with no statable action is a surface-pattern match
     // (greeting, courtesy offer), not a real request. A block with no
     // statable cause is a stop without a stated reason, the unfinished turn
@@ -404,6 +412,18 @@ mod tests {
         }
         // The answer of an earlier schema names one task and is not read.
         assert!(end_with(json!({"kind": "new", "name": "가"})).is_err());
+    }
+
+    /// Both boundaries ask Codex for medium effort, an effort Codex takes,
+    /// and ask Claude for none (D-12, B17).
+    #[test]
+    fn a_label_asks_codex_for_medium_effort_and_claude_for_none() {
+        for phase in [AnalysisPhase::TurnStart, AnalysisPhase::TurnEnd] {
+            let request = request(phase, OutputLanguage::Korean, "w1:p1", "r".into(), "");
+            assert_eq!(request.effort(hide_ai::ProviderId::CODEX), Some("medium"));
+            assert!(hide_ai::ProviderId::CODEX.efforts().contains(&"medium"));
+            assert_eq!(request.effort(hide_ai::ProviderId::CLAUDE), None);
+        }
     }
 
     #[test]

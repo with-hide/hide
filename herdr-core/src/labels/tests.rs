@@ -500,6 +500,121 @@ fn an_opencode_transaction_keeps_proof_and_caps_its_pending_reread() {
     assert_eq!(harness.backend.calls(), 0);
 }
 
+/// An idle agy pane on conversation `id`, which agy's index places in a
+/// checkout of the harness home.
+fn agy_conversation(harness: &Harness, id: &str) -> ObservedAgent {
+    let cwd = harness.home.path().join("checkout");
+    std::fs::create_dir(&cwd).unwrap();
+    let cwd = hide_platform::fs::identity::canonical(&cwd).unwrap();
+    crate::fixture::antigravity_conversation(harness.home.path(), &cwd, id, 4, None);
+    let transcript = hide_session::antigravity::transcript(harness.home.path(), id);
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    std::fs::write(
+        &transcript,
+        include_str!(
+            "../../../hide-session/tests/fixtures/adapters/antigravity-1.3.6/transcript_full.jsonl"
+        ),
+    )
+    .unwrap();
+    ObservedAgent {
+        pane_id: "w1:p1".into(),
+        agent: Some("agy".into()),
+        status: Some("idle".into()),
+        reference: Some(("id".into(), id.into())),
+        cwd: Some(cwd.to_str().unwrap().into()),
+        state_change_seq: 1,
+    }
+}
+
+/// The native session id the row would carry for `observed`.
+fn shown_session(worker: &LabelWorker, observed: &ObservedAgent) -> Option<String> {
+    shown_facts(worker, observed).and_then(|facts| facts.native_session_id)
+}
+
+#[test]
+fn an_agy_index_agy_is_writing_keeps_the_proven_conversation_until_it_is_gone() {
+    let harness = Harness::new();
+    let id = "a9c0e2f4-0000-4000-8000-000000000001";
+    let mut observed = agy_conversation(&harness, id);
+    let (mut worker, woken, _) = harness.worker(harness.store());
+    worker.set_summaries(false, Instant::now());
+    observe(&mut worker, &observed);
+    settle(&mut worker, &woken);
+    assert_eq!(shown_session(&worker, &observed).as_deref(), Some(id));
+    // agy writes its index after a turn; a read that meets the write, here
+    // its rollback journal, disproves nothing (CI run 39099935719: the row
+    // lost its id and Fork was refused until the next read).
+    let index = harness
+        .home
+        .path()
+        .join(".gemini/antigravity-cli/conversation_summaries.db");
+    let journal = index.with_file_name("conversation_summaries.db-journal");
+    std::fs::write(&journal, b"agy writing its index").unwrap();
+    observed.state_change_seq += 1;
+    observe(&mut worker, &observed);
+    settle(&mut worker, &woken);
+    assert_eq!(shown_session(&worker, &observed).as_deref(), Some(id));
+    std::fs::remove_file(&journal).unwrap();
+    observed.state_change_seq += 1;
+    observe(&mut worker, &observed);
+    settle(&mut worker, &woken);
+    assert_eq!(shown_session(&worker, &observed).as_deref(), Some(id));
+    // A conversation agy no longer indexes is gone, and its proof with it.
+    rusqlite::Connection::open(&index)
+        .unwrap()
+        .execute(
+            "DELETE FROM conversation_summaries WHERE conversation_id = ?1",
+            [id],
+        )
+        .unwrap();
+    observed.state_change_seq += 1;
+    observe(&mut worker, &observed);
+    settle(&mut worker, &woken);
+    assert_eq!(shown_session(&worker, &observed), None);
+    assert_eq!(harness.backend.calls(), 0);
+}
+
+/// A hold that outlasts every retry is no write in flight: agy died holding
+/// its index, and the row stops naming a conversation no read can prove is
+/// still there, until a read proves it again.
+#[test]
+fn an_agy_index_held_past_every_retry_stops_proving_the_conversation_until_it_is_read() {
+    let harness = Harness::new();
+    let id = "a9c0e2f4-0000-4000-8000-000000000001";
+    let mut observed = agy_conversation(&harness, id);
+    let (mut worker, woken, _) = harness.worker(harness.store());
+    worker.set_summaries(false, Instant::now());
+    observe(&mut worker, &observed);
+    settle(&mut worker, &woken);
+    assert_eq!(shown_session(&worker, &observed).as_deref(), Some(id));
+    let journal = harness
+        .home
+        .path()
+        .join(".gemini/antigravity-cli/conversation_summaries.db-journal");
+    std::fs::write(&journal, b"left by an agy that died writing").unwrap();
+    observed.state_change_seq += 1;
+    observe(&mut worker, &observed);
+    settle(&mut worker, &woken);
+    // Each tick lands just past the wait due, whatever the list holds; the
+    // read after the last wait is past every retry.
+    let (last, waits) = super::worker::READ_RETRY_BACKOFF.split_last().unwrap();
+    for wait in waits {
+        worker.tick(Instant::now() + *wait + Duration::from_secs(1));
+        settle(&mut worker, &woken);
+        assert_eq!(shown_session(&worker, &observed).as_deref(), Some(id));
+    }
+    worker.tick(Instant::now() + *last + Duration::from_secs(1));
+    settle(&mut worker, &woken);
+    assert_eq!(shown_session(&worker, &observed), None);
+    // The journal goes once agy writes its index again: the next read
+    // proves the conversation, with no state change to wait for.
+    std::fs::remove_file(&journal).unwrap();
+    worker.tick(Instant::now() + Duration::from_secs(16));
+    settle(&mut worker, &woken);
+    assert_eq!(shown_session(&worker, &observed).as_deref(), Some(id));
+    assert_eq!(harness.backend.calls(), 0);
+}
+
 #[test]
 fn a_titles_only_opencode_session_keeps_its_native_title_and_generated_goal() {
     let harness = Harness::new();
@@ -667,6 +782,256 @@ fn an_end_waits_for_parent_authority_after_a_cold_context() {
             .analysis_turn_end
             .is_some()
     );
+}
+
+/// A turn's end whose context never comes is recorded unjudged once the
+/// wait is over: its row keeps no line or end, the last turn's included, one
+/// diagnostic names it, other panes are not held meanwhile, and the next
+/// turn is judged as usual (B12-B15).
+#[test]
+fn an_end_whose_context_never_comes_is_recorded_unjudged_after_thirty_seconds() {
+    use crate::links::ledger::LedgerContext;
+    let harness = Harness::new();
+    let (mut worker, woken, store, client) = cold_ledger_worker(&harness);
+    let mut turns = vec![("user", "배포 스크립트 고쳐줘"), ("assistant", "고치는 중")];
+    let path = harness.session("a", "native-a", &turns);
+    harness.backend.begin("배포 스크립트 수정 작업");
+    observe(&mut worker, &agent(&path, "working", 3));
+    settle(&mut worker, &woken);
+    assert_eq!(
+        shown(&worker, &agent(&path, "working", 3))
+            .unwrap()
+            .progress
+            .as_deref(),
+        Some("배포 스크립트 수정 작업 진행")
+    );
+
+    turns.push(("assistant", "고쳤습니다"));
+    harness.session("a", "native-a", &turns);
+    let idle = agent(&path, "idle", 4);
+    observe(&mut worker, &idle);
+    settle(&mut worker, &woken);
+    worker.tick(Instant::now() + Duration::from_secs(10));
+    settle(&mut worker, &woken);
+    assert_eq!(harness.backend.calls(), 1, "the end waits for its context");
+    assert!(
+        store.target(LOCAL_TARGET)["w1:p1"]
+            .analysis_turn_end
+            .is_none()
+    );
+
+    // Another pane is judged while the first one waits.
+    let other_path = harness.session(
+        "b",
+        "native-b",
+        &[("user", "로그 정리해줘"), ("assistant", "정리했습니다")],
+    );
+    client.prime_context_for_test(claude_session("native-b"), LedgerContext::default());
+    let other = ObservedAgent {
+        pane_id: "w1:p2".to_owned(),
+        ..agent(&other_path, "idle", 2)
+    };
+    harness.backend.answer("로그 정리 작업 묶음", "done", "");
+    let live = HashSet::from(["w1:p1".to_owned(), "w1:p2".to_owned()]);
+    worker.observe(
+        &[idle.clone(), other.clone()],
+        Some(&live),
+        Instant::now(),
+        2_000,
+    );
+    worker.tick(Instant::now());
+    settle(&mut worker, &woken);
+    assert_eq!(harness.backend.calls(), 2);
+    assert_eq!(
+        task(shown(&worker, &other)).as_deref(),
+        Some("로그 정리 작업 묶음")
+    );
+
+    let ((), records) = crate::diagnostics::capture(|| {
+        worker.tick(Instant::now() + Duration::from_secs(31));
+        settle(&mut worker, &woken);
+    });
+    assert_eq!(harness.backend.calls(), 2, "the capped end spends no call");
+    assert!(
+        store.target(LOCAL_TARGET)["w1:p1"]
+            .analysis_turn_end
+            .is_some()
+    );
+    let label = shown(&worker, &idle).unwrap();
+    assert_eq!(label.task.as_deref(), Some("배포 스크립트 수정 작업"));
+    assert_eq!(label.progress, None, "the last turn's line is not left");
+    assert_eq!(label.expected_reply, None);
+    let capped: Vec<_> = records
+        .iter()
+        .filter(|record| record["kind"] == "analysis.context_unavailable")
+        .collect();
+    assert_eq!(capped.len(), 1, "{records:?}");
+    assert_eq!(capped[0]["pane_id"], "w1:p1");
+    assert_eq!(capped[0]["session_id"], "native-a");
+    // The turn is handed to the ledger as unjudged; this client's mailbox
+    // is full, so the attempt shows as the refusal it got.
+    assert!(
+        records.iter().any(|record| record["kind"] == "ledger.enqueue_failed"
+            && record["pane_id"] == "w1:p1"),
+        "{records:?}"
+    );
+
+    // The next turn is judged once its context reads.
+    client.prime_context_for_test(claude_session("native-a"), LedgerContext::default());
+    turns.extend([("user", "다시 확인해줘"), ("assistant", "확인했습니다")]);
+    harness.session("a", "native-a", &turns);
+    harness
+        .backend
+        .answer("배포 스크립트 수정 작업", "done", "");
+    let next = agent(&path, "idle", 6);
+    worker.observe(&[next.clone(), other], Some(&live), Instant::now(), 3_000);
+    worker.tick(Instant::now());
+    settle(&mut worker, &woken);
+    assert_eq!(harness.backend.calls(), 3);
+    assert_eq!(
+        shown(&worker, &next).unwrap().progress.as_deref(),
+        Some("배포 스크립트 수정 작업 진행")
+    );
+}
+
+/// A wait for a turn's context counts only while the worker waits: the
+/// switch going off and back on starts it over instead of spending it.
+#[test]
+fn a_wait_for_context_starts_over_when_summaries_come_back() {
+    let harness = Harness::new();
+    let (mut worker, woken, store, _client) = cold_ledger_worker(&harness);
+    let path = harness.session(
+        "a",
+        "native-a",
+        &[
+            ("user", "배포 스크립트 고쳐줘"),
+            ("assistant", "고쳤습니다"),
+        ],
+    );
+    observe(&mut worker, &agent(&path, "idle", 3));
+    settle(&mut worker, &woken);
+    assert!(worker.set_summaries(false, Instant::now()));
+    let back = Instant::now() + Duration::from_secs(40);
+    let ((), records) = crate::diagnostics::capture(|| {
+        assert!(worker.set_summaries(true, back));
+        worker.tick(back);
+        settle(&mut worker, &woken);
+    });
+    assert!(
+        !records
+            .iter()
+            .any(|record| record["kind"] == "analysis.context_unavailable"),
+        "{records:?}"
+    );
+    assert!(
+        store.target(LOCAL_TARGET)["w1:p1"]
+            .analysis_turn_end
+            .is_none()
+    );
+    let ((), records) = crate::diagnostics::capture(|| {
+        worker.tick(back + Duration::from_secs(31));
+        settle(&mut worker, &woken);
+    });
+    assert!(
+        records
+            .iter()
+            .any(|record| record["kind"] == "analysis.context_unavailable"),
+        "{records:?}"
+    );
+    assert_eq!(harness.backend.calls(), 0);
+}
+
+/// A turn that works again after its end found no context starts its wait
+/// over when it stops, even when its start was already asked.
+#[test]
+fn a_wait_for_context_starts_over_when_the_turn_works_again() {
+    let harness = Harness::new();
+    let (mut worker, woken, store, _client) = cold_ledger_worker(&harness);
+    let mut turns = vec![("user", "배포 스크립트 고쳐줘"), ("assistant", "고치는 중")];
+    let path = harness.session("a", "native-a", &turns);
+    harness.backend.begin("배포 스크립트 수정 작업");
+    observe(&mut worker, &agent(&path, "working", 3));
+    settle(&mut worker, &woken);
+    assert_eq!(harness.backend.calls(), 1, "the start was asked");
+    turns.push(("assistant", "잠시 멈춤"));
+    harness.session("a", "native-a", &turns);
+    observe(&mut worker, &agent(&path, "idle", 4));
+    settle(&mut worker, &woken);
+    turns.push(("assistant", "다시 고치는 중"));
+    harness.session("a", "native-a", &turns);
+    observe(&mut worker, &agent(&path, "working", 5));
+    settle(&mut worker, &woken);
+    let later = Instant::now() + Duration::from_secs(40);
+    turns.push(("assistant", "고쳤습니다"));
+    harness.session("a", "native-a", &turns);
+    let live = HashSet::from(["w1:p1".to_owned()]);
+    let ((), records) = crate::diagnostics::capture(|| {
+        worker.observe(&[agent(&path, "idle", 6)], Some(&live), later, 2_000);
+        worker.tick(later);
+        // The stop is read and its end found waiting at `later`, forty
+        // seconds after the first miss.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !worker.settled() {
+            assert!(Instant::now() < deadline, "the worker did not settle");
+            let _ = woken.recv_timeout(Duration::from_millis(200));
+            worker.drain(later, unix_now_ms());
+        }
+        worker.tick(later + Duration::from_secs(10));
+    });
+    assert!(
+        !records
+            .iter()
+            .any(|record| record["kind"] == "analysis.context_unavailable"),
+        "{records:?}"
+    );
+    assert!(
+        store.target(LOCAL_TARGET)["w1:p1"]
+            .analysis_turn_end
+            .is_none()
+    );
+    let ((), records) = crate::diagnostics::capture(|| {
+        worker.tick(later + Duration::from_secs(31));
+    });
+    assert!(
+        records
+            .iter()
+            .any(|record| record["kind"] == "analysis.context_unavailable"),
+        "{records:?}"
+    );
+}
+
+/// A worker whose ledger client has no context for any session yet.
+fn cold_ledger_worker(
+    harness: &Harness,
+) -> (
+    LabelWorker,
+    Receiver<()>,
+    Arc<LabelStore>,
+    crate::links::worker::LinkClient,
+) {
+    let store = harness.store();
+    let client = crate::links::worker::LinkClient::full_mailbox_for_test();
+    let node: Arc<dyn crate::node_access::NodeLink> = Arc::new(hide_node::Local::new(Some(
+        harness.home.path().to_path_buf(),
+    )));
+    let (worker, woken) = harness.spawn_with_ledger(
+        Arc::clone(&store),
+        LOCAL_TARGET,
+        "local.sock",
+        Arc::new(NodeTranscripts::new(Box::new(move || {
+            Ok(Arc::clone(&node))
+        }))),
+        Arc::new(Mutex::new(Some(client.clone()))),
+    );
+    (worker, woken, store, client)
+}
+
+fn claude_session(session: &str) -> crate::links::ledger::SessionIdentity {
+    crate::links::ledger::SessionIdentity {
+        device_id: LOCAL_TARGET.into(),
+        agent: "claude".into(),
+        session_id: session.into(),
+    }
 }
 
 #[test]
@@ -1127,6 +1492,139 @@ fn a_turn_that_ends_within_the_start_delay_costs_one_request_not_two() {
     );
 }
 
+/// A short turn that brings a new job renames the pane from its one end
+/// call, which sees the request the skipped start would have; a short
+/// follow-up on the same job keeps the name (B6-B8).
+#[test]
+fn a_short_turn_with_a_new_job_renames_the_pane_and_a_follow_up_does_not() {
+    let mut harness = Harness::new();
+    harness.start_delay = Duration::from_secs(15);
+    let (mut worker, woken, path) = harness_with_named_pane(&harness);
+    let named = harness.backend.calls();
+    let mut turns = vec![
+        ("user", "첫 요청"),
+        ("assistant", "완료"),
+        ("user", "README 오타 고쳐줘"),
+        ("assistant", "고쳤습니다"),
+    ];
+    harness.session("a", "native-a", &turns);
+    harness.input.record("w1:p1", turn_at(2) - 300, false);
+    harness.backend.answer("README 오타 수정 작업", "done", "");
+    observe(&mut worker, &agent(&path, "working", 7));
+    settle(&mut worker, &woken);
+    let idle = agent(&path, "idle", 8);
+    observe(&mut worker, &idle);
+    settle(&mut worker, &woken);
+    assert_eq!(harness.backend.calls(), named + 1, "one call for the turn");
+    assert_eq!(
+        task(shown(&worker, &idle)).as_deref(),
+        Some("README 오타 수정 작업")
+    );
+    let asked = harness
+        .backend
+        .inputs
+        .lock()
+        .unwrap()
+        .last()
+        .cloned()
+        .unwrap();
+    assert!(
+        !asked.contains("<none/>"),
+        "the end saw no new request: {asked}"
+    );
+
+    turns.extend([
+        ("user", "어느 파일이었어?"),
+        ("assistant", "README.md입니다"),
+    ]);
+    harness.session("a", "native-a", &turns);
+    harness.input.record("w1:p1", turn_at(4) - 300, false);
+    harness.backend.answers.lock().unwrap().push_back(json!({
+        "goal": "README 파일 위치 확인 작업", "goal_changed": false, "line": "README.md였음", "end": "done",
+        "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
+    }));
+    observe(&mut worker, &agent(&path, "working", 9));
+    settle(&mut worker, &woken);
+    let idle = agent(&path, "idle", 10);
+    observe(&mut worker, &idle);
+    settle(&mut worker, &woken);
+    assert_eq!(harness.backend.calls(), named + 2);
+    let label = shown(&worker, &idle).unwrap();
+    assert_eq!(label.task.as_deref(), Some("README 오타 수정 작업"));
+    assert_eq!(label.progress.as_deref(), Some("README.md였음"));
+}
+
+/// Only the operator's short turn renames from its end: another agent's
+/// letter does not, and neither does the end of a turn whose start was
+/// asked, whatever `goal_changed` says (D-04).
+#[test]
+fn an_end_renames_only_an_operator_turn_whose_start_was_never_asked() {
+    let renaming = |goal: &str| {
+        json!({
+            "goal": goal, "goal_changed": true, "line": "끝냄", "end": "done",
+            "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
+        })
+    };
+    let mut harness = Harness::new();
+    harness.start_delay = Duration::from_secs(15);
+    let (mut worker, woken, path) = harness_with_named_pane(&harness);
+    let named = harness.backend.calls();
+    // A short turn no operator submitted.
+    let mut turns = vec![
+        ("user", "첫 요청"),
+        ("assistant", "완료"),
+        ("user", "로그 정리 부탁"),
+        ("assistant", "정리했습니다"),
+    ];
+    harness.session("a", "native-a", &turns);
+    harness
+        .backend
+        .answers
+        .lock()
+        .unwrap()
+        .push_back(renaming("다른 에이전트가 붙인 이름"));
+    observe(&mut worker, &agent(&path, "working", 7));
+    settle(&mut worker, &woken);
+    let idle = agent(&path, "idle", 8);
+    observe(&mut worker, &idle);
+    settle(&mut worker, &woken);
+    assert_eq!(harness.backend.calls(), named + 1);
+    assert_eq!(
+        task(shown(&worker, &idle)).as_deref(),
+        Some("첫 요청에 붙은 작업 이름")
+    );
+
+    // An operator turn that worked past the delay: its start is asked and
+    // keeps the name, and its end may not move it.
+    turns.extend([("user", "긴 작업 해줘"), ("assistant", "하는 중")]);
+    harness.session("a", "native-a", &turns);
+    harness.input.record("w1:p1", turn_at(4) - 300, false);
+    harness.backend.answers.lock().unwrap().push_back(json!({
+        "goal": "첫 요청에 붙은 작업 이름", "goal_changed": false, "line": "하는 중",
+    }));
+    observe(&mut worker, &agent(&path, "working", 9));
+    settle(&mut worker, &woken);
+    worker.tick(Instant::now() + Duration::from_secs(20));
+    settle(&mut worker, &woken);
+    assert_eq!(harness.backend.calls(), named + 2, "the start was asked");
+    turns.push(("assistant", "끝났습니다"));
+    harness.session("a", "native-a", &turns);
+    harness
+        .backend
+        .answers
+        .lock()
+        .unwrap()
+        .push_back(renaming("끝에서 바꾼 이름"));
+    let idle = agent(&path, "idle", 10);
+    observe(&mut worker, &idle);
+    settle(&mut worker, &woken);
+    assert_eq!(harness.backend.calls(), named + 3);
+    assert_eq!(
+        task(shown(&worker, &idle)).as_deref(),
+        Some("첫 요청에 붙은 작업 이름")
+    );
+}
+
 #[test]
 fn a_turn_that_keeps_working_past_the_start_delay_is_asked_its_start() {
     let mut harness = Harness::new();
@@ -1464,7 +1962,10 @@ fn the_providers_answer_is_judged_before_it_is_shown() {
         r#"{"goal":"배포 방식 결정 작업","goal_changed":false,"line":"이 줄은 사십 자를 훌쩍 넘기는 아주 긴 결과 문장이라서 화면 한 줄에 맞게 반드시 잘려야 합니다","end":"done"}"#,
     )
     .unwrap();
-    assert_eq!(long.line.chars().count(), 40);
+    assert_eq!(
+        long.line,
+        "이 줄은 사십 자를 훌쩍 넘기는 아주 긴 결과 문장이라서 화면 한…"
+    );
     let block_without_cause = parse_text(
         AnalysisPhase::TurnEnd,
         r#"{"goal":"배포 방식 결정 작업","goal_changed":false,"line":"","end":"blocked"}"#,
@@ -1494,6 +1995,57 @@ fn the_providers_answer_is_judged_before_it_is_shown() {
             "a stopped turn's end outside the five is refused, not read as anything: {end}"
         );
     }
+}
+
+/// A line past its language's limit ends between words with `…` and keeps
+/// its verdict; a line within the limit is shown as written (B9-B11).
+#[test]
+fn a_long_line_is_cut_between_words_and_a_question_stays_a_question() {
+    use super::analysis::{AnalysisPhase, LabelEnd};
+    use super::context_label::parse;
+    let end = |language, line: &str, end: &str| {
+        parse(
+            AnalysisPhase::TurnEnd,
+            language,
+            json!({
+                "goal": null, "goal_changed": false, "line": line, "end": end,
+                "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
+            }),
+        )
+        .unwrap()
+    };
+    let question = end(
+        hide_ai::OutputLanguage::Korean,
+        "배포 환경을 스테이징과 프로덕션 중에서 어느 쪽으로 먼저 올릴지 골라 주세요 그리고 승인해 주세요",
+        "question",
+    );
+    assert_eq!(
+        question.line,
+        "배포 환경을 스테이징과 프로덕션 중에서 어느 쪽으로 먼저 올릴지 골라…"
+    );
+    assert_eq!(question.end, LabelEnd::Question);
+    let fits = "배포 환경을 골라 주세요";
+    let short = end(hide_ai::OutputLanguage::Korean, fits, "question");
+    assert_eq!(short.line, fits);
+    let exact = "가".repeat(40);
+    assert_eq!(
+        end(hide_ai::OutputLanguage::Korean, &exact, "done").line,
+        exact
+    );
+    let english = end(
+        hide_ai::OutputLanguage::English,
+        "Choose whether the release goes to staging or to production first, then approve the rollout plan",
+        "question",
+    );
+    assert_eq!(
+        english.line,
+        "Choose whether the release goes to staging or to production first, then…"
+    );
+    let fits = "Choose whether the release goes to staging or to production first";
+    assert_eq!(
+        end(hide_ai::OutputLanguage::English, fits, "done").line,
+        fits
+    );
 }
 
 /// A turn's start cannot know how the turn will end, so it is not asked and

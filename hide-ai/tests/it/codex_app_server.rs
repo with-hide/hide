@@ -42,6 +42,7 @@ fn request(deadline: Duration) -> AiRequest {
         pick: None,
         output_language: None,
         answer: hide_ai::AnswerMode::default(),
+        provider_efforts: Vec::new(),
     }
 }
 
@@ -227,10 +228,199 @@ fn a_non_json_message_is_invalid_output() {
     });
 }
 
+/// A feature's effort for Codex reaches the turn when the caller picked
+/// none, and the attempt's log line names it (label-judgment-fixes B17).
+#[test]
+fn a_features_codex_effort_is_sent_with_the_turn_and_logged() {
+    with_mode("ok", || {
+        let turn =
+            std::env::temp_dir().join(format!("hide-ai-effort-turn-{}.json", std::process::id()));
+        unsafe { std::env::set_var("FAKE_TURN_FILE", &turn) };
+        let attempts = Arc::new(Attempts::default());
+        let router = AiRouter::new(
+            vec![Arc::new(backend())],
+            RouterConfig {
+                priority: vec![ProviderId::CODEX],
+                ..RouterConfig::default()
+            },
+            attempts.clone(),
+        );
+        let request = AiRequest {
+            provider_efforts: vec![
+                (ProviderId::CLAUDE, "high".to_owned()),
+                (ProviderId::CODEX, "medium".to_owned()),
+            ],
+            ..request(Duration::from_secs(10))
+        };
+        let outcome = router.execute(&request, &CancelToken::new());
+        unsafe { std::env::remove_var("FAKE_TURN_FILE") };
+        let params: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&turn).unwrap()).unwrap();
+        let _ = std::fs::remove_file(&turn);
+        outcome.unwrap();
+        assert_eq!(params["effort"], "medium");
+        assert_eq!(
+            *attempts.efforts.lock().unwrap(),
+            [Some("medium".to_owned())]
+        );
+    });
+}
+
+/// The label END schema's shape: a `oneOf` of task kinds with unique ids,
+/// which the API's strict mode refuses.
+fn one_of_schema() -> serde_json::Value {
+    json!({
+        "type": "object", "additionalProperties": false, "required": ["task"],
+        "properties": {"task": {"oneOf": [
+            {"type": "object", "additionalProperties": false, "required": ["kind", "ids"],
+             "properties": {"kind": {"const": "continue"},
+                            "ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}}},
+            {"type": "object", "additionalProperties": false, "required": ["kind"],
+             "properties": {"kind": {"const": "none"}}}
+        ]}}
+    })
+}
+
+/// `PlainJson` names the schema in the thread's instructions and sends no
+/// `outputSchema`, so a schema strict mode refuses still gets an answer, read
+/// from a fenced message and checked against the schema by the router.
+#[test]
+fn a_plain_json_request_carries_its_schema_in_the_instructions_and_not_as_output_schema() {
+    with_mode("ok", || {
+        let instructions =
+            std::env::temp_dir().join(format!("hide-ai-plain-instr-{}.txt", std::process::id()));
+        let turn =
+            std::env::temp_dir().join(format!("hide-ai-plain-turn-{}.json", std::process::id()));
+        unsafe {
+            std::env::set_var("FAKE_INSTRUCTIONS_FILE", &instructions);
+            std::env::set_var("FAKE_TURN_FILE", &turn);
+            std::env::set_var("FAKE_REPLY", "```json\n{\"task\":{\"kind\":\"none\"}}\n```");
+        }
+        let router = AiRouter::new(
+            vec![Arc::new(backend())],
+            RouterConfig {
+                priority: vec![ProviderId::CODEX],
+                ..RouterConfig::default()
+            },
+            Arc::new(NoopLogSink),
+        );
+        let request = AiRequest {
+            output_schema: one_of_schema(),
+            answer: hide_ai::AnswerMode::PlainJson,
+            ..request(Duration::from_secs(10))
+        };
+        let outcome = router.execute(&request, &CancelToken::new());
+        unsafe {
+            std::env::remove_var("FAKE_INSTRUCTIONS_FILE");
+            std::env::remove_var("FAKE_TURN_FILE");
+            std::env::remove_var("FAKE_REPLY");
+        }
+        let sent = std::fs::read_to_string(&instructions).unwrap();
+        let params: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&turn).unwrap()).unwrap();
+        let _ = std::fs::remove_file(&instructions);
+        let _ = std::fs::remove_file(&turn);
+        assert_eq!(outcome.unwrap().value, json!({"task": {"kind": "none"}}));
+        assert!(params.get("outputSchema").is_none(), "{params}");
+        assert!(sent.starts_with("Answer as JSON."), "{sent}");
+        assert!(sent.contains(&one_of_schema().to_string()), "{sent}");
+    });
+}
+
+/// A request the API refuses (strict mode's 400 for a `oneOf` schema) is a
+/// refusal with a code of its own, not an unknown completion: nothing ran,
+/// so it spends no unknown call.
+#[test]
+fn a_schema_the_api_refuses_is_a_refused_request_with_its_code() {
+    with_mode("ok", || {
+        let attempts = Arc::new(Attempts::default());
+        let router = AiRouter::new(
+            vec![Arc::new(backend())],
+            RouterConfig {
+                priority: vec![ProviderId::CODEX],
+                backoff_base: Duration::ZERO,
+                usage_sink: Some(attempts.clone()),
+                ..RouterConfig::default()
+            },
+            attempts.clone(),
+        );
+        let request = AiRequest {
+            output_schema: one_of_schema(),
+            answer: hide_ai::AnswerMode::Schema,
+            ..request(Duration::from_secs(10))
+        };
+        let error = router.execute(&request, &CancelToken::new()).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid_output:codex_request_refused:http_400:invalid_json_schema"
+        );
+        assert!(attempts.calls.lock().unwrap().is_empty());
+        // The log names the refusal and the request, and nothing of the
+        // conversation.
+        let finished = attempts.finished.lock().unwrap();
+        let [(request_id, Some(detail))] = finished.as_slice() else {
+            panic!("{finished:?}");
+        };
+        assert_eq!(request_id.as_deref(), Some("req-1"));
+        assert!(
+            detail.starts_with("invalid_output:codex_request_refused:http_400:invalid_json_schema"),
+            "{detail}"
+        );
+        assert!(
+            !detail.contains("hello") && !detail.contains("strict"),
+            "{detail}"
+        );
+    });
+}
+
+/// An `other` failure is read for the API body's status and code only: a
+/// 4xx is a refused request, an account status keeps its own class, and a
+/// server error or a message that is no API body stays an unknown completion.
+#[test]
+fn an_other_failure_is_classified_by_the_api_bodys_status_alone() {
+    let body = |status: u64, code: Option<&str>| {
+        json!({"type": "error", "status": status,
+               "error": {"message": "prose that is never read", "code": code}})
+        .to_string()
+    };
+    for (message, expected) in [
+        (
+            body(404, None),
+            "invalid_output:codex_request_refused:http_404",
+        ),
+        (
+            body(400, Some("has spaces in it")),
+            "invalid_output:codex_request_refused:http_400",
+        ),
+        (body(401, Some("invalid_api_key")), "not_authenticated"),
+        (
+            body(500, Some("server_error")),
+            "completion_unknown:codex_other",
+        ),
+        (
+            "not an api body".to_owned(),
+            "completion_unknown:codex_other",
+        ),
+    ] {
+        with_mode("api_error", || {
+            unsafe { std::env::set_var("FAKE_API_MESSAGE", &message) };
+            let error = backend()
+                .execute(&request(Duration::from_secs(10)), &CancelToken::new())
+                .unwrap_err();
+            unsafe { std::env::remove_var("FAKE_API_MESSAGE") };
+            assert_eq!(error.to_string(), expected, "{message}");
+        });
+    }
+}
+
 #[derive(Debug, Default)]
 struct Attempts {
     calls: Mutex<Vec<Vec<ModelTokens>>>,
     started: Mutex<usize>,
+    /// Each `ai.request.finished` as its request id and detail.
+    finished: Mutex<Vec<(Option<String>, Option<String>)>>,
+    /// The effort each `ai.attempt` names.
+    efforts: Mutex<Vec<Option<String>>>,
 }
 
 impl AiUsageSink for Attempts {
@@ -243,6 +433,13 @@ impl AiLogSink for Attempts {
     fn log(&self, event: AiLogEvent) {
         if event.event == "ai.attempt" {
             *self.started.lock().unwrap() += 1;
+            self.efforts.lock().unwrap().push(event.effort.clone());
+        }
+        if event.event == "ai.request.finished" {
+            self.finished
+                .lock()
+                .unwrap()
+                .push((event.request_id, event.detail));
         }
     }
 }

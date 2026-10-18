@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use herdr_core::workspace_control::Action;
@@ -140,7 +140,8 @@ enum AfterAnswer {
 
 /// No daemon listens where the reference points, before anything was sent:
 /// the daemon that issued it stopped without removing it. Reported as
-/// `hide_unavailable`, the reason a caller already acts on.
+/// `hide_unavailable`, the reason a caller already acts on, except by a
+/// hook's request ([`request_hook`]), whose reasons name the step that failed.
 const UNREACHABLE: &str = "hide_unreachable";
 
 fn reported(reason: String) -> String {
@@ -171,16 +172,8 @@ pub fn bootstrap(env: &Env, one_shot: bool) -> Result<PathBuf, String> {
 
 fn bootstrap_local(env: &Env, request: &Value) -> Result<PathBuf, String> {
     let socket = crate::pane_auth::bootstrap_socket_path(&env.state_dir)?;
-    let mut stream = LocalStream::connect(&socket).map_err(|_| "hide_unavailable".to_owned())?;
-    stream
-        .set_read_timeout(Some(TIMEOUT))
+    let mut stream = LocalStream::connect_until(&socket, Instant::now() + TIMEOUT)
         .map_err(|_| "hide_unavailable".to_owned())?;
-    match stream.set_write_timeout(Some(TIMEOUT)) {
-        // A Windows pipe has no write timeout; the request is one line that
-        // fits the pipe's buffer, and the read that follows is bounded.
-        Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {}
-        result => result.map_err(|_| "hide_unavailable".to_owned())?,
-    }
     writeln!(stream, "{request}").map_err(|_| "hide_unavailable".to_owned())?;
     read_bootstrap_answer(&mut stream)
 }
@@ -213,7 +206,9 @@ fn bootstrap_remote(env: &Env, request: &Value) -> Result<Option<PathBuf>, Strin
     )
 }
 
-fn live_bridges(bridge_dir: &Path) -> Result<Vec<LocalStream>, String> {
+/// Connects to each node pane service that lives in `bridge_dir`, each
+/// connect waiting no later than `deadline`, which then bounds the stream.
+fn live_bridges(bridge_dir: &Path, deadline: Instant) -> Result<Vec<LocalStream>, String> {
     let bridge_dir = bridge_dir.to_path_buf();
     let metadata = match fs::symlink_metadata(&bridge_dir) {
         Ok(metadata) => metadata,
@@ -250,7 +245,7 @@ fn live_bridges(bridge_dir: &Path) -> Result<Vec<LocalStream>, String> {
         {
             continue;
         }
-        let Ok(stream) = LocalStream::connect(&socket) else {
+        let Ok(stream) = LocalStream::connect_until(&socket, deadline) else {
             continue;
         };
         streams.push(stream);
@@ -265,10 +260,9 @@ fn live_bridges(bridge_dir: &Path) -> Result<Vec<LocalStream>, String> {
 fn bootstrap_bridges(bridge_dir: &Path, request: &Value) -> Result<Option<PathBuf>, String> {
     let mut success = None;
     let mut reason = None;
-    for mut stream in live_bridges(bridge_dir)? {
-        let _ = stream.set_read_timeout(Some(REMOTE_BOOTSTRAP_TIMEOUT));
-        // A Windows pipe has no write timeout; the request is one short line.
-        let _ = stream.set_write_timeout(Some(REMOTE_BOOTSTRAP_TIMEOUT));
+    for mut stream in live_bridges(bridge_dir, Instant::now() + REMOTE_BOOTSTRAP_TIMEOUT)? {
+        // Each bridge has the whole time: one answers after the one before.
+        stream.set_deadline(Instant::now() + REMOTE_BOOTSTRAP_TIMEOUT);
         if writeln!(stream, "{request}").is_err() {
             reason = Some("bridge_unavailable".to_owned());
             continue;
@@ -552,21 +546,56 @@ pub fn request_memory_hook(env: &Env, mut ask: Value) -> Result<Value, String> {
 
 /// Hook reads always use the bootstrap service. Choosing a route happens
 /// before sending; neither a refusal nor a lost answer retries the command.
+///
+/// Each step that can fail has a reason of its own, which a hook records
+/// (`docs/agent-hooks.md`, What a hook records when it fails): no daemon
+/// published its socket (`hide_unavailable`), the record naming it is not
+/// trusted (`invalid_bootstrap_socket_record`), nothing took the connection
+/// there (`hide_unreachable`), the request was not written whole, so nothing
+/// ran (`request_unsent`), no answer came before the deadline and the command
+/// may have run (`request_timeout`), and the answer was not one bounded JSON
+/// line for this request (`invalid_response`).
 pub fn request_hook(
     env: &Env,
-    mut command: hide_node_link::panes::HookCommand,
+    command: hide_node_link::panes::HookCommand,
 ) -> Result<Value, String> {
-    use hide_node_link::panes::{HOOK_REQUEST_LIMIT, HookCommand, HookRequest};
-    let started = std::time::Instant::now();
-    let timeout = if matches!(command, HookCommand::Memory { .. }) {
+    let within = if matches!(command, hide_node_link::panes::HookCommand::Memory { .. }) {
         MEMORY_WITHIN
     } else {
         TIMEOUT
     };
+    hook_request(
+        env,
+        std::env::var(crate::env::HIDE_CAP_REF).ok(),
+        command,
+        Instant::now() + within,
+    )
+}
+
+/// [`request_hook`] with the reference `HIDE_CAP_REF` names, if any, and the
+/// request's deadline.
+fn hook_request(
+    env: &Env,
+    named: Option<String>,
+    mut command: hide_node_link::panes::HookCommand,
+    deadline: Instant,
+) -> Result<Value, String> {
+    use hide_node_link::panes::{HOOK_REQUEST_LIMIT, HookCommand, HookRequest};
     let request_id = fresh_request_id()?;
-    let named = match std::env::var(crate::env::HIDE_CAP_REF) {
-        Ok(path) if path.is_empty() => return Err("invalid_reference".to_owned()),
-        Ok(path) => match read_reference(Path::new(&path)) {
+    let failed = |reason: &'static str, error: Option<&std::io::Error>| {
+        herdr_core::diagnostic!(json!({
+            "component": "workspace_cli",
+            "kind": "hook.request_failed",
+            "request_id": request_id,
+            "pane_id": env.pane_id,
+            "reason": reason,
+            "io_kind": error.map(|error| format!("{:?}", error.kind())),
+        }));
+        reason.to_owned()
+    };
+    let named = match named {
+        Some(path) if path.is_empty() => return Err("invalid_reference".to_owned()),
+        Some(path) => match read_reference(Path::new(&path)) {
             Ok(reference) => Some((PathBuf::from(path), reference)),
             Err(reason) if reason == "credential_expired" => {
                 herdr_core::diagnostic!(json!({
@@ -579,7 +608,10 @@ pub fn request_hook(
             }
             Err(reason) => return Err(reason),
         },
-        Err(_) => None,
+        None => None,
+    };
+    let connect = |socket: &Path| {
+        LocalStream::connect_until(socket, deadline).map_err(|error| (UNREACHABLE, Some(error)))
     };
     let selected = match &named {
         Some((
@@ -588,26 +620,34 @@ pub fn request_hook(
                 route: Route::Node { socket },
                 ..
             },
-        )) => LocalStream::connect(&node_socket(socket).ok_or("invalid_reference")?)
-            .map_err(|_| "hide_unavailable".to_owned()),
+        )) => connect(&node_socket(socket).ok_or("invalid_reference")?),
         _ => {
             let state = named
                 .as_ref()
                 .and_then(|(path, _)| path.parent().and_then(Path::parent))
                 .unwrap_or(&env.state_dir);
-            crate::pane_auth::bootstrap_socket_path(state).and_then(|socket| {
-                LocalStream::connect(&socket).map_err(|_| "hide_unavailable".to_owned())
-            })
+            hide_node::pane_proof::recorded_socket_path(&crate::pane_auth::bootstrap_socket_record(
+                state,
+            ))
+            .map_err(|refusal| (refusal.code(), None))
+            .and_then(|socket| connect(&socket))
         }
     };
     let mut stream = match selected {
         Ok(stream) => stream,
-        Err(_) => {
-            let mut bridges = live_bridges(&hide_kit::layout::workspace_bridges(&env.state_dir))?;
+        // A device's node answers for a pane whose daemon is on another
+        // machine; without one, the route's own failure stands.
+        Err((reason, error)) => {
+            let mut bridges = live_bridges(
+                &hide_kit::layout::workspace_bridges(&env.state_dir),
+                deadline,
+            )?;
             if bridges.len() > 1 {
                 return Err("ambiguous_pane".to_owned());
             }
-            bridges.pop().ok_or("hide_unavailable")?
+            bridges
+                .pop()
+                .ok_or_else(|| failed(reason, error.as_ref()))?
         }
     };
     let mut nonce = [0u8; 16];
@@ -632,58 +672,52 @@ pub fn request_hook(
         }
         *prompt = herdr_core::memory_hook::prefix(prompt, prompt.len() / 2).to_owned();
     };
-    let remaining = || {
-        timeout
-            .checked_sub(started.elapsed())
-            .filter(|left| !left.is_zero())
-    };
-    let line = format!("{line}\n");
-    let mut pending = line.as_bytes();
-    while !pending.is_empty() {
-        let within = remaining().ok_or("request_timeout")?;
-        stream
-            .set_write_timeout(Some(within))
-            .map_err(|_| "hide_unavailable")?;
-        let written = stream.write(pending).map_err(|_| "hide_unavailable")?;
-        if written == 0 {
-            return Err("hide_unavailable".to_owned());
-        }
-        pending = &pending[written..];
-    }
+    stream
+        .write_all(format!("{line}\n").as_bytes())
+        .map_err(|error| failed("request_unsent", Some(&error)))?;
     let line = read_hook_line(
-        |within, bytes| {
-            stream.set_read_timeout(Some(within))?;
-            stream.read(bytes)
-        },
-        remaining,
-    )?;
-    let answer: Value = serde_json::from_str(&line).map_err(|_| "invalid_response")?;
+        |bytes| stream.read(bytes),
+        || deadline.checked_duration_since(Instant::now()),
+    )
+    .map_err(|(reason, error)| failed(reason, error.as_ref()))?;
+    let answer: Value =
+        serde_json::from_str(&line).map_err(|_| failed("invalid_response", None))?;
     if answer["ok"] == true && answer["request_id"] != request_id {
-        return Err("invalid_response".to_owned());
+        return Err(failed("invalid_response", None));
     }
     Ok(answer)
 }
 
-/// Each blocking read gets only the time left in the original request.
-/// The clock is supplied so a trickling peer's deadline is tested without
-/// sleeping or making a scheduler speed assertion.
+/// Reads the answer's one line. The stream's deadline bounds each read, and
+/// the time left is checked again after each, so a peer that trickles bytes
+/// cannot keep the request past its deadline; the clock is supplied so that
+/// is tested without sleeping or a scheduler speed assertion. A read that
+/// fails says why with the system's answer.
 fn read_hook_line(
-    mut read: impl FnMut(Duration, &mut [u8]) -> std::io::Result<usize>,
+    mut read: impl FnMut(&mut [u8]) -> std::io::Result<usize>,
     mut remaining: impl FnMut() -> Option<Duration>,
-) -> Result<String, String> {
+) -> Result<String, (&'static str, Option<std::io::Error>)> {
     use hide_node_link::panes::HOOK_RESPONSE_LIMIT;
+    let timed_out = || ("request_timeout", None);
     let mut answer = Vec::new();
     let mut chunk = [0; 4096];
     loop {
-        let within = remaining()
-            .filter(|left| !left.is_zero())
-            .ok_or("request_timeout")?;
-        let read = read(within, &mut chunk).map_err(|_| "request_timeout")?;
         remaining()
             .filter(|left| !left.is_zero())
-            .ok_or("request_timeout")?;
+            .ok_or_else(timed_out)?;
+        let read = read(&mut chunk).map_err(|error| {
+            let reason = if error.kind() == std::io::ErrorKind::TimedOut {
+                "request_timeout"
+            } else {
+                "invalid_response"
+            };
+            (reason, Some(error))
+        })?;
+        remaining()
+            .filter(|left| !left.is_zero())
+            .ok_or_else(timed_out)?;
         if read == 0 {
-            return Err("invalid_response".to_owned());
+            return Err(("invalid_response", None));
         }
         let end = chunk[..read]
             .iter()
@@ -691,10 +725,10 @@ fn read_hook_line(
             .map(|at| at + 1);
         answer.extend_from_slice(&chunk[..end.unwrap_or(read)]);
         if answer.len() > HOOK_RESPONSE_LIMIT {
-            return Err("invalid_response".to_owned());
+            return Err(("invalid_response", None));
         }
         if end.is_some() {
-            return String::from_utf8(answer).map_err(|_| "invalid_response".to_owned());
+            return String::from_utf8(answer).map_err(|_| ("invalid_response", None));
         }
     }
 }
@@ -964,7 +998,9 @@ fn node_socket(wire: &str) -> Option<PathBuf> {
 /// first to end closes the node's stream, which ends the other.
 fn node_stream(socket: &Path, token: Option<&str>) -> Result<tokio::io::DuplexStream, String> {
     let stream = LocalStream::connect(socket).map_err(|_| UNREACHABLE.to_owned())?;
-    let _ = stream.set_write_timeout(Some(TIMEOUT));
+    stream
+        .set_write_timeout(Some(TIMEOUT))
+        .map_err(|_| "hide_unavailable".to_owned())?;
     stream
         .set_read_timeout(None)
         .map_err(|_| "hide_unavailable".to_owned())?;
@@ -1111,37 +1147,173 @@ mod tests {
     fn a_trickling_hook_response_cannot_renew_the_request_deadline() {
         use std::cell::Cell;
         let elapsed = Cell::new(Duration::ZERO);
-        let mut allowed = Vec::new();
+        let reads = Cell::new(0);
         let answer = read_hook_line(
-            |within, bytes| {
-                allowed.push(within);
+            |bytes| {
+                reads.set(reads.get() + 1);
                 elapsed.set(elapsed.get() + Duration::from_secs(4));
                 bytes[0] = b' ';
                 Ok(1)
             },
             || Duration::from_secs(10).checked_sub(elapsed.get()),
         );
-        assert_eq!(answer, Err("request_timeout".to_owned()));
-        assert_eq!(allowed, [10, 6, 2].map(Duration::from_secs));
+        assert_eq!(answer.map_err(|(reason, _)| reason), Err("request_timeout"));
+        // At 4 s, 8 s and 12 s: the third byte came past the 10 s deadline.
+        assert_eq!(reads.get(), 3);
     }
 
     #[test]
     fn a_hook_response_requires_a_bounded_complete_line() {
         for (bytes, expected) in [
             (b"{}\n".to_vec(), Ok("{}\n".to_owned())),
-            (b"{}".to_vec(), Err("invalid_response".to_owned())),
+            (b"{}".to_vec(), Err("invalid_response")),
             (
                 vec![b' '; hide_node_link::panes::HOOK_RESPONSE_LIMIT + 1],
-                Err("invalid_response".to_owned()),
+                Err("invalid_response"),
             ),
         ] {
             let mut peer = std::io::Cursor::new(bytes);
             let answer = read_hook_line(
-                |_, chunk| std::io::Read::read(&mut peer, chunk),
+                |chunk| std::io::Read::read(&mut peer, chunk),
                 || Some(Duration::from_secs(10)),
             );
-            assert_eq!(answer, expected);
+            assert_eq!(answer.map_err(|(reason, _)| reason), expected);
         }
+        // A read the deadline ended is a timeout; one the stream ended is no
+        // answer, and each keeps what the system said.
+        for (kind, expected) in [
+            (std::io::ErrorKind::TimedOut, "request_timeout"),
+            (std::io::ErrorKind::ConnectionReset, "invalid_response"),
+        ] {
+            let answer = read_hook_line(|_| Err(kind.into()), || Some(Duration::from_secs(10)));
+            assert_eq!(
+                answer.map_err(|(reason, error)| (reason, error.map(|error| error.kind()))),
+                Err((expected, Some(kind)))
+            );
+        }
+    }
+
+    /// A bootstrap listener recorded in `state` as a running daemon records
+    /// it. Its one connection reads a request line, hands it to the test and
+    /// then does what `respond` does with the stream.
+    fn hook_listener(
+        state: &Path,
+        respond: impl FnOnce(&Value, &mut LocalStream) + Send + 'static,
+    ) -> (mpsc::Receiver<Value>, std::thread::JoinHandle<()>) {
+        private::create_dir_all(&state.join("pane-capabilities")).unwrap();
+        let (listener, _) = crate::pane_auth::bind(state).unwrap();
+        let (heard, hears) = mpsc::channel();
+        let served = std::thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(&mut stream).read_line(&mut line).unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            let _ = heard.send(request.clone());
+            respond(&request, &mut stream);
+        });
+        (hears, served)
+    }
+
+    /// The gap Windows hooks fell through (letter-7785): a hook's request
+    /// crosses a real local stream to the bootstrap listener and reads its
+    /// answer. Memory's prompt makes the request longer than a Windows pipe's
+    /// 512-byte buffer, so its write waits on the listener's reads.
+    #[test]
+    fn a_hook_request_reaches_the_bootstrap_listener_and_reads_its_answer() {
+        let state = short_dir();
+        let (hears, served) = hook_listener(state.path(), |request, stream| {
+            let answer =
+                json!({"ok": true, "request_id": request["hook"]["request_id"], "result": {}});
+            writeln!(stream, "{answer}").unwrap();
+        });
+        let prompt = "x".repeat(8 * 1024);
+        let command = hide_node_link::panes::HookCommand::Memory {
+            event: "UserPromptSubmit".to_owned(),
+            runtime: "claude".to_owned(),
+            session: "session".to_owned(),
+            prompt: prompt.clone(),
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let answer = hook_request(&env_at(state.path()), None, command, deadline).unwrap();
+        let request = hears.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(answer["ok"], true, "{answer}");
+        assert_eq!(answer["request_id"], request["hook"]["request_id"]);
+        assert_eq!(request["hook"]["command"]["prompt"], prompt.as_str());
+        served.join().unwrap();
+    }
+
+    /// Writes a bootstrap record in `state` naming `socket`, as a daemon
+    /// would, without a listener behind it.
+    fn record_socket(state: &Path, socket: &Path) {
+        let record = crate::pane_auth::bootstrap_socket_record(state);
+        private::create_dir_all(record.parent().unwrap()).unwrap();
+        private::create_new_file(&record)
+            .unwrap()
+            .write_all(socket.to_str().unwrap().as_bytes())
+            .unwrap();
+    }
+
+    /// Each step a hook's request can stop at answers its own reason, which
+    /// the hook records under a cause of its own.
+    #[test]
+    fn each_step_a_hook_request_stops_at_has_its_own_reason_and_cause() {
+        let ask = |state: &Path, within: Duration| {
+            let command = hide_node_link::panes::HookCommand::WorkspaceInfo {};
+            let deadline = Instant::now() + within;
+            let reason = hook_request(&env_at(state), None, command, deadline).unwrap_err();
+            let cause = hide_agent_hooks::delivery::refusal_cause(Some(&reason));
+            (reason, cause)
+        };
+        let within = Duration::from_secs(10);
+        let step = |reason: &str, cause| (reason.to_owned(), cause);
+
+        // No daemon published its socket.
+        let state = short_dir();
+        assert_eq!(
+            ask(state.path(), within),
+            step("hide_unavailable", "unavailable")
+        );
+
+        // The record names a folder that is gone.
+        let state = short_dir();
+        record_socket(state.path(), &state.path().join("gone").join("b.sock"));
+        assert_eq!(
+            ask(state.path(), within),
+            step("invalid_bootstrap_socket_record", "record")
+        );
+
+        // The record names a private folder where nothing listens.
+        let state = short_dir();
+        let folder = state.path().join("sockets");
+        private::create_dir(&folder).unwrap();
+        record_socket(state.path(), &folder.join("b.sock"));
+        assert_eq!(
+            ask(state.path(), within),
+            step("hide_unreachable", "connect")
+        );
+
+        // The listener reads the request and ends without an answer.
+        let state = short_dir();
+        let (_, served) = hook_listener(state.path(), |_, _| {});
+        assert_eq!(
+            ask(state.path(), within),
+            step("invalid_response", "answer")
+        );
+        served.join().unwrap();
+
+        // The listener reads the request and never answers.
+        let state = short_dir();
+        let (release, released) = mpsc::channel::<()>();
+        let (_, served) = hook_listener(state.path(), move |_, _| {
+            // Bounded only so a request that never times out fails the test.
+            let _ = released.recv_timeout(Duration::from_secs(20));
+        });
+        assert_eq!(
+            ask(state.path(), Duration::from_millis(300)),
+            step("request_timeout", "timeout")
+        );
+        drop(release);
+        served.join().unwrap();
     }
 
     // Mode bits widen the file for the refusal.
@@ -1302,6 +1474,31 @@ mod tests {
         panes.remove_folder();
     }
 
+    /// The environment a `hide` whose state folder is `directory` runs with.
+    fn env_at(directory: &Path) -> Env {
+        Env {
+            home: directory.to_path_buf(),
+            herdr_socket_path: None,
+            herdr_bin_path: None,
+            login_shell: None,
+            state_dir: directory.to_path_buf(),
+            legacy_state_dir: None,
+            account_state_folder: false,
+            keep_alive: true,
+            vite_origin: None,
+            bind: "127.0.0.1:0".parse().unwrap(),
+            idle_secs: 600,
+            build: None,
+            starter_program: None,
+            open_command: None,
+            host_helper_root: None,
+            host_cli_dir: None,
+            pane_id: None,
+            tailscale_bin: Some(directory.join("no-tailscale")),
+            search_path: None,
+        }
+    }
+
     /// Waits, at most a hang guard's while, until `done` holds.
     #[allow(clippy::disallowed_methods)] // polls a state the daemon changes on its own task, bounded by a deadline
     fn until(mut done: impl FnMut() -> bool) -> bool {
@@ -1323,27 +1520,7 @@ mod tests {
     #[test]
     fn a_one_shot_command_is_not_claimed_and_its_token_ends_with_its_connection() {
         let directory = tempfile::tempdir().unwrap();
-        let env = Env {
-            home: directory.path().to_path_buf(),
-            herdr_socket_path: None,
-            herdr_bin_path: None,
-            login_shell: None,
-            state_dir: directory.path().to_path_buf(),
-            legacy_state_dir: None,
-            account_state_folder: false,
-            keep_alive: true,
-            vite_origin: None,
-            bind: "127.0.0.1:0".parse().unwrap(),
-            idle_secs: 600,
-            build: None,
-            starter_program: None,
-            open_command: None,
-            host_helper_root: None,
-            host_cli_dir: None,
-            pane_id: None,
-            tailscale_bin: Some(directory.path().join("no-tailscale")),
-            search_path: None,
-        };
+        let env = env_at(directory.path());
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
