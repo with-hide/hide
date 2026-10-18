@@ -79,13 +79,31 @@ impl ForkableAgent {
             ],
             Self::Codex => vec!["fork".to_owned(), session_id.to_owned()],
             Self::Pi | Self::Omp => vec!["--fork".to_owned(), session_id.to_owned()],
-            // OpenCode 1.18.30 `--help`: `--fork` forks the session `-s` names.
+            // OpenCode 1.x (1.18.30 `cli/cmd/tui.ts`): `--fork` forks the
+            // session `-s` names. 2.x's interactive command has no `--fork`
+            // (2.0.29 `packages/cli/src/commands/commands.ts`, the root
+            // command's options) and, given one, prints its help and exits;
+            // its server forks the session instead and the pane opens the new
+            // one ([`opencode_forked_arguments`]).
+            // Which one a session takes is its node's to read
+            // (`live::fork_arguments`).
             Self::OpenCode => vec!["-s".to_owned(), session_id.to_owned(), "--fork".to_owned()],
             // agy 1.4.0 forks only through its `/fork` command, typed once
             // the resumed conversation is up (`live::fork_antigravity`).
             Self::Antigravity => vec!["--conversation".to_owned(), session_id.to_owned()],
         }
     }
+}
+
+/// The arguments that open the session OpenCode 2.x's server forked
+/// (`hide_node_link::protocol::OpenCodeFork::Forked`): the new session is
+/// opened as a resume opens one, and an id that would reach the argument list
+/// as anything but an id is refused.
+pub(crate) fn opencode_forked_arguments(id: &str) -> Result<Vec<String>, String> {
+    if !hide_session::valid_native_id(id) {
+        return Err("OpenCode answered the fork with an invalid session id".into());
+    }
+    Ok(vec!["-s".to_owned(), id.to_owned()])
 }
 
 /// Where the operator put the fork when they chose it (PRD
@@ -380,6 +398,15 @@ mod tests {
             ["-s", "3f2b1c00-0000-4000-8000-000000000001", "--fork"]
         );
         assert!(is_forkable(Some("OpenCode"), Some("ses_native")));
+    }
+
+    #[test]
+    fn an_opencode_2_fork_opens_the_session_its_server_made_and_never_a_flag() {
+        assert_eq!(
+            opencode_forked_arguments("ses_fork").unwrap(),
+            ["-s", "ses_fork"]
+        );
+        assert!(opencode_forked_arguments("--dangerously-skip-permissions").is_err());
     }
 
     #[test]

@@ -3406,6 +3406,7 @@ fn run_agent_fork_with_registration(
         current()
     };
     check()?;
+    let arguments = fork_arguments(node, request)?;
     // A split takes no command, so only a fork in its own tab runs the
     // integration's launch.
     let launch = matches!(request.placement, ForkPlacement::Tab)
@@ -3485,7 +3486,7 @@ fn run_agent_fork_with_registration(
         shell,
         &request.name,
         request.agent.kind(),
-        request.agent.resume_arguments(&request.session_id),
+        arguments,
         request.codex_daemon,
         &check,
     )
@@ -3523,6 +3524,44 @@ fn run_agent_fork_with_registration(
                     "{error}; the created pane {child_pane_id} could not be closed: {close_error}"
                 ),
             })
+        }
+    }
+}
+
+/// The agent's arguments that open the fork. Every agent but OpenCode spells
+/// its own fork ([`crate::fork::ForkableAgent::resume_arguments`]). OpenCode's
+/// depends on the version holding the session, which its node reads from the
+/// database (`hide_session::opencode::fork_route`): 1.x forks with its own
+/// flag, and 2.x's server makes the fork here, once, before the fork's pane
+/// exists, so every later step of this fork, a retried start included, opens
+/// that one session. A node that cannot fork it ends the fork with its reason
+/// before any pane is made.
+fn fork_arguments(
+    node: &dyn crate::node_access::NodeLink,
+    request: &ForkRequest,
+) -> Result<Vec<String>, String> {
+    if request.agent != crate::fork::ForkableAgent::OpenCode {
+        return Ok(request.agent.resume_arguments(&request.session_id));
+    }
+    let cwd = request
+        .cwd
+        .as_deref()
+        .ok_or("Session fork has no confirmed checkout")?;
+    let fork: hide_node_link::protocol::OpenCodeFork = crate::node_access::call_as(
+        node,
+        hide_node_link::protocol::Call::OpenCodeFork {
+            source: request.session_id.clone(),
+            cwd: cwd.to_owned(),
+        },
+        hide_node_link::protocol::OPENCODE_FORK_TIMEOUT,
+    )
+    .map_err(|error| format!("OpenCode could not fork the session: {error}"))?;
+    match fork {
+        hide_node_link::protocol::OpenCodeFork::Flag => {
+            Ok(request.agent.resume_arguments(&request.session_id))
+        }
+        hide_node_link::protocol::OpenCodeFork::Forked { id } => {
+            crate::fork::opencode_forked_arguments(&id)
         }
     }
 }
@@ -4624,6 +4663,154 @@ mod tests {
                 _ => &["session.snapshot", "layout.apply", "pane.close"],
             };
             assert_eq!(herdr.methods(), expected, "{case}");
+        }
+    }
+
+    /// A node that forks OpenCode sessions as `answer` says and records each
+    /// ask in `log`, beside the Herdr requests the test records there.
+    struct OpenCodeForking {
+        inner: hide_node::Local,
+        answer: Result<hide_node_link::protocol::OpenCodeFork, &'static str>,
+        log: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl crate::node_access::NodeLink for OpenCodeForking {
+        fn call(
+            &self,
+            call: hide_node_link::protocol::Call,
+            timeout: Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            let hide_node_link::protocol::Call::OpenCodeFork { source, cwd } = &call else {
+                return self.inner.call(call, timeout);
+            };
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("opencode_fork {source} {cwd}"));
+            match &self.answer {
+                Ok(fork) => Ok(serde_json::to_value(fork).unwrap().into()),
+                Err(reason) => Err(crate::node_access::LinkError::Refused(
+                    hide_node_link::HostError::new(hide_node_link::ErrorCode::Io, *reason),
+                )),
+            }
+        }
+
+        fn reader_features(&self) -> Option<&hide_node_link::sessions::ReaderFeatures> {
+            self.inner.reader_features()
+        }
+
+        fn in_process(&self) -> bool {
+            self.inner.in_process()
+        }
+    }
+
+    /// OpenCode 2.0.29's interactive command has no `--fork`: the node's
+    /// server forks the session once, before the fork's tab exists, and the
+    /// tab opens the session it made; a node that cannot fork it ends the fork
+    /// with its reason and no tab.
+    #[test]
+    fn an_opencode_2_fork_is_made_by_its_server_before_its_tab_and_the_tab_opens_it() {
+        for case in ["forked", "refused"] {
+            let home = tempfile::tempdir().unwrap();
+            let cwd = hide_platform::fs::identity::canonical(home.path()).unwrap();
+            let checkout = cwd.display().to_string();
+            crate::fixture::opencode_2_database(
+                home.path(),
+                &[("ses_root", None, checkout.as_str())],
+            );
+            let log = Arc::new(Mutex::new(Vec::new()));
+            let node = OpenCodeForking {
+                inner: hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(
+                    hide_host::shell_integration::UserShell {
+                        shell: Some("/bin/zsh".into()),
+                        ..Default::default()
+                    },
+                ),
+                answer: if case == "forked" {
+                    Ok(hide_node_link::protocol::OpenCodeFork::Forked {
+                        id: "ses_fork".into(),
+                    })
+                } else {
+                    Err("opencode_fork_timed_out")
+                },
+                log: Arc::clone(&log),
+            };
+            let herdr_log = Arc::clone(&log);
+            let herdr = FakeHerdr::start("opencode-2-fork-tab", move |method, params| {
+                herdr_log.lock().unwrap().push(method.to_owned());
+                match method {
+                    "session.snapshot" => json!({"type": "session_snapshot", "snapshot": {
+                        "version": "fixture", "protocol": HERDR_PROTOCOL_REVISION,
+                        "workspaces": [], "tabs": [], "panes": [], "agents": [],
+                        "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
+                            "area": {"x":0,"y":0,"width":80,"height":24},
+                            "focused_pane_id": "parent-pane",
+                            "panes": [{"pane_id":"parent-pane", "focused":true,
+                                "rect":{"x":0,"y":0,"width":80,"height":24}}], "splits": []}]
+                    }}),
+                    "layout.apply" => {
+                        json!({"type":"layout_apply","layout":{"workspace_id":"w1","tab_id":"w1:t2",
+                        "zoomed":false,"focused_pane_id":"child-pane",
+                        "root":{"type":"pane","pane_id":"child-pane"}}})
+                    }
+                    "pane.process_info" => json!({"type":"pane_process_info","process_info":{
+                        "pane_id":"child-pane","shell_pid":42,"foreground_process_group_id":42,
+                        "foreground_processes":[{"pid":42,"name":"zsh"}]}}),
+                    "pane.get" => json!({"type":"pane_info","pane":{
+                        "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"unknown","revision":1,
+                        "tokens":{"hide_prompt":"1"}}}),
+                    "agent.start" => {
+                        assert_eq!(params["kind"], "opencode");
+                        assert_eq!(params["args"], json!(["-s", "ses_fork"]));
+                        json!({"type":"agent_started","argv":[],"agent":{
+                            "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"idle","revision":2}})
+                    }
+                    other => panic!("unexpected {other}"),
+                }
+            });
+            let request = ForkRequest {
+                source_reference: Some(crate::sidebar::SessionAgentSessionPayload {
+                    kind: "id".into(),
+                    value: "ses_root".into(),
+                }),
+                parent_state_change_seq: None,
+                connection_generation: 0,
+                codex_daemon: Default::default(),
+                parent_pane_id: "parent-pane".into(),
+                agent: crate::fork::ForkableAgent::OpenCode,
+                session_id: "ses_root".into(),
+                cwd: Some(checkout.clone()),
+                name: "fork-opencode-2".into(),
+                tab_label: Some("Tab 2".into()),
+                placement: ForkPlacement::Tab,
+            };
+            let result = run_agent_fork_with_registration(
+                &herdr.connector(),
+                &node,
+                &request,
+                &|| Ok(()),
+                |_, _| {},
+                |_, _| Ok(()),
+            );
+            let fork = format!("opencode_fork ses_root {checkout}");
+            if case == "forked" {
+                assert_eq!(result.unwrap(), "child-pane");
+                assert_eq!(
+                    *log.lock().unwrap(),
+                    [
+                        fork.as_str(),
+                        "session.snapshot",
+                        "layout.apply",
+                        "pane.process_info",
+                        "pane.get",
+                        "agent.start",
+                    ]
+                );
+            } else {
+                let error = result.unwrap_err();
+                assert!(error.contains("opencode_fork_timed_out"), "{error}");
+                assert_eq!(*log.lock().unwrap(), [fork.as_str()]);
+            }
         }
     }
 
