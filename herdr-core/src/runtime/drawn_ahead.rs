@@ -34,67 +34,12 @@ pub(super) struct ProvisionalTab {
     pub(super) recorded_at_unix_ms: u64,
 }
 
-/// A fork's pane Herdr has named and not yet laid out. It is the checkout's
-/// it was made in for at most `PROVISIONAL_TAB_TIMEOUT_MS`, as a created tab
-/// is drawn: a split is not drawn, so until Herdr lays it out the projection
-/// reads it as a creation pending rather than a missing pane.
-#[derive(Clone, Debug)]
-pub(super) struct MadePane {
-    pub(super) pane_id: String,
-    /// The checkout it was made in, by path, and its tab: the fork's own, or
-    /// the source's for a split.
-    pub(super) checkout: String,
-    pub(super) tab_id: String,
-    pub(super) recorded_at_unix_ms: u64,
-}
-
 impl Runtime {
     /// Lays everything drawn ahead of Herdr over a session about to be
     /// ingested.
     pub(super) fn overlay_drawn_ahead(&mut self, payload: &mut SessionSnapshotPayload) {
-        Self::settle_made_panes(
-            &mut self.forks_in_flight,
-            |pane_id| {
-                payload
-                    .layouts
-                    .iter()
-                    .any(|layout| layout.panes.iter().any(|pane| pane.pane_id == pane_id))
-            },
-            unix_milliseconds(),
-        );
         self.overlay_created_tabs(payload);
         self.overlay_geometry(payload);
-    }
-
-    /// Ends each fork pane's hold once Herdr's layout lists it, or at its
-    /// bound, logged, after which a pane still missing is one the projection
-    /// waits on and says so. Says whether one lapsed. With no fork starting,
-    /// which is nearly always, it reads nothing.
-    pub(super) fn settle_made_panes(
-        forks: &mut HashMap<String, super::agents::PendingFork>,
-        laid_out: impl Fn(&str) -> bool,
-        now_unix_ms: u64,
-    ) -> bool {
-        let mut lapsed = false;
-        for fork in forks.values_mut() {
-            let Some(made) = fork.made.as_ref() else {
-                continue;
-            };
-            if laid_out(&made.pane_id) {
-                fork.made = None;
-            } else if now_unix_ms.saturating_sub(made.recorded_at_unix_ms)
-                >= PROVISIONAL_TAB_TIMEOUT_MS
-            {
-                crate::diagnostic!(serde_json::json!({
-                    "component": "pane_fork",
-                    "kind": "pane.fork.layout_late",
-                    "pane_id": made.pane_id,
-                }));
-                fork.made = None;
-                lapsed = true;
-            }
-        }
-        lapsed
     }
 
     /// Holds the acknowledged creation until Herdr lays it out. A known
@@ -131,20 +76,38 @@ impl Runtime {
     }
 
     /// Where a pane Hide made sits before Herdr's layout lists it, as the
-    /// checkout it was made in, by path, and its tab: a created tab's, or a
-    /// starting fork's, which is its source's checkout whether the fork has
-    /// a tab of its own or a split of the source's.
+    /// checkout it was made in, by path, and its tab: a created tab's own, or
+    /// for a drawn split, its target's, which a fork's split shares with its
+    /// source.
     pub(super) fn created_pane_place(&self, pane_id: &str) -> Option<(&str, &str)> {
-        self.provisional_tabs
+        if let Some(tab) = self
+            .provisional_tabs
             .iter()
             .find(|tab| tab.pane_id == pane_id)
-            .map(|tab| (tab.cwd.as_str(), tab.tab_id.as_str()))
-            .or_else(|| {
-                self.forks_in_flight
-                    .values()
-                    .filter_map(|fork| fork.made.as_ref())
-                    .find(|made| made.pane_id == pane_id)
-                    .map(|made| (made.checkout.as_str(), made.tab_id.as_str()))
+        {
+            return Some((tab.cwd.as_str(), tab.tab_id.as_str()));
+        }
+        let target =
+            self.pane_operations
+                .values()
+                .find_map(|operation| match &operation.prediction {
+                    Some(super::pane_prediction::Prediction::Split {
+                        target, created, ..
+                    }) if created == pane_id => Some(target.as_str()),
+                    _ => None,
+                })?;
+        self.snapshot
+            .navigator
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.checkouts)
+            .find_map(|checkout| {
+                checkout
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.panes.iter().any(|pane| pane.id == target))
+                    .and_then(|tab| tab.id.as_deref())
+                    .map(|tab_id| (checkout.path.as_str(), tab_id))
             })
     }
 

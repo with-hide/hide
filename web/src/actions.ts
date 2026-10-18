@@ -1022,7 +1022,7 @@ export function createActions(send: DispatchFn) {
      */
     forkPane(paneId: string, placement: ForkPlacement) {
       const requestId = remoteRequestId();
-      dispatch({ schema_version: 2, kind: "fork_pane", payload: { pane_id: paneId, placement, request_id: requestId } });
+      dispatch({ schema_version: 2, kind: "fork_pane", payload: { pane_id: paneId, placement, origin: "operator", request_id: requestId } });
       armKeyTarget(requestId);
     },
 

@@ -1345,7 +1345,7 @@ fn native_fork_current_journey(kind: &'static str) {
             context.api_connector = connector;
             runtime.set_live(context);
             assert!(runtime.dispatch_json(&serde_json::to_vec(&serde_json::json!({
-                "schema_version":SCHEMA_VERSION,"kind":"fork_pane","payload":{"pane_id":parent,"placement":"tab"}
+                "schema_version":SCHEMA_VERSION,"kind":"fork_pane","payload":{"pane_id":parent,"placement":"tab","origin":"operator"}
             })).unwrap()));
         }
         wait_for("actual fork worker settles", || {

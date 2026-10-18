@@ -1619,9 +1619,10 @@ fn pending_fork(runtime: &mut Runtime, source: &str, request_id: Option<&str>) {
             press: runtime.forks_in_flight.len() as u64 + 1,
             generation: runtime.live_generation,
             issued_serial: runtime.control_lane.issued_serial(),
+            origin: super::events::ForkOrigin::Operator,
             tab_id: None,
+            pane_id: None,
             tab_label: Some("claude".into()),
-            made: None,
             focused: None,
             kind: "claude".into(),
             name: "fork-fixture".into(),
@@ -1786,7 +1787,7 @@ fn a_second_fork_of_a_pane_still_forking_is_refused_whichever_item_asked() {
     pending_fork(&mut runtime, "w-order:t1:p", None);
     runtime.dispatch_json(&explorer_event(
         "fork_pane",
-        serde_json::json!({"pane_id":"w-order:t1:p","placement":"side","request_id":"second"}),
+        serde_json::json!({"pane_id":"w-order:t1:p","placement":"side","origin":"operator","request_id":"second"}),
     ));
     assert_eq!(
         runtime
@@ -2003,9 +2004,9 @@ fn keys_held_for(runtime: &Runtime, pane: &str) -> bool {
 // Herdr's layout lists it, so the keyboard brings that checkout forward even
 // when a focus on the pane, the fork's own or a second one (the journey's),
 // comes before the catalog does. Its own tab is drawn as a created tab is and
-// the projection never waits on it; a split is a creation pending until
-// Herdr lays it out. With another checkout in front the journey's Grok fork
-// waited 30 s on `pane.projection_unavailable` on macOS.
+// a split as a split Hide asked for is, so the projection never waits on it.
+// With another checkout in front the journey's Grok fork waited 30 s on
+// `pane.projection_unavailable` on macOS.
 #[test]
 fn a_fork_brings_its_checkout_forward_before_herdr_lists_its_pane() {
     let before = ["w-order:t1", "w-order:t2"];
@@ -2040,22 +2041,22 @@ fn a_fork_brings_its_checkout_forward_before_herdr_lists_its_pane() {
         let (mut runtime, checkout, pane) = forked(from_elsewhere, false);
         assert_eq!(front(&runtime).as_deref(), Some(checkout.as_str()));
         focus_pane(&mut runtime, pane);
+        let shown = (
+            Some(checkout.clone()),
+            Some(pane.to_owned()),
+            Some("w-order:t1".to_owned()),
+            false,
+        );
         runtime.ingest_session(Ok(fork_session(&before, "w-order:t1", None)));
-        let (front, selected, _, waiting) = fork_on_screen(&runtime);
         assert_eq!(
-            (front, selected, waiting),
-            (Some(checkout.clone()), Some(pane.to_owned()), false),
+            fork_on_screen(&runtime),
+            shown,
             "from elsewhere: {from_elsewhere}"
         );
         runtime.ingest_session(Ok(fork_session(&before, "w-order:t1", Some(pane))));
         assert_eq!(
             fork_on_screen(&runtime),
-            (
-                Some(checkout),
-                Some(pane.to_owned()),
-                Some("w-order:t1".to_owned()),
-                false
-            ),
+            shown,
             "from elsewhere: {from_elsewhere}"
         );
         assert!(keys_held_for(&runtime, pane));
@@ -2128,16 +2129,17 @@ fn herdrs_layout_of_a_fork_is_not_read_as_herdr_moving_the_keyboard() {
     }
 }
 
-// A fork's pane is held as its checkout's only for the bound a created tab is
-// drawn for: a split Herdr has not laid out by then is logged and waited on
-// as any missing pane is, and a fork whose agent never started takes its
-// drawn tab back with the pane its worker closed.
+// What is drawn for a fork's pane lasts as long as any drawing ahead of
+// Herdr: a split Herdr has not laid out by then is the unknown result a split
+// Hide asked for is, after which its pane is waited on as any missing pane
+// is, and a fork whose agent never started takes back what was drawn for the
+// pane its worker closed.
 #[test]
 fn a_fork_pane_herdr_never_lays_out_is_released_at_its_bound() {
     let before = ["w-order:t1", "w-order:t2"];
     let (mut runtime, _, pane) = forked(false, false);
     runtime.tick_async_operations(unix_milliseconds() + CLOSE_STAGE_TIMEOUT_MS + 1_000);
-    assert!(runtime.forks_in_flight["w-order:t1:p"].made.is_none());
+    assert_eq!(diagnostic_count(&runtime, "pane.operation.unconfirmed"), 1);
     runtime.ingest_session(Ok(fork_session(&before, "w-order:t1", None)));
     assert_eq!(
         runtime
@@ -2150,18 +2152,90 @@ fn a_fork_pane_herdr_never_lays_out_is_released_at_its_bound() {
         "{pane} is waited on, and says so"
     );
 
-    let (mut runtime, checkout, _) = forked(false, true);
-    runtime.ingest_fork_result("w-order:t1:p", Err("start refused".into()), 1);
-    runtime.ingest_session(Ok(fork_session(&before, "w-order:t1", None)));
-    assert_eq!(ordered_tab_ids(&runtime, &checkout), before);
-    assert_eq!(
-        input_state(&runtime, "fork-keys"),
-        Some(InputRequestState::Discarded)
-    );
-    assert_eq!(
-        runtime.snapshot().terminal.pane_id.as_deref(),
-        Some("w-order:t1:p")
-    );
+    for (tab, taken_back) in [
+        (true, "tab.create.taken_back"),
+        (false, "pane.split.taken_back"),
+    ] {
+        let (mut runtime, checkout, _) = forked(false, tab);
+        let (_, records) = crate::diagnostics::capture(|| {
+            runtime.ingest_fork_result("w-order:t1:p", Err("start refused".into()), 1)
+        });
+        assert!(
+            records.iter().any(|record| record["kind"] == taken_back),
+            "tab: {tab}"
+        );
+        runtime.ingest_session(Ok(fork_session(&before, "w-order:t1", None)));
+        assert_eq!(ordered_tab_ids(&runtime, &checkout), before, "tab: {tab}");
+        assert_eq!(
+            runtime
+                .snapshot()
+                .active_pane_layout()
+                .map(|layout| layout.pane_ids()),
+            Some(vec!["w-order:t1:p"]),
+            "tab: {tab}"
+        );
+        assert_eq!(
+            input_state(&runtime, "fork-keys"),
+            Some(InputRequestState::Discarded)
+        );
+        assert_eq!(
+            runtime.snapshot().terminal.pane_id.as_deref(),
+            Some("w-order:t1:p")
+        );
+    }
+}
+
+// Only the operator's own press of Fork agent takes the screen and the
+// keyboard (#1271): a fork another caller asks for is made and drawn where
+// it goes, and waits there.
+#[test]
+fn a_fork_the_operator_did_not_press_stays_behind() {
+    let before = ["w-order:t1", "w-order:t2"];
+    for tab in [true, false] {
+        let (mut runtime, checkout, elsewhere) = entered_from_elsewhere(&before);
+        choose_checkout(&mut runtime, "workspace:elsewhere", &elsewhere);
+        runtime.ingest_session(Ok(fork_session(&before, "w-else:t1", None)));
+        let screen = fork_on_screen(&runtime);
+        pending_fork(&mut runtime, "w-order:t1:p", Some("fork-keys"));
+        runtime
+            .forks_in_flight
+            .get_mut("w-order:t1:p")
+            .expect("the fork is starting")
+            .origin = super::events::ForkOrigin::Agent;
+        let (tab_id, pane) = if tab {
+            (Some("w-order:t4"), "w-order:t4:p")
+        } else {
+            (None, "w-order:t1:p2")
+        };
+        runtime.ingest_fork_pane("w-order:t1:p", tab_id, pane);
+        runtime.ingest_session(Ok(fork_session(&before, "w-else:t1", None)));
+        assert_eq!(fork_on_screen(&runtime), screen, "tab: {tab}");
+        assert_eq!(
+            input_state(&runtime, "fork-keys"),
+            Some(InputRequestState::Discarded),
+            "tab: {tab}"
+        );
+        if tab {
+            assert!(
+                ordered_tab_ids(&runtime, &checkout)
+                    .iter()
+                    .any(|tab| tab == "w-order:t4")
+            );
+        }
+    }
+}
+
+// A device's pane is drawn by the device that holds it, never ahead of Herdr
+// on this machine.
+#[test]
+fn a_fork_of_a_device_pane_draws_nothing_here() {
+    let (mut runtime, _) = setup();
+    let source = "remote:device-1:pane:w1:p1";
+    pending_fork(&mut runtime, source, None);
+    runtime.ingest_fork_pane(source, Some("w1:t2"), "remote:device-1:pane:w1:p2");
+    runtime.ingest_fork_pane(source, None, "remote:device-1:pane:w1:p3");
+    assert!(runtime.provisional_tabs.is_empty());
+    assert!(runtime.pane_operations.is_empty());
 }
 
 fn focus_pane(runtime: &mut Runtime, pane: &str) {

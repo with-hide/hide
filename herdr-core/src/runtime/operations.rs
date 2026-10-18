@@ -350,16 +350,6 @@ impl Runtime {
         changed |= self.expire_close_operations(now_unix_ms);
         changed |= self.expire_pane_operations(now_unix_ms);
         changed |= self.expire_provisional_tabs(now_unix_ms);
-        changed |= Self::settle_made_panes(
-            &mut self.forks_in_flight,
-            |pane_id| {
-                self.snapshot
-                    .pane_layouts
-                    .iter()
-                    .any(|layout| layout.pane_ids().contains(&pane_id))
-            },
-            now_unix_ms,
-        );
         changed |= self.expire_remote_operations(now_unix_ms);
         changed |= self.expire_pending_choice(now_unix_ms);
         changed |= self.advance_tree_closes();
@@ -901,6 +891,75 @@ impl Runtime {
         self.sync_recent_closed_snapshot();
         self.pump_geometry_queue(&scope_id);
         true
+    }
+
+    /// Draws a split Herdr has already answered outside the tab's line, as
+    /// the fork worker's split right of its source is, through the record a
+    /// split Hide asked for keeps from its answer: drawn until Herdr's layout
+    /// lists `created`, unknown at the same bound, and holding the tab's line
+    /// meanwhile, since what waits there is predicted on the layout with it.
+    pub(super) fn draw_answered_split(&mut self, target: &str, created: &str) {
+        let (Some(scope_id), Some(baseline_signature)) = (
+            self.pane_operation_scope(target),
+            self.pane_operation_baseline(target),
+        ) else {
+            return;
+        };
+        let id = self.insert_queued_geometry(
+            "pane.split",
+            target.to_owned(),
+            scope_id,
+            baseline_signature,
+            GeometryRequest::Pane(PaneControlAction::Split {
+                pane_id: target.to_owned(),
+                direction: PaneSplitDirection::Right,
+                cwd: None,
+            }),
+            Some(super::pane_prediction::Prediction::Split {
+                target: target.to_owned(),
+                direction: crate::model::PaneLayoutDirection::Right,
+                created: created.to_owned(),
+            }),
+        );
+        if let Some(operation) = self.pane_operations.get_mut(&id) {
+            operation.phase = "awaiting_topology".to_owned();
+            operation.stage = "topology".to_owned();
+            operation.created_pane_id = Some(created.to_owned());
+            operation.deadline_at_unix_ms =
+                Some(unix_milliseconds().saturating_add(CLOSE_STAGE_TIMEOUT_MS));
+        }
+        self.request_republish();
+        self.settle_pane_operation_from_known_topology(&id);
+        self.sync_recent_closed_snapshot();
+    }
+
+    /// Takes back the drawn split of `created`, a pane its worker closed
+    /// before Herdr laid it out, and lets the tab's line move on.
+    pub(super) fn take_back_answered_split(&mut self, created: &str) {
+        let Some(id) = self
+            .pane_operations
+            .values()
+            .find(|operation| {
+                operation.phase == "awaiting_topology"
+                    && operation.created_pane_id.as_deref() == Some(created)
+            })
+            .map(|operation| operation.id.clone())
+        else {
+            return;
+        };
+        let operation = self
+            .pane_operations
+            .remove(&id)
+            .expect("the operation was just found");
+        crate::diagnostic!(serde_json::json!({
+            "component": "pane_operation",
+            "kind": "pane.split.taken_back",
+            "tab_id": operation.scope_id,
+            "pane_id": created,
+        }));
+        self.request_republish();
+        self.pump_geometry_queue(&operation.scope_id);
+        self.sync_recent_closed_snapshot();
     }
 
     /// Admits the operator's close of one pane among several into its tab's
