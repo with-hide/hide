@@ -49,8 +49,18 @@ class PrivateCLI(unittest.TestCase):
             subprocess.run(['/usr/bin/git', *args], cwd=self.checkout, env=self.env, check=True,
                            capture_output=True)
 
-    def invoke(self):
+    def invoke(self, during_package=''):
         command = 'from agent_journey.cli import main; import sys; sys.exit(main(sys.argv[1:]))'
+        if during_package:
+            # The OS directory boundary orders the competing operator write
+            # after the initial watch and before the unconditional end check.
+            package = self.run / 'probe/package/hide.app/Contents/Resources'
+            command = (f'import os\noriginal_mkdir = os.mkdir\n'
+                       f'def mkdir(path, *args, **kwargs):\n'
+                       f'    if os.fspath(path) == {str(package)!r}:\n'
+                       + ''.join('        ' + line + '\n' for line in during_package.splitlines())
+                       + '    return original_mkdir(path, *args, **kwargs)\n'
+                       + 'os.mkdir = mkdir\n' + command)
         result = subprocess.run([sys.executable, '-c', command, '--mode', 'local', '--fake-model',
                                  '--agents', 'pi', '--run-dir', str(self.run), '--herdr-bin',
                                  str(self.checkout / 'target/debug/herdr')],
@@ -62,6 +72,34 @@ class PrivateCLI(unittest.TestCase):
         self.assertFalse((self.run / 'watch-private').exists())
         self.assertNotIn('unexpected_execution', result.stdout + result.stderr)
         return report
+
+    def test_end_comparison_catches_configuration_link_and_new_entry_traces(self):
+        config = self.operator / '.codex/config.toml'
+        config.parent.mkdir()
+        link = self.operator / '.local/bin/claude'
+        link.parent.mkdir(parents=True)
+        for case, expected in (('config', '.codex/config.toml'),
+                               ('link', '.local/bin/claude'), ('new', '.codex')):
+            with self.subTest(case=case):
+                shutil.rmtree(self.run, ignore_errors=True)
+                config.write_text('external configuration')
+                link.unlink(missing_ok=True)
+                link.symlink_to(self.base / 'old-program')
+                entry = config.parent / 'new-session'
+                entry.unlink(missing_ok=True)
+                action = {
+                    'config': f'open({str(config)!r}, "w").write({str(self.run)!r})',
+                    'link': f'os.unlink({str(link)!r})\nos.symlink({str(self.run / "program")!r}, {str(link)!r})',
+                    'new': f'open({str(entry)!r}, "w").write({str(self.run)!r})',
+                }[case]
+                report = self.invoke(during_package=action)
+                self.assertEqual(report['operator_watch']['changed'], [expected])
+                # The package's missing hook binary proves the initial guard
+                # admitted the run; its separate error cannot hide end refusal.
+                self.assertTrue(any(row['reason'] == 'build_this_worktrees_hide_agent_hooks_first'
+                                    for row in report['failures']))
+                self.assertTrue(any('operator_watch_run_trace' in row['reason']
+                                    for row in report['failures']))
 
     def test_run_path_in_configuration_is_exit_two_and_reports_no_hash_or_link_target(self):
         config = self.operator / '.codex/auth.json'

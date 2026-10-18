@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import stat
 
-from agent_live_check.protection import MAX_CONFIG_FILES, ProtectionError, configuration_bytes, write_private
+from agent_live_check.protection import MAX_CONFIG_FILES, ProtectionError, shared_configuration_bytes, write_private
 from . import claude_watch, database_watch
 from .watch_markers import MAX_SCAN_BYTES, Markers
 
@@ -31,7 +31,7 @@ class OperatorWatch:
 
     def __init__(self, root, scratch=None, run=None, markers=()):
         self.root, self.scratch, self.run = root, scratch, run
-        self.markers = Markers(run, markers)
+        self.markers = Markers(run, markers, home=root)
         self.copies = []
         self.before = self.snapshot()
 
@@ -75,7 +75,9 @@ class OperatorWatch:
         for name in CONFIGURATION:
             path = self.root / name
             target = os.readlink(path) if path.is_symlink() else None
-            value = configuration_bytes(path.resolve())
+            value, reason = shared_configuration_bytes(path.resolve())
+            if reason:
+                raise ProtectionError(reason)
             result[name] = {"sha256": value[0].digest if value else None, "target": target,
                             "marker": self.markers.link(path) or bool(value and self.markers.contains(value[1]))}
         result[".claude.json"] = claude_watch.snapshot(self.root, self.markers)

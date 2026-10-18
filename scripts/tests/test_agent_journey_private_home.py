@@ -325,6 +325,27 @@ class OmpWatch(unittest.TestCase):
             self.assertEqual(len(opened), expected_opens)
             self.assertEqual(list(self.scratch.iterdir()), [])
 
+    def test_checkpoint_removing_wal_before_copy_retries_without_failing_the_watch(self):
+        from unittest.mock import patch
+        watch = fake_private.OperatorWatch(self.root, self.scratch)
+        wal = Path(str(self.path) + '-wal')
+        self.assertTrue(wal.exists())
+        original = os.open
+
+        def checkpoint(path, flags, *args, **kwargs):
+            if Path(path) == wal:
+                self.connection.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+                self.connection.close()
+                # The open copy descriptor can defer SQLite's own unlink on
+                # macOS; complete the fixture checkpoint's removal explicitly.
+                wal.unlink(missing_ok=True)
+            return original(path, flags, *args, **kwargs)
+
+        with patch('os.open', side_effect=checkpoint):
+            self.assertEqual(watch.check()['changed'], [])
+        self.assertFalse(wal.exists())
+        self.assertEqual(list(self.scratch.iterdir()), [])
+
     def test_copy_budget_is_enforced_before_reading_a_sparse_file(self):
         self.connection.close()
         with self.path.open('wb') as stream:

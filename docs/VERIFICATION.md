@@ -438,6 +438,9 @@ The four guards are enforced before or during every admitted agent's journey:
 3. The run inspects the following operator watch at its start and after cleanup for traces of this run: its directory, fake server addresses with ports, and a per-run fake key (including the tail Claude stores).
    A trace in a watched file, selected database row or new top-level entry, or a watched link pointing inside the run, fails with exit 2.
    Content changes without those markers, including concurrent token refreshes and temporary entries, are reported as external changes and do not fail.
+   Run paths include HOME-relative `~/` spelling and macOS `/var` and `/tmp` aliases, in plain or JSON-escaped form; a path boundary excludes similarly named sibling runs.
+   Fake server addresses include both `127.0.0.1:PORT` and `localhost:PORT`, with a boundary excluding longer ports.
+   A configuration file moving during a read retries at most three times; continued movement still fails with exit 2.
    Unreadable marker checks still fail with exit 2.
    Reports retain fixed item names and pass/fail only, never hashes, link targets, entry lists or configuration/login bytes; the watch never restores or changes operator files.
 4. The adapter declares an API-key environment route, the provider configuration names that variable, and the fake server accepts a model request only when it carries that key.
@@ -446,6 +449,7 @@ The four guards are enforced before or during every admitted agent's journey:
 The watch covers the `.local/bin/claude` link, the configuration/login files below, and the top-level names under `.claude`, `.codex`, `.gemini`, `.grok`, `.omp`, `.pi` and `.local/share/opencode`.
 Existing session/history append records are not compared.
 New top-level entries are scanned recursively for run markers, within a shared budget of 50,000 entries and 1 GiB per snapshot; exceeding either cap fails the run.
+An entry disappearing during enumeration or open, and a socket, FIFO or other special entry, contains no file trace and does not fail the watch.
 Internal snapshots retain hashes and names in memory only.
 The private lane admits only the process environment basics named in `PRIVATE_ENV`; provider, package-manager and agent settings come from its explicit route.
 Keychain file access is denied, but access through the securityd Mach service has not been verified; no operator keychain item is queried as a probe.

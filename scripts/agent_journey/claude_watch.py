@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from agent_live_check.protection import ProtectionError, configuration_bytes
+from agent_live_check.protection import ProtectionError, shared_configuration_bytes
 
 KEYS = ("oauthAccount", "primaryApiKey", "customApiKeyResponses", "installMethod", "autoUpdates",
         "hasCompletedOnboarding", "lastOnboardingVersion")
@@ -13,7 +13,9 @@ KEYS = ("oauthAccount", "primaryApiKey", "customApiKeyResponses", "installMethod
 def snapshot(root, markers):
     try:
         path = root / ".claude.json"
-        value = configuration_bytes(path.resolve())
+        value, reason = shared_configuration_bytes(path.resolve())
+        if reason:
+            raise ProtectionError(reason)
         if value is None:
             return {"marker": markers.link(path)} if path.is_symlink() else None
         data = json.loads(value[1])
