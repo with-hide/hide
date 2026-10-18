@@ -105,12 +105,14 @@ class Journey:
         write_private(path, redact((json.dumps(value, indent=2, ensure_ascii=False, default=str) + "\n").encode()))
         return path.name
 
-    def capture(self, name):
-        """The agent pane's screen, kept only for a failed cell (PRD B12)."""
-        if not self.pane:
+    def capture(self, name, pane=None):
+        """The screen of the pane the cell measured, the agent's own unless
+        it names another, kept only for a failed cell (PRD B12)."""
+        pane = pane or self.pane
+        if not pane:
             return None
         try:
-            _, text, _ = self.runtime.command(["pane", "read", self.pane, "--source", "recent-unwrapped",
+            _, text, _ = self.runtime.command(["pane", "read", pane, "--source", "recent-unwrapped",
                                                "--lines", "200"], check=False)
         except ProcessError:
             return None
@@ -119,7 +121,9 @@ class Journey:
         write_private(path, redact(text.encode()))
         return path.name
 
-    def settle(self, name, verdict, evidence=None):
+    def settle(self, name, verdict, evidence=None, pane=None):
+        """`pane` the pane the cell measured when it is not the agent's own,
+        as a fork's is."""
         status, reason = verdict
         if status == cells.FAIL and self.quota is not None:
             spent = spent_quota(self.id, self.paths, self.quota, self.sessions)
@@ -131,8 +135,8 @@ class Journey:
                 cells.settle_agent(self.table, self.id, reason)
                 return False
         if status == cells.FAIL:
-            pane = self.capture(name)
-            evidence = ", ".join(value for value in (evidence, pane) if value) or None
+            screen = self.capture(name, pane)
+            evidence = ", ".join(value for value in (evidence, screen) if value) or None
         cells.settle(self.table, self.id, name, status, reason, evidence)
         return status == cells.PASS
 
@@ -558,7 +562,8 @@ class Journey:
     def turn_in(self, pane, record):
         """Types a prompt into `pane`, another agent pane this journey
         opened, as the operator does, and waits for its answer there. Returns
-        (verdict, read, token); the journey's own pane is unchanged after."""
+        (verdict, read, token); the journey's own pane is unchanged after, so
+        a cell settled after it names `pane` for its screen capture."""
         saved = self.pane, self.session, self.reference
         self.pane, self.session, self.reference = pane, None, None
         try:

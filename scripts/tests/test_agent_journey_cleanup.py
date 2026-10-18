@@ -133,6 +133,28 @@ class FinishedAgent(unittest.TestCase):
         self.assertEqual(record["closed"], {"w4:p2": "closed", "w4:p3": "closed", "w5:p1": "pane_not_found"})
 
 
+class FailedCellScreen(unittest.TestCase):
+    def test_a_failed_cell_keeps_the_screen_of_the_pane_it_measured(self):
+        with tempfile.TemporaryDirectory() as folder:
+            read = []
+
+            def command(argv, check=True):
+                read.append(argv[2])
+                return 0, f"screen of {argv[2]}\n", ""
+            runtime = SimpleNamespace(run=Path(folder), command=command,
+                                      owner=SimpleNamespace(cancelled=threading.Event()))
+            table = {"opencode": {name: {"status": "pending"} for name in ("fork", "resume")}}
+            journey = Journey(runtime, None, None, table, {"id": "opencode", "herdr_kind": "opencode", "model_flag": []},
+                              Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={})
+            journey.pane = "w3:p1"
+            # A fork is measured in its own pane while the journey's stays the source's.
+            journey.settle("fork", ("fail", "no answer"), pane="w3:p7")
+            journey.settle("resume", ("fail", "no answer"))
+            self.assertEqual(read, ["w3:p7", "w3:p1"])
+            self.assertEqual((Path(folder) / "opencode-fork-pane.txt").read_text(), "screen of w3:p7\n")
+            self.assertEqual(table["opencode"]["fork"]["evidence"], "opencode-fork-pane.txt")
+
+
 class LeftoversAndReport(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()

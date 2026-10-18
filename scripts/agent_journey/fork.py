@@ -108,4 +108,4 @@ def measure(journey):
         answer = cells.with_turn(cells.reply_verdict(read, row["session_id"], value), turn)
         status, reason = (status, reason + "; " + answer[1]) if answer[0] == cells.PASS else \
             (answer[0], "the fork's answer: " + answer[1])
-    journey.settle(CELL, (status, reason), journey.evidence(CELL, record))
+    journey.settle(CELL, (status, reason), journey.evidence(CELL, record), pane=opened[0])
