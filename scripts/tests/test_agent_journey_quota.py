@@ -101,16 +101,16 @@ class Gemini(unittest.TestCase):
 
 
     def interactive(self, source="errorreport.go:224", severity="E"):
-        """An interactive agy's log record of the refusal print mode reports as
-        `quota-spent.txt`: the same SDK error under a glog header, its line
-        breaks continuing the record (run 39097738256, Linux, 2026-10-18)."""
-        error = json.loads((FIXTURES / "quota-spent.txt").read_text().strip().removeprefix("AGY_ERROR: "))["short_error"]
-        return f"{severity}1018 04:40:32.771498     766 {source}] {error}"
+        """The first of the two records an interactive agy logged for a spent
+        day (`quota-spent-interactive.log`), its source and severity as given."""
+        record = (FIXTURES / "quota-spent-interactive.log").read_text().split("\nE1018 ")[0]
+        return severity + record[1:].replace("errorreport.go:224", source, 1)
 
     def test_an_interactive_agys_logged_refusal_of_a_spent_day_leaves_the_turn_unmeasured(self):
         transcript = session({"type": "USER_INPUT"})
-        self.log("I1018 04:40:24.229659      50 server.go:1765] Language server version: 1.4.1", self.interactive(),
-                 "I1018 04:40:33.000000      50 server.go:1800] next")
+        recorded = (FIXTURES / "quota-spent-interactive.log").read_text().rstrip("\n")
+        self.log("I1018 05:03:54.229659      50 server.go:1765] Language server version: 1.4.1", recorded,
+                 "I1018 05:03:55.000000      50 server.go:1800] next")
         self.assertEqual(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home),
                          ["GenerateRequestsPerDayPerProjectPerModel-FreeTier"])
         # Only agy's own error report counts: an info record or another source carrying the text does not.
