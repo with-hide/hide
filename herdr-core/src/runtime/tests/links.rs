@@ -1240,6 +1240,8 @@ fn native_fork_current_journey(kind: &'static str) {
         "source-session-changed",
         "source-reference-changed",
         "source-cwd-changed",
+        "source-agent-gone",
+        "source-pane-gone",
         "during-tab-connect",
         "during-start-connect",
     ] {
@@ -1322,6 +1324,8 @@ fn native_fork_current_journey(kind: &'static str) {
                         | "source-session-changed"
                         | "source-reference-changed"
                         | "source-cwd-changed"
+                        | "source-agent-gone"
+                        | "source-pane-gone"
                 ) {
                     let runtime = status_runtime.upgrade().unwrap();
                     let mut runtime = runtime.lock().unwrap();
@@ -1359,6 +1363,25 @@ fn native_fork_current_journey(kind: &'static str) {
                                 .find(|pane| pane.id == parent)
                                 .unwrap()
                                 .cwd = "another-folder".into();
+                        }
+                        "source-agent-gone" => {
+                            runtime
+                                .snapshot
+                                .navigator
+                                .agents
+                                .retain(|agent| agent.pane_id != parent);
+                        }
+                        "source-pane-gone" => {
+                            for tab in runtime
+                                .snapshot
+                                .navigator
+                                .workspaces
+                                .iter_mut()
+                                .flat_map(|workspace| &mut workspace.checkouts)
+                                .flat_map(|checkout| &mut checkout.tabs)
+                            {
+                                tab.panes.retain(|pane| pane.id != parent);
+                            }
                         }
                         _ => unreachable!(),
                     }
@@ -1448,8 +1471,11 @@ fn native_fork_current_journey(kind: &'static str) {
                     "agent.start"
                 ],
                 "during-tab-connect" => vec!["session.snapshot"],
-                "source-session-changed" | "source-reference-changed" | "source-cwd-changed" =>
-                    vec!["session.snapshot", "layout.apply", "pane.close"],
+                "source-session-changed"
+                | "source-reference-changed"
+                | "source-cwd-changed"
+                | "source-agent-gone"
+                | "source-pane-gone" => vec!["session.snapshot", "layout.apply", "pane.close"],
                 _ => vec![
                     "session.snapshot",
                     "layout.apply",

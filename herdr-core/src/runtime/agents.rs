@@ -2411,13 +2411,12 @@ impl Runtime {
                 .live
                 .as_ref()
                 .is_some_and(|live| Arc::ptr_eq(&live.api_connector, connector))
+            // A later press for the same pane/session cannot authorize this
+            // worker: each admitted fork has its own name.
             && self
                 .forks_in_flight
                 .get(&request.parent_pane_id)
-                .is_some_and(|pending| {
-                    pending.generation == request.connection_generation
-                        && pending.name == request.name
-                })
+                .is_some_and(|pending| pending.name == request.name)
             && self.snapshot.navigator.agents.iter().any(|agent| {
                 agent.pane_id == request.parent_pane_id
                     && hide_agent_adapter::canonical_kind(&agent.agent_kind) == request.agent.kind()
