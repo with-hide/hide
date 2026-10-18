@@ -109,7 +109,7 @@ def not_configured(kind, fixture_bin, fake=False):
 
 def route_names(kind, fixture_bin, fake_env=None):
     """The environment CI mode adds to an agent, by name only (its values are paths or a key)."""
-    names = [*home_env(Path()), "HIDE_STATE_DIR", "PATH", *QUIET, *LOGINS[kind]["env"]]
+    names = [*home_env(Path()), "HIDE_STATE_DIR", "PATH", *temp_env(Path()), *QUIET, *LOGINS[kind]["env"]]
     if fixture_bin:
         names.append("HIDE_E2E_JOURNEY")
     elif fake_env is not None:
@@ -128,10 +128,12 @@ def key_file(runtime, kind):
 def wrapper(runtime, program, kind, path, journey_config=None, fake_env=None):
     """The program a pane runs as `kind`: the agent in the disposable HOME,
     with the runner's PATH behind the candidate's `hide` and its key, or the
-    fake model's environment (fake_lane.py) in place of a key."""
+    fake model's environment (fake_lane.py) in place of a key. Its PATH and
+    temporary folder are set here, since a Windows pane takes both from the
+    account's registry rather than from Herdr."""
     private_directory(runtime.bin)
     environment = {**home_env(runtime.home), "HIDE_STATE_DIR": str(runtime.state),
-                   "PATH": os.pathsep.join((str(runtime.bin), path)), **QUIET,
+                   "PATH": os.pathsep.join((str(runtime.bin), path)), **temp_env(runtime.run / "agent-tmp"), **QUIET,
                    **{name: str(runtime.home / relative) for name, relative in LOGINS[kind]["env"].items()}}
     if journey_config:
         environment["HIDE_E2E_JOURNEY"] = str(journey_config)

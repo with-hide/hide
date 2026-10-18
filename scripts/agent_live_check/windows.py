@@ -8,7 +8,8 @@ outside the job; the job ends everything in it when its last handle closes
 the tree with it. The handle is never inheritable and no child is given it.
 The private files follow hide-platform's `fs::private` (Windows): created
 with an access list naming only this account, and checked by owner and
-access list. Imported only on Windows.
+access list. The account's Path in the registry is where a pane Herdr opens
+reads its PATH (`UserPath`). Imported only on Windows.
 """
 
 import ctypes
@@ -16,6 +17,7 @@ from ctypes import wintypes
 import msvcrt
 import os
 import threading
+import winreg
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
@@ -469,3 +471,41 @@ def is_private(path):
         return True
     finally:
         LocalFree(descriptor)
+
+
+class UserPath:
+    """`folder` first on this account's own Path in the registry until
+    `close`. Herdr builds a Windows pane's environment from the registry (its
+    portable-pty reads HKLM's and HKCU's Environment over the server's own),
+    so a PATH given to Herdr never reaches a pane Hide opens, and an agent the
+    run starts there is found only through this Path, as an operator's is.
+    The caller holds it only on a disposable account (CI mode)."""
+
+    def __init__(self, folder):
+        self.folder = str(folder)
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
+                            winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as key:
+            try:
+                value, kind = winreg.QueryValueEx(key, "Path")
+                self.existed = True
+            except FileNotFoundError:
+                value, kind, self.existed = "", winreg.REG_EXPAND_SZ, False
+            winreg.SetValueEx(key, "Path", 0, kind, f"{self.folder};{value}" if value else self.folder)
+
+    def close(self):
+        """Takes `folder` back out, keeping whatever else changed the Path
+        meanwhile; a Path that did not exist before is removed again."""
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
+                            winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as key:
+            try:
+                value, kind = winreg.QueryValueEx(key, "Path")
+            except FileNotFoundError:
+                return
+            entries = value.split(";")
+            wanted = os.path.normcase(self.folder)
+            entries = next(([*entries[:index], *entries[index + 1:]] for index, entry in enumerate(entries)
+                            if os.path.normcase(entry) == wanted), entries)
+            if entries or self.existed:
+                winreg.SetValueEx(key, "Path", 0, kind, ";".join(entries))
+            else:
+                winreg.DeleteValue(key, "Path")

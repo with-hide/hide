@@ -30,6 +30,9 @@ from agent_live_check.runtime import Runtime, clean_env
 from agent_live_check.sandbox import WriteSandbox
 from agent_live_check.system import STOP_SIGNALS, WINDOWS, exe, git as git_program, launcher
 
+if WINDOWS:
+    from agent_live_check.windows import UserPath
+
 from . import ci, clis, cells, fake_lane, fake_model, memory, omp_state, opencode_service, quota
 from .controller import Controller
 from .daemon import Daemon
@@ -494,7 +497,7 @@ def main(argv=None):
                            run_seconds=SETUP_SECONDS + AGENT_SECONDS * max(1, len(measured)))
     previous = {signum: signal.signal(signum, lambda *_: owner.cancelled.set())
                 for signum in STOP_SIGNALS}
-    runtime = guard = daemon = None
+    runtime = guard = daemon = user_path = None
     # One fake model per agent, so each one's log counts that agent's requests alone.
     servers = {}
     # Each OpenCode agent's program, environment and private server port, whose server the run ends.
@@ -530,6 +533,10 @@ def main(argv=None):
         else:
             sandbox, ready = None, prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, urls,
                                               services)
+        if WINDOWS and not local:
+            # Before Herdr opens a pane, which reads its PATH from the
+            # account's registry: the agents' wrappers are found through it.
+            user_path = UserPath(runtime.bin)
         report["herdr"] = runtime.start()
         if sandbox:
             allow_hook_route(sandbox, runtime)
@@ -646,6 +653,12 @@ def main(argv=None):
                 owner.close()
             except Exception as cleanup_error:
                 report["cleanup"]["failures"].append(str(cleanup_error))
+        if user_path:
+            try:
+                user_path.close()
+            except OSError as error:
+                report["cleanup"]["confirmed"] = False
+                report["cleanup"].setdefault("failures", []).append(f"user_path_not_restored: {error}")
         if omp_sessions is not None and report["cleanup"].get("processes_confirmed"):
             # After every process ended, so no omp still writes its state.
             projects = [Path(item["worktree"]) for item in report["created"] if item.get("worktree")]

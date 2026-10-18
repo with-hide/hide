@@ -1,8 +1,9 @@
 """The live check's Windows forms, run on Windows (docs/VERIFICATION.md, Agent
 journey): a child's job ends its whole tree when the owner dies, every cap
 is the Unix guardian's and a crossed one is a named failure, private files
-admit only this account, and the pane shell's commands and the launchers
-carry their arguments and exit status.
+admit only this account, the pane shell's commands and the launchers carry
+their arguments and exit status, and the run's folder leaves the account's
+Path as it found it.
 
 No Herdr, hided or agent is needed; `agent-journey.yml` runs this file on a
 Windows runner. Elsewhere every test is skipped.
@@ -249,6 +250,50 @@ class ShellForms(unittest.TestCase):
         (folder / "object").chmod(0o444)
         remove_tree(self.folder / "checkout")
         self.assertFalse((self.folder / "checkout").exists())
+
+
+@unittest.skipUnless(WINDOWS, "the Windows forms run on Windows")
+class UserPathHold(unittest.TestCase):
+    """The account's Path in the registry, where a Herdr pane reads its PATH."""
+
+    def read(self):
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            try:
+                return winreg.QueryValueEx(key, "Path")
+            except FileNotFoundError:
+                return None
+
+    def write(self, value):
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE) as key:
+            if value is None:
+                winreg.DeleteValue(key, "Path")
+            else:
+                winreg.SetValueEx(key, "Path", 0, value[1], value[0])
+
+    def test_the_run_folder_comes_first_and_leaves_what_changed_meanwhile(self):
+        from agent_live_check.windows import UserPath
+        before = self.read()
+        self.addCleanup(self.write, before)
+        folder = Path(tempfile.gettempdir()) / "journey-run/bin"
+        held = UserPath(folder)
+        value, kind = self.read()
+        self.assertEqual(value.split(";")[0], str(folder))
+        # An installer adds its own folder while the run holds the Path.
+        self.write((value + ";C:\\installed\\bin", kind))
+        held.close()
+        expected = ";".join(filter(None, [before[0] if before else "", "C:\\installed\\bin"]))
+        self.assertEqual(self.read(), (expected, before[1] if before else kind))
+
+    def test_a_path_that_did_not_exist_is_removed_again(self):
+        from agent_live_check.windows import UserPath
+        before = self.read()
+        self.addCleanup(self.write, before)
+        if before is not None:
+            self.write(None)
+        UserPath(Path(tempfile.gettempdir()) / "journey-run/bin").close()
+        self.assertIsNone(self.read())
 
 
 if __name__ == "__main__":
