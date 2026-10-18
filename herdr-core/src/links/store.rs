@@ -985,14 +985,15 @@ impl LinkStore {
     /// Removes the sessions their project's Copied history no longer keeps
     /// (D-18, D-25, B33). `days` answers a project key's policy (0 is Off,
     /// None the default 90); `file_exists` says whether a local file is
-    /// still there. Returns how many sessions left.
+    /// still there. Returns the sessions that left, which the session
+    /// archive drops too (PRD session-archive B31).
     pub fn prune(
         &mut self,
         days: &dyn Fn(&str) -> Option<u16>,
         local_device: &str,
         files_present: &mut FilesPresent<'_>,
         now: u64,
-    ) -> Result<usize, String> {
+    ) -> Result<Vec<SessionIdentity>, String> {
         let projects = self.projects()?;
         let mut owner: HashMap<SessionKey, usize> = HashMap::new();
         let sessions = self.all_sessions()?;
@@ -1068,8 +1069,66 @@ impl LinkStore {
                 gone.push(session.key.clone());
             }
         }
+        self.remove_sessions(&gone)?;
+        Ok(gone.into_iter().map(SessionKey::identity).collect())
+    }
+
+    /// Removes Hide's record lines of the named sessions, and nothing of the
+    /// agents' own conversation files (PRD session-archive D-15, B29).
+    pub fn delete_sessions(&mut self, sessions: &[SessionIdentity]) -> Result<(), String> {
+        let keys = sessions
+            .iter()
+            .map(|session| SessionKey {
+                device: session.device_id.clone(),
+                agent: session.agent.clone(),
+                id: session.session_id.clone(),
+            })
+            .collect::<Vec<_>>();
+        self.remove_sessions(&keys)
+    }
+
+    /// The archived sessions the record holds no line for whose project's
+    /// Copied history has run out since they were archived (D-14, B31): Off
+    /// keeps them, an unknown project takes the default 90 days.
+    pub fn expired_archived(
+        &self,
+        archived: &[ArchivedSession],
+        days: &dyn Fn(&str) -> Option<u16>,
+        now: u64,
+    ) -> Result<Vec<SessionIdentity>, String> {
+        if archived.is_empty() {
+            return Ok(Vec::new());
+        }
+        let projects = self.projects()?;
+        let mut expired = Vec::new();
+        for held in archived {
+            let key = SessionKey {
+                device: held.session.device_id.clone(),
+                agent: held.session.agent.clone(),
+                id: held.session.session_id.clone(),
+            };
+            if self.session(&key)?.is_some() {
+                continue;
+            }
+            let policy = projects
+                .iter()
+                .find(|project| {
+                    project.device == held.session.device_id && project.root == held.project_root
+                })
+                .and_then(|project| days(&project.key))
+                .unwrap_or(90);
+            if policy != 0
+                && held.archived_at_unix_ms < now.saturating_sub(u64::from(policy) * DAY_MS)
+            {
+                expired.push(held.session.clone());
+            }
+        }
+        Ok(expired)
+    }
+
+    fn remove_sessions(&mut self, gone: &[SessionKey]) -> Result<(), String> {
         let tx = self.connection.transaction().map_err(failed)?;
-        for key in &gone {
+        for key in gone {
             for table in [
                 "sessions",
                 "session_branches",
@@ -1104,7 +1163,7 @@ impl LinkStore {
                 .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
                 .map_err(failed)?;
         }
-        Ok(gone.len())
+        Ok(())
     }
 
     pub fn projects(&self) -> Result<Vec<ProjectRow>, String> {
@@ -2390,6 +2449,25 @@ struct SessionKey {
     device: String,
     agent: String,
     id: String,
+}
+
+impl SessionKey {
+    fn identity(self) -> SessionIdentity {
+        SessionIdentity {
+            device_id: self.device,
+            agent: self.agent,
+            session_id: self.id,
+        }
+    }
+}
+
+/// A session the archive holds, which retention answers for even when the
+/// record has no line of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArchivedSession {
+    pub session: SessionIdentity,
+    pub project_root: String,
+    pub archived_at_unix_ms: u64,
 }
 
 /// A folder on a device.

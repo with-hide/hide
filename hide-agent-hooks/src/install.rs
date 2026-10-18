@@ -376,6 +376,12 @@ pub(crate) fn codex_command(helper: &Path, event: HookEvent) -> String {
     }
 }
 
+/// `value` quoted for this system's own shell (PowerShell on Windows, a
+/// POSIX shell elsewhere), for a command the operator is shown to type.
+pub fn quote_for_shell(value: &str) -> String {
+    Quoting::NATIVE.quote(value)
+}
+
 /// How a path is quoted in the command this system writes, and read back.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Quoting {

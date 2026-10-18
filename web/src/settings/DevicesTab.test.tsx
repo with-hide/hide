@@ -85,6 +85,31 @@ it("grows one line under the device for a failed part, with Reinstall, and the l
   await whole.unmount();
 });
 
+it("says a pass that stopped before changing anything once, naming the folder and what to change, and its Retry runs the pass again", async () => {
+  const refused = remote("mini", { kit: kit([], { refused: { cause: "unsafe", path: "/srv/shared", variable: null } }) });
+  const view = await mount(state([refused]));
+  const line = view.q('[data-kit-refused="mini"]')!;
+  expect(line.textContent).toBe("✕Hide stopped before changing anything. Another account can change this, or it is a link: /srv/shared. Make it a folder only you can change, then try again." + "Retry");
+  expect(view.q('[data-kit-problem="mini"]')).toBeNull();
+  await act(async () => { view.q('[data-kit-retry="mini"]')?.click(); });
+  expect(sent(view.events, "kit_reinstall")).toEqual([{ schema_version: 2, kind: "kit_reinstall", payload: { device_id: "mini" } }]);
+  await view.unmount();
+
+  const running = await mount(state([remote("mini", { kit: kit([], { busy: true, refused: { cause: "busy", path: null, variable: null } }) })]));
+  expect((running.q('[data-kit-retry="mini"]') as HTMLButtonElement).disabled).toBe(true);
+  await running.unmount();
+});
+
+it("says a refusal it cannot name as stopped, with Retry, never an empty line; too many projects is its own line", async () => {
+  const future = await mount(state([remote("mini", { kit: kit([], { refused: { cause: "a_cause_from_a_newer_build", path: null, variable: null } as never }) })]));
+  expect(future.q('[data-kit-refused="mini"]')!.textContent).toBe("✕Hide stopped before changing anything, for a reason this version of Hide can't name. Update Hide, then try again." + "Retry");
+  await future.unmount();
+
+  const projects = await mount(state([remote("mini", { kit: kit([], { refused: { cause: "projects", path: null, variable: null } }) })]));
+  expect(projects.q('[data-kit-refused="mini"]')!.textContent).toContain("More projects are registered than it can check.");
+  await projects.unmount();
+});
+
 it("says in one line when a device's Herdr stays older than Hide's, with the step its cause allows, and nothing once it moved or while it is out of reach (PRD device-herdr-update B3, B8)", async () => {
   const behind = (cause: "cannot_hand_off" | "handoff_failed") => remote("mini", { herdr_behind: { server_version: "0.9.1", version: "0.9.3", cause } });
   const failed = await mount(state([behind("handoff_failed")]));

@@ -333,6 +333,57 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Owned,
         Moves::Stays,
     ),
+    // An archived session names each member's machine, its pane, the pane
+    // a resume made and the registration it holds; its folders stay beside
+    // that machine id.
+    (
+        CORE_STATE,
+        "/session_archive/*/members/*/machine",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        CORE_STATE,
+        "/session_archive/*/members/*/pane_id",
+        Mechanism::Owned,
+        Moves::Pane,
+    ),
+    (
+        CORE_STATE,
+        "/session_archive/*/members/*/resume/pane_id",
+        Mechanism::Owned,
+        Moves::Pane,
+    ),
+    (
+        CORE_STATE,
+        "/session_archive/*/members/*/registration/actor/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        CORE_STATE,
+        "/session_archive/*/members/*/registration/actor/pane_id",
+        Mechanism::Owned,
+        Moves::Pane,
+    ),
+    (
+        CORE_STATE,
+        "/session_archive/*/project_root",
+        Mechanism::Owned,
+        Moves::Stays,
+    ),
+    (
+        CORE_STATE,
+        "/session_archive/*/members/*/checkout_path",
+        Mechanism::Owned,
+        Moves::Stays,
+    ),
+    (
+        CORE_STATE,
+        "/session_archive/*/members/*/cwd",
+        Mechanism::Owned,
+        Moves::Stays,
+    ),
     (
         CORE_STATE,
         "/factory_secretary_pane",
@@ -623,6 +674,14 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         DELIVERY_LEDGER,
         "/spawns/*/machine",
         Mechanism::Rewritten,
+        Moves::Whole,
+    ),
+    // A promotion task names its card by number; a fold of Project Memory
+    // that renumbered the card is read through (`reown`, promotion targets).
+    (
+        DELIVERY_LEDGER,
+        "/spawns/*/task/target",
+        Mechanism::Owned,
         Moves::Whole,
     ),
     (
@@ -1152,6 +1211,23 @@ fn convert_core_state(value: &mut Value, node: &str, _projects: &BTreeMap<String
             changed |= rewrite(record.get_mut("node_id"), node);
         }
     }
+    if let Some(archive) = value
+        .get_mut("session_archive")
+        .and_then(Value::as_object_mut)
+    {
+        for record in archive.values_mut() {
+            for member in each(record, "members") {
+                changed |= rewrite(member.get_mut("machine"), node);
+                changed |= rewrite(
+                    member
+                        .get_mut("registration")
+                        .and_then(|registration| registration.get_mut("actor"))
+                        .and_then(|actor| actor.get_mut("device_id")),
+                    node,
+                );
+            }
+        }
+    }
     changed
 }
 
@@ -1401,6 +1477,11 @@ mod tests {
         let write = |name: &str, value: Value| {
             std::fs::write(state.join(name), serde_json::to_vec(&value).unwrap()).unwrap();
         };
+        let archive = json!({"archive-1": {"project_root": root, "members": [{
+            "machine": "local", "pane_id": "w1:p6", "checkout_path": root, "cwd": root,
+            "resume": {"state": "done", "pane_id": "w1:p7"},
+            "registration": {"id": "agent-1", "actor": {"pane_id": "w1:p6", "name": "a", "kind": "claude", "device_id": "local"}},
+        }]}});
         write(
             CORE_STATE,
             json!({
@@ -1439,6 +1520,7 @@ mod tests {
                     "records": {"w1:p1": {"parent_pane_id": "w1:p0", "cwd": root}},
                     "dormant": {"sleep-1": {"node_id": "local", "old_pane_id": "w1:p5", "cwd": root}},
                 },
+                "session_archive": archive,
                 "expanded_paths": [root],
                 "operator_tab_names": {"w1:t1": "review"},
                 "project_base_branches": {root.clone(): "main"},
@@ -1479,7 +1561,8 @@ mod tests {
                 "watches": [{"parent": actor("local"), "target": actor("local")}],
                 "agents": [{"machine": "local", "native_machine": "local", "actor": actor("local"), "pane": "w1:p1", "host_scope": "/tmp/herdr.sock",
                             "project": root, "session": "s1", "instance": "term_1"}],
-                "spawns": [{"repo": root, "path": root, "requested_path": root, "pane": "w1:p2", "machine": "mini"}],
+                "spawns": [{"repo": root, "path": root, "requested_path": root, "pane": "w1:p2", "machine": "mini",
+                            "task": {"kind": "memory_promote", "target": "m1"}}],
                 "identity_waits": [{"id": "wait-8", "machine": "local", "pane": "w1:p3", "name": "fork-w1-p1-1-1", "kind": "codex",
                                     "owed": {"for": "fork", "origin": "agent-1"}}],
                 "node_clocks": {"mini": {"connected_ms": 60_000, "since": null}},

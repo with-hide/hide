@@ -830,6 +830,7 @@ impl AiRouter {
                         event.provider = Some(provider);
                         event.outcome_class = Some("ok".into());
                         event.attempt = Some(attempt);
+                        event.effort = request.effort(provider).map(str::to_owned);
                         event.output_tokens = response.usage.output_tokens;
                         event.thinking_tokens =
                             response.usage.thinking_tokens.filter(|tokens| *tokens > 0);
@@ -848,6 +849,7 @@ impl AiRouter {
                         event.provider = Some(provider);
                         event.outcome_class = Some(error.class().into());
                         event.attempt = Some(attempt);
+                        event.effort = request.effort(provider).map(str::to_owned);
                     });
                     let attempts = match &error {
                         AiError::Transient(_) => self.config.max_transient_attempts,
@@ -1537,7 +1539,26 @@ mod tests {
             pick: None,
             output_language: None,
             answer: crate::AnswerMode::default(),
+            provider_efforts: Vec::new(),
         }
+    }
+
+    /// A feature's effort applies to its own provider only, and a caller's
+    /// pick replaces it (label-judgment-fixes B17).
+    #[test]
+    fn a_features_effort_is_asked_of_its_provider_alone_and_a_pick_wins() {
+        let mut asked = request("p", "x");
+        asked.provider_efforts = vec![(ProviderId::CODEX, "medium".to_owned())];
+        assert_eq!(asked.effort(ProviderId::CODEX), Some("medium"));
+        assert_eq!(asked.effort(ProviderId::CLAUDE), None);
+        asked.pick = Some(crate::AiPick {
+            provider: ProviderId::CODEX,
+            model: None,
+            effort: Some("high".to_owned()),
+        });
+        assert_eq!(asked.effort(ProviderId::CODEX), Some("high"));
+        asked.pick.as_mut().unwrap().effort = None;
+        assert_eq!(asked.effort(ProviderId::CODEX), None);
     }
 
     /// A clock the test moves by hand, starting where the system's was when

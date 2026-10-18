@@ -138,6 +138,11 @@ pub struct AiRequest {
     /// way it always did.
     #[serde(default)]
     pub answer: AnswerMode,
+    /// The reasoning effort the feature asks of a provider when the caller
+    /// picked none, by provider; a provider not listed runs at its own
+    /// default. Absent on the wire from an older peer, which asks none.
+    #[serde(default)]
+    pub provider_efforts: Vec<(ProviderId, String)>,
 }
 
 /// How a request asks a provider for a JSON answer. The router validates the
@@ -149,15 +154,18 @@ pub enum AnswerMode {
     /// Codex's `outputSchema`) constrains the answer. Claude Code does this
     /// by calling a synthetic tool, which is a second model turn and a
     /// larger prompt: the right price for an answer with a long or strict
-    /// shape.
+    /// shape. Codex's surface is the API's strict mode, which refuses
+    /// `oneOf` and `uniqueItems`, so a schema using them cannot ask this way
+    /// there.
     #[default]
     Schema,
     /// The system prompt names the schema and asks for one JSON object, and
-    /// the object is read back from the text. One model turn: the choice for
-    /// a short answer whose shape the router checks anyway. The schema rides
-    /// in the system prompt, an argument of the child, so only a short one
-    /// belongs here. A provider that
-    /// has no schema surface answers this way in either mode.
+    /// the object is read back from the text; Claude and Codex both honour
+    /// it and send no schema of their own. One model turn: the choice for a
+    /// short answer whose shape the router checks anyway. For Claude the
+    /// schema rides in the system prompt, an argument of the child, so only
+    /// a short one belongs here. A provider that has no schema surface
+    /// answers this way in either mode.
     PlainJson,
 }
 
@@ -217,9 +225,18 @@ impl AiRequest {
             .unwrap_or(configured)
     }
 
-    /// The reasoning effort the caller picked, if any.
-    pub fn effort(&self) -> Option<&str> {
-        self.pick.as_ref().and_then(|pick| pick.effort.as_deref())
+    /// The reasoning effort `provider` is asked with: the caller's pick
+    /// (which only its own provider ever answers), else the feature's
+    /// effort for that provider, else none.
+    pub fn effort(&self, provider: ProviderId) -> Option<&str> {
+        match &self.pick {
+            Some(pick) => pick.effort.as_deref(),
+            None => self
+                .provider_efforts
+                .iter()
+                .find(|(id, _)| *id == provider)
+                .map(|(_, effort)| effort.as_str()),
+        }
     }
 
     /// The system prompt every provider is given: the feature's own, then

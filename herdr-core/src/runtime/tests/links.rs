@@ -1103,6 +1103,7 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
                 label: "resume".into(),
                 host: crate::checkout_owner::TabHost::Workspace("w-order".into()),
                 focus: true,
+                cwd: cwd.clone(),
                 resume_scope: Some(hide_session::SessionReadScope {
                     id: "native-pi".into(),
                     cwd,

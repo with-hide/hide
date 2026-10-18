@@ -227,6 +227,7 @@ impl Runtime {
             id,
             agent_kind: None,
             resume_scope: None,
+            cwd: synced.home.clone(),
             checkout_path: synced.home,
             label,
             host,

@@ -2,7 +2,7 @@ import type { Actions } from "../actions";
 import { Button } from "../components/ui/button";
 import { Note, Status } from "../components/settings-rows";
 import { useInterfaceTranslation } from "../i18n/client";
-import { kitConsentTerms, kitPartLine, kitPartText, kitProblems } from "../settings";
+import { kitConsentTerms, kitPartLine, kitPartText, kitProblems, kitRefusalLine } from "../settings";
 import type { Device } from "../snapshot";
 
 export function KitTerms({ helperRoot, cliDir }: { helperRoot: string | null; cliDir: string | null }) {
@@ -20,8 +20,9 @@ export function KitTerms({ helperRoot, cliDir }: { helperRoot: string | null; cl
  * What a machine's row says about Hide's kit (PRD settings-cleanup B54, B56):
  * nothing while it is in place. Only a part that needs the operator shows, as
  * one line under the machine with Reinstall, and the line goes when the
- * Reinstall lands. A machine whose kit does not run says why, and the first
- * install says it is under way.
+ * Reinstall lands. A machine whose kit does not run says why, a pass that
+ * stopped before changing anything says what stopped it once, with Try again,
+ * and the first install says it is under way.
  */
 export function KitProblem({ device, actions, onAct }: { device: Device; actions: Actions; onAct: () => void }) {
   const { t } = useInterfaceTranslation();
@@ -31,6 +32,26 @@ export function KitProblem({ device, actions, onAct }: { device: Device; actions
     return (
       <div data-machine-kit={`${device.id}:unavailable`}>
         <Note>{kit.unavailable}</Note>
+      </div>
+    );
+  }
+  if (kit.refused) {
+    // Try again runs the same pass, which checks again what stopped it.
+    return (
+      <div className="flex flex-wrap items-center gap-x-sm gap-y-xs" data-kit-refused={device.id} data-machine-kit={`${device.id}:${kit.busy ? "busy" : "refused"}`}>
+        <Status tone="error">{kitRefusalLine(kit.refused, t)}</Status>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={kit.busy}
+          onClick={() => {
+            onAct();
+            actions.reinstallKit(device.id);
+          }}
+          data-kit-retry={device.id}
+        >
+          {kit.busy ? t("devices.installingKit") : t("common.retry")}
+        </Button>
       </div>
     );
   }
@@ -75,6 +96,7 @@ export function KitParts({ device }: { device: Device }) {
   const kit = device.kit;
   if (!kit) return null;
   if (kit.unavailable) return <Note>{kit.unavailable}</Note>;
+  if (kit.refused) return <Status tone="error">{kitRefusalLine(kit.refused, t)}</Status>;
   if (kit.components.length === 0) return <Status tone="pending">{kit.busy ? t("devices.installingKit") : t("devices.kitOnConnection")}</Status>;
   return (
     <div className="grid grid-cols-[auto_auto_minmax(0,1fr)] gap-x-xs gap-y-xxs" data-machine-kit={`${device.id}:${kit.busy ? "busy" : "read"}`}>

@@ -104,6 +104,14 @@ impl Sink for RuntimeSink {
         self.apply(move |runtime| runtime.ingest_link_filling(filling));
     }
 
+    fn pruned(&self, sessions: Vec<crate::links::ledger::SessionIdentity>) {
+        self.apply(move |runtime| runtime.ingest_link_pruned(sessions));
+    }
+
+    fn deleted(&self, request: String, answer: Result<(), String>) {
+        self.apply(move |runtime| runtime.ingest_archive_record_deleted(request, answer));
+    }
+
     fn devices(&self) -> Vec<(String, Arc<dyn crate::node_access::NodeLink>)> {
         self.runtime
             .upgrade()
@@ -150,12 +158,14 @@ pub(crate) fn spawn_worker(
     let mut guard = runtime.lock().map_err(|_| "runtime lock poisoned")?;
     guard.links_work.client = Some(worker.client());
     guard.feed_links();
+    // The archive's sessions reach retention once the worker is there.
+    guard.resend_archive_retention();
     guard.restore_pending_backlog();
     Ok(worker)
 }
 
 /// A session file's agent name for a Hide agent kind.
-fn session_agent(kind: &str) -> Option<&'static str> {
+pub(super) fn session_agent(kind: &str) -> Option<&'static str> {
     hide_agent_adapter::adapter(kind)?
         .session
         .map(|format| format.adapter().herdr.name)

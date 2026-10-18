@@ -134,6 +134,7 @@ fn request() -> AiRequest {
         pick: None,
         output_language: Some(OutputLanguage::Korean),
         answer: hide_ai::AnswerMode::default(),
+        provider_efforts: Vec::new(),
     }
 }
 

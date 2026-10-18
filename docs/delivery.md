@@ -22,6 +22,7 @@ A bare pane ID never reaches a pane on another machine, even when only that mach
 A pane on another machine is reached by the agent's name or registration ID, or by the full address of a device's pane, `remote:<device>:pane:<id>`.
 The same reading applies to the pane IDs of `--actor` and `--observer`.
 A name that two machines share, such as the default `hide-claude-w1-p2`, is refused `target_ambiguous`.
+Each refusal's `next_action` says so: `target_ambiguous` points to the registration ID from `hide agent list` or the full address, and `target_unavailable` says a bare pane ID names a pane on the caller's own machine and points to the name or registration ID; neither is told to retry.
 A connected device recipient uses its node's pane service over that device's existing SSH link; the credential fixes its device, link, pane, sender and kind, and losing the link revokes that credential immediately.
 The only ledger remains on the controlling daemon.
 A disconnected device hook finishes within its two-second budget with no letters, leaving them pending in that ledger.
@@ -104,7 +105,29 @@ Its ignored run report records active detection-manifest versions and native out
 The adapter declaration is a reviewed product decision; the tool never changes it automatically.
 The shared agent adapter declares bell eligibility separately from prompt intake, spawn refusal and session format; its contract rejects a bell without a prompt hook, and adding prompt intake alone never widens the bell targets.
 Claude Code's plan approval reads `blocked`; Codex's does not, and the session read guards it instead (next section).
-Grok and Cursor are not targets because their menus were not observed (no logged-in CLI was available for the check); at rest their letters are read through `hide inbox`, and while they work their own tool hook hands them over ([Letters while the agent works](#letters-while-the-agent-works)).
+Cursor is not a target: its menus have not been observed, and the agent checks leave Cursor out by the operator's decision of 2026-10-17.
+Grok is not a target for what its terminal was seen to do on 2026-10-18, on Grok 1.0.52 and 1.0.62 under an isolated Herdr 0.9.5 (Grok detection manifest 2026.10.05.1), answered by a scripted stand-in model, with each line typed by the doorbell's own call (`pane.send_input`, the line and Enter), observed by hand rather than by the local measurement tool's matrix.
+Two findings rule it out.
+First, its prompt hook cannot carry the letters, so a bell turn would bring the line and not the letter.
+Second, its plan review reads `working` for as long as it waits, and a bell target is rung while it works, so a bell would act on the review.
+Grok's three hooks did the same on both versions:
+
+- `UserPromptSubmit` runs with the prompt and the session id, but nothing it prints reaches the model (Grok's hooks guide: "stdout of an allowing hook is discarded").
+- A `PreToolUse` hook's `additionalContext` reaches the model after the tool's result, which is how Grok's letters are handed over while it works.
+- A `Stop` hook's block reason reaches the model as "Stop hook feedback", and the turn goes on.
+
+| Scene | Herdr reads | What the line did | Seen on |
+|---|---|---|---|
+| At rest, over the welcome panel or a suggested next line | `idle` | Submitted as one prompt | 1.0.52, 1.0.62 |
+| A turn running | `working` | Waited in Grok's own queue and ran as a turn of its own after the current one | 1.0.52 |
+| Shell and file permission menus | `blocked` | Typed into the shell menu, chose nothing | 1.0.52 |
+| A question (`ask_user_question`) | `blocked` | Chose the first option with the line's `1` | 1.0.52 |
+| Plan review (the terminal title says `Running: Plan: Exit`) | `working` while it waits | Opened a comment on the plan and was lost; the same text typed as keys approved the plan with its `a` (1.0.52) | 1.0.52, 1.0.62 |
+| `/model` picker | `idle` | Taken as a model name: "Unknown model" | 1.0.52 |
+| `/resume` picker | `idle` | Taken as a search; the picker stayed open | 1.0.52 |
+| Folder-trust question at start, before Grok has a session | `idle`, ready | Its Enter trusted the folder; the missing native session holds the bell today (`session_changed`) | 1.0.52, 1.0.62 |
+
+At rest Grok's and Cursor's letters are read through `hide inbox`, and while they work their own tool hook hands them over ([Letters while the agent works](#letters-while-the-agent-works)).
 OpenCode, Pi and omp are not targets either, though Hide's plugin and extension give them a prompt hook: on 2026-10-07 OpenCode's previous-session picker read `done`, and a bell's Enter there opened another session, and Pi's and omp's resume pickers read `done` too.
 Their letters ride their next prompt instead (below), or a tool result while they work, and a bell is reconsidered only in the change that would flip an adapter declaration, once the live-check tool has found a bell harmless in every scene that agent does not read as `blocked`.
 Herdr 0.9.1 reads a built-in slash picker such as `/model` or `/resume` as `done`, not `blocked`, for both targets, and a bell typed into an open picker is accepted by it.
@@ -485,9 +508,10 @@ The unsupported reconciliation/resume/session flags and relay, escalate, graph a
 
 A registration ends when Herdr no longer has its pane, so its name and the watches on it do not outlive the pane; the ended record stays in the ledger, like one `hide agent end` ended, and still counts against the 2048-registration limit.
 The core reads that from its own session sync of the host's Herdr, never from a separate poll: a pane the in-sync replica listed and then stops listing was closed by Herdr or moved to another tab, which gives it a new id and already ends the watches on it, and a pane missing from the fresh `session.snapshot` of a connect is gone for every registration made before that snapshot was asked for, which is how registrations left by panes that closed while no Hide was running end on the first connect.
-Nothing ends on uncertainty: a stream that lost events, a Herdr live handoff or restart and an unreachable Herdr publish no read until a fresh snapshot replaces it, a disconnected device publishes none, a sleeping or resumed agent keeps its pane, a session asleep with its pane closed keeps its registration and the watches on it until its wake continues them or lets them go, a registration on another Herdr socket of the same machine is not judged by this one's read, and a registration made after the snapshot was asked for waits until a read lists its pane.
+Nothing ends on uncertainty: a stream that lost events, a Herdr live handoff or restart and an unreachable Herdr publish no read until a fresh snapshot replaces it, a disconnected device publishes none, a sleeping or resumed agent keeps its pane, a session asleep with its pane closed keeps its registration and the watches on it until its wake continues them or lets them go, an archived session keeps them the same way until 이어가기 continues them or the archive is deleted, a registration on another Herdr socket of the same machine is not judged by this one's read, and a registration made after the snapshot was asked for waits until a read lists its pane.
 The delivery store ends it with the watches on it and the answer waits of the letters it sent or received, as `hide agent end` does, and logs `agent.ended` once with the agent id, machine, pane and reason (`pane_left` or `pane_absent`); nothing reaches the screen.
 A session that sleeps by closing its pane saves the registration it held, and the pane that wakes it takes that registration over: the registration keeps its id, name, parent and watch, the letters addressed to or from it follow it to the new pane, and the delivery store logs `agent.continued` with the agent id and the pane it left.
+An archived session's member (PRD session-archive) is continued the same way when 이어가기 brings it back ([ARCHITECTURE.md: Session archive](ARCHITECTURE.md#session-archive)).
 An agent whose CLI runs no session hook on resume (Cursor) gets its session from the core: the wake worker reports to Herdr the id the pane resumed, so the same-session check below has a session to compare ([ARCHITECTURE.md: Agent sleep](ARCHITECTURE.md#agent-sleep)).
 The core decides this from the wake it started, only when the new pane runs the same native session, kind and device; any other pane is not given the registration, and a registration it cannot continue ends with the pane that held it.
 Removing a device retires its cached pane read and rejects late reads from its retired coordinator; removal does not prove its panes gone or end any registration or watch.

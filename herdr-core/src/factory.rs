@@ -2828,6 +2828,7 @@ fn judge_loop(shared: Arc<JudgeShared>, runtime: Weak<Mutex<Runtime>>, home: Opt
             pick,
             output_language: Some(output_language(judgment.language)),
             answer: hide_ai::AnswerMode::Schema,
+            provider_efforts: Vec::new(),
         };
         let started = Instant::now();
         let outcome = if unknown {

@@ -440,7 +440,7 @@ impl AiBackend for ClaudeCliBackend {
                 binary: &binary,
                 args: &Self::print_arguments(
                     request.model(&self.config.model),
-                    request.effort(),
+                    request.effort(ProviderId::CLAUDE),
                     &system,
                     schema,
                 ),
@@ -449,7 +449,7 @@ impl AiBackend for ClaudeCliBackend {
                 environment: Environment::Inherit,
                 // Print mode thinks by default; see `THINKING_OFF`. A picked
                 // effort is a request for thinking, so it is left on.
-                set: if request.effort().is_some() {
+                set: if request.effort(ProviderId::CLAUDE).is_some() {
                     &[]
                 } else {
                     &thinking_off
@@ -965,6 +965,7 @@ mod tests {
             pick: None,
             output_language: None,
             answer: crate::AnswerMode::default(),
+            provider_efforts: Vec::new(),
         };
         assert_eq!(
             backend.execute(&request, &CancelToken::new()).unwrap_err(),

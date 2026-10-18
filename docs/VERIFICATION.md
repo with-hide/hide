@@ -15,6 +15,7 @@ A claim is verified by the check that observes what a caller of the behavior obs
 | Web or desktop logic that needs no window | `bash scripts/verify-web.sh` | [CONTRIBUTING.md: CI gates](../CONTRIBUTING.md#ci-gates) |
 | A flow a user performs in the web shell | `pnpm --dir web e2e` | [Before an e2e run](#before-an-e2e-run) |
 | A desktop app behavior: window, menu, native view, relaunch, a daemon that goes away | `pnpm --dir desktop e2e` | [BUILD.md: The desktop app](BUILD.md#the-desktop-app) |
+| A file the desktop host loads from its own bundle (the status page) | `desktop/e2e/status-page.spec.ts` with `HIDE_E2E_PACKAGED_APP` naming a package | [ARCHITECTURE.md: The desktop host](ARCHITECTURE.md#the-desktop-host) |
 | A browser display | The commands in its guide | [BROWSER_DISPLAYS.md: Verification](BROWSER_DISPLAYS.md#verification) |
 | A screen matches its design | `node scripts/design-review.mjs review <slug> --baseline <bundle>` | [DESIGN_WORKFLOW.md](DESIGN_WORKFLOW.md#reference-bundle-and-review-run) |
 | Responsiveness, rendering, CPU, or memory | The layered procedure | [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md) |
@@ -22,6 +23,8 @@ A claim is verified by the check that observes what a caller of the behavior obs
 | A remote device's behavior | A private Herdr on the device | [A device check](#a-device-check) |
 | Each supported agent works end to end in Hide | `python3 scripts/agent-journey-check.py` | [Agent journey](#agent-journey) |
 | Anything the rows above cannot reach yet | Manual QA on an isolated candidate | [Manual native QA](#manual-native-qa) |
+
+The desktop e2e runs the app from plain files, so it cannot see what only a package does: the status page loaded from `app.asar` under the shipped fuses failed in every package while every e2e passed, so a claim about a file the host loads from its own bundle is proven by a package, not by the dev build.
 
 Run the Rust lanes through `scripts/verify-cargo.sh`, never a bare `cargo test` from an agent's pane: the pane carries `HERDR_SOCKET_PATH` for the operator's Herdr, and on 2026-10-02 two daemon tests followed the operator's live Herdr with the real HOME, where the label worker reads the operator's conversations, because the core then took that variable over the socket a test handed it; the core no longer does, it takes its home from hided rather than from the process `HOME`, and the script clears every `HERDR_*` variable first.
 

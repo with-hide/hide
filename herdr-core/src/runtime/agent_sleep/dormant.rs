@@ -6,7 +6,7 @@ use crate::agent_sleep::{
 };
 
 /// How long a woken Factory worker may wait for the Factory to bind its pane.
-const WOKEN_BINDING_LIMIT_MS: u64 = 60 * 60 * 1000;
+pub(in crate::runtime) const WOKEN_BINDING_LIMIT_MS: u64 = 60 * 60 * 1000;
 
 /// What a sleeping session an older build saved, which names no owner, asks
 /// of the operator while the project list does not show its checkout.
@@ -1290,7 +1290,7 @@ impl Runtime {
     /// store to move the registration, and says the record must stay.
     /// A registration that cannot be continued is let go, so it ends with
     /// the pane that held it as any other would.
-    fn continue_dormant_registration(
+    pub(in crate::runtime) fn continue_dormant_registration(
         &mut self,
         registration: &crate::agent_sleep::DormantRegistration,
         pane: &str,
@@ -1370,7 +1370,7 @@ impl Runtime {
         }
     }
 
-    fn release_dormant_hold(&mut self, id: &str) {
+    pub(in crate::runtime) fn release_dormant_hold(&mut self, id: &str) {
         let gone = self
             .delivery_ledger
             .as_ref()

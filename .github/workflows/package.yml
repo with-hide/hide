@@ -193,7 +193,7 @@ jobs:
           HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
-          bash scripts/verify-web.sh desktop e2e packaged-window.spec.ts
+          bash scripts/verify-web.sh desktop e2e packaged-window.spec.ts status-page.spec.ts
       - name: Build two release versions of the same app for the update test
         # N is installed, N+1 is served from a local feed (PRD auto-update
         # D-29); both are the package above with another version, so the
@@ -391,7 +391,7 @@ jobs:
           HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
-          bash scripts/verify-web.sh desktop e2e local-kit.spec.ts server-picker.spec.ts --project background
+          bash scripts/verify-web.sh desktop e2e local-kit.spec.ts server-picker.spec.ts status-page.spec.ts --project background
       - name: Report flaky and failed tests
         # A test that fails its retry too becomes a `Failed test` annotation,
         # which the run's summary shows and the nightly report files; see
