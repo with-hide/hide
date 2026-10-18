@@ -188,7 +188,9 @@ pub(crate) fn trust_worktree(
     }) else {
         return Ok(());
     };
-    let node = node.ok_or("agent_trust_unavailable: the worktree's machine is not connected")?;
+    let node = node.ok_or(
+        "agent_trust_unavailable: the machine that runs the worktree's pane cannot be reached.",
+    )?;
     crate::node_access::call_as::<()>(
         node,
         hide_node_link::protocol::Call::AgentTrust {

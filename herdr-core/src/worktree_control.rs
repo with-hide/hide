@@ -1081,8 +1081,11 @@ fn launch_with_prompt_checked(
         shell,
         made_worktree,
     } = start;
+    // The trust is written by the machine that runs the pane: `agent_node`
+    // is none for a device, whose own Herdr answers for its PATH, and a
+    // device's worktree still needs its trust recorded there.
     if let Some(path) = made_worktree.as_deref()
-        && let Err(reason) = crate::agent_start::trust_worktree(agent_node, &kind, path)
+        && let Err(reason) = crate::agent_start::trust_worktree(pane_node, &kind, path)
     {
         return TaskAgentOutcome::Failed(reason);
     }
@@ -3800,6 +3803,52 @@ mod tests {
 
     /// PRD overview-request-view D-20: a Codex that has the shared daemon is
     /// started without it, ahead of its first prompt.
+    #[test]
+    fn a_device_worktree_start_records_trust_on_the_pane_node_or_refuses_without_one() {
+        let home = tempfile::tempdir().unwrap();
+        let tree = home.path().join("tree");
+        std::fs::create_dir_all(tree.join(".git")).unwrap();
+        let wire = hide_platform::path::to_wire(&tree).unwrap();
+        let resolved = hide_platform::fs::identity::canonical(&tree).unwrap();
+        let node = hide_node::Local::new(Some(home.path().to_path_buf()));
+        let make = || PendingAgentStart {
+            resume_reference: None,
+            resume_scope: None,
+            pane_id: "w1:p1".into(),
+            kind: "claude".into(),
+            prompt: None,
+            args: Vec::new(),
+            codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+            shell: crate::agent_start::ShellStart::Plain,
+            made_worktree: Some(wire.clone()),
+        };
+        // A device start: no agent node (its Herdr answers for its PATH), a
+        // pane node that is the device's.
+        let server = server(vec![
+            shell_ready(),
+            json!({"result":{"type":"agent_started","argv":[],"agent":agent("working")}}),
+        ]);
+        let outcome = launch_with_prompt_checked(&server, None, Some(&node), 7, make(), &|| Ok(()));
+        assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
+        let written: Value =
+            serde_json::from_slice(&std::fs::read(home.path().join(".claude.json")).unwrap())
+                .unwrap();
+        let key = resolved.to_str().unwrap().replace('\\', "/");
+        assert_eq!(
+            written["projects"][key.as_str()]["hasTrustDialogAccepted"],
+            true
+        );
+        // With no pane node the start refuses before Herdr is asked.
+        let server = self::server(vec![]);
+        let TaskAgentOutcome::Failed(reason) =
+            launch_with_prompt_checked(&server, None, None, 7, make(), &|| Ok(()))
+        else {
+            panic!("a start without the pane's machine went ahead")
+        };
+        assert!(reason.starts_with("agent_trust_unavailable"), "{reason}");
+        assert!(requests_of(&server).is_empty());
+    }
+
     #[test]
     fn an_unknown_codex_first_start_refuses_before_contacting_herdr() {
         let server = server(vec![]);
