@@ -17,7 +17,7 @@ use hide_platform::fs::identity::{canonical, file_id};
 #[cfg(unix)]
 use hide_platform::process::GuardedSpawnError;
 use hide_platform::process::{
-    CaptureFailureKind, MAX_CAPTURE_BYTES, OWNER_LAUNCH_KEYS, OwnedChild, OwnerWatch,
+    CaptureFailureKind, GroupEnd, MAX_CAPTURE_BYTES, OWNER_LAUNCH_KEYS, OwnedChild, OwnerWatch,
     RUN_OUTPUT_CAP, RunFailure, cwd_of, descendants, descends_from, detach, image_of, is_alive,
     kill_tree, measure_tree, name_of, parent_of, restrict_to_login_environment, run_to_end,
     running, set_output_aside, start_time, terminate, terminate_group,
@@ -938,7 +938,11 @@ fn a_folder_that_is_a_running_processes_working_folder_moves_once_it_has_ended()
 fn a_pid_that_names_no_process_to_signal_is_refused() {
     let _serial = serial();
     for pid in [0, 1, i32::MAX as u32 + 1, u32::MAX] {
-        for result in [kill_tree(pid), terminate(pid), terminate_group(pid)] {
+        for result in [
+            kill_tree(pid),
+            terminate(pid),
+            terminate_group(pid).map(drop),
+        ] {
             assert_eq!(
                 result.unwrap_err().kind(),
                 ErrorKind::InvalidInput,
@@ -971,7 +975,10 @@ fn ending_a_job_ends_its_leader_and_what_it_started_and_nothing_else() {
     let helper = ready_number(leader.take_stdout().unwrap());
     let _helper = FixtureProcess::live(helper);
 
-    terminate_group(leader.id()).unwrap();
+    assert_eq!(
+        terminate_group(leader.id()).unwrap(),
+        GroupEnd::Ended { left: Vec::new() }
+    );
 
     assert!(!leader.wait().unwrap().success());
     assert!(
@@ -982,18 +989,17 @@ fn ending_a_job_ends_its_leader_and_what_it_started_and_nothing_else() {
     bystander.kill_tree().unwrap();
 }
 
+/// A job that ended on its own between Herdr naming it and the end is told
+/// as such, not as a failure to end it.
 #[test]
-fn ending_a_job_whose_leader_has_ended_is_not_found() {
+fn ending_a_job_whose_leader_has_ended_finds_it_gone() {
     let _serial = serial();
     let mut child = role_command("sleep").spawn().unwrap();
     child.kill().unwrap();
     child.wait().unwrap();
     // `child` is kept: on Windows its handle keeps the pid from being handed
     // to a process that starts meanwhile.
-    assert_eq!(
-        terminate_group(child.id()).unwrap_err().kind(),
-        ErrorKind::NotFound
-    );
+    assert_eq!(terminate_group(child.id()).unwrap(), GroupEnd::Gone);
     drop(child);
 }
 

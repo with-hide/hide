@@ -19,6 +19,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use hide_herdr_client::{ApiConnector, ApiError, request_with_connector};
+use hide_node_link::process::GroupEnd;
 use hide_node_link::protocol::Call;
 
 use crate::node_access::{NodeLink, call_as};
@@ -159,8 +160,9 @@ pub(crate) fn end_agent(
             "reason": unanswered,
         }));
     }
-    // The job Herdr reported as the pane's foreground ends.
-    call_as::<()>(
+    // The job Herdr reported as the pane's foreground ends. One that ended on
+    // its own since is gone, and the shell is waited for all the same.
+    let ended = call_as::<GroupEnd>(
         node,
         Call::TerminateGroup { leader: foreground },
         REQUEST_TIMEOUT,
@@ -168,6 +170,21 @@ pub(crate) fn end_agent(
     .map_err(|error| {
         EndError::Failed(format!("ending process group {foreground} failed: {error}"))
     })?;
+    if let GroupEnd::Ended { left } = &ended
+        && !left.is_empty()
+    {
+        crate::diagnostic!(serde_json::json!({
+            "component": "agent_sleep",
+            "kind": "agent_sleep.end_left_running",
+            "pane_id": pane_id,
+            "provider": kind,
+            "leader": foreground,
+            "left": left
+                .iter()
+                .map(|process| serde_json::json!({"pid": process.pid, "reason": process.reason}))
+                .collect::<Vec<_>>(),
+        }));
+    }
     if shell_takes_terminal_within(connector, pane_id, shell, END_TIMEOUT)? {
         return Ok(state.state_change_seq);
     }
@@ -815,6 +832,56 @@ mod tests {
         while process::is_alive(tool) {
             assert!(Instant::now() < deadline, "the agent's tool kept running");
             thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// A node that answers each end with what it is given, and says it was
+    /// asked.
+    struct EndingNode(Value, Arc<AtomicBool>);
+
+    impl NodeLink for EndingNode {
+        fn call(
+            &self,
+            call: Call,
+            _: Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            assert!(
+                matches!(call, Call::TerminateGroup { leader: 9 }),
+                "{call:?}"
+            );
+            self.1.store(true, Ordering::SeqCst);
+            Ok(crate::node_access::LinkAnswer::Parsed(self.0.clone()))
+        }
+    }
+
+    /// The agent may quit between the last look at its pane and the node's
+    /// end, or leave a process the node could not end once the agent itself
+    /// is down. Neither is a failed sleep: the shell holds the terminal, so
+    /// the agent sleeps.
+    #[test]
+    fn an_end_that_finds_the_agent_gone_or_leaves_a_process_still_sleeps_it() {
+        for answer in [
+            json!({"outcome": "gone"}),
+            json!({"outcome": "ended", "left": [{"pid": 11, "reason": "Access is denied."}]}),
+        ] {
+            let asked = Arc::new(AtomicBool::new(false));
+            let node = EndingNode(answer.clone(), Arc::clone(&asked));
+            let herdr = FakeHerdr::start_with_errors("agent-sleep-gone", move |method, _| {
+                match method {
+                    "agent.get" => Ok(agent_info("idle", 7)),
+                    "pane.process_info" if asked.load(Ordering::SeqCst) => Ok(process_info(42, 42)),
+                    "pane.process_info" => Ok(process_info(42, 9)),
+                    // Refused keys go to the node at once, so no grace is
+                    // waited out here.
+                    "pane.send_keys" => Err(("pane_send_failed".into(), "refused".into())),
+                    other => panic!("unexpected {other}"),
+                }
+            });
+            assert_eq!(
+                end_agent(&herdr.connector(), &node, "w1:p1", "claude"),
+                Ok(7),
+                "{answer}"
+            );
         }
     }
 

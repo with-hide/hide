@@ -173,7 +173,12 @@ use crate::error::HostError;
 /// interactive command has no `--fork` (docs/ARCHITECTURE.md, OpenCode). A
 /// helper on 42 would refuse the call, so no OpenCode session on that device
 /// could be forked; it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 43;
+/// 44: `terminate_group` answers what it did (`GroupEnd`): ended, with each
+/// process under a Windows leader that was left running and why, or gone
+/// already, where it answered nothing and refused a job that had ended. A
+/// helper on 43 answers `null`, which a sleep could not read; it is refused
+/// at Hello and upgraded.
+pub const PROTOCOL_VERSION: u32 = 44;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -575,7 +580,9 @@ pub enum Call {
     /// (`hide_platform::process::terminate_group`): `SIGTERM` to its process
     /// group on Unix, and on Windows, where Herdr names the job by its first
     /// process, that process and everything under it. A group of 1 or less
-    /// is refused unsent, since kill(-0) and kill(-1) reach far more.
+    /// is refused unsent, since kill(-0) and kill(-1) reach far more. The
+    /// answer is a [`crate::process::GroupEnd`]: ended, with what was left
+    /// running, or gone already.
     TerminateGroup {
         leader: u32,
     },
