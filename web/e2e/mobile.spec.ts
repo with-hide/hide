@@ -653,6 +653,22 @@ test("an empty list, the unreachable line, the phone limit and the seven-day rev
     const restarted = daemon.origin;
     await expect.poll(() => tailscale.proxy(), { timeout: 20_000 }).toBe(restarted);
 
+    // A Mac gone to sleep: hided stops answering and the phone's socket stays open. The phone asks
+    // after 20 s of silence, hears nothing for 10 s, and shows the same line (30 s at most), then
+    // connects again by itself once hided runs. Windows has no SIGSTOP and no mobile daemon (#315).
+    if (process.platform !== "win32") {
+      process.kill(daemon.pid, "SIGSTOP");
+      try {
+        await expect(phone.locator('[data-phone-unreachable="true"]')).toContainText("Not connected · hide on your Mac or Tailscale on your phone is off. Retrying", { timeout: 45_000 });
+        await expect(phone.locator('[data-phone-connected="false"]')).toBeVisible();
+        await screenshot(phone, "mobile-phone-silent-hided");
+      } finally {
+        process.kill(daemon.pid, "SIGCONT");
+      }
+      await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible({ timeout: 45_000 });
+      await expect(phone.locator('[data-phone-unreachable="true"]')).toHaveCount(0);
+    }
+
     // B23: opened with no network, the cached shell shows the same line instead of a blank page.
     await phone.reload();
     await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible({ timeout: 20_000 });

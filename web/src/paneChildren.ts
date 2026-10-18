@@ -36,9 +36,9 @@ export function paneChildren(paneId: string, agents: AgentRow[], rest: SnapshotR
     parts.push({ kind: "raised", count: raised, label: "panes.children.raised" }, { kind: "waiting", count: asking, label: "panes.children.waiting" });
   }
   if (counts && unavailableDevice === null) {
-    // The core omits its unknown count from the wire; its final row status
-    // already applies demand precedence and identifies these children.
-    const unknown = children.filter((child) => child.status_code === "unknown").length;
+    // The core omits its unknown count from the wire; its row mark already
+    // applies demand precedence and names these children (D-04).
+    const unknown = children.filter((child) => child.mark === "unknown").length;
     const idle = children.length - asking - counts.working - counts.done - unknown;
     parts.push(
       { kind: "working", count: counts.working, label: "panes.children.working" },

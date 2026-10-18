@@ -23,7 +23,7 @@ describe("the Workspace strips", () => {
 const sizes: LaneSizes = { agentMin: 480, laneMin: 360, laneIdeal: 520, treeMin: 180, treeIdeal: 240, divider: 8 };
 
 const frame = (input: Partial<Omit<LaneInput, "sizes">> & { body: number }) =>
-  laneFrame({ tool: null, pinned: false, tree: false, laneWidth: null, treeWidth: null, hasViews: true, shown: false, expanded: false, ...input, sizes });
+  laneFrame({ tool: null, pinned: false, tree: false, laneWidth: null, panelWidth: null, treeWidth: null, hasViews: true, shown: false, expanded: false, ...input, sizes });
 
 describe("the right lane (PRD right-lane)", () => {
   it("gives Agent Views the whole body while the lane is closed or put away (B1, B4)", () => {
@@ -33,7 +33,20 @@ describe("the right lane (PRD right-lane)", () => {
 
   it("draws an unpinned lane over Agent Views at its width, Agent Views keeping its own (B3)", () => {
     expect(frame({ tool: "files", shown: true, body: 1200 })).toMatchObject({ mode: "overlay", agents: 1200, width: 520, document: 520, tree: null });
-    expect(frame({ tool: "prs", shown: true, laneWidth: 700, body: 1200 })).toMatchObject({ mode: "overlay", agents: 1200, width: 700 });
+    expect(frame({ tool: "prs", shown: true, panelWidth: 700, body: 1200 })).toMatchObject({ mode: "overlay", agents: 1200, width: 700 });
+  });
+
+  it("draws the files tool at its document width and every other tool and the 보기 slot at the panel width, docked or drawn over (B6)", () => {
+    const widths = { laneWidth: 900, panelWidth: 440 };
+    for (const placed of [{ shown: true }, { pinned: true }]) {
+      expect(frame({ tool: "files", ...placed, ...widths, body: 1600 })).toMatchObject({ width: 900, field: "lane_width" });
+      for (const tool of ["memory", "prs", "changes", "detail"] as const) {
+        expect(frame({ tool, ...placed, ...widths, body: 1600 })).toMatchObject({ width: 440, field: "panel_width" });
+      }
+    }
+    // A wide document leaves a panel never resized at the default.
+    expect(frame({ tool: "memory", shown: true, laneWidth: 900, body: 1600 }).width).toBe(520);
+    expect(frame({ tool: "files", shown: true, panelWidth: 440, body: 1600 }).width).toBe(520);
   });
 
   it("docks a pinned lane, Agent Views giving up its width and the divider's (B5, B7)", () => {
@@ -111,6 +124,9 @@ describe("the right lane (PRD right-lane)", () => {
     expect(laneLanding({ x: 1600 - 520 - 8 - 100, body: 1600, frame: over, sizes })).toEqual({ lane_width: 620 });
     expect(laneLanding({ x: 0, body: 1600, frame: over, sizes })).toEqual({ lane_width: 1600 - 8 });
     expect(laneLanding({ x: 1590, body: 1600, frame: over, sizes })).toEqual({ lane_width: 360 });
+    // Another tool's divider lands the panel width and leaves the document's.
+    const memory = frame({ tool: "memory", shown: true, laneWidth: 900, body: 1600 });
+    expect(laneLanding({ x: 1600 - 520 - 8 - 100, body: 1600, frame: memory, sizes })).toEqual({ panel_width: 620 });
   });
 
   it("trades width between the tree and the document, so the lane and Agent Views keep theirs (B10)", () => {

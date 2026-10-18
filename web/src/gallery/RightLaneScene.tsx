@@ -78,7 +78,7 @@ export function RightLaneScene({ theme, scale, content, state }: SceneParams & {
     scene.rest.navigator!.focused_checkout_id = checkout.id;
     scene.rest.ui_state = { ...scene.rest.ui_state!, expanded_paths: Object.keys(listings), selected_path: lane.documents ? tabs[0]!.path : null };
     scene.rest.workspace_view = {
-      device_id: "local", path: root, tool: lane.tool, last_tool: lane.tool, prs: { only_checkout: false }, pinned: lane.pinned, tree: lane.tree, lane_width: null, tree_width: null, lane_called: 0, lane_calls: 0,
+      device_id: "local", path: root, tool: lane.tool, last_tool: lane.tool, prs: { only_checkout: false }, pinned: lane.pinned, tree: lane.tree, lane_width: null, panel_width: null, tree_width: null, lane_called: 0, lane_calls: 0,
       layout: { root: { area: { id: "a1", active: displays[0]?.id ?? null, displays } }, active_area: "a1", limits: { areas: 4, depth: 3, displays: 32 }, display_count: displays.length },
     };
     return { scene, editor: { tabs: lane.documents ? tabs : [], active_tab_id: lane.documents ? "t1" : null }, documents, listings };

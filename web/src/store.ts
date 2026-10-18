@@ -272,7 +272,7 @@ function mergeDocuments(previous: Documents, section: DocumentsSection): Documen
 
 const KNOWN_GROUPS = new Set(["needs_you", "done", "working", "seen"]);
 // Every mark the type names, so a mark the core adds cannot be read as unknown here.
-const KNOWN_MARKS = new Set(Object.keys({ turn: true, going: true, waiting: true, done: true, unread: true, quiet: true, asleep: true } satisfies Record<RowMark, true>));
+const KNOWN_MARKS = new Set(Object.keys({ turn: true, going: true, waiting: true, done: true, unread: true, quiet: true, unknown: true, asleep: true } satisfies Record<RowMark, true>));
 export const DIAGNOSTIC_CAP = 200;
 
 /** Expanded folders the store keeps a listing for; the PRD's watch cap is the same number. */
@@ -610,11 +610,11 @@ export const useShellStore = create<Store>((set, get) => ({
               // vouch for: no mark, dimmed, `상태 모름` (status-marks B16).
               if (agent.group && !KNOWN_GROUPS.has(agent.group)) {
                 diagnostics.push(`unknown enum group=${agent.group}`);
-                return { ...agent, group: "unknown", unknown: true, mark: "quiet" as const, status_code: "unknown" as const };
+                return { ...agent, group: "unknown", unknown: true, mark: "unknown" as const, status_code: "unknown" as const };
               }
               if (!KNOWN_MARKS.has(agent.mark)) {
                 diagnostics.push(`unknown enum mark=${String(agent.mark)}`);
-                return { ...agent, unknown: true, mark: "quiet" as const, status_code: "unknown" as const };
+                return { ...agent, unknown: true, mark: "unknown" as const, status_code: "unknown" as const };
               }
               return agent;
             });

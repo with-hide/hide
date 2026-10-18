@@ -283,8 +283,9 @@ function ChildName({ paneId, child, actions }: { paneId: string; child: AgentRow
   const state = line ? lineText(t, child, line) : markWords(t, child);
   const hint = [child.identity_label, agentProductName(child.agent_kind), state].filter((text, index, all) => text && all.indexOf(text) === index).join(" · ");
   return <Hint label={hint}>
-    <button type="button" aria-label={hint} data-pane-child-name={child.pane_id} className={cn("flex shrink-0 items-center gap-xxs rounded-xs outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring", child.mark === "quiet" ? "text-muted-foreground" : "text-subtle-foreground")} onClick={() => actions.followRelation(paneId, child.pane_id, child.identity_label)}>
-      {child.mark === "quiet" ? null : <StatusMark mark={child.mark} />}
+    <button type="button" aria-label={hint} data-pane-child-name={child.pane_id} className={cn("flex shrink-0 items-center gap-xxs rounded-xs outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring", child.mark === "quiet" || child.mark === "unknown" ? "text-muted-foreground" : "text-subtle-foreground")} onClick={() => actions.followRelation(paneId, child.pane_id, child.identity_label)}>
+      {/* An unknown child's mark is an empty slot, which inline is only a gap. */}
+      {child.mark === "unknown" ? null : <StatusMark mark={child.mark} />}
       <span className="max-w-(--size-pane-child-chip-max) truncate">{child.identity_label}</span>
     </button>
   </Hint>;
