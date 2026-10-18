@@ -214,8 +214,8 @@ const BADGE_ORDER: (keyof MarkCounts)[] = ["turn", "going", "done", "unread"];
 
 /**
  * The badge's marks in the order whose move is next (B19): `!` N, ring N,
- * green dot N, plain dot N, zero states left out. A quiet agent draws no mark
- * and is counted in none.
+ * green dot N, plain dot N, zero states left out. A quiet agent, at rest, is
+ * counted in none.
  */
 export function badgeParts(counts: BadgeCounts | undefined): BadgePart[] {
   if (!counts) return [];

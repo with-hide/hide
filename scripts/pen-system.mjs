@@ -119,7 +119,7 @@ export function markShapes(p) {
     {type: 'path', id: `${p}-arc-wait`, name: 'Waiting', enabled: false, width: 10, height: 10, viewBox: [0, 0, 10, 10], geometry: dashedArc(), stroke: '$--agent-working', strokeWidth: 1.9},
     {type: 'ellipse', id: `${p}-dot`, name: 'Unread', enabled: false, width: 7, height: 7, fill: '$--success'},
     // r 3.4 of 12 with a 1.3 stroke at the read-status opacity, as status-mark.tsx draws it.
-    {type: 'ellipse', id: `${p}-quiet`, name: 'Quiet', enabled: false, width: 6.8, height: 6.8, fill: [], stroke: '$--muted-foreground', strokeWidth: 1.3, opacity: 0.55},
+    {type: 'ellipse', id: `${p}-quiet`, name: 'Quiet', enabled: false, width: 6.8, height: 6.8, fill: [], stroke: '$--muted-foreground', strokeWidth: 1.3, strokeAlignment: 'center', opacity: 0.55},
   ];
 }
 

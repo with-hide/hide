@@ -21994,6 +21994,7 @@
                       "fill": [],
                       "stroke": "$--muted-foreground",
                       "strokeWidth": 1.3,
+                      "strokeAlignment": "center",
                       "opacity": 0.55
                     },
                     {
@@ -43909,6 +43910,7 @@
                               "fill": [],
                               "stroke": "$--muted-foreground",
                               "strokeWidth": 1.3,
+                              "strokeAlignment": "center",
                               "opacity": 0.55
                             }
                           ],
@@ -44198,6 +44200,7 @@
                               "fill": [],
                               "stroke": "$--muted-foreground",
                               "strokeWidth": 1.3,
+                              "strokeAlignment": "center",
                               "opacity": 0.55
                             }
                           ],
@@ -44488,6 +44491,7 @@
                               "fill": [],
                               "stroke": "$--muted-foreground",
                               "strokeWidth": 1.3,
+                              "strokeAlignment": "center",
                               "opacity": 0.55
                             }
                           ],
@@ -47725,6 +47729,7 @@
                               "fill": [],
                               "stroke": "$--muted-foreground",
                               "strokeWidth": 1.3,
+                              "strokeAlignment": "center",
                               "opacity": 0.55
                             }
                           ],
