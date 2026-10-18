@@ -54,6 +54,17 @@ pub(super) struct ActiveStart {
     pub task: u64,
     pub workspace: workspace_view::WorkspaceKey,
     pub key: String,
+    /// Global starts may bring their checkout forward only while the
+    /// original screen's selection has not been superseded.
+    global_focus: Option<StartFocus>,
+}
+
+#[derive(PartialEq)]
+struct StartFocus {
+    workspace: Option<workspace_view::WorkspaceKey>,
+    serial: u64,
+    group: Option<String>,
+    tab: Option<String>,
 }
 
 pub(super) struct SaveWaiter {
@@ -443,10 +454,12 @@ impl Runtime {
             intent: intent.clone(),
             sender,
         });
+        let global_focus = (!explicit && !stays_behind).then(|| self.start_focus());
         self.group_start = Some(ActiveStart {
             task,
             workspace,
             key,
+            global_focus,
         });
         self.persist_workspace_views();
         Ok(PreparedStart {
@@ -661,8 +674,21 @@ impl Runtime {
             })
     }
 
-    /// Whether the user is still looking at the target. A late answer may
-    /// fill it, but never selects a group the user has left.
+    fn start_focus(&self) -> StartFocus {
+        let workspace = self.front_workspace_key();
+        let view = workspace
+            .as_ref()
+            .and_then(|key| self.workspace_views.as_ref()?.views.get(&key.0, &key.1));
+        StartFocus {
+            workspace: workspace.clone(),
+            serial: self.last_view_intent_serial,
+            group: view.and_then(|view| view.agent_groups.selected.clone()),
+            tab: view.and_then(|view| view.selected_agent_layout().active().map(str::to_owned)),
+        }
+    }
+
+    /// A targeted start keeps its selected slot. A global start may open its
+    /// checkout if no intervening selection superseded the original press.
     pub(super) fn group_start_should_focus(&self, task: u64) -> bool {
         let Some(active) = self
             .group_start
@@ -681,7 +707,11 @@ impl Runtime {
         let Some(start) = view.agent_starts.get(&active.key) else {
             return false;
         };
-        self.front_workspace_key().as_ref() == Some(&active.workspace)
+        (self.front_workspace_key().as_ref() == Some(&active.workspace)
+            || active
+                .global_focus
+                .as_ref()
+                .is_some_and(|origin| *origin == self.start_focus()))
             && view.agent_groups.selected == start.group_id
             && view
                 .group_layout(start.group_id.as_deref())

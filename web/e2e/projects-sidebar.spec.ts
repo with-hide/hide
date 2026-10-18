@@ -241,8 +241,8 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     await rest(page);
     expect(await rowGeometry(primaryRow, feature, primaryParts)).toEqual(atRest);
 
-    // An agentless checkout uses the same single-line height as Overview;
-    // opening it sends no disclosure intent and leaves the fold slot empty.
+    // An unvisited agentless checkout uses the same single-line row height.
+    // Opening it exposes its empty Ungrouped collection (group-tabs B12).
     await project.locator("[data-empty-worktrees]").click();
     const emptyRow = project.locator("[data-checkout-row]").filter({ has: page.locator('[data-checkout][aria-label^="empty"]') });
     const emptyButton = emptyRow.locator("[data-checkout]");
@@ -252,7 +252,9 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     await expect(emptyButton).toHaveAttribute("aria-current", "true");
     const emptyId = await emptyButton.getAttribute("data-checkout");
     await expect.poll(() => last.get("focus_checkout")?.checkout_id).toBe(emptyId);
-    expect(last.get("focus_checkout")?.expanded).toBeUndefined();
+    await expect(emptyRow.locator("[data-checkout-toggle]")).toHaveAttribute("aria-expanded", "true");
+    await expect(emptyRow.locator("[data-checkout-agents-open]").getByRole("button", { name: "Ungrouped", exact: true })).toBeVisible();
+    await expect(emptyRow.locator("[data-pane]")).toHaveCount(0);
 
     // The chevron opens the agent rows below the row: their own marks stand
     // for the checkout's badge, which goes, and the row becomes one line with

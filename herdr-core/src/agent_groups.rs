@@ -17,6 +17,10 @@ pub struct Group {
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct Groups {
+    /// The first real Agent topology or explicit collection choice settled
+    /// the initial canvas. Empty layouts after that are deliberate.
+    #[serde(default)]
+    pub(crate) initialized: bool,
     #[serde(default)]
     next_id: u64,
     #[serde(default)]
@@ -92,6 +96,16 @@ impl WorkspaceView {
         unconfirmed: &HashSet<&str>,
     ) -> Result<bool, LayoutError> {
         let before = (self.agent_layout.clone(), self.agent_groups.clone());
+        if !self.agent_groups.initialized && !topology.is_empty() {
+            let untouched = self.agent_layout == Layout::default()
+                && self.agent_groups == Groups::default()
+                && self.agent_starts.is_empty();
+            if untouched && topology.iter().all(|(_, delegated)| *delegated) {
+                // Delegated tabs have canvases but never ordinary strip slots.
+                self.agent_layout.select(&topology[0].0, true, 0)?;
+            }
+            self.agent_groups.initialized = true;
+        }
         let mut seen_changed = false;
         let actual_topology = topology;
         let mut topology = std::borrow::Cow::Borrowed(topology);
@@ -251,6 +265,7 @@ impl WorkspaceView {
             layout: Layout::default(),
         });
         self.agent_groups.selected = Some(id.clone());
+        self.agent_groups.initialized = true;
         self.agent_groups.undo = None;
         Ok(id)
     }
@@ -274,6 +289,7 @@ impl WorkspaceView {
         }
         let changed = self.agent_groups.selected.as_deref() != id;
         self.agent_groups.selected = id.map(str::to_owned);
+        self.agent_groups.initialized = true;
         Ok(changed)
     }
 
@@ -417,6 +433,7 @@ impl WorkspaceView {
             .insert(area, Tab::new(id.clone()), stamp)?;
         self.selected_agent_layout_mut().select(&id, false, stamp)?;
         self.agent_groups.drafts.insert(id.clone());
+        self.agent_groups.initialized = true;
         self.agent_groups.undo = None;
         Ok(id)
     }
@@ -458,5 +475,50 @@ impl WorkspaceView {
         }
         self.agent_groups.drafts.retain(|id| tabs.contains(id));
         notes
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reconcile(view: &mut WorkspaceView, topology: &[(String, bool)]) {
+        view.reconcile_agent_groups(topology, 0, &HashSet::new(), &HashSet::new())
+            .unwrap();
+    }
+
+    #[test]
+    fn first_delegated_only_topology_opens_a_canvas_without_a_strip_tab() {
+        let mut view = WorkspaceView::new("local", "/child-checkout");
+        reconcile(&mut view, &[]);
+        reconcile(&mut view, &[("child-tab".into(), true)]);
+        assert_eq!(view.selected_agent_layout().active(), Some("child-tab"));
+        assert_eq!(view.agent_layout.tree.display_count(), 0);
+        reconcile(&mut view, &[]);
+        reconcile(&mut view, &[("another-child".into(), true)]);
+        assert_eq!(view.selected_agent_layout().active(), None);
+    }
+
+    #[test]
+    fn explicit_empty_ungrouped_choice_survives_save_and_delegated_arrival() {
+        let mut view = WorkspaceView::new("local", "/empty-checkout");
+        view.select_agent_group(None).unwrap();
+        view.agent_groups =
+            serde_json::from_value(serde_json::to_value(&view.agent_groups).unwrap()).unwrap();
+        reconcile(&mut view, &[("child-tab".into(), true)]);
+        assert_eq!(view.selected_agent_layout().active(), None);
+    }
+
+    #[test]
+    fn delegated_arrivals_leave_selected_empty_groups_and_drafts_alone() {
+        for draft in [false, true] {
+            let mut view = WorkspaceView::new("local", "/empty-checkout");
+            let group = view.create_agent_group("Work").unwrap();
+            let tab = draft.then(|| view.create_agent_draft("a1", 1).unwrap());
+            reconcile(&mut view, &[("child-tab".into(), true)]);
+            assert_eq!(view.agent_groups.selected, Some(group));
+            assert_eq!(view.selected_agent_layout().active(), tab.as_deref());
+            assert!(view.agent_layout.canvases.is_empty());
+        }
     }
 }

@@ -10,6 +10,27 @@ use std::fs;
 const PATH: &str = "/named-group-tabs";
 const TABS: [&str; 3] = ["w-order:t1", "w-order:t2", "w-order:t3"];
 
+#[test]
+fn a_global_start_can_open_another_checkout_until_a_selection_supersedes_it() {
+    let (mut runtime, _) = setup();
+    let task = runtime
+        .begin_task_operation("agent_start", None, None, None, None)
+        .unwrap();
+    runtime
+        .prepare_group_start(
+            task,
+            (crate::node::TEST_NODE, "/another-checkout"),
+            None,
+            Some("global"),
+            None,
+            false,
+        )
+        .unwrap();
+    assert!(runtime.group_start_should_focus(task));
+    group(&mut runtime, "leave-origin", json!({"action":"new_tab"}));
+    assert!(!runtime.group_start_should_focus(task));
+}
+
 fn setup() -> (Runtime, String) {
     let (runtime, checkout) = tab_order_runtime(PATH);
     let mut runtime = with_new_views(runtime, "named-group-tabs");

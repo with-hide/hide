@@ -4117,10 +4117,9 @@ impl Runtime {
                 // (`ingest_task_agent_result`).
                 let input_ready = operation.agent_phase.is_none().then(|| pane_id.clone());
                 if should_focus {
-                    self.snapshot.terminal.pane_id = Some(pane_id.clone());
-                    self.snapshot.focused.surface = Surface::Terminal;
-                    self.snapshot.focused.pane_id = Some(pane_id.clone());
-                    self.snapshot.ui_state.selected_pane_id = Some(pane_id);
+                    // Targeted creation intentionally did not focus Herdr.
+                    // Use the same ordered, acknowledged focus as a pane press.
+                    self.focus_pane(pane_id, PaneFocusOrigin::Restore, None);
                 }
                 // A tab that does not take the screen is not where the
                 // operator's keys were going, agent or not.
