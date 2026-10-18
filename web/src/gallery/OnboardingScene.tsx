@@ -208,7 +208,7 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
   const refused = state === "agents-refused" || state === "settings-refused";
   const agents = refused ? [] : kitAgents(state, system).map((agent) => (step === "agents" || agent.availability !== "available" ? agent : { ...agent, enabled: true, chosen: true }));
   const kit = refused
-    ? { agents, components: [], busy: false, refused: { cause: "unsafe", path: system === "windows" ? "D:\\" : system === "linux" ? "/srv/team" : "/Users/Shared/team", variable: "HIDE_STATE_DIR" } }
+    ? { agents, components: [], busy: false, refused: { cause: "unsafe", path: system === "windows" ? "D:\\" : system === "linux" ? "/srv/team" : "/Volumes/Team", variable: "HIDE_STATE_DIR" } }
     : { agents, components: [{ id: "cli", label: "hide", state: "off", reason: null, location: system === "windows" ? `${HOME}/.local/bin/hide.cmd` : `${HOME}/.local/bin/hide` }], busy: false };
   return {
     revision: 1,
