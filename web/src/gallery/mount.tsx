@@ -21,6 +21,7 @@ import { OverviewScene, overviewSceneParams } from "./OverviewScene";
 import { UsageScene } from "./UsageScene";
 import { ProjectSettingsScene } from "./ProjectSettingsScene";
 import { SessionWorkScene } from "./SessionWorkScene";
+import { PrCardScene } from "./PrCardScene";
 import { PALETTE_HIDE_CLASS } from "../theme";
 
 export function mountGallery(root: Root) {
@@ -38,6 +39,10 @@ export function mountGallery(root: Root) {
   if (scene !== null) {
     if (scene === "project-settings") {
       root.render(<StrictMode><ProjectSettingsScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "pr-card") {
+      root.render(<StrictMode><PrCardScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "session-record") {

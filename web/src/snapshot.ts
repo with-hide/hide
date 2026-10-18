@@ -344,6 +344,8 @@ export type PullRequestWork = {
   asked_of_me: "unknown" | "none" | "direct" | "team";
   failed_checks: { name: string; url: string | null }[];
   pending_checks: number;
+  /** Disjoint counts from the open head's GitHub rollup; absent until read. */
+  check_counts?: { total: number; passed: number; failed: number; running: number; waiting: number; skipped: number; unknown: number } | null;
   /** Its place in the base branch's merge queue; `unknown` while the queue could not be read. */
   queue: { state: "unknown" | "not_queued" } | { state: "at"; position: number };
   review_requested_at_unix_ms: number | null;

@@ -215,10 +215,14 @@ The Explorer tree's rows use the shell's indent (`--size-tree-indent`), chevron 
 The shell's marks are Material Icon Theme SVGs, which Pen draws empty, so the sheet draws lucide glyphs in the theme's hues in their place; the production gallery's `right-lane` scene (`state=tree-only`) is the reference for the marks themselves.
 Its web files are `web/src/WorkspaceScreen.tsx`, `web/src/TabBar.tsx`, `web/src/ViewAreas.tsx`, `web/src/Tools.tsx`, and `web/src/ExplorerTree.tsx`.
 
-Session record is `Screen / Session record`, built by `sessionWorkScreens` in `scripts/pen-screens-session-work.mjs` (PRD session-record-redesign).
-It draws the record the lane's 보기 slot holds (PRD sidebar-task-lens D-44) in both themes: the default record (the PRs the session and its descendants made, the checklist with its `2/3 · 맡긴 일 N` head, checkbox tasks and the children under the tasks that delegated them, `놓친 것 N`, and `내 말 N` at the end; PRD record-card-readability), the Hide AI off record, and a states board.
-Its controls are library refs; the PR mark is a ref of the Agent tree parts.
-`/gallery?scene=session-record` is the production `SessionRecord` over `web/src/gallery/SessionWorkScene.tsx`, with `state=off`, `case=open-missed|now|goals|delegated|empty` and `state=ended` for the 태스크 list, measured by `web/e2e/session-record-geometry.mjs`.
+PR and session cards are the authored `Screen / PR card` and `Screen / Session card` sheets, transplanted from the operator-approved local proposals with the screen transplant procedure above.
+They replace the generated `Screen / Session record` sheet and supersede the standalone card arrangements in Task lens D and E; those task-lens sheets still describe their surrounding navigation.
+The PR sheet carries wide and narrow cards in Light and Dark, plus failed and ready cases.
+The session sheet carries wide and narrow cards in both themes, plus a child expanded in place.
+These sheets are not rebuilt from a screen generator; edit them through the same authored-screen procedure and keep their stable frame ids.
+`/gallery?scene=pr-card` renders production `PrCardView` over `web/src/gallery/PrCardScene.tsx`, with `state=rest|failed|ready|unknown|skipped` and `web/e2e/pr-card-geometry.mjs` as its measurement.
+`/gallery?scene=session-record` renders production `SessionRecord` over `web/src/gallery/SessionWorkScene.tsx`, with summaries Off, pending judgment, question, loading and failed cases, measured by `web/e2e/session-record-geometry.mjs`.
+Both galleries accept `width`, `theme`, `lang`, `scale` and long content for wrapping checks; gallery values are invented examples, and isolated daemon tests own runtime behavior.
 
 Settings is `Screen / Settings`, built by `settingsBoards` in `scripts/pen-screens-settings.mjs` from the boards the operator approved (PRD settings-left-nav D-11).
 It draws the ⌘, sheet with its list on the left, App (General, Notifications, Devices, Shortcuts) and This Mac (Agents, Hide AI, Mobile, GitHub) with About at the list's foot, and each page under its title alone: General as Appearance, Notifications with This Mac and Phone, Agents with its machine switch, Hide AI, GitHub and About.

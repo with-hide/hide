@@ -1,6 +1,6 @@
 // One background candidate, with production record workers and private native
 // conversations. GitHub and drafting stay controlled in this visual fixture.
-import { expect, type ElectronApplication } from "@playwright/test";
+import { expect, type ElectronApplication, type Locator } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { continueFixtureTranscript, setFixtureLifecycle, startHerdr } from "../../web/e2e/herdr-fixture";
 import { FIRST_GOAL, MISSED, NEXT_GOAL, nextWork, seedFirstWork, workFixture, workRepositoryReady } from "../../web/e2e/session-work-fixture";
@@ -9,12 +9,24 @@ import { enterWorkspace, openTaskFolds, showTool, taskRow } from "../../web/e2e/
 import { fitWindow, isolate, launchShell, REPO, test } from "./fixture";
 import { captureElectronWindow } from "./electron-window";
 
-/** The record, the requests at its end, then the pane's checklist pinned by Show task list through the app menu's chord. */
+/** The approved record separates the session's PRs from a child's expandable record. */
+async function expectRecordOutputs(record: Locator, child: string, own: number) {
+  await record.getByRole("tab", { name: /^PR/ }).click();
+  await expect(record.locator('[data-record-output="pr"]')).toHaveCount(own, { timeout: 45_000 });
+  const row = record.locator(`[data-record-child="${child}"]`);
+  await row.locator(":scope > button").click();
+  await row.getByRole("tab", { name: /^PR/ }).click();
+  await expect(row.locator('[data-record-output="pr"]')).toHaveCount(1, { timeout: 45_000 });
+  await expect(record.locator('[data-record-output="pr"]')).toHaveCount(own + 1);
+  await row.locator(":scope > button").click();
+}
+
+/** The record, its request-history tab, then the pane's checklist through the app menu's chord. */
 async function captureRecordAndTaskList(app: ElectronApplication, pane: string, theme: string, facts: Record<string, unknown>) {
   const page = await app.firstWindow();
   const record = page.locator('aside[data-lane="detail"][data-detail="record"] [data-session-record="lane"]');
   await captureElectronWindow(app, `record-tasks-children-${theme}`, facts);
-  // The requests stand at the record's end, the newest four open (PRD record-card-readability B24).
+  await record.getByRole("tab", { name: /^(Request history|요청 기록)/ }).click();
   await record.locator("[data-record-words]").scrollIntoViewIfNeeded();
   await expect(record.locator("[data-record-request]").first()).toBeVisible();
   await captureElectronWindow(app, `record-words-${theme}`, facts);
@@ -61,7 +73,7 @@ test("@platform session work records, missed lines, ended work and search render
     // The record opens in the lane's 보기 slot (PRD sidebar-task-lens B15).
     const record = page.locator('aside[data-lane="detail"][data-detail="record"] [data-session-record="lane"]');
     await expect(record.locator('[data-record-work]').first().locator('[data-record-task]')).toHaveCount(1, { timeout: 45_000 });
-    await expect(record.locator('[data-record-output="pr"]')).toHaveCount(2, { timeout: 45_000 });
+    await expectRecordOutputs(record, child, 1);
     // The rail keeps a fifth button for the slot: pressed while the lane draws it, kept when a tool is called, and pressing it comes back (B46).
     const slotButton = page.locator('[data-lane-tool="detail"][data-detail-slot="record"]');
     await expect(slotButton).toHaveAttribute("aria-pressed", "true");
@@ -82,7 +94,7 @@ test("@platform session work records, missed lines, ended work and search render
     await setFixtureLifecycle(herdr, herdr.panes[0], "idle");
     // The parent's three tasks, the second request's two deliverables one each; the child's is in its own record, behind its row (B20).
     await expect(record.locator('[data-record-task]')).toHaveCount(3, { timeout: 45_000 });
-    await expect(record.locator('[data-record-output="pr"]')).toHaveCount(3, { timeout: 45_000 });
+    await expectRecordOutputs(record, child, 2);
     // The child is a row of the parent's record (B20); the capture keeps the parent in front.
     await expect(record.locator(`[data-record-child="${child}"]`)).toBeVisible();
     const fixtureIdentity = { head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: REPO, encoding: "utf8" }).trim(), home: run.env.HOME, state: run.env.HIDE_STATE_DIR, socket: herdr.socket, daemon: run.daemonPid(), parent: herdr.panes[0], child, provider: "scripted", github: "scripted" };
@@ -95,6 +107,7 @@ test("@platform session work records, missed lines, ended work and search render
       await page.keyboard.press("Escape");
       const facts = { ...fixtureIdentity, theme, tools: await page.locator("[data-lane-frame]").boundingBox() };
       await captureRecordAndTaskList(app, herdr.panes[0], theme, facts);
+      await record.getByRole("tab", { name: /^(Findings|발견사항)/ }).click();
       const missed = record.locator('[data-record-missed] [data-missed-work]', { hasText: MISSED });
       // An open line in its own section offers 백로그로 and 무시, with no drafted form (PRD overview-device-tasks B43; PRD record-card-readability B12).
       await expect(missed.locator("[data-missed-backlog-add]")).toBeVisible();
@@ -113,11 +126,11 @@ test("@platform session work records, missed lines, ended work and search render
       await page.keyboard.press("Escape");
       await expect(record.locator('[data-record-task]')).toHaveCount(0);
       // The parent's two requests; the child's is in its own record, behind its row.
+      await record.getByRole("tab", { name: /^(Request history|요청 기록)/ }).click();
       await expect(record.locator('[data-record-request]')).toHaveCount(2);
       await expect(record.getByRole('heading', { level: 2 })).toContainText('Claude');
       await expect(record.locator('[data-record-child]')).toContainText('Claude');
-      // The child's pull request stands on the child's row; the session's own stand beside the title (B15).
-      await expect(record.locator('[data-record-child] [data-record-output="pr"]')).toHaveCount(1);
+      await expectRecordOutputs(record, child, 2);
       await captureSummariesOff(app, herdr.panes[0], theme, facts);
       await page.locator('[data-open-settings]').click();
       await page.locator('[data-settings-tab="hideAi"]').click();
