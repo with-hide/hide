@@ -462,6 +462,75 @@ fn a_start_follow_notifies_herdr_when_its_tab_is_only_active_in_a_background_wor
 }
 
 #[test]
+fn a_repeated_focus_after_its_answer_waits_for_the_existing_tab_move() {
+    let t = tree();
+    let (mut runtime, _) = live_tab_order_runtime(&t.main);
+    let tabs = ["w-order:t1", "w-order:t2"];
+    runtime.ingest_session(Ok(tab_order_payload(&t.main, &tabs, &tabs, tabs[0])));
+    runtime.focus_pane("w-order:t2:p".into(), PaneFocusOrigin::Operator, None);
+    super::session_navigation::finish_running_pane_focus(&mut runtime, Ok(()));
+    let notifications = diagnostic_count(&runtime, "pane.focus.requested");
+
+    // The successful control arrived before its tab_focused stream event.
+    // A repeated click shares that move, even after an unchanged old header.
+    for stale_header in [false, true] {
+        if stale_header {
+            runtime.ingest_session(Ok(tab_order_payload(&t.main, &tabs, &tabs, tabs[0])));
+        }
+        runtime.focus_pane("w-order:t2:p".into(), PaneFocusOrigin::Operator, None);
+        assert_eq!(
+            diagnostic_count(&runtime, "pane.focus.requested"),
+            notifications,
+            "an answered focus must not be sent again before its stream move"
+        );
+        assert_eq!(
+            runtime.snapshot.focused.pane_id.as_deref(),
+            Some("w-order:t2:p")
+        );
+    }
+    runtime.set_live(runtime.live.as_ref().unwrap().clone());
+    runtime.focus_pane("w-order:t2:p".into(), PaneFocusOrigin::Operator, None);
+    assert_eq!(
+        diagnostic_count(&runtime, "pane.focus.requested"),
+        notifications + 1,
+        "a new connection cannot reuse the old connection's confirmation"
+    );
+}
+
+#[test]
+fn an_unconfirmed_background_workspace_focus_does_not_answer_its_retry() {
+    let t = tree();
+    let (mut runtime, _) = live_tab_order_runtime(&t.main);
+    let workspaces: [(&str, &[&str], &str); 2] =
+        [("wa", &["wa:t1"], "wa:t1"), ("wb", &["wb:t1"], "wb:t1")];
+    runtime.ingest_session(Ok(split_checkout_payload(&t.main, &workspaces, "wa")));
+    runtime.focus_pane("wb:t1:p".into(), PaneFocusOrigin::Operator, None);
+    let control = runtime.pane_focus_in_flight.clone().expect("running focus");
+    runtime.complete_lane_pane_focus(
+        control,
+        Err(live::ControlFailure::Ambiguous("answer was lost".into())),
+        8,
+    );
+    runtime.focus_pane(
+        "wb:t1:p".into(),
+        PaneFocusOrigin::Operator,
+        Some("explicit-retry".into()),
+    );
+    assert_eq!(diagnostic_count(&runtime, "pane.focus.requested"), 2);
+    assert_eq!(
+        runtime
+            .snapshot
+            .status
+            .pane_focus_request
+            .as_ref()
+            .unwrap()
+            .phase,
+        "pending",
+        "a lost answer is not a successful focus confirmation"
+    );
+}
+
+#[test]
 fn a_global_start_respects_a_later_external_tab_or_pane_visit() {
     let t = tree();
     for external in ["unchanged", "tab", "pane"] {

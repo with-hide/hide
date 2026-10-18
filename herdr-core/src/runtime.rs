@@ -2439,6 +2439,9 @@ impl Runtime {
 
     pub fn set_live(&mut self, context: LiveContext) {
         self.live_generation = self.live_generation.saturating_add(1);
+        for request in &mut self.tab_focus_requests {
+            request.pane_focus_confirmed = false;
+        }
         self.live = Some(context);
         // A sleeping session can wake only over a connection.
         self.refresh_dormant_rows();

@@ -3427,7 +3427,8 @@ impl Runtime {
         // A tab active only in a background workspace is not global focus.
         let herdr_agrees = self.layout_holding_pane(&pane_id).is_none_or(|layout| {
             layout.focused_pane_id == pane_id
-                && self.herdr_focused_tab_seen.as_deref() == Some(layout.tab_id.as_str())
+                && (self.herdr_focused_tab_seen.as_deref() == Some(layout.tab_id.as_str())
+                    || self.pane_focus_tab_confirmed(&layout.tab_id))
         });
         let notify = !already_focused
             || !herdr_agrees
