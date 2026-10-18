@@ -144,12 +144,42 @@ impl AiBackend for Scripted {
 struct CountingSource {
     inner: super::NodeTranscripts,
     reads: AtomicUsize,
+    completed: AtomicUsize,
+    held: Mutex<bool>,
+    released: Condvar,
+}
+
+impl CountingSource {
+    fn hold(&self) {
+        *self.held.lock().unwrap() = true;
+    }
+
+    fn release(&self) {
+        *self.held.lock().unwrap() = false;
+        self.released.notify_all();
+    }
 }
 
 impl TranscriptSource for CountingSource {
     fn read(&self, request: &LabelTranscriptRequest) -> Result<LabelTranscript, ReadFailure> {
         self.reads.fetch_add(1, Ordering::SeqCst);
-        self.inner.read(request)
+        let mut held = self.held.lock().unwrap();
+        while *held {
+            let (next, timeout) = self
+                .released
+                .wait_timeout(held, Duration::from_secs(20))
+                .unwrap();
+            held = next;
+            if timeout.timed_out() && *held {
+                return Err(ReadFailure::Pending(
+                    "fixture reader hold expired".to_owned(),
+                ));
+            }
+        }
+        drop(held);
+        let result = self.inner.read(request);
+        self.completed.fetch_add(1, Ordering::SeqCst);
+        result
     }
 }
 
@@ -215,6 +245,9 @@ impl Harness {
                 super::NodeTranscripts::new(Box::new(move || Ok(Arc::clone(&node))))
             },
             reads: AtomicUsize::new(0),
+            completed: AtomicUsize::new(0),
+            held: Mutex::new(false),
+            released: Condvar::new(),
         });
         let (worker, woken) = self.spawn(store, LOCAL_TARGET, "local.sock", source.clone());
         (worker, woken, source)
@@ -337,6 +370,20 @@ fn settle(worker: &mut LabelWorker, woken: &Receiver<()>) {
     while !worker.settled() {
         let left = deadline.saturating_duration_since(Instant::now());
         assert!(!left.is_zero(), "the worker did not settle");
+        let _ = woken.recv_timeout(left.min(Duration::from_millis(200)));
+        worker.drain(Instant::now(), unix_now_ms());
+    }
+}
+
+fn drain_until(
+    worker: &mut LabelWorker,
+    woken: &Receiver<()>,
+    ready: impl Fn(&LabelWorker) -> bool,
+) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !ready(worker) {
+        let left = deadline.saturating_duration_since(Instant::now());
+        assert!(!left.is_zero(), "the expected worker result did not arrive");
         let _ = woken.recv_timeout(left.min(Duration::from_millis(200)));
         worker.drain(Instant::now(), unix_now_ms());
     }
@@ -1773,6 +1820,112 @@ fn a_second_working_turn_retires_the_first_turns_line_before_analysis() {
     assert_eq!(
         shown(&worker, &second).unwrap().progress.as_deref(),
         Some("둘째 요청의 실제 작업 진행")
+    );
+}
+
+#[test]
+fn an_old_analysis_cannot_restore_progress_after_a_new_turn_was_read() {
+    let mut harness = Harness::new();
+    harness.start_delay = Duration::from_secs(15);
+    let path = harness.session("a", "native-a", &[("user", "첫 요청")]);
+    harness.backend.begin("첫 요청의 실제 작업");
+    let (mut worker, woken, source) = harness.worker(harness.store());
+    let first = agent(&path, "working", 5);
+    observe(&mut worker, &first);
+    settle(&mut worker, &woken);
+    assert_eq!(
+        shown(&worker, &first).unwrap().progress.as_deref(),
+        Some("첫 요청의 실제 작업 진행")
+    );
+
+    harness.session(
+        "a",
+        "native-a",
+        &[("user", "첫 요청"), ("user", "둘째 요청")],
+    );
+    harness.backend.begin("둘째 요청의 실제 작업");
+    harness.backend.hold();
+    let second = agent(&path, "working", 6);
+    observe(&mut worker, &second);
+    settle(&mut worker, &woken);
+    worker.tick(Instant::now() + Duration::from_secs(20));
+    drain_until(&mut worker, &woken, |_| harness.backend.calls() == 2);
+
+    harness.session(
+        "a",
+        "native-a",
+        &[
+            ("user", "첫 요청"),
+            ("user", "둘째 요청"),
+            ("user", "셋째 요청"),
+        ],
+    );
+    harness.backend.begin("셋째 요청의 실제 작업");
+    let third = agent(&path, "working", 7);
+    observe(&mut worker, &third);
+    drain_until(&mut worker, &woken, |worker| {
+        source.completed.load(Ordering::SeqCst) >= 3 && worker.reader_idle()
+    });
+    assert_eq!(shown(&worker, &third).unwrap().progress, None);
+
+    harness.backend.release();
+    settle(&mut worker, &woken);
+    assert_eq!(shown(&worker, &third).unwrap().progress, None);
+    worker.tick(Instant::now() + Duration::from_secs(20));
+    settle(&mut worker, &woken);
+    assert_eq!(
+        shown(&worker, &third).unwrap().progress.as_deref(),
+        Some("셋째 요청의 실제 작업 진행")
+    );
+}
+
+#[test]
+fn a_new_turn_read_retires_an_old_done_result_that_arrived_first() {
+    let mut harness = Harness::new();
+    harness.start_delay = Duration::from_secs(15);
+    let path = harness.session("a", "native-a", &[("user", "첫 요청")]);
+    harness.backend.begin("첫 요청의 실제 작업");
+    let (mut worker, woken, source) = harness.worker(harness.store());
+    let first = agent(&path, "working", 5);
+    observe(&mut worker, &first);
+    settle(&mut worker, &woken);
+
+    harness.backend.answer("마친 첫 요청을 정리함", "done", "");
+    harness.backend.hold();
+    harness.session(
+        "a",
+        "native-a",
+        &[("user", "첫 요청"), ("assistant", "첫 작업 완료")],
+    );
+    let idle = agent(&path, "idle", 6);
+    observe(&mut worker, &idle);
+    drain_until(&mut worker, &woken, |_| harness.backend.calls() == 2);
+
+    harness.session(
+        "a",
+        "native-a",
+        &[("user", "첫 요청"), ("user", "다음 요청")],
+    );
+    harness.backend.begin("다음 요청의 실제 작업");
+    source.hold();
+    let next = agent(&path, "working", 7);
+    observe(&mut worker, &next);
+    harness.backend.release();
+    drain_until(&mut worker, &woken, |worker| {
+        shown(worker, &next).unwrap().progress.as_deref() == Some("마친 첫 요청을 정리함 진행")
+    });
+
+    harness.backend.hold();
+    source.release();
+    drain_until(&mut worker, &woken, |worker| {
+        source.completed.load(Ordering::SeqCst) >= 3 && worker.reader_idle()
+    });
+    assert_eq!(shown(&worker, &next).unwrap().progress, None);
+    harness.backend.release();
+    settle(&mut worker, &woken);
+    assert_eq!(
+        shown(&worker, &next).unwrap().progress.as_deref(),
+        Some("다음 요청의 실제 작업 진행")
     );
 }
 
@@ -3789,6 +3942,9 @@ fn a_failed_same_state_follow_up_forgets_structured_question_without_ai() {
                 }
             })),
             reads: AtomicUsize::new(0),
+            completed: AtomicUsize::new(0),
+            held: Mutex::new(false),
+            released: Condvar::new(),
         });
         let (mut worker, woken) =
             harness.spawn(harness.store(), LOCAL_TARGET, "local.sock", source.clone());
