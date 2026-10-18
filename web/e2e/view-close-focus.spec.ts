@@ -41,11 +41,11 @@ test("View close follows MRU, preserves background input and hands collapsed are
     await tab("c.txt").click({ button: "right" });
     await page.getByRole("menuitem", { name: "Split", exact: true }).hover();
     await page.getByRole("menuitem", { name: "Right", exact: true }).click();
-    await expect(page.locator("[data-view-area]")).toHaveCount(2);
-    const right = page.locator("[data-view-area]").last();
+    await expect(page.locator("[data-view-area-id]")).toHaveCount(2);
+    const right = page.locator("[data-view-area-id]").last();
     await right.locator(".cm-content").click();
     await page.keyboard.press(chord("close_tab"));
-    await expect(page.locator("[data-view-area]")).toHaveCount(1);
+    await expect(page.locator("[data-view-area-id]")).toHaveCount(1);
     await expect(tab("b.txt")).toHaveAttribute("aria-selected", "true");
     await expect(editor).toBeFocused();
     await expect(editor).toContainText("kept-input");
