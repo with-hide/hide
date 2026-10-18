@@ -525,20 +525,26 @@ impl Runtime {
                 focus_device: false,
             }));
         } else {
-            self.visible_tab_ids.remove(&checkout_id);
-            if let Some(checkout) = self
-                .snapshot
-                .navigator
-                .workspaces
-                .iter_mut()
-                .flat_map(|workspace| &mut workspace.checkouts)
-                .find(|checkout| checkout.id == checkout_id)
-            {
-                checkout.active_tab_id = None;
-            }
-            self.select_terminal_pane(None);
-            self.operator_focused_pane_id = None;
+            self.clear_agent_workspace_pane(&checkout_id);
         }
+    }
+
+    /// Clears a local checkout's previous canvas without forwarding devices
+    /// or issuing Herdr focus; a result follows with its ordered pane focus.
+    pub(super) fn clear_agent_workspace_pane(&mut self, checkout_id: &str) {
+        self.visible_tab_ids.remove(checkout_id);
+        if let Some(checkout) = self
+            .snapshot
+            .navigator
+            .workspaces
+            .iter_mut()
+            .flat_map(|workspace| &mut workspace.checkouts)
+            .find(|checkout| checkout.id == checkout_id)
+        {
+            checkout.active_tab_id = None;
+        }
+        self.select_terminal_pane(None);
+        self.operator_focused_pane_id = None;
     }
 
     /// An explicit real-agent navigation reveals its owning group. Session

@@ -154,7 +154,10 @@ test("a late global start stays behind after returning to an empty group or draf
       await open(page, daemon);
       await createGroup(page, "Other");
       const origin = await createGroup(page, "Origin");
-      if (draft) await page.locator("[data-new-agent-tab=true]").click();
+      if (draft) {
+        await page.locator("[data-new-agent-tab=true]").click();
+        await expect(blank(page)).toHaveAttribute("data-agent-tab-start", /^draft:/);
+      }
       const originalDraft = await blank(page).getAttribute("data-agent-tab-start");
 
       await page.keyboard.press(chord("search"));

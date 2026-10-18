@@ -4090,7 +4090,7 @@ impl Runtime {
                         recorded_at_unix_ms: unix_milliseconds(),
                     });
                 }
-                self.complete_group_start(id, created_tab_id.as_deref(), &pane_id);
+                self.complete_group_start(id, created_tab_id.as_deref(), &pane_id, should_focus);
                 if let Some(detail) = issue_error {
                     self.push_diagnostic(
                         "checkout_issue.create_failed",

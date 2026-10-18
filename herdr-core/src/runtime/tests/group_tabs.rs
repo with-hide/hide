@@ -32,6 +32,55 @@ fn a_global_start_can_open_another_checkout_until_a_selection_supersedes_it() {
 }
 
 #[test]
+fn a_global_start_in_the_front_checkout_keeps_its_navigation_through_snapshot_sync() {
+    for stays_behind in [false, true] {
+        let (mut runtime, _) = setup();
+        let task = runtime
+            .begin_task_operation("agent_start", None, None, None, None)
+            .unwrap();
+        runtime
+            .snapshot
+            .task_operation
+            .as_mut()
+            .unwrap()
+            .stays_behind = stays_behind;
+        runtime
+            .prepare_group_start(
+                task,
+                (crate::node::TEST_NODE, PATH),
+                None,
+                Some("global-front-checkout"),
+                None,
+                false,
+            )
+            .unwrap();
+        // Dispatch and snapshot publication synchronize the old pane with
+        // the chosen canvas while the real start's answer is still pending.
+        runtime.sync_workspace_view();
+        ingest(&mut runtime, &TABS);
+        assert_eq!(geometry(&published(&runtime).root)["active"], TABS[0]);
+        assert_eq!(runtime.group_start_should_focus(task), !stays_behind);
+        runtime.ingest_task_operation_result(
+            task,
+            Ok(live::WorktreeTaskOutcome {
+                path: PATH.into(),
+                pane_id: "w-order:t4:p".into(),
+                created_tab_id: Some("w-order:t4".into()),
+                purpose_error: None,
+                unconfirmed_purpose_token: None,
+                issue_error: None,
+                shell: crate::agent_start::ShellStart::Plain,
+            }),
+        );
+        runtime.sync_workspace_view();
+        assert_eq!(
+            geometry(&published(&runtime).root)["active"],
+            if stays_behind { TABS[0] } else { "w-order:t4" }
+        );
+    }
+}
+
+#[test]
 fn a_global_start_stays_behind_after_an_empty_selection_round_trip() {
     for draft in [false, true] {
         let (mut runtime, _) = setup();
@@ -879,7 +928,7 @@ fn a_late_start_fills_its_original_draft_once_without_changing_the_visible_group
     assert!(!runtime.group_start_should_focus(82));
     // Herdr's authoritative topology may precede the effect's own answer.
     ingest(&mut runtime, &[TABS[0], TABS[1], TABS[2], "w-order:t4"]);
-    runtime.complete_group_start(82, Some("w-order:t4"), "w-order:t4:p");
+    runtime.complete_group_start(82, Some("w-order:t4"), "w-order:t4:p", false);
     runtime.sync_workspace_view();
     assert_eq!(
         published(&runtime).group_id.as_deref(),
@@ -888,7 +937,7 @@ fn a_late_start_fills_its_original_draft_once_without_changing_the_visible_group
     assert_eq!(tabs(&runtime, Some(&target)), ["w-order:t4"]);
     assert_eq!(tabs(&runtime, None), TABS);
     assert!(!published(&runtime).drafts.contains(&draft));
-    runtime.complete_group_start(82, Some("w-order:t4"), "w-order:t4:p");
+    runtime.complete_group_start(82, Some("w-order:t4"), "w-order:t4:p", false);
     runtime.sync_workspace_view();
     assert_eq!(tabs(&runtime, Some(&target)), ["w-order:t4"]);
     let settled = runtime
@@ -937,7 +986,7 @@ fn an_acknowledged_start_survives_stale_topology_then_closes_after_being_observe
     assert_eq!(prepared.saved.try_recv().expect("start persisted"), Ok(()));
 
     // The effect answers first. The session stream still contains the old tabs.
-    runtime.complete_group_start(91, Some("w-order:t4"), "w-order:t4:p");
+    runtime.complete_group_start(91, Some("w-order:t4"), "w-order:t4:p", false);
     runtime.sync_workspace_view();
     assert_eq!(tabs(&runtime, Some(&target)), ["w-order:t4"]);
     assert!(!published(&runtime).drafts.contains(&draft));
@@ -1253,7 +1302,7 @@ fn add_pane_accepts_the_shown_delegated_tab_and_refuses_a_stale_canvas_target() 
         runtime.group_start_target_is_current(102),
         "an admitted start can finish after the user leaves its canvas"
     );
-    runtime.complete_group_start(102, Some(CHILDREN[0]), "w-order:t4:new-pane");
+    runtime.complete_group_start(102, Some(CHILDREN[0]), "w-order:t4:new-pane", false);
     assert!(
         runtime.group_start_target_is_current(102),
         "agent launch keeps the accepted live tab"
@@ -1539,7 +1588,7 @@ fn pending_creation_occupies_its_draft_once_even_when_topology_beats_the_answer(
         );
         assert_eq!(tabs(&runtime, None), existing);
         assert_eq!(tabs(&runtime, Some(&target)), std::slice::from_ref(&draft));
-        runtime.complete_group_start(130, Some(stage), &format!("{stage}:p"));
+        runtime.complete_group_start(130, Some(stage), &format!("{stage}:p"), false);
         runtime.ingest_session(Ok(payload));
         runtime.sync_workspace_view();
         assert_eq!(tabs(&runtime, Some(&target)), [stage]);

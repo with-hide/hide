@@ -54,6 +54,7 @@ pub(super) struct ActiveStart {
     pub task: u64,
     pub workspace: workspace_view::WorkspaceKey,
     pub key: String,
+    explicit_target: bool,
 }
 
 pub(super) struct TaskStartFocus {
@@ -396,16 +397,16 @@ impl Runtime {
                     let draft = view
                         .create_agent_draft(&target.area_id, unix_milliseconds())
                         .map_err(|_| "The tab could not be reserved. Retry.".to_owned());
-                    if stays_behind {
+                    if !explicit || stays_behind {
                         let layout = view.selected_agent_layout_mut();
                         layout.tree.active_area = prior_area;
-                        if let Some(tab) = prior_tab
-                            && let Some(area) = layout.tree.area_mut(&target.area_id)
-                        {
-                            area.active = Some(tab);
+                        if let Some(area) = layout.tree.area_mut(&target.area_id) {
+                            area.active = prior_tab;
                         }
                         if let Some(canvas) = prior_canvas {
                             layout.canvases.insert(target.area_id.clone(), canvas);
+                        } else {
+                            layout.canvases.remove(&target.area_id);
                         }
                     }
                     view.agent_groups.selected = selected;
@@ -480,6 +481,7 @@ impl Runtime {
             task,
             workspace,
             key,
+            explicit_target: explicit,
         });
         self.persist_workspace_views();
         Ok(PreparedStart {
@@ -849,18 +851,22 @@ impl Runtime {
             .task_start_focus
             .as_ref()
             .filter(|focus| focus.task == task);
+        let global_current = origin.is_none_or(|focus| {
+            focus.global_focus.as_ref().is_some_and(|origin| {
+                origin.serial == self.last_view_intent_serial
+                    && (origin.workspace.is_none() || *origin == self.start_focus())
+            })
+        });
         let Some(active) = self
             .group_start
             .as_ref()
             .filter(|active| active.task == task)
         else {
-            return origin.is_none_or(|focus| {
-                focus.global_focus.as_ref().is_some_and(|origin| {
-                    origin.serial == self.last_view_intent_serial
-                        && (origin.workspace.is_none() || *origin == self.start_focus())
-                })
-            });
+            return global_current;
         };
+        if !active.explicit_target {
+            return global_current && self.group_start_target_is_current(task);
+        }
         let Some(view) = self
             .workspace_views
             .as_ref()
@@ -924,7 +930,13 @@ impl Runtime {
         self.persist_workspace_views();
     }
 
-    pub(super) fn complete_group_start(&mut self, task: u64, tab: Option<&str>, pane: &str) {
+    pub(super) fn complete_group_start(
+        &mut self,
+        task: u64,
+        tab: Option<&str>,
+        pane: &str,
+        should_focus: bool,
+    ) {
         let Some(active) = self
             .group_start
             .as_ref()
@@ -933,6 +945,8 @@ impl Runtime {
             return;
         };
         let local = active.workspace.0 == self.node.as_str();
+        let follow_local_global = local && !active.explicit_target && should_focus;
+        let workspace = active.workspace.clone();
         let Some(tab) = tab else {
             return;
         };
@@ -996,6 +1010,14 @@ impl Runtime {
         start.pane_id = Some(pane);
         start.state = StartState::Ready;
         start.seen_in_topology |= seen;
+        if follow_local_global {
+            view.agent_groups.selected = start.group_id.clone();
+            let layout = view.selected_agent_layout_mut();
+            let stamp = layout.tree.next_stamp(unix_milliseconds());
+            layout
+                .select(start.live_tab_id.as_deref().unwrap(), false, stamp)
+                .expect("a current start retains its admitted slot");
+        }
         if start.agent_phase.is_none() {
             start.agent_phase = start.agent_kind.as_ref().map(|_| "starting".into());
         }
@@ -1005,6 +1027,15 @@ impl Runtime {
         }
         store.generation = store.generation.wrapping_add(1);
         self.persist_workspace_views();
+        if follow_local_global {
+            // The result owns this selection even before its first owner
+            // appears in topology. Clear the old visible pane in this event;
+            // result ingestion follows with the ordinary ordered pane focus.
+            if let Some((workspace_id, checkout_id)) = self.agent_workspace_ids(&workspace) {
+                self.focus_checkout(&workspace_id, &checkout_id);
+                self.clear_agent_workspace_pane(&checkout_id);
+            }
+        }
         self.request_republish();
     }
 
