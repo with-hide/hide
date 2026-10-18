@@ -57,6 +57,8 @@ fn run_coordinator(
     };
     let mut replica: Option<SessionReplica> = None;
     let mut active_tab_reads: BTreeMap<String, u32> = BTreeMap::new();
+    // Kept across reconnects: it is keyed by terminal, and a reconnect
+    // neither refills a start's reads nor reports a cold one again.
     let mut launch_settle = super::launch_settle::LaunchSettle::default();
     let mut subscription: Option<ActiveSubscription> = None;
     let mut subscription_generation = 0_u64;
@@ -224,7 +226,6 @@ fn run_coordinator(
                     catalog_cache.connection = subscription_generation;
                     reconcile_until = snapshot_at + RECONCILE_GRACE;
                     active_tab_reads.clear();
-                    launch_settle = super::launch_settle::LaunchSettle::default();
                     if let Err(message) = sync_reader.reset() {
                         crate::diagnostic!(json!({
                             "component": "session_sync",
@@ -805,6 +806,7 @@ fn run_coordinator(
                                 context.log_target(),
                                 &agents,
                                 Instant::now(),
+                                super::launch_settle::recorded_start,
                                 |panes| sync_reader.ask(generation, SyncRead::Launches(panes)),
                             );
                             if let Some(writer) = lineage_writer.as_mut()
