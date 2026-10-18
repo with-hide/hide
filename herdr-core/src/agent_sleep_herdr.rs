@@ -24,6 +24,7 @@ use crate::node_access::{NodeLink, call_as};
 use crate::agent_sleep::WakeMode;
 use crate::agent_start::StartError;
 use crate::handle::ChangeNotifier;
+use crate::input_gate::Drain;
 use crate::runtime::Runtime;
 use crate::wire;
 
@@ -38,6 +39,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long an ended agent has to hand the terminal back to its shell before
 /// the sleep is given up and the agent is left awake (B8).
 const END_TIMEOUT: Duration = Duration::from_secs(10);
+/// The longest the end waits for a write already admitted to the pane; a
+/// write has its own request timeout (`REQUEST_TIMEOUT`), so this is the hang guard.
+const WRITE_DRAIN_LIMIT: Duration = Duration::from_secs(6);
 const END_POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// `agent.start` waits this long for the agent to be ready; the read waits a
 /// little longer so a slow start is not reported as an unanswered one.
@@ -320,19 +324,53 @@ pub(crate) struct SleepTarget {
     /// The pane as the machine's Herdr names it; a node's pane is kept in
     /// the core under its `remote:` scope.
     pub(crate) herdr_pane_id: String,
+    /// Closed to the pane before the end began; the end waits for the writes
+    /// that were admitted before that.
+    pub(crate) input_gate: Arc<crate::input_gate::PaneInputGate>,
 }
 
 pub(crate) fn spawn_end(context: SleepTarget, pane_id: String, kind: String) -> Result<(), String> {
+    spawn_end_within(context, pane_id, kind, WRITE_DRAIN_LIMIT)
+}
+
+/// Waits for the writes admitted before the pane closed, and ends the agent
+/// only once they have landed. A write that outlives `drain_limit` is not
+/// waited out: the agent stays awake (nothing is signalled), so that write
+/// lands in the agent, and the sleep fails like any other the agent refused.
+fn end_after_drain(
+    context: &SleepTarget,
+    pane_id: &str,
+    kind: &str,
+    drain_limit: Duration,
+) -> Result<u64, String> {
+    if context.input_gate.wait_drained(pane_id, drain_limit) == Drain::Stalled {
+        crate::diagnostic!(serde_json::json!({
+            "component": "agent_sleep",
+            "kind": "agent_sleep.drain_stalled",
+            "pane_id": pane_id,
+            "limit_ms": u64::try_from(drain_limit.as_millis()).unwrap_or(u64::MAX),
+        }));
+        return Err("a write to the pane was still in flight".to_owned());
+    }
+    end_agent(
+        context.api_connector.as_ref(),
+        context.node.as_ref(),
+        &context.herdr_pane_id,
+        kind,
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn spawn_end_within(
+    context: SleepTarget,
+    pane_id: String,
+    kind: String,
+    drain_limit: Duration,
+) -> Result<(), String> {
     thread::Builder::new()
         .name("herdr-core-agent-sleep".into())
         .spawn(move || {
-            let result = end_agent(
-                context.api_connector.as_ref(),
-                context.node.as_ref(),
-                &context.herdr_pane_id,
-                &kind,
-            )
-            .map_err(|error| error.to_string());
+            let result = end_after_drain(&context, &pane_id, &kind, drain_limit);
             let Some(runtime) = context.runtime.upgrade() else {
                 return;
             };
@@ -484,6 +522,81 @@ mod tests {
             );
             assert_eq!(herdr.methods(), ["agent.get"]);
         }
+    }
+
+    fn sleep_target(
+        herdr: &FakeHerdr,
+        gate: &Arc<crate::input_gate::PaneInputGate>,
+    ) -> SleepTarget {
+        SleepTarget {
+            api_connector: Arc::new(herdr.connector()),
+            node: Arc::new(hide_node::Local::of_process()),
+            runtime: Weak::new(),
+            notifier: ChangeNotifier::new(),
+            herdr_pane_id: "w1:p1".into(),
+            input_gate: Arc::clone(gate),
+        }
+    }
+
+    /// A reply a phone admitted just before the pane closed is on its way to
+    /// the agent. The worker must not touch the agent until it has landed, or
+    /// the reply arrives behind the end and runs in the shell.
+    #[test]
+    fn the_end_waits_for_a_write_admitted_before_the_pane_closed() {
+        let released = Arc::new(AtomicBool::new(false));
+        let seen = Arc::clone(&released);
+        let herdr = FakeHerdr::start("agent-sleep-drain", move |method, _| match method {
+            "agent.get" => {
+                assert!(
+                    seen.load(Ordering::SeqCst),
+                    "the end began while a write was still landing"
+                );
+                // Busy again, so nothing is signalled: the order is the subject.
+                agent_info("working", 3)
+            }
+            other => panic!("unexpected {other}"),
+        });
+        let gate = Arc::new(crate::input_gate::PaneInputGate::default());
+        let admission = gate.admit("w1:p1").expect("awake");
+        gate.close("w1:p1");
+        spawn_end(sleep_target(&herdr, &gate), "w1:p1".into(), "claude".into())
+            .expect("the worker starts");
+        // The write is released once the worker is at its wait, not at its spawn.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !gate.is_waiting("w1:p1") {
+            assert!(Instant::now() < deadline, "the worker never waited");
+            thread::yield_now();
+        }
+        assert!(gate.admit("w1:p1").is_err(), "a later write is refused");
+        released.store(true, Ordering::SeqCst);
+        drop(admission);
+        herdr.wait_for_requests(1, Duration::from_secs(30));
+    }
+
+    /// A write stalled past the drain bound is not waited out and not ended
+    /// under: nothing reaches Herdr, so the agent stays awake and the late
+    /// write lands in it; the sleep fails with a reason the runtime takes as
+    /// any refused end (it reopens the pane and backs off).
+    #[test]
+    fn a_write_stalled_past_the_drain_bound_leaves_the_agent_awake() {
+        let herdr = FakeHerdr::start("agent-sleep-stalled", |method, _| {
+            panic!("a stalled write must not let the end begin: {method}")
+        });
+        let gate = Arc::new(crate::input_gate::PaneInputGate::default());
+        let admission = gate.admit("w1:p1").expect("awake");
+        gate.close("w1:p1");
+        // The write is held until the worker's answer is in, so it cannot
+        // finish inside the bound by luck.
+        let error = end_after_drain(
+            &sleep_target(&herdr, &gate),
+            "w1:p1",
+            "claude",
+            Duration::from_millis(50),
+        )
+        .expect_err("the drain did not finish");
+        assert!(error.contains("still in flight"), "{error}");
+        assert!(herdr.methods().is_empty(), "the agent was not touched");
+        drop(admission);
     }
 
     #[test]

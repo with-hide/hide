@@ -3158,10 +3158,14 @@ pub(crate) fn spawn_agent_find(
     route: PaneApiRoute,
     request_id: String,
     find: AgentFind,
+    gate: Arc<crate::input_gate::PaneInputGate>,
 ) -> Result<(), String> {
+    let core_pane_id = route.pane_id.clone();
     route.spawn(
         "herdr-core-agent-find",
-        move |connector, herdr_pane_id| open_agent_find(connector, herdr_pane_id, find),
+        move |connector, herdr_pane_id| {
+            open_agent_find(connector, herdr_pane_id, find, &gate, &core_pane_id)
+        },
         move |runtime, pane_id, result| runtime.ingest_agent_find(pane_id, request_id, result),
     )
 }
@@ -3170,6 +3174,8 @@ fn open_agent_find(
     connector: &dyn ApiConnector,
     pane_id: &str,
     find: AgentFind,
+    gate: &Arc<crate::input_gate::PaneInputGate>,
+    core_pane_id: &str,
 ) -> Result<PaneFindRoute, String> {
     // An agent that draws inline leaves its conversation in Herdr's history,
     // where the find bar reaches all of it; its own search may not exist in
@@ -3182,6 +3188,11 @@ fn open_agent_find(
         Some(_) => Some(read_pane_text(connector, pane_id, "visible")?.text),
         None => None,
     };
+    // The keys go into the agent's own search box; into the shell under a
+    // sleeping agent they would be typed as a command.
+    let _admission = gate
+        .admit(core_pane_id)
+        .map_err(|_| "The agent is asleep, so its own search is closed".to_owned())?;
     control_request(
         connector,
         "pane.send_keys",

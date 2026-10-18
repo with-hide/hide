@@ -1263,6 +1263,9 @@ pub struct Runtime {
     /// What the nodes were last told is on screen, asleep and closing, so
     /// only a change is sent.
     terminal_intents: terminal::TerminalIntents,
+    /// Which panes take no input while their agent ends, sleeps or wakes,
+    /// asked at the write by the writers that bypass a node's terminal.
+    input_gate: Arc<crate::input_gate::PaneInputGate>,
     next_remote_file_generation: u64,
     attachment: Option<attachments::PendingAttachment>,
     attachment_rejection: Option<crate::model::AsyncOperationSnapshot>,
@@ -2099,6 +2102,7 @@ impl Runtime {
             terminal_states: HashMap::new(),
             terminal_attach_requested: HashSet::new(),
             terminal_intents: terminal::TerminalIntents::default(),
+            input_gate: Arc::default(),
             next_remote_file_generation: 0,
             attachment: None,
             attachment_rejection: None,
@@ -2320,10 +2324,17 @@ impl Runtime {
         runtime.apply_persisted_pet_state();
         runtime.refresh_pet();
         runtime.refresh_agent_scopes();
+        // A sleep saved before this start is as closed as it was.
+        runtime.sync_input_gate();
         if shortcuts_imported {
             runtime.persist_ui_state();
         }
         runtime
+    }
+
+    /// The gate the writers that bypass a node's terminal ask at the write.
+    pub fn input_gate(&self) -> Arc<crate::input_gate::PaneInputGate> {
+        Arc::clone(&self.input_gate)
     }
 
     /// Every node's terminals, reached once the shell has built them.

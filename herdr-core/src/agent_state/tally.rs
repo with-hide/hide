@@ -365,6 +365,17 @@ pub mod phone {
         pub pull_request: Option<u64>,
     }
 
+    /// What a sleeping agent's pane says about it (`AgentSleepSnapshot`): the
+    /// phone words it as the desktop does and refuses input while it is set.
+    #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+    pub struct PhoneSleep {
+        /// `sleeping`, `waking` or `failed`.
+        pub state: String,
+        pub reason: Option<String>,
+        pub since_unix_ms: u64,
+        pub progress: Option<String>,
+    }
+
     #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
     pub struct PhoneAgent {
         pub device_id: String,
@@ -400,6 +411,10 @@ pub mod phone {
         pub detail: Option<String>,
         pub status_code: String,
         pub demand: String,
+        /// Present while the agent's process is ended and its pane holds a
+        /// bare shell; nothing may be typed into the pane then.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub sleep: Option<PhoneSleep>,
         /// Whether the compact title is emphasized, independent of the detail view.
         pub emphasized: bool,
         /// Whether opening the phone keeps this root notification. A read root
@@ -721,6 +736,9 @@ pub mod phone {
                     .and_then(Value::as_str)
                     .unwrap_or("none")
                     .to_owned(),
+                sleep: agent
+                    .get("sleep")
+                    .and_then(|sleep| serde_json::from_value(sleep.clone()).ok()),
             });
         }
     }

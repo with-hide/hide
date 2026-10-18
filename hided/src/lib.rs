@@ -477,6 +477,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         },
         host_name: host_name(),
         core: Arc::clone(&core),
+        input_gate: core.input_gate()?,
         herdr_socket: env.herdr_socket_path.as_ref().map(std::path::PathBuf::from),
         renderers: Arc::clone(&renderers),
         start_demand: Arc::clone(&start_demand),

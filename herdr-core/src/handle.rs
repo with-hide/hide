@@ -30,7 +30,7 @@ pub struct ChangeNotifier {
 }
 
 impl ChangeNotifier {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             registration: Arc::new(Mutex::new(None)),
             announced: Arc::new(AtomicBool::new(false)),
@@ -737,6 +737,13 @@ impl Core {
             return None;
         }
         lock_recover(&self.runtime).remote_herdr_api(device_id)
+    }
+
+    /// The gate a writer that bypasses a node's terminal (a phone's reply)
+    /// asks at the write: it refuses a pane whose agent is ending, asleep or
+    /// waking. Taken once and kept; the runtime keeps it current.
+    pub fn input_gate(&self) -> std::sync::Arc<crate::input_gate::PaneInputGate> {
+        lock_recover(&self.runtime).input_gate()
     }
 
     /// Daemon-only read of consented, connected SSH routes. Opening a route
