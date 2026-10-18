@@ -32,6 +32,7 @@ type Start = {
 const blank = (page: Page) => page.locator("[data-agent-tab-start]");
 const terminal = (page: Page) => page.locator("[data-group-start-terminal=true]");
 const selector = (page: Page) => page.locator("[data-agent-group-selector]");
+const stripTabs = (page: Page) => page.locator("[data-agent-tab-bar] [role=tab][data-tab]");
 
 function starts(daemon: Daemon): Start[] {
   const file = path.join(daemon.stateDir, "workspace-views.json");
@@ -94,6 +95,33 @@ async function acceptsInput(herdr: HerdrFixture, pane: string, suffix = "INPUT_O
   }).toContain(`PLAIN_${suffix}`);
 }
 
+async function startClaude(page: Page, prompt: string) {
+  await expect(blank(page)).toBeVisible();
+  await blank(page).locator("[data-agent-kind]").click();
+  await expect(page.locator('[data-agent-kind-option="claude"]')).toBeEnabled({ timeout: 20_000 });
+  await page.locator('[data-agent-kind-option="claude"]').click();
+  const model = blank(page).locator("[data-agent-model-kind]");
+  await expect(model).toBeEnabled();
+  await model.click();
+  await page.locator('[data-agent-model-option="opus"]').click();
+  await blank(page).getByRole("textbox").fill(prompt);
+  await page.locator("[data-group-start-agent=true]").click();
+  await expect(blank(page)).toHaveCount(0, { timeout: 30_000 });
+}
+
+async function claudeIsRunning(herdr: HerdrFixture, pane: string, prompt: string) {
+  await expect.poll(() => {
+    const row = herdr.run(["pane", "get", pane]) as { result: { pane: { agent: string | null } } };
+    return row.result.pane.agent;
+  }, { timeout: 30_000 }).toBe("claude");
+  await expect.poll(() => JSON.stringify(herdr.run(["pane", "process-info", "--pane", pane])), { timeout: 30_000 }).toContain("opus");
+  await expect.poll(() => {
+    const read = spawnSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
+    expect(read.status, read.stderr).toBe(0);
+    return read.stdout;
+  }, { timeout: 30_000 }).toContain(prompt);
+}
+
 async function cleanup(primary: unknown, steps: (() => void | Promise<void>)[]) {
   const errors: unknown[] = primary === undefined ? [] : [primary];
   for (const step of steps) {
@@ -129,6 +157,42 @@ for (const scenario of [
         state: "ready",
         effect: { shell_readiness: "plain", expected_command: plainCommand(scenario.shell), binding: { pane_id: pane, identity: actual } },
       });
+      const tab = (await stripTabs(page).getAttribute("data-tab"))!;
+      const originalTabs = topology(herdr);
+      await page.locator(`[data-add-agent="${tab}"]`).click();
+      const prompt = "Plain shell added agent prompt";
+      await startClaude(page, prompt);
+      await expect(page.locator("[data-pane-view]")).toHaveCount(2);
+      await expect(page.locator(`[data-pane-view="${pane}"]`)).toBeVisible();
+      await expect(stripTabs(page)).toHaveAttribute("data-tab", tab);
+      const added = (await page.locator("[data-pane-view]").evaluateAll(panes => panes.map(pane => pane.getAttribute("data-pane-view")!))).find(id => id !== pane)!;
+      await claudeIsRunning(herdr, added, prompt);
+      expect(identity(herdr, pane)).toEqual(actual);
+      expect(topology(herdr).sort()).toEqual(originalTabs.sort());
+      await acceptsInput(herdr, pane, "AFTER_AGENT_ADD");
+      await expect.poll(() => starts(daemon!).find(start => start.effect?.binding?.pane_id === added)).toMatchObject({
+        state: "ready",
+        effect: { shell_readiness: "plain", expected_command: plainCommand(scenario.shell) },
+      });
+      if (!scenario.blockIntegration) {
+        await createGroup(page, "First plain agent");
+        await page.locator("[data-new-agent-tab=true]").click();
+        const draft = await blank(page).getAttribute("data-agent-tab-start");
+        expect(draft).toMatch(/^draft:/);
+        const firstPrompt = "Plain shell first draft agent prompt";
+        await startClaude(page, firstPrompt);
+        await expect(stripTabs(page)).toHaveCount(1);
+        await expect(page.locator(`[data-tab="${draft}"]`)).toHaveCount(0);
+        await expect(page.locator("[data-pane-view]")).toHaveCount(1);
+        await expect(selector(page)).toContainText("First plain agent");
+        const first = (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!;
+        await claudeIsRunning(herdr, first, firstPrompt);
+        expect(topology(herdr)).toHaveLength(originalTabs.length + 1);
+        await expect.poll(() => starts(daemon!).find(start => start.effect?.binding?.pane_id === first)).toMatchObject({
+          state: "ready",
+          effect: { shell_readiness: "plain", expected_command: plainCommand(scenario.shell) },
+        });
+      }
       if (scenario.blockIntegration) expect(fs.statSync(blocked).isFile()).toBe(true);
     } catch (error) { failure = error; }
     finally { await cleanup(failure, [() => daemon?.stop(), () => herdr.stop()]); }
