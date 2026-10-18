@@ -9,7 +9,11 @@ the private `service.json`, so its OpenCode never reaches the operator's
 server, and marks the agent's environment, which the server inherits from
 the terminal that started it, so the run tells its own servers from any
 other. Every exit path stops them: OpenCode's own `service stop` first, then
-a signal to each marked server still running.
+a signal to each marked server still running, and last the owner's close,
+which ends every process the run owns, the server included (a guardian's
+marked descendant on Linux and macOS, a member of Herdr's job on Windows,
+where no other process's environment can be read to signal it). What is
+left is judged after that close (`left`).
 """
 
 import json
@@ -122,7 +126,11 @@ def stop(launch, environment, port, mark, owner):
     end = time.monotonic() + STOP_SECONDS
     while time.monotonic() < end and (listening(port) or ours(mark)):
         time.sleep(0.2)
-    record["left"] = ours(mark) or []
-    if listening(port):
-        record["left"].append(f"port {port}")
+    record["left"] = left(port, mark)
     return record
+
+
+def left(port, mark):
+    """The run's servers still running and the port if a server still
+    answers on it."""
+    return (ours(mark) or []) + ([f"port {port}"] if listening(port) else [])

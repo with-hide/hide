@@ -641,9 +641,6 @@ def main(argv=None):
                                                                   runtime.owner)
             except Exception as error:
                 agent["opencode_service"] = {"port": port, "left": [f"stop failed: {error}"]}
-            if agent["opencode_service"]["left"]:
-                report["failures"].append({"type": "CleanupError", "reason": "opencode_server_left: "
-                                           + json.dumps(agent["opencode_service"]["left"])})
         if runtime:
             # Herdr's own log lives in the private home the cleanup removes.
             log = runtime.home / "config/herdr/herdr-server.log"
@@ -675,6 +672,17 @@ def main(argv=None):
         if path_left:
             report["cleanup"]["confirmed"] = False
             report["cleanup"].setdefault("failures", []).append(path_left)
+        for key, (_, _, port) in services.items():
+            # The owner's close ended every process the run owns, the server
+            # included; one still answering now outlived the run.
+            service = next(row for row in report["agents"] if row["id"] == key)["opencode_service"]
+            if service["left"]:
+                service["left"] = opencode_service.left(port, str(runtime.home))
+                if not service["left"]:
+                    service["stopped_by"] = "the run's close"
+            if service["left"]:
+                report["failures"].append({"type": "CleanupError", "reason": "opencode_server_left: "
+                                           + json.dumps(service["left"])})
         # Hide AI's model requests, apart from the agents' budget: none in
         # local mode, where it is off, and counted in CI mode, where it is on.
         try:
