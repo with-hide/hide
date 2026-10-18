@@ -396,7 +396,7 @@ jobs:
         # for the shell to hold the terminal.
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 5
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(=agent_sleep_herdr::tests::ending_an_agent_ends_what_it_started_and_waits_for_the_shell)'
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(=agent_sleep_herdr::tests::an_agent_that_does_not_quit_on_its_keys_is_ended_with_what_it_started)'
       - name: Public repository read deadline
         # Execute the delayed native Git fixture, including Windows child
         # cleanup; compiling the public-boundary regression is not proof.
