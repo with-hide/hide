@@ -19,7 +19,7 @@ import { timeline, type Milestone, type TimelineEntry } from "./prCardModel";
 import { recordTitle } from "./sessionWork";
 import { catalogOf, localDeviceId, type LinkPanel, type PullRequest, type Workspace } from "./snapshot";
 import { startAnswer, startRequestId } from "./startAnswer";
-import { startFailure } from "./startDraft";
+import { startReasonText } from "./startReason";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -187,9 +187,8 @@ function useResume(): { resume: Resume; start: (send: (request: string) => void)
       const ui = useUiStore.getState();
       if (answer.agentPhase) ui.setWatchedTask(answer.taskId);
       if (answer.paneId) ui.setFocusWhenListed(answer.paneId);
-      const reason = answer.agentMessage ? startFailure(answer.agentMessage) : null;
-      const worded = reason === null ? "" : "key" in reason ? t(reason.key) : reason.message;
-      setResume({ request: null, failure: answer.agentPhase === "failed" ? worded : null });
+      const reason = answer.agentMessage ? startReasonText(answer.agentMessage, t) : "";
+      setResume({ request: null, failure: answer.agentPhase === "failed" ? reason : null });
     } else if (answer.phase === "refused" || answer.phase === "failed") {
       setResume({ request: null, failure: answer.message ?? "" });
     }

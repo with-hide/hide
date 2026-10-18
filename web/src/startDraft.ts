@@ -8,6 +8,7 @@
 import { create } from "zustand";
 import type { ProviderKind } from "./agentPicker";
 import type { MessageKey } from "./i18n/catalogs";
+import { startReason } from "./startReason";
 
 /**
  * What an open names instead of what is in front: the project to aim at, as
@@ -20,14 +21,9 @@ export type StartPreset = { projectId: string; kind?: ProviderKind };
 /** Why a start did not go: the core's own sentence, shown as sent, or a catalog key the panel words in the operator's language. */
 export type StartFailure = { message: string } | { key: MessageKey };
 
-/** The codes the core sends in place of a sentence, each worded in the operator's language. */
-const FAILURE_KEYS = new Map<string, MessageKey>([["codex_capability_unknown", "workspace.codexCapabilityUnknown"]]);
-
-/** The core's reason when it sent one, worded by key when it is a code, else the plain "did not start". */
+/** The core's reason when it sent one (`startReason`), else the plain "did not start". */
 export function startFailure(message: string | null | undefined): StartFailure {
-  if (!message) return { key: "workspace.agentNotStarted" };
-  const key = FAILURE_KEYS.get(message);
-  return key ? { key } : { message };
+  return message ? startReason(message) : { key: "workspace.agentNotStarted" };
 }
 
 type StartPanelState = {

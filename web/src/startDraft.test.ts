@@ -45,7 +45,7 @@ describe("the start panel's draft", () => {
   });
 
   it("words a Codex the machine's kit has not read in the operator's language", () => {
-    expect(startFailure("codex_capability_unknown")).toEqual({ key: "workspace.codexCapabilityUnknown" });
+    expect(startFailure("codex_capability_unknown")).toEqual({ key: "agents.codexUnread" });
     expect(startFailure("constructor")).toEqual({ message: "constructor" });
   });
 });

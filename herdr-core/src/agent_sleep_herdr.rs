@@ -600,7 +600,8 @@ mod tests {
         let WakeOutcome::Failed { reason, .. } = outcome else {
             panic!("wake started")
         };
-        assert!(reason.contains("Settings"), "{reason}");
+        // The screen words the code (`web/src/startReason.ts`).
+        assert_eq!(reason, crate::codex_launch::CAPABILITY_UNKNOWN);
         assert!(herdr.methods().is_empty());
     }
 
