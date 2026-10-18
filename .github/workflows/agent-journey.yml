@@ -31,7 +31,7 @@
 # system of its rotation, and reads "not measured" with that reason
 # elsewhere (docs/VERIFICATION.md, Agent journey). A leg with no agent to
 # sign in builds and starts nothing and leaves a notice.
-# A CLI that answers another version than the pin is named in a warning.
+# A CLI that answers another version than the pin fails the install and the lane.
 # Its report is never a release's agent evidence when it came from the
 # stand-ins (`skills/release/SKILL.md`).
 name: agent journey

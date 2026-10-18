@@ -3,8 +3,11 @@ install fails here, not on a runner."""
 
 from pathlib import Path
 import importlib.util
+import os
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
@@ -34,6 +37,38 @@ class Table(unittest.TestCase):
         self.assertTrue(clis.matches("1.4.0", "agy 1.4.0 (abc)"))
         self.assertFalse(clis.matches("1.4.0", "agy 1.4.01"))
         self.assertFalse(clis.matches("1.0.4", "11.0.4"))
+
+
+class Install(unittest.TestCase):
+    def install(self, answer):
+        """main() for Pi, its npm install replaced by a program that answers `answer`."""
+        with tempfile.TemporaryDirectory() as temporary:
+            program = Path(temporary) / "pi"
+            program.write_text("")
+            with mock.patch.dict(os.environ, {"CI": "true", "RUNNER_TEMP": temporary}), \
+                    mock.patch.dict(os.environ, {"GITHUB_PATH": "", "GITHUB_OUTPUT": ""}), \
+                    mock.patch.object(install, "npm", return_value={"pi": program}), \
+                    mock.patch.object(install, "answered", return_value=answer):
+                return install.main(["pi"])
+
+    def test_the_pinned_version_installs(self):
+        self.assertEqual(self.install(clis.table()["pi"]["version"]), 0)
+
+    def test_another_version_than_the_pin_fails_the_install(self):
+        with self.assertRaises(SystemExit) as stopped:
+            self.install("9.9.9")
+        self.assertIn("pi answered '9.9.9', agent-clis.json pins", str(stopped.exception))
+
+    def test_npm_runs_the_install_scripts_of_only_the_rows_that_name_them(self):
+        rows = install.table()
+        kinds = [kind for kind, row in rows.items() if row["installer"] == "npm"]
+        calls = []
+        with mock.patch.object(install, "run", side_effect=lambda argv, env=None: calls.append(argv)), \
+                mock.patch.object(install.shutil, "which", return_value="npm"):
+            install.npm(kinds, rows, Path("prefix"))
+        self.assertIn("--ignore-scripts", calls[0])
+        self.assertEqual(calls[1][:2], ["npm", "rebuild"])
+        self.assertEqual(set(calls[1][4:]), {rows[kind]["package"] for kind in kinds if rows[kind].get("install_scripts")})
 
 
 if __name__ == "__main__":

@@ -105,13 +105,23 @@ class FakeModel(unittest.TestCase):
         passed, _ = lane.judge(report(self.table(), [{"id": "grok", "cli_missing": "grok"}], fake_model=True), "fake")
         self.assertFalse(passed)
 
-    def test_a_cli_answering_another_version_than_the_pin_is_named(self):
-        agent = {"id": "antigravity", "version": "1.4.1",
-                 "pin": {"version": "1.4.0", "matches": False, "pinned": "installer takes no version"}}
+    def test_a_cli_answering_another_version_than_the_pin_fails(self):
+        agent = {"id": "antigravity", "version": "1.4.3",
+                 "pin": {"version": "1.4.2", "matches": False, "pinned": "installer takes no version"}}
         passed, notes = lane.judge(report(self.table(), [agent], fake_model=True), "fake")
-        self.assertTrue(passed)
-        self.assertEqual(notes, ["::warning title=agent journey antigravity::answered '1.4.1', contracts/agent-clis.json "
-                                 "pins 1.4.0 (installer takes no version)"])
+        self.assertFalse(passed)
+        self.assertEqual(notes, ["::error title=agent journey antigravity::answered '1.4.3', contracts/agent-clis.json "
+                                 "pins 1.4.2 (installer takes no version)"])
+
+    def test_a_report_without_a_row_the_lane_stands_for_fails(self):
+        # Every row it has passes, but Codex's is not there to pass.
+        table = self.table()
+        del table["codex"]
+        for name, flag in (("fake", "fake_model"), ("fixture", "fixture")):
+            with self.subTest(name):
+                passed, notes = lane.judge(report(table, [], **{flag: True}), name)
+                self.assertFalse(passed)
+                self.assertIn("::error title=agent journey codex::the report has no codex row", notes)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,8 @@
       "version": "2.1.302",
       "installer": "npm",
       "package": "@anthropic-ai/claude-code",
-      "program": "node_modules/@anthropic-ai/claude-code/bin/claude.exe"
+      "program": "node_modules/@anthropic-ai/claude-code/bin/claude.exe",
+      "install_scripts": "its postinstall puts the native program at bin/claude.exe"
     },
     "codex": {
       "version": "0.163.0",
@@ -20,7 +21,8 @@
       "version": "2.0.29",
       "installer": "npm",
       "package": "@opencode/cli",
-      "program": "node_modules/@opencode/cli/bin/opencode.exe"
+      "program": "node_modules/@opencode/cli/bin/opencode.exe",
+      "install_scripts": "its postinstall puts the native program at bin/opencode.exe"
     },
     "pi": {
       "version": "1.0.4",
@@ -32,7 +34,7 @@
       "installer": "omp"
     },
     "agy": {
-      "version": "1.4.0",
+      "version": "1.4.2",
       "installer": "agy",
       "pinned": "installer takes no version"
     }

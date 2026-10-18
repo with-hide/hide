@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """Installs agent CLIs on a CI runner at the versions contracts/agent-clis.json pins.
 
-Usage: install-agent-clis.py <kind>... [--prefix DIR]
+Usage: install-agent-clis.py <kind>... | --all [--prefix DIR]
 
 CI only (CI=true): on a workstation each CLI is the operator's, and this would
 hand a test a second copy. Each CLI goes under DIR (default
 $RUNNER_TEMP/agent-clis), and the script prints one `<kind>=<program>` line
 per CLI; with GITHUB_PATH set it puts each program's folder on the PATH of
 the later steps, and with GITHUB_OUTPUT set it writes the same lines as the
-step's outputs. A CLI whose installer takes no version is installed at the
-vendor's current release; a CLI that answers another version than the
-table's is named in a warning here, and the journey's lane names it again
-from its report.
+step's outputs. npm installs run no package's install scripts but those of
+a row that names why it needs them (`install_scripts`). A CLI whose installer
+takes no version is installed at the vendor's current release, and a CLI that
+answers another version than the table's fails the install, so a vendor
+release moves the pin in a pull request before a lane measures it.
 """
 
 import argparse
@@ -59,13 +60,17 @@ def run(argv, env=None):
 
 
 def npm(kinds, rows, prefix):
-    """One npm install of every npm CLI into its own prefix, as the trust contract installs them."""
+    """One npm install of every npm CLI into its own prefix, as the trust
+    contract installs them, with no install script but those the table names."""
     folder = prefix / "npm"
     program = shutil.which("npm")
     if not program:
         raise SystemExit("npm is not on PATH: set up Node before this step")
-    run([program, "install", "--prefix", str(folder), "--no-audit", "--no-fund",
+    run([program, "install", "--prefix", str(folder), "--no-audit", "--no-fund", "--ignore-scripts",
          *(f"{rows[kind]['package']}@{rows[kind]['version']}" for kind in kinds)])
+    scripted = [rows[kind]["package"] for kind in kinds if rows[kind].get("install_scripts")]
+    if scripted:
+        run([program, "rebuild", "--prefix", str(folder), *scripted])
     # npm's shim on Windows is a `.cmd` beside the script it runs elsewhere;
     # a package that names its native program is reached by that path instead.
     return {kind: folder / rows[kind].get("program", f"node_modules/.bin/{kind}{'.cmd' if WINDOWS else ''}")
@@ -134,9 +139,12 @@ def answered(program):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("kinds", nargs="+")
+    parser.add_argument("kinds", nargs="*")
+    parser.add_argument("--all", action="store_true", help="every CLI the table pins")
     parser.add_argument("--prefix", type=Path)
     args = parser.parse_args(argv)
+    if bool(args.kinds) == args.all:
+        parser.error("name the CLIs or pass --all, not both")
     if os.environ.get("CI") != "true":
         print("install-agent-clis.py installs CLIs on a CI runner only", file=sys.stderr)
         return 2
@@ -146,13 +154,13 @@ def main(argv=None):
         raise SystemExit(f"not in {TABLE.name}: {', '.join(unknown)}")
     prefix = (args.prefix or Path(os.environ["RUNNER_TEMP"]) / "agent-clis").resolve()
     prefix.mkdir(parents=True, exist_ok=True)
-    kinds = list(dict.fromkeys(args.kinds))
+    kinds = list(rows) if args.all else list(dict.fromkeys(args.kinds))
     programs = npm([kind for kind in kinds if rows[kind]["installer"] == "npm"], rows, prefix) \
         if any(rows[kind]["installer"] == "npm" for kind in kinds) else {}
     for kind in kinds:
         if rows[kind]["installer"] != "npm":
             programs[kind] = INSTALLERS[rows[kind]["installer"]](rows[kind], prefix)
-    lines, notes = [], []
+    lines, notes, mismatches = [], [], []
     for kind in kinds:
         program = programs[kind]
         if not program.is_file():
@@ -161,10 +169,14 @@ def main(argv=None):
         notes.append(f"{kind} {version}")
         if not matches(rows[kind]["version"], version):
             pinned = rows[kind].get("pinned")
-            print(f"::warning title=agent CLI version::{kind} answered {version!r}, the table pins "
-                  f"{rows[kind]['version']}" + (f" ({pinned})" if pinned else ""))
+            mismatches.append(f"{kind} answered {version!r}, {TABLE.name} pins {rows[kind]['version']}"
+                              + (f" ({pinned})" if pinned else ""))
         lines.append(f"{kind}={program}")
     print(f"::notice title=agent CLIs::{', '.join(notes)}")
+    if mismatches:
+        for mismatch in mismatches:
+            print(f"::error title=agent CLI version::{mismatch}")
+        raise SystemExit("an installed CLI is not the pinned version: " + "; ".join(mismatches))
     for name, value in (("GITHUB_PATH", "\n".join(dict.fromkeys(str(programs[kind].parent) for kind in kinds))),
                         ("GITHUB_OUTPUT", "\n".join(lines))):
         if os.environ.get(name):

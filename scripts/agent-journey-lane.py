@@ -8,8 +8,10 @@ each agent they imitate, and the fake lane (the real CLIs answered by the
 journey's fake model) only when every built cell passed for those agents, so
 it can take the stand-ins' place. Each lane fails on a failed cell, an isolation, setup or
 cleanup failure (the journey's exit 2), or a request budget overrun; the login
-and fake lanes also fail when an agent is refused its login or its CLI
-is missing, as the job installed it. An agent with no key is a notice, and a turn the provider answered nothing because the key's day was
+and fake lanes also fail when an agent is refused its login, its CLI
+is missing, as the job installed it, or its CLI answers another version than
+contracts/agent-clis.json pins; the fixture and fake lanes fail when the
+report has no row for an agent they stand for. An agent with no key is a notice, and a turn the provider answered nothing because the key's day was
 spent is a `Not measured` warning, which keeps the lane from being green in
 the nightly report (scripts/ci-flaky-report.py), and neither fails it. Each
 finding is printed as a GitHub annotation; the exit code is the lane's.
@@ -65,15 +67,22 @@ def judge(report, lane):
             if cell["status"] == "fail":
                 passed = False
                 notes.append(annotation("error", f"agent journey {agent}", f"{name}: {cell['reason']}"))
-        if lane in ("fixture", "fake") and agent in FIXTURE_AGENTS:
-            for name in FIXTURE_CELLS if lane == "fixture" else BUILT_CELLS:
-                cell = cells.get(name, {"status": "absent", "reason": ""})
-                if cell["status"] != "pass":
-                    passed = False
-                    notes.append(annotation("error", f"agent journey {agent}", f"{name} is {cell['status']}, "
-                                            + ("a stand-in passes it" if lane == "fixture" else
-                                               "the fake model lane stands in for the stand-in only when it passes")
-                                            + f": {cell['reason']}"))
+    # The agents a keyless lane stands for are read by name, so a report
+    # without one of their rows fails rather than passing on the rest.
+    for agent in FIXTURE_AGENTS if lane in ("fixture", "fake") else ():
+        cells = table.get(agent)
+        if cells is None:
+            passed = False
+            notes.append(annotation("error", f"agent journey {agent}", f"the report has no {agent} row"))
+            continue
+        for name in FIXTURE_CELLS if lane == "fixture" else BUILT_CELLS:
+            cell = cells.get(name, {"status": "absent", "reason": ""})
+            if cell["status"] != "pass":
+                passed = False
+                notes.append(annotation("error", f"agent journey {agent}", f"{name} is {cell['status']}, "
+                                        + ("a stand-in passes it" if lane == "fixture" else
+                                           "the fake model lane stands in for the stand-in only when it passes")
+                                        + f": {cell['reason']}"))
     for agent in report.get("agents", []):
         if lane in ("login", "fake") and agent.get("login"):
             passed = False
@@ -86,7 +95,8 @@ def judge(report, lane):
         if lane in ("login", "fake") and pin and not pin["matches"]:
             # A night measures what the table pins; a CLI that answers another
             # version is the one that changed (contracts/agent-clis.json).
-            notes.append(annotation("warning", f"agent journey {agent['id']}",
+            passed = False
+            notes.append(annotation("error", f"agent journey {agent['id']}",
                                     f"answered {agent.get('version')!r}, contracts/agent-clis.json pins {pin['version']}"
                                     + (f" ({pin['pinned']})" if pin.get("pinned") else "")))
         if agent.get("not_configured"):
