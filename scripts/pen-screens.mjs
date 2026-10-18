@@ -1066,7 +1066,7 @@ function buildWorkspace(tokens) {
   for (const [name, suffix] of [['Light', 'l'], ['Dark', 'd']]) {
     const section = result.children.find(node => node.name === name);
     if (!section) throw new Error(`Workspace lacks ${name} section`);
-    section.children.push(...laneBoards(tokens, {themedXref, template, alias: ALIAS}, suffix), sessionDesign(tokens).headerBoard(suffix), sessionDesign(tokens).taskBoard(suffix));
+    section.children.push(...laneBoards(tokens, {themedXref, template, alias: ALIAS}, suffix), sessionDesign(tokens).headerBoard(suffix), sessionDesign(tokens).edgeBoard(suffix), sessionDesign(tokens).taskBoard(suffix));
   }
   for (const state of buildWorkspaceSupplemental()) {
     const parent = nodes(result).find(node => node.id === state.parent);

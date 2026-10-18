@@ -282,6 +282,7 @@ async function openBrowser(root, cleanup) {
 
 function sceneUrl(origin, target, condition) {
   const query = new URLSearchParams({scene: target.scene, theme: condition.theme, width: String(condition.width), scale: String(condition.scale), content: condition.content});
+  if (target.language) query.set('lang', target.language);
   return `${origin}/gallery?${query}`;
 }
 
@@ -316,6 +317,7 @@ async function enterState(page, state, target) {
     await page.locator(target.readySelector ?? target.selector).waitFor();
     await page.evaluate(() => document.fonts.ready);
   }
+  if (state === 'edge' && target.scene === 'pane-header') await page.locator('[data-pane-header-case="popover"] [data-pane-tree]').click();
   // The Observer frames that show a disclosure or a menu open.
   if (state === 'obs-direct') {
     await page.locator('[data-factory-settings-group="advanced"] > summary').click();

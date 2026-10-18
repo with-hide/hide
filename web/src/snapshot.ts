@@ -944,6 +944,8 @@ export type PaneHeader = {
   notice: PaneNotice | null;
   /** What waits on the operator in this pane, drawn on its second row. */
   band: PaneBand | null;
+  /** The current pane agent's own live working sentence, selected by the core. */
+  progress?: string | null;
 };
 export type PaneNotice = {kind: string; tone: "muted" | "warning" | "error"; reason: string | null; since_unix_ms: number | null; exit_code: number | null};
 /** The pane's own approval, answer, block or stop, or a raised descendant's ask; `read` once the operator has looked. */

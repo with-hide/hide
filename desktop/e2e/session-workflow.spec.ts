@@ -29,6 +29,14 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
     await expect(pane.locator('[data-pane-header-band="raised"]')).toBeVisible({ timeout: 30_000 });
     const treeButton = pane.locator(`[data-pane-tree="${parent}"]`);
     await expect(treeButton).toBeVisible();
+    await expect(treeButton).toHaveText("1");
+    await expect(pane.locator(`[data-pane-child-name]`)).toHaveCount(0);
+    await expect(pane.locator(`[data-pane-own-progress="${parent}"]`)).toHaveCount(0);
+    const raisedRow = pane.locator('[data-pane-header-band="raised"]');
+    await expect(raisedRow.locator(`[data-pane-band-who="${child}"]`)).toBeVisible();
+    await expect(raisedRow).toContainText("자식");
+    const raisedText = await raisedRow.innerText();
+    expect(raisedText.indexOf("승인")).toBeLessThan(raisedText.indexOf("자식의 긴 한국어 검증 요청"));
     const terminal = await host.boundingBox();
     const facts = { head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), parent, child, home: run.env.HOME, socket: herdr.socket, state: run.env.HIDE_STATE_DIR, provider: "synthetic agent transcript and lifecycle" };
     for (const theme of ["light", "dark"] as const) {
@@ -55,6 +63,8 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
     }
     await setFixtureLifecycle(herdr, child, "working");
     await expect(pane.locator('[data-pane-header-band="raised"]')).toHaveCount(0);
+    await setFixtureLifecycle(herdr, parent, "working");
+    await expect(pane.locator(`[data-pane-own-progress="${parent}"]`)).toHaveText("자식 검토 결과를 기다리는 중");
     expect(await host.boundingBox()).toEqual(terminal);
     await expect(page.locator(`nav[data-sidebar] [data-pane="${child}"]`)).toHaveCount(0);
     await captureNativeWindow(app, "session-working-restored", { ...facts, terminal });

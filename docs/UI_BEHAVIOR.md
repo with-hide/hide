@@ -474,23 +474,24 @@ No other hold of a letter reaches the screen, and nothing changes on the sender'
 The tree popover's `Overview에서 일감 보기` opens the Overview on the agent's device with the card of the task it belongs to selected and the agent's own record in the panel (PRD overview-device-tasks B59); a resting or cleanup card's fold opens with it, so the selected card is drawn.
 The zoom control names the panes it hides and unzooms the tab; the existing pane keyboard outline and focused-header wash remain.
 
-The second row over the terminal has one job: it shows what waits on the operator in this pane, or the pane's children, and nothing else.
-A pane with children always has it; a pane without children has it only while something waits on the operator, and a pane whose terminal is not live has no ask on it, because its body says why.
+The second row over the terminal shows one operator request or the current pane agent's own live working progress, with a child-tree button at its left when direct children are known.
+It is absent when there is no request, valid progress or child button; a pane whose terminal is not live has no ask or progress on it, because its body says why.
 The core publishes the ask (`herdr-core/src/agent_state/header.rs`, `Header.band`): the pane's own Approval, Answer or Blocked first, the lead raised descendant next, then the pane's own Stopped.
 A pull request's verb (Fix, Review, Merge) is the header PR mark's colour and a finished turn is the status mark's dot to read, so neither draws a row; the PR mark carries no review word either.
 An ask stays until it is answered: once the operator has had the pane focused it dims to `--opacity-read-status`, as its row's request line does, and a question the operator read but did not answer keeps its row (`Band.read`).
 The pane's own ask starts with its verb, `승인`, `질문`, `막힘` or `멈춤` in the warning colour, then what is asked and the stable wait; an Approval names no command, since the core reads none, and shows the ask's own default words.
-A raised descendant's ask starts with that agent's name after the turn mark (the product, the path from the root, the checkout and the wait in its hover), then its verb, what to do, the parent that has not received a letter, the elapsed time and Open, so the row never reads as a child asking for the pane's own approval.
+A raised descendant's ask starts with its verb, then that agent's name and `(자식)` (the product, the path from the root, the checkout and the wait in its hover), what to do, the parent that has not received a letter, the elapsed time and Open, so the row never reads as a child asking for the pane's own approval.
 Open goes to the raised descendant, or for a draft to the parent whose input holds it, and is disabled with the connection reason beside it while that pane's device is not connected.
 An ask is quiet text on the secondary fill with a warning rail; the request text gets three shares of the flexible space, and the asking agent and an unreceived-letter explanation get one each, so they do not consume the whole reason at narrow widths or enlarged text.
-Without an ask, a parent's row names every live direct child with its row's mark, the way the sidebar lists them: a child with news to read (done or unread) first and the rest in the core's `tree_rank` order, an unknown child without a mark, and the names that do not fit fading out at the right edge; pressing a name opens that child.
-Each name's hover and accessible name give the child's name, product and state line, and a sleeping child's says what its moon means (status-marks B31).
-The children button keeps the row's right end whenever the pane has live children, with an ask on the row or not: `자식 N` and a chevron, after the core's operator-raised request count over the subtree with the turn mark when that count is positive, and it opens the existing tree popover ([status-model.md](status-model.md#the-descendant-mark-and-the-tree-popover)).
+Without an ask, the row shows the current pane agent's own nonblank progress only while its state is live Working; finished, idle and disconnected states cannot retain that sentence.
+The row does not substitute a child's line or the pane title for missing progress.
+The children button stays at the row's left whenever the pane has live direct children, with an ask or progress on the row or neither: a tree icon, the actual number and a chevron open the existing tree popover ([status-model.md](status-model.md#the-descendant-mark-and-the-tree-popover)).
+The row never lists individual child names or a second status icon; child names, states and navigation remain in the popover.
 Its tooltip and accessible name spell out the live direct child total and every state count; an ordinary child's question, approval or error is its parent's to answer, so it is named only there, and a dot on a name is a reported completion, not verified delivery of a task.
 The button opens with the raised branches expanded whenever its core raised count is positive; `외 N건` remains only when the children button is unavailable.
-If the parent or a known descendant's device is not connected, the row says the connection reason in place of the names and the button drops its raised count, keeping the last topology total and the reason in its tooltip and accessible name, until the connection returns.
+If the parent or a known descendant's device is not connected, the button keeps the last topology total and the reason in its tooltip and accessible name; the connection reason is also visible beside any progress until the connection returns.
 With no live children there is no children button, and no empty separator.
-Working has a thin blue line along the top instead of a row; CI wait, waiting and idle have none.
+Working keeps a thin blue line along the top and adds its own progress row only when the core has a valid sentence; CI wait, waiting and idle have neither.
 The row and the blue line overlay the terminal and change neither its viewport nor its PTY grid.
 Pending and failed moves appear at the initiating popover, ancestor step or Open with the existing retry rules, plus the Agent-area notice when the source pane is no longer visible or the move started from a child's name.
 

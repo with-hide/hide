@@ -984,20 +984,21 @@ Regression owners: `agent_state::escalation::tests`, `runtime::tests::lineage`, 
 
 ### Quiet pane headers
 
-`agent_state/header.rs` publishes three things per pane: a working-line flag, at most one notice, and at most one band.
+`agent_state/header.rs` publishes a working-line flag, at most one notice, at most one band, and the current pane agent's own live Working progress when it has a nonblank sentence.
 The notice says why the terminal is not live and is drawn in the pane's body: the device away first, then Herdr's restoration failure, sleep, and the stream's own state (ended with its exit code, released, closing, unavailable, starting, or a wheel another client holds); a device's unavailable pane reads `reconnecting` or `helper_not_allowed` by what its link waits for.
-A pane with a notice takes no answer, so it has no band and no working line.
+A pane with a notice takes no answer, so it has no band, progress or working line.
 The band is the operator's turn and nothing else: the pane's own Approval, Answer or Blocked first, then the lead raised descendant, then the pane's own Stopped.
-A pull request's verb (Fix, Review, Merge) and a finished turn (Result) have no band: the header's PR mark and status mark already say them; Working has a thin blue line, while CI wait, child wait and Idle have nothing.
+A pull request's verb (Fix, Review, Merge) and a finished turn (Result) have no band: the header's PR mark and status mark already say them; Working has a thin blue line and can show its own progress, while CI wait, child wait and Idle have nothing.
 A band stays until it is answered, not until it is read: `Band.read` says the operator has had the pane focused since it arrived, and a question the operator read but did not answer keeps its Answer band although the row's verb has left Answer.
-An ask band is quiet text on the secondary fill with a warning rail (PRD D-43): the pane's own ask starts with its verb and says what is asked (for an Answer, the row's second line, so a native question reads as itself), and a raised descendant's `RaisedAsk` starts with that agent's name, the path, checkout and wait in its hover, then the verb, what to do, the unreceived parent for an Answer, the elapsed time, and Open.
+An ask band is quiet text on the secondary fill with a warning rail (PRD D-43): the pane's own ask starts with its verb and says what is asked (for an Answer, the row's second line, so a native question reads as itself), and a raised descendant's `RaisedAsk` starts with its verb, then that agent's name and `(자식)`, the path, checkout and wait in its hover, what to do, the unreceived parent for an Answer, the elapsed time, and Open.
 The duplicate `외 N건` is absent when the children button supplies raised-tree access, and remains as a fallback otherwise.
 An Approval band carries no reason: the core reads no approval command and a generated sentence is not one, so the band shows the ask's own default words.
 What Hide could not read, such as an approval command, is not written on the band, since the operator cannot act on its absence (design principle #13).
-The band and the children row overlay the terminal so state changes never resize its PTY grid.
+The band and progress row overlay the terminal so state changes never resize its PTY grid.
 The identity row reads the ancestor path, the status mark, the agent's logo, title, the letters-waiting pill from `row.letters_waiting`, the pane's own PR mark from `row.state.pr`, the Not connected chip and the existing controls; the ancestors' names drop first when narrow, leaving `›` and the accessible name.
-A parent's second row keeps the children button at its right end; without a band the rest of the row names each live direct child with its row's mark, a child with news first, and with a band the ask takes that place.
-An unavailable device anywhere in that known subtree replaces the names with the existing connection reason and drops the button's raised count, while preserving topology access.
+A parent's second row keeps the tree icon, direct-child count and chevron at its left; without a band the rest of the row shows its own valid Working progress, or no text when it has none.
+Child names and states remain in the tree popover, while the button's accessible name and tooltip describe the live count and state counts.
+An unavailable device anywhere in that known subtree preserves the last topology count and connection reason in the button's name and tooltip; without a band, it also shows that reason beside any progress.
 Pending or failed relationship navigation stays visible at its popover, ancestor step or band's Open with retry where available, and in the retained Agent-area status when the source pane is no longer on screen.
 Regression owners: `runtime::tests::session_state`, `runtime::tests::device_kit`, `web/src/PaneHeaderBand.test.tsx`, `web/src/PaneNotice.test.tsx`, `web/e2e/sidebar-status.spec.ts`, and the pane/lineage desktop checks.
 

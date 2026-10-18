@@ -93,53 +93,65 @@ function childrenFixture(): AgentRow[] {
   return [{ ...seed, lineage_child_pane_ids: [...children.map((child) => child.pane_id), "closed"], direct_child_counts: { error: 0, approval: 0, question: 1, working: 1, done: 1 } }, ...children];
 }
 
-// docs/UI_BEHAVIOR.md, Agent panes and the Agents explorer: every child by name with its
-// row's mark, a child with news first, and the children button at the end.
-it("names every child with its row's mark, news first, and keeps the counts in the children button", async () => {
+// PRD B1-B2: the resting row names no child; the tree button keeps its full counts.
+it("puts the tree and direct-child number first while keeping state counts accessible", async () => {
   const agents = childrenFixture().map((row) => row.pane_id === "result" ? { ...row, mark: "done" as const } : row.pane_id === "idle" ? { ...row, mark: "quiet" as const } : row);
   const { container, unmount } = await mount({ working: true, notice: null, band: null }, agents);
   try {
     const row = container.querySelector('[data-pane-header-band="children"]')!;
     const trigger = row.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
     expect(trigger.getAttribute("aria-label")).toBe("Child agents 5 · Child requests: 1 · Working: 1 · Reported results: 1 · Unknown state: 1 · Resting: 1");
-    expect(trigger.textContent).toBe("Children 5");
+    expect(trigger.textContent).toBe("5");
+    expect(row.firstElementChild).toBe(trigger);
     // An ordinary child's question is its parent's to answer: no raised count.
     expect(trigger.querySelector('[data-mark="turn"]')).toBeNull();
-    const names = Array.from(row.querySelectorAll("[data-pane-child-name]"));
-    expect(names.map((name) => name.getAttribute("data-pane-child-name"))).toEqual(["result", "question", "working", "idle", "unknown"]);
-    expect(names[0]!.querySelector('[data-mark="done"]')).not.toBeNull();
-    expect(row.querySelector('[data-pane-child-name="idle"] [data-mark="quiet"]')).not.toBeNull();
-    expect(row.querySelector('[data-pane-child-name="unknown"] [data-mark]')).toBeNull();
-    expect(row.querySelector('[data-pane-child-name="question"]')?.getAttribute("aria-label")).toContain("Should these changes share a PR?");
+    expect(row.querySelectorAll("[data-pane-child-name]")).toHaveLength(0);
     expect(container.querySelector("[data-pane-working-line]")).not.toBeNull();
   } finally { await unmount(); }
 });
 
-it("opens the child a name belongs to", async () => {
+it("opens a child from the tree popover", async () => {
   const { container, events, unmount } = await mount({ working: false, notice: null, band: null }, childrenFixture());
   try {
-    await act(async () => container.querySelector<HTMLButtonElement>('[data-pane-child-name="working"]')!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>("[data-pane-tree]")!.click());
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-agent-child="working"]')!.click());
     expect(useUiStore.getState().relation).toMatchObject({ sourcePaneId: "parent", targetPaneId: "working" });
     expect(events).toHaveLength(1);
   } finally { await unmount(); }
 });
 
-it("puts the pane's own approval in the children's place, verb first, with the raised count on the children button", async () => {
+it("puts the pane's own approval after the tree and keeps raised counts in its name", async () => {
   const agents = childrenFixture();
   agents[0]!.descendant_mark = { kind: "raised", count: 2 };
   const { container, unmount } = await mount({ working: false, notice: null, band: { ...header.band!, kind: "approval", reason: "Run the verification command", raised: undefined, action: null, more: 1 } }, agents);
   try {
     const row = container.querySelector('[data-pane-header-band="approval"]')!;
-    // The row starts with the verb, not with the children, so the approval reads as the pane's own.
-    expect(row.firstElementChild?.querySelector("[data-verb]")?.getAttribute("data-verb")).toBe("approval");
+    expect(row.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
+    expect(row.querySelector("[data-verb]")?.getAttribute("data-verb")).toBe("approval");
     expect(row.querySelector("[data-pane-band-who]")).toBeNull();
     expect(row.querySelector("[data-pane-child-names]")).toBeNull();
     const trigger = row.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
-    expect(trigger.querySelector('[data-pane-child-count="raised"]')?.textContent).toBe("2");
+    expect(trigger.textContent).toBe("5");
     expect(trigger.getAttribute("aria-label")).toContain("Descendant requests needing you: 2");
     expect(row.textContent).toContain("Run the verification command");
     expect(container.querySelector("[data-pane-band-more]")).toBeNull();
   } finally { await unmount(); }
+});
+
+it("shows only the core-owned progress when no request waits, with or without children", async () => {
+  const progress = "검증 로그를 확인하고 있어요";
+  const withChildren = await mount({ working: true, notice: null, band: null, progress }, childrenFixture());
+  try {
+    const row = withChildren.container.querySelector('[data-pane-header-band="progress"]')!;
+    expect(row.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
+    expect(row.querySelector('[data-pane-own-progress]')?.textContent).toBe(progress);
+    expect(row.textContent).not.toContain("Child question");
+  } finally { await withChildren.unmount(); }
+  const solo = await mount({ working: true, notice: null, band: null, progress }, [], { paneId: "solo" });
+  try {
+    expect(solo.container.querySelector('[data-pane-tree]')).toBeNull();
+    expect(solo.container.querySelector('[data-pane-own-progress]')?.textContent).toBe(progress);
+  } finally { await solo.unmount(); }
 });
 
 it("never counts a core unknown child as resting or a result when the wire omits the unknown count", async () => {
@@ -197,7 +209,7 @@ it.each(["parent", "child", "descendant"] as const)("preserves topology but repl
     // A disconnected device's children draw no mark (status-marks B16).
     expect(trigger.querySelector("[data-mark]")).toBeNull();
     expect(container.querySelector("[data-pane-child-count]")).toBeNull();
-    expect(container.querySelector('[data-pane-child-names="unavailable"]')?.textContent).toBe("Mac mini is not connected");
+    expect(container.querySelector('[data-pane-child-connection]')?.textContent).toBe("Mac mini is not connected");
     await act(async () => trigger.click());
     expect(document.querySelector('[data-agent-tree="parent"]')).not.toBeNull();
     if (scope === "child") {
@@ -206,6 +218,17 @@ it.each(["parent", "child", "descendant"] as const)("preserves topology but repl
       expect(child.getAttribute("aria-label")).toContain("mini disconnected");
       expect(child.getAttribute("aria-label")).not.toContain("Working");
     }
+  } finally { await unmount(); }
+});
+
+it("keeps the child connection reason visible beside the parent's own progress", async () => {
+  const agents = childrenFixture();
+  agents[1]!.device_id = "mini";
+  const rest = { status: { pane_focus_request: null, remote: [{ target_id: "mini", state: "disconnected", message: "Mac mini is not connected" }] } } as unknown as SnapshotRest;
+  const { container, unmount } = await mount({ working: true, notice: null, band: null, progress: "Checking my changes" }, agents, { rest });
+  try {
+    expect(container.querySelector('[data-pane-own-progress]')?.textContent).toBe("Checking my changes");
+    expect(container.querySelector('[data-pane-child-connection]')?.textContent).toBe("Mac mini is not connected");
   } finally { await unmount(); }
 });
 
@@ -251,17 +274,17 @@ it("draws a waiting child's line in the child tree and its name, and dims an unk
   } finally { await unmount(); }
 });
 
-// A sleeping child has no line; its name's hover still says what its moon means (status-marks B31).
-it("names a sleeping child's moon in its name's hover with no line of its own", async () => {
+// A sleeping child remains accessible in the tree after inline names leave the header.
+it("names a sleeping child and its state in the tree", async () => {
   const [parent, ...all] = childrenFixture();
   const child = all.find((row) => row.pane_id === "idle")!;
   const sleeping = { ...child, mark: "asleep" as const, status_code: "sleeping" as const, state: { ...child.state, line: { text: "Split the parser", mode: "kept" as const, tone: { kind: "subtle" as const, read: true } } } };
   const { container, unmount } = await mount({ working: false, notice: null, band: null }, [{ ...parent!, lineage_child_pane_ids: [sleeping.pane_id], direct_child_counts: { error: 0, approval: 0, question: 0, working: 0, done: 0 } }, sleeping]);
   try {
-    const name = container.querySelector('[data-pane-child-name="idle"]')!;
-    expect(name.textContent).toBe("Child idle");
-    expect(name.querySelector('[data-mark="asleep"]')).not.toBeNull();
-    expect(name.getAttribute("aria-label")).toBe("Child idle · Claude Code · Sleeping · wakes when opened");
+    expect(container.querySelector('[data-pane-child-name="idle"]')).toBeNull();
+    await act(async () => container.querySelector<HTMLButtonElement>("[data-pane-tree]")!.click());
+    const name = document.querySelector('[data-agent-child="idle"]')!;
+    expect(name.getAttribute("aria-label")).toContain("Sleeping");
   } finally { await unmount(); }
 });
 
@@ -275,15 +298,17 @@ it("turns a missing core answer into a retryable timeout beside the move", async
   } finally { await unmount(); }
 });
 
-it("leads a raised ask with the name of the agent that asks, then its verb and what", async () => {
+it("leads a raised ask with its verb, then the child name and request", async () => {
   const {container, unmount} = await mount();
   try {
     const band = container.querySelector("[data-pane-header-band=raised]")!;
-    const who = band.firstElementChild!;
+    const who = band.querySelector("[data-pane-band-who]")!;
     expect(who.getAttribute("data-pane-band-who")).toBe("child");
-    expect(who.textContent).toBe("자식 검증");
-    expect(who.querySelector('[data-mark="turn"]')).not.toBeNull();
-    expect(band.querySelector("[data-verb=approval]")?.textContent).toBe("Approval");
+    expect(who.textContent).toBe("자식 검증(child)");
+    expect(who.querySelector('[data-mark="turn"]')).toBeNull();
+    const verb = band.querySelector("[data-verb=approval]")!;
+    expect(verb.textContent).toBe("Approval");
+    expect(verb.compareDocumentPosition(who) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(band.textContent).toContain("하위 검증 권한이 필요합니다");
     expect(band.querySelector("[data-pane-band-more]")).toBeNull();
   } finally { await unmount(); }

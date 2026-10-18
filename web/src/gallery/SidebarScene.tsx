@@ -18,6 +18,7 @@ import { applyEvent, OFFLINE_DEVICE, REFERENCE_FOLDS, sidebarScene, sidebarStatu
 /** What one scene document shows; every value comes from its query string. */
 export type SceneParams = {
   axis?: boolean;
+  state?: string;
   theme: "light" | "dark";
   /** The sidebar's width in CSS pixels, seeded as the core's `ui_state.sidebar_width`; absent, the sidebar's default. */
   width: number | null;
@@ -46,7 +47,7 @@ export function sceneParams(params: URLSearchParams): SceneParams {
   if (devices === "one" && front !== "local") throw new Error(`Scene front ${front} needs devices=two`);
   const rail = params.get("rail") ?? "shown";
   if (rail !== "shown" && rail !== "hidden") throw new Error(`Unknown scene rail ${rail}`);
-  return { theme: params.get("theme") === "light" ? "light" : "dark", width: width === null ? null : Number(width), scale, content, devices, front, rail };
+  return { theme: params.get("theme") === "light" ? "light" : "dark", width: width === null ? null : Number(width), scale, content, devices, front, rail, state: params.get("state") ?? "rest" };
 }
 
 export function SidebarScene({ theme, width, scale, content, devices, front, rail, axis = false }: SceneParams) {

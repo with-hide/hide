@@ -1,5 +1,5 @@
 // The pane header (PRD agent-hierarchy-screens D-14 to D-24, D-37 to D-43;
-// the approved Pen round 2, D-44). The Sessions panel it once sat beside is
+// pane-header-progress D-01 to D-09). The Sessions panel it once sat beside is
 // retired: a device's tasks are the sidebar's 태스크 list (PRD
 // sidebar-task-lens D-16), drawn in the Task lens sheets. Controls are refs
 // of the existing System masters supplied by pen-screens, and the verb, descendant
@@ -21,8 +21,8 @@ export function sessionScreens(tokens, {frame, text, icon, themedXref, screenBut
 
   // A pane: its header (the ancestor path, the marks and title, the fork mark of
   // a pane Fork agent made, which is a root and has no path, the own PR chip,
-  // then menu, zoom and close) over its terminal. B2 moves the child trigger
-  // into the same second-row overlay as the core band.
+  // then menu, zoom and close) over its terminal. The second-row overlay
+  // starts with one direct-child tree button, then a request or own progress.
   // with the one band a pane carries overlaid at the top (D-14, D-43; B20, B21).
   // The task chip (web/src/PaneTaskChip.tsx, PRD task-split-checklist D-05):
   // `<done>/<tasks>` from one task, before the PR chip; child progress never
@@ -31,12 +31,10 @@ export function sessionScreens(tokens, {frame, text, icon, themedXref, screenBut
     icon(`${id}-g`, 'list-checks', {size:12,fill:open ? '$--foreground' : '$--muted-foreground'}),
     text(`${id}-n`, tasks, {size:'$--text-micro',fill:open ? '$--foreground' : '$--muted-foreground',mono:true}),
   ]);
-  function pane(id, {path = [], mark = '○', tone = '$--agent-working', provider: kind = 'codex', title, forked, tasks, pr, children, counts = {}, disconnected = false, summary = '작업 상태 칩과 팝업을 연결하는 중', band, terminal}) {
-    // Only the counts a row mark stands for are drawn; a disconnected device's children draw none (status-marks B16, B21).
-    const parts = disconnected ? [] : (band ? ['raised'] : ['raised', 'working', 'result']).filter(key=>counts[key]);
+  function pane(id, {path = [], mark = '○', tone = '$--agent-working', provider: kind = 'codex', title, forked, tasks, pr, children, progress, summary, band, terminal}) {
+    const line = progress ?? summary;
     const tree = children ? [themedXref(`${id}-tree`, 'ath-tree-button', 'Child states', {fill:'$--background'}, {
-      'ath-tb-tree':{enabled:parts.length===0},'ath-tb-counts':{enabled:parts.length>0},
-      ...Object.fromEntries(parts.flatMap(key=>[[`ath-tb-${key}`,{enabled:true}],[`ath-tb-${key}-n`,{content:String(counts[key])}]])),
+      'ath-tb-count':{content:String(children)},
     })] : [];
     const header = frame(`${id}-header`, 'Header', {width:'fill_container',height:28,layout:'horizontal',gap:6,alignItems:'center',padding:[0,8],fill:'$--card'}, [
       ...path.flatMap((name, index) => [caption(`${id}-path-${index}`, name, '$--muted-foreground'), caption(`${id}-sep-${index}`, '›', '$--muted-foreground')]),
@@ -54,14 +52,14 @@ export function sessionScreens(tokens, {frame, text, icon, themedXref, screenBut
     const bandRow = band ? [frame(`${id}-band`, 'Ask band', {width:'fill_container',height:28,layout:'horizontal',gap:6,alignItems:'center',padding:[0,8],fill:'$--secondary',stroke:'$--warning',strokeWidth:{left:2},strokeAlignment:'inner'}, [
       ...tree,
       verb(`${id}-band-verb`, band.verb),
+      ...(band.who ? [caption(`${id}-band-who`, `${band.who[1]} (자식)`, '$--muted-foreground')] : []),
       caption(`${id}-band-what`, band.what, '$--foreground'),
-      ...(band.who ? [caption(`${id}-band-who`, band.who[1], '$--muted-foreground')] : []),
       ...(band.unreceived ? [caption(`${id}-band-unreceived`, band.unreceived, '$--muted-foreground')] : [caption(`${id}-band-age`, band.age ?? '12m', '$--muted-foreground', {mono:true})]),
       ...(!children && band.more ? [caption(`${id}-band-more`, `외 ${band.more}건`, '$--muted-foreground')] : []),
       frame(`${id}-band-sp`, 'Spacer', {width:'fill_container',height:1}, []),
       screenButton(`${id}-band-open`, '열기', {variant:'outline', height:20}),
-    ])] : children ? [frame(`${id}-children`, 'Child status overlay', {width:'fill_container',height:28,layout:'horizontal',gap:'$--spacing-xs',alignItems:'center',padding:[0,'$--spacing-sm'],fill:'$--secondary'},[
-      ...tree,caption(`${id}-child-summary`,summary,'$--muted-foreground',{width:'fill_container'}),
+    ])] : children || line ? [frame(`${id}-children`, 'Progress overlay', {width:'fill_container',height:28,layout:'horizontal',gap:'$--spacing-xs',alignItems:'center',padding:[0,'$--spacing-sm'],fill:'$--secondary'},[
+      ...tree,...(line ? [caption(`${id}-progress`,line,'$--muted-foreground',{width:'fill_container'})] : []),
     ])] : [];
     return frame(id, 'Pane', {width:'fill_container',height:120,layout:'vertical',gap:0,clip:true,fill:'$--background',stroke:'$--border',strokeWidth:1,strokeAlignment:'inner'}, [
       header, ...bandRow,
@@ -70,25 +68,32 @@ export function sessionScreens(tokens, {frame, text, icon, themedXref, screenBut
   }
   function headerBoard(suffix) {
     const id=`sfu-ph-board-${suffix}`;
-    const root='hide 에이전트 지원 PR 묶…';
-    const bands=[
-      ['approval',{verb:'승인',what:'권한 요청에서 멈춤',who:['codex','테스트 작성'],age:'12m'}],
-      ['answer',{verb:'질문',what:'PR을 하나로 합칠까요, 나눌까요?',who:['claude','P7 Pi·omp 재우기'],unreceived:'hide 에이전트 지원 PR… 60분째 못 받음'}],
-      ['confirm',{verb:'확인',what:'리뷰 지적 3건 반영하고 멈춤',who:['claude','사전 리뷰'],age:'1h'}],
-      ['draft',{verb:'초안',what:'내 입력 초안 때문에 질문이 못 감',who:['codex','P8 읽기 전용 준비'],age:'8m'}],
-    ];
-    // One column at the approved board's width, each pane under the line that says what it shows.
     const labeled = (key, label, children) => frame(`${id}-sec-${key}`, label, {width:'fill_container',layout:'vertical',gap:8}, [caption(`${id}-sec-${key}-label`, label, '$--subtle-foreground', {weight:'600'}), ...children]);
-    return frame(id,'Pane header states',{width:761,layout:'vertical',gap:20,padding:[0,0,24,0],fill:'$--background'},[
-      labeled('root','B2 raised ask: ! count replaces 외 N건, with no duplicate total',[pane(`${id}-root`,{mark:'!',tone:'$--warning',provider:'claude',title:'hide 에이전트 지원 PR 묶음 머지 조율',pr:{number:812,state:'mergeable'},children:8,counts:{raised:2},band:{verb:'승인',what:'e2e 테스트 돌리던 중',who:['codex','테스트 작성'],age:'12m',more:1},terminal:'› 에이전트 지원 PR 다섯 개의 머지 순서를 맞추는 중'})]),
-      labeled('child','B2 child pane: own PR on the identity row, child states and representative line on the second',[pane(`${id}-child`,{path:[root],title:'P8 읽기 전용 준비',pr:{number:811,state:'failed'},children:5,counts:{working:1,result:1,waiting:1,unknown:1,idle:1},summary:'기존 PR에 합칠지 부모 응답을 기다리는 중'})]),
-      labeled('unknown','Unknown child: a tilde, never a resting ring',[pane(`${id}-unknown`,{title:'자식 상태 확인',children:1,counts:{unknown:1},summary:'상태 확인 중인 자식'})]),
-      labeled('disconnected','Unavailable states: topology access with a connection reason',[pane(`${id}-disconnected`,{title:'다른 기기의 자식 상태',children:5,disconnected:true,summary:'Mac mini 연결되지 않음'})]),
-      labeled('grand','Grandchild pane: two ancestors, no PR and no children (B20)',[pane(`${id}-grand`,{path:[root,'P8 읽기 전용 준비'],mark:'!',tone:'$--warning',title:'테스트 작성',terminal:'Allow bash: pnpm --dir web e2e ? (y/n)'})]),
-      labeled('fork','Forked pane: a root of its own, the fork mark after the title opens the source it was forked from (fork-operator-root B8)',[pane(`${id}-fork`,{provider:'claude',title:'P8 읽기 전용 준비',forked:true})]),
-      labeled('two','Two own PRs: one mark per state (B22)',[pane(`${id}-two`,{path:[root],mark:'✓',tone:'$--success',provider:'claude',title:'P6 OpenCode 세션 리더',pr:{counts:[['failed',1],['merged',1]]}})]),
-      labeled('bands','Band per cause: child counts compact to preserve the request (B3)',bands.map(([key,band])=>pane(`${id}-band-${key}`,{path:[root],title:'P8 읽기 전용 준비',children:2,band}))),
-      caption(`${id}-rule`,'승인은 label 줄이 없으면 "권한 요청에서 멈춤". 답변의 대기는 부모가 못 받은 시간. 초안은 초안이 걸린 부모를 연다. 띠는 PTY 크기를 바꾸지 않는다.'),
+    return frame(id,'Pane header states',{width:840,layout:'vertical',gap:20,padding:[0,0,24,0],fill:'$--background'},[
+      labeled('progress','01 · 진행 중',[pane(`${id}-progress`,{title:'Group tab 기능 설계',children:3,progress:'상황별 헤더 시안을 정리하고 있어요'})]),
+      labeled('question','02 · 답변이 필요함',[pane(`${id}-question`,{title:'Group tab 기능 설계',children:3,band:{verb:'질문',what:'그룹 이름은 직접 정하게 할까요?',age:'2분'}})]),
+      labeled('approval','03 · 승인이 필요함',[pane(`${id}-approval`,{title:'Group tab 기능 설계',children:3,band:{verb:'승인',what:'권한 승인을 기다리고 있어요',age:'1분'}})]),
+      labeled('blocked','04 · 막힘',[pane(`${id}-blocked`,{title:'Group tab 기능 설계',children:3,band:{verb:'막힘',what:'접근 권한을 확인해 주세요',age:'4분'}})]),
+      labeled('raised','05 · 자식에게 사용자 승인이 필요함',[pane(`${id}-raised`,{title:'Group tab 기능 설계',children:3,band:{verb:'승인',what:'권한 승인을 기다리고 있어요',who:['codex','UI 검증'],age:'3분'}})]),
+      labeled('stopped','06 · 현재 세션이 멈춤',[pane(`${id}-stopped`,{title:'Group tab 기능 설계',children:3,band:{verb:'멈춤',what:'응답이 중단됐어요',age:'1분'}})]),
+    ]);
+  }
+  function edgeBoard(suffix) {
+    const id=`sfu-ph-edge-${suffix}`;
+    const labeled = (key, label, children) => frame(`${id}-sec-${key}`, label, {width:'fill_container',layout:'vertical',gap:8}, [caption(`${id}-sec-${key}-label`, label, '$--subtle-foreground', {weight:'600'}), ...children]);
+    const popover = frame(`${id}-popover`, 'Child tree popover', {width:280,layout:'vertical',gap:6,padding:10,fill:'$--popover',stroke:'$--border',strokeWidth:1,cornerRadius:'$--radius-md'}, [
+      caption(`${id}-popover-title`,'Group tab 기능 설계','$--foreground',{weight:'600'}),
+      caption(`${id}-popover-a`,'›  레이아웃 설계 · 상태별 헤더 시안 정리 중','$--foreground'),
+      caption(`${id}-popover-b`,'›  구현 · 진행 문구 연결 중','$--foreground'),
+      caption(`${id}-popover-c`,'›  검증 · 검토 결과 도착','$--muted-foreground'),
+    ]);
+    return frame(id,'Pane header edge states',{width:840,layout:'vertical',gap:20,padding:[0,0,24,0],clip:true,fill:'$--background'},[
+      labeled('solo','07 · 자식 없이 진행 중',[pane(`${id}-solo`,{title:'Group tab 기능 설계',progress:'상황별 헤더 시안을 정리하고 있어요'})]),
+      labeled('children','08 · progress 없음 · 자식 있음',[pane(`${id}-children`,{title:'Group tab 기능 설계',children:3})]),
+      labeled('empty','09 · progress도 자식도 없음',[pane(`${id}-empty`,{title:'Group tab 기능 설계'})]),
+      labeled('finished','10 · 작업 완료 · 자식 있음',[pane(`${id}-finished`,{mark:'✓',tone:'$--success',title:'Group tab 기능 설계',children:3})]),
+      labeled('popover','11 · 자식 목록 열기',[pane(`${id}-open`,{title:'Group tab 기능 설계',children:3,progress:'검토 결과를 정리하고 있어요'}),popover]),
+      labeled('narrow','12 · 좁은 패널 · 긴 progress',[frame(`${id}-narrow-wrap`,'Narrow pane',{width:440,layout:'vertical'},[pane(`${id}-narrow`,{title:'Group tab 기능 설계',children:12,progress:'헤더 상태별 표시와 요청 우선순위를 검토하고 있어요'})])]),
     ]);
   }
   // The task chip and its checklist (PRD task-split-checklist B9-B14): a chip
@@ -140,5 +145,5 @@ export function sessionScreens(tokens, {frame, text, icon, themedXref, screenBut
       ]),
     ]);
   }
-  return {headerBoard,taskBoard};
+  return {headerBoard,edgeBoard,taskBoard};
 }
