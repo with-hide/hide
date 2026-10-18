@@ -81,6 +81,9 @@ def measurable(table, agent, name):
     if before is None:
         return True
     status = table[agent][before]["status"]
+    if status == PENDING and not measurable(table, agent, before):
+        # An open prerequisite whose own prerequisite did not pass is settled first.
+        status = table[agent][before]["status"]
     if status == PASS:
         return True
     if status == PENDING:

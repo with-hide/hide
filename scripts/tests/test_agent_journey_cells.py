@@ -75,6 +75,14 @@ class Propagation(unittest.TestCase):
         self.assertEqual(table["codex"]["resume"]["reason"], "prerequisite cell not measured (sleep_wake)")
         self.assertEqual(cells.exit_code(table, ["codex"], setup_failed=False), 1)
 
+    def test_a_cell_two_steps_after_a_failed_start_reads_not_measured(self):
+        # A failed start leaves its reply open; the fork, which needs the reply, settles both.
+        table = measured_table()
+        cells.settle(table, "codex", "start", cells.FAIL, "spawn refused")
+        self.assertFalse(cells.measurable(table, "codex", "fork"))
+        self.assertEqual(table["codex"]["reply"]["reason"], "prerequisite cell failed (start)")
+        self.assertEqual(table["codex"]["fork"]["reason"], "prerequisite cell not measured (reply)")
+
     def test_a_settled_cell_is_never_overwritten(self):
         table = measured_table("start")
         self.assertFalse(cells.settle(table, "codex", "start", cells.FAIL, "late"))
