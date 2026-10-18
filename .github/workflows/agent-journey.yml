@@ -108,7 +108,10 @@ jobs:
     # A Windows-only run leaves no system for the stand-ins.
     if: ${{ inputs.systems != '["windows"]' }}
     runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15"}')[matrix.system] }}
-    timeout-minutes: 45
+    # Every job's cap is at least the sum of its steps' caps, so a step that
+    # times out still leaves the report's upload its time
+    # (scripts/tests/test_agent_journey_workflow.py).
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -123,7 +126,9 @@ jobs:
       RUN_DIR: agents/runs/agent-journey-fixture-${{ matrix.system }}
     steps:
       - uses: actions/checkout@v7
+        timeout-minutes: 5
       - uses: Swatinem/rust-cache@v2
+        timeout-minutes: 10
         with:
           workspaces: ". -> target"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -144,6 +149,7 @@ jobs:
         timeout-minutes: 5
         run: echo "bin=$(zsh scripts/fetch-herdr-runtime.sh --platform "$HERDR_PLATFORM")" >> "$GITHUB_OUTPUT"
       - name: Build the Claude and Codex stand-ins and the controller's spawn provider
+        timeout-minutes: 5
         run: |
           mkdir -p "$RUNNER_TEMP/journey-shims" "$RUNNER_TEMP/journey-controller"
           cc -O1 -o "$RUNNER_TEMP/journey-shims/claude" web/e2e/shims/claude-shim.c
@@ -160,8 +166,10 @@ jobs:
             --herdr-bin "${{ steps.herdr.outputs.bin }}" --run-dir "$RUN_DIR"
           echo "exit=$?" >> "$GITHUB_OUTPUT"
       - name: The lane's verdict
+        timeout-minutes: 2
         run: python3 scripts/agent-journey-lane.py "$RUN_DIR/report.json" --lane fixture
       - name: Keep the report
+        timeout-minutes: 5
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
@@ -179,15 +187,18 @@ jobs:
     name: agent journey Windows forms
     if: ${{ contains(fromJSON(inputs.systems), 'windows') }}
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     defaults:
       run:
         shell: bash
     steps:
       - name: Keep line endings as committed
+        timeout-minutes: 1
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
+        timeout-minutes: 5
       - uses: actions/setup-python@v5
+        timeout-minutes: 5
         with:
           python-version: "3.12"
       - name: Process jobs, private files and pane shell commands on Windows
@@ -202,8 +213,10 @@ jobs:
     name: agent journey fake model (${{ matrix.system }})
     if: ${{ inputs.fake }}
     runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
-    # Seven agents of eleven cells each, about 4 to 7 minutes an agent on macOS (2026-10-18).
-    timeout-minutes: 95
+    # Seven agents of eleven cells each, about 4 to 7 minutes an agent on
+    # macOS (2026-10-18), inside the journey step's 75; the job's cap is its
+    # steps' caps summed.
+    timeout-minutes: 160
     strategy:
       fail-fast: false
       matrix:
@@ -218,19 +231,24 @@ jobs:
       PYTHON: ${{ matrix.system == 'windows' && 'python' || 'python3' }}
     steps:
       - name: Keep line endings as committed
+        timeout-minutes: 1
         if: runner.os == 'Windows'
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
+        timeout-minutes: 5
         with:
           persist-credentials: false
       - uses: Swatinem/rust-cache@v2
+        timeout-minutes: 10
         with:
           workspaces: ". -> target"
           save-if: false
       - uses: actions/setup-node@v4
+        timeout-minutes: 5
         with:
           node-version: 22
       - uses: actions/setup-python@v5
+        timeout-minutes: 5
         if: runner.os == 'Windows'
         with:
           python-version: "3.12"
@@ -258,6 +276,7 @@ jobs:
           fi
           echo "bin=$bin" >> "$GITHUB_OUTPUT"
       - name: Build the controller's spawn provider
+        timeout-minutes: 5
         # Before the run, as the stand-ins are: a Windows link can outlast the
         # run's 15-second command cap.
         id: controller
@@ -280,8 +299,10 @@ jobs:
             --herdr-bin "${{ steps.herdr.outputs.bin }}" --run-dir "$RUN_DIR"
           echo "journey exit $?"
       - name: The lane's verdict
+        timeout-minutes: 2
         run: '"$PYTHON" scripts/agent-journey-lane.py "$RUN_DIR/report.json" --lane fake'
       - name: Keep the report
+        timeout-minutes: 5
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
@@ -298,8 +319,10 @@ jobs:
     name: agent journey signed in (${{ matrix.system }})
     if: ${{ inputs.live }}
     runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
-    # As the fake model lane: every agent whose key is set may run.
-    timeout-minutes: 95
+    # Every agent whose key is set may run, each with a provider's cap
+    # (cli.py), inside the journey step's 115; the job's cap is its steps'
+    # caps summed.
+    timeout-minutes: 200
     strategy:
       fail-fast: false
       matrix:
@@ -315,9 +338,11 @@ jobs:
       HAS_KEYS: ${{ secrets.HIDE_CLAUDE_API_KEY != '' || secrets.HIDE_CODEX_API_KEY != '' || secrets.HIDE_AGY_API_KEY != '' || secrets.HIDE_GROK_API_KEY != '' || secrets.HIDE_OPENCODE_API_KEY != '' || secrets.HIDE_PI_API_KEY != '' || secrets.HIDE_OMP_API_KEY != '' }}
     steps:
       - name: Not configured without the CI account's keys
+        timeout-minutes: 1
         if: ${{ env.HAS_KEYS != 'true' }}
         run: echo "::notice title=agent journey signed in::not configured (no HIDE_CLAUDE_API_KEY, HIDE_CODEX_API_KEY, HIDE_AGY_API_KEY, HIDE_GROK_API_KEY, HIDE_OPENCODE_API_KEY, HIDE_PI_API_KEY or HIDE_OMP_API_KEY secret); the signed-in journey stays unproven"
       - name: Choose the agents this leg signs in
+        timeout-minutes: 1
         # Each agent whose key is set, at its pinned version; agy only on the
         # systems its daily quota measures tonight.
         if: ${{ env.HAS_KEYS == 'true' }}
@@ -359,27 +384,33 @@ jobs:
           echo "kinds=${kinds[*]}" >> "$GITHUB_OUTPUT"
           echo "agy=$agy" >> "$GITHUB_OUTPUT"
       - name: Keep line endings as committed
+        timeout-minutes: 1
         if: ${{ steps.agents.outputs.kinds != '' && runner.os == 'Windows' }}
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
+        timeout-minutes: 5
         if: ${{ steps.agents.outputs.kinds != '' }}
         with:
           # The keyed steps never need the repository token.
           persist-credentials: false
       - uses: Swatinem/rust-cache@v2
+        timeout-minutes: 10
         if: ${{ steps.agents.outputs.kinds != '' }}
         with:
           workspaces: ". -> target"
           save-if: false
       - uses: actions/setup-node@v4
+        timeout-minutes: 5
         if: ${{ steps.agents.outputs.kinds != '' }}
         with:
           node-version: 22
       - uses: actions/setup-python@v5
+        timeout-minutes: 5
         if: ${{ steps.agents.outputs.kinds != '' && runner.os == 'Windows' }}
         with:
           python-version: "3.12"
       - name: Install zsh on Linux
+        timeout-minutes: 5
         if: ${{ steps.agents.outputs.kinds != '' && runner.os == 'Linux' }}
         run: sudo apt-get install -y --no-install-recommends zsh
       - name: Install the pinned agent CLIs
@@ -410,6 +441,7 @@ jobs:
           fi
           echo "bin=$bin" >> "$GITHUB_OUTPUT"
       - name: Build the controller's spawn provider
+        timeout-minutes: 5
         # Before the run, as the stand-ins are: a Windows link can outlast the
         # run's 15-second command cap.
         if: ${{ steps.agents.outputs.kinds != '' }}
@@ -428,7 +460,7 @@ jobs:
         # The keys reach only this step; the journey keeps each one under the
         # run's probe, which its cleanup removes, and the report names them only.
         if: ${{ steps.agents.outputs.kinds != '' }}
-        timeout-minutes: 75
+        timeout-minutes: 115
         env:
           HIDE_CLAUDE_API_KEY: ${{ secrets.HIDE_CLAUDE_API_KEY }}
           HIDE_CODEX_API_KEY: ${{ secrets.HIDE_CODEX_API_KEY }}
@@ -448,9 +480,11 @@ jobs:
             --herdr-bin "${{ steps.herdr.outputs.bin }}" --run-dir "$RUN_DIR"
           echo "journey exit $?"
       - name: The lane's verdict
+        timeout-minutes: 2
         if: ${{ steps.agents.outputs.kinds != '' }}
         run: '"$PYTHON" scripts/agent-journey-lane.py "$RUN_DIR/report.json" --lane login'
       - name: Keep the report
+        timeout-minutes: 5
         if: ${{ steps.agents.outputs.kinds != '' && !cancelled() }}
         uses: actions/upload-artifact@v7
         with:

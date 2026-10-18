@@ -26,7 +26,7 @@ jobs:
   install:
     name: agent CLIs (${{ matrix.system }})
     runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
-    timeout-minutes: 15
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -40,15 +40,19 @@ jobs:
     steps:
       - name: Keep line endings as committed
         if: runner.os == 'Windows'
+        timeout-minutes: 1
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
+        timeout-minutes: 5
         with:
           persist-credentials: false
       - uses: actions/setup-node@v4
+        timeout-minutes: 5
         with:
           node-version: 22
       - uses: actions/setup-python@v5
         if: runner.os == 'Windows'
+        timeout-minutes: 5
         with:
           python-version: "3.12"
       - name: Install every pinned agent CLI
