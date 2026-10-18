@@ -49,7 +49,7 @@ async function workspaceAt(herdr: HerdrFixture, cwd: string, task: string): Prom
 /** The open menu as it is drawn: a line per item (its label and chord), "─" per separator, "(disabled)" after a disabled item. */
 async function menuLines(menu: Locator): Promise<string[]> {
   return menu.evaluate((element) =>
-    Array.from(element.children).map((child) => {
+    Array.from(element.children).filter((child) => !child.hasAttribute("data-menu-title")).map((child) => {
       if (child.getAttribute("role") === "separator") return "─";
       const label = child.querySelector("[data-menu-label]")?.textContent ?? "";
       const chord = child.querySelector("[data-menu-shortcut]")?.textContent;
@@ -289,16 +289,19 @@ test("the agent row's menu copies Herdr's session id, the row's title and the pa
     // B7, B8
     await expect(agentRow).toBeVisible();
     let menu = await openMenu(page, agentRow, "사이드바 메뉴 구현 actions");
-    expect(await menuLines(menu)).toEqual(["Show", "─", "Copy title", "Copy session id", "Copy pane ID", "─", "Close tab…"]);
+    expect(await menuLines(menu)).toEqual(["Show", "─", "Copy details", "─", "Close tab…"]);
     await screenshot(page, "sidebar-menus-agent-dark");
-    await menu.locator('[data-menu-item="copy_session_id"]').click();
+    await menu.locator('[data-menu-group="copy"]').hover();
+    await page.locator('[data-menu-item="copy_session_id"]').click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(SESSION);
     menu = await openMenu(page, agentRow, "사이드바 메뉴 구현 actions");
-    await menu.locator('[data-menu-item="copy_title"]').click();
+    await menu.locator('[data-menu-group="copy"]').hover();
+    await page.locator('[data-menu-item="copy_title"]').click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("사이드바 메뉴 구현");
     // The id `herdr pane list` names this pane by, the one ⌘K finds it by.
     menu = await openMenu(page, agentRow, "사이드바 메뉴 구현 actions");
-    await menu.locator('[data-menu-item="copy_pane_id"]').click();
+    await menu.locator('[data-menu-group="copy"]').hover();
+    await page.locator('[data-menu-item="copy_pane_id"]').click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(worktreePane);
   } finally { stop(); }
 });

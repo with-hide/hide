@@ -61,7 +61,7 @@ it("keeps a dismissed or newer menu when a terminal link resolves late", async (
     else await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     await act(async () => resolve({ target: { kind: "url", url: "https://example.test/" }, found: null }));
     expect(menu.labels()).not.toContain("Copy link");
-    if (replace) expect(menu.labels()).toContain("Close pane Shell");
+    if (replace) expect(menu.labels()).toContain("Close terminal");
     else expect(menu.labels()).toEqual([]);
   }
   await menu.unmount();
@@ -69,17 +69,17 @@ it("keeps a dismissed or newer menu when a terminal link resolves late", async (
 
 it("names the pane as its header does while the menu is open", async () => {
   const menu = await openMenu(row(), "Claude");
-  expect(menu.labels()).toContain("Close pane Claude");
+  expect(document.querySelector("[data-menu-title]")?.textContent).toBe("Claude");
   // The core's label for the session arrives after the menu opened.
   await menu.render(row(), "Agent two");
-  expect(menu.labels()).toContain("Close pane Agent two");
-  expect(menu.labels()).not.toContain("Close pane Claude");
+  expect(document.querySelector("[data-menu-title]")?.textContent).toBe("Agent two");
+  expect(menu.labels()).toContain("Close terminal");
   await menu.unmount();
 });
 
 it("offers what the core now says about the pane while the menu is open", async () => {
   const menu = await openMenu(row({ fork: { available: false, reason: "This agent has not reported its conversation yet" } }), "Agent two");
-  const fork = () => Array.from(document.querySelectorAll('[role="menuitem"]')).find((item) => item.textContent?.startsWith("Fork agent"));
+  const fork = () => document.querySelector('[data-menu-group="fork"]');
   expect(fork()?.hasAttribute("data-disabled")).toBe(true);
   await menu.render(row({ fork: { available: true } }), "Agent two");
   expect(fork()?.hasAttribute("data-disabled")).toBe(false);

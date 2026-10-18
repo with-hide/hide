@@ -180,6 +180,11 @@ use crate::error::HostError;
 /// helper on 43 would drop the effort and still send the schema Codex
 /// refuses, so every agent label judged on that device's Codex would fail;
 /// it is refused at Hello and upgraded.
+/// 45: `terminate_group` answers what it did (`GroupEnd`): ended, with each
+/// process under a Windows leader that was left running and why, or gone
+/// already, where it answered nothing and refused a job that had ended. A
+/// helper on 44 answers `null`, which a sleep could not read; it is refused
+/// at Hello and upgraded.
 /// 46: creation requests declare fork holds and bind their pane on the node.
 /// Older helpers cannot protect bare pane keys; Hello refuses them and the
 /// existing helper replacement installs a compatible build.
@@ -581,9 +586,13 @@ pub enum Call {
     RemoveClipboard {
         path: String,
     },
-    /// `SIGTERM` to every member of the process group `leader` leads: a
-    /// pane's foreground job, ended for agent sleep. A group of 1 or less is
-    /// refused unsent, since kill(-0) and kill(-1) reach far more.
+    /// Ends the job `leader` leads, a pane's foreground job, for agent sleep
+    /// (`hide_platform::process::terminate_group`): `SIGTERM` to its process
+    /// group on Unix, and on Windows, where Herdr names the job by its first
+    /// process, that process and everything under it. A group of 1 or less
+    /// is refused unsent, since kill(-0) and kill(-1) reach far more. The
+    /// answer is a [`crate::process::GroupEnd`]: ended, with what was left
+    /// running, or gone already.
     TerminateGroup {
         leader: u32,
     },

@@ -1,3 +1,4 @@
+import type { MenuPresentation } from "./components/menu-symbols";
 // The pure rules behind the sidebar's row menus: which actions a project,
 // checkout or agent row offers and why one is disabled, the purpose field's
 // limits, and what the worktree dialogs read out of a task or removal the
@@ -282,7 +283,7 @@ export function checkoutMenu(workspace: Workspace, checkout: Checkout, host: Men
   return items;
 }
 
-export type AgentMenuItem = {
+export type AgentMenuItem = MenuPresentation & {
   id: "show_agent" | "copy_title" | "copy_session_id" | "copy_pane_id" | "close_tab";
   label: string;
   unavailable: string | null;
@@ -299,11 +300,11 @@ export type AgentMenuItem = {
  */
 export function agentMenu(agent: AgentRow, showChord: string, t: TFunction<"translation">): AgentMenuItem[] {
   return [
-    { id: "show_agent", label: t("workspace.menu.showAgent"), unavailable: null, shortcut: showChord },
-    { id: "copy_title", label: t("workspace.menu.copyTitle"), unavailable: null, separated: true },
-    { id: "copy_session_id", label: t("workspace.menu.copySession"), unavailable: agent.session_id ? null : t("workspace.unavailable.noSession") },
-    { id: "copy_pane_id", label: t("workspace.menu.copyPaneId"), unavailable: null },
-    { id: "close_tab", label: t("workspace.menu.closeTab"), unavailable: null, separated: true },
+    { id: "show_agent", icon: "terminal", label: t("workspace.menu.showAgent"), unavailable: null, shortcut: showChord },
+    { id: "copy_title", group: "copy", menuLabel: t("menus.sessionTitle"), icon: "copy", label: t("workspace.menu.copyTitle"), unavailable: null, separated: true },
+    { id: "copy_session_id", group: "copy", menuLabel: t("menus.sessionId"), icon: "id", label: t("workspace.menu.copySession"), unavailable: agent.session_id ? null : t("workspace.unavailable.noSession") },
+    { id: "copy_pane_id", group: "copy", menuLabel: t("menus.terminalId"), icon: "id", label: t("workspace.menu.copyPaneId"), unavailable: null },
+    { id: "close_tab", icon: "close", label: t("workspace.menu.closeTab"), unavailable: null, separated: true },
   ];
 }
 

@@ -20,6 +20,26 @@ pub enum ProcessStart {
     },
 }
 
+/// What ending a pane's foreground job did
+/// (`hide_platform::process::GroupEnd`).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum GroupEnd {
+    /// The job no longer holds the terminal. `left` names each process under
+    /// a Windows leader that was left running, and why.
+    Ended { left: Vec<LeftRunning> },
+    /// The job had ended on its own before the call.
+    Gone,
+}
+
+/// A process under an ended job's leader that is still running
+/// (`hide_platform::process::LeftRunning`).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct LeftRunning {
+    pub pid: u32,
+    pub reason: String,
+}
+
 /// How the terminal a pane's shell controls takes typed input
 /// (`hide_platform::process::LineInput`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

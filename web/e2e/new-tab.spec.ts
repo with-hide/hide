@@ -84,6 +84,7 @@ test("New tab chord opens where the keyboard is: its View area, its pane's Agent
     await enterWorkspace(page, "fixture");
     const agentTab = (id: string) => page.locator(`[data-agent-tab-bar] [data-tab="${id}"]`);
     await agentTab(secondId).click({ button: "right" });
+    await page.locator('[data-menu-group="split"]').hover();
     await page.locator('[data-menu-item="split_right"]').click();
     const areas = page.locator("[data-agent-area-id]");
     await expect(areas).toHaveCount(2);

@@ -341,12 +341,13 @@ A drag never moves a view to another Workspace, never turns an Agent tab into a 
 
 ### The View tab menu
 
-A right-click on a View tab, or the menu key while the tab has focus, opens its menu with these items in order: Keep open, Split right, Split left, Split up, Split down, Move right, Move left, Move up, Move down, Copy path, Select in File Tree, the OS file manager's reveal, Close view.
+A right-click on a View tab, or the menu key while the tab has focus, opens its menu with these items in order: New tab, Keep open, Split, Move, Copy path, Select in File Tree, the OS file manager's reveal, Close view.
+Split and Move open submenus ordered Right, Left, Up, Down; Move appears only when at least one neighbouring area exists.
 Keep open appears only on a preview view.
 Select in File Tree shows the Explorer with the file's row unfolded and selected and opens nothing; the reveal follows [the reveal rule](#explorer-file-management), and a page has neither.
 Both are disabled with the reason while the file is unavailable or cannot be read yet.
 A Move item appears only toward an area that exists in that direction, and moves the view into it without a split.
-A Split item the Workspace cannot make stays listed, disabled, with its reason under it, the way every web menu draws an item its target cannot use.
+A Split direction the Workspace cannot make stays listed, disabled, with its reason under it; when every direction has the same refusal, the Split trigger shows that reason once and stays disabled.
 The labels say where the view goes, never "Move to Group".
 Close view closes the view and never the file on disk; the menu has no file deletion and never closes a pane or a tab.
 Opening the menu moves no focus and changes nothing, and Escape closes it.
@@ -510,10 +511,11 @@ Other active or unknown panes and descendants keep their close guards.
 A failed terminal has no recoverable live layout, so a close containing one does not enter the ordinary undo stack.
 Closing the last failed terminal preserves the project registration without trying to start a replacement in the failed folder.
 
-The pane menu (from its overflow control or a right-click on the header) lists the parent and the other siblings as explicit Open items, then Copy pane name, Copy pane ID and Close pane, which asks about the agents it spawned as Closing an agent that spawned others says; opening it moves no focus and marks nothing read.
+The pane menu (from its overflow control or a right-click on the header) groups the parent and other siblings under Related sessions and the pane name and ID under Copy details, then offers Close terminal, which asks about the agents it spawned as Closing an agent that spawned others says; opening it moves no focus and marks nothing read.
 The pane's own children are not in it: its tree button opens them.
-The menu names the pane as its header does and is drawn from the pane as it is now, not as it was when the menu opened: a session's label arrives after its first turn, and the menu already open then reads `Close pane <label>` and offers Fork agent and Sleep agent as the core now says.
-A right-click in the terminal focuses that pane, like a click, and opens a longer menu: Copy (only over a selection), Paste, Select all, and Find; then Split right, Split down, and Zoom pane or Unzoom pane (disabled on a tab's only pane); then the pane menu's items; an item with a chord that does the same shows it, ⌘C and ⌘V included.
+The menu names the pane as its header does and is drawn from the pane as it is now, not as it was when the menu opened: a session's label arrives after its first turn, and the heading already open then reads the new label and offers Fork session and Sleep agent as the core now says.
+Fork session groups the new-tab and right-side destinations without changing which sessions can fork.
+A right-click in the terminal focuses that pane, like a click, and opens a longer menu: Copy (only over a selection), Paste, Select all, and Find; then Split right, Split down, and Zoom terminal or Exit zoom (disabled on a tab's only pane); then the pane menu's items; an item with a chord that does the same shows it, ⌘C and ⌘V included.
 The Zoom pane chord on a tab's only pane does nothing either, on this machine and on a device: the core does not send it and logs `pane.zoom.single_pane` (`remote.control.zoom_single_pane` for a device).
 Copy pane ID, here and in an agent row's menu, copies the id the pane's own Herdr knows it by (`w9J:p52`), the one `herdr pane read` takes on that device, without the `remote:` scope Hide gives a device's pane.
 The right-click leaves the drag selection as it was, so Copy copies what the operator selected; the program in the pane never hears it.
@@ -954,7 +956,7 @@ A press or Enter goes to the task's Workspace, tab and pane; the arrows, Home an
 The row of the pane with the keyboard, or its nearest drawn ancestor while folded away, carries the sidebar's selected fill and `aria-current`; the list scrolls only as far as brings a newly selected row into view, and never while the operator's scroll position holds the selected row unchanged (B13).
 While ⌥ is held (Alt on Windows and Linux) each task row carries its number at its top right, as the 프로젝트 tree's roots and the Agent tabs do (PRD electron-digit-shortcuts-hints): the rows are counted top to bottom as the list draws them, a group's rows then the rows of a fold the operator opened, a task's children never, nine at most, and ⌥1 to ⌥9 open that row's task the way a press does.
 The `프로젝트 | 태스크` switch decides which list ⌥n counts, so on 태스크 the numbers are this list's and on 프로젝트 the tree's, whether or not the sidebar is shown.
-Under the pointer or focus the time's slot holds the record button and `⋯`, which offers `기록 보기` (Space), `pane으로` (↩), Resolve and, on a task, `세션 보관`, offered and disabled as the pane menu's Archive session is; a right-click on the row opens the same menu (B15, B18; PRD session-archive B1, D-27).
+Under the pointer or focus the time's slot holds the record button and `⋯`, which offers `기록 보기` (Space), `터미널로 이동` (↩), Resolve and, on a task, `세션 보관`, offered and disabled as the pane menu's Archive session is; a right-click on the row opens the same menu (B15, B18; PRD session-archive B1, D-27).
 `세션 보관` closes the task's root and every descendant pane with it and keeps their conversations: a session that is not working, or only waits on the operator, goes at once, and one with work running first asks `작업을 멈추고 보관할까요?`, listing the agents working now, with `작업 멈추고 보관` and `취소`, neither holding the keyboard (B5-B7).
 The row leaves the open groups for 보관됨 once every pane closed; a save that fails closes nothing, and a close some agents refuse keeps the session as it was, with one notice, the members that did close listed in its record, and `세션 보관` again finishing the same archive; the notice says whether a close was refused, timed out or lost its device, and once that root closes some other way its archived members stand in 보관됨 as their own row (B8-B12, B24).
 An archived row reads its title, its project in 상태별, its PR marks and how long ago it was archived, with no status mark, since nothing runs; `보관하는 중…`, `이어가는 중…`, `이어가지 못함`, `지우는 중…` or `상태 모름` stand on its second line while they hold, and a device that is not connected dims it (B14-B18, B13).
@@ -1338,7 +1340,7 @@ Elsewhere nothing on a row stands for its menu: a right-click, or the menu key o
 Project, checkout and agent rows each have one (PRD sidebar-context-menus), and every other item runs at once; only `Remove project…`, `Delete worktree…` and `Close tab…` go through their existing confirmations.
 A project row's menu is `New worktree…`, `New tab in main` (a new tab in the checkout the home glyph marks, brought to the front), then the reveal and `Copy path`, then `Pin` or `Unpin` and `Remove project…`, on every project row, registered or not.
 A checkout row's menu is `Open` (the row's open, without unfolding its agents), `New tab here`, `Open pull request #n` while GitHub knows one, then `Set purpose…`, `Set as default checkout`, `Copy branch name`, `Copy path`, `Open in VS Code` and the reveal, then `Delete worktree…` in the destructive color on a linked worktree.
-An agent row's menu, in Agents and under an opened checkout, is `Show` (the row's own open, with the ⌥n that selects the same row where the host has one), then `Copy title`, `Copy session id` (the conversation id Herdr recorded, disabled when it recorded none) and `Copy pane ID`, then `Close tab…`, which closes the tab holding the agent's pane, wherever it is, through the tab close flow, including its question about the agents spawned from it; Herdr 0.9.1 can neither mark a pane seen nor stop an agent, so neither is offered.
+An agent row's menu, in Agents and under an opened checkout, is `Show` (the row's own open, with the ⌥n that selects the same row where the host has one), then `Copy details` with `Session title`, `Session ID` (the conversation id Herdr recorded, disabled when it recorded none) and `Terminal ID`, then `Close tab…`, which closes the tab holding the agent's pane, wherever it is, through the tab close flow, including its question about the agents spawned from it; Herdr 0.9.1 can neither mark a pane seen nor stop an agent, so neither is offered.
 A Git project's menu has no `Open in VS Code`; a plain folder's has it before the reveal, since the folder is the checkout.
 `Open in VS Code` is the desktop app's only and only while VS Code is installed on this machine, which the host checks once per launch: it opens the folder in a VS Code window, on another device's row it is disabled with the reveal's reason, and a failed open (VS Code or the folder gone) shows nothing and leaves its reason, never the path, in the desktop log (D-13, D-14).
 `New tab in main` and `New tab here` show the registry's new-tab chord; the reveal follows [the reveal rule](#explorer-file-management): the desktop app's only, labelled by its OS, showing the folder selected in the OS file manager without opening anything.
@@ -2566,3 +2568,17 @@ Loading, local-only, no-workspace, disconnected, and unreadable states are each 
 A value Hide cannot read is shown as unreadable (a question mark or equivalent), never as a false zero or a silently empty state.
 An alert, banner, or sheet for a failure is a deliberate product decision, never a default: a failure the operator cannot act on goes to the diagnostic log instead (design principle 13).
 Retryable failures offer Retry attached to the exact target that failed; a definitive refusal and an unconfirmed/timed-out result are told apart in their copy, because only the definitive case can safely remove state (such as a reopen entry or a pending pane).
+
+### Action menu presentation
+
+The terminal, pane header, Agent and View tabs, Projects session rows and Tasks rows show a shared leading icon column and one muted heading naming the target.
+Opening a menu still acts on that target without selecting another tab or marking a session read.
+The heading follows the target's current name; the terminal close action reads `Close terminal` without repeating the name.
+Copy, Paste, Select all, Find, Split right, Split down and Zoom remain direct terminal actions, with the existing platform-specific chords.
+Related sessions, fork destinations and copied session details are submenus; Agent and View tab directions are grouped under Split and Move, with Rename beside New tab on an Agent tab.
+Only directions already offered by the layout are shown under Move.
+The command identities and their eligibility stay the same; a submenu whose choices share the same refusal shows that reason once on its disabled trigger, and mixed eligibility keeps the reason beside each disabled choice.
+Escape closes the innermost submenu first, returns focus to its trigger, then closes the root menu and restores the original target's focus.
+Close and archive stay neutral, while removing an archived session keeps the destructive color and existing confirmation.
+The Tasks action formerly labelled `pane으로` reads `터미널로 이동`; the four supported interface languages use the same structure.
+The approved B layout is recorded by `Component / Action menus` in the library, generated in `scripts/pen-system.mjs` from the shared System menu items.
