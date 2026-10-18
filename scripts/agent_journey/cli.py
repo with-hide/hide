@@ -619,6 +619,16 @@ def main(argv=None):
                     agent["refused_past_budget"] = servers[key].refused
                 agent["request_budget"] = rows[key].get("request_budget")
                 journey.close()
+                if key in services:
+                    # Its panes are closed and no later agent uses it: ended now, so the
+                    # server, which outlives every terminal, holds no memory under the
+                    # run's cap while the next agents run.
+                    launch, environment, port = services[key]
+                    try:
+                        agent["opencode_service"] = opencode_service.stop(launch, environment, port,
+                                                                          str(runtime.home), runtime.owner)
+                    except Exception as error:
+                        agent["opencode_service"] = {"port": port, "left": [f"stop failed: {error}"]}
     except Exception as error:
         # A stop the operator asked for is not a failure; the cells say "interrupted".
         if not (owner.cancelled.is_set() and isinstance(error, ProcessError) and "cancelled" in str(error)):
@@ -643,6 +653,9 @@ def main(argv=None):
             # Before the owner closes: the server outlives every terminal, and the run started it.
             # Its own stop runs past the run's deadline too, as the rest of the teardown does.
             agent = next(row for row in report["agents"] if row["id"] == key)
+            if "opencode_service" in agent and not agent["opencode_service"]["left"]:
+                # Already ended once its agent's cells settled.
+                continue
             try:
                 with owner.teardown():
                     agent["opencode_service"] = opencode_service.stop(launch, environment, port,
