@@ -538,10 +538,12 @@ fn same_path_memo_details_stay_with_the_requested_device() {
             ..Default::default()
         }),
     ));
-    assert!(!runtime.dispatch_json(&event(
-        "issue_detail_request",
-        serde_json::json!({"workspace_id": node_workspace, "task_key": key, "comments_after": "same-owner-cursor"}),
-    )));
+    let event = serde_json::json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "issue_detail_request",
+        "payload": {"workspace_id": node_workspace, "task_key": key, "comments_after": "same-owner-cursor"},
+    });
+    assert!(!runtime.dispatch_json(&serde_json::to_vec(&event).unwrap()));
     let detail = runtime.snapshot.issue_work.detail.as_ref().unwrap();
     assert!(detail.matches("same-path-on-core", crate::node::TEST_NODE, &key));
     assert_eq!(
