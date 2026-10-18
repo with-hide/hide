@@ -855,7 +855,7 @@ mod tests {
         std::fs::write(root.join("file"), "").unwrap();
         let locked = root.join("locked");
         std::fs::create_dir(&locked).unwrap();
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0)).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
 
         let through_file = Folder::look_at(&root.join("file/s")).unwrap();
         assert!(
