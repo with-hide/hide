@@ -33689,6 +33689,7 @@
                           "fontWeight": "400"
                         }
                       ],
+                      "width": "fill_container",
                       "layout": "vertical",
                       "gap": 0,
                       "alignItems": "start"
@@ -66230,6 +66231,3669 @@
       "fill": "$--card",
       "x": 14600,
       "y": 6421
+    },
+    {
+      "type": "frame",
+      "id": "cmp-action-menus",
+      "name": "Component / Action menus",
+      "children": [
+        {
+          "type": "text",
+          "id": "cmp-action-menus-title",
+          "name": "Component / Action menus",
+          "content": "Component / Action menus",
+          "fill": "$--foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-headline",
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "cmp-action-menus-spec",
+          "name": "Context menu B approved in H",
+          "content": "Context menu B approved in HTML: consistent icons, one target heading, direct frequent actions, submenus for directions, related sessions, fork destinations and copied details. Close and archive remain neutral; deletion alone is destructive. A shared unavailable reason appears once on its group.",
+          "fill": "$--subtle-foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-caption",
+          "fontWeight": "400",
+          "textGrowth": "fixed-width",
+          "width": 820
+        },
+        {
+          "type": "frame",
+          "id": "cmp-action-menus-light",
+          "name": "Light",
+          "children": [
+            {
+              "type": "frame",
+              "id": "action-terminal-l-cell",
+              "name": "Terminal",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-terminal-l-cap",
+                  "name": "Terminal",
+                  "content": "Terminal",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-terminal-l",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "action-terminal-heading-l",
+                      "name": "Target",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "action-terminal-title-l",
+                          "name": "입력과 세션 복귀 흐름 검토",
+                          "content": "입력과 세션 복귀 흐름 검토",
+                          "fill": "$--muted-foreground",
+                          "fontFamily": "$--font-ui",
+                          "fontSize": "$--text-caption",
+                          "fontWeight": "400"
+                        }
+                      ],
+                      "padding": [
+                        "$--spacing-xs",
+                        "$--spacing-sm"
+                      ]
+                    },
+                    {
+                      "id": "action-terminal-head-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-terminal-0-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "복사",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "copy",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "복사",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "⌘C",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-1-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "붙여넣기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "clipboard-paste",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "붙여넣기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "⌘V",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-2-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "모두 선택",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "square-dashed",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "모두 선택",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-3-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "찾기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "search",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "찾기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "⌘F",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-4-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-terminal-5-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "오른쪽으로 분할",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "panel-right",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "오른쪽으로 분할",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "⌘D",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-6-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "아래로 분할",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "panel-bottom",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "아래로 분할",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "⇧⌘D",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-7-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "확대",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "maximize",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "확대",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-8-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-terminal-9-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "관련 세션",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "network",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "관련 세션",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "›",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-10-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-terminal-11-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "잠자기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "moon",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "잠자기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-12-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "세션 보관",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "archive",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "세션 보관",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-13-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "세션 분기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "git-fork",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "세션 분기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "›",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-14-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-terminal-15-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "정보 복사",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "copy",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "정보 복사",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "›",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-16-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-terminal-17-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "터미널 닫기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "x",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "터미널 닫기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            },
+            {
+              "type": "frame",
+              "id": "action-tab-l-cell",
+              "name": "Agent tab",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-tab-l-cap",
+                  "name": "Agent tab",
+                  "content": "Agent tab",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-tab-l",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "action-tab-heading-l",
+                      "name": "Target",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "action-tab-title-l",
+                          "name": "입력과 세션 복귀 흐름 검토",
+                          "content": "입력과 세션 복귀 흐름 검토",
+                          "fill": "$--muted-foreground",
+                          "fontFamily": "$--font-ui",
+                          "fontSize": "$--text-caption",
+                          "fontWeight": "400"
+                        }
+                      ],
+                      "padding": [
+                        "$--spacing-xs",
+                        "$--spacing-sm"
+                      ]
+                    },
+                    {
+                      "id": "action-tab-head-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-tab-0-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "새 탭",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "plus",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "새 탭",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-tab-1-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "이름 변경…",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "pencil",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "이름 변경…",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-tab-2-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-tab-3-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "분할",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "panel-right",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "분할",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "›",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-tab-4-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "이동",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "arrow-right",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "이동",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "›",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-tab-5-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-tab-6-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "이름 복사",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "copy",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "이름 복사",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-tab-7-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-tab-8-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "탭 닫기…",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "x",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "탭 닫기…",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            },
+            {
+              "type": "frame",
+              "id": "action-view-l-cell",
+              "name": "File tab",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-view-l-cap",
+                  "name": "File tab",
+                  "content": "File tab",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-view-l",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "action-view-heading-l",
+                      "name": "Target",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "action-view-title-l",
+                          "name": "입력과 세션 복귀 흐름 검토",
+                          "content": "입력과 세션 복귀 흐름 검토",
+                          "fill": "$--muted-foreground",
+                          "fontFamily": "$--font-ui",
+                          "fontSize": "$--text-caption",
+                          "fontWeight": "400"
+                        }
+                      ],
+                      "padding": [
+                        "$--spacing-xs",
+                        "$--spacing-sm"
+                      ]
+                    },
+                    {
+                      "id": "action-view-head-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-view-0-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "새 탭",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "plus",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "새 탭",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-view-1-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "열어두기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "pin",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "열어두기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-view-2-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-view-3-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "분할",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "panel-right",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "분할",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "›",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-view-4-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "이동",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "arrow-right",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "이동",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "›",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-view-5-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-view-6-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "경로 복사",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "copy",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "경로 복사",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-view-7-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "파일 트리에서 선택",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "folder-open",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "파일 트리에서 선택",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-view-8-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "Finder에서 보기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "external-link",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "Finder에서 보기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-view-9-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-view-10-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "보기 닫기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "x",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "보기 닫기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            },
+            {
+              "type": "frame",
+              "id": "action-session-l-cell",
+              "name": "Session row",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-session-l-cap",
+                  "name": "Session row",
+                  "content": "Session row",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-session-l",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "action-session-heading-l",
+                      "name": "Target",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "action-session-title-l",
+                          "name": "입력과 세션 복귀 흐름 검토",
+                          "content": "입력과 세션 복귀 흐름 검토",
+                          "fill": "$--muted-foreground",
+                          "fontFamily": "$--font-ui",
+                          "fontSize": "$--text-caption",
+                          "fontWeight": "400"
+                        }
+                      ],
+                      "padding": [
+                        "$--spacing-xs",
+                        "$--spacing-sm"
+                      ]
+                    },
+                    {
+                      "id": "action-session-head-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-session-0-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "보기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "square-terminal",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "보기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-session-1-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-session-2-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "정보 복사",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "copy",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "정보 복사",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "›",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-session-3-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-session-4-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "탭 닫기…",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "x",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "탭 닫기…",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            },
+            {
+              "type": "frame",
+              "id": "action-task-l-cell",
+              "name": "Live task",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-task-l-cap",
+                  "name": "Live task",
+                  "content": "Live task",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-task-l",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "action-task-heading-l",
+                      "name": "Target",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "action-task-title-l",
+                          "name": "입력과 세션 복귀 흐름 검토",
+                          "content": "입력과 세션 복귀 흐름 검토",
+                          "fill": "$--muted-foreground",
+                          "fontFamily": "$--font-ui",
+                          "fontSize": "$--text-caption",
+                          "fontWeight": "400"
+                        }
+                      ],
+                      "padding": [
+                        "$--spacing-xs",
+                        "$--spacing-sm"
+                      ]
+                    },
+                    {
+                      "id": "action-task-head-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-task-0-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "기록 보기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "file-text",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "기록 보기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "Space",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-task-1-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "터미널로 이동",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "square-terminal",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "터미널로 이동",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "↩",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-task-2-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "Resolve",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "check",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "Resolve",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-task-3-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-task-4-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "세션 보관",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "archive",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "세션 보관",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            },
+            {
+              "type": "frame",
+              "id": "action-archived-l-cell",
+              "name": "Archived task",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-archived-l-cap",
+                  "name": "Archived task",
+                  "content": "Archived task",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-archived-l",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "action-archived-heading-l",
+                      "name": "Target",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "action-archived-title-l",
+                          "name": "입력과 세션 복귀 흐름 검토",
+                          "content": "입력과 세션 복귀 흐름 검토",
+                          "fill": "$--muted-foreground",
+                          "fontFamily": "$--font-ui",
+                          "fontSize": "$--text-caption",
+                          "fontWeight": "400"
+                        }
+                      ],
+                      "padding": [
+                        "$--spacing-xs",
+                        "$--spacing-sm"
+                      ]
+                    },
+                    {
+                      "id": "action-archived-head-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-archived-0-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "기록 보기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "file-text",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "기록 보기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "Space",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-archived-1-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "이어가기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "play",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "이어가기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-archived-2-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-archived-3-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "보관함에서 지우기…",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "trash-2",
+                          "enabled": true,
+                          "fill": "$--destructive"
+                        },
+                        "mnu-item-label": {
+                          "content": "보관함에서 지우기…",
+                          "fill": "$--destructive"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            },
+            {
+              "type": "frame",
+              "id": "action-unavailable-l-cell",
+              "name": "Shared refusal",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-unavailable-l-cap",
+                  "name": "Shared refusal",
+                  "content": "Shared refusal",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-unavailable-l",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "action-unavailable-heading-l",
+                      "name": "Target",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "action-unavailable-title-l",
+                          "name": "입력과 세션 복귀 흐름 검토",
+                          "content": "입력과 세션 복귀 흐름 검토",
+                          "fill": "$--muted-foreground",
+                          "fontFamily": "$--font-ui",
+                          "fontSize": "$--text-caption",
+                          "fontWeight": "400"
+                        }
+                      ],
+                      "padding": [
+                        "$--spacing-xs",
+                        "$--spacing-sm"
+                      ]
+                    },
+                    {
+                      "id": "action-unavailable-head-l",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-unavailable-0-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "세션 분기",
+                      "opacity": 0.45,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "git-fork",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "세션 분기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "content": "세션 정보를 아직 받지 못했습니다",
+                          "enabled": true
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "›",
+                          "enabled": true
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            },
+            {
+              "type": "frame",
+              "id": "action-directions-l-cell",
+              "name": "Direction submenu",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-directions-l-cap",
+                  "name": "Direction submenu",
+                  "content": "Direction submenu",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-directions-l",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "id": "action-directions-0-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "오른쪽",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "panel-right",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "오른쪽",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-directions-1-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "왼쪽",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "panel-left",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "왼쪽",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-directions-2-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "위쪽",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "panel-top",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "위쪽",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-directions-3-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "아래쪽",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "panel-bottom",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "아래쪽",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            },
+            {
+              "type": "frame",
+              "id": "action-fork-l-cell",
+              "name": "Fork submenu",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-fork-l-cap",
+                  "name": "Fork submenu",
+                  "content": "Fork submenu",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-fork-l",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "id": "action-fork-0-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "새 탭에서 분기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "git-fork",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "새 탭에서 분기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-fork-1-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "오른쪽에서 분기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "panel-right",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "오른쪽에서 분기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            },
+            {
+              "type": "frame",
+              "id": "action-copy-l-cell",
+              "name": "Copy submenu",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-copy-l-cap",
+                  "name": "Copy submenu",
+                  "content": "Copy submenu",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-copy-l",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "id": "action-copy-0-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "세션 이름",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "copy",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "세션 이름",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-copy-1-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "세션 ID",
+                      "opacity": 0.45,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "hash",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "세션 ID",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "content": "세션 정보를 아직 받지 못했습니다",
+                          "enabled": true
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-copy-2-l",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "터미널 ID",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "hash",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "터미널 ID",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            }
+          ],
+          "theme": {
+            "Mode": "Light"
+          },
+          "layout": "horizontal",
+          "gap": "$--spacing-lg",
+          "alignItems": "end",
+          "padding": "$--spacing-lg",
+          "fill": "$--background",
+          "width": "fit_content",
+          "cornerRadius": "$--radius-md"
+        },
+        {
+          "type": "frame",
+          "id": "cmp-action-menus-dark",
+          "name": "Dark",
+          "children": [
+            {
+              "type": "frame",
+              "id": "action-terminal-d-cell",
+              "name": "Terminal",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-terminal-d-cap",
+                  "name": "Terminal",
+                  "content": "Terminal",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-terminal-d",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "action-terminal-heading-d",
+                      "name": "Target",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "action-terminal-title-d",
+                          "name": "입력과 세션 복귀 흐름 검토",
+                          "content": "입력과 세션 복귀 흐름 검토",
+                          "fill": "$--muted-foreground",
+                          "fontFamily": "$--font-ui",
+                          "fontSize": "$--text-caption",
+                          "fontWeight": "400"
+                        }
+                      ],
+                      "padding": [
+                        "$--spacing-xs",
+                        "$--spacing-sm"
+                      ]
+                    },
+                    {
+                      "id": "action-terminal-head-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-terminal-0-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "복사",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "copy",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "복사",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "⌘C",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-1-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "붙여넣기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "clipboard-paste",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "붙여넣기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "⌘V",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-2-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "모두 선택",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "square-dashed",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "모두 선택",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-3-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "찾기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "search",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "찾기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "⌘F",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-4-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-terminal-5-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "오른쪽으로 분할",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "panel-right",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "오른쪽으로 분할",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "⌘D",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-6-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "아래로 분할",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "panel-bottom",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "아래로 분할",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "⇧⌘D",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-7-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "확대",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "maximize",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "확대",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-8-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-terminal-9-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "관련 세션",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "network",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "관련 세션",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "›",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-10-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-terminal-11-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "잠자기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "moon",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "잠자기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-12-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "세션 보관",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "archive",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "세션 보관",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-13-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "세션 분기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "git-fork",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "세션 분기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "›",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-14-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-terminal-15-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "정보 복사",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "copy",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "정보 복사",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "›",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-terminal-16-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-terminal-17-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "터미널 닫기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "x",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "터미널 닫기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            },
+            {
+              "type": "frame",
+              "id": "action-tab-d-cell",
+              "name": "Agent tab",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-tab-d-cap",
+                  "name": "Agent tab",
+                  "content": "Agent tab",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-tab-d",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "action-tab-heading-d",
+                      "name": "Target",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "action-tab-title-d",
+                          "name": "입력과 세션 복귀 흐름 검토",
+                          "content": "입력과 세션 복귀 흐름 검토",
+                          "fill": "$--muted-foreground",
+                          "fontFamily": "$--font-ui",
+                          "fontSize": "$--text-caption",
+                          "fontWeight": "400"
+                        }
+                      ],
+                      "padding": [
+                        "$--spacing-xs",
+                        "$--spacing-sm"
+                      ]
+                    },
+                    {
+                      "id": "action-tab-head-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-tab-0-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "새 탭",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "plus",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "새 탭",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-tab-1-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "이름 변경…",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "pencil",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "이름 변경…",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-tab-2-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-tab-3-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "분할",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "panel-right",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "분할",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "›",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-tab-4-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "이동",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "arrow-right",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "이동",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "›",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-tab-5-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-tab-6-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "이름 복사",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "copy",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "이름 복사",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-tab-7-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-tab-8-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "탭 닫기…",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "x",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "탭 닫기…",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            },
+            {
+              "type": "frame",
+              "id": "action-view-d-cell",
+              "name": "File tab",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-view-d-cap",
+                  "name": "File tab",
+                  "content": "File tab",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-view-d",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "action-view-heading-d",
+                      "name": "Target",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "action-view-title-d",
+                          "name": "입력과 세션 복귀 흐름 검토",
+                          "content": "입력과 세션 복귀 흐름 검토",
+                          "fill": "$--muted-foreground",
+                          "fontFamily": "$--font-ui",
+                          "fontSize": "$--text-caption",
+                          "fontWeight": "400"
+                        }
+                      ],
+                      "padding": [
+                        "$--spacing-xs",
+                        "$--spacing-sm"
+                      ]
+                    },
+                    {
+                      "id": "action-view-head-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-view-0-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "새 탭",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "plus",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "새 탭",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-view-1-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "열어두기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "pin",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "열어두기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-view-2-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-view-3-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "분할",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "panel-right",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "분할",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "›",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-view-4-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "이동",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "arrow-right",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "이동",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "›",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-view-5-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-view-6-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "경로 복사",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "copy",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "경로 복사",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-view-7-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "파일 트리에서 선택",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "folder-open",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "파일 트리에서 선택",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-view-8-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "Finder에서 보기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "external-link",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "Finder에서 보기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-view-9-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-view-10-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "보기 닫기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "x",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "보기 닫기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            },
+            {
+              "type": "frame",
+              "id": "action-session-d-cell",
+              "name": "Session row",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-session-d-cap",
+                  "name": "Session row",
+                  "content": "Session row",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-session-d",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "action-session-heading-d",
+                      "name": "Target",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "action-session-title-d",
+                          "name": "입력과 세션 복귀 흐름 검토",
+                          "content": "입력과 세션 복귀 흐름 검토",
+                          "fill": "$--muted-foreground",
+                          "fontFamily": "$--font-ui",
+                          "fontSize": "$--text-caption",
+                          "fontWeight": "400"
+                        }
+                      ],
+                      "padding": [
+                        "$--spacing-xs",
+                        "$--spacing-sm"
+                      ]
+                    },
+                    {
+                      "id": "action-session-head-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-session-0-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "보기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "square-terminal",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "보기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-session-1-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-session-2-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "정보 복사",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "copy",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "정보 복사",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "›",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-session-3-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-session-4-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "탭 닫기…",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "x",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "탭 닫기…",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            },
+            {
+              "type": "frame",
+              "id": "action-task-d-cell",
+              "name": "Live task",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-task-d-cap",
+                  "name": "Live task",
+                  "content": "Live task",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-task-d",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "action-task-heading-d",
+                      "name": "Target",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "action-task-title-d",
+                          "name": "입력과 세션 복귀 흐름 검토",
+                          "content": "입력과 세션 복귀 흐름 검토",
+                          "fill": "$--muted-foreground",
+                          "fontFamily": "$--font-ui",
+                          "fontSize": "$--text-caption",
+                          "fontWeight": "400"
+                        }
+                      ],
+                      "padding": [
+                        "$--spacing-xs",
+                        "$--spacing-sm"
+                      ]
+                    },
+                    {
+                      "id": "action-task-head-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-task-0-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "기록 보기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "file-text",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "기록 보기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "Space",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-task-1-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "터미널로 이동",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "square-terminal",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "터미널로 이동",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "↩",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-task-2-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "Resolve",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "check",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "Resolve",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-task-3-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-task-4-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "세션 보관",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "archive",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "세션 보관",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            },
+            {
+              "type": "frame",
+              "id": "action-archived-d-cell",
+              "name": "Archived task",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-archived-d-cap",
+                  "name": "Archived task",
+                  "content": "Archived task",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-archived-d",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "action-archived-heading-d",
+                      "name": "Target",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "action-archived-title-d",
+                          "name": "입력과 세션 복귀 흐름 검토",
+                          "content": "입력과 세션 복귀 흐름 검토",
+                          "fill": "$--muted-foreground",
+                          "fontFamily": "$--font-ui",
+                          "fontSize": "$--text-caption",
+                          "fontWeight": "400"
+                        }
+                      ],
+                      "padding": [
+                        "$--spacing-xs",
+                        "$--spacing-sm"
+                      ]
+                    },
+                    {
+                      "id": "action-archived-head-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-archived-0-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "기록 보기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "file-text",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "기록 보기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "Space",
+                          "enabled": true
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-archived-1-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "이어가기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "play",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "이어가기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-archived-2-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-archived-3-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "보관함에서 지우기…",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "trash-2",
+                          "enabled": true,
+                          "fill": "$--destructive"
+                        },
+                        "mnu-item-label": {
+                          "content": "보관함에서 지우기…",
+                          "fill": "$--destructive"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            },
+            {
+              "type": "frame",
+              "id": "action-unavailable-d-cell",
+              "name": "Shared refusal",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-unavailable-d-cap",
+                  "name": "Shared refusal",
+                  "content": "Shared refusal",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-unavailable-d",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "action-unavailable-heading-d",
+                      "name": "Target",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "action-unavailable-title-d",
+                          "name": "입력과 세션 복귀 흐름 검토",
+                          "content": "입력과 세션 복귀 흐름 검토",
+                          "fill": "$--muted-foreground",
+                          "fontFamily": "$--font-ui",
+                          "fontSize": "$--text-caption",
+                          "fontWeight": "400"
+                        }
+                      ],
+                      "padding": [
+                        "$--spacing-xs",
+                        "$--spacing-sm"
+                      ]
+                    },
+                    {
+                      "id": "action-unavailable-head-d",
+                      "type": "ref",
+                      "ref": "mnu-sep-m",
+                      "name": "Separator"
+                    },
+                    {
+                      "id": "action-unavailable-0-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "세션 분기",
+                      "opacity": 0.45,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "git-fork",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "세션 분기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "content": "세션 정보를 아직 받지 못했습니다",
+                          "enabled": true
+                        },
+                        "mnu-item-shortcut": {
+                          "content": "›",
+                          "enabled": true
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            },
+            {
+              "type": "frame",
+              "id": "action-directions-d-cell",
+              "name": "Direction submenu",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-directions-d-cap",
+                  "name": "Direction submenu",
+                  "content": "Direction submenu",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-directions-d",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "id": "action-directions-0-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "오른쪽",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "panel-right",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "오른쪽",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-directions-1-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "왼쪽",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "panel-left",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "왼쪽",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-directions-2-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "위쪽",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "panel-top",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "위쪽",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-directions-3-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "아래쪽",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "panel-bottom",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "아래쪽",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            },
+            {
+              "type": "frame",
+              "id": "action-fork-d-cell",
+              "name": "Fork submenu",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-fork-d-cap",
+                  "name": "Fork submenu",
+                  "content": "Fork submenu",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-fork-d",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "id": "action-fork-0-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "새 탭에서 분기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "git-fork",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "새 탭에서 분기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-fork-1-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "오른쪽에서 분기",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "panel-right",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "오른쪽에서 분기",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            },
+            {
+              "type": "frame",
+              "id": "action-copy-d-cell",
+              "name": "Copy submenu",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "action-copy-d-cap",
+                  "name": "Copy submenu",
+                  "content": "Copy submenu",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-micro",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "action-copy-d",
+                  "name": "Content",
+                  "children": [
+                    {
+                      "id": "action-copy-0-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "세션 이름",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "copy",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "세션 이름",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-copy-1-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "세션 ID",
+                      "opacity": 0.45,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "hash",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "세션 ID",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "content": "세션 정보를 아직 받지 못했습니다",
+                          "enabled": true
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
+                      "id": "action-copy-2-d",
+                      "type": "ref",
+                      "ref": "mnu-item-m",
+                      "name": "터미널 ID",
+                      "opacity": 1,
+                      "descendants": {
+                        "mnu-item-icon": {
+                          "icon": "hash",
+                          "enabled": true,
+                          "fill": "$--muted-foreground"
+                        },
+                        "mnu-item-label": {
+                          "content": "터미널 ID",
+                          "fill": "$--foreground"
+                        },
+                        "mnu-item-reason": {
+                          "enabled": false
+                        },
+                        "mnu-item-shortcut": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ],
+                  "layout": "vertical",
+                  "gap": 0,
+                  "padding": "$--spacing-xxs",
+                  "width": 360,
+                  "cornerRadius": "$--radius-sm",
+                  "fill": "$--popover",
+                  "stroke": "$--border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner"
+                }
+              ],
+              "layout": "vertical",
+              "gap": "$--spacing-xs",
+              "alignItems": "start",
+              "width": "fit_content"
+            }
+          ],
+          "theme": {
+            "Mode": "Dark"
+          },
+          "layout": "horizontal",
+          "gap": "$--spacing-lg",
+          "alignItems": "end",
+          "padding": "$--spacing-lg",
+          "fill": "$--background",
+          "width": "fit_content",
+          "cornerRadius": "$--radius-md"
+        }
+      ],
+      "layout": "vertical",
+      "gap": "$--spacing-xl",
+      "padding": "$--spacing-xl",
+      "fill": "$--card",
+      "cornerRadius": "$--radius-lg",
+      "width": "fit_content",
+      "x": 16000,
+      "y": 8281
     }
   ],
   "themes": {

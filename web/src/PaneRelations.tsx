@@ -143,6 +143,7 @@ export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffe
   const items: MenuEntry<PaneMenuId>[] = relationEntries(pane).map((entry) => ({
     id: `open:${entry.paneId}` as const,
     label: translate(relationLabel[entry.relation], { name: entry.label }),
+    icon: "terminal", group: "relations", menuLabel: translate(`menus.${entry.relation}`, { name: entry.label }),
     unavailable: null,
   }));
   // Sleep agent (PRD agent-sleep B15): offered on a local agent pane that is
@@ -150,7 +151,7 @@ export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffe
   const agentActions: MenuEntry<PaneMenuId>[] = [];
   if (pane.sleep_action) {
     agentActions.push({
-      id: "sleep_agent",
+      id: "sleep_agent", menuLabel: translate("menus.sleep"), icon: "sleep",
       label: translate("panes.menu.sleep"),
       unavailable: pane.sleep_action.available ? null : (pane.sleep_action.reason ?? translate("panes.menu.sleepUnavailable")),
     });
@@ -158,7 +159,7 @@ export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffe
   // Archive session (PRD session-archive B1-B4, D-08): below Sleep agent on a
   // root agent's pane, disabled with why on a child, an unknown conversation
   // or a disconnected device; a shell, a Factory worker and Hide AI get none.
-  const archiveEntry: MenuEntry<PaneMenuId> | null = archive.kind === "offered" ? { id: "archive_session", label: translate("archive.menu.archive"), unavailable: archive.unavailable } : null;
+  const archiveEntry: MenuEntry<PaneMenuId> | null = archive.kind === "offered" ? { id: "archive_session", icon: "archive", label: translate("archive.menu.archive"), unavailable: archive.unavailable } : null;
   if (archiveEntry && pane.sleep_action) agentActions.push(archiveEntry);
   // Fork agent and Fork agent to the side (PRD fork-operator-root B2, B3, D-03):
   // offered on an agent pane the core can fork, and both drawn disabled with the
@@ -167,15 +168,15 @@ export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffe
   if (pane.fork?.available || pane.fork?.reason) {
     const unavailable = pane.fork.available ? null : (pane.fork.reason ?? translate("panes.menu.forkUnavailable"));
     agentActions.push(
-      { id: "fork_agent", label: translate("panes.menu.fork"), unavailable },
-      { id: "fork_agent_side", label: translate("panes.menu.forkSide"), unavailable },
+      { id: "fork_agent", group: "fork", menuLabel: translate("menus.forkTab"), icon: "fork", label: translate("panes.menu.fork"), unavailable },
+      { id: "fork_agent_side", group: "fork", menuLabel: translate("menus.forkSide"), icon: "split_right", label: translate("panes.menu.forkSide"), unavailable },
     );
   }
   if (archiveEntry && !pane.sleep_action) agentActions.push(archiveEntry);
   if (agentActions.length > 0) items.push(...agentActions.map((item, index) => (index === 0 ? { ...item, separated: items.length > 0 } : item)));
-  items.push({ id: "copy_name", label: translate("panes.menu.copyName"), unavailable: null, separated: items.length > 0 && agentActions.length === 0 });
-  items.push({ id: "copy_pane_id", label: translate("panes.menu.copyPaneId"), unavailable: null });
-  items.push({ id: "close_pane", label: translate("panes.close", { name: title }), unavailable: null, separated: true });
+  items.push({ id: "copy_name", group: "copy", menuLabel: translate("menus.terminalName"), icon: "copy", label: translate("panes.menu.copyName"), unavailable: null, separated: items.length > 0 });
+  items.push({ id: "copy_pane_id", group: "copy", menuLabel: translate("menus.terminalId"), icon: "id", label: translate("panes.menu.copyPaneId"), unavailable: null });
+  items.push({ id: "close_pane", menuLabel: translate("menus.closeTerminal"), icon: "close", label: translate("panes.close", { name: title }), unavailable: null, separated: true });
   return items;
 }
 
@@ -203,29 +204,29 @@ export function terminalMenuItems(pane: PaneRow, title: string, context: Termina
   const { target, found } = context.link ?? {};
   if (target?.kind === "url") {
     items.push(
-      { id: "link_open", label: translate("panes.menu.openInHide"), unavailable: null },
-      { id: "link_external", label: translate("panes.menu.openDefaultBrowser"), unavailable: null },
-      { id: "link_copy", label: translate("panes.menu.copyLink"), unavailable: null },
+      { id: "link_open", icon: "record", label: translate("panes.menu.openInHide"), unavailable: null },
+      { id: "link_external", icon: "external", label: translate("panes.menu.openDefaultBrowser"), unavailable: null },
+      { id: "link_copy", icon: "copy", label: translate("panes.menu.copyLink"), unavailable: null },
     );
   } else if (target?.kind === "path" && found) {
     const html = found.kind === "file" && isHtmlFile(found.real);
-    items.push({ id: "link_open", label: translate(html ? "documents.openInBrowser" : "common.open"), unavailable: null });
-    if (html && context.link?.inCheckout) items.push({ id: "link_source", label: translate("panes.menu.openSource"), unavailable: null });
-    items.push({ id: "link_external", label: translate("panes.menu.openDefaultApp"), unavailable: null });
+    items.push({ id: "link_open", icon: "record", label: translate(html ? "documents.openInBrowser" : "common.open"), unavailable: null });
+    if (html && context.link?.inCheckout) items.push({ id: "link_source", icon: "source", label: translate("panes.menu.openSource"), unavailable: null });
+    items.push({ id: "link_external", icon: "external", label: translate("panes.menu.openDefaultApp"), unavailable: null });
     const host = context.reveal === undefined ? revealHost() : context.reveal;
-    if (host) items.push({ id: "link_reveal", label: translate(host.label), unavailable: null });
-    items.push({ id: "link_copy", label: translate("workspace.menu.copyPath"), unavailable: null });
+    if (host) items.push({ id: "link_reveal", icon: "folder", label: translate(host.label), unavailable: null });
+    items.push({ id: "link_copy", icon: "copy", label: translate("workspace.menu.copyPath"), unavailable: null });
   }
   const editingStart = items.length;
-  if (context.selection) items.push({ id: "copy", label: translate("common.copy"), unavailable: null, shortcut: chords.copy });
+  if (context.selection) items.push({ id: "copy", icon: "copy", label: translate("common.copy"), unavailable: null, shortcut: chords.copy });
   items.push(
-    { id: "paste", label: translate("panes.menu.paste"), unavailable: null, shortcut: chords.paste },
-    { id: "select_all", label: translate("panes.menu.selectAll"), unavailable: null },
-    { id: "find", label: translate("panes.menu.find"), unavailable: null, shortcut: chords.find },
-    { id: "split_right", label: splitLabel("right"), unavailable: null, separated: true, shortcut: chords.splitRight },
-    { id: "split_down", label: splitLabel("down"), unavailable: null, shortcut: chords.splitDown },
+    { id: "paste", icon: "paste", label: translate("panes.menu.paste"), unavailable: null, shortcut: chords.paste },
+    { id: "select_all", icon: "select", label: translate("panes.menu.selectAll"), unavailable: null },
+    { id: "find", icon: "find", label: translate("panes.menu.find"), unavailable: null, shortcut: chords.find },
+    { id: "split_right", icon: "split_right", label: splitLabel("right"), unavailable: null, separated: true, shortcut: chords.splitRight },
+    { id: "split_down", icon: "split_down", label: splitLabel("down"), unavailable: null, shortcut: chords.splitDown },
     {
-      id: "toggle_zoom",
+      id: "toggle_zoom", menuLabel: translate(context.zoomed ? "menus.unzoom" : "menus.zoom"), icon: context.zoomed ? "unzoom" : "zoom",
       label: context.zoomed ? translate("panes.unzoom") : translate("panes.menu.zoom"),
       unavailable: context.zoomed || context.paneCount > 1 ? null : translate("panes.menu.onlyPane"),
       shortcut: chords.zoom,
@@ -299,7 +300,7 @@ export function usePaneMenu(pane: PaneRow, title: string, actions: Actions) {
   // menu says what the header says now.
   const archive = useArchiveOffer(pane.id, open !== null);
   const items = open === null ? [] : open.terminal ? terminalMenuItems(pane, title, open.terminal, archive) : paneMenuItems(pane, title, archive);
-  const menu = <EntryPointMenu label={t("panes.menu.aria", { name: title })} items={items} onSelect={select} at={open} onClose={() => setOpen(null)} />;
+  const menu = <EntryPointMenu title={title} label={t("panes.menu.aria", { name: title })} items={items} onSelect={select} at={open} onClose={() => setOpen(null)} />;
   return {
     menu,
     open: open !== null,

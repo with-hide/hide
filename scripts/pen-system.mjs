@@ -223,7 +223,7 @@ function menuItemMaster() {
     padding: ['$--spacing-xs', '$--spacing-sm'], fill: '#00000000',
   }, [
     icon('mnu-item-icon', 'pencil', {size: 14, fill: '$--muted-foreground'}),
-    frame('mnu-item-body', 'Body', {layout: 'vertical', gap: 0, alignItems: 'start'}, [
+    frame('mnu-item-body', 'Body', {width: 'fill_container', layout: 'vertical', gap: 0, alignItems: 'start'}, [
       text('mnu-item-label', 'Item', {fill: '$--foreground', size: '$--text-body'}),
       text('mnu-item-reason', 'Reason', {fill: '$--muted-foreground', size: '$--text-caption', enabled: false}),
     ]),
@@ -244,12 +244,12 @@ function menuItem(id, label, state = 'default', glyph) {
 }
 
 // The label-with-optional-stacked-reason shape entry-menu.tsx's `EntryItems`
-// actually renders (no leading icon): a disabled item keeps its reason visible
+// actually renders: a disabled item keeps its reason visible
 // under the label, per design principle 9 (a disabled state shown with its cause).
-function menuItemReason(id, label, {reason = null, disabled = false, destructive = false, shortcut = null} = {}) {
+function menuItemReason(id, label, {reason = null, disabled = false, destructive = false, shortcut = null, glyph = null} = {}) {
   const textFill = destructive ? '$--destructive' : '$--foreground';
   return ref(id, MENUITEM_MASTER_ID, label, {opacity: disabled ? 0.45 : 1}, {
-    'mnu-item-icon': {enabled: false},
+    'mnu-item-icon': glyph ? {icon: glyph, enabled: true, fill: destructive ? '$--destructive' : '$--muted-foreground'} : {enabled: false},
     'mnu-item-label': {content: label, fill: textFill},
     'mnu-item-reason': reason ? {content: reason, enabled: true} : {enabled: false},
     'mnu-item-shortcut': shortcut ? {content: shortcut, enabled: true} : {enabled: false},
@@ -1001,8 +1001,38 @@ function buildAgentGraphBox(tokens) {
 }
 
 /** The generated `Component /` sheets that are neither folded legacy masters nor hand-authored; `at` is where a new one lands until a person moves it. */
+// Approved context-menu B: direct frequent actions, grouped secondary choices.
+function buildActionMenus(tokens) {
+  const width = num(tokens, '--size-relationship-list-max');
+  const states = (suffix) => {
+    const menu = (key, title, rows) => cell(title, menuContent(`action-${key}-${suffix}`, width, [
+      ...(['directions', 'fork', 'copy'].includes(key) ? [] : [frame(`action-${key}-heading-${suffix}`, 'Target', {padding: ['$--spacing-xs', '$--spacing-sm']}, [text(`action-${key}-title-${suffix}`, '입력과 세션 복귀 흐름 검토', {size: '$--text-caption', fill: '$--muted-foreground'})]), menuSeparator(`action-${key}-head-${suffix}`)]),
+      ...rows.map((row, index) => row === null ? menuSeparator(`action-${key}-${index}-${suffix}`) : menuItemReason(`action-${key}-${index}-${suffix}`, row[0], {glyph: row[1], ...row[2]})),
+    ]));
+    return [
+      menu('terminal', 'Terminal', [
+        ['복사', 'copy', {shortcut: '⌘C'}], ['붙여넣기', 'clipboard-paste', {shortcut: '⌘V'}], ['모두 선택', 'square-dashed'], ['찾기', 'search', {shortcut: '⌘F'}], null,
+        ['오른쪽으로 분할', 'panel-right', {shortcut: '⌘D'}], ['아래로 분할', 'panel-bottom', {shortcut: '⇧⌘D'}], ['확대', 'maximize'], null,
+        ['관련 세션', 'network', {shortcut: '›'}], null, ['잠자기', 'moon'], ['세션 보관', 'archive'], ['세션 분기', 'git-fork', {shortcut: '›'}], null,
+        ['정보 복사', 'copy', {shortcut: '›'}], null, ['터미널 닫기', 'x'],
+      ]),
+      menu('tab', 'Agent tab', [['새 탭', 'plus'], ['이름 변경…', 'pencil'], null, ['분할', 'panel-right', {shortcut: '›'}], ['이동', 'arrow-right', {shortcut: '›'}], null, ['이름 복사', 'copy'], null, ['탭 닫기…', 'x']]),
+      menu('view', 'File tab', [['새 탭', 'plus'], ['열어두기', 'pin'], null, ['분할', 'panel-right', {shortcut: '›'}], ['이동', 'arrow-right', {shortcut: '›'}], null, ['경로 복사', 'copy'], ['파일 트리에서 선택', 'folder-open'], ['Finder에서 보기', 'external-link'], null, ['보기 닫기', 'x']]),
+      menu('session', 'Session row', [['보기', 'square-terminal'], null, ['정보 복사', 'copy', {shortcut: '›'}], null, ['탭 닫기…', 'x']]),
+      menu('task', 'Live task', [['기록 보기', 'file-text', {shortcut: 'Space'}], ['터미널로 이동', 'square-terminal', {shortcut: '↩'}], ['Resolve', 'check'], null, ['세션 보관', 'archive']]),
+      menu('archived', 'Archived task', [['기록 보기', 'file-text', {shortcut: 'Space'}], ['이어가기', 'play'], null, ['보관함에서 지우기…', 'trash-2', {destructive: true}]]),
+      menu('unavailable', 'Shared refusal', [['세션 분기', 'git-fork', {disabled: true, reason: '세션 정보를 아직 받지 못했습니다', shortcut: '›'}]]),
+      menu('directions', 'Direction submenu', [['오른쪽', 'panel-right'], ['왼쪽', 'panel-left'], ['위쪽', 'panel-top'], ['아래쪽', 'panel-bottom']]),
+      menu('fork', 'Fork submenu', [['새 탭에서 분기', 'git-fork'], ['오른쪽에서 분기', 'panel-right']]),
+      menu('copy', 'Copy submenu', [['세션 이름', 'copy'], ['세션 ID', 'hash', {disabled: true, reason: '세션 정보를 아직 받지 못했습니다'}], ['터미널 ID', 'hash']]),
+    ];
+  };
+  return buildSheet('cmp-action-menus', 'Component / Action menus', 'Context menu B approved in HTML: consistent icons, one target heading, direct frequent actions, submenus for directions, related sessions, fork destinations and copied details. Close and archive remain neutral; deletion alone is destructive. A shared unavailable reason appears once on its group.', [], states('l'), states('d'));
+}
+
 export function componentSheets(tokens) {
   return [
+    {name: 'Component / Action menus', build: () => buildActionMenus(tokens), at: {x: 16000, y: 8281}},
     {name: 'Component / Agent graph box', build: () => buildAgentGraphBox(tokens), at: {x: 1200, y: 8281}},
     {name: 'Component / Agent tree parts', build: () => buildAgentTreeParts(tokens), at: {x: 8800, y: 7264}},
     {name: 'Component / Hide AI origin', build: () => buildHideAiOrigin(tokens), at: {x: 11200, y: 7264}},
