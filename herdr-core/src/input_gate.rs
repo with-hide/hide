@@ -26,6 +26,19 @@ pub struct Closed;
 struct State {
     closed: HashSet<String>,
     writing: HashMap<String, usize>,
+    /// Waiters inside `wait_drained`, per pane; a test reads it to know the
+    /// waiter reached its boundary before it releases the write.
+    waiting: HashMap<String, usize>,
+}
+
+/// How a wait for the writes already admitted ended.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Drain {
+    /// No admitted write to the pane is still running.
+    Drained,
+    /// A write was still running when the limit passed: the caller must not
+    /// act as if the pane were quiet.
+    Stalled,
 }
 
 /// The panes closed to input and the writes in flight to the others.
@@ -92,19 +105,38 @@ impl PaneInputGate {
     }
 
     /// Waits until no admitted write to `pane` is still running, or `limit`
-    /// passes (a write has its own timeout, so a longer wait would be a hang).
-    /// Close the pane first, or a new write may be admitted behind the wait.
-    pub fn wait_drained(&self, pane: &str, limit: Duration) {
-        let state = self.lock();
-        let _ = self
+    /// passes (a write has its own timeout, so a longer wait would be a hang),
+    /// and says which. Close the pane first, or a new write may be admitted
+    /// behind the wait.
+    pub fn wait_drained(&self, pane: &str, limit: Duration) -> Drain {
+        let mut state = self.lock();
+        *state.waiting.entry(pane.to_owned()).or_default() += 1;
+        let (mut state, _) = self
             .drained
-            .wait_timeout_while(state, limit, |state| state.writing.contains_key(pane));
+            .wait_timeout_while(state, limit, |state| state.writing.contains_key(pane))
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(count) = state.waiting.get_mut(pane) {
+            *count -= 1;
+            if *count == 0 {
+                state.waiting.remove(pane);
+            }
+        }
+        if state.writing.contains_key(pane) {
+            Drain::Stalled
+        } else {
+            Drain::Drained
+        }
+    }
+
+    /// Whether a `wait_drained` on `pane` is waiting now.
+    #[cfg(test)]
+    pub(crate) fn is_waiting(&self, pane: &str) -> bool {
+        self.lock().waiting.contains_key(pane)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
 
     use super::*;
@@ -123,6 +155,19 @@ mod tests {
         );
     }
 
+    /// Waits (a hang guard only) until the waiter is inside its wait, so the
+    /// write is released after the boundary was reached, not after the spawn.
+    fn until_waiting(gate: &PaneInputGate, pane: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !gate.is_waiting(pane) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the waiter never waited"
+            );
+            thread::yield_now();
+        }
+    }
+
     /// The race the gate exists for: a write admitted just before the pane
     /// closed is still on its way when the worker would end the agent. The
     /// worker waits for it, so the bytes land in the agent and not behind it,
@@ -132,29 +177,47 @@ mod tests {
         let gate = Arc::new(PaneInputGate::default());
         let admission = gate.admit("w1:p1").expect("awake");
         gate.close("w1:p1");
-        let ended = Arc::new(AtomicBool::new(false));
         let worker = {
-            let (gate, ended) = (Arc::clone(&gate), Arc::clone(&ended));
-            thread::spawn(move || {
-                gate.wait_drained("w1:p1", Duration::from_secs(30));
-                ended.store(true, Ordering::SeqCst);
-            })
+            let gate = Arc::clone(&gate);
+            thread::spawn(move || gate.wait_drained("w1:p1", Duration::from_secs(30)))
         };
+        until_waiting(&gate, "w1:p1");
         // A late write is refused while the first still runs.
         assert_eq!(gate.admit("w1:p1").err(), Some(Closed));
+        drop(admission);
+        assert_eq!(worker.join().expect("worker"), Drain::Drained);
+    }
+
+    /// A write that outlives the bound is reported, not waited out: the
+    /// caller must not end the agent under it. The write is held until the
+    /// wait has returned, so the outcome is not a race.
+    #[test]
+    fn a_write_that_outlives_the_bound_is_reported_as_stalled() {
+        let gate = Arc::new(PaneInputGate::default());
+        let admission = gate.admit("w1:p1").expect("awake");
+        gate.close("w1:p1");
+        assert_eq!(
+            gate.wait_drained("w1:p1", Duration::from_millis(50)),
+            Drain::Stalled
+        );
         assert!(
-            !ended.load(Ordering::SeqCst),
-            "the worker waits for the write in flight"
+            !gate.is_waiting("w1:p1"),
+            "a wait that ended is not counted"
         );
         drop(admission);
-        worker.join().expect("worker");
-        assert!(ended.load(Ordering::SeqCst));
+        assert_eq!(
+            gate.wait_drained("w1:p1", Duration::from_secs(30)),
+            Drain::Drained
+        );
     }
 
     #[test]
     fn an_idle_pane_is_drained_at_once() {
         let gate = Arc::new(PaneInputGate::default());
         gate.close("w1:p1");
-        gate.wait_drained("w1:p1", Duration::from_secs(30));
+        assert_eq!(
+            gate.wait_drained("w1:p1", Duration::from_secs(30)),
+            Drain::Drained
+        );
     }
 }
