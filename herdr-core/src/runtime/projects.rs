@@ -4056,7 +4056,14 @@ impl Runtime {
         // A start names one place: a device's Home, or one of its checkouts.
         let checkout_path = match (payload.home, payload.checkout_path.clone()) {
             (true, None) => {
-                return self.start_in_home(&device, agent_kind, model, prompt, request_id);
+                return self.start_in_home(
+                    &device,
+                    agent_kind,
+                    model,
+                    prompt,
+                    request_id,
+                    payload.stay_behind,
+                );
             }
             (false, Some(path)) if !path.is_empty() => path,
             _ => {
@@ -4126,6 +4133,7 @@ impl Runtime {
         if let Some(operation) = self.snapshot.task_operation.as_mut() {
             operation.request_id = request_id;
             operation.device_id = (!local).then(|| device.clone());
+            operation.stays_behind = payload.stay_behind;
         }
         self.remember_agent_choice(agent_kind.as_deref(), model.as_deref());
         let mut arguments = resume.unwrap_or_default();
@@ -4153,6 +4161,7 @@ impl Runtime {
             checkout_path,
             label,
             host,
+            focus: !payload.stay_behind,
         };
         let target = if local {
             self.live

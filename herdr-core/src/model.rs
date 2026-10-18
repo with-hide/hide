@@ -5278,6 +5278,11 @@ pub struct TaskOperationSnapshot {
     /// task and never another window's or phone's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    /// The task came from a surface that is not the operator's own screen
+    /// (a phone start): its tab is made without taking the screen, the
+    /// keyboard or Herdr's focus. The core's own fact; no shell reads it.
+    #[serde(skip)]
+    pub stays_behind: bool,
 }
 
 /// The one repository clone Add a project started, and how far it got.

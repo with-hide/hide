@@ -3845,6 +3845,7 @@ impl Runtime {
             agent_phase: None,
             agent_message: None,
             request_id: None,
+            stays_behind: false,
         });
         Ok(id)
     }
@@ -3862,9 +3863,11 @@ impl Runtime {
         let operation_kind = operation.kind.clone();
         let repository_root = operation.repository_root.clone();
         let device = operation.device_id.clone();
+        let stays_behind = operation.stays_behind;
         // A device's Herdr focuses what it created, and the device's screen
-        // follows its host; this machine's focus does not move for it.
-        let should_focus = operation_kind != "branch_migrate" && device.is_none();
+        // follows its host; this machine's focus does not move for it. A
+        // task that stays behind (a phone start) takes the screen nowhere.
+        let should_focus = operation_kind != "branch_migrate" && device.is_none() && !stays_behind;
         match result {
             Ok(outcome) => {
                 let live::WorktreeTaskOutcome {

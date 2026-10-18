@@ -927,6 +927,7 @@ impl Runtime {
             request_id: Some(start_request.clone()),
             resume_session_id: opener.resume.clone(),
             resume_session_path: opener.resume_path.clone(),
+            stay_behind: false,
         });
         let refused = self.snapshot.status.last_error != before
             && self

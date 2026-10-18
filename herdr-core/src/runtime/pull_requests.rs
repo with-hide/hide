@@ -708,6 +708,7 @@ impl Runtime {
                 request_id: None,
                 resume_session_id: None,
                 resume_session_path: None,
+                stay_behind: false,
             }),
             None => self.start_worktree_task(
                 CreateWorktreePayload {
