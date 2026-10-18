@@ -12,6 +12,7 @@ import { spawnSync } from "node:child_process";
 import { expect, test, type Page } from "@playwright/test";
 import { claudeProjects, herdrHasFocus, setFixtureSession, startHerdr, writeFixtureTranscript, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
+import { herdrGate } from "./herdr-gate";
 import { countSent, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 150_000 });
@@ -22,12 +23,12 @@ const FORKED_SESSION = "66666666-7777-8888-9999-000000000000";
 type Listed = { result: { agents: { pane_id: string }[] } };
 
 /** The source pane runs a Claude conversation Herdr reported; hided serves the page. */
-async function forkStack(page: Page, herdr: HerdrFixture, name: string): Promise<{ daemon: Daemon; forker: string; last: Map<string, Record<string, unknown>> }> {
+async function forkStack(page: Page, herdr: HerdrFixture, name: string, socket: string): Promise<{ daemon: Daemon; forker: string; last: Map<string, Record<string, unknown>> }> {
   await page.setViewportSize({ width: 1440, height: 900 });
   const [, forker] = herdr.panes;
   writeFixtureTranscript(claudeProjects(herdr), SESSION, { task: "Agent two" });
   setFixtureSession(herdr, forker, SESSION);
-  const daemon = await startHided(herdr, name);
+  const daemon = await startHided({ ...herdr, socket }, name);
   const last = new Map<string, Record<string, unknown>>();
   countSent(page, last);
   await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -102,10 +103,12 @@ function screenOf(herdr: HerdrFixture, pane: string): string {
 test("Fork agent accepts bare pane keys from another client and opens right of the source @platform", async ({ page }) => {
   const herdr = await startHerdr();
   let daemon: Daemon | null = null;
+  let gate: Awaited<ReturnType<typeof herdrGate>> | undefined;
   try {
+    gate = await herdrGate(herdr, { PATH: herdr.fixturePath, HIDE_E2E_ROOT: herdr.root });
     // A tab after the source's, so the fork's tab has to land between them.
     const after = (herdr.run(["tab", "create", "--workspace", herdr.workspace, "--label", "after", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as { result: { tab: { tab_id: string } } }).result.tab.tab_id;
-    const stack = await forkStack(page, herdr, "agent-fork-tab");
+    const stack = await forkStack(page, herdr, "agent-fork-tab", gate.socket);
     daemon = stack.daemon;
     const { forker, last } = stack;
     const { forked } = await fork(page, herdr, forker, "fork_agent", "typed-before-start", daemon);
@@ -140,6 +143,7 @@ test("Fork agent accepts bare pane keys from another client and opens right of t
     await expect.poll(() => herdrHasFocus(herdr, forker), { timeout: 30_000 }).toBe(true);
   } finally {
     daemon?.stop();
+    await gate?.stop();
     herdr.stop();
   }
 });
@@ -147,8 +151,10 @@ test("Fork agent accepts bare pane keys from another client and opens right of t
 test("Fork agent to the side splits the source's tab and moves the keyboard to the fork", async ({ page }) => {
   const herdr = await startHerdr();
   let daemon: Daemon | null = null;
+  let gate: Awaited<ReturnType<typeof herdrGate>> | undefined;
   try {
-    const stack = await forkStack(page, herdr, "agent-fork-side");
+    gate = await herdrGate(herdr, { PATH: herdr.fixturePath, HIDE_E2E_ROOT: herdr.root });
+    const stack = await forkStack(page, herdr, "agent-fork-side", gate.socket);
     daemon = stack.daemon;
     const { forker, last } = stack;
     const { forked } = await fork(page, herdr, forker, "fork_agent_side", "typed-beside");
@@ -165,6 +171,7 @@ test("Fork agent to the side splits the source's tab and moves the keyboard to t
     await screenshot(page, "agent-fork-side");
   } finally {
     daemon?.stop();
+    await gate?.stop();
     herdr.stop();
   }
 });
