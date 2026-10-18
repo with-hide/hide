@@ -51,7 +51,7 @@ export function OverviewScene({ state, theme, palette, language }: OverviewScene
         workspace_id: project.id, tab_id: tabId, focused_pane_id: "h-a1", zoomed: false,
         root: { type: "split", direction: "right", ratio: 0.55, first: { type: "pane", pane_id: "h-a1" }, second: { type: "split", direction: "down", ratio: 0.5, first: { type: "pane", pane_id: "h-a1c1" }, second: { type: "pane", pane_id: "h-a1c2" } } },
       }];
-      rest.terminal = { headers: Object.fromEntries(checkout.tabs[0]!.panes.map((pane) => [pane.id, { working: pane.id !== "h-a1c2", band: null }])) } as never;
+      rest.terminal = { headers: Object.fromEntries(checkout.tabs[0]!.panes.map((pane) => [pane.id, { working: pane.id !== "h-a1c2", notice: null, band: null }])) } as never;
       rest.workspace_view = {
         device_id: "local", path: checkout.path, tool: null, last_tool: "prs", prs: { only_checkout: false }, pinned: true, tree: false, lane_width: null, panel_width: null, tree_width: null, lane_called: 0, lane_calls: 0,
         layout: { root: { area: { id: "a1", active: null, displays: [] } }, active_area: "a1", limits: { areas: 6, depth: 3, displays: 32 }, display_count: 0 },

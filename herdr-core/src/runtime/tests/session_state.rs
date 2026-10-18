@@ -1,6 +1,5 @@
 use super::*;
 use crate::agent_state::sessions::ResolveSource;
-use crate::model::PullRequestSnapshot;
 use serde_json::json;
 
 fn with_session() -> Runtime {
@@ -133,9 +132,8 @@ fn pane_bands_prioritize_connection_then_own_demand_then_raised_descendants() {
     let runtime = with_session();
     let mut agent = runtime.snapshot.navigator.agents[0].clone();
     let pane = pane("session", "/work/app");
-    let project = workspace("app", "App", "/work/app", vec![]);
     agent.state.verb = RequestVerb::Working;
-    let working = header::of(&pane, Some(&agent), None, &project, None);
+    let working = header::of(&pane, Some(&agent), None, None);
     assert!(working.working);
     assert!(working.band.is_none());
     agent.raised = ["first", "second"]
@@ -154,7 +152,7 @@ fn pane_bands_prioritize_connection_then_own_demand_then_raised_descendants() {
             human_notice: false,
         })
         .into();
-    let raised = header::of(&pane, Some(&agent), None, &project, None);
+    let raised = header::of(&pane, Some(&agent), None, None);
     let band = raised.band.unwrap();
     assert_eq!(
         (
@@ -167,7 +165,7 @@ fn pane_bands_prioritize_connection_then_own_demand_then_raised_descendants() {
     );
     assert_eq!(
         band.action,
-        Some(header::Action::Child {
+        Some(header::Action {
             pane_id: "first".into(),
             label: "Task first".into()
         })
@@ -177,16 +175,14 @@ fn pane_bands_prioritize_connection_then_own_demand_then_raised_descendants() {
     agent.demand = "question".into();
     agent.state.verb = RequestVerb::Answer;
     agent.blocked = true;
-    let own = header::of(&pane, Some(&agent), None, &project, None)
-        .band
-        .unwrap();
+    let own = header::of(&pane, Some(&agent), None, None).band.unwrap();
     assert_eq!((own.kind.as_str(), own.more), ("approval", 2));
     agent.user_turn = Some(hide_session::turns::UserTurnFact {
         kind: hide_session::turns::UserTurnKind::Question,
         content: None,
     });
     assert_eq!(
-        header::of(&pane, Some(&agent), None, &project, None)
+        header::of(&pane, Some(&agent), None, None)
             .band
             .unwrap()
             .kind,
@@ -204,7 +200,7 @@ fn pane_bands_prioritize_connection_then_own_demand_then_raised_descendants() {
     });
     agent.detail = crate::agent_state::native_question_line(agent.user_turn.as_ref());
     assert_eq!(
-        header::of(&pane, Some(&agent), None, &project, None)
+        header::of(&pane, Some(&agent), None, None)
             .band
             .unwrap()
             .reason
@@ -213,20 +209,22 @@ fn pane_bands_prioritize_connection_then_own_demand_then_raised_descendants() {
     );
     agent.user_turn.as_mut().unwrap().kind = hide_session::turns::UserTurnKind::PlanApproval;
     assert_eq!(
-        header::of(&pane, Some(&agent), None, &project, None)
+        header::of(&pane, Some(&agent), None, None)
             .band
             .unwrap()
             .kind,
         "approval",
         "a native plan wait still asks for approval"
     );
-    let offline = header::of(&pane, Some(&agent), None, &project, Some("mini"))
-        .band
-        .unwrap();
+    // A device that is away says so in the pane's body, and its pane takes
+    // no answer, so nothing waits on the second row.
+    let offline = header::of(&pane, Some(&agent), None, Some("mini"));
+    let notice = offline.notice.unwrap();
     assert_eq!(
-        (offline.kind.as_str(), offline.tone, offline.action),
-        ("device_offline", "muted", None)
+        (notice.kind.as_str(), notice.tone, notice.reason.as_deref()),
+        ("device_offline", "muted", Some("mini"))
     );
+    assert!(offline.band.is_none());
 }
 
 /// B25, D-07, D-23: a blocked pane names its block in its own band, a stopped
@@ -237,130 +235,86 @@ fn pane_bands_name_a_block_and_a_stop_and_leave_a_wait_unmarked() {
     let runtime = with_session();
     let mut agent = runtime.snapshot.navigator.agents[0].clone();
     let pane = pane("session", "/work/app");
-    let project = workspace("app", "App", "/work/app", vec![]);
-    let band_of =
-        |agent: &SidebarAgentSnapshot| header::of(&pane, Some(agent), None, &project, None).band;
+    let band_of = |agent: &SidebarAgentSnapshot| header::of(&pane, Some(agent), None, None).band;
     agent.state.verb = RequestVerb::Blocked;
-    let blocked = band_of(&agent).expect("a block has a band");
-    assert_eq!(
-        (blocked.kind.as_str(), blocked.tone),
-        ("blocked", "warning")
-    );
+    assert_eq!(band_of(&agent).expect("a block has a band").kind, "blocked");
     agent.state.verb = RequestVerb::Stopped;
     assert_eq!(band_of(&agent).expect("a stop has a band").kind, "stopped");
     agent.state.verb = RequestVerb::Waiting;
     assert!(band_of(&agent).is_none(), "a wait is drawn without a band");
 }
 
+/// The second row is the operator's turn and nothing else: a pull request's
+/// verb is its header chip's colour and a finished turn is the row's mark,
+/// so neither draws a band (docs/UI_BEHAVIOR.md, Agent panes and the Agents explorer).
 #[test]
-fn pane_pr_band_targets_its_duty_instead_of_another_link_with_higher_sort_priority() {
-    use crate::agent_state::{RequestVerb, header};
-    let mut runtime = with_session();
-    let agent = &mut runtime.snapshot.navigator.agents[0];
-    let pane = pane("session", "/work/app");
-    let mut project = workspace("app", "App", "/work/app", vec![]);
-    let pr = |number, checks| {
-        serde_json::from_value::<PullRequestSnapshot>(json!({
-        "number":number,"title":"Duty","url":format!("https://github.com/acme/app/pull/{number}"),
-        "head_branch":"feature","base_branch":"main","badge":"open","checks":checks,"is_draft":false,"closing_issues":[]
-    })).unwrap()
-    };
-    project.pull_requests = vec![pr(1, "failed"), pr(2, "passing")];
-    let link = |index: usize, duty| {
-        let p = &project.pull_requests[index];
-        crate::request_view::AgentPullRequestSnapshot {
-            number: p.number,
-            title: p.title.clone(),
-            url: p.url.clone(),
-            badge: p.badge,
-            checks: p.checks,
-            review: p.review,
-            is_draft: p.is_draft,
-            head_branch: p.head_branch.clone(),
-            closing_issues: vec![],
-            live: true,
-            duty,
-            created: true,
-            settled_at_unix_ms: None,
-        }
-    };
-    agent.request = Some(crate::request_view::AgentRequestSnapshot {
-        verb: RequestVerb::Review,
-        verb_since_unix_ms: 123,
-        line: Some("Review duty".into()),
-        end: None,
-        request: None,
-        later_by: None,
-        reply: None,
-        pull_requests: vec![link(0, false), link(1, true)],
-    });
-    agent.state = crate::agent_state::turn::row_state(agent);
-    let projected = header::of(&pane, Some(agent), None, &project, None);
-    let band = projected.band.unwrap();
-    assert_eq!(band.kind, "merge");
-    assert!(matches!(
-        band.action,
-        Some(header::Action::Pr { number: 2, .. })
-    ));
-    assert_eq!(band.since_unix_ms, Some(123));
-    assert_eq!(band.reason, None);
-    assert_eq!(
-        band.facts,
-        Some(header::ReasonFacts::PullRequest {
-            checks: crate::model::PullRequestChecks::Passing,
-            review: None
-        })
-    );
-    // An earlier approved duty must not steal the action from the PR that
-    // still needs a review, even though both checks are passing.
-    let links = &mut agent.request.as_mut().unwrap().pull_requests;
-    links[0].duty = true;
-    links[0].checks = crate::model::PullRequestChecks::Passing;
-    links[0].review = Some(crate::model::ReviewDecision::Approved);
-    links[1].review = Some(crate::model::ReviewDecision::ReviewRequired);
-    agent.state = crate::agent_state::turn::row_state(agent);
-    let review = header::of(&pane, Some(agent), None, &project, None)
-        .band
-        .unwrap();
-    assert_eq!(review.kind, "review");
-    assert!(matches!(
-        review.action,
-        Some(header::Action::Pr { number: 2, .. })
-    ));
-    assert_eq!(
-        review.facts,
-        Some(header::ReasonFacts::PullRequest {
-            checks: crate::model::PullRequestChecks::Passing,
-            review: Some(crate::model::ReviewDecision::ReviewRequired)
-        })
-    );
-    // A draft with passing checks is a draft, as its mark says: no Merge band
-    // and nothing to review points at it.
-    let links = &mut agent.request.as_mut().unwrap().pull_requests;
-    links[0].duty = false;
-    links[1].is_draft = true;
-    links[1].review = None;
-    agent.state = crate::agent_state::turn::row_state(agent);
-    let draft = header::of(&pane, Some(agent), None, &project, None).band;
-    assert_ne!(draft.as_ref().map(|band| band.kind.as_str()), Some("merge"));
-    assert!(!matches!(
-        draft.and_then(|band| band.action),
-        Some(header::Action::Pr { number: 2, .. })
-    ));
-}
-
-#[test]
-fn pane_bands_keep_idle_and_ci_wait_quiet_and_distinguish_failed_exits() {
+fn pane_bands_leave_pull_requests_and_results_to_the_header() {
     use crate::agent_state::{RequestVerb, header};
     let runtime = with_session();
     let mut agent = runtime.snapshot.navigator.agents[0].clone();
     let pane = pane("session", "/work/app");
-    let project = workspace("app", "App", "/work/app", vec![]);
+    for verb in [
+        RequestVerb::Fix,
+        RequestVerb::Review,
+        RequestVerb::Result,
+        RequestVerb::Idle,
+    ] {
+        agent.state.verb = verb;
+        let header = header::of(&pane, Some(&agent), None, None);
+        assert_eq!(
+            (header.band, header.notice, header.working),
+            (None, None, false),
+            "{verb:?} has no band"
+        );
+    }
+}
+
+/// A question stays the operator's turn after they look at the pane: the
+/// band is marked read and keeps asking until a reply moves the agent on.
+#[test]
+fn a_read_question_keeps_its_band_until_it_is_answered() {
+    use crate::agent_state::{RequestVerb, header};
+    let runtime = with_session();
+    let mut agent = runtime.snapshot.navigator.agents[0].clone();
+    let pane = pane("session", "/work/app");
+    agent.demand = "question".into();
+    agent.detail = Some("배포 전에 main에 먼저 머지할까요?".into());
+    agent.unread = true;
+    agent.state.verb = RequestVerb::Answer;
+    let unread = header::of(&pane, Some(&agent), None, None).band.unwrap();
+    assert_eq!((unread.kind.as_str(), unread.read), ("answer", false));
+    // Reading the pane takes the Answer verb away from the row (Seen), but
+    // the question has not been answered.
+    agent.unread = false;
+    for verb in [RequestVerb::Idle, RequestVerb::Review] {
+        agent.state.verb = verb;
+        let read = header::of(&pane, Some(&agent), None, None).band.unwrap();
+        assert_eq!(
+            (read.kind.as_str(), read.read, read.reason.as_deref()),
+            ("answer", true, Some("배포 전에 main에 먼저 머지할까요?")),
+            "{verb:?}"
+        );
+    }
+    // The reply puts the agent to work, and the band goes.
+    agent.state.verb = RequestVerb::Working;
+    assert!(header::of(&pane, Some(&agent), None, None).band.is_none());
+    agent.demand = "none".into();
+    agent.state.verb = RequestVerb::Idle;
+    assert!(header::of(&pane, Some(&agent), None, None).band.is_none());
+}
+
+#[test]
+fn pane_notices_keep_idle_and_ci_wait_quiet_and_distinguish_failed_exits() {
+    use crate::agent_state::{RequestVerb, header};
+    let runtime = with_session();
+    let mut agent = runtime.snapshot.navigator.agents[0].clone();
+    let pane = pane("session", "/work/app");
     for verb in [RequestVerb::Idle, RequestVerb::Waiting] {
         agent.state.verb = verb;
-        let result = header::of(&pane, Some(&agent), None, &project, None);
+        let result = header::of(&pane, Some(&agent), None, None);
         assert!(!result.working);
         assert!(result.band.is_none());
+        assert!(result.notice.is_none());
     }
     for (code, kind, tone) in [(0, "terminated", "muted"), (7, "exit", "error")] {
         let terminal = TerminalPaneSnapshot {
@@ -368,11 +322,11 @@ fn pane_bands_keep_idle_and_ci_wait_quiet_and_distinguish_failed_exits() {
             exit_code: Some(code),
             ..Default::default()
         };
-        let band = header::of(&pane, Some(&agent), Some(&terminal), &project, None)
-            .band
+        let notice = header::of(&pane, Some(&agent), Some(&terminal), None)
+            .notice
             .unwrap();
         assert_eq!(
-            (band.kind.as_str(), band.tone, band.exit_code),
+            (notice.kind.as_str(), notice.tone, notice.exit_code),
             (kind, tone, Some(code))
         );
     }
