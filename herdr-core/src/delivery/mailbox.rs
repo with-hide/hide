@@ -515,7 +515,7 @@ fn rang(ledger: &Ledger, actor: &Actor, digest: &str) -> bool {
             && letter
                 .bell_line
                 .as_deref()
-                .is_some_and(|line| hide_agent_hooks::delivery::prompt_digest(line) == digest)
+                .is_some_and(|line| hide_agent_hooks::delivery::matches_prompt_digest(line, digest))
     })
 }
 
@@ -1026,7 +1026,7 @@ mod tests {
     }
 
     /// The line a test rings with, standing for what the doorbell typed.
-    const LINE: &str = "🔔 sender 보고: body-0";
+    const LINE: &str = "🦉 sender 보고: body-0";
 
     /// What the prompt hook receives when `prompt` was submitted.
     fn pull_for(ledger: &mut Ledger, recipient: &Actor, prompt: &str) -> Intake {
@@ -1084,7 +1084,8 @@ mod tests {
                 &mut ledger,
                 &recipient,
                 None,
-                &prompt(LINE, "native-session"),
+                // A console reader can omit the owl before the prompt hook.
+                &prompt("sender 보고: body-0", "native-session"),
                 100,
             )
             .unwrap();
@@ -1105,7 +1106,7 @@ mod tests {
                 &mut ledger,
                 &recipient,
                 None,
-                &prompt(LINE, "native-session"),
+                &prompt("sender 보고: body-0", "native-session"),
                 102,
             )
             .unwrap();
@@ -1184,6 +1185,71 @@ mod tests {
     }
 
     #[test]
+    fn a_transport_without_the_owl_opens_only_its_recipients_pending_letter() {
+        let mut ledger = Ledger::default();
+        let recipient = actor("recipient");
+        let other = actor("other");
+        let ids = pending_for(&mut ledger, &recipient, 1);
+        send(
+            &mut ledger,
+            &actor("sender-other"),
+            &other,
+            "other",
+            "body-0",
+            "request",
+            None,
+            2,
+        )
+        .unwrap();
+        ring(&mut ledger, 0, "🦉 sender 보고: body-0");
+        let prompt = "sender 보고: body-0";
+        assert_eq!(pull_for(&mut ledger, &recipient, prompt).ids, ids);
+        for changed in [
+            "sender 보고: body-1",
+            "sender 보고: body-0!",
+            "sender 보고: body-0\u{fe0f}",
+        ] {
+            assert!(pull_for(&mut ledger, &recipient, changed).ids.is_empty());
+        }
+        assert!(pull_for(&mut ledger, &other, prompt).ids.is_empty());
+        for state in [State::Delivered, State::Cancelled, State::Undelivered] {
+            ledger.letters[0].state = state;
+            assert!(pull_for(&mut ledger, &recipient, prompt).ids.is_empty());
+        }
+    }
+
+    #[test]
+    fn old_and_canonical_hook_digests_share_the_saved_bell_during_an_upgrade() {
+        let mut ledger = Ledger::default();
+        let recipient = actor("recipient");
+        let ids = pending_for(&mut ledger, &recipient, 1);
+        // Persist and reload a pre-upgrade reservation, with no migration.
+        ring(&mut ledger, 0, "🔔 sender 보고: body-0");
+        let mut ledger: Ledger =
+            serde_json::from_slice(&serde_json::to_vec(&ledger).unwrap()).unwrap();
+        // SHA-256 values from Python hashlib, not from the shared function.
+        for digest in [
+            "905ad85a944e8f21f9baf7bf9f8c015ee474ce4aa06aa3ceb4819983910ad7cc",
+            "4f92fb268cec536579de240550e4f59959e98f09adcce532f7c6df805b089883",
+        ] {
+            let answer = apply(
+                &mut ledger,
+                &recipient,
+                None,
+                &Command::Pull {
+                    prompt_digest: Some(digest.into()),
+                    session: None,
+                    point: PullPoint::Prompt,
+                },
+                100,
+            )
+            .unwrap();
+            let intake: Intake = serde_json::from_value(answer).unwrap();
+            assert_eq!(intake.ids, ids, "{digest}");
+        }
+    }
+
+    #[test]
     fn an_operator_prompt_gets_a_count_while_a_bell_is_coming_and_the_bell_gets_the_bodies() {
         let mut ledger = Ledger::default();
         let recipient = actor("recipient");
@@ -1240,14 +1306,14 @@ mod tests {
         assert!(counted(pull_for(
             &mut ledger,
             &recipient,
-            "🔔 sender 보고: body-1"
+            "🦉 sender 보고: body-1"
         )));
         // The same words in another agent's pane are not its bell.
         assert!(counted(pull_for(&mut ledger, &other, LINE)));
         let bell = pull_for(&mut ledger, &recipient, LINE);
         assert_eq!(bell.ids, [ledger.letters[0].id.clone()]);
         // A second bell for the letter replaces the line the first typed.
-        ring(&mut ledger, 0, "🔔 sender 보고: body-0 · 외 1통");
+        ring(&mut ledger, 0, "🦉 sender 보고: body-0 · 외 1통");
         assert!(counted(pull_for(&mut ledger, &recipient, LINE)));
         // Once the letter is taken in, its line opens nothing.
         let id = ledger.letters[0].id.clone();
@@ -1259,7 +1325,7 @@ mod tests {
             100,
         )
         .unwrap();
-        let after = pull_for(&mut ledger, &recipient, "🔔 sender 보고: body-0 · 외 1통");
+        let after = pull_for(&mut ledger, &recipient, "🦉 sender 보고: body-0 · 외 1통");
         assert!(after.ids.is_empty() && after.context.is_empty());
     }
 

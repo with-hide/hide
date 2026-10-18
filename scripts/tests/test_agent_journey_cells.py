@@ -167,7 +167,7 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(cells.reply_verdict({"error": "no file"}, "s", "JOURNEY-1")[0], cells.FAIL)
 
     def test_a_letter_passes_only_when_delivered_and_answered_in_the_turn_the_bell_opened(self):
-        bell = "🔔 controller: Reply with exactly the token on the next line"
+        bell = "🦉 controller: Reply with exactly the token on the next line"
         events = [{"role": "assistant", "text": "JOURNEY-1"}, {"role": "user", "text": bell},
                   {"role": "assistant", "text": "JOURNEY-1"}]
         read = {"session": "s", "events": events}
@@ -180,6 +180,17 @@ class Verdicts(unittest.TestCase):
         # A token answered before the bell's turn is not the letter's answer.
         early = {"session": "s", "events": events[:2]}
         self.assertEqual(cells.letter_verdict(delivered, early, "s", "JOURNEY-1")[0], cells.FAIL)
+
+    def test_the_journey_and_prompt_hook_agree_on_the_shared_identity_examples(self):
+        path = Path(__file__).resolve().parents[2] / "hide-agent-hooks/tests/fixtures/bell-prompt-identity.json"
+        examples = json.loads(path.read_text(encoding="utf-8"))
+        delivered = {"state": "delivered", "bell_line": examples["bell_line"]}
+        for example in examples["cases"]:
+            with self.subTest(example["name"]):
+                read = {"session": "s", "events": [{"role": "user", "text": example["prompt"]},
+                                                 {"role": "assistant", "text": "JOURNEY-1"}]}
+                expected = cells.PASS if example["matches"] else cells.FAIL
+                self.assertEqual(cells.letter_verdict(delivered, read, "s", "JOURNEY-1")[0], expected)
 
     def test_a_next_prompt_letter_passes_only_when_the_prompt_hook_confirmed_it_and_the_reply_carries_it(self):
         events = [{"role": "assistant", "text": "JOURNEY-0"},

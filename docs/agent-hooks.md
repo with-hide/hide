@@ -103,7 +103,8 @@ For local and connected device agent delivery, `UserPromptSubmit` reads the subm
 The session id goes to `hide inbox --hook --session`, which is how the hook counts as a submission only in its own pane; an unreadable or truncated payload has none, so that hook clears no draft.
 The bell turn pulls at most five pending letters and 8 KiB of letter context from the sibling `hide` CLI within one total two-second budget; any other prompt receives only a one-line count of waiting letters.
 Only a successful stdout flush permits confirmation, so pre-confirm interruption can repeat an ID and confirmed letters do not repeat.
-The session guidance says that a prompt beginning with `🔔` is Hide's bell and that `hide inbox` shows the letter when the prompt did not bring it, and a Codex bell names `hide inbox` itself ([delivery.md: The bell line](delivery.md#the-bell-line)); a missing or failed hook leaves pending letters available through `hide inbox` and `hide request show`.
+The session guidance says that a prompt beginning with `🦉` is Hide's bell and that `hide inbox` shows the letter when the prompt did not bring it, and a Codex bell names `hide inbox` itself ([delivery.md: The bell line](delivery.md#the-bell-line)); a missing or failed hook leaves pending letters available through `hide inbox` and `hide request show`.
+The same guidance says that Codex CLI on Windows may show the line without the owl; the core and hook recognize the saved line after removing non-BMP characters ([delivery.md: Recognizing the bell](delivery.md#recognizing-the-bell)).
 This delivery path has its own bounded private diagnostics; Memory's request runs beside it and ends where it does.
 [delivery.md](delivery.md#safe-intake-and-manual-fallback) owns these intake, failure and confirmation rules.
 

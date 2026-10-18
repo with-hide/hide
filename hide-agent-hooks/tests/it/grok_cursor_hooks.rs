@@ -25,7 +25,7 @@ const GROK: &[(&str, &str)] = &[
 #[test]
 fn grok_observes_a_prompt_without_printing_or_confirming_its_answer() {
     let machine = Machine::new("letters");
-    let prompt = "🔔 lead 보고: waiting";
+    let prompt = "🦉 lead 보고: waiting";
     let run = machine.run_event(
         "grok",
         "UserPromptSubmit",
