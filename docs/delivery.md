@@ -66,6 +66,7 @@ A tool that runs these commands from a program (sasu, a Factory engine) checks t
 
 A caller compares the digest it was written against, or the commands and options it uses, and refuses a mismatch before running anything.
 The CLI admits only the commands and flags the contract names (`hided/src/cli_contract.rs`), its tests hold each parser to the table, and the answer schemas come from the core's answer types (`herdr-core/src/delivery/answer.rs`), so a changed command name, option or answer field changes the exported contract.
+A command whose standard output is closed by its reader (`hide agent list | head`) ends quietly with status 141 and prints nothing to standard error; `docs/ARCHITECTURE.md`, The platform layer, owns the rule.
 `contracts/hide-cli.json` is the committed copy, and a test fails until it is regenerated with `target/debug/hide contract --json | python3 -m json.tool > contracts/hide-cli.json`.
 
 ## Safe intake and manual fallback
@@ -415,7 +416,9 @@ A longer session is refused `session_too_long` when the record is made, never as
 An empty session or one holding a control character is refused `invalid_registration` by the same rule (`coordination::kept_session`).
 A build before this one reads a session past 256 bytes as a damaged ledger, so going back to it after such a registration answers every delivery and agent command `ledger_unavailable` until this build or a later one runs again.
 A caller with no such record is refused `participant_ended` when its record ended, `participant_session_changed` when its pane's live record belongs to another session (the pane's agent session changed), `ambiguous_participant` when two live records match, and `participant_unavailable` otherwise; a remote participant on a pane of the same name is never the local caller.
-`hide agent spawn` requires `--name`, `--intent`, `--kind`, `--repo` and `--branch`, with optional `--parent`, `--machine`, `--path` and native arguments after `--`.
+`hide agent spawn` requires `--name`, `--intent`, `--kind`, `--repo` and `--branch`, with optional `--parent`, `--machine`, `--path`, `--model`, `--effort` and native arguments after `--`.
+`--model` and `--effort` are the agent's launch choice: the start passes them in the kind's own spelling, and every wake, fork and reopen Hide makes of the agent starts it with them again (`docs/ARCHITECTURE.md`, Agent start), while native arguments after `--` apply to this start only.
+A choice the kind does not take is refused `invalid_launch_choice` before anything is created, and the choice is part of the intent, so the same intent with another choice is an `intent_conflict`.
 Choose responsibility when creating the agent; it cannot be transferred afterwards.
 With `--parent here` or the caller's own id, the agent is delegated: its parent owns the work, lineage is written immediately and an automatic watch starts.
 Without `--parent`, the work is handed off to the operator: the agent is an independent root, has no lineage edge to the spawner and starts no automatic watch.
@@ -450,6 +453,9 @@ Completed intent replay returns the durable receipt without contacting Herdr, in
 `--machine <device id>` starts the child on a connected device instead of the caller's own; it works with delegation and handoff alike.
 The id is the `device_id` that `hide workspace info` shows and the `machine` that `hide agent list` shows for agents there; a device label is not accepted, and the caller's own id is the same as leaving the flag out, so a spawn without `--machine` is exactly the spawn above.
 `--repo` and `--path` are then paths on that device.
+A spawn records the machine of its child only when that is not the caller's own, and the ledger refuses a child whose machine is not the spawn's.
+A core move therefore reads the field against the caller's machine after the move (`node_migration::reown`): a spawn that names none stays so, a machine the move renames takes its new id, and one that is now the caller's own is dropped.
+The copy is loaded with the ledger's own reader before it leaves the machine giving the core and again before it is placed on the machine taking it, so a move that would leave the new core without its letters, watches and registrations is rolled back instead of reported done.
 The caller keeps the parent registration, the authority and the watch; the child's checkout (a worktree when the branch has none), tab, agent start, identity wait and lineage tokens are the device's, made through its Herdr API channel, and the tokens name this machine as `parent_machine`.
 The agent is registered under the device, so the sidebar and the Overview's tasks show it under its parent with the device's mark, its reports and inactivity warnings reach the parent as letters over the existing device paths, and a handed-off agent records the caller as `origin`.
 Before the intent is reserved or anything is made, the spawn is refused with a stable code and a next action when the id is not a device (`machine_unknown`, naming the connected device ids the caller could have used), the device is not connected or its helper cannot answer (`machine_unavailable`), `--repo` holds no repository there (`repository_unavailable`) or the agent CLI is not on the device's `PATH` (`agent_not_installed`); the checks are the node link's `repository` and `agent_installed` calls, taken off the runtime lock.

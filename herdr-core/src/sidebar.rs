@@ -649,6 +649,7 @@ fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, Str
         herdr_name: non_empty(agent.name.as_deref())
             .filter(|name| !crate::fork::hide_made_name(name, agent_kind, &pane_id))
             .map(str::to_owned),
+        started_name: non_empty(agent.name.as_deref()).map(str::to_owned),
         declared_fork: crate::wire::fork_declaration(
             &agent.tokens,
             non_empty(agent.lineage_session.as_deref()),

@@ -595,7 +595,6 @@ function WorkersGroup({ config, machine, reset, set, actions }: { config: Factor
               <AgentPicker
                 actions={actions}
                 value={{ kind: candidate.agent as never, model: candidate.model ?? null }}
-                withModel={adapter?.can_pick_model !== false}
                 onChange={(next) => change(at, next.kind === candidate.agent ? { model: next.model } : { agent: next.kind, model: null, effort: null })}
               />
               {adapter && adapter.efforts.length > 0 ? <EffortSelect value={candidate.effort ?? null} efforts={adapter.efforts} onChange={(effort) => change(at, { effort })} data={`worker_effort:${at + 1}`} /> : <span className="text-caption text-muted-foreground">{t("factory.settings.cliDefault")}</span>}

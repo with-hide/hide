@@ -119,7 +119,7 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
       { ...children[0]!, id: "b2-working", pane_id: "b2-working", identity_label: "자식 상태 칩과 팝업 연결 구현", descendant_mark: null, state: { ...children[0]!.state, tree_rank: 1, line: { text: "작업 상태 칩과 팝업을 연결하는 중", mode: "news", tone: { kind: "working", read: false } } } },
       { ...children[1]!, id: "b2-result", pane_id: "b2-result", identity_label: "헤더 배치 검토", mark: "done", status_code: "done", unknown: false, descendant_mark: null, state: { ...children[1]!.state, tree_rank: 2, line: null } },
       { ...children[1]!, id: "b2-idle", pane_id: "b2-idle", identity_label: "다음 요청 대기", unknown: false, descendant_mark: null, state: { ...children[1]!.state, tree_rank: 3, line: null } },
-      { ...children[1]!, id: "b2-unknown", pane_id: "b2-unknown", identity_label: "상태 확인 중인 자식", mark: "quiet", status_code: "unknown", activity: "unknown", demand: "none", descendant_mark: null, state: { ...children[1]!.state, tree_rank: 3, line: null } },
+      { ...children[1]!, id: "b2-unknown", pane_id: "b2-unknown", identity_label: "상태 확인 중인 자식", mark: "unknown", status_code: "unknown", activity: "unknown", demand: "none", descendant_mark: null, state: { ...children[1]!.state, tree_rank: 3, line: null } },
       { ...children[1]!, id: "b2-question", pane_id: "b2-question", identity_label: "부모에게 PR 구성 질문", mark: "turn", status_code: "question", unknown: false, descendant_mark: null, state: { ...children[1]!.state, tree_rank: 0, line: { text: "기존 PR에 합칠지 부모 응답을 기다리는 중", mode: "quiet", tone: { kind: "subtle", read: false } } } },
     ];
     const headerAgents = BANDS.map(([id]) => ({ ...seed, id, pane_id: id,

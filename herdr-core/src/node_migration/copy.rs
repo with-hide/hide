@@ -336,6 +336,17 @@ pub fn check_loadable(dir: &Path) -> Result<(), Refusal> {
             if !value.is_object() {
                 return Err(refuse(&path, "is not a JSON object"));
             }
+            // The ledger is the one store whose loader refuses what it does
+            // not accept and leaves the bytes alone, so the core would start
+            // with every letter, watch and registration unavailable.
+            if *name == super::DELIVERY_LEDGER {
+                crate::delivery::ledger::from_bytes(&bytes).map_err(|code| {
+                    refuse(
+                        &path,
+                        format!("is not a delivery ledger this build loads: {code}"),
+                    )
+                })?;
+            }
         } else if name.ends_with(".sqlite3") {
             // Immutable, so the check writes no log or index beside a copy
             // whose files must stay as they were sent.
@@ -849,6 +860,28 @@ mod tests {
             check_loadable(&staging).unwrap_err().file,
             staging.join("links.sqlite3")
         );
+    }
+
+    /// The delivery ledger is held to the reader the core loads it with: a
+    /// copy whose ledger the core would refuse (and, refusing, start with
+    /// every letter unavailable) is a copy the move does not place.
+    #[test]
+    fn a_ledger_the_core_would_refuse_is_named_by_the_load_check() {
+        let source = folder();
+        let staging = source.path().join("move-staging/i1");
+        stage(source.path(), &staging, &settings(source.path())).unwrap();
+        let ledger = staging.join(super::super::DELIVERY_LEDGER);
+        crate::delivery::ledger::save(&ledger, &crate::delivery::ledger::Ledger::default())
+            .unwrap();
+        check_loadable(&staging).unwrap();
+
+        let mut broken: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&ledger).unwrap()).unwrap();
+        broken["next_id"] = json!(0);
+        std::fs::write(&ledger, serde_json::to_vec(&broken).unwrap()).unwrap();
+        let refusal = check_loadable(&staging).unwrap_err();
+        assert_eq!(refusal.file, ledger);
+        assert!(refusal.reason.contains("ledger_unavailable"), "{refusal}");
     }
 
     #[test]

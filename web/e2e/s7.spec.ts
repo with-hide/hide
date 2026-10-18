@@ -509,10 +509,11 @@ test("Open to the side from the only area is refused with its reason until that 
     expect(stack.events.filter((event) => event.kind === "file_open" && event.payload.beside === true)).toHaveLength(0);
     expect(stack.events.filter((event) => event.kind === "changes_select" && event.payload.beside === true)).toHaveLength(0);
 
-    // With room (File Views widened), the same item opens the second view to the right.
+    // With room (File Views widened), the same item opens the second view to
+    // the right. Files keeps a width of its own, so it is widened from Files.
+    await showExplorer(page);
     await widenLane(page);
     await expect.poll(async () => (await boxOf(area(page, 0))).width).toBeGreaterThan(450);
-    await showExplorer(page);
     await row.click({ button: "right" });
     await expect(item).toBeEnabled();
     await item.click();

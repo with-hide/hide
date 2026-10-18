@@ -66,6 +66,18 @@ it("asks for the record once when the slot draws one nothing has read, as after 
   try { expect(read.sent).toEqual([]); } finally { await read.unmount(); }
 });
 
+it("asks again when the window lands on a new core session while the slot still draws the record", async () => {
+  const restored = await mount(null);
+  try {
+    expect(restored.sent).toHaveLength(1);
+    // The same slot, a self-contained snapshot of a core that has read nothing.
+    await act(async () => useShellStore.setState({ viewGeneration: useShellStore.getState().viewGeneration + 1, sessionRecord: null }));
+    expect(restored.sent).toHaveLength(2);
+    await act(async () => useShellStore.setState({ sessionRecord: { session: SESSION, loading: true, failure: null, record: null } }));
+    expect(restored.sent).toHaveLength(2);
+  } finally { await restored.unmount(); }
+});
+
 it("draws no PR list: a task's PR stands on its line, a child's on the child's row, and no status words (B15)", async () => {
   const { container, unmount } = await mount(BASE);
   try {

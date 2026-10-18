@@ -271,7 +271,7 @@ export function checkoutCard(workspace: Workspace, checkout: Checkout, nowMs: nu
     else rows.push({ key: "branch", label: t("card.branch"), value: worktree.head_sha ? t("card.detachedAt", { sha: worktree.head_sha.slice(0, 7) }) : t("card.detached") });
   }
   const summary = checkout.agent_summary;
-  // Quiet agents draw no mark, so a checkout with only those has no row to show (status-marks B19).
+  // Quiet agents count on no badge, so a checkout with only those has no row to show (status-marks B19).
   if (summary && checkout.agent_scope.badge_total > 0 && badgeParts(summary.marks).length > 0) rows.push({ key: "agents", label: t("overview.agents"), marks: summary.marks });
   const commitSeconds = worktree?.last_commit_unix_seconds;
   const age = activityAge(commitSeconds != null ? commitSeconds * 1000 : null, nowMs);

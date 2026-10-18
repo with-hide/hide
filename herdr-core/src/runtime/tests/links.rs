@@ -979,7 +979,12 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
                 Some(kind.into()),
             )
             .unwrap();
-        runtime.set_task_agent_launch(id, None, vec![flag.into(), "native-pi".into()]);
+        runtime.set_task_agent_launch(
+            id,
+            None,
+            vec![flag.into(), "native-pi".into()],
+            Default::default(),
+        );
         let reference = crate::sidebar::SessionAgentSessionPayload {
             kind: "path".into(),
             value: native.display().to_string(),
