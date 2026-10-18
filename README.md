@@ -36,7 +36,7 @@ hide lets them work as one team: they start helpers, watch them and write to eac
 It keeps the team in one view and keeps it going after you close the laptop.
 You get the decisions; the rest stays out of the way.
 
-It works with the agent CLIs you already signed in to: **Claude Code, Codex, Antigravity, OpenCode, Cursor, Grok, Pi and omp**.
+It works with the agent CLIs you already signed in to: **Claude Code, Codex, Antigravity, OpenCode, Grok, Pi and omp**.
 No new API key, no hosted service.
 
 ## Features
@@ -52,7 +52,7 @@ Claude Code and Codex can end a turn and wait; the letter they wait for wakes th
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: light)" srcset="site/assets/shots/agents-light.webp">
-    <img src="site/assets/shots/agents-dark.webp" alt="A lead agent, Claude Code, open in a pane. Its header shows one child asking and its pull requests, and a popover lists the helpers it started. The sidebar tree beside it shows the lead with Codex workers and an OpenCode helper under them.">
+    <img src="site/assets/shots/agents-dark.webp" alt="The hide window with the lead's tree open. The sidebar shows the lead with Codex workers and OpenCode helpers under it, and a popover from the lead's pane lists the helpers it started, one of them asking.">
   </picture>
 </p>
 
@@ -72,7 +72,7 @@ Add any machine by its SSH alias and its agents join the same groups, and pair y
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: light)" srcset="site/assets/shots/core-light.webp">
-    <img src="site/assets/shots/core-dark.webp" alt="Settings in hide. Devices lists the core machine, a laptop that dials in and a server, all connected. Mobile shows Tailscale ready and one paired phone.">
+    <img src="site/assets/shots/core-dark.webp" alt="Settings in hide. Devices lists the core machine, a laptop that dials in and a Linux server, all connected. Mobile shows Tailscale ready and one paired phone.">
   </picture>
 </p>
 
