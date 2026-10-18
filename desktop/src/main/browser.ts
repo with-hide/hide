@@ -21,10 +21,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { TFunction } from "i18next";
 import { pathToFileURL } from "node:url";
-import type { BrowserHostEvent, BrowserPageState, BrowserPlacement } from "../../../web/src/host";
+import type { BrowserDevicePlacement, BrowserHostEvent, BrowserPageState, BrowserPlacement, BrowserRect } from "../../../web/src/host";
 import { hostChord, isCycleCommand, keySystemOf, matchHost, releaseModifier, systemRegistry, type Command, type CommandId } from "../../../web/src/shortcuts";
 import { BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL } from "../channel";
-import { appScheme, browserPartition, isLocalNetworkHost, isPopup, loadable, localPageRequest, MAX_AUTHORIZED_SCOPES, MAX_LIVE_VIEWS, MAX_POPUPS, overCap, parseCommand, parseSync, parseTarget, popupBounds, remoteRequest, toBounds, viewKey } from "./browserSync";
+import { appScheme, browserPartition, deviceEmulation, isLocalNetworkHost, isPopup, loadable, localPageRequest, MAX_AUTHORIZED_SCOPES, MAX_LIVE_VIEWS, MAX_POPUPS, overCap, parseCommand, parseSync, parseTarget, popupBounds, remoteRequest, toBounds, viewKey } from "./browserSync";
 import { nextZoomFactor, type PageZoom } from "../../../web/src/zoomSteps";
 import type { HostLog } from "./log";
 import type { CdpPage, CdpRetirement, CdpScope } from "./browserCdp";
@@ -37,6 +37,8 @@ const ERR_ABORTED = -3;
 const PAGE_PERMISSIONS = new Set(["clipboard-sanitized-write"]);
 /** The text-size commands, which zoom a focused page the way Chrome's ⌘= / ⌘- / ⌘0 do. */
 const PAGE_ZOOM_COMMANDS: Readonly<Partial<Record<CommandId, PageZoom>>> = { text_larger: "in", text_smaller: "out", text_reset: "reset" };
+/** The shell's zoom commands for one page, from the zoom badge's popover. */
+const SHELL_ZOOM_COMMANDS: Readonly<Record<string, PageZoom>> = { zoom_in: "in", zoom_out: "out", zoom_reset: "reset" };
 /** Chrome's second zoom-in chord, ⌘+ (⌘⇧= on a US keyboard), as an app-menu accelerator. */
 const ZOOM_IN_ALIAS = accelerator({ code: "Equal", meta: true, shift: true });
 /** Pinch zoom on a page, as visual zoom levels; Electron turns it off by default. */
@@ -56,8 +58,15 @@ type Page = {
   /** The load stamp this page last loaded. */
   applied: number;
   visible: boolean;
+  /** Placed on its slot in the front Workspace, shown or standing behind its still for an overlay. */
+  placed: boolean;
   shownAt: number;
   state: BrowserPageState;
+  /** The device size the page lays out at, null to fit its slot, with the bounds it was last placed at. */
+  device: BrowserDevicePlacement | null;
+  bounds: BrowserRect | null;
+  /** The emulation last applied to its contents, as JSON; null when none is. */
+  emulated: string | null;
   report: NodeJS.Timeout | null;
   route: ResolvedPage | null;
   partition: string;
@@ -235,8 +244,10 @@ export class BrowserViews {
       if (!this.trusted(event)) return null;
       const target = parseTarget(value);
       const page = target ? this.pages.get(viewKey(target.workspace, target.id)) : undefined;
-      // A covered page's still: the shell asks while the page still shows, ahead of the sync that hides it.
-      if (!page || !page.visible) {
+      // A covered page's still: the shell asks while the page still shows,
+      // ahead of the sync that hides it, and again for a page it keeps covered
+      // in the front Workspace whose zoom moved under the zoom popover.
+      if (!page || (!page.visible && !page.placed)) {
         this.log.event("browser.capture_refused", { id: target?.id ?? null, reason: page ? "hidden" : "missing" });
         return null;
       }
@@ -257,7 +268,9 @@ export class BrowserViews {
       const page = target ? this.pages.get(viewKey(target.workspace, target.id)) : undefined;
       if (!page || !command) return;
       const contents = page.view.webContents;
-      if (command === "focus") {
+      const zoom = SHELL_ZOOM_COMMANDS[command];
+      if (zoom) this.zoom(page, zoom);
+      else if (command === "focus") {
         if (page.visible && this.window?.isFocused()) contents.focus();
       } else if (command === "back" && contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack();
       else if (command === "forward" && contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
@@ -319,7 +332,9 @@ export class BrowserViews {
   /**
    * A text-size command while a page holds the keyboard zooms that page and
    * leaves it the keyboard; any other command, or no focused page, is not
-   * handled here. Routed by command, so a rebound chord zooms too.
+   * handled here. Routed by command, so a rebound chord zooms too. A page
+   * shown at a device size takes the command and zooms nothing, so neither
+   * the page nor a terminal's text moves (PRD browser-width-zoom B13).
    */
   zoomFocused(command: CommandId): boolean {
     const zoom = PAGE_ZOOM_COMMANDS[command];
@@ -334,8 +349,44 @@ export class BrowserViews {
     return undefined;
   }
 
+  /** A page at a device size keeps its zoom: its viewport is the device's width whatever the zoom. */
   private zoom(page: Page, zoom: PageZoom): void {
+    if (page.device) return;
     zoomContents(page.view.webContents, zoom);
+    this.zoomMoved(page.partition);
+  }
+
+  /**
+   * Chromium keeps one zoom per host of a session, so a zoom anywhere moves
+   * every page of that host, in any Workspace, and no event says so: each
+   * page of the session reports its zoom again when it moved, and one at a
+   * device size has its viewport fitted again (PRD browser-width-zoom B9).
+   * At most `MAX_LIVE_VIEWS` pages are read, and only on a zoom.
+   */
+  private zoomMoved(partition: string): void {
+    for (const page of this.pages.values()) {
+      if (page.partition !== partition || page.view.webContents.isDestroyed()) continue;
+      const zoom = page.view.webContents.getZoomFactor();
+      if (page.state.zoom !== zoom) this.update(page, { zoom });
+      this.emulate(page);
+    }
+  }
+
+  /**
+   * Lays the page out at its device size, or at its slot's again (PRD
+   * browser-width-zoom D-12); applied only when what it asks for changed, and
+   * again after every committed navigation, since a new document, or a new
+   * renderer, starts without it.
+   */
+  private emulate(page: Page, force = false): void {
+    const contents = page.view.webContents;
+    if (contents.isDestroyed()) return;
+    const params = page.device && page.bounds ? deviceEmulation(page.device, page.bounds, contents.getZoomFactor()) : null;
+    const key = params ? JSON.stringify(params) : null;
+    if (!force && key === page.emulated) return;
+    if (params) contents.enableDeviceEmulation(params);
+    else if (page.emulated !== null) contents.disableDeviceEmulation();
+    page.emulated = key;
   }
 
   /**
@@ -349,7 +400,10 @@ export class BrowserViews {
     if (!popup) return false;
     const zoom = PAGE_ZOOM_COMMANDS[command];
     if (command === "close_tab" || command === "close_pane") popup.window.close();
-    else if (zoom) zoomContents(popup.window.webContents, zoom);
+    else if (zoom) {
+      zoomContents(popup.window.webContents, zoom);
+      this.zoomMoved(popup.owner.partition);
+    }
     return true;
   }
 
@@ -375,6 +429,7 @@ export class BrowserViews {
       else if (page.workspace !== workspace || !placed.has(page.key)) {
         // A retained page outside the front presentation stays alive and hidden.
         if (this.returnTo === page) this.returnTo = null;
+        page.placed = false;
         this.show(page, false);
       }
     }
@@ -384,7 +439,10 @@ export class BrowserViews {
       const key = viewKey(workspace ?? "", display.id);
       let page = this.pages.get(key);
       if (!display.rect) {
-        if (page) this.show(page, false);
+        if (page) {
+          page.placed = false;
+          this.show(page, false);
+        }
         continue;
       }
       if (!page) page = this.create(window, workspace ?? "", display);
@@ -395,7 +453,12 @@ export class BrowserViews {
         page.applied = display.load;
         this.load(page, display.url);
       }
-      page.view.setBounds(toBounds(display.rect, zoom));
+      const bounds = toBounds(display.rect, zoom);
+      page.view.setBounds(bounds);
+      page.placed = true;
+      page.device = display.device ?? null;
+      page.bounds = bounds;
+      this.emulate(page);
       this.show(page, display.visible);
       page.shownAt = now;
     }
@@ -422,8 +485,12 @@ export class BrowserViews {
       view,
       applied: display.load,
       visible: false,
+      placed: false,
       shownAt: 0,
-      state: { url: display.url, title: "", loading: true, canGoBack: false, canGoForward: false, failure: null },
+      state: { url: display.url, title: "", loading: true, canGoBack: false, canGoForward: false, failure: null, zoom: 1 },
+      device: null,
+      bounds: null,
+      emulated: null,
       report: null,
       route: null,
       partition,
@@ -569,7 +636,9 @@ export class BrowserViews {
     contents.on("did-start-loading", () => this.update(page, { loading: true, failure: null }));
     contents.on("did-stop-loading", () => this.update(page, { loading: false, ...history() }));
     contents.on("did-navigate", (_event, url) => {
-      this.update(page, { url: this.sourceAddress(page, url), ...history() });
+      // A new document takes its host's zoom, and starts without the device size.
+      this.update(page, { url: this.sourceAddress(page, url), zoom: contents.getZoomFactor(), ...history() });
+      this.emulate(page, true);
       // The limits live in the page's renderer, so each committed document,
       // which may be a new renderer, gets them again.
       void contents.setVisualZoomLevelLimits(...PINCH_ZOOM_LIMITS).catch((error: unknown) => this.log.event("browser.pinch_zoom_failed", { detail: String(error) }));

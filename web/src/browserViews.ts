@@ -16,7 +16,7 @@
 // over them and its drop lands in the shell, never in a page.
 
 import { create } from "zustand";
-import { browserBridge, type BrowserBridge, type BrowserHostEvent, type BrowserPageState, type BrowserPlacement, type BrowserRect, type BrowserSync } from "./host";
+import { browserBridge, type BrowserBridge, type BrowserDevicePlacement, type BrowserHostEvent, type BrowserPageState, type BrowserPlacement, type BrowserRect, type BrowserSync } from "./host";
 import { SHELL_DRAG_ATTRIBUTES, shellDragging } from "./shellDrag";
 import { windowDeviceId } from "./screenMachine";
 import { type SnapshotRest, type ViewLayoutSnapshot } from "./snapshot";
@@ -89,11 +89,12 @@ export function isHtmlFile(path: string): boolean {
   return /\.x?html?$/i.test(path);
 }
 
-/** How the host places each display: its rect, and whether the page itself shows there. */
-export function placements(rows: BrowserDisplayRow[], rects: ReadonlyMap<string, BrowserRect>, hidden: ReadonlySet<string>): BrowserPlacement[] {
+/** How the host places each display: its rect, whether the page itself shows there, and the device size it lays out at. */
+export function placements(rows: BrowserDisplayRow[], rects: ReadonlyMap<string, BrowserRect>, hidden: ReadonlySet<string>, devices: ReadonlyMap<string, BrowserDevicePlacement> = new Map()): BrowserPlacement[] {
   return rows.map((row) => {
     const rect = rects.get(row.id) ?? null;
-    return { ...row, rect, visible: rect !== null && !hidden.has(row.id) };
+    const device = devices.get(row.id);
+    return { ...row, rect, visible: rect !== null && !hidden.has(row.id), ...(device ? { device } : {}) };
   });
 }
 
@@ -184,13 +185,16 @@ class BrowserSyncLoop {
   private retained: BrowserSync["retained"] = [];
   private authorizedScopes: NonNullable<BrowserSync["authorized_scopes"]> = [];
   private retainedKeys = new Set<string>();
-  private readonly slots = new Map<string, HTMLElement>();
+  /** Each display's slot, the element its page is laid over, with the device size the slot draws it at. */
+  private readonly slots = new Map<string, { element: HTMLElement; device: BrowserDevicePlacement | null }>();
   /** Displays hidden behind their still until what covers them is gone. */
   private readonly frozen = new Set<string>();
   /** One still per shown page of the front Workspace. */
   private readonly cache = new Map<string, CachedStill>();
   /** Pages with a capture in flight: at most one each. */
   private readonly capturing = new Set<string>();
+  /** Covered pages whose zoom moved while their capture was in flight: they are captured once more when it answers. */
+  private readonly recapture = new Set<string>();
   /** Pages whose load just finished or that just came into view. */
   private readonly stale = new Set<string>();
   /** The quiet wait before a page's still is taken, by display id, with what it waits on. */
@@ -249,6 +253,34 @@ class BrowserSyncLoop {
     });
   }
 
+  /**
+   * A page whose zoom moved. Covered, as by the zoom popover drawn over it,
+   * its still is taken again at once, so the operator sees each step (PRD
+   * browser-width-zoom B7); the host captures a page it hides for an overlay
+   * of the front Workspace.
+   */
+  zoomMoved(workspace: string, id: string): void {
+    const front = this.front;
+    if (front?.workspace !== workspace) return;
+    // An uncovered page's still is of the zoom before: it is taken again once
+    // the page is quiet, so a layer that covers it later draws the page as it is.
+    if (!this.frozen.has(id)) {
+      this.stale.add(id);
+      this.schedule();
+      return;
+    }
+    const row = front.rows.find((candidate) => candidate.id === id);
+    const element = this.slots.get(id)?.element;
+    if (!row || !element?.isConnected) return;
+    const box = element.getBoundingClientRect();
+    if (this.capturing.has(id)) {
+      this.recapture.add(id);
+      return;
+    }
+    const url = useBrowserStore.getState().pages[hostKey(workspace, id)]?.url || row.url;
+    this.capture(workspace, id, url, { x: box.left, y: box.top, width: box.width, height: box.height });
+  }
+
   requestFocus(workspace: string, id: string): void {
     this.focus = { workspace, id };
     this.schedule();
@@ -275,6 +307,7 @@ class BrowserSyncLoop {
       this.epoch += 1;
       this.frozen.clear();
       this.capturing.clear();
+      this.recapture.clear();
       this.forget(() => true);
       useBrowserStore.setState({ stills: {} });
     }
@@ -297,13 +330,14 @@ class BrowserSyncLoop {
     this.schedule();
   }
 
-  register(id: string, element: HTMLElement): () => void {
-    this.slots.set(id, element);
+  register(id: string, element: HTMLElement, device: BrowserDevicePlacement | null): () => void {
+    const slot = { element, device };
+    this.slots.set(id, slot);
     this.resize?.observe(element);
     this.watch();
     this.schedule();
     return () => {
-      if (this.slots.get(id) === element) this.slots.delete(id);
+      if (this.slots.get(id) === slot) this.slots.delete(id);
       this.resize?.unobserve(element);
       this.schedule();
     };
@@ -333,18 +367,21 @@ class BrowserSyncLoop {
     const overlays = this.slots.size > 0 ? overlayRects() : { rects: [], moving: false };
     const dragging = this.slots.size > 0 && shellDragging();
     const rects = new Map<string, BrowserRect>();
+    const devices = new Map<string, BrowserDevicePlacement>();
     const hidden = new Set<string>();
     const shown = new Map<string, boolean>();
     for (const row of front?.rows ?? []) {
-      const element = this.slots.get(row.id);
+      const slot = this.slots.get(row.id);
+      const element = slot?.element;
       // A slot in a lane put away, or under another of its tools, keeps its
       // layout for its scroll and is drawn by nobody: its page is hidden (PRD
       // right-lane B21).
-      if (!front || !element?.isConnected || element.closest(HIDDEN_LANE_SELECTOR)) continue;
+      if (!front || !slot || !element?.isConnected || element.closest(HIDDEN_LANE_SELECTOR)) continue;
       const box = element.getBoundingClientRect();
       if (box.width <= 0 || box.height <= 0) continue;
       const rect = { x: box.left, y: box.top, width: box.width, height: box.height };
       rects.set(row.id, rect);
+      if (slot.device) devices.set(row.id, slot.device);
       const page = pages[hostKey(front.workspace, row.id)];
       const url = page?.url || row.url;
       const failed = Boolean(page?.failure);
@@ -362,7 +399,7 @@ class BrowserSyncLoop {
     this.forget((id) => !shown.has(id));
     const sync: BrowserSync = {
       workspace: front?.workspace ?? null,
-      displays: front ? placements(front.rows, rects, hidden) : [],
+      displays: front ? placements(front.rows, rects, hidden, devices) : [],
       retained: this.retained,
       authorized_scopes: this.authorizedScopes,
       ...(this.attachmentEpoch === undefined ? {} : { attachment_epoch: this.attachmentEpoch }),
@@ -449,10 +486,11 @@ class BrowserSyncLoop {
 
   /** Drops what is kept for the displays `gone` names: their still, their wait and their triggers. */
   private forget(gone: (id: string) => boolean): void {
-    for (const id of new Set([...this.cache.keys(), ...this.quiet.keys(), ...this.due.keys(), ...this.stale])) {
+    for (const id of new Set([...this.cache.keys(), ...this.quiet.keys(), ...this.due.keys(), ...this.stale, ...this.recapture])) {
       if (!gone(id)) continue;
       this.cache.delete(id);
       this.stale.delete(id);
+      this.recapture.delete(id);
       this.unwait(id);
     }
   }
@@ -478,6 +516,7 @@ class BrowserSyncLoop {
         const kept = this.cache.get(id);
         this.cache.set(id, { ...taken, still: still ?? (stillFits(kept, url, rect) ? kept.still : null) });
         if (still && this.frozen.has(id)) useBrowserStore.setState((current) => ({ stills: { ...current.stills, [id]: still } }));
+        if (this.recapture.delete(id)) this.zoomMoved(workspace, id);
         this.schedule();
       });
   }
@@ -519,9 +558,9 @@ export function noteShellLayer(): void {
   loop?.schedule();
 }
 
-/** A display's page slot: the host places the page over this element. */
-export function registerBrowserSlot(id: string, element: HTMLElement): () => void {
-  return syncLoop()?.register(id, element) ?? (() => undefined);
+/** A display's page slot: the host places the page over this element, laid out at `device` when one is set. */
+export function registerBrowserSlot(id: string, element: HTMLElement, device: BrowserDevicePlacement | null = null): () => void {
+  return syncLoop()?.register(id, element, device) ?? (() => undefined);
 }
 
 /** One focus intent, delivered after the host has the current visible slots. */
@@ -531,7 +570,10 @@ export function focusBrowserDisplay(workspace: string, id: string): void {
 
 /** Records what a page says and places it again, since a failed page gives its place to a notice. */
 export function notePageState(event: Extract<BrowserHostEvent, { kind: "state" }>): void {
-  useBrowserStore.setState((current) => ({ pages: { ...current.pages, [hostKey(event.workspace, event.id)]: event.state } }));
+  const key = hostKey(event.workspace, event.id);
+  const zoomed = (useBrowserStore.getState().pages[key]?.zoom ?? 1) !== (event.state.zoom ?? 1);
+  useBrowserStore.setState((current) => ({ pages: { ...current.pages, [key]: event.state } }));
+  if (zoomed) loop?.zoomMoved(event.workspace, event.id);
   loop?.schedule();
 }
 

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { appScheme, browserPartition, isLocalNetworkHost, localPageRequest, isPopup, loadable, popupBounds, MAX_AUTHORIZED_SCOPES, MAX_SYNCED_DISPLAYS, overCap, parseCommand, parseSync, parseTarget, remoteRequest, toBounds } from "./browserSync";
+import { appScheme, browserPartition, deviceEmulation, isLocalNetworkHost, localPageRequest, isPopup, loadable, popupBounds, MAX_AUTHORIZED_SCOPES, MAX_SYNCED_DISPLAYS, overCap, parseCommand, parseSync, parseTarget, remoteRequest, toBounds } from "./browserSync";
 
 const rect = { x: 0, y: 40, width: 800, height: 600 };
 const display = { id: "d1", area_id: "a1", url: "https://a.test/", load: 3, rect, visible: true };
@@ -100,7 +100,18 @@ describe("what the shell may ask of the browser views (issue 155)", () => {
     expect(parseTarget({ workspace: "w", id: "d1" })).toEqual({ workspace: "w", id: "d1" });
     expect(parseTarget({ workspace: "w" })).toBeNull();
     expect(parseCommand("reload")).toBe("reload");
+    for (const zoom of ["zoom_in", "zoom_out", "zoom_reset"]) expect(parseCommand(zoom)).toBe(zoom);
     expect(parseCommand("eval")).toBeNull();
+    expect(parseCommand("zoom")).toBeNull();
+  });
+
+  it("takes a display's device size, and drops a sync whose size is out of shape (PRD browser-width-zoom D-12)", () => {
+    const sized = { ...sync, displays: [{ ...display, device: { width: 390, mobile: true } }] };
+    expect(parseSync(sized)).toEqual(sized);
+    expect(parseSync({ ...sync, displays: [{ ...display, device: null }] })).toEqual(sync);
+    for (const device of [{ width: 0, mobile: true }, { width: 390.5, mobile: true }, { width: 4097, mobile: false }, { width: 390 }, { width: "390", mobile: true }, "mobile"]) {
+      expect(parseSync({ ...sync, displays: [{ ...display, device }] }), JSON.stringify(device)).toBeNull();
+    }
   });
 
   it("loads only the web, a local file, or a blank page", () => {
@@ -168,6 +179,24 @@ describe("what the shell may ask of the browser views (issue 155)", () => {
     expect(remoteRequest(route, "http://[::ffff:127.0.0.1]:9000/private")).toEqual({ cancel: true });
     expect(remoteRequest({ source_url: "http://127.1:5173/", url: "http://127.1:5173/" }, "http://127.1:5173/")).toEqual({ cancel: true });
     expect(remoteRequest({ source_url: "file:///checkout/page.html", url: "http://127.0.0.1:63002/secret/page.html" }, "https://example.com/leak")).toEqual({ cancel: true });
+  });
+});
+
+describe("a page at a device size (PRD browser-width-zoom B11, B12)", () => {
+  it("fits a wider desktop viewport into its rectangle, its width the device's at any page zoom", () => {
+    const bounds = { x: 12, y: 60, width: 496, height: 600 };
+    const at100 = deviceEmulation({ width: 1280, mobile: false }, bounds, 1);
+    expect(at100).toMatchObject({ screenPosition: "desktop", viewSize: { width: 1280, height: Math.round(600 / (496 / 1280)) } });
+    expect(at100.scale).toBeCloseTo(496 / 1280);
+    // The page's zoom divides the viewport into CSS pixels, so it is laid out zoomed and drawn back at the same size.
+    const at110 = deviceEmulation({ width: 1280, mobile: false }, bounds, 1.1);
+    expect(at110.viewSize).toEqual({ width: 1408, height: Math.round((600 / (496 / 1280)) * 1.1) });
+    expect(at110.scale! * at110.viewSize!.width).toBeCloseTo(496);
+  });
+
+  it("lays a narrower mobile viewport out at its own width and scale, which Chromium does not zoom", () => {
+    const params = deviceEmulation({ width: 390, mobile: true }, { x: 0, y: 0, width: 390, height: 700 }, 1.25);
+    expect(params).toMatchObject({ screenPosition: "mobile", viewSize: { width: 390, height: 700 }, screenSize: { width: 390, height: 700 }, scale: 1 });
   });
 });
 
