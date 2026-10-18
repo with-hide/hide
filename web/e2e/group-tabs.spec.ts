@@ -212,3 +212,73 @@ test("a committed start with its answer lost across restart adopts the original 
     expect(gate.params("layout.apply")).toHaveLength(1);
   } finally { try { daemon?.stop(); } finally { try { await gate.stop(); } finally { herdr.stop(); } } }
 });
+
+test("a lost join answer preserves the existing zoomed tab and all three shells after restart", async ({ page }) => {
+  const herdr = await startHerdr({ agents: false });
+  const gate = await herdrGate(herdr);
+  let daemon: Daemon | null = null;
+  const identity = (pane: string) => {
+    const row = herdr.run(["pane", "get", pane]) as { result: { pane: { terminal_id: string } } };
+    const process = herdr.run(["pane", "process-info", "--pane", pane]) as { result: { process_info: { shell_pid: number } } };
+    return { terminal: row.result.pane.terminal_id, pid: process.result.process_info.shell_pid };
+  };
+  const output = (pane: string) => {
+    const read = spawnSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
+    expect(read.status, read.stderr).toBe(0);
+    return read.stdout;
+  };
+  const submit = (pane: string, line: string) => {
+    const sent = spawnSync(herdr.bin, ["pane", "run", pane, line], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
+    expect(sent.status, sent.stderr).toBe(0);
+  };
+  try {
+    daemon = await startHided(herdr, "group-join-recover", undefined, { HERDR_SOCKET_PATH: gate.socket });
+    await open(page, daemon);
+    await createGroup(page, "Join recovery");
+    await terminal(page).click();
+    await expect(blank(page)).toHaveCount(0, { timeout: 30_000 });
+    const tab = (await stripTabs(page).getAttribute("data-tab"))!;
+    const first = (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!;
+    const split = herdr.run(["pane", "split", "--pane", first, "--direction", "right", "--no-focus"]) as { result: { pane: { pane_id: string } } };
+    const second = split.result.pane.pane_id;
+    await expect(page.locator("[data-pane-view]")).toHaveCount(2);
+    for (const [index, pane] of [first, second].entries()) {
+      submit(pane, herdr.shell === "cmd" ? `set GROUP_JOIN_VALUE=original-${index} & echo BEFORE_JOIN_${index}` : `GROUP_JOIN_VALUE=original-${index}; printf 'BEFORE_JOIN_${index}\\n'`);
+      await expect.poll(() => output(pane)).toContain(`BEFORE_JOIN_${index}`);
+    }
+    const originals = [identity(first), identity(second)];
+    const originalTabs = topology(herdr);
+    herdr.run(["pane", "zoom", "--pane", first, "--on"]);
+    await page.locator(`[data-add-agent="${tab}"]`).click();
+    const held = gate.arm("pane.move");
+    await terminal(page).click();
+    await held;
+    await expect(stripTabs(page)).toHaveCount(1);
+    const move = gate.params("pane.move")[0];
+    const staged = move.pane_id as string;
+    expect(staged).toBeTruthy();
+    const stagedIdentity = identity(staged);
+    const saved = JSON.parse(fs.readFileSync(path.join(daemon.stateDir, "workspace-views.json"), "utf8")) as { workspaces: { agent_starts: Record<string, { state: string; effect?: { binding?: { pane_id: string } } }> }[] };
+    expect(saved.workspaces.flatMap(view => Object.values(view.agent_starts ?? {}))).toContainEqual(expect.objectContaining({ state: "pending", effect: expect.objectContaining({ binding: expect.objectContaining({ pane_id: staged }) }) }));
+    await page.goto("about:blank");
+    process.kill(daemon.pid, "SIGKILL");
+    await expect.poll(() => { try { process.kill(daemon!.pid, 0); return true; } catch { return false; } }).toBe(false);
+    daemon = await daemon.restart(async () => { await gate.release(); });
+    await open(page, daemon);
+    await page.getByRole("button", { name: "Check start status", exact: true }).click();
+    await expect(blank(page)).toHaveCount(0, { timeout: 30_000 });
+    await expect(page.locator("[data-pane-view]")).toHaveCount(3);
+    expect(topology(herdr)).toEqual(originalTabs);
+    expect([identity(first), identity(second)]).toEqual(originals);
+    expect(identity(staged)).toEqual(stagedIdentity);
+    expect(gate.params("pane.move")).toHaveLength(1);
+    expect(gate.params("layout.apply")).toHaveLength(1);
+    for (const [index, pane] of [first, second].entries()) {
+      submit(pane, herdr.shell === "cmd" ? "echo AFTER_JOIN_%GROUP_JOIN_VALUE%" : "printf 'AFTER_JOIN_%s\\n' \"$GROUP_JOIN_VALUE\"");
+      await expect.poll(() => output(pane)).toContain(`AFTER_JOIN_original-${index}`);
+    }
+    submit(staged, "echo ADOPTED_SHELL_ACCEPTS_INPUT");
+    await expect.poll(() => output(staged)).toContain("ADOPTED_SHELL_ACCEPTS_INPUT");
+    await screenshot(page, "group-tabs-join-recovered");
+  } finally { try { daemon?.stop(); } finally { try { await gate.stop(); } finally { herdr.stop(); } } }
+});
