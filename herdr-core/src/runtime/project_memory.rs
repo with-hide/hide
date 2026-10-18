@@ -772,7 +772,7 @@ impl Runtime {
         self.hook_diagnosis.as_ref().is_some_and(|diagnosis| {
             diagnosis.runtimes.iter().any(|row| {
                 row.memory_compatibility.supports_injection()
-                    && matches!(row.status, HookStatus::Installed { version } if version >= hide_agent_hooks::HOOK_VERSION)
+                    && matches!(row.status, HookStatus::Installed { version } if version >= hide_agent_hooks::HOOK_ENTRY_VERSION)
             })
         })
     }

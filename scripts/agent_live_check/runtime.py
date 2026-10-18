@@ -69,8 +69,8 @@ PROVIDER_KEYS = ("ANTHROPIC_AUTH_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "AWS_
                  "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")
 
 
-# The XDG folders under the probe's home that every process it starts reads,
-# the daemon and Hide's reader included.
+# The shell's private XDG folders. The daemon is started without a shell's
+# XDG_STATE_HOME, like an app opened from the Dock.
 XDG_FOLDERS = {"XDG_CONFIG_HOME": "config", "XDG_STATE_HOME": "state", "XDG_DATA_HOME": "data",
                "XDG_CACHE_HOME": "cache"}
 
@@ -206,8 +206,13 @@ class Runtime:
                 write_private(self.home / name, data)
             write_private(run / "herdr.toml", ("[update]\nversion_check = false\n[sound]\nenabled = false\n"
                                                + self.shell.herdr_config()).encode())
-            self.daemon_env = {**base, "HIDE_STATE_DIR": str(self.state), "HIDE_PORT": "0",
+            self.daemon_env = {**base, "HIDE_PORT": "0",
                                "HIDE_KEEP_ALIVE": "1", "HIDED_UI_DIR": str(checkout / "web/dist")}
+            self.daemon_env.pop("XDG_STATE_HOME", None)
+            # CI uses the account's default; a local sandbox keeps the state
+            # outside its writable probe and therefore needs an explicit route.
+            if self.state != self.home / ".hide/state":
+                self.daemon_env["HIDE_STATE_DIR"] = str(self.state)
             # hided observes native session identity using its usual reader.
             # These read-only references do not change the operator's trees.
             for relative in (() if fixture_bin else (".claude/projects", ".codex/sessions")):

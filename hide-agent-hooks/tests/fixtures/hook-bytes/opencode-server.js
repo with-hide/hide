@@ -1,4 +1,4 @@
-// hide-opencode-server@1 sha256=28d47b197fe67c3fbb0ac222f341ae563b7999c653d2f8593330775fe732f643
+// hide-opencode-server@2 sha256=e4525e592182d145159128bb01fb64546f8baa9ceda09eaf11b195c50e450f9c
 // Hide's OpenCode 2 plugin, its server half, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // OpenCode 2 runs one server for every terminal attached to it, so this half is never any pane's: what needs the
@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 const HELPER = "/kit path/it's/hide-agent-hooks";
+const ROUTE = [];
 
 // The budgets are the 1.x plugin's (`../hide.js`): the prompt one is Claude Code's prompt hook's, the tool one the
 // spawn guard's. A question to the TUI half spends the same budget, its trip included.
@@ -129,7 +130,7 @@ export function helper(state, operation, input, budgetMs, env = process.env) {
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(HELPER, ["opencode", operation], { stdio: ["pipe", "pipe", "ignore"], env });
+      child = spawn(HELPER, ["opencode", operation, ...ROUTE], { stdio: ["pipe", "pipe", "ignore"], env });
     } catch {
       resolve(null);
       return;

@@ -173,10 +173,10 @@ impl TrustFailure {
 /// `herdr` is what the kit recorded Herdr's integration added to that file
 /// (empty unless the kit installed it); each is trusted as exactly the entry
 /// the kit saw Herdr write.
-pub fn trust_own_hooks(
+pub fn trust_own_hooks<'a>(
     codex: &Path,
     home: &Path,
-    helper: &Path,
+    helper: impl Into<crate::route::HookTarget<'a>>,
     herdr: &[HookEntry],
     stop: &AtomicBool,
 ) -> TrustOutcome {
@@ -185,10 +185,10 @@ pub fn trust_own_hooks(
 
 /// [`trust_own_hooks`] with the bounds named, for a caller (a test) that
 /// needs a Codex that does not answer to be given up on sooner.
-pub fn trust_own_hooks_within(
+pub fn trust_own_hooks_within<'a>(
     codex: &Path,
     home: &Path,
-    helper: &Path,
+    helper: impl Into<crate::route::HookTarget<'a>>,
     herdr: &[HookEntry],
     stop: &AtomicBool,
     limits: Limits,
@@ -242,7 +242,11 @@ struct Expected {
 }
 
 /// Hide's own six entries, then the entries the kit recorded Herdr writing.
-fn expected_entries(helper: &Path, herdr: &[HookEntry]) -> Vec<Expected> {
+fn expected_entries<'a>(
+    helper: impl Into<crate::route::HookTarget<'a>>,
+    herdr: &[HookEntry],
+) -> Vec<Expected> {
+    let helper = helper.into();
     HookEvent::ALL
         .into_iter()
         .map(|event| Expected {
@@ -1282,8 +1286,8 @@ mod tests {
             command.replace("--runtime codex", "--runtime claude-code"),
             command.replace("SessionStart", "Stop"),
             command.replace(
-                &format!("hide-subagents@{}", crate::HOOK_VERSION),
-                &format!("hide-subagents@{}", crate::HOOK_VERSION - 1),
+                &format!("hide-subagents@{}", crate::HOOK_ENTRY_VERSION),
+                &format!("hide-subagents@{}", crate::HOOK_ENTRY_VERSION - 1),
             ),
             format!("{command} "),
             command.to_uppercase(),

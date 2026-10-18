@@ -132,6 +132,11 @@ pub fn workspace_bridges(state_dir: &Path) -> PathBuf {
     state_dir.join("workspace-bridges")
 }
 
+/// The daemon's lifetime lock, shared with the account kit's route ownership check.
+pub fn daemon_lock(state_dir: &Path) -> PathBuf {
+    state_dir.join("hided.lock")
+}
+
 /// Durable local requests and watches; its owner is the core delivery worker.
 pub fn delivery_ledger(state_dir: &Path) -> PathBuf {
     state_dir.join("delivery-ledger.json")

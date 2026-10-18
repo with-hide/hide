@@ -23,6 +23,7 @@
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+use crate::route::HookTarget;
 use hide_agent_adapter::PluginDialect;
 use sha2::{Digest, Sha256};
 
@@ -144,7 +145,8 @@ impl Plugin {
     }
 
     /// Judges the plugin by its worst file.
-    pub fn observe(&self, home: &Path, helper: &Path) -> PluginObserved {
+    pub fn observe<'a>(&self, home: &Path, helper: impl Into<HookTarget<'a>>) -> PluginObserved {
+        let helper = helper.into();
         self.files
             .iter()
             .map(|file| file.observe(home, helper))
@@ -155,7 +157,12 @@ impl Plugin {
     /// Writes this build's files once none of them refuses: a file Hide did
     /// not write anywhere in the plugin leaves every file as it was. True
     /// when a file changed.
-    pub fn install(&self, home: &Path, helper: &Path) -> Result<bool, String> {
+    pub fn install<'a>(
+        &self,
+        home: &Path,
+        helper: impl Into<HookTarget<'a>>,
+    ) -> Result<bool, String> {
+        let helper = helper.into();
         for file in self.files {
             file.refusal(home, &file.observe(home, helper))?;
         }
@@ -240,7 +247,8 @@ impl PluginFile {
         )
     }
 
-    fn body(&self, helper: &Path) -> String {
+    fn body<'a>(&self, helper: impl Into<HookTarget<'a>>) -> String {
+        let helper = helper.into();
         // A JSON string is a JavaScript string literal, whatever the path holds.
         let literal = serde_json::to_string(&helper.display().to_string())
             .expect("a string always serializes");
@@ -251,11 +259,18 @@ impl PluginFile {
             .fold(self.template.to_owned(), |body, (placeholder, value)| {
                 body.replacen(placeholder, value, 1)
             })
+            .replacen(
+                "__HIDE_ROUTE__",
+                &serde_json::to_string(&helper.arguments().split_whitespace().collect::<Vec<_>>())
+                    .expect("strings serialize"),
+                1,
+            )
             .replacen(HELPER_PLACEHOLDER, &literal, 1)
     }
 
     /// The exact bytes Hide writes for `helper`.
-    pub fn text(&self, helper: &Path) -> String {
+    pub fn text<'a>(&self, helper: impl Into<HookTarget<'a>>) -> String {
+        let helper = helper.into();
         let body = self.body(helper);
         format!(
             "// {}@{} sha256={}\n{body}",
@@ -274,7 +289,8 @@ impl PluginFile {
     }
 
     /// Judges the file against the one `helper` would be named in.
-    fn observe(&self, home: &Path, helper: &Path) -> PluginObserved {
+    fn observe<'a>(&self, home: &Path, helper: impl Into<HookTarget<'a>>) -> PluginObserved {
+        let helper = helper.into();
         if !self.config_directory(home).is_dir() {
             return PluginObserved::ConfigAbsent;
         }
@@ -308,7 +324,7 @@ impl PluginFile {
                 "version {version} of the {what} is there; this build writes version {}",
                 self.version
             ),
-            Some(found) if Path::new(&found) != helper => format!(
+            Some(found) if Path::new(&found) != &*helper => format!(
                 "the {what} runs {found}, not this build's {}",
                 helper.display()
             ),
@@ -340,7 +356,8 @@ impl PluginFile {
     /// Writes this build's file. A file Hide did not write is never replaced,
     /// and the agent's own folder is never created. Writing the same bytes
     /// twice writes nothing; true when the file changed.
-    fn install(&self, home: &Path, helper: &Path) -> Result<bool, String> {
+    fn install<'a>(&self, home: &Path, helper: impl Into<HookTarget<'a>>) -> Result<bool, String> {
+        let helper = helper.into();
         let path = self.path(home);
         let observed = self.observe(home, helper);
         self.refusal(home, &observed)?;

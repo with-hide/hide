@@ -41,7 +41,7 @@ fn install_update_and_remove_keep_unrelated_source_spans_and_repeat_without_writ
             " \r\n{{\t{SETTING},\r\n\"hooks\" : {{\"Stop\" : [\n{GROUP}\n],\"Custom\" : [ {GROUP} ],\"CustomEmpty\":[]}} }} \r\n"
         );
         let (home, helper) = fixture(runtime, &source);
-        let outcome = install(runtime, home.path(), &helper).unwrap();
+        let outcome = install(runtime, home.path(), crate::hook_target(&helper)).unwrap();
         assert!(outcome.changed);
         assert_eq!(outcome.preserved_entries, 1);
         let installed = read(runtime, home.path());
@@ -54,7 +54,11 @@ fn install_update_and_remove_keep_unrelated_source_spans_and_repeat_without_writ
             status(runtime, home.path()),
             HookStatus::Installed { .. }
         ));
-        assert!(!install(runtime, home.path(), &helper).unwrap().changed);
+        assert!(
+            !install(runtime, home.path(), crate::hook_target(&helper))
+                .unwrap()
+                .changed
+        );
         assert_eq!(read(runtime, home.path()), installed);
 
         let next_helper = home
@@ -63,12 +67,20 @@ fn install_update_and_remove_keep_unrelated_source_spans_and_repeat_without_writ
             .join(hide_agent_hooks::HELPER_BINARY_NAME);
         fs::create_dir_all(next_helper.parent().unwrap()).unwrap();
         fs::write(&next_helper, b"next helper").unwrap();
-        assert!(install(runtime, home.path(), &next_helper).unwrap().changed);
+        assert!(
+            install(runtime, home.path(), crate::hook_target(&next_helper))
+                .unwrap()
+                .changed
+        );
         let updated = read(runtime, home.path());
         literal_survives(&updated, GROUP);
         literal_survives(&updated, SETTING);
         assert!(!updated.contains(&helper.display().to_string()));
-        assert!(!install(runtime, home.path(), &next_helper).unwrap().changed);
+        assert!(
+            !install(runtime, home.path(), crate::hook_target(&next_helper))
+                .unwrap()
+                .changed
+        );
         assert_eq!(read(runtime, home.path()), updated);
 
         let outcome = remove(runtime, home.path()).unwrap();
@@ -125,7 +137,11 @@ fn mixed_groups_keep_each_unowned_handler_and_group_metadata_when_owned_commands
             assert!(!remove(runtime, home.path()).unwrap().changed);
 
             fs::write(runtime.config_path(home.path()), &source).unwrap();
-            assert!(install(runtime, home.path(), &helper).unwrap().changed);
+            assert!(
+                install(runtime, home.path(), crate::hook_target(&helper))
+                    .unwrap()
+                    .changed
+            );
             let installed = read(runtime, home.path());
             literal_survives(&installed, HANDLER);
             literal_survives(&installed, GROUP);
@@ -138,7 +154,11 @@ fn mixed_groups_keep_each_unowned_handler_and_group_metadata_when_owned_commands
                     .len(),
                 1
             );
-            assert!(!install(runtime, home.path(), &helper).unwrap().changed);
+            assert!(
+                !install(runtime, home.path(), crate::hook_target(&helper))
+                    .unwrap()
+                    .changed
+            );
             assert_eq!(read(runtime, home.path()), installed);
         }
     }
@@ -171,7 +191,7 @@ fn equal_handlers_in_distinct_groups_keep_their_own_spelling_and_order() {
         format!(r#"{{"hooks":{{"Stop":[{{"hooks":[{mixed_handler},{owned}]}},{standalone}]}}}}"#);
     let runtime = AgentRuntime::ClaudeCode;
     let (home, helper) = fixture(runtime, &source);
-    install(runtime, home.path(), &helper).unwrap();
+    install(runtime, home.path(), crate::hook_target(&helper)).unwrap();
     let installed = read(runtime, home.path());
     literal_survives(&installed, mixed_handler);
     literal_survives(&installed, standalone);
@@ -198,7 +218,7 @@ fn ambiguous_duplicate_members_and_malformed_json_are_refused_without_mutation()
             let (home, helper) = fixture(runtime, source);
             assert!(
                 matches!(
-                    install(runtime, home.path(), &helper),
+                    install(runtime, home.path(), crate::hook_target(&helper)),
                     Err(InstallFailure::Unparsable { .. })
                 ),
                 "{source}"
@@ -230,7 +250,7 @@ fn shape_refusals_and_nesting_limit_leave_the_original_bytes() {
         let runtime = AgentRuntime::Codex;
         let (home, helper) = fixture(runtime, source);
         assert!(matches!(
-            install(runtime, home.path(), &helper),
+            install(runtime, home.path(), crate::hook_target(&helper)),
             Err(InstallFailure::UnexpectedShape { .. })
         ));
         assert_eq!(read(runtime, home.path()), source);
@@ -242,7 +262,11 @@ fn shape_refusals_and_nesting_limit_leave_the_original_bytes() {
     );
     let (home, helper) = fixture(AgentRuntime::Codex, &source);
     assert!(matches!(
-        install(AgentRuntime::Codex, home.path(), &helper),
+        install(
+            AgentRuntime::Codex,
+            home.path(),
+            crate::hook_target(&helper)
+        ),
         Err(InstallFailure::Unparsable { .. })
     ));
     assert_eq!(read(AgentRuntime::Codex, home.path()), source);
@@ -263,17 +287,25 @@ fn guidance_uses_the_same_source_preserving_writer() {
         return;
     }
     assert!(
-        guidance::install(GuidanceAgent::Cursor, home.path(), &helper)
-            .unwrap()
-            .changed
+        guidance::install(
+            GuidanceAgent::Cursor,
+            home.path(),
+            crate::hook_target(&helper)
+        )
+        .unwrap()
+        .changed
     );
     let installed = fs::read_to_string(&path).unwrap();
     literal_survives(&installed, SETTING);
     literal_survives(&installed, HANDLER);
     assert!(
-        !guidance::install(GuidanceAgent::Cursor, home.path(), &helper)
-            .unwrap()
-            .changed
+        !guidance::install(
+            GuidanceAgent::Cursor,
+            home.path(),
+            crate::hook_target(&helper)
+        )
+        .unwrap()
+        .changed
     );
     assert_eq!(fs::read_to_string(&path).unwrap(), installed);
     assert!(

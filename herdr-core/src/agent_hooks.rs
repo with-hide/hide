@@ -135,7 +135,7 @@ pub fn kit_hook_status(
     };
     Some(match state {
         ComponentState::Installed => HookStatus::Installed {
-            version: hide_agent_hooks::HOOK_VERSION,
+            version: hide_agent_hooks::HOOK_ENTRY_VERSION,
         },
         ComponentState::Outdated => HookStatus::Outdated { version: 0 },
         ComponentState::Absent => HookStatus::RuntimeAbsent,
@@ -210,6 +210,16 @@ mod tests {
         assert_eq!(
             device_hook_status(
                 false,
+                &kit(hide_kit::ComponentState::Installed),
+                HookDialect::ClaudeCode
+            ),
+            Some(hide_agent_hooks::HookStatus::Installed {
+                version: hide_agent_hooks::HOOK_ENTRY_VERSION
+            })
+        );
+        assert_eq!(
+            device_hook_status(
+                false,
                 &kit(hide_kit::ComponentState::Off),
                 HookDialect::ClaudeCode
             ),
@@ -262,7 +272,7 @@ mod tests {
                 (
                     ComponentState::Installed,
                     HookStatus::Installed {
-                        version: hide_agent_hooks::HOOK_VERSION,
+                        version: hide_agent_hooks::HOOK_ENTRY_VERSION,
                     },
                 ),
                 // An edited entry, or another build's, still speaks.

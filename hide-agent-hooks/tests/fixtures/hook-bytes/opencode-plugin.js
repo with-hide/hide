@@ -1,4 +1,4 @@
-// hide-opencode-plugin@6 sha256=af3b423678f1546b1cecd136e2742e5ecf83f606cfecd91f2810bfcbd7bf2699
+// hide-opencode-plugin@7 sha256=ccd322861a3007070f42489901b9be756ef1850164fd8d2f7e4809624b56de1e
 // Hide's OpenCode 1.x plugin, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane Hide manages, or when its helper is gone, it does nothing.
@@ -11,6 +11,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 const HELPER = "/kit path/it's/hide-agent-hooks";
+const ROUTE = [];
 
 // The prompt budget is Claude Code's prompt hook's; the tool budget is the
 // spawn guard's. OpenCode puts no limit on a hook, so these are the limits.
@@ -109,7 +110,7 @@ function helper(state, operation, input, budgetMs) {
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(HELPER, ["opencode", operation], { stdio: ["pipe", "pipe", "ignore"] });
+      child = spawn(HELPER, ["opencode", operation, ...ROUTE], { stdio: ["pipe", "pipe", "ignore"] });
     } catch {
       resolve(null);
       return;

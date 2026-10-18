@@ -104,6 +104,7 @@ const stop = ({ herdr, daemon }: Stack) => {
 
 const grokFile = (home: string) => path.join(home, ".grok", "hooks", "hide.json");
 const cursorFile = (home: string) => path.join(home, ".cursor", "hooks.json");
+const capturedState = (daemon: Daemon) => `--state-dir-b64 ${Buffer.from(daemon.stateDir).toString("base64url")}`;
 
 /** The files' shapes, as far as the spec reads them: Grok's and Claude Code's group a command in `hooks`, Cursor's entry is flat. */
 type Grouped = { hooks: Record<string, { matcher?: string; hooks: { command: string }[] }[]> };
@@ -141,13 +142,13 @@ test("the switches write Hide's Grok file and Cursor entries beside the others, 
     const switchOf = (id: string, state: "on" | "off") => list.locator(`[data-agent-switch="${daemon.node}:${id}:${state}"]`);
     await expect(switchOf("grok", "off")).toBeVisible({ timeout: 60_000 });
     await expect(switchOf("cursor", "off")).toBeVisible();
-    // Grok's rest bell needs the prompt observer beside its tool and Stop hooks; Cursor keeps version 6.
+    // Each switch routes its installed hooks back to the daemon that wrote them.
     await switchOf("grok", "off").click();
     await expect(switchOf("grok", "on")).toBeVisible();
-    await expect.poll(() => read(grokFile(home)), { timeout: 60_000 }).toContain("hide-guidance@7");
+    await expect.poll(() => read(grokFile(home)), { timeout: 60_000 }).toContain(capturedState(daemon));
     await switchOf("cursor", "off").click();
     await expect(switchOf("cursor", "on")).toBeVisible();
-    await expect.poll(() => read(cursorFile(home)), { timeout: 60_000 }).toContain("hide-guidance@6");
+    await expect.poll(() => read(cursorFile(home)), { timeout: 60_000 }).toContain(capturedState(daemon));
     expect(Object.keys(json<Grouped>(grokFile(home)).hooks).sort()).toEqual(["PreToolUse", "SessionStart", "Stop", "SubagentStart", "SubagentStop", "UserPromptSubmit"]);
     expect(json<Grouped>(grokFile(home)).hooks.UserPromptSubmit![0]!.matcher).toBeUndefined();
     expect(installed.grok(home, "UserPromptSubmit")).toContain("--event UserPromptSubmit");
@@ -192,7 +193,7 @@ test("a Grok file the operator removed or edited shows on its row until Reinstal
   const wire = watchWire(page);
   try {
     const list = await openAgents(page, daemon);
-    await expect.poll(() => read(grokFile(home)), { timeout: 60_000 }).toContain("hide-guidance@7");
+    await expect.poll(() => read(grokFile(home)), { timeout: 60_000 }).toContain(capturedState(daemon));
     const original = json<Grouped>(grokFile(home));
     // B8: the hook the operator took out is not put back; its row says so with Reinstall, on that row only.
     fs.rmSync(grokFile(home));
