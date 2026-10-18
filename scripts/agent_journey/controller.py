@@ -18,7 +18,7 @@ import time
 from agent_live_check.processes import ProcessError
 from agent_live_check.protection import private_directory, write_private
 from agent_live_check.runtime import clean_env
-from agent_live_check.system import WINDOWS, exe, home_env, temp_env
+from agent_live_check.system import WINDOWS, exe, home_env, remove_pane_files, temp_env
 
 COMMAND_SECONDS = 25
 START_SECONDS = 60
@@ -101,11 +101,10 @@ class Controller:
         """One `hide` command run by the controller agent; its JSON answer."""
         runtime = self.runtime
         self.sequence += 1
-        self.completed.unlink(missing_ok=True)
-        self.response.unlink(missing_ok=True)
+        remove_pane_files(self.completed, self.response)
         environment = {**home_env(runtime.home), "HIDE_STATE_DIR": str(runtime.state),
                        "PATH": runtime.env["PATH"], **temp_env(runtime.run / "agent-tmp")}
-        self.command.unlink(missing_ok=True)
+        remove_pane_files(self.command)
         write_private(self.command, json.dumps({"argv": [str(runtime.hide), *args], "env": environment,
                                                 "response": str(self.response)}).encode())
         runtime.command(["pane", "send-text", self.pane, "!"])
