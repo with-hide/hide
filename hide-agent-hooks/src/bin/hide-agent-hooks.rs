@@ -51,6 +51,9 @@ fn main() -> ExitCode {
     // Guarded launches acknowledge ownership before parsing, filesystem work
     // or runtime stdin. Keep this guard until all output and intake finish.
     let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if argument_value("--runtime", &arguments).as_deref() == Some("grok") {
+        probe(serde_json::json!({"stage":"entry", "event":argument_value("--event", &arguments)}));
+    }
     let owner_watch = match OwnerWatch::from_launch() {
         Ok(watch) => watch,
         // Exit 2 from a `PreToolUse` hook refuses the tool call. The outer hook
@@ -275,7 +278,8 @@ fn run_basic_hook(agent: GuidanceAgent, arguments: &[String], started: Instant) 
 fn probe(mut value: serde_json::Value) {
     if let Some(home) = home_directory() {
         value["at"] = serde_json::json!(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis());
-        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(home.join(".hide/agent-hooks/probe.jsonl")) {
+        let folder = std::env::var_os("GROK_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".grok"));
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(folder.join("hook-probe.jsonl")) {
             let _ = writeln!(file, "{value}");
         }
     }
