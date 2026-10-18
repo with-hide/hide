@@ -256,6 +256,17 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         generation = path.endswith(("/chat/completions", "/responses", "/messages")) or ":generateContent" in path \
             or ":streamGenerateContent" in path
+        if generation and self.server.api_key is not None:
+            key = self.server.api_key
+            authenticated = (self.headers.get("Authorization") == "Bearer " + key
+                             or self.headers.get("x-api-key") == key
+                             or self.headers.get("x-goog-api-key") == key)
+            if not authenticated:
+                self.server.auth_failures += 1
+                self.record(kind="auth_refused", authenticated=False)
+                self.send(401, {"error": {"message": "fake_api_key_required"}})
+                return
+            self.server.authenticated += 1
         if not self.admitted(generation):
             return
         text, token = reply(request)
@@ -356,7 +367,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, reply)
 
 
-def serve(log=None, limit=None):
+def serve(log=None, limit=None, api_key=None):
     """A started server on 127.0.0.1 and its thread; `server.server_address[1]`
     is the port, and `limit` the most model requests it answers."""
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -364,6 +375,7 @@ def serve(log=None, limit=None):
     server.log, server.lock = log, threading.Lock()
     server.limit, server.counts = limit, threading.Lock()
     server.requests = server.generations = server.refused = 0
+    server.api_key, server.authenticated, server.auth_failures = api_key, 0, 0
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread

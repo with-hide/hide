@@ -548,6 +548,8 @@ pub struct AgentAdapter {
     pub conversation: Option<SessionFormat>,
     pub titles: Option<SessionFormat>,
     pub start: Option<LaunchDialect>,
+    /// Safety declaration for keyless journeys only; never changes a real login HOME.
+    pub fake_home: journey::FakeHome,
     pub find: Option<FindDialect>,
     pub usage: usage::UsageDeclaration,
     pub doc_url: &'static str,

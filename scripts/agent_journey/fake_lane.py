@@ -4,13 +4,14 @@ pointed at the journey's fake model (fake_model.py) instead of a provider
 
 This table is the lane's only per-agent CLI knowledge: the environment and
 the files under the run's daemon home that send the CLI's model requests to
-`url`, in either mode. In CI mode HOME is that home; in local mode HOME stays
-the operator's and each agent reads the same files through its route's
-configuration variable (local.py), and Claude through CLAUDE_CONFIG_DIR. No
-login is used or copied, so nothing an operator owns is read.
+`url`, in either mode. CI and guarded local fake runs use that private HOME;
+real local logins keep the operator's HOME. No login is read or copied.
 """
 
 import json
+from pathlib import Path
+
+from .fake_private import configure_update
 
 from agent_live_check.protection import private_directory, write_private
 
@@ -33,7 +34,7 @@ LIMITS = [
 # the fake skip any proxy the runner has.
 QUIET = {"NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost",
          "PI_OFFLINE": "1", "PI_SKIP_VERSION_CHECK": "1", "PI_TELEMETRY": "0",
-         "GROK_AUTO_UPDATE": "0", "GROK_TELEMETRY_ENABLED": "0", "AGY_CLI_DISABLE_AUTO_UPDATE": "1",
+         "GROK_TELEMETRY_ENABLED": "0",
          "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
 
 
@@ -79,9 +80,9 @@ def grok(home, url, root, local):
     config = home / ".grok/config.toml"
     private_directory(config.parent)
     write_private(config, (f'[models]\ndefault = "{PROVIDER}"\n[model.{PROVIDER}]\nmodel = "{MODEL}"\n'
-                           f'base_url = "{url}/v1"\napi_key = "{KEY}"\napi_backend = "chat_completions"\n'
+                           f'base_url = "{url}/v1"\nenv_key = "JOURNEY_FAKE_KEY"\napi_backend = "chat_completions"\n'
                            f'name = "Journey"\ncontext_window = 128000\n').encode())
-    return {}
+    return {"JOURNEY_FAKE_KEY": KEY}
 
 
 def pi(home, url, root, local):
@@ -91,10 +92,10 @@ def pi(home, url, root, local):
     folder = home / ".pi/agent"
     private_directory(folder)
     write_private(folder / "models.json", json.dumps({"providers": {PROVIDER: {
-        "baseUrl": f"{url}/v1", "api": "openai-completions", "apiKey": KEY,
+        "baseUrl": f"{url}/v1", "api": "openai-completions", "apiKey": "${JOURNEY_FAKE_KEY}",
         "models": [{"id": MODEL, "name": "Journey"}]}}}).encode())
     write_private(folder / "settings.json", json.dumps({"defaultProvider": PROVIDER, "defaultModel": MODEL}).encode())
-    return {}
+    return {"JOURNEY_FAKE_KEY": KEY}
 
 
 def omp(home, url, root, local):
@@ -127,7 +128,7 @@ def opencode(home, url, root, local):
     folder = home / opencode_service.CONFIG
     private_directory(folder)
     write_private(folder / "opencode.json", json.dumps({
-        "model": f"{PROVIDER}/{MODEL}", "update": "disable",
+        "model": f"{PROVIDER}/{MODEL}",
         "providers": {PROVIDER: {"name": "Journey", "env": ["JOURNEY_FAKE_KEY"],
                                  "package": "@opencode/ai/providers/openai-compatible",
                                  "settings": {"baseURL": f"{url}/v1"}, "models": {MODEL: {"name": "Journey"}}}}}).encode())
@@ -140,7 +141,12 @@ PROVIDERS = {"claude": claude, "codex": codex, "grok": grok, "pi": pi, "omp": om
 def configure(kind, home, url, root, local):
     """Writes the files that point `kind` at the fake model at `url` and
     returns the environment it runs with."""
-    return {**QUIET, **PROVIDERS[kind](home, url, root, local)}
+    env = {**QUIET, **PROVIDERS[kind](home, url, root, local)}
+    rows = json.loads((Path(__file__).resolve().parents[2] / "contracts/agent-journey.json").read_text())
+    declaration = next(row.get("fake_home", {}) for row in rows if row["herdr_kind"] == kind)
+    if declaration.get("auto_update"):
+        env.update(configure_update(declaration, home))
+    return env
 
 
 def requests(log):

@@ -408,7 +408,34 @@ Never run a cargo build or test while it runs: either relinks `target/debug` und
 With `--fake-model`, in either mode, each real CLI with Hide's real kit and Herdr's integration is answered by the journey's fake model (`scripts/agent_journey/fake_model.py`) instead of a provider, and no login is read, copied or used.
 It speaks OpenAI Chat Completions and Responses, Anthropic Messages and Gemini `generateContent`, streamed or whole, with usage in each provider's shape, and answers a turn with the last token of what the request sends after the model's own last turn, a token inside Hide's Project Memory blocks left out, or with the token of the Project Memory index the session started with when the turn carries none; a request that asks for JSON of a schema, as Claude Code's and Codex's title requests do, is answered with an object of that schema.
 `scripts/agent_journey/fake_lane.py` writes each CLI's provider configuration into the run's daemon home, and each agent gets its own server, so its log counts that agent's model requests exactly.
-Locally Claude then reads a private `CLAUDE_CONFIG_DIR` in the daemon home instead of the operator's `~/.claude.json`, so its never-trusted start is measured there too; the candidate's Hide AI is off in both modes, and the native titles are what the title cell reads.
+Local fake mode uses a private HOME only for an adapter whose four guards can be enforced; real-login mode always keeps the operator's HOME.
+Build its layout reader first with `bash scripts/verify-cargo.sh build -p hide-kit --example journey_cache`.
+The local fake runner installs only the selected CLIs from `contracts/agent-clis.json` into `~/.hide/cache/journey-clis/`, whose path and 4 GiB total cap are owned by `hide_kit::layout`.
+Each entry is keyed by the CLI pin, installer specification, operating system and architecture; later runs reuse its receipt and verify the executable digest and answered version.
+The cap includes in-progress installations and cached downloads; crossing it fails with exit 2 and asks the operator to remove unused pins, never silently evicts another run's CLI or increases the cap.
+A lease holds the cache until the run's children have ended, so another local fake run refuses a busy cache.
+An interrupted installation remains an explicitly incomplete pin and must be removed before retrying.
+
+The four guards are enforced before or during every admitted agent's journey:
+
+1. The executable comes only from the pinned cache, never the operator's PATH or aliases.
+   The installer itself has a private HOME and a write sandbox permitting only that cache entry; the agent's controlled PATH contains the candidate wrappers, the Node runtime and system tools.
+2. The Rust adapter declares how automatic updates are disabled, projected into `contracts/agent-journey.json` and applied before any CLI starts.
+   The agent's write sandbox also denies changes to the cached program, operator agent folders and keychain, and permits model traffic only to loopback.
+3. The run compares the operator's `~/.local/bin/claude` link target and the mtimes of `~/.claude`, `~/.codex`, `~/.gemini`, `~/.grok`, `~/.omp` and `~/.pi` before installation, between journey steps and after cleanup.
+   Any difference is an isolation failure (exit 2), even if another operator process caused it; the report retains both metadata snapshots without restoring or changing those paths.
+   These are directory mtimes, not recursive content hashes; the sandbox enforces the agent's write boundary independently.
+4. The adapter declares an API-key environment route, the provider configuration names that variable, and the fake server accepts a model request only when it carries that key.
+   Missing or rejected key evidence stops the run with exit 2 after the start attempt; reports record only environment names, authenticated request counts and source references.
+
+Claude Code, Codex, Grok, OpenCode, Pi and omp declare these routes.
+Their update policies are respectively `DISABLE_AUTOUPDATER`, `check_for_update_on_startup = false`, `GROK_DISABLE_AUTOUPDATER`, `update: disable`, `PI_OFFLINE` and `startup.checkUpdate: false` (omp checks for a version but does not automatically install it).
+agy keeps the local exception and is not started: its installer cannot select the pinned release; CI's disposable runner still measures it with its existing version check.
+Cursor remains excluded by operator decision.
+A missing key or update declaration, or a non-version-selecting installer, keeps an adapter on its existing local fake route with the operator HOME, and the report names the exception.
+This preserves existing coverage: a route already measured still runs, while an existing local limitation such as agy remains `not measured`.
+The candidate's Hide AI is off in both fake modes, and native titles are what the title cell reads.
+`scripts/tests/test_agent_journey_private_home.py` exercises metadata and link changes on fake watch roots, missing proof, cache refusal and authenticated requests; no test watches or changes the operator's folders.
 The report is marked as a fake model run with what a fake model cannot show: it proves the CLI, Hide's kit and Herdr's integration, never a provider, a login or a quota, and its rows are kept apart from a signed-in run's.
 
 ### The CI lanes

@@ -52,6 +52,8 @@ def markdown(report):
         lines.append(f"### {agent['id']}")
         lines.append("")
         lines.append(f"- CLI: {text(agent.get('version', 'not probed'))}")
+        if "private_home" in agent:
+            lines.append(f"- private HOME: `{text(json.dumps(agent['private_home']))}`")
         if "requests" in agent:
             budget = agent.get("request_budget")
             lines.append(f"- model requests: {agent['requests']}" + (f" (budget {budget})" if budget is not None else "")
@@ -73,7 +75,7 @@ def markdown(report):
         lines.append("")
     lines.extend(["## Isolation, operator files and cleanup", "", "```json",
                   json.dumps({key: report[key] for key in ("measured_repository", "measured_commit", "measured_project", "created",
-                                               "configuration", "operator_trust", "operator_session_folders",
+                                               "configuration", "operator_watch", "cli_cache", "operator_trust", "operator_session_folders",
                                                "leftover_copies", "cleanup", "failures")
                                 if key in report},
                              indent=2, default=str), "```", ""])

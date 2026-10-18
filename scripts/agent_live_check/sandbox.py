@@ -44,7 +44,7 @@ class WriteSandbox:
     def __init__(self, run: Path, sockets: Path, operator_home: Path,
                  state: Path | None = None, *, checkout: Path,
                  protected: list[Path] | None = None, routing: list[Path] | None = None,
-                 executables: list[Path] | None = None):
+                 executables: list[Path] | None = None, fake_private: bool = False):
         if sys.platform != "darwin" or not Path("/usr/bin/sandbox-exec").is_file():
             raise ProtectionError("authenticated_probes_require_macos_write_sandbox")
         self.run = run.resolve()
@@ -121,7 +121,21 @@ class WriteSandbox:
                      operator_home / ".local/state/hide", operator_home / ".config/herdr",
                      *(routing or [])]):
             rules.append(f"(deny file-read* (subpath {quote(path)}))")
-        self.profile = self.run / "native-write-guard.sb"
+        if fake_private:
+            # Only keyless pinned CLIs enter this stricter mode. Operator native
+            # state is neither an auth source nor a destination, even if a CLI
+            # ignores HOME. No remote provider can receive a request.
+            rules.extend(["(deny file-write*)",
+                          "(allow file-write* " + " ".join(f"(subpath {quote(p)})" for p in allowed) + ")",
+                          '(allow file-write* (literal "/dev/null"))',
+                          "(deny network-outbound)",
+                          '(allow network-outbound (remote ip "127.0.0.1:*"))',
+                          f"(allow network-outbound (remote unix-socket (subpath {quote(self.sockets)})))",
+                          f"(allow network-outbound (remote unix-socket (subpath {quote(self.run)})))"])
+            for name in (".claude", ".claude.json", ".codex", ".gemini", ".grok", ".omp", ".pi",
+                         ".config/opencode", ".local/share/opencode", "Library/Keychains"):
+                rules.append(f"(deny file-read* file-write* (subpath {quote(operator_home / name)}))")
+        self.profile = self.run / ("fake-write-guard.sb" if fake_private else "native-write-guard.sb")
         self.rules = rules
         self.references = set()
         write_private(self.profile, ("\n".join(rules) + "\n").encode())
@@ -142,6 +156,23 @@ class WriteSandbox:
 
     def command(self, argv: list[str]) -> list[str]:
         return ["/usr/bin/sandbox-exec", "-f", str(self.profile), *argv]
+
+    def verify_private(self, owner, env, outside):
+        """Fail before a CLI starts if the fake-only write boundary is ineffective.
+
+        The attempted forbidden write is a disposable stand-in, never an operator file.
+        """
+        forbidden, allowed = outside / "forbidden", self.probe / "private-guard-proof"
+        write_private(forbidden, b"unchanged")
+        script = ("import pathlib,sys\n"
+                  f"pathlib.Path({str(allowed)!r}).write_bytes(b'allowed')\n"
+                  f"try: pathlib.Path({str(forbidden)!r}).write_bytes(b'changed')\n"
+                  "except PermissionError: pass\n"
+                  "else: sys.exit(31)\n")
+        code, _, _ = owner.run(self.command([sys.executable, "-c", script]), env=env, check=False)
+        if code or forbidden.read_bytes() != b"unchanged" or not allowed.is_file():
+            raise ProtectionError("private_home_write_guard_not_enforced")
+        allowed.unlink()
 
     def verify(self, owner: OwnedProcesses, env: dict, outside: Path) -> None:
         """Exercise declared-file/control protection and Unix socket isolation.
