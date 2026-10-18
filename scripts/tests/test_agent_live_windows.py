@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_live_check import processes
 from agent_live_check.processes import OwnedProcesses, ProcessError, ProcessSafetyError
 from agent_live_check.protection import private, private_directory, write_private
-from agent_live_check.system import WINDOWS, PaneShell, launcher, remove_tree, same_path
+from agent_live_check.system import WINDOWS, PaneShell, launcher, remove_pane_files, remove_tree, same_path
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 WAIT_SECONDS = 10
@@ -236,12 +236,13 @@ class ShellForms(unittest.TestCase):
         return subprocess.run(f'"{shell}" /d /s /c "{line}"', capture_output=True, timeout=60)
 
     def test_a_pane_command_keeps_its_output_and_exit_status(self):
-        output, status = self.folder / "pane out", self.folder / "status"
+        output, error, status = self.folder / "pane out", self.folder / "pane err", self.folder / "status"
         program = [sys.executable, "-c", "import sys; print(sys.argv[1:]); sys.stderr.write('noise'); sys.exit(3)",
                    "two words", "it's"]
-        ran = self.cmd(PaneShell().program(program, output, status))
+        ran = self.cmd(PaneShell().program(program, output, error, status))
         self.assertEqual(ran.stderr, b"")
         self.assertEqual(output.read_text().strip(), str(["two words", "it's"]))
+        self.assertEqual(error.read_text(), "noise")
         self.assertEqual(status.read_text().strip(), "3")
 
     def test_a_variable_read_from_a_file_reaches_what_the_shell_starts(self):
@@ -251,7 +252,40 @@ class ShellForms(unittest.TestCase):
                        + f' & "{sys.executable}" -c "import os; print(os.environ[\'HIDE_CAP_REF\'])"')
         self.assertEqual(ran.returncode, 0, ran.stderr)
         self.assertEqual(ran.stdout.decode().strip(), "C:/private/pane capabilities/reference.json")
-        self.assertTrue(ready.is_file())
+        self.assertEqual(ready.read_text().strip(), "ready")
+
+    def test_a_readable_completion_marker_is_released_after_its_writer_closes(self):
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                      wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        marker = self.folder / "reference-ready"
+        marker.write_text("ready")
+        # Read sharing, without delete sharing, as cmd's redirect can hold
+        # after its completion bytes are visible to the controller.
+        handle = kernel.CreateFileW(str(marker), 0x40000000, 1, None, 3, 0, None)
+        self.assertNotEqual(handle, ctypes.c_void_p(-1).value)
+        unlink = os.unlink
+
+        def release_after_refusal(*args, **kwargs):
+            nonlocal handle
+            try:
+                return unlink(*args, **kwargs)
+            except PermissionError:
+                kernel.CloseHandle(handle)
+                handle = None
+                raise
+        try:
+            self.assertEqual(marker.read_text(), "ready")
+            with patch("os.unlink", release_after_refusal):
+                remove_pane_files(marker)
+            self.assertFalse(marker.exists())
+        finally:
+            if handle is not None:
+                kernel.CloseHandle(handle)
 
     def test_the_pane_shell_is_the_one_herdr_is_told_to_start(self):
         config = PaneShell().herdr_config()

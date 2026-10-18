@@ -12,6 +12,7 @@ const publish = (next: SnapshotRest) => useShellStore.setState({ rest: next });
 describe("the failures the operator is told about", () => {
   it("picks the ones the operator can act on and leaves the rest to the diagnostic log (design 13)", () => {
     expect(errorNotice(error("pane_reopen.not_restarted", 1))).toEqual({ text: "reason for pane_reopen.not_restarted", refreshable: false });
+    expect(errorNotice(error("terminal.input_hold_failed", 1))).toEqual({ text: "reason for terminal.input_hold_failed", refreshable: false });
     expect(errorNotice(error("remote.control.close_status_unknown", 1))).toEqual({ text: "reason for remote.control.close_status_unknown", refreshable: true });
     expect(errorNotice(error("remote.control.refused", 1))?.refreshable).toBe(false);
     expect(errorNotice(error("view_layout.unsaved", 1))?.text).toBe("reason for view_layout.unsaved");

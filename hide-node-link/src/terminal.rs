@@ -108,7 +108,10 @@ pub enum TerminalControl {
     /// The agent in the pane sleeps: keys for it are dropped until it wakes.
     Asleep { pane: String, asleep: bool },
     /// A creation the screen sends keys against before Herdr names its pane.
-    RequestOpen { request: String },
+    RequestOpen { request: String, fork: bool },
+    /// The pane exists but its creation is still starting. All clients' keys
+    /// for it join this request's queue on the pane's node.
+    RequestHold { request: String, pane: String },
     /// Herdr's answer for the creation named its pane.
     RequestResolve { request: String, pane: String },
     /// The creation made no pane the keys may follow.
@@ -500,6 +503,7 @@ impl TerminalControl {
             Self::Shown { .. }
             | Self::Focus { .. }
             | Self::RequestOpen { .. }
+            | Self::RequestHold { .. }
             | Self::RequestResolve { .. }
             | Self::RequestDiscard { .. }
             | Self::AttachmentRefuse { .. }

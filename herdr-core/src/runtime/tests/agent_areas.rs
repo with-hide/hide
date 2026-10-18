@@ -2215,6 +2215,17 @@ fn a_fork_the_operator_did_not_press_stays_behind() {
             Some(InputRequestState::Discarded),
             "tab: {tab}"
         );
+        assert!(
+            runtime
+                .snapshot
+                .terminal
+                .input_requests
+                .iter()
+                .any(|request| {
+                    request.held_for.as_deref() == Some(pane)
+                        && request.state == InputRequestState::Pending
+                })
+        );
         if tab {
             assert!(
                 ordered_tab_ids(&runtime, &checkout)
@@ -2274,4 +2285,75 @@ fn herdr_reporting_a_fork_tab_before_its_answer_is_not_followed() {
     assert!(keys_held_for(&runtime, "w-order:t4:p"));
     assert_eq!(diagnostic_count(&runtime, "pane.focus.followed"), 0);
     assert_eq!(diagnostic_count(&runtime, "tab.focus.followed"), 0);
+}
+
+#[test]
+fn unconfirmed_fork_input_keeps_the_successful_fork_pane() {
+    let source = "w-order:t1:p";
+    let pane = "w-order:t4:p";
+    let (mut runtime, _) = setup();
+    let terminals = record_terminals(&mut runtime);
+    pending_fork(&mut runtime, source, Some("fork-keys"));
+    runtime.ingest_fork_pane(source, Some("w-order:t4"), pane);
+    let screen = fork_on_screen(&runtime);
+    terminals.take();
+    runtime.discard_fork_input(source);
+    runtime.ingest_fork_result(source, Ok(pane.into()), 0);
+    assert_eq!(fork_on_screen(&runtime), screen);
+    assert!(runtime.forks_in_flight.is_empty());
+    assert_eq!(
+        input_state(&runtime, "fork-keys"),
+        Some(InputRequestState::Discarded)
+    );
+    let controls = terminals.take();
+    assert!(controls.iter().any(|control| matches!(control,
+        TerminalControl::RequestDiscard { request, reason } if request == "fork-keys" && reason == "unconfirmed")));
+    assert!(
+        !controls
+            .iter()
+            .any(|control| matches!(control, TerminalControl::RequestResolve { .. }))
+    );
+    assert_eq!(diagnostic_count(&runtime, "pane.fork_failed"), 0);
+}
+
+/// A panicking worker and a vanished runtime both end the node's holder.
+#[test]
+fn fork_worker_panic_and_runtime_teardown_discard_the_node_request() {
+    let source = "w-order:t1:p";
+    for panic_worker in [true, false] {
+        let (mut runtime, _) = setup();
+        let terminals = record_terminals(&mut runtime);
+        pending_fork(&mut runtime, source, Some("fork-owner"));
+        assert!(terminals.take().contains(&TerminalControl::RequestOpen {
+            request: "fork-owner".into(),
+            fork: true,
+        }));
+        runtime.ingest_fork_pane(source, None, "w-order:t3:p");
+        terminals.take();
+        let runtime = Arc::new(Mutex::new(runtime));
+        let context = live::LiveContext {
+            socket_path: Default::default(),
+            runtime: Arc::downgrade(&runtime),
+            notifier: crate::handle::ChangeNotifier::noop(),
+            api_connector: Arc::new(hide_herdr_client::LocalSocketConnector::new(
+                std::path::PathBuf::new(),
+            )),
+            node: Arc::new(hide_node::Local::of_process()),
+        };
+        if panic_worker {
+            live::finish_fork_worker(&context, source, || panic!("fixture worker exit"));
+            let state = runtime.lock().unwrap();
+            assert!(state.forks_in_flight.is_empty());
+            assert_eq!(
+                input_state(&state, "fork-owner"),
+                Some(InputRequestState::Discarded)
+            );
+        } else {
+            drop(runtime);
+            live::finish_fork_worker(&context, source, || Ok("w-order:t3:p".into()));
+        }
+        assert!(terminals.take().iter().any(|control| matches!(control,
+            TerminalControl::RequestDiscard { request, .. } if request == "fork-owner"
+        )));
+    }
 }
