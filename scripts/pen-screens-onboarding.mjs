@@ -395,10 +395,10 @@ export function onboardingBoards(tokens, root, {themedXref, screenButton, screen
   }
 
   function starting(p) {
-    return nativeWindow(p, [
+    const window = nativeWindow(p, [
       F(`${p}-flight`, 'Local owl-roam / reduced-motion still', {width: num(tokens, '--size-brand-flight'), height: 450, layout: 'none'}, [
         at(F(`${p}-brand`, 'Brand', {width: 800, height: 450, layout: 'vertical', gap: '$--spacing-md', alignItems: 'center', justifyContent: 'center'}, [
-          baseText(`${p}-word`, 'hide', {size: '$--size-brand-word', weight: '750', fill: '$--foreground', letterSpacing: '$--tracking-brand'}),
+          {...baseText(`${p}-word`, 'hide', {size: '$--size-brand-word', weight: '800', fill: '$--foreground'}), letterSpacing: num(tokens, '--tracking-brand')},
           T(`${p}-tagline`, 'Run more agents. Hold less.', {fill: '$--subtle-foreground'}),
           F(`${p}-loading`, 'Preparing / localized host state', {layout: 'vertical', gap: '$--spacing-sm', alignItems: 'center', padding: ['$--spacing-md', 0, 0, 0]}, [
       F(`${p}-track`, 'Indeterminate / static in reduced motion', {width: num(tokens, '--size-brand-track'), height: num(tokens, '--size-brand-track-h'), cornerRadius: '$--radius-sm', fill: '$--border', layout: 'horizontal', justifyContent: 'center'}, [F(`${p}-sweep`, 'Sweep', {width: 48, height: num(tokens, '--size-brand-track-h'), fill: '$--primary'}, [])]),
@@ -408,6 +408,9 @@ export function onboardingBoards(tokens, root, {themedXref, screenButton, screen
         at(F(`${p}-owl`, 'owl-roam / resting beside the brand', {width: 800, height: 450, fill: {type: 'image', url: './assets/owls/owl-roam.png', mode: 'contain'}}, []), num(tokens, '--size-brand-flight') * 0.24, 0),
       ]),
     ]);
+    // The host starts before persisted appearance is available. Pen's static
+    // font uses the nearest supported hundred to the host's 750 weight.
+    return {...window, theme: {Mode: 'Dark', Palette: 'Hide'}};
   }
 
   // -- the sidebar and Home ---------------------------------------------------------

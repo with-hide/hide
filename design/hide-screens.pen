@@ -212485,7 +212485,8 @@
                                                       "fill": "$--foreground",
                                                       "fontFamily": "$--font-ui",
                                                       "fontSize": "$--size-brand-word",
-                                                      "fontWeight": "750"
+                                                      "fontWeight": "800",
+                                                      "letterSpacing": -7
                                                     },
                                                     {
                                                       "type": "text",
@@ -212594,7 +212595,11 @@
                                       "clip": true,
                                       "stroke": "$--border",
                                       "strokeWidth": 1,
-                                      "strokeAlignment": "inner"
+                                      "strokeAlignment": "inner",
+                                      "theme": {
+                                        "Mode": "Dark",
+                                        "Palette": "Hide"
+                                      }
                                     }
                                   ],
                                   "layout": "vertical",
@@ -240138,7 +240143,8 @@
                                                       "fill": "$--foreground",
                                                       "fontFamily": "$--font-ui",
                                                       "fontSize": "$--size-brand-word",
-                                                      "fontWeight": "750"
+                                                      "fontWeight": "800",
+                                                      "letterSpacing": -7
                                                     },
                                                     {
                                                       "type": "text",
@@ -240247,7 +240253,11 @@
                                       "clip": true,
                                       "stroke": "$--border",
                                       "strokeWidth": 1,
-                                      "strokeAlignment": "inner"
+                                      "strokeAlignment": "inner",
+                                      "theme": {
+                                        "Mode": "Dark",
+                                        "Palette": "Hide"
+                                      }
                                     }
                                   ],
                                   "layout": "vertical",
