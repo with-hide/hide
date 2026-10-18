@@ -1290,6 +1290,12 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "session_too_long" => {
             "The agent names its session by a file path longer than 4096 bytes; spawn it with a new intent in a checkout with a shorter path"
         }
+        "target_ambiguous" => {
+            "More than one agent answers to that name, on different machines; send to its registration ID from hide agent list (agent-N), or to the pane's full address remote:<device>:pane:<id>"
+        }
+        "target_unavailable" => {
+            "No agent answers to that; a bare pane ID names a pane on your own machine. Find the recipient in hide agent list and send to its name or registration ID"
+        }
         "codex_capability_unknown" => {
             "Hide has not read whether that machine's Codex runs a shared server; ask the operator to press Check again in Settings > Agents for that machine, then run the same command again with the same intent"
         }
@@ -4505,6 +4511,8 @@ mod tests {
             "native_identity_unavailable",
             "identity_waits_full",
             "session_too_long",
+            "target_ambiguous",
+            "target_unavailable",
             "codex_capability_unknown",
         ] {
             let (reason, next) = refusal_answer(code.to_owned(), delivery_next_action(code));

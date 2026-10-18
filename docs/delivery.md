@@ -22,6 +22,7 @@ A bare pane ID never reaches a pane on another machine, even when only that mach
 A pane on another machine is reached by the agent's name or registration ID, or by the full address of a device's pane, `remote:<device>:pane:<id>`.
 The same reading applies to the pane IDs of `--actor` and `--observer`.
 A name that two machines share, such as the default `hide-claude-w1-p2`, is refused `target_ambiguous`.
+Each refusal's `next_action` says so: `target_ambiguous` points to the registration ID from `hide agent list` or the full address, and `target_unavailable` says a bare pane ID names a pane on the caller's own machine and points to the name or registration ID; neither is told to retry.
 A connected device recipient uses its node's pane service over that device's existing SSH link; the credential fixes its device, link, pane, sender and kind, and losing the link revokes that credential immediately.
 The only ledger remains on the controlling daemon.
 A disconnected device hook finishes within its two-second budget with no letters, leaving them pending in that ledger.
