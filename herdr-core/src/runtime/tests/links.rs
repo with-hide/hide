@@ -1182,7 +1182,7 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
 
 #[test]
 #[cfg(unix)]
-fn a_native_fork_worker_refuses_control_retired_during_create_or_start_connect() {
+fn a_native_fork_keeps_state_changes_but_refuses_a_replaced_source_or_control() {
     for kind in ["pi", "omp"] {
         native_fork_current_journey(kind);
     }
@@ -1234,7 +1234,15 @@ fn fork_methods(server: &FakeHerdr) -> Vec<String> {
 
 #[cfg(unix)]
 fn native_fork_current_journey(kind: &'static str) {
-    for case in ["current", "during-tab-connect", "during-start-connect"] {
+    for case in [
+        "current",
+        "during-parent-state-change",
+        "source-session-changed",
+        "source-reference-changed",
+        "source-cwd-changed",
+        "during-tab-connect",
+        "during-start-connect",
+    ] {
         let home = tempfile::tempdir().unwrap();
         let cwd = home.path().canonicalize().unwrap().display().to_string();
         let folder =
@@ -1289,6 +1297,7 @@ fn native_fork_current_journey(kind: &'static str) {
         let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let arm_connect = Arc::clone(&armed);
         let old_focus = std::sync::Mutex::new(String::new());
+        let status_runtime = shared.weak();
         let old = FakeHerdr::start("pi-fork-retired", move |method, params| match method {
             "pane.focus" | "pane.layout" | "workspace.get" => {
                 focus_answer(method, params, &old_focus).unwrap()
@@ -1306,9 +1315,58 @@ fn native_fork_current_journey(kind: &'static str) {
                 }})
             }
             // The fork's tab runs the node's shell with the integration.
-            "layout.apply" => serde_json::json!({"type":"layout_apply","layout":{
+            "layout.apply" => {
+                if matches!(
+                    case,
+                    "during-parent-state-change"
+                        | "source-session-changed"
+                        | "source-reference-changed"
+                        | "source-cwd-changed"
+                ) {
+                    let runtime = status_runtime.upgrade().unwrap();
+                    let mut runtime = runtime.lock().unwrap();
+                    let agent = runtime
+                        .snapshot
+                        .navigator
+                        .agents
+                        .iter_mut()
+                        .find(|agent| agent.pane_id == parent)
+                        .unwrap();
+                    match case {
+                        "during-parent-state-change" => agent.state_change_seq = Some(5),
+                        "source-session-changed" => {
+                            agent.session_id = Some("another-session".into())
+                        }
+                        "source-reference-changed" => {
+                            agent
+                                .row_facts
+                                .as_mut()
+                                .unwrap()
+                                .native_reference
+                                .as_mut()
+                                .unwrap()
+                                .value = "another-source".into()
+                        }
+                        "source-cwd-changed" => {
+                            runtime
+                                .snapshot
+                                .navigator
+                                .workspaces
+                                .iter_mut()
+                                .flat_map(|workspace| &mut workspace.checkouts)
+                                .flat_map(|checkout| &mut checkout.tabs)
+                                .flat_map(|tab| &mut tab.panes)
+                                .find(|pane| pane.id == parent)
+                                .unwrap()
+                                .cwd = "another-folder".into();
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                serde_json::json!({"type":"layout_apply","layout":{
                 "workspace_id":"w-order","tab_id":"w-order:t2","zoomed":false,
-                "focused_pane_id":"child-pane","root":{"type":"pane","pane_id":"child-pane"}}}),
+                "focused_pane_id":"child-pane","root":{"type":"pane","pane_id":"child-pane"}}})
+            }
             "pane.process_info" => {
                 if case == "during-start-connect" {
                     arm_connect.store(true, Ordering::SeqCst);
@@ -1359,8 +1417,12 @@ fn native_fork_current_journey(kind: &'static str) {
             runtime.pending_pane_focus.is_none() && runtime.pane_focus_in_flight.is_none()
         });
         let runtime = shared.lock().unwrap();
-        if case == "current" {
-            assert!(runtime.snapshot.status.last_error.is_none());
+        if matches!(case, "current" | "during-parent-state-change") {
+            assert!(
+                runtime.snapshot.status.last_error.is_none(),
+                "{case}: {:?}",
+                runtime.snapshot.status.last_error
+            );
         } else {
             let failure = runtime
                 .snapshot
@@ -1378,7 +1440,7 @@ fn native_fork_current_journey(kind: &'static str) {
         assert_eq!(
             fork_methods(&old),
             match case {
-                "current" => vec![
+                "current" | "during-parent-state-change" => vec![
                     "session.snapshot",
                     "layout.apply",
                     "pane.process_info",
@@ -1386,6 +1448,8 @@ fn native_fork_current_journey(kind: &'static str) {
                     "agent.start"
                 ],
                 "during-tab-connect" => vec!["session.snapshot"],
+                "source-session-changed" | "source-reference-changed" | "source-cwd-changed" =>
+                    vec!["session.snapshot", "layout.apply", "pane.close"],
                 _ => vec![
                     "session.snapshot",
                     "layout.apply",
