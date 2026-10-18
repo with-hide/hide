@@ -32,12 +32,12 @@ pub use store::hold::{
 };
 pub use store::{
     AnalysisBatch, ApplyOptions, ApplySummary, Candidate, CandidateKind, CandidateOutcome,
-    CandidateRelation, CardEvidence, ComparisonCard, CursorReader, DeleteProjectOutcome,
-    InjectedItem, Injection, InjectionKind, InjectionOutcome, MemoryDetail, MemoryError,
-    MemoryItem, MemoryLifecycle, MemorySource, MemoryStore, PendingCard, PreviousRevision,
-    ProjectMemoryState, Promotion, PromotionState, PromotionSuggestion, ReceiptRecord,
-    RetrievalQuery, SessionCursorRecord, SessionSourceRecord, StoreMode, branch_name, card_name,
-    parse_card_name, repository_path,
+    CandidateRelation, CardEvidence, ComparisonCard, Conversion, CursorReader,
+    DeleteProjectOutcome, InjectedItem, Injection, InjectionKind, InjectionOutcome, MemoryDetail,
+    MemoryError, MemoryItem, MemoryLifecycle, MemorySource, MemoryStore, PendingCard,
+    PreviousRevision, ProjectMemoryState, Promotion, PromotionState, PromotionSuggestion,
+    ReceiptRecord, RetrievalQuery, SessionCursorRecord, SessionSourceRecord, StoreMode,
+    branch_name, card_name, parse_card_name, repository_path,
 };
 pub use verify::{
     Correction, DOCUMENT_EXCERPT_BYTES, DOCUMENT_LIMIT, EXCERPT_SOURCE_BYTES, Excerpt,

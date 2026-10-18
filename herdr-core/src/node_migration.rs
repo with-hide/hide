@@ -625,6 +625,14 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Rewritten,
         Moves::Whole,
     ),
+    // A promotion task names its card by number; a fold of Project Memory
+    // that renumbered the card is read through (`reown`, promotion targets).
+    (
+        DELIVERY_LEDGER,
+        "/spawns/*/task/target",
+        Mechanism::Owned,
+        Moves::Whole,
+    ),
     (
         DELIVERY_LEDGER,
         "/spawns/*/repo",
@@ -1479,7 +1487,8 @@ mod tests {
                 "watches": [{"parent": actor("local"), "target": actor("local")}],
                 "agents": [{"machine": "local", "native_machine": "local", "actor": actor("local"), "pane": "w1:p1", "host_scope": "/tmp/herdr.sock",
                             "project": root, "session": "s1", "instance": "term_1"}],
-                "spawns": [{"repo": root, "path": root, "requested_path": root, "pane": "w1:p2", "machine": "mini"}],
+                "spawns": [{"repo": root, "path": root, "requested_path": root, "pane": "w1:p2", "machine": "mini",
+                            "task": {"kind": "memory_promote", "target": "m1"}}],
                 "identity_waits": [{"id": "wait-8", "machine": "local", "pane": "w1:p3", "name": "fork-w1-p1-1-1", "kind": "codex",
                                     "owed": {"for": "fork", "origin": "agent-1"}}],
                 "node_clocks": {"mini": {"connected_ms": 60_000, "since": null}},
