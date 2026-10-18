@@ -1314,6 +1314,7 @@ fn a_mixed_device_tree_rolls_outputs_and_missed_items_into_the_spawn_task_and_op
                 parent_name: "parent".into(),
                 name: "child".into(),
                 reported_at_unix_ms: None,
+                live: true,
             }])
             .unwrap();
         store
@@ -1392,6 +1393,7 @@ fn delegated_raw_records_accept_only_the_initial_and_parents_work_requests() {
             parent_name: "lead".into(),
             name: "child".into(),
             reported_at_unix_ms: None,
+            live: true,
         }])
         .unwrap();
     let facts = hide_session::links::LinkFacts {
@@ -1517,6 +1519,7 @@ fn late_parent_retracts_judgments_and_refuses_in_flight_operator_work() {
             parent_name: "lead".into(),
             name: "child".into(),
             reported_at_unix_ms: None,
+            live: true,
         }])
         .unwrap();
     // An END and a raw request captured before lineage arrived settle later.
@@ -2255,6 +2258,7 @@ fn a_childs_progress_counts_its_own_tasks_or_its_last_end_and_hides_while_one_is
                 parent_name: "parent".into(),
                 name: "child".into(),
                 reported_at_unix_ms: None,
+                live: true,
             }])
             .unwrap();
         store
@@ -2508,6 +2512,7 @@ mod continuation {
                         parent_name: "observer".into(),
                         name: format!("impl-{id}"),
                         reported_at_unix_ms: *reported,
+                        live: true,
                     })
                     .collect::<Vec<_>>(),
             )
@@ -2787,6 +2792,25 @@ mod continuation {
         assert_eq!(tasks(&store), [(true, false, LabelEnd::Question); 2]);
     }
 
+    /// The lineage facts again, `b` run by a pane or not.
+    fn b_live(store: &mut LinkStore, live: bool) {
+        let fact = |id: &str, live: bool| crate::links::ParentFact {
+            device_id: "device-a".into(),
+            agent: "claude".into(),
+            session_id: id.into(),
+            parent_device_id: session().device_id,
+            parent_agent: session().agent,
+            parent_session_id: session().session_id,
+            parent_name: "observer".into(),
+            name: format!("impl-{id}"),
+            reported_at_unix_ms: None,
+            live,
+        };
+        store
+            .apply_parents(&[fact("a", true), fact("b", live)])
+            .unwrap();
+    }
+
     #[test]
     fn a_merged_task_waits_for_a_child_it_spawned_that_is_still_at_work() {
         let directory = tempfile::tempdir().unwrap();
@@ -2800,16 +2824,59 @@ mod continuation {
             [(false, false, LabelEnd::Waiting); 2],
             "a merged, b still at work (B23)"
         );
+        // a's report wakes the observer while b works: the turn is the task's.
+        turn(
+            &mut store,
+            20,
+            20_000,
+            20_900,
+            LabelEnd::Question,
+            Some("impl-a"),
+            TaskDecision::None,
+        );
+        assert_eq!(tasks(&store), [(false, false, LabelEnd::Question); 2]);
+        // b's pane is gone: the state it was last read in holds nothing.
+        b_live(&mut store, false);
+        assert_eq!(tasks(&store), [(true, false, LabelEnd::Question); 2]);
+        b_live(&mut store, true);
+        assert_eq!(tasks(&store), [(false, false, LabelEnd::Question); 2]);
         title(&store, &child("b"), "idle");
         assert_eq!(
             tasks(&store),
-            [(true, false, LabelEnd::Waiting); 2],
+            [(true, false, LabelEnd::Question); 2],
             "b rests"
         );
         // A child whose newest turn went unjudged holds nothing (D-05).
         title(&store, &child("b"), "working");
         unjudged(&mut store, &child("b"), 5);
-        assert_eq!(tasks(&store), [(true, false, LabelEnd::Waiting); 2]);
+        assert_eq!(tasks(&store), [(true, false, LabelEnd::Question); 2]);
+    }
+
+    #[test]
+    fn a_letter_turn_waits_for_the_first_lineage_facts_after_a_start() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+        let end = |letter: Option<&str>| LedgerUpdate::TurnEnd {
+            session: session(),
+            offset: 20,
+            started_at_unix_ms: 20_000,
+            at_unix_ms: 20_900,
+            end: LabelEnd::Done,
+            work_author: false,
+            letter: letter.map(str::to_owned),
+            turn_witness: None,
+            judgment: TurnJudgment::default(),
+        };
+        assert!(store.awaits_lineage(&end(Some("impl-a"))));
+        assert!(
+            !store.awaits_lineage(&end(None)),
+            "a watch turn waits for nothing"
+        );
+        store.apply_parents(&[]).unwrap();
+        assert!(
+            !store.awaits_lineage(&end(Some("impl-a"))),
+            "no children is a fact"
+        );
     }
 
     #[test]

@@ -683,6 +683,11 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
             for child in children.iter().flatten() {
                 update_context_ancestors(client, store, child);
             }
+            if children.is_err() {
+                // Kept for the next pass: a descendant letter's turn waits
+                // for lineage facts the store has taken.
+                state.parents.get_or_insert(parents);
+            }
             state.wrote(children.map(|_| ()), "parents");
             state.dirty_at.get_or_insert_with(Instant::now);
         }
@@ -691,6 +696,10 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
                 let Some(update) = state.ledger.front() else {
                     break;
                 };
+                if store.awaits_lineage(update) {
+                    state.ledger_retry_at = Some(Instant::now() + Duration::from_secs(1));
+                    break;
+                }
                 let session = update.session().clone();
                 let result = store.apply_ledger_update(update);
                 if let Err(code) = &result
@@ -1603,6 +1612,7 @@ mod tests {
                         parent_name: "Parent".into(),
                         name: "child".into(),
                         reported_at_unix_ms: None,
+                        live: true,
                     })
                     .collect::<Vec<_>>(),
             )
@@ -1762,6 +1772,7 @@ mod tests {
             parent_name: "lead".into(),
             name: "child".into(),
             reported_at_unix_ms: None,
+            live: true,
         };
         store
             .apply_parents(&[parented(&session("child")), parented(&pi)])

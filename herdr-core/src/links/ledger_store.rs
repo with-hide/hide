@@ -782,17 +782,20 @@ impl LinkStore {
                 letter: Some(sender),
                 ..
             } if !self.turn_recorded(session, *offset)? => {
-                // Placing the turn is a refinement: a lineage read that fails
-                // records the turn with no task rather than losing it.
-                self.letter_task(session, sender, *end)
-                    .unwrap_or_else(|error| {
+                // A store failure is retried whole; any other failure to
+                // place the turn records it with no task rather than losing it.
+                match self.letter_task(session, sender, *end) {
+                    Ok(group) => group,
+                    Err(error) if error.starts_with("links_store_") => return Err(error),
+                    Err(error) => {
                         crate::diagnostic!(serde_json::json!({
                             "component":"links", "kind":"ledger.letter_task_unavailable",
                             "device_id":session.device_id, "session_id":session.session_id,
                             "offset":offset, "error":error,
                         }));
                         None
-                    })
+                    }
+                }
             }
             _ => None,
         };
@@ -1458,8 +1461,7 @@ impl LinkStore {
             .collect::<Result<Vec<_>, _>>()
             .map_err(failed)?;
         let mut child_work = Vec::with_capacity(children.len());
-        // Task groups with a spawned child at work; a resting child or one
-        // whose newest turn went unjudged holds nothing (D-05, B23).
+        // Task groups a spawned child holds open (D-05, B23).
         let mut busy_groups = BTreeSet::new();
         for child in children {
             let mut child =
@@ -1468,8 +1470,7 @@ impl LinkStore {
                 params![session.device_id,session.agent,session.session_id,child.started_at_unix_ms.map(|n|n as i64)],|r|r.get(0)).optional().map_err(failed)?.flatten();
             child.spawn_task = spawn_task.clone();
             let facts = self.child_facts(&child.session)?;
-            if child.state.as_deref() == Some("working")
-                && !facts.latest_unjudged
+            if facts.holds_task(&child)
                 && let Some(task) = &spawn_task
             {
                 busy_groups.insert(task_group(task).to_owned());
@@ -1514,6 +1515,21 @@ impl LinkStore {
         Ok(record)
     }
 
+    /// Whether `update` is a descendant letter's turn that must wait for the
+    /// runtime's first lineage facts after a start: before them no sender can
+    /// be matched, and a turn recorded with no task is never placed again.
+    pub fn awaits_lineage(&self, update: &LedgerUpdate) -> bool {
+        self.lineage.is_none()
+            && matches!(
+                update,
+                LedgerUpdate::TurnEnd {
+                    work_author: false,
+                    letter: Some(_),
+                    ..
+                }
+            )
+    }
+
     fn turn_recorded(&self, session: &SessionIdentity, offset: u64) -> Result<bool, String> {
         turn_recorded(&self.connection, session, offset)
     }
@@ -1534,11 +1550,8 @@ impl LinkStore {
     /// What decides a child beside its record (D-08, D-09): a report to its
     /// parent with no turn started after it, and an unjudged newest turn.
     fn child_facts(&self, child: &SessionIdentity) -> Result<ChildFacts, String> {
-        let reported_idle = match self
-            .lineage
-            .get(child)
-            .and_then(|lineage| lineage.reported_at_unix_ms)
-        {
+        let lineage = self.lineage.as_ref().and_then(|known| known.get(child));
+        let reported_idle = match lineage.and_then(|lineage| lineage.reported_at_unix_ms) {
             Some(at) => !self
                 .connection
                 .query_row(
@@ -1553,6 +1566,7 @@ impl LinkStore {
         Ok(ChildFacts {
             reported_idle,
             latest_unjudged: self.latest_unjudged(child)?,
+            live: lineage.is_some_and(|lineage| lineage.live),
         })
     }
 
@@ -1573,6 +1587,7 @@ impl LinkStore {
             return Ok(None);
         }
         let record = self.record_tree(session, &mut BTreeSet::new(), 0, &mut 0, false)?;
+        let lineage = self.lineage.as_ref().ok_or("ledger_lineage_pending")?;
         fn named(
             record: &SessionRecord,
             sender: &str,
@@ -1589,7 +1604,7 @@ impl LinkStore {
         let groups = record
             .children
             .iter()
-            .filter(|child| named(child, sender, &self.lineage))
+            .filter(|child| named(child, sender, lineage))
             .map(|child| child.spawn_task.clone())
             .collect::<BTreeSet<_>>();
         if groups.len() > 1 {
@@ -1603,6 +1618,13 @@ impl LinkStore {
         if groups.is_empty() {
             crate::diagnostic!(serde_json::json!({
                 "component":"links", "kind":"ledger.letter_sender_unknown",
+                "device_id":session.device_id, "session_id":session.session_id,
+            }));
+        } else if groups.contains(&None) {
+            // The child is known but no judged turn of this session holds its
+            // start, so there is no task to continue.
+            crate::diagnostic!(serde_json::json!({
+                "component":"links", "kind":"ledger.letter_spawn_task_missing",
                 "device_id":session.device_id, "session_id":session.session_id,
             }));
         }

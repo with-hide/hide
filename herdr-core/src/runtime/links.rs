@@ -509,9 +509,12 @@ impl Runtime {
         if self.links_work.parents_print == Some(print) {
             return;
         }
+        // The first facts go out even when empty: the links worker holds a
+        // descendant letter's turn until it has them.
+        let first = self.links_work.parents_print.is_none();
         self.links_work.parents_print = Some(print);
         let parents = self.link_parent_facts();
-        if *self.links_work.parents != parents {
+        if first || *self.links_work.parents != parents {
             self.links_work.parents = Arc::new(parents);
             client.parents(Arc::clone(&self.links_work.parents));
         }
@@ -636,6 +639,7 @@ impl Runtime {
                     parent_name: wire_name(parent, devices.get(parent.pane_id.as_str())?),
                     name: wire_name(agent, devices.get(agent.pane_id.as_str())?),
                     reported_at_unix_ms: None,
+                    live: true,
                 })
             })
             .map(|parent| {
@@ -678,6 +682,16 @@ impl Runtime {
                 .or_insert(letter.created_at_unix_ms);
             *at = (*at).max(letter.created_at_unix_ms);
         }
+        // A registered child is live while a pane runs its session.
+        let live = self
+            .link_lineage_agents()
+            .filter_map(|agent| {
+                Some((
+                    *devices.get(agent.pane_id.as_str())?,
+                    agent.session_id.as_deref()?,
+                ))
+            })
+            .collect::<std::collections::HashSet<_>>();
         let registered = ledger
             .agents
             .iter()
@@ -698,6 +712,8 @@ impl Runtime {
                     reported_at_unix_ms: reports
                         .get(&(identity(&record.actor), identity(&parent.actor)))
                         .copied(),
+                    live: live
+                        .contains(&(record.actor.device_id.as_str(), record.session.as_str())),
                 })
             })
             .collect::<Vec<_>>();

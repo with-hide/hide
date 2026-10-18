@@ -434,6 +434,19 @@ pub struct ChildFacts {
     pub reported_idle: bool,
     /// Its newest turn went unjudged.
     pub latest_unjudged: bool,
+    /// A pane runs its session now.
+    pub live: bool,
+}
+
+impl ChildFacts {
+    /// Whether the child holds the task that spawned it open (PRD
+    /// task-continuation D-05, B23): it works in a live pane on a judged
+    /// newest turn. A resting child, one whose newest turn went unjudged and
+    /// one no pane runs any more, whatever state it was last read in, hold
+    /// nothing.
+    pub fn holds_task(self, child: &SessionRecord) -> bool {
+        self.live && !self.latest_unjudged && child.state.as_deref() == Some("working")
+    }
 }
 
 impl ChildWork {

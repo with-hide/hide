@@ -85,9 +85,10 @@ pub enum Opened {
 pub struct LinkStore {
     connection: Connection,
     /// What the delivery registry says of each child the last lineage facts
-    /// named: the name its letters carry and its newest report to its
-    /// parent. Memory only; the runtime sends the facts again after a start.
-    lineage: BTreeMap<SessionIdentity, ChildLineage>,
+    /// named: the name its letters carry, its newest report to its parent and
+    /// whether a pane runs it. Memory only, and `None` until the runtime's
+    /// first facts after a start, so a letter's turn waits for them.
+    lineage: Option<BTreeMap<SessionIdentity, ChildLineage>>,
 }
 
 /// A child's delivery facts (PRD task-continuation D-02, D-08).
@@ -95,6 +96,7 @@ pub struct LinkStore {
 pub(crate) struct ChildLineage {
     pub(crate) name: String,
     pub(crate) reported_at_unix_ms: Option<u64>,
+    pub(crate) live: bool,
 }
 
 enum OpenFailure {
@@ -235,7 +237,7 @@ impl LinkStore {
             .map_err(classify)?;
         Ok(Self {
             connection,
-            lineage: BTreeMap::new(),
+            lineage: None,
         })
     }
 
@@ -260,7 +262,7 @@ impl LinkStore {
         }
         Ok(Self {
             connection,
-            lineage: BTreeMap::new(),
+            lineage: None,
         })
     }
 
@@ -970,12 +972,13 @@ impl LinkStore {
                 ChildLineage {
                     name: parent.name.clone(),
                     reported_at_unix_ms: parent.reported_at_unix_ms,
+                    live: parent.live,
                 },
             );
             children.push(child);
         }
         tx.commit().map_err(failed)?;
-        self.lineage = lineage;
+        self.lineage = Some(lineage);
         Ok(children)
     }
 
