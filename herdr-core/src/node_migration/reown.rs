@@ -21,8 +21,8 @@ use serde_json::{Map, Value};
 
 use super::{
     CORE_STATE, DELIVERY_LEDGER, FACTORY, KEYS, LABELS, LINKS, LOCAL_ISSUES, MARKER_FILE,
-    MARKER_VERSION, Marker, Moves, Refusal, SESSION_SEARCH, WORKSPACE_VIEWS, read_json,
-    read_marker, write,
+    MARKER_VERSION, Marker, Moves, PROJECT_MEMORY, Refusal, SESSION_SEARCH, WORKSPACE_VIEWS,
+    read_json, read_marker, write,
 };
 use crate::node::NodeId;
 
@@ -250,6 +250,13 @@ pub fn reown(staging: &Path, change: &OwnerChange, ids: &IdTable) -> Result<Reow
         && reown_factory(staging, change).map_err(|reason| refuse(&factory, reason))?
     {
         outcome.files.push(FACTORY.to_owned());
+    }
+
+    let memory = staging.join(PROJECT_MEMORY);
+    if memory.is_file()
+        && reown_memory(&memory, change).map_err(|reason| refuse(&memory, reason))?
+    {
+        outcome.files.push(PROJECT_MEMORY.to_owned());
     }
 
     let marker = serde_json::to_vec(&Marker {
@@ -822,6 +829,33 @@ fn reown_factory(staging: &Path, change: &OwnerChange) -> Result<bool, String> {
         .map_err(|error| error.to_string())
 }
 
+/// Project Memory (PRD core-host-node-move): a Project is stored under the
+/// id of its machine and the digest of that id and its root, and so are the
+/// cards, receipts and cursors that follow it. A machine the move gives
+/// another id takes its Projects with it, by the same re-key the layer-1
+/// conversion makes (`MemoryStore::convert_device`), so a Project's Memory
+/// is the new core's for the same Project and not an empty one beside it.
+/// A store that does not open, or a Project already stored under the id a
+/// move would give, stops the move: the new core would otherwise start a
+/// Memory of its own beside the old one.
+fn reown_memory(path: &Path, change: &OwnerChange) -> Result<bool, String> {
+    let store = crate::runtime::memory::open_memory_store(path)
+        .map_err(|error| format!("Project Memory does not open: {error}"))?;
+    let mut changed = false;
+    for (from, to) in [
+        (&change.new_owner_was, &change.new_owner),
+        (&change.old_owner, &change.old_owner_as),
+    ] {
+        if from != to {
+            let moved = store
+                .convert_device(from, to)
+                .map_err(|error| format!("Project Memory of {from}: {error}"))?;
+            changed |= !moved.is_empty();
+        }
+    }
+    Ok(changed)
+}
+
 /// What a pattern reaches: a value, or the object whose keys it names.
 enum Slot<'a> {
     Value(&'a mut Value),
@@ -1035,6 +1069,32 @@ mod tests {
     }
     fn device_checkout(device: &str, path: &str) -> String {
         crate::device_catalog::checkout_id(device, path)
+    }
+
+    /// The id Project Memory and the settings keep a project under.
+    fn device_digest(device: &str, root: &str) -> String {
+        crate::project_settings::key(device, root)
+    }
+
+    /// Each Project of the Memory store with its machine, and the project
+    /// id its receipt cursor names, in id order.
+    fn memory_projects(state: &Path) -> Vec<(String, String, String)> {
+        let connection = rusqlite::Connection::open_with_flags(
+            state.join(PROJECT_MEMORY),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let mut statement = connection
+            .prepare(
+                "SELECT p.id, p.device_id, c.project_id FROM projects p \
+                 JOIN receipt_cursors c ON c.project_id=p.id ORDER BY p.id",
+            )
+            .unwrap();
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
     }
 
     /// A Project's choices as the core saves them, with the protections a
@@ -1338,6 +1398,23 @@ mod tests {
             json!({"version": 1, "projects": {M_ROOT: [{"number": 1}]}, "devices": {ALIAS: {C_ROOT: [{"number": 2}]}}}),
         );
         write(MARKER_FILE, json!({"version": 1, "node": M}));
+        let memory = hide_memory::MemoryStore::open(&state.join(PROJECT_MEMORY)).unwrap();
+        for (device, root) in [(M, M_ROOT), (ALIAS, C_ROOT), (X, X_ROOT)] {
+            memory
+                .ensure_project(&device_digest(device, root), Path::new(root), device)
+                .unwrap();
+        }
+        drop(memory);
+        let connection = rusqlite::Connection::open(state.join(PROJECT_MEMORY)).unwrap();
+        for (device, root) in [(M, M_ROOT), (ALIAS, C_ROOT), (X, X_ROOT)] {
+            connection
+                .execute(
+                    "INSERT INTO receipt_cursors VALUES(?1,'claude','s1',0,x'',NULL,1,0)",
+                    [device_digest(device, root)],
+                )
+                .unwrap();
+        }
+        drop(connection);
         let (links, _) = crate::links::store::LinkStore::open(&state.join(LINKS)).unwrap();
         links
             .set_meta(crate::links::worker::LISTED_AT, "100")
@@ -1456,6 +1533,18 @@ mod tests {
             core["project_settings"],
             settings_of(&[(M, M_ROOT), (C, C_ROOT), (X, X_ROOT)])
         );
+        // Project Memory follows its machine the same way: the mini's
+        // Projects, cards and cursors become the core's own, the MacBook's
+        // keep the node id it links in by.
+        let mut expected: Vec<(String, String, String)> = [(M, M_ROOT), (C, C_ROOT), (X, X_ROOT)]
+            .iter()
+            .map(|(device, root)| {
+                let id = device_digest(device, root);
+                (id.clone(), (*device).to_owned(), id)
+            })
+            .collect();
+        expected.sort();
+        assert_eq!(memory_projects(state), expected);
         // Settings keyed by a project path are read the same on either
         // core, whichever machine holds the project: they stay.
         assert_eq!(core["selected_path"], json!(M_ROOT));
@@ -1695,6 +1784,7 @@ mod tests {
             MARKER_FILE,
         ];
         let original: Vec<Value> = files.iter().map(|file| read(&state.join(file))).collect();
+        let memory = memory_projects(state);
         reown(state, &forward(), &forward_ids()).unwrap();
         // The mini's core takes the MacBook's records into memory and, when it
         // stops for the move back, writes them to `moved` again.
@@ -1725,6 +1815,7 @@ mod tests {
                 "{file}"
             );
         }
+        assert_eq!(memory_projects(state), memory, "Project Memory");
         let links = crate::links::store::LinkStore::open(&state.join(LINKS))
             .unwrap()
             .0;
@@ -1848,6 +1939,29 @@ mod tests {
         let refusal = reown(state, &forward(), &forward_ids()).unwrap_err();
         assert_eq!(refusal.file, state.join(CORE_STATE));
         assert!(refusal.reason.contains("names no root"), "{refusal}");
+    }
+
+    #[test]
+    fn a_memory_project_the_move_would_land_on_stops_it_and_names_the_store() {
+        let dir = macbook_folder();
+        let state = dir.path();
+        // The core already holds a Project at the id the mini's would take.
+        let store = hide_memory::MemoryStore::open(&state.join(PROJECT_MEMORY)).unwrap();
+        store
+            .ensure_project(&device_digest(C, C_ROOT), Path::new(C_ROOT), C)
+            .unwrap();
+        drop(store);
+        let refusal = reown(state, &forward(), &forward_ids()).unwrap_err();
+        assert_eq!(refusal.file, state.join(PROJECT_MEMORY));
+        assert!(
+            refusal.reason.contains("node_conversion_conflict"),
+            "{refusal}"
+        );
+        assert_eq!(
+            read(&state.join(MARKER_FILE))["node"],
+            json!(M),
+            "the owner is unchanged"
+        );
     }
 
     #[test]

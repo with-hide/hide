@@ -647,7 +647,7 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         PROJECT_MEMORY,
         "projects.device_id, every project_id column",
         Mechanism::Rewritten,
-        Moves::Stays,
+        Moves::Whole,
     ),
     (
         SESSION_SEARCH,
