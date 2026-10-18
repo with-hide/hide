@@ -32,6 +32,7 @@ export const ONBOARDING_STATES = [
   "agents-changes",
   "agents-failed",
   "agents-none",
+  "agents-refused",
   "agents-setup",
   "notifications",
   "notifications-asking",
@@ -49,6 +50,7 @@ export const ONBOARDING_STATES = [
   "settings-blocked",
   "settings-done-only",
   "settings-both",
+  "settings-refused",
 ] as const;
 
 export type OnboardingState = (typeof ONBOARDING_STATES)[number];
@@ -201,7 +203,13 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
   const step = state === "agents-setup" ? "done" : state.startsWith("agents") ? "agents" : state.startsWith("notifications") ? "notifications" : state === "project" ? "project" : "done";
   // The switch is on once Turn on was pressed; macOS's answer is the host's (`permissionOf`).
   const enabled = (state.startsWith("notifications-") && state !== "notifications-no-service") || state === "settings-on" || state === "settings-blocked" || state === "settings-both";
-  const agents = kitAgents(state, system).map((agent) => (step === "agents" || agent.availability !== "available" ? agent : { ...agent, enabled: true, chosen: true }));
+  // A first pass that stopped before changing anything: a state folder HIDE_STATE_DIR chose that other
+  // accounts can change, read as each system spells the folder at fault; nothing was judged, so no agent is listed.
+  const refused = state === "agents-refused" || state === "settings-refused";
+  const agents = refused ? [] : kitAgents(state, system).map((agent) => (step === "agents" || agent.availability !== "available" ? agent : { ...agent, enabled: true, chosen: true }));
+  const kit = refused
+    ? { agents, components: [], busy: false, refused: { cause: "unsafe", path: system === "windows" ? "D:\\" : system === "linux" ? "/srv/team" : "/Users/Shared/team", variable: "HIDE_STATE_DIR" } }
+    : { agents, components: [{ id: "cli", label: "hide", state: "off", reason: null, location: system === "windows" ? `${HOME}/.local/bin/hide.cmd` : `${HOME}/.local/bin/hide` }], busy: false };
   return {
     revision: 1,
     navigator: {
@@ -209,14 +217,14 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
       workspaces: projects,
       inactive_projects: [],
       agents: [],
-      devices: [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit: { agents, components: [{ id: "cli", label: "hide", state: "off", reason: null, location: system === "windows" ? `${HOME}/.local/bin/hide.cmd` : `${HOME}/.local/bin/hide` }], busy: false } }],
+      devices: [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit }],
       focused_device_id: "local",
       focused_checkout_id: null,
     },
     ui_state: {
       left_sidebar_visible: true,
       first_run: { version: 1, step },
-      agent_onboarding: step === "agents" ? "pending" : "done",
+      agent_onboarding: state === "agents-refused" ? null : step === "agents" ? "pending" : "done",
       desktop_notifications: enabled,
       desktop_notifications_done: state === "settings-done-only" || state === "settings-both",
       workspace_registrations: [{ id: "home", label: "hide", path: `${HOME}/hide`, device_id: "local", pinned: false, home: true }, ...projects.map((row) => ({ id: row.id, label: row.label, path: row.path, device_id: "local", pinned: false }))],
