@@ -1,3 +1,4 @@
+import { menusCatalogs, menusEnglish } from "./resources/menus";
 import { projectSettingsCatalogs, projectSettingsEnglish } from "./resources/projectSettings";
 import { usageCatalogs, usageEnglish } from "./resources/usage";
 import { commandsCatalogs, commandsEnglish } from "./resources/commands";
@@ -42,6 +43,7 @@ import { sessionWorkCatalogs, sessionWorkEnglish } from "./resources/sessionWork
 import { deviceOverviewCatalogs, deviceOverviewEnglish } from "./resources/deviceOverview";
 
 export const english = {
+  ...menusEnglish,
   ...sessionWorkEnglish,
   ...deviceOverviewEnglish,
   ...agentSessionsEnglish,
@@ -90,6 +92,7 @@ export type MessageKey = keyof typeof english;
 export const catalogs = {
   en: english,
   ko: {
+    ...menusCatalogs.ko,
     ...sessionWorkCatalogs.ko,
     ...deviceOverviewCatalogs.ko,
     ...agentSessionsCatalogs.ko,
@@ -133,6 +136,7 @@ export const catalogs = {
     ...projectSettingsCatalogs.ko,
   },
   "zh-CN": {
+    ...menusCatalogs["zh-CN"],
     ...sessionWorkCatalogs["zh-CN"],
     ...deviceOverviewCatalogs["zh-CN"],
     ...agentSessionsCatalogs["zh-CN"],
@@ -176,6 +180,7 @@ export const catalogs = {
     ...projectSettingsCatalogs["zh-CN"],
   },
   ja: {
+    ...menusCatalogs.ja,
     ...sessionWorkCatalogs.ja,
     ...deviceOverviewCatalogs.ja,
     ...agentSessionsCatalogs.ja,
