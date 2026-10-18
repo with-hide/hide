@@ -56,39 +56,49 @@ def signature(info):
             info.st_ctime_ns, info.st_nlink)
 
 
-def read_file(path, expected, destination=None):
-    """Hash through one checked descriptor; optionally clone or stream its bytes."""
+class CopyChanged(ProtectionError):
+    """The live bundle moved during a copy; only this condition is retried."""
+
+
+def copy_file(path, expected, destination):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as source:
         before = os.fstat(source.fileno())
         if (signature(before)[:5] != expected or not stat.S_ISREG(before.st_mode)
                 or before.st_uid != os.getuid() or before.st_nlink != 1):
-            raise ProtectionError("operator_watch_database_copy_changed")
-        method, sink = None, None
-        if destination is not None:
-            if clone(source.fileno(), destination):
-                method = "apfs_clone"
-            else:
-                method = "chunked_copy"
-                sink = os.fdopen(os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb")
-        hashed, count = hashlib.sha256(), 0
-        try:
-            while data := source.read(CHUNK_BYTES):
-                count += len(data)
-                if count > expected[2]:
-                    raise ProtectionError("operator_watch_database_copy_changed")
-                hashed.update(data)
-                if sink is not None:
+            raise CopyChanged("operator_watch_database_copy_changed")
+        if clone(source.fileno(), destination):
+            method = "apfs_clone"
+        else:
+            method, count = "chunked_copy", 0
+            with os.fdopen(os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as sink:
+                while data := source.read(CHUNK_BYTES):
+                    count += len(data)
+                    if count > expected[2]:
+                        raise CopyChanged("operator_watch_database_copy_changed")
                     sink.write(data)
-        finally:
-            if sink is not None:
-                sink.close()
-        if count != expected[2] or signature(os.fstat(source.fileno())) != signature(before):
-            raise ProtectionError("operator_watch_database_copy_changed")
-        return hashed.hexdigest(), method
+                if count != expected[2]:
+                    raise CopyChanged("operator_watch_database_copy_changed")
+        if signature(os.fstat(source.fileno())) != signature(before):
+            raise CopyChanged("operator_watch_database_copy_changed")
+        return method
 
 
-def digest(root, scratch, name, copies=None):
+def digest(root, scratch, name, copies=None, markers=None):
+    try:
+        for attempt in range(3):
+            try:
+                return snapshot(root, scratch, name, copies, markers)
+            except CopyChanged:
+                if attempt == 2:
+                    raise
+    except OSError as error:
+        raise ProtectionError(f"operator_watch_database_copy_failed: errno={error.errno}") from None
+    except (sqlite3.Error, ValueError, TypeError) as error:
+        raise ProtectionError("operator_watch_database_snapshot_unreadable: " + type(error).__name__) from None
+
+
+def snapshot(root, scratch, name, copies, markers):
     source = root / name
     paths = [source, Path(str(source) + "-wal")]
     before = metadata(paths, root, MAX_DATABASE_BYTES)
@@ -99,54 +109,40 @@ def digest(root, scratch, name, copies=None):
     if scratch is None:
         raise ProtectionError("operator_watch_database_private_copy_directory_missing")
     private_directory(scratch)
-    try:
-        with tempfile.TemporaryDirectory(prefix="database-", dir=scratch) as folder:
-            copy = Path(folder) / source.name
-            hashes = {}
-            for path in paths:
-                if before[path] is None:
-                    continue
-                target = Path(folder) / path.name
-                hashed, method = read_file(path, before[path], target)
-                # A clone must agree with the stream too, including any write
-                # concurrent with the clone system call.
-                copied = metadata([target], Path(folder), MAX_DATABASE_BYTES)[target]
-                if read_file(target, copied)[0] != hashed:
-                    raise ProtectionError("operator_watch_database_copy_changed")
-                hashes[path] = hashed
-                if copies is not None:
-                    copies.append({"agent": "omp" if name.startswith(".omp/") else "opencode",
-                                   "file": "database" if path == source else "wal",
-                                   "method": method, "bytes": before[path][2]})
-            if metadata(paths, root, MAX_DATABASE_BYTES) != before:
-                raise ProtectionError("operator_watch_database_copy_changed")
-            for path, hashed in hashes.items():
-                if read_file(path, before[path])[0] != hashed:
-                    raise ProtectionError("operator_watch_database_copy_changed")
-            if metadata(paths, root, MAX_DATABASE_BYTES) != before:
-                raise ProtectionError("operator_watch_database_copy_changed")
-            connection = sqlite3.connect(copy, timeout=1)
+    with tempfile.TemporaryDirectory(prefix="database-", dir=scratch) as folder:
+        copy = Path(folder) / source.name
+        copied = []
+        for path in paths:
+            if before[path] is None:
+                continue
             try:
-                connection.execute("PRAGMA trusted_schema=OFF")
-                if connection.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
-                    raise ProtectionError("operator_watch_database_corrupt")
-                result, total = {}, 0
-                for table, query in DATABASES[name].items():
-                    hashed, count = hashlib.sha256(), 0
-                    for row in connection.execute(query):
-                        count += 1
-                        if count > MAX_CONFIG_FILES:
-                            raise ProtectionError("operator_watch_database_rows_over_budget")
-                        content = json.dumps(row, ensure_ascii=True, separators=(",", ":")).encode() + b"\n"
-                        total += len(content)
-                        if total > MAX_BACKUP_BYTES:
-                            raise ProtectionError("operator_watch_database_row_bytes_over_budget")
-                        hashed.update(content)
-                    result[table] = {"sha256": hashed.hexdigest(), "rows": count}
-                return result
-            finally:
-                connection.close()
-    except OSError as error:
-        raise ProtectionError(f"operator_watch_database_copy_failed: errno={error.errno}") from None
-    except (sqlite3.Error, ValueError, TypeError) as error:
-        raise ProtectionError("operator_watch_database_snapshot_unreadable: " + type(error).__name__) from None
+                method = copy_file(path, before[path], Path(folder) / path.name)
+            except FileNotFoundError:
+                raise CopyChanged("operator_watch_database_copy_changed") from None
+            copied.append({"agent": "omp" if name.startswith(".omp/") else "opencode",
+                           "file": "database" if path == source else "wal",
+                           "method": method, "bytes": before[path][2]})
+        if metadata(paths, root, MAX_DATABASE_BYTES) != before:
+            raise CopyChanged("operator_watch_database_copy_changed")
+        connection = sqlite3.connect(copy, timeout=1)
+        try:
+            connection.execute("PRAGMA trusted_schema=OFF")
+            result, total = {}, 0
+            for table, query in DATABASES[name].items():
+                hashed, count, marked = hashlib.sha256(), 0, False
+                for row in connection.execute(query):
+                    count += 1
+                    if count > MAX_CONFIG_FILES:
+                        raise ProtectionError("operator_watch_database_rows_over_budget")
+                    content = json.dumps(row, ensure_ascii=True, separators=(",", ":")).encode() + b"\n"
+                    total += len(content)
+                    if total > MAX_BACKUP_BYTES:
+                        raise ProtectionError("operator_watch_database_row_bytes_over_budget")
+                    hashed.update(content)
+                    marked |= bool(markers and markers.contains(content))
+                result[table] = {"sha256": hashed.hexdigest(), "rows": count, "marker": marked}
+            if copies is not None:
+                copies.extend(copied)
+            return result
+        finally:
+            connection.close()

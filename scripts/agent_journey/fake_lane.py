@@ -38,15 +38,15 @@ QUIET = {"NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost",
          "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
 
 
-def claude_config(root):
+def claude_config(root, key=KEY):
     """Claude's global config: onboarding done, the fake key accepted, and the
     measured repository trusted; the never-trusted repository is left out."""
     return {"hasCompletedOnboarding": True,
-            "customApiKeyResponses": {"approved": [KEY[-20:]], "rejected": []},
+            "customApiKeyResponses": {"approved": [key[-20:]], "rejected": []},
             "projects": {ci.claude_project(root): {"hasTrustDialogAccepted": True}}}
 
 
-def claude(home, url, root, local):
+def claude(home, url, root, local, key=KEY):
     """Claude Code takes the base URL and key from its environment. Locally its
     configuration folder is the daemon home's `.claude`, whose `.config.json`
     is the global config Claude reads there and the file Hide records its
@@ -54,14 +54,14 @@ def claude(home, url, root, local):
     it is `~/.claude.json` of the disposable HOME, as a new machine's."""
     config = home / ".claude/.config.json" if local else home / ".claude.json"
     private_directory(config.parent)
-    write_private(config, json.dumps(claude_config(root)).encode())
-    env = {"ANTHROPIC_BASE_URL": url, "ANTHROPIC_API_KEY": KEY}
+    write_private(config, json.dumps(claude_config(root, key)).encode())
+    env = {"ANTHROPIC_BASE_URL": url, "ANTHROPIC_API_KEY": key}
     if local:
         env["CLAUDE_CONFIG_DIR"] = str(home / ".claude")
     return env
 
 
-def codex(home, url, root, local):
+def codex(home, url, root, local, key=KEY):
     """Codex 0.163 reads no base URL from its environment: a provider of its
     own in CODEX_HOME's config.toml, whose key it reads from `env_key`."""
     del root, local
@@ -70,10 +70,10 @@ def codex(home, url, root, local):
     write_private(config, (f'model = "{MODEL}"\nmodel_provider = "{PROVIDER}"\n'
                            f'[model_providers.{PROVIDER}]\nname = "{PROVIDER}"\nbase_url = "{url}/v1"\n'
                            f'wire_api = "responses"\nenv_key = "JOURNEY_FAKE_KEY"\n').encode())
-    return {"JOURNEY_FAKE_KEY": KEY}
+    return {"JOURNEY_FAKE_KEY": key}
 
 
-def grok(home, url, root, local):
+def grok(home, url, root, local, key=KEY):
     """Grok 1.0.52's custom model in GROK_HOME's config.toml
     (~/.grok/docs/user-guide/11-custom-models.md), its default."""
     del root, local
@@ -82,10 +82,10 @@ def grok(home, url, root, local):
     write_private(config, (f'[models]\ndefault = "{PROVIDER}"\n[model.{PROVIDER}]\nmodel = "{MODEL}"\n'
                            f'base_url = "{url}/v1"\nenv_key = "JOURNEY_FAKE_KEY"\napi_backend = "chat_completions"\n'
                            f'name = "Journey"\ncontext_window = 128000\n').encode())
-    return {"JOURNEY_FAKE_KEY": KEY}
+    return {"JOURNEY_FAKE_KEY": key}
 
 
-def pi(home, url, root, local):
+def pi(home, url, root, local, key=KEY):
     """Pi 1.0.4's custom provider (`models.json`) and default model
     (`settings.json`) in its agent folder."""
     del root, local
@@ -95,10 +95,10 @@ def pi(home, url, root, local):
         "baseUrl": f"{url}/v1", "api": "openai-completions", "apiKey": "${JOURNEY_FAKE_KEY}",
         "models": [{"id": MODEL, "name": "Journey"}]}}}).encode())
     write_private(folder / "settings.json", json.dumps({"defaultProvider": PROVIDER, "defaultModel": MODEL}).encode())
-    return {"JOURNEY_FAKE_KEY": KEY}
+    return {"JOURNEY_FAKE_KEY": key}
 
 
-def omp(home, url, root, local):
+def omp(home, url, root, local, key=KEY):
     """omp 18.7.0's custom provider (`models.yml`) and default model role
     (`config.yml`) in its agent folder; its key is read from the variable
     `apiKey` names."""
@@ -109,18 +109,18 @@ def omp(home, url, root, local):
                                           f"    apiKey: JOURNEY_FAKE_KEY\n    api: openai-completions\n"
                                           f"    models:\n      - id: {MODEL}\n        name: Journey\n").encode())
     write_private(folder / "config.yml", (ci.OMP_SET_UP + f"modelRoles:\n  default: {PROVIDER}/{MODEL}\n").encode())
-    return {"JOURNEY_FAKE_KEY": KEY}
+    return {"JOURNEY_FAKE_KEY": key}
 
 
-def agy(home, url, root, local):
+def agy(home, url, root, local, key=KEY):
     """agy 1.4.0 signs in with GEMINI_API_KEY once its settings name the
     Gemini provider (ci.py); its base URL variable is the Gemini SDK's."""
     del root, local
     ci.agy_set_up(home)
-    return {"GEMINI_API_KEY": KEY, "GOOGLE_GEMINI_BASE_URL": url}
+    return {"GEMINI_API_KEY": key, "GOOGLE_GEMINI_BASE_URL": url}
 
 
-def opencode(home, url, root, local):
+def opencode(home, url, root, local, key=KEY):
     """OpenCode 2.0.29's custom provider and default model in its global
     `opencode.json` (opencode.ai/v2/docs/providers), its key read from the
     variable `env` names, and no update check."""
@@ -132,16 +132,16 @@ def opencode(home, url, root, local):
         "providers": {PROVIDER: {"name": "Journey", "env": ["JOURNEY_FAKE_KEY"],
                                  "package": "@opencode/ai/providers/openai-compatible",
                                  "settings": {"baseURL": f"{url}/v1"}, "models": {MODEL: {"name": "Journey"}}}}}).encode())
-    return {"JOURNEY_FAKE_KEY": KEY}
+    return {"JOURNEY_FAKE_KEY": key}
 
 
 PROVIDERS = {"claude": claude, "codex": codex, "grok": grok, "pi": pi, "omp": omp, "agy": agy, "opencode": opencode}
 
 
-def configure(kind, home, url, root, local):
+def configure(kind, home, url, root, local, key=KEY):
     """Writes the files that point `kind` at the fake model at `url` and
     returns the environment it runs with."""
-    env = {**QUIET, **PROVIDERS[kind](home, url, root, local)}
+    env = {**QUIET, **PROVIDERS[kind](home, url, root, local, key)}
     rows = json.loads((Path(__file__).resolve().parents[2] / "contracts/agent-journey.json").read_text())
     declaration = next(row.get("fake_home", {}) for row in rows if row["herdr_kind"] == kind)
     if declaration.get("auto_update"):

@@ -427,62 +427,58 @@ The four guards are enforced before or during every admitted agent's journey:
 1. The executable comes only from the pinned cache, never the operator's PATH or aliases.
    The installer itself has a private HOME and a write sandbox permitting only that cache entry; the agent's controlled PATH contains the candidate wrappers, the Node runtime and system tools.
 2. The Rust adapter declares how automatic updates are disabled, projected into `contracts/agent-journey.json` and applied before any CLI starts.
-   The agent's write sandbox also denies changes to the cached program, operator agent folders and keychain, and permits model traffic only to loopback.
-3. The run compares the following operator watch at its start and after cleanup; any end difference is an isolation failure (exit 2), even if another operator process caused it.
-   Reports retain hashes and names, never configuration or login bytes, and never restore or change the watched paths.
+   The agent's write sandbox also denies changes to the cached program, operator agent folders and keychain files, and permits model traffic only to loopback.
+3. The run inspects the following operator watch at its start and after cleanup for traces of this run: its directory, fake server addresses with ports, and a per-run fake key (including the tail Claude stores).
+   A trace in a watched file, selected database row or new top-level entry, or a watched link pointing inside the run, fails with exit 2.
+   Content changes without those markers, including concurrent token refreshes and temporary entries, are reported as external changes and do not fail.
+   Unreadable marker checks still fail with exit 2.
+   Reports retain fixed item names and pass/fail only, never hashes, link targets, entry lists or configuration/login bytes; the watch never restores or changes operator files.
 4. The adapter declares an API-key environment route, the provider configuration names that variable, and the fake server accepts a model request only when it carries that key.
    Missing or rejected key evidence stops the run with exit 2 after the start attempt; reports record only environment names, authenticated request counts and source references.
 
-The approved guard (3) names exactly what is compared:
+The watch covers the `.local/bin/claude` link, the configuration/login files below, and the top-level names under `.claude`, `.codex`, `.gemini`, `.grok`, `.omp`, `.pi` and `.local/share/opencode`.
+Existing session/history append records are not compared.
+New top-level entries are scanned recursively for run markers, within a shared budget of 50,000 entries and 1 GiB per snapshot; exceeding either cap fails the run.
+Internal snapshots retain hashes and names in memory only.
+The private lane admits only the process environment basics named in `PRIVATE_ENV`; provider, package-manager and agent settings come from its explicit route.
+Keychain file access is denied, but access through the securityd Mach service has not been verified; no operator keychain item is queried as a probe.
 
-> (a) the ~/.local/bin/claude link target;
-> (b) the content hash of each agent's configuration and login files, the ones an install, first start or sign-in writes (Claude Code, Codex CLI, Grok, omp, Pi; you decide the exact file list from the pinned sources and docs, and name it in docs);
-> (c) the set of entry names at the top of each root (~/.claude, ~/.codex, ~/.gemini, ~/.grok, ~/.omp, ~/.pi).
-> Folder mtimes and the record files live sessions append to are not compared.
-
-Compare a snapshot taken at the start of the run with one taken at the end.
-If anything differs at the end, exit 2.
-There are no filename-pattern exceptions for temporary atomic-write entries: an observed end difference is reported for a new decision, not hidden.
 The exact configuration/login paths, relative to the operator's HOME, are:
 
 | Agent | Configuration and login paths | Source for the file boundary |
 | --- | --- | --- |
-| Claude Code | selected login/install keys and run-project paths in `.claude.json`; `.claude/settings.json`, `.claude/settings.local.json`, `.claude/.credentials.json` | [Official settings guide](https://code.claude.com/docs/en/settings), configuration files and authentication storage; the macOS keychain is denied by the sandbox. |
+| Claude Code | selected login/install keys and run-project paths in `.claude.json`; `.claude/settings.json`, `.claude/settings.local.json`, `.claude/.credentials.json` | [Official settings guide](https://code.claude.com/docs/en/settings), configuration files and authentication storage; keychain files are denied by the sandbox; securityd access is unverified. |
 | Codex | `.codex/config.toml`, `.codex/auth.json`, `.codex/hooks.json`, `.codex/.credentials.json` | [Pinned core sources](https://github.com/openai/codex/tree/rust-v0.163.0/codex-rs/core/src), config, auth storage and hooks. |
 | Grok | `.grok/config.toml`, `.grok/auth.json`, `.grok/trusted_folders.toml`, `.grok/mcp_credentials.json` | [Official settings reference](https://docs.x.ai/build/settings/reference) and [published authentication source](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-login); the public source is 1.0.45, without a tag for the selected 1.0.52 CLI pin. |
 | Pi | `.pi/agent/settings.json`, `models.json`, `auth.json`, `oauth.json`, `mcp-auth.json`, `keybindings.json`, `trust.json`, `mcp.json` in the same folder | [Pinned package](https://www.npmjs.com/package/@earendil-works/pi-coding-agent/v/1.0.4), `dist/migrations.js`, `dist/core/auth-storage.js` and `dist/extensions/mcp/oauth.js`; startup can migrate the legacy OAuth and keybinding files. |
 | omp | `.omp/agent/config.yml`, `.omp/agent/config.yaml`, `.omp/agent/models.yml`, `.omp/agent/settings.json`, `.omp/agent/secrets.yml`, `.omp/agent/secret-placeholder.key`; credential and settings rows of `.omp/agent/agent.db`, read from a private copy | [Pinned paths](https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/utils/src/dirs.ts), [settings storage](https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/coding-agent/src/session/agent-storage.ts) and [credential storage](https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/ai/src/auth/sqlite-credential-store.ts). |
 | OpenCode | `.config/opencode/opencode.json`, `opencode.jsonc`, `tui.json`, `cli.json`, `service.json` in the same folder; credential rows of `.local/share/opencode/opencode.db`, read from a private copy | [Pinned credential schema](https://github.com/anomalyco/opencode/blob/v2.0.29/packages/core/src/credential/sql.ts), [database path](https://github.com/anomalyco/opencode/blob/v2.0.29/packages/cli/src/database-path.ts), [configuration migration](https://github.com/anomalyco/opencode/blob/v2.0.29/packages/cli/src/config/migrate.ts); v2 reads the old `auth.json` only for migration. |
 
-Claude Code's mixed global file is compared by this approved refinement of (b):
-
-> (i) the hash of the login and install keys only (the account/OAuth key, the API key and the answers about it, installMethod, autoUpdates, the onboarding-complete keys; pick the exact names from the pinned version and write them in docs);
-> (ii) at the end, no key in projects is a path inside this run's folders (the run folder, its worktrees and its private HOME). A run whose HOME leaked writes its own cwd there, so this catches a write by the run itself exactly, and other sessions' entries don't matter.
-> Counters, caches and other projects' entries are live session state and stay out, like omp's usage counters. JSON that is half written or cannot be read counts as a change: exit 2.
-
-The login-state evidence follows these additional conditions, also applied to the omp and OpenCode row comparisons:
-
-> Only read it. Do not leave a copy anywhere outside the run folder, and delete any copy made inside the run folder at cleanup.
-> The report records only key names and pass or fail. It never holds values, paths, or the raw hashes.
+Claude Code's mixed global file is scanned for run markers, including normalized absolute project paths.
+Its login/install keys below are compared in memory to identify external changes; unrelated project entries and live counters do not produce external-change notices.
+Every report uses the same privacy boundary: fixed item names and pass/fail, with external changes named separately.
+Copies are kept only inside the run and removed immediately after each database read and again at unconditional cleanup.
+A later run reports a leftover `watch-private` directory after an uncatchable kill; it never reuses it.
 
 The selected keys are `oauthAccount`, `primaryApiKey`, `customApiKeyResponses`, `installMethod`, `autoUpdates`, `hasCompletedOnboarding` and `lastOnboardingVersion`.
 The whole selected object is hashed canonically in memory, including the absence of a key; evidence retains only the compared key names and pass/fail, not values, project paths or hashes.
 Claude Code is closed source: these names follow its configuration/onboarding format, while its official settings documentation is live rather than version-pinned.
 Every absolute `projects` key is checked against the run directory, which contains the private HOME and both worktree roots; any such key at the end fails even if it was already present at the start.
 
-OpenCode is also covered: the top-level entry names of `~/.local/share/opencode` join (c), and its configuration/login rows join (b).
+OpenCode is also covered: the top-level entry names of `~/.local/share/opencode` and its configuration/login rows are watched.
 The six original roots, including `~/.gemini`, remain watched.
 These are the standard home paths; candidate routing overrides are stripped or point to its private home.
 For omp, the comparison hashes `settings(key, value, updated_at)` ordered by `key`, and `auth_credentials(id, provider, credential_type, data, disabled_cause, identity_key, created_at, updated_at)` ordered by `id`.
 For OpenCode, it hashes `credential(id, integration_id, label, value, connector_id, method_id, active, time_created, time_updated)` ordered by `id`.
 Usage counters, refresh leases and session records are excluded.
-The reader copies each raw database and any WAL to a private run folder, verifies their identity, size and bytes again, opens only that copy with SQLite, and removes it before reading the next database.
-On macOS, the already-open source descriptor is cloned with `fclonefileat`; unsupported or cross-volume cloning falls back to a 1 MiB chunked copy, and the report names the method and byte count for each file.
+The reader copies each raw database and any WAL to a private run folder, checks their identity, size, mode and modification time before and after copying, opens only that copy with SQLite, and removes it before reading the next database.
+On macOS, the already-open source descriptor is cloned with `fclonefileat`; unsupported or cross-volume cloning falls back to a 1 MiB chunked copy, without streaming the cloned database to hash it.
 The database plus WAL has a fixed 1 GiB cap, separate from the 16 MiB cap for configuration bytes and returned credential/settings rows.
 The larger database cap accounts for session records sharing the database; those records are never returned or hashed into the comparison.
 Only one database bundle exists in the private copy directory at a time, and an out-of-space failure reports its errno with exit 2.
 It never opens the operator database with SQLite, including read-only mode, and never copies or creates its SHM.
-A concurrent change during copying, an unreadable schema, a corrupt copy or a crossed copy/row budget fails with exit 2 rather than skipping an agent.
+A concurrent change during copying retries the whole bundle at most three times; continued movement, an unreadable schema, a corrupt queried row or a crossed copy/row budget fails with exit 2.
+Only the selected row queries run; a whole-database integrity scan is unnecessary for this watch.
 Top-level entry enumeration and database row reads use the existing configuration-file count cap.
 
 Claude Code, Codex, Grok, OpenCode, Pi and omp declare these routes.

@@ -190,7 +190,12 @@ class LeftoversAndReport(unittest.TestCase):
         for name in ("agent-journey-a", "release-0.5.0-journey", "this-run"):
             (runs / name / "probe/daemon-home/.codex").mkdir(parents=True)
             (runs / name / "probe/daemon-home/.codex/auth.json").write_text("{}")
+        watch = runs / "killed-run/watch-private/database-copy"
+        watch.mkdir(parents=True)
+        (watch / 'credential.db').write_bytes(b'fixture')
         found = leftover_copies(self.base, runs / "this-run")
+        self.assertIn(str(watch.parent), found)
+        found.remove(str(watch.parent))
         self.assertEqual(found, [str(runs / name / "probe/daemon-home/.codex/auth.json")
                                  for name in ("agent-journey-a", "release-0.5.0-journey")])
 

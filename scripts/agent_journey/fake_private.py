@@ -5,8 +5,9 @@ import os
 from pathlib import Path
 import stat
 
-from agent_live_check.protection import MAX_CONFIG_FILES, ProtectionError, stamp, write_private
+from agent_live_check.protection import MAX_CONFIG_FILES, ProtectionError, configuration_bytes, write_private
 from . import claude_watch, database_watch
+from .watch_markers import MAX_SCAN_BYTES, Markers
 
 WATCH = (".claude", ".codex", ".gemini", ".grok", ".omp", ".pi", ".local/share/opencode")
 LINK = ".local/bin/claude"
@@ -26,69 +27,82 @@ CONFIGURATION = (
 
 
 class OperatorWatch:
-    """Read bounded hashes and names; retain no configuration or login bytes."""
+    """Keep comparison data in memory; publish names and outcomes only."""
 
-    def __init__(self, root, scratch=None, run=None):
+    def __init__(self, root, scratch=None, run=None, markers=()):
         self.root, self.scratch, self.run = root, scratch, run
+        self.markers = Markers(run, markers)
         self.copies = []
         self.before = self.snapshot()
 
     def snapshot(self):
-        result = {}
-        entries = 0
+        try:
+            return self._snapshot()
+        except (OSError, RuntimeError) as error:
+            if isinstance(error, ProtectionError):
+                raise
+            # An OS exception's filename and symlink resolution may be private.
+            raise ProtectionError("operator_watch_unreadable") from None
+
+    def _snapshot(self):
+        result, entries = {}, 0
+        scan_budget = [MAX_CONFIG_FILES, MAX_SCAN_BYTES]
+        baseline = getattr(self, "before", {})
         for name in (*WATCH, LINK):
             path = self.root / name
             try:
                 info = path.lstat()
-                value = {"type": stat.S_IFMT(info.st_mode)}
-                if path.is_symlink():
-                    value["target"] = os.readlink(path)
-                if name in WATCH and path.is_dir():
-                    names = []
-                    with os.scandir(path) as children:
-                        for child in children:
-                            entries += 1
-                            if entries > MAX_CONFIG_FILES:
-                                raise ProtectionError("operator_watch_entry_budget_exceeded")
-                            names.append(child.name)
-                    value["entries"] = sorted(names)
-                result[name] = value
             except FileNotFoundError:
                 result[name] = None
+                continue
+            value = {"type": stat.S_IFMT(info.st_mode), "marker": False}
+            if path.is_symlink():
+                value["target"] = os.readlink(path)
+                value["marker"] = self.markers.link(path)
+            if name in WATCH and path.is_dir():
+                names = []
+                old = set((baseline.get(name) or {}).get("entries", ()))
+                with os.scandir(path) as children:
+                    for child in children:
+                        entries += 1
+                        if entries > MAX_CONFIG_FILES:
+                            raise ProtectionError("operator_watch_entry_budget_exceeded")
+                        names.append(child.name)
+                        if baseline and child.name not in old:
+                            value["marker"] |= self.markers.tree(Path(child.path), scan_budget)
+                value["entries"] = sorted(names)
+            result[name] = value
         for name in CONFIGURATION:
             path = self.root / name
-            # A user may keep settings through a symlink; compare its target
-            # and the bounded ordinary file it names, without retaining bytes.
             target = os.readlink(path) if path.is_symlink() else None
-            value = stamp(path.resolve())
-            result[name] = {"sha256": value.digest, "target": target} if value else None
-        result[".claude.json"] = claude_watch.snapshot(self.root, self.run)
+            value = configuration_bytes(path.resolve())
+            result[name] = {"sha256": value[0].digest if value else None, "target": target,
+                            "marker": self.markers.link(path) or bool(value and self.markers.contains(value[1]))}
+        result[".claude.json"] = claude_watch.snapshot(self.root, self.markers)
         for name in database_watch.DATABASES:
-            result[name] = database_watch.digest(self.root, self.scratch, name, self.copies)
+            result[name] = database_watch.digest(self.root, self.scratch, name, self.copies, self.markers)
         return result
 
     def compare(self):
-        after = self.snapshot()
-        changed = [name for name in self.before if self.before[name] != after[name]]
-        if (after.get(".claude.json") or {}).get("run_projects") and ".claude.json" not in changed:
-            changed.append(".claude.json")
-        protected = {".claude.json": "claude_login_install", ".omp/agent/agent.db": "omp_login_settings",
-                     ".local/share/opencode/opencode.db": "opencode_login"}
+        return self.result(self.snapshot())
+
+    def result(self, after):
+        failed, external = [], []
         comparisons = {}
-        for path, label in protected.items():
-            fields = (list(claude_watch.KEYS) + ["projects_in_run"] if path == ".claude.json"
-                      else list(database_watch.DATABASES[path]))
-            comparisons[label] = {"keys": fields, "status": "fail" if path in changed else "pass"}
-        # Login hashes and run-project path names stay in memory, never evidence.
-        return {"before": {key: value for key, value in self.before.items() if key not in protected},
-                "after": {key: value for key, value in after.items() if key not in protected},
-                "login_comparisons": comparisons, "database_copies": self.copies,
-                "changed": [protected.get(name, name) for name in changed]}
+        for name, value in after.items():
+            marked = bool(value and (value.get("marker") or
+                          any(isinstance(row, dict) and row.get("marker") for row in value.values())))
+            comparisons[name] = "fail" if marked else "pass"
+            if marked:
+                failed.append(name)
+            elif self.before[name] != value:
+                external.append(name)
+        return {"items": comparisons, "changed": failed, "external_changes": external}
 
     def check(self, result=None):
         result = self.compare() if result is None else result
         if result["changed"]:
-            raise ProtectionError("operator_watch_changed: " + ", ".join(result["changed"]))
+            raise ProtectionError("operator_watch_run_trace: " + ", ".join(result["changed"]))
         return result
 
 

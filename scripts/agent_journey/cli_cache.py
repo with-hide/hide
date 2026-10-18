@@ -87,6 +87,17 @@ class Cache:
         folder = self.root / pin_key(kind, pin)
         if folder.exists():
             raise ProtectionError("journey_cli_cache_incomplete: remove the incomplete pin and retry")
+        try:
+            return self.install_pin(runtime, kind, pin, update_env, folder)
+        except BaseException:
+            with runtime.owner.teardown():
+                runtime.owner.close()
+                runtime.owner.attribution_report()
+            if folder.exists():
+                shutil.rmtree(folder)
+            raise
+
+    def install_pin(self, runtime, kind, pin, update_env, folder):
         private_directory(folder)
         for name in ("home", "tmp", "npm-cache"):
             private_directory(folder / name)
@@ -97,7 +108,7 @@ class Cache:
                                f"(allow file-write* (subpath {quote(folder)}))\n"
                                '(allow file-write* (literal "/dev/null"))\n'
                                "(deny appleevent-send)\n").encode())
-        environment = {**clean_env(), "HOME": str(folder / "home"), "TMPDIR": str(folder / "tmp"),
+        environment = {**clean_env(private=True), "HOME": str(folder / "home"), "TMPDIR": str(folder / "tmp"),
                        "npm_config_cache": str(folder / "npm-cache"), "npm_config_userconfig": os.devnull,
                        **update_env}
         for name in ("GITHUB_PATH", "GITHUB_OUTPUT", "BASH_ENV", "ENV", "NODE_OPTIONS", "NODE_PATH"):

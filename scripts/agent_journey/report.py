@@ -73,6 +73,8 @@ def markdown(report):
         lines.extend(["## Product findings", ""])
         lines.extend(f"- {text(finding)}" for finding in report["product_findings"])
         lines.append("")
+    for name in report.get("operator_watch", {}).get("external_changes", []):
+        lines.append(f"바깥에서 바뀜: {text(name)}")
     lines.extend(["## Isolation, operator files and cleanup", "", "```json",
                   json.dumps({key: report[key] for key in ("measured_repository", "measured_commit", "measured_project", "created",
                                                "configuration", "operator_watch", "cli_cache", "operator_trust", "operator_session_folders",
