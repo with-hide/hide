@@ -220,11 +220,11 @@ That residual limit is the approved D-18 boundary; external input is not represe
 
 ### The bell line
 
-The doorbell types `🔔 <writer> <kind>: <the letter's first line>`, then ` · 외 N통` when N more letters wait for the same recipient, then ` · hide inbox` for a Codex recipient:
+The doorbell types `🦉 <writer> <kind>: <the letter's first line>`, then ` · 외 N통` when N more letters wait for the same recipient, then ` · hide inbox` for a Codex recipient:
 
 ```
-🔔 label-end-fix 보고: label end 수정 PR #881을 열었습니다
-🔔 hierarchy-pen-scratch 보고: Pen 시안이 준비됐습니다 · 외 1통
+🦉 label-end-fix 보고: label end 수정 PR #881을 열었습니다
+🦉 hierarchy-pen-scratch 보고: Pen 시안이 준비됐습니다 · 외 1통
 ```
 
 The kind reads 요청 for a request, 막힘 for a block, 보고 for a report, 진행 for a progress letter, 답장 for a reply and 감시 for a watch warning.
@@ -232,10 +232,11 @@ The writer is the name the sender registered under (`hide agent register`, `hide
 A watch warning is named by the agent it watches, and its first line says for how long nothing moved, that the agent stopped with a question, or that it is blocked at a prompt ([Watch activity and completion](#watch-activity-and-completion)).
 Both are looked up in memory when the bell rings, on the doorbell's thread, never on the session-sync thread.
 The first line is the body's first line that has anything to show, cut to 60 characters with `…`, and the writer is cut to 32; a body with no such line leaves the colon and summary out.
-Agents learn from their session guidance that this first line is the letter's one-line summary, and that a prompt beginning with `🔔` brings a letter that `hide inbox` shows if the prompt did not.
+Agents learn from their session guidance that this first line is the letter's one-line summary, and that a prompt beginning with `🦉` brings a letter that `hide inbox` shows if the prompt did not.
+The mark is U+1F989 without a variation selector; Codex CLI on Windows may show the line without the owl.
 
 Whether the line names `hide inbox` is decided per runtime (`bell::names_inbox`), by whether its bell turn can arrive without Hide's hooks having run in the pane.
-Claude Code runs every user-level hook it is given, so its prompt hook hands the turn the letter and its session guidance has already said what `🔔` means; its line ends at the summary.
+Claude Code runs every user-level hook it is given, so its prompt hook hands the turn the letter and its session guidance has already said what `🦉` means; its line ends at the summary.
 Codex runs a user-level hook only once its own trust review approved that exact entry, so another tool's change to `hooks.json` silently stops Hide's, and a Codex attached to its shared app-server daemon runs hooks in the daemon's environment rather than the pane's ([agent-hooks.md](agent-hooks.md)); its bell turn can then arrive with neither the letter nor the guidance, so its line ends with ` · hide inbox`.
 
 The line is submitted to the checked pane through Herdr's `agent.prompt` on every system, so Herdr owns how each agent's input reader finishes a paste and submits it.
@@ -248,13 +249,17 @@ The existing draft, identity and readiness checks, three-attempt limit and retry
 The line carries nothing a composer acts on while it is typed.
 Control characters become spaces, characters that draw nothing or reorder text are dropped (`display_text::one_line`), and runs of whitespace become one space.
 `@` opens the file picker in Claude Code and Codex and `$` opens Codex's skill picker, and Enter would accept the picker's choice instead of submitting, so both are typed as their full-width forms `＠` and `＄`; a backslash before Enter continues the line in Claude Code, so `\` is typed as `＼`.
-`/`, `!` and `#` act only as a prompt's first character, and the line begins with `🔔`.
+`/`, `!` and `#` act only as a prompt's first character, and the line begins with `🦉`.
 
 ### Recognizing the bell
 
 The reservation that spends one of a letter's three bells saves the exact line on the letter (`bell_line`) before it is typed.
 A prompt hook's pull is the bell's exactly when its digest is that of the saved line of a `pending` letter whose recipient is the caller's own pane and native session (`mailbox::rang`).
-A person who types `🔔` and the same words before the doorbell saved them, a bell line copied into another agent's pane, and a line whose letter was already taken in or cancelled are therefore ordinary prompts.
+The core and hook share `hide_agent_hooks::delivery::prompt_digest`: remove every character above U+FFFF, trim the result, then compare its SHA-256 exactly, with no agent or system branch.
+Codex CLI 0.163.0's Windows input reader can drop non-BMP characters, so losing the owl or another such character leaves the bell recognizable; every BMP character, including U+FE0F, remains significant.
+Older hooks' whole-line digests remain accepted against the saved line, including an existing `🔔` reservation, without migrating the ledger.
+New hooks send only the canonical digest.
+A person who types `🦉` and the same words before the doorbell saved them, a bell line copied into another agent's pane, and a line whose letter was already taken in or cancelled are therefore ordinary prompts.
 Once the line is saved, submitting it in that pane takes the letter whoever pressed Enter: the prompt then names the letter it brings.
 A second bell for the same letter saves its own line, so a hook of the first one that arrives after it is an ordinary prompt too.
 The ledger refuses a saved line longer than 512 bytes or holding a control character.

@@ -48,11 +48,25 @@ pub fn read_prompt(payload: &[u8], truncated: bool) -> Prompt {
 }
 
 /// What the hook tells the core about the submitted prompt: the SHA-256 of
-/// its trimmed text in lowercase hex. Only the core knows which line its
+/// its canonical text in lowercase hex. Characters above U+FFFF are removed
+/// before trimming: some console readers drop them, including the leading
+/// owl. Every agent and system uses this same identity rule.
+/// Only the core knows which line its
 /// doorbell typed into the pane, so the prompt is the bell exactly when this
 /// matches the digest of that line; the hook never decides it from the text,
 /// and the prompt itself never leaves the hook.
 pub fn prompt_digest(prompt: &str) -> String {
+    let canonical: String = prompt.chars().filter(|&c| c <= '\u{ffff}').collect();
+    full_prompt_digest(&canonical)
+}
+
+/// Accept the canonical digest and the whole-line digest older hooks send
+/// during an upgrade. The saved line needs no migration.
+pub fn matches_prompt_digest(line: &str, digest: &str) -> bool {
+    prompt_digest(line) == digest || full_prompt_digest(line) == digest
+}
+
+fn full_prompt_digest(prompt: &str) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(prompt.trim().as_bytes())
         .iter()
@@ -410,6 +424,18 @@ fn diagnostic_path(home: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prompt_identity_ignores_only_non_bmp_characters_and_outer_whitespace() {
+        // FIPS 180-2's SHA-256 of "abc", independent of the bell producer.
+        let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        for prompt in ["abc", "🦉 abc", "🔔 a🐈bc 🦉", "\u{10000}abc\u{10ffff}"] {
+            assert_eq!(prompt_digest(prompt), abc, "{prompt:?}");
+        }
+        for prompt in ["abd", "a bc", "Abc", "abc\u{ffff}", "abc\u{fe0f}", "abc한"] {
+            assert_ne!(prompt_digest(prompt), abc, "{prompt:?}");
+        }
+    }
 
     #[test]
     fn only_a_complete_payload_carries_its_prompt_digest_and_session() {

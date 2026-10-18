@@ -16,10 +16,10 @@ use crate::programs;
 use crate::stand_ins;
 
 /// The line the stand-in core rang with.
-const LINE: &str = "🔔 label-end-fix 보고: PR #881을 열었습니다";
-/// SHA-256 of `LINE` and of `please run the tests`, from
-/// `printf %s ... | shasum -a 256`.
-const LINE_DIGEST: &str = "8c8f47d90d22c1de24724041f83429bfb4163ba4f7004431b38e235d6b3669e1";
+const LINE: &str = "🦉 label-end-fix 보고: PR #881을 열었습니다";
+/// SHA-256 of `LINE` without non-BMP characters, trimmed, and of
+/// `please run the tests`, from Python hashlib.
+const LINE_DIGEST: &str = "00a23306f40d42e3b7b2106eb079ab1f8f393cd8ca7c13a1a5b57832eb6b4b3a";
 const OPERATOR_DIGEST: &str = "d5f5d18e68c6739345b7f53abb632b17c1c3663c1aebedc5a7d23987ec1ae706";
 
 /// A stand-in `hide` that answers the bell's digest with a letter and any

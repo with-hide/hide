@@ -1291,7 +1291,7 @@ mod tests {
             assert_eq!(typed[0]["target"], "recipient");
             // The recipient is a Codex, so the line names where the letter is.
             assert_eq!(
-                typed[0]["text"], "🔔 Codex 보고: private · hide inbox",
+                typed[0]["text"], "🦉 Codex 보고: private · hide inbox",
                 "{flags}"
             );
             // Herdr owns each input reader's submission. Hide neither sends
@@ -1311,7 +1311,7 @@ mod tests {
             // recognizes the turn the bell opens.
             assert_eq!(
                 bell.line().as_deref(),
-                Some("🔔 Codex 보고: private · hide inbox")
+                Some("🦉 Codex 보고: private · hide inbox")
             );
         }
     }
@@ -1478,7 +1478,7 @@ mod tests {
         // No registration and no row: the runtime's name, never an id.
         assert_eq!(
             line(&ledger, &letter),
-            "🔔 Codex 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
+            "🦉 Codex 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
         );
         // A row with no title is called by its runtime too.
         let untitled: crate::sidebar::SessionSnapshotPayload = serde_json::from_value(json!({
@@ -1489,7 +1489,7 @@ mod tests {
         crate::runtime::delivery::tests::show_agents(&mut runtime.lock().unwrap(), untitled);
         assert_eq!(
             line(&ledger, &letter),
-            "🔔 Codex 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
+            "🦉 Codex 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
         );
         // The sidebar's title for the pane, while the pane still hosts it.
         let titled: crate::sidebar::SessionSnapshotPayload = serde_json::from_value(json!({
@@ -1501,13 +1501,13 @@ mod tests {
         crate::runtime::delivery::tests::show_agents(&mut runtime.lock().unwrap(), titled);
         assert_eq!(
             line(&ledger, &letter),
-            "🔔 라벨 제목 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
+            "🦉 라벨 제목 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
         );
         let mut moved_on = letter.clone();
         moved_on.sender.session = Some("an-earlier-session".into());
         assert_eq!(
             line(&ledger, &moved_on),
-            "🔔 Codex 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
+            "🦉 Codex 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
         );
         // The name it registered under comes first.
         ledger.agents.push(crate::coordination::AgentRecord {
@@ -1528,14 +1528,14 @@ mod tests {
         });
         assert_eq!(
             line(&ledger, &letter),
-            "🔔 label-end-fix 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
+            "🦉 label-end-fix 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
         );
         // A registration with no name of its own is called by the title, not
         // by its registration id, which the letter's envelope carries.
         ledger.agents[0].name = None;
         assert_eq!(
             line(&ledger, &letter),
-            "🔔 라벨 제목 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
+            "🦉 라벨 제목 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
         );
         ledger.agents[0].name = Some("label-end-fix".into());
         // A watch warning is about the agent it watches, not its parent.
@@ -1550,7 +1550,7 @@ mod tests {
         });
         assert_eq!(
             line(&ledger, &warning),
-            "🔔 label-end-fix 감시: 리뷰 끝났습니다 · 외 1통 · hide inbox"
+            "🦉 label-end-fix 감시: 리뷰 끝났습니다 · 외 1통 · hide inbox"
         );
     }
 
@@ -1745,12 +1745,12 @@ mod tests {
         // as a ring at rest does, and the letter keeps that line.
         let typed = bell.typed();
         assert_eq!(typed.len(), 1);
-        assert_eq!(typed[0]["text"], "🔔 Codex 보고: private · hide inbox");
+        assert_eq!(typed[0]["text"], "🦉 Codex 보고: private · hide inbox");
         assert_eq!(typed[0]["target"], "recipient");
         assert!(typed[0].get("wait").is_none());
         assert_eq!(
             bell.line().as_deref(),
-            Some("🔔 Codex 보고: private · hide inbox")
+            Some("🦉 Codex 보고: private · hide inbox")
         );
         assert_eq!(bell.attempts(), 1);
     }

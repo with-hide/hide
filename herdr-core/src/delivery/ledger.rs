@@ -71,7 +71,8 @@ pub struct Letter {
     pub answer_wait_ended: Option<AnswerWaitEnd>,
     /// The line the doorbell typed for this letter last, saved with its
     /// reservation before it was typed; null until the first bell. A
-    /// submitted prompt is that bell exactly when it is this line.
+    /// submitted prompt is that bell when its canonical digest matches this
+    /// line; older hooks' whole-line digests remain accepted too.
     #[serde(default)]
     pub bell_line: Option<String>,
     /// Where the letter's wait for intake began: on its recipient machine's
@@ -883,7 +884,7 @@ mod tests {
             let path = root.path().join("ledger.json");
             let mut ledger = letter();
             for attempt in 1..=3 {
-                let line = format!("🔔 sender 보고: 시도 {attempt}");
+                let line = format!("🦉 sender 보고: 시도 {attempt}");
                 assert_eq!(
                     ledger.letters[0]
                         .reserve_bell(&Default::default(), 2, line.clone())
@@ -908,7 +909,7 @@ mod tests {
             let before = ledger.bytes().unwrap();
             assert_eq!(
                 ledger.letters[0]
-                    .reserve_bell(&Default::default(), 2, "🔔 a 보고: b".into())
+                    .reserve_bell(&Default::default(), 2, "🦉 a 보고: b".into())
                     .unwrap_err(),
                 "doorbell_attempt_limit"
             );
@@ -927,7 +928,7 @@ mod tests {
             ledger = load(&path).unwrap();
             assert_eq!(
                 ledger.letters[0]
-                    .reserve_bell(&Default::default(), 2, "🔔 a 보고: b".into())
+                    .reserve_bell(&Default::default(), 2, "🦉 a 보고: b".into())
                     .unwrap_err(),
                 "letter_not_pending"
             );
@@ -954,20 +955,20 @@ mod tests {
             if sent {
                 assert_eq!(
                     restored.letters[0]
-                        .reserve_bell(&Default::default(), 2, "🔔 a 보고: b".into())
+                        .reserve_bell(&Default::default(), 2, "🦉 a 보고: b".into())
                         .unwrap_err(),
                     "doorbell_attempt_limit"
                 );
             } else {
                 assert_eq!(
                     restored.letters[0]
-                        .reserve_bell(&Default::default(), 2, "🔔 a 보고: b".into())
+                        .reserve_bell(&Default::default(), 2, "🦉 a 보고: b".into())
                         .unwrap(),
                     3
                 );
                 assert_eq!(
                     restored.letters[0]
-                        .reserve_bell(&Default::default(), 2, "🔔 a 보고: b".into())
+                        .reserve_bell(&Default::default(), 2, "🦉 a 보고: b".into())
                         .unwrap_err(),
                     "doorbell_attempt_limit"
                 );
@@ -976,11 +977,11 @@ mod tests {
         let mut invalid = ledger;
         assert_eq!(
             invalid.letters[0]
-                .reserve_bell(&Default::default(), 2, "🔔 a\n보고".into())
+                .reserve_bell(&Default::default(), 2, "🦉 a\n보고".into())
                 .unwrap_err(),
             "bell_line_invalid"
         );
-        invalid.letters[0].bell_line = Some("🔔 a\n보고".into());
+        invalid.letters[0].bell_line = Some("🦉 a\n보고".into());
         assert_eq!(invalid.validate().unwrap_err(), "ledger_unavailable");
         invalid.letters[0].bell_line = None;
         invalid.letters[0].bell_attempts = Some(4);

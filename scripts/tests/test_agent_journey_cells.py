@@ -153,7 +153,7 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(cells.reply_verdict({"error": "no file"}, "s", "JOURNEY-1")[0], cells.FAIL)
 
     def test_a_letter_passes_only_when_delivered_and_answered_in_the_turn_the_bell_opened(self):
-        bell = "🔔 controller: Reply with exactly the token on the next line"
+        bell = "🦉 controller: Reply with exactly the token on the next line"
         events = [{"role": "assistant", "text": "JOURNEY-1"}, {"role": "user", "text": bell},
                   {"role": "assistant", "text": "JOURNEY-1"}]
         read = {"session": "s", "events": events}
@@ -174,6 +174,16 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(cells.resume_verdict("a", "b", (cells.PASS, "ok")),
                          (cells.FAIL, "native session changed across Wake (a -> b)"))
         self.assertEqual(cells.resume_verdict("a", "a", (cells.PASS, "ok")), (cells.PASS, "same session a; ok"))
+
+    def test_a_letter_turn_survives_non_bmp_loss_but_no_other_text_change(self):
+        bell = "🦉 controller 보고: Read the letter · hide inbox"
+        delivered = {"state": "delivered", "bell_line": bell}
+        for prompt, expected in [("controller 보고: Read the letter · hide inbox", cells.PASS),
+                                 ("controller 보고: Read another letter · hide inbox", cells.FAIL),
+                                 ("controller 보고: Read the letter · hide inbox\ufe0f", cells.FAIL)]:
+            read = {"session": "s", "events": [{"role": "user", "text": prompt},
+                                             {"role": "assistant", "text": "JOURNEY-1"}]}
+            self.assertEqual(cells.letter_verdict(delivered, read, "s", "JOURNEY-1")[0], expected)
 
 
 class ClosedReader(unittest.TestCase):
