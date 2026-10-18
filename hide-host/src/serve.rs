@@ -1212,6 +1212,15 @@ pub fn handle_with_progress(
                     .map_err(|error| HostError::new(ErrorCode::Io, error.to_string()))?,
             )
         }
+        Call::OpenCodeFork { source, cwd } => {
+            let home = env.home("opencode_fork_home_unavailable")?;
+            to_value(crate::opencode_fork::fork(
+                Path::new(&home),
+                &source,
+                &absolute(&cwd)?,
+                &env.stop,
+            )?)
+        }
         Call::AgentTrust {
             agent,
             path,
