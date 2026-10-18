@@ -103,7 +103,7 @@ def stop(launch, environment, port, mark, owner):
     if not before and not listening(port):
         return record
     try:
-        code, _, error = owner.run([str(launch), "service", "stop"], env=environment, check=False, seconds=30)
+        code, _, error = owner.run([str(launch), "service", "stop"], env=environment, check=False)
         record["service_stop"] = code if not code else f"{code}: {error.strip()[:200]}"
     except Exception as failure:
         # A stopped run's owner refuses new work; the signals below still end the server.

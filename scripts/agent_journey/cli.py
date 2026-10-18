@@ -218,7 +218,7 @@ def package(runtime):
             refuse(f"build_this_worktrees_{name.replace('-', '_')}_first")
         # On macOS an APFS clone: the probe's copy can change without touching the build.
         if sys.platform == "darwin":
-            runtime.owner.run(["/bin/cp", "-c", str(source), str(resources / name)], env=runtime.env, seconds=30)
+            runtime.owner.run(["/bin/cp", "-c", str(source), str(resources / name)], env=runtime.env)
         else:
             shutil.copyfile(source, resources / exe(name))
             (resources / exe(name)).chmod(0o700)

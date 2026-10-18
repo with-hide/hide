@@ -509,7 +509,8 @@ class ProcessProtection(unittest.TestCase):
             self.assertTrue(json.loads(receipt.read_text())["confirmed"])
 
     def test_expired_prelaunch_work_never_starts_a_child_or_owes_a_receipt(self):
-        for phase, seconds, delay in (("receipt", .1, 2), ("environment", .1, 2), ("environment", 120, 16)):
+        # The last case waits the whole command cap; a longer wait is refused before any of this.
+        for phase, seconds, delay in (("receipt", .1, 2), ("environment", .1, 2), ("environment", 15, 16)):
             with self.subTest(phase=phase, seconds=seconds), tempfile.TemporaryDirectory() as name:
                 clock = [100.0]
                 owner = OwnedProcesses(diagnostics=Path(name) / "diagnostics")

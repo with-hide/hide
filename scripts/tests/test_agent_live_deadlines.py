@@ -7,6 +7,7 @@ substituted boundaries; the real screen, identity and input adapters run.
 """
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -211,6 +212,13 @@ class ObservationDeadlines(unittest.TestCase):
             runtime.owner.deadline = 100.5
             self.assertEqual(self.observe(root, runtime, 120)[0]["arrival"], "timeout")
             self.assertTrue(all(0 < value <= .5 for value in runtime.budgets))
+
+    def test_a_command_asked_to_run_past_the_cap_is_refused_before_it_starts(self):
+        owner = OwnedProcesses()
+        self.addCleanup(owner.close)
+        with self.assertRaisesRegex(ValueError, f"at most {COMMAND_SECONDS} s"):
+            owner.run([sys.executable, "-c", "pass"], env=dict(os.environ), seconds=COMMAND_SECONDS + 1)
+        self.assertEqual(owner.children, {})
 
     def test_seed_cannot_submit_or_certify_after_late_native_replies(self):
         for late, input_count in ((("screen", 1), 0), (("agent", 1), 0),

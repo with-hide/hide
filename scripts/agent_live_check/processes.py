@@ -377,7 +377,10 @@ class OwnedProcesses:
 
     def run(self, argv, *, env, cwd=None, seconds=COMMAND_SECONDS, check=True, deadline=None,
             stdin=subprocess.DEVNULL):
-        end = min(self.deadline, time.monotonic() + min(COMMAND_SECONDS, seconds),
+        if seconds > COMMAND_SECONDS:
+            # A command never runs past the cap; a longer wait is not shortened behind the caller's back.
+            raise ValueError(f"a command runs at most {COMMAND_SECONDS} s, not {seconds} s")
+        end = min(self.deadline, time.monotonic() + seconds,
                   self.deadline if deadline is None else deadline)
         child = self.spawn(argv, env=env, cwd=cwd, deadline=end, stdin=stdin)
         output = [bytearray(), bytearray()]
