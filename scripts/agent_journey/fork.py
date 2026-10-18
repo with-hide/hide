@@ -67,7 +67,9 @@ def measure(journey):
     source_session = (journey.daemon.row(journey.pane) or {}).get("session_id")
     record["source"]["session"] = source_session
     before = panes(journey.runtime)
-    journey.daemon.dispatch("fork_pane", {"pane_id": journey.pane, "placement": "tab"})
+    journey.daemon.dispatch(
+        "fork_pane", {"pane_id": journey.pane, "placement": "tab", "origin": "operator"}
+    )
     try:
         journey.runtime.wait(lambda: panes(journey.runtime) - before, FORK_SECONDS)
     except ProcessError as error:
