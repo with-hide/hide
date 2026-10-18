@@ -1028,16 +1028,26 @@ fn silent_peer(path: &Path) -> (mpsc::Sender<()>, thread::JoinHandle<()>) {
 }
 
 /// Writes to a peer that never reads until a write fails, and answers that
-/// failure and the moment it came: no buffer on any system holds a
-/// gigabyte.
+/// failure, the moment it came and how long the write that ran out of time
+/// waited: the failing one, or the one before it that moved only part of its
+/// bytes. No buffer on any system holds a gigabyte.
 fn write_until_refused(client: &mut LocalStream) -> (std::io::ErrorKind, Instant, Duration) {
     let chunk = vec![7_u8; 64 * 1024];
     let mut written = 0_usize;
+    let mut cut = None;
     while written < 1 << 30 {
         let started = Instant::now();
         match client.write(&chunk) {
-            Ok(count) => written += count,
-            Err(error) => return (error.kind(), Instant::now(), started.elapsed()),
+            Ok(count) => {
+                written += count;
+                if count < chunk.len() {
+                    cut = Some(started.elapsed());
+                }
+            }
+            Err(error) => {
+                let waited = cut.unwrap_or_else(|| started.elapsed());
+                return (error.kind(), Instant::now(), waited);
+            }
         }
     }
     panic!("a gigabyte reached a peer that never reads");
@@ -1057,6 +1067,44 @@ fn a_write_timeout_ends_a_write_a_silent_peer_holds_after_the_time() {
     assert!(waited >= timeout, "returned early: {waited:?}");
     drop(release);
     held.join().unwrap();
+}
+
+/// A write cut short may leave the peer part of a message, so once the peer
+/// reads again and there would be room, no handle on the stream writes.
+#[test]
+fn after_a_write_runs_out_of_time_the_stream_takes_no_more_writes() {
+    let (_folder, path) = endpoint();
+    let listener = LocalListener::bind(&path).unwrap();
+    let (resume, resumed) = mpsc::channel::<()>();
+    let peer = thread::spawn(move || {
+        let mut stream = listener.accept().unwrap();
+        resumed.recv_timeout(Duration::from_secs(30)).unwrap();
+        let mut taken = Vec::new();
+        let _ = stream.read_to_end(&mut taken);
+    });
+    let mut client = LocalStream::connect(&path).unwrap();
+    client
+        .set_write_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    let (kind, _, _) = write_until_refused(&mut client);
+    assert_eq!(kind, std::io::ErrorKind::TimedOut);
+    resume.send(()).unwrap();
+    client
+        .set_write_timeout(Some(Duration::from_secs(30)))
+        .unwrap();
+    let mut duplicate = client.duplicate();
+    for stream in [&mut client, &mut duplicate] {
+        let started = Instant::now();
+        let error = stream.write(b"x").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut, "{error:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the write waited"
+        );
+    }
+    drop(duplicate);
+    drop(client);
+    peer.join().unwrap();
 }
 
 /// One exchange's deadline bounds the wait of each read and write, longer
