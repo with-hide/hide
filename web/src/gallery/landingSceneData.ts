@@ -1,5 +1,5 @@
-// The product shots on the introduction site (site/index.html, the hero and
-// the three pillars): the story of its one-night timeline, drawn by the
+// The product shots on the introduction site (site/index.html, the hero's
+// tabs and the Hide AI section): the story of its one-night timeline, drawn by the
 // shell's own components. Everything is the gallery's frozen sidebar fixture
 // with its invented text replaced, never a second projection: the groups,
 // counts and tree shape are what the core wrote for that fixture, and only the
@@ -7,7 +7,7 @@
 // name here is a person, a machine or a path of anyone's.
 
 import type { PrBoard } from "../agentScope";
-import type { AgentRow, Checkout, Device, PullRequest, SnapshotRest, Workspace } from "../snapshot";
+import type { AgentRow, Checkout, Device, MemoryRow, ProjectMemory, PullRequest, SnapshotRest, Workspace } from "../snapshot";
 import type { MobileState } from "../mobileSettings";
 import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
@@ -108,7 +108,7 @@ function renameProject(project: Workspace): Workspace {
   return { ...project, ...(label ? { label } : {}), pinned: false, checkouts: project.checkouts.map(renameCheckout) };
 }
 
-/** The window's projects and agents for the attention and agents shots: one machine, the page's story. */
+/** The window's projects and agents for every shot: one machine, the page's story. */
 export function landingSidebar(nowMs: number, expanded: string[], width: number): { rest: SnapshotRest; agents: AgentRow[] } {
   const base = sidebarScene("reference", { ...REFERENCE_FOLDS, expandedAgents: expanded }, nowMs);
   const navigator = base.rest.navigator!;
@@ -182,19 +182,22 @@ export function landingDevices(nowMs: number, width: number): { rest: SnapshotRe
 const HERO_PULL_GROUPS: Record<PullRequest["state"], PrBoard["rows"][number]["group"] | null> = { mergeable: "needs_you", failed: "working", pending: "working", merged: "merged", draft: null, closed: null };
 const HERO_PULL_AGENTS: Record<number, string> = { 431: "a3", 436: "a3", 432: "a1g1" };
 
-/** The PRs tool's width in the hero, narrow enough that the two terminals beside it read whole. */
+/** The lane's width in the workspace shots, narrow enough that the two terminals beside it read whole. */
 const HERO_LANE_WIDTH = 360;
 
 /** The two panes the hero shows side by side, of the billing-app main checkout's one Agent tab. */
 export const HERO_PANES = ["a1", "a3"] as const;
 
+
 /**
  * The hero: the attention shot's window with the billing-app main checkout in
  * front, its lead and the agent asking to merge side by side, and the PRs tool
- * pinned beside them listing what those agents opened.
+ * pinned beside them listing what those agents opened. The agents shot is the
+ * same window with the lead's children unfolded in the tree (`expanded`), and
+ * the memory shot pins the Memory tool instead of the PRs tool.
  */
-export function landingWorkspace(nowMs: number, width: number): { rest: SnapshotRest; agents: AgentRow[] } {
-  const scene = landingSidebar(nowMs, [], width);
+export function landingWorkspace(nowMs: number, width: number, tool: "prs" | "memory" = "prs", expanded: string[] = []): { rest: SnapshotRest; agents: AgentRow[] } {
+  const scene = landingSidebar(nowMs, expanded, width);
   const navigator = scene.rest.navigator!;
   const project = navigator.workspaces!.find((row) => row.id === "hide")!;
   const main = project.checkouts[0]!;
@@ -229,12 +232,44 @@ export function landingWorkspace(nowMs: number, width: number): { rest: Snapshot
     pane_layouts: [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: HERO_PANES[1], zoomed: false, root: { type: "split", direction: "right", ratio: 0.5, first: { type: "pane", pane_id: HERO_PANES[0] }, second: { type: "pane", pane_id: HERO_PANES[1] } } }],
     workspace_view: {
       agent_layout: { root: { area: { id: "g1", active: tab.id, displays: [{ id: tab.id! }] } }, active_area: "g1", canvases: {}, limits: { areas: 4, depth: 3, displays: 64 }, display_count: 1 },
-      device_id: "local", path: main.path, tool: "prs", last_tool: "prs", prs: { only_checkout: false }, pinned: true, tree: false, lane_width: HERO_LANE_WIDTH, tree_width: null, lane_called: 0, lane_calls: 0,
+      device_id: "local", path: main.path, tool, last_tool: tool, prs: { only_checkout: false }, pinned: true, tree: false, lane_width: HERO_LANE_WIDTH, panel_width: HERO_LANE_WIDTH, tree_width: null, lane_called: 0, lane_calls: 0,
       layout: { root: { area: { id: "v1", active: null, displays: [] } }, active_area: "v1", limits: { areas: 4, depth: 3, displays: 32 }, display_count: 0 },
     },
     terminal: { headers: { a1: { working: true, band: null } } },
   };
   return { rest, agents: scene.agents };
+}
+
+const MINUTE = 60_000;
+const DAY = 1440 * MINUTE;
+
+/**
+ * The memory shot's cards: what the story's sessions decided about the
+ * billing-app, in the kinds and states the core gives them. One rule is asked
+ * about for the docs, an agent is writing another into them, and one already
+ * lives in the repository's CONTRIBUTING.md.
+ */
+export function landingMemory(nowMs: number, workspaceId: string): ProjectMemory {
+  const card = (number: number, title: string, kind: MemoryRow["kind"], given: number, pulled: number, human: number, ago: number, promotion: MemoryRow["promotion"] = null): MemoryRow => ({
+    number, title, kind, provided_session_count: given, pull_count: pulled, human_source_count: human, updated_at_unix_ms: nowMs - ago, verifying: false, promotion,
+  });
+  const rows = [
+    card(13, "Use pnpm, never npm", "rule", 6, 4, 2, 40 * MINUTE),
+    card(14, "Exports stay in UTC; the invoice PDF shows local time", "decision", 4, 2, 1, 2 * 60 * MINUTE),
+    card(16, "An empty invoice list exports a header row, not an empty file", "decision", 2, 1, 1, 25 * MINUTE),
+    card(11, "Above 10,000 rows the export times out; page it", "lesson", 3, 2, 1, DAY),
+    card(10, "Release notes wait for a person to read them", "rule", 5, 3, 2, 2 * DAY, { state: "running", agent: { name: "memory-promote-m10", pane_id: "w1:p9" }, pr_number: null, target_path: null, github_failure: null }),
+    card(9, "Run the export tests before opening a pull request", "rule", 8, 6, 2, 3 * DAY, { state: "merged", agent: null, pr_number: 474, target_path: "CONTRIBUTING.md", github_failure: null }),
+    card(7, "Invoices live in the billing schema, not public", "fact", 7, 5, 0, 4 * DAY),
+  ];
+  return {
+    workspace_id: workspaceId, unavailable: null, loading: false, enabled: true, capacity_reached: false,
+    rows,
+    questions: [{ kind: "promote", number: 13, title: rows[0]!.title, human_session_count: 2, pulled_session_count: 4 }],
+    analysis: "idle", consent_required: false, usable_cards: rows.length, checking_card: null, check_resume_at_unix_ms: null, forgotten: null, pending_action: null,
+    expanded: null,
+    search: null,
+  };
 }
 
 const CLAUDE = "\x1b[38;2;215;119;87m";
