@@ -2003,5 +2003,137 @@
       "Empty groups and grouped or ungrouped drafts keep the prompt, shared picker and terminal start legible in both themes and at narrow widths.",
       "The sidebar keeps hidden groups, drafts and terminal-only tabs reachable. Fixture terminal bodies do not prove native terminal rendering or start behavior."
     ]
+  },
+  "overview": {
+    "description": "Five Overview tabs with verified session groups, mixed backlog, request search and account-wide usage.",
+    "file": "design/hide-screens.pen",
+    "sheet": "screen-overview",
+    "scene": "overview",
+    "selector": "[data-gallery-scene=overview]",
+    "readySelector": "[data-overview-graph][data-graph-phase=ready], [data-main-screen]:not([data-main-view=work])",
+    "measurement": "web/e2e/overview-geometry.mjs",
+    "language": "ko",
+    "viewportHeight": 900,
+    "frames": [
+      {
+        "node": "ov-work-l",
+        "theme": "light",
+        "width": 1440,
+        "scale": 1,
+        "content": "reference",
+        "state": "work"
+      },
+      {
+        "node": "ov-projects-l",
+        "theme": "light",
+        "width": 1440,
+        "scale": 1,
+        "content": "reference",
+        "state": "projects"
+      },
+      {
+        "node": "ov-backlog-l",
+        "theme": "light",
+        "width": 1440,
+        "scale": 1,
+        "content": "reference",
+        "state": "backlog"
+      },
+      {
+        "node": "ov-history-l",
+        "theme": "light",
+        "width": 1440,
+        "scale": 1,
+        "content": "reference",
+        "state": "history"
+      },
+      {
+        "node": "ov-usage-l",
+        "theme": "light",
+        "width": 1440,
+        "scale": 1,
+        "content": "reference",
+        "state": "usage"
+      },
+      {
+        "node": "ov-work-d",
+        "theme": "dark",
+        "width": 1440,
+        "scale": 1,
+        "content": "reference",
+        "state": "work"
+      },
+      {
+        "node": "ov-projects-d",
+        "theme": "dark",
+        "width": 1440,
+        "scale": 1,
+        "content": "reference",
+        "state": "projects"
+      },
+      {
+        "node": "ov-backlog-d",
+        "theme": "dark",
+        "width": 1440,
+        "scale": 1,
+        "content": "reference",
+        "state": "backlog"
+      },
+      {
+        "node": "ov-history-d",
+        "theme": "dark",
+        "width": 1440,
+        "scale": 1,
+        "content": "reference",
+        "state": "history"
+      },
+      {
+        "node": "ov-usage-d",
+        "theme": "dark",
+        "width": 1440,
+        "scale": 1,
+        "content": "reference",
+        "state": "usage"
+      }
+    ],
+    "conditions": {
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "widths": [
+        1440,
+        900,
+        640
+      ],
+      "contents": [
+        "reference"
+      ],
+      "scales": [
+        1,
+        1.3076923076923077
+      ]
+    },
+    "states": {
+      "rest": "Work graph, multiple roots and collapsed projects",
+      "projects": "Project comparison and retained disk controls",
+      "backlog": "Source-qualified issues and memos",
+      "history": "Retained operator requests across dates",
+      "usage": "Account-wide daily and model usage"
+    },
+    "urlStates": [
+      "projects",
+      "backlog",
+      "history",
+      "usage"
+    ],
+    "rules": {
+      "noOverlap": true,
+      "noSidewaysOverflow": true
+    },
+    "judgment": [
+      "Compare structure and density with the fixed approved HTML; the Pen sheets document the product and do not replace that authority.",
+      "Check long mixed Korean and English titles, narrow windows, larger text, focus return and source scope. Native behavior and actual topology require separate evidence."
+    ]
   }
 }

@@ -260,6 +260,7 @@ pub(crate) fn run_cli_with_input(
     // Reuse the installed sibling rather than trusting a different checkout
     // earlier on PATH. A missing part follows the manual-inbox fallback.
     let mut command = Command::new(sibling);
+    crate::route::apply(&mut command).map_err(Failure::from)?;
     command
         .args(arguments)
         .stdin(if input.is_empty() {

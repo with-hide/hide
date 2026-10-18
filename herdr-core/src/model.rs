@@ -77,6 +77,7 @@ pub struct Snapshot {
     pub usage: crate::usage::model::UsageSnapshot,
     pub schema_version: u32,
     pub delivery_watches: Vec<crate::delivery::watch::View>,
+    pub overview_graph: OverviewGraphSnapshot,
     pub navigator: NavigatorSnapshot,
     pub overlay: OverlaySnapshot,
     pub tab: TabSnapshot,
@@ -4039,13 +4040,13 @@ pub struct IssueWorkSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub undo: Option<BacklogUndoSnapshot>,
     /// Where each item a backlog panel or a Start dialog shows came from, one
-    /// per item key, kept while any window shows it (B31, B33).
+    /// per workspace/device/item, kept while any window shows it (B31, B33).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub origins: Vec<BacklogOriginSnapshot>,
     /// Every backlog item key a missed line made, newest first, for the
     /// backlog row's flag (B27).
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub missed_keys: Vec<String>,
+    pub missed_keys: Vec<crate::links::ledger::BacklogMissedKey>,
     /// Every GitHub issue key Hide made for the backlog (the quick add, the
     /// backlog's input or `백로그로`), newest first: only these and memos
     /// show `되돌리기` (D-21, B31).
@@ -4119,6 +4120,8 @@ impl From<hide_node_link::gh::GithubFailureCategory> for BacklogFailure {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct BacklogUndoSnapshot {
+    pub workspace_id: String,
+    pub device_id: String,
     pub task_key: String,
     /// `working`, `done` or `failed`.
     pub phase: String,
@@ -4127,6 +4130,8 @@ pub struct BacklogUndoSnapshot {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct BacklogOriginSnapshot {
+    pub workspace_id: String,
+    pub device_id: String,
     pub task_key: String,
     /// `reading`, `ready` or `failed`.
     pub phase: String,
@@ -4140,6 +4145,14 @@ pub struct BacklogOriginSnapshot {
     /// this device and never sent to GitHub (D-21).
     pub request: Option<String>,
     pub answer: Option<String>,
+}
+
+impl BacklogOriginSnapshot {
+    pub fn matches(&self, owner: &crate::links::ledger::BacklogOriginIdentity) -> bool {
+        self.workspace_id == owner.workspace_id
+            && self.device_id == owner.device_id
+            && self.task_key == owner.task_key
+    }
 }
 
 /// The latest GitHub search (`github_search`), matched by the web's own
@@ -4200,6 +4213,8 @@ impl GithubSearchSnapshot {
 /// empty until `ready`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IssueDetailSnapshot {
+    pub workspace_id: String,
+    pub device_id: String,
     pub task_key: String,
     /// `reading`, `ready` or `failed`.
     pub phase: String,
@@ -4211,28 +4226,51 @@ pub struct IssueDetailSnapshot {
     pub assignees: Vec<String>,
     pub comment_count: Option<u32>,
     pub comments: Vec<crate::tasks::TaskComment>,
+    pub comments_cursor: Option<String>,
+    pub comments_has_more: bool,
+    pub comments_limited: bool,
+    pub comments_loading: bool,
 }
 
 impl IssueDetailSnapshot {
-    pub fn reading(task_key: String) -> Self {
-        Self::settled(task_key, "reading", None)
+    pub fn reading(workspace_id: String, device_id: String, task_key: String) -> Self {
+        Self::settled(workspace_id, device_id, task_key, "reading", None)
     }
 
     /// The answer to a read: `ready` with what it read, or `failed` with why.
-    pub fn answered(task_key: String, answer: Result<crate::tasks::TaskDetail, String>) -> Self {
+    pub fn answered(
+        workspace_id: String,
+        device_id: String,
+        task_key: String,
+        answer: Result<crate::tasks::TaskDetail, String>,
+    ) -> Self {
         match answer {
-            Ok(detail) => Self::settled(task_key, "ready", Some(detail)),
+            Ok(detail) => Self::settled(workspace_id, device_id, task_key, "ready", Some(detail)),
             Err(message) => Self {
                 message: Some(message),
-                ..Self::settled(task_key, "failed", None)
+                ..Self::settled(workspace_id, device_id, task_key, "failed", None)
             },
         }
     }
 
-    fn settled(task_key: String, phase: &str, detail: Option<crate::tasks::TaskDetail>) -> Self {
+    pub fn matches(&self, workspace_id: &str, device_id: &str, task_key: &str) -> bool {
+        self.workspace_id == workspace_id
+            && self.device_id == device_id
+            && self.task_key == task_key
+    }
+
+    fn settled(
+        workspace_id: String,
+        device_id: String,
+        task_key: String,
+        phase: &str,
+        detail: Option<crate::tasks::TaskDetail>,
+    ) -> Self {
         let read = detail.is_some();
         let detail = detail.unwrap_or_default();
         Self {
+            workspace_id,
+            device_id,
             task_key,
             phase: phase.into(),
             body: read.then_some(detail.body),
@@ -4243,6 +4281,10 @@ impl IssueDetailSnapshot {
             assignees: detail.assignees,
             comment_count: detail.comment_count,
             comments: detail.comments,
+            comments_cursor: detail.comments_cursor,
+            comments_has_more: detail.comments_has_more,
+            comments_limited: detail.comments_limited,
+            comments_loading: false,
         }
     }
 }
@@ -6044,6 +6086,7 @@ impl Snapshot {
             schema_version: SCHEMA_VERSION,
             usage: crate::usage::model::UsageSnapshot::initial(options.node_id.as_str()),
             delivery_watches: Vec::new(),
+            overview_graph: OverviewGraphSnapshot::default(),
             navigator: NavigatorSnapshot {
                 agent_scope: Default::default(),
                 root_path: None,
@@ -6192,6 +6235,7 @@ impl PetSnapshot {
     }
 }
 
+mod overview_graph;
 /// The sections of [`Snapshot`] that ride the revisioned `rest` channel of
 /// the delta wire: everything except the editor and the changes view (each
 /// with its own revision), the terminal chunk ring (sequence cursor), and the
@@ -6199,6 +6243,7 @@ impl PetSnapshot {
 /// Owned copy retained by the runtime to stamp revisions by comparison, so
 /// no mutation site needs dirty-tracking discipline.
 mod rest;
+pub use overview_graph::{GraphSession, OverviewGraphSnapshot};
 pub use rest::{RestSections, RestWire};
 
 /// One delta response taken from the runtime, holding everything the wire

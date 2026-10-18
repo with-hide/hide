@@ -833,7 +833,8 @@ Running promotion elapsed labels reuse the window's existing shared clock; only 
 What each live pane's session was given is read again, one indexed query per live session, after a receipt batch, a pane change or a Memory change, one read in flight and one waiting.
 Crossing a cap is logged, never an enlarged queue; the operator sees only a state they can act on.
 
-There is no Project-wide Conversation history (PRD overview-device-tasks D-20): no `project_sessions` or `session_search` section rides the snapshot, and no search worker, index or 30-second refresh runs.
+The former copied Project-wide Conversation history remains removed: its raw-body index and 30-second refresh are not restored.
+Overview History searches retained canonical requests on demand through the existing session-work worker, with the bounds described below.
 The old `session-search.sqlite3` is opened read-only only to read each project's retention choice, and a missing file or table costs nothing beyond that open.
 
 `UserPromptSubmit` is a separate high-frequency boundary.
@@ -855,7 +856,7 @@ Record hook idle and driven timing separately, including sample count and failur
 An automated deadline test proves bounded return under its fixture conditions; it does not prove every storage device, link or interaction answers inside the wait.
 Report the hook's Memory time separately for a pane on the core's machine and one on a node, and the prompt hook's worst case beside it.
 
-### Overview tasks and backlog reads
+### Overview Work, backlog, History and Usage reads
 
 The Overview's tasks are the core's (`agent_state/tally/tasks.rs`), rebuilt only with the agent scope cache's compared input, so an unchanged frame derives no task and adds nothing to the high-frequency path.
 The shell sorts and filters them into sections in one memoized pass (`taskSections` in `web/src/overviewTasks.ts`) over the projects, rows and filter it reads, and an unchanged input does not regroup cards.
@@ -877,6 +878,34 @@ Manual acceptance in the desktop app includes the device switch, overlay dismiss
 
 Opening the Overview adds one `github_request` per local Git project it shows, which costs nothing when the core already holds that project's answer, and the Projects tab's `disk_watch`; hover, focus, filter changes and popovers are local component state that publishes nothing.
 The backlog is a pure function of the snapshot (`backlogOf` and `filterRows` in `web/src/overviewBacklog.ts`), one pass over the project's items, and its filter is a pass over its rows.
+Source-qualified Local and GitHub rows share that pass, with status, source, author, assignee, labels and query applied before each project's initial fifty visible rows.
+Wide issue or record detail retains its list mounted and inert, so Back restores local list state without another catalog read.
+Issue comments use the existing detail worker, fifty per requested page and two hundred retained per item, with four thousand characters per comment; pagination is explicit and adds no timer.
+
+Work derives its graph from canonical agent, lineage, verified launch and bounded delivery facts, never from terminal output or letter bodies.
+The graph delivery projection keeps at most 2,000 metadata edges, independently of the existing 5,000-item delivery ledger, and publishes only changed facts.
+`overviewGraphModel.ts` creates a stable structure key so status, model and elapsed-text updates do not schedule another layout.
+`dependencyLayout.ts` owns at most one layout Worker and AbortController with a deadline, terminates them on success, failure, cancellation and unmount, and refuses more than four hundred layout nodes.
+A failed layout leaves the fifty-row list usable with Retry; hover, zoom, folding and selection add no core event or reader.
+Reduced-motion changes and unmount release animation and media-query listeners rather than leaving background work running.
+
+History queries the retained request ledger through the existing session-work worker and its sixteen-RPC admission and 512-command queue, without a new resident worker, native session scan or polling interval.
+One cancellable 180 ms debounce belongs to the mounted view; a newer query replaces its demand and request-id and connection-generation checks reject stale answers.
+The literal query is bounded to two hundred characters, and device, immutable original project, agent, status and time criteria run in SQL before `LIMIT 51`.
+One page retains fifty sessions with at most two snippets each and one continuation cursor, ordered by activity and stable session identity.
+The UI retains one result page and at most two hundred cursor entries; it does not accumulate every page's results.
+Search uses the existing 64 MiB ledger, retention choice, five-hundred-character saved request and two-thousand-request per-session caps, and original requests saved while summaries were Off remain searchable without reclassification.
+Generated titles and task summaries are opt-in and do not restore the retired raw-transcript search index.
+Request navigation carries the exact saved offset, centers that one retained request and applies literal highlighting locally; it schedules no native-file search.
+
+Usage's daily/model comparison uses the existing historical-usage worker and unchanged discovery and publication cadence in the ownership ledger above.
+The existing pricing pass adds at most O(rows log 4096) work for a shared date/agent/model/source map, retaining the newest 4,096 model keys and reporting truncation while complete daily sums remain independent.
+No per-call model list is copied into every agent range; one prepared bounded model list is installed with the existing consumption publication, using the same short Runtime lock and outside-lock serialization.
+The mounted view filters and sums those prepared amounts for seven, thirty, ninety or retained-year dates, selected agent and day; it does not reprice, read native sessions or increase polling.
+The daily and model tables mount at most thirty top-level records per page, while the chart mounts only the chosen bounded calendar range.
+The existing minute countdown remains the only Usage UI clock, and leaving Usage clears its existing open hint and timer.
+These bounds and functional regressions establish ownership and capped work, not native responsiveness or RSS acceptance.
+Measure matched baseline and candidate idle and driven workloads separately before making a performance claim.
 An item's panel reads where it came from once when it opens (`backlog_origin`, one slot per item, at most 32), and the Start dialog reads its issue once (`issue_detail_request`, `gh issue view` on a worker off `Mutex<Runtime>`); a later read of the same item replaces its slot so only the newest answer lands.
 The ⌘K GitHub search is one `github_search` event per query the operator commits, never per keystroke and never on a timer; its `gh search prs` and `gh search issues` calls (two calls however many projects, at most 20 `--repo`, 15 s each, after one `gh repo view` per project the reader has not read) run one after another on a single worker off `Mutex<Runtime>`, one search at a time with a newer request replacing the one waiting, and it adds only the `issue_work.search` slot (at most 20 pull requests and 20 issues) to the revisioned `rest` section; `runtime::tests::issues` owns the lifecycle and `github::tests` the allowlist and parser.
 The sidebar's 태스크 list (PRD sidebar-task-lens B22) is `taskList` in `web/src/taskList.ts`, one pass over the device's `agent_scope.tasks` memoized on that value, the agent rows and the view option; the core rebuilds the tasks only with the scope cache's compared input (`agent_state/tally/tasks.rs`), the list draws no rows while the 프로젝트 list or a hidden sidebar shows, its elapsed clock updates only its own text, and the 보기 slot adds one read per item the operator opens, the card's or the record's, on the event that opens it.

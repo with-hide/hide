@@ -937,11 +937,13 @@ pub(super) struct IssueSettingsSetPayload {
 
 /// `issue_detail_request`: one issue's body, labels, author, assignees and
 /// comments, for its panel and the Start dialog.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct IssueDetailRequestPayload {
     pub(super) workspace_id: String,
     pub(super) task_key: String,
+    #[serde(default)]
+    pub(super) comments_after: Option<String>,
 }
 
 /// `github_search`: pull requests and issues of this Mac's GitHub projects
@@ -1507,8 +1509,8 @@ pub(super) enum Event {
     BacklogRetry(super::backlog::BacklogIntentPayload),
     BacklogDismiss(super::backlog::BacklogIntentPayload),
     BacklogUndo(super::backlog::BacklogItemPayload),
-    BacklogOrigin(super::backlog::BacklogItemPayload),
-    BacklogOriginClose(super::backlog::BacklogKeyPayload),
+    BacklogOrigin(crate::links::ledger::BacklogOriginIdentity),
+    BacklogOriginClose(crate::links::ledger::BacklogOriginIdentity),
     FactoryAction(Box<super::factory::FactoryActionPayload>),
     FactoryTaskOpen(super::factory::FactoryTaskOpenPayload),
     FactoryTaskClose,
@@ -1759,14 +1761,24 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "links_open" => decode!(super::links::LinksOpenPayload, LinksOpen),
         "session_record_open" => decode!(super::links::RecordOpenPayload, SessionRecordOpen),
         "session_record_close" => Ok(Event::SessionRecordClose),
-        "session_work_search" => decode!(super::links::RecordSearchPayload, SessionWorkSearch),
+        "session_work_search" => {
+            let search: super::links::RecordSearchPayload =
+                serde_json::from_value(payload).map_err(|_| invalid_payload(&kind))?;
+            if !search.bounded() {
+                return Err(invalid_payload(&kind));
+            }
+            Ok(Event::SessionWorkSearch(search))
+        }
         "session_missed_status" => decode!(super::links::MissedStatusPayload, SessionMissedStatus),
         "backlog_add" => decode!(super::backlog::BacklogAddPayload, BacklogAdd),
         "backlog_retry" => decode!(super::backlog::BacklogIntentPayload, BacklogRetry),
         "backlog_dismiss" => decode!(super::backlog::BacklogIntentPayload, BacklogDismiss),
         "backlog_undo" => decode!(super::backlog::BacklogItemPayload, BacklogUndo),
-        "backlog_origin" => decode!(super::backlog::BacklogItemPayload, BacklogOrigin),
-        "backlog_origin_close" => decode!(super::backlog::BacklogKeyPayload, BacklogOriginClose),
+        "backlog_origin" => decode!(crate::links::ledger::BacklogOriginIdentity, BacklogOrigin),
+        "backlog_origin_close" => decode!(
+            crate::links::ledger::BacklogOriginIdentity,
+            BacklogOriginClose
+        ),
         "factory_action" => serde_json::from_value::<super::factory::FactoryActionPayload>(payload)
             .map(|payload| Event::FactoryAction(Box::new(payload)))
             .map_err(|_| invalid_payload(&kind)),

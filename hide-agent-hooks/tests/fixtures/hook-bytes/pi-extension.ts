@@ -1,4 +1,4 @@
-// hide-extension@7 sha256=bf3458f368f5df8d48f4c87782410dd0c6c09d5aecb75b6a44c118c7f9a5c8e6
+// hide-extension@8 sha256=eee5ec0f3a25e9a13a6c2066fa5118850572a6d2614c5fa7257e1e482beb374f
 // Hide's extension for Pi and omp, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane, in an agent started from another Pi's or omp's shell, or when its helper is gone, it does
@@ -12,8 +12,9 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 const HELPER = "/kit path/it's/hide-agent-hooks";
+const ROUTE = [];
 const AGENT = "pi";
-const VERSION = 7;
+const VERSION = 8;
 
 // The prompt budget is Claude Code's prompt hook's; the tool budget is the spawn guard's. Both hosts wait for
 // a handler far longer (omp gives up at 30 s and then blocks the tool), so these are the limits.
@@ -122,7 +123,7 @@ function helper(state, operation, input, budgetMs) {
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(HELPER, [AGENT, operation], { stdio: ["pipe", "pipe", "ignore"] });
+      child = spawn(HELPER, [AGENT, operation, ...ROUTE], { stdio: ["pipe", "pipe", "ignore"] });
     } catch {
       state.lost += 1;
       resolve(null);

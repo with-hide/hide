@@ -835,9 +835,22 @@ impl Runtime {
         // Preserve installed bytes for startup recovery. In particular no
         // subsequent pull, tick or bell may acknowledge our old memory image.
         self.delivery_ledger = Err("ledger_unavailable".into());
+        self.snapshot.overview_graph.available = false;
     }
 
     pub(crate) fn publish_delivery(&mut self, ledger: Arc<Ledger>, transitions: bool) -> bool {
+        let now = unix_milliseconds();
+        let graph_changed = self.delivery_ledger.as_ref().ok().is_none_or(|previous| {
+            !self
+                .snapshot
+                .overview_graph
+                .matches_ledger(previous, &ledger, now)
+        });
+        if graph_changed {
+            let mut graph = crate::model::OverviewGraphSnapshot::from_ledger(&ledger, now);
+            graph.sessions = std::mem::take(&mut self.snapshot.overview_graph.sessions);
+            self.snapshot.overview_graph = graph;
+        }
         let delivered: Vec<_> = ledger
             .letters
             .iter()
@@ -941,6 +954,7 @@ impl Runtime {
         self.feed_link_parents();
         let lineage = (waiters_moved || started_moved) && self.refresh_agent_lineage();
         changed
+            | graph_changed
             | reopened
             | feedback
             | continued

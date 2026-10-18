@@ -165,6 +165,14 @@ fn backlog_runtime_with(
         repository: Some("acme/project".into()),
         ..Default::default()
     };
+    runtime
+        .github
+        .projects
+        .push(crate::model::GithubProjectSnapshot {
+            root_path: project.path.clone(),
+            issues: project.home_issues.clone(),
+            ..Default::default()
+        });
     let notes = workspace(
         "n",
         "Notes",
@@ -198,7 +206,9 @@ fn add(shared: &SharedRuntime, intent: &str, workspace: &str, title: &str) {
     send(
         shared,
         "backlog_add",
-        serde_json::json!({"intent": intent, "workspace_id": workspace, "title": title}),
+        serde_json::json!({"intent": intent, "workspace_id": workspace, "title": title,
+            "destination": if workspace == "n" { "local" } else { "github" },
+            "repository": if workspace == "n" { None } else { Some("acme/project") }}),
     );
 }
 
@@ -235,17 +245,52 @@ fn row_key(runtime: &Runtime, intent: &str) -> Option<String> {
         .clone()
 }
 
+/// B15/D14: an omitted destination is a memo even in a GitHub project;
+/// naming GitHub without a repository refuses before any external write.
+#[test]
+fn adding_defaults_to_local_and_publishing_requires_a_repository() {
+    let gh = FakeGh::new();
+    let (shared, _worker) = backlog_runtime(gh.clone());
+    send(
+        &shared,
+        "backlog_add",
+        serde_json::json!({
+            "intent": "private-default", "workspace_id": "w", "title": "Private follow-up"
+        }),
+    );
+    wait(&shared, "the default memo", |runtime| {
+        row_key(runtime, "private-default").is_some()
+    });
+    assert_eq!(
+        row_key(&shared.lock().unwrap(), "private-default").as_deref(),
+        Some("local:/repo#1")
+    );
+    send(
+        &shared,
+        "backlog_add",
+        serde_json::json!({
+            "intent": "missing-repository", "workspace_id": "w", "title": "Publish only explicitly", "destination": "github"
+        }),
+    );
+    let runtime = shared.lock().unwrap();
+    let refused = runtime
+        .snapshot
+        .issue_work
+        .backlog
+        .iter()
+        .find(|row| row.intent == "missing-repository")
+        .unwrap();
+    assert_eq!(
+        (refused.phase, refused.failure),
+        (BacklogPhase::Failed, Some(BacklogFailure::Refused))
+    );
+    assert!(gh.calls("issue create").is_empty());
+}
+
 #[test]
 fn a_github_item_is_one_title_only_create_and_a_repeated_send_makes_no_second() {
     let gh = FakeGh::new();
-    let (shared, _worker) = backlog_runtime_with(gh.clone(), |runtime| {
-        let mut project = crate::model::GithubProjectSnapshot {
-            root_path: "/repo".into(),
-            ..Default::default()
-        };
-        project.issues.repository = Some("acme/project".into());
-        runtime.github.projects = vec![project];
-    });
+    let (shared, _worker) = backlog_runtime(gh.clone());
     add(&shared, "i-1", "w", "Flaky e2e on Windows");
     add(&shared, "i-1", "w", "Flaky e2e on Windows");
     wait(&shared, "the issue", |runtime| {
@@ -767,6 +812,7 @@ fn a_missed_line_whose_session_origin_repository_is_unknown_makes_no_issue() {
             "backlog_add",
             serde_json::json!({
                 "intent": intent, "workspace_id": "w", "title": "Missed follow-up",
+                "destination": "github", "repository": "acme/project",
                 "missed": {"session": {"device_id": session.device_id, "agent": "codex", "session_id": session_id}, "id": "x"},
             }),
         );
@@ -800,6 +846,14 @@ fn add_other_project(runtime: &mut Runtime) {
         repository: Some("acme/project".into()),
         ..Default::default()
     };
+    runtime
+        .github
+        .projects
+        .push(crate::model::GithubProjectSnapshot {
+            root_path: other.path.clone(),
+            issues: other.home_issues.clone(),
+            ..Default::default()
+        });
     runtime.snapshot.navigator.workspaces.push(other);
 }
 
@@ -1049,6 +1103,24 @@ fn summaries_on(runtime: &mut Runtime) {
 /// A fresh session in `/repo`, whose repository is `acme/project`, with one
 /// open missed line; answers that line's id.
 fn seed_open_missed(runtime: &Runtime, session: &crate::links::ledger::SessionIdentity) -> String {
+    seed_missed_turn(
+        runtime,
+        session,
+        "/repo",
+        "Ship it",
+        "Update the docs",
+        None,
+    )
+}
+
+pub(super) fn seed_missed_turn(
+    runtime: &Runtime,
+    session: &crate::links::ledger::SessionIdentity,
+    root: &str,
+    request: &str,
+    missed: &str,
+    witness: Option<String>,
+) -> String {
     use crate::links::ledger::{
         LedgerUpdate, MissedKind, NewMissedWork, RecordedRequest, TurnJudgment, WorkAuthor,
     };
@@ -1059,9 +1131,9 @@ fn seed_open_missed(runtime: &Runtime, session: &crate::links::ledger::SessionId
     store
         .apply_project(
             &crate::links::ProjectFacts {
-                key: hide_project::project_id(&session.device_id, std::path::Path::new("/repo")),
+                key: hide_project::project_id(&session.device_id, std::path::Path::new(root)),
                 device_id: session.device_id.clone(),
-                root: "/repo".into(),
+                root: root.into(),
                 repository: Some("acme/project".into()),
                 ..Default::default()
             },
@@ -1080,7 +1152,7 @@ fn seed_open_missed(runtime: &Runtime, session: &crate::links::ledger::SessionId
                 error: None,
                 facts: hide_session::links::LinkFacts {
                     session_id: Some(session.session_id.clone()),
-                    cwd: Some("/repo".into()),
+                    cwd: Some(root.into()),
                     first_at_unix_ms: Some(now - 2_000),
                     last_at_unix_ms: Some(now - 2_000),
                     ..Default::default()
@@ -1092,12 +1164,12 @@ fn seed_open_missed(runtime: &Runtime, session: &crate::links::ledger::SessionId
     for update in [
         LedgerUpdate::Requests {
             session: session.clone(),
-            cwd: "/repo".into(),
+            cwd: root.into(),
             path: None,
             requests: vec![RecordedRequest {
                 offset: 1,
                 at_unix_ms: now - 2_000,
-                text: "Ship it".into(),
+                text: request.into(),
                 author: WorkAuthor::Operator,
                 task_ids: vec![],
                 chapter_id: None,
@@ -1117,11 +1189,11 @@ fn seed_open_missed(runtime: &Runtime, session: &crate::links::ledger::SessionId
             end: crate::labels::analysis::LabelEnd::Done,
             work_author: true,
             letter: None,
-            turn_witness: None,
+            turn_witness: witness,
             judgment: TurnJudgment {
                 missed: vec![NewMissedWork {
                     kind: MissedKind::FollowUp,
-                    text: "Update the docs".into(),
+                    text: missed.into(),
                 }],
                 ..Default::default()
             },
@@ -1149,6 +1221,8 @@ fn add_missed(shared: &SharedRuntime, intent: &str, workspace: &str, id: &str) {
         "backlog_add",
         serde_json::json!({
             "intent": intent, "workspace_id": workspace, "title": "Update the docs",
+            "destination": if workspace == "n" { "local" } else { "github" },
+            "repository": if workspace == "n" { None } else { Some("acme/project") },
             "missed": {"session": {"device_id": session.device_id, "agent": session.agent, "session_id": session.session_id}, "id": id},
         }),
     );
@@ -1167,8 +1241,14 @@ fn a_missed_line_becomes_an_issue_in_its_session_repository_and_is_flagged() {
         &shared,
         "the missed line's issue to be flagged",
         |runtime| {
-            row_key(runtime, "m-1")
-                .is_some_and(|key| runtime.snapshot.issue_work.missed_keys.contains(&key))
+            row_key(runtime, "m-1").is_some_and(|key| {
+                runtime
+                    .snapshot
+                    .issue_work
+                    .missed_keys
+                    .iter()
+                    .any(|item| item.task_key == key && item.device_id.is_none())
+            })
         },
     );
     assert_eq!(
@@ -1247,6 +1327,8 @@ fn a_missed_line_whose_failure_no_retry_can_change_is_added_again_under_a_new_in
 
 fn shown_origin(task_key: &str) -> crate::model::BacklogOriginSnapshot {
     crate::model::BacklogOriginSnapshot {
+        workspace_id: "w".into(),
+        device_id: crate::node::TEST_NODE.into(),
         task_key: task_key.into(),
         phase: "ready".into(),
         session: None,
@@ -1256,6 +1338,35 @@ fn shown_origin(task_key: &str) -> crate::model::BacklogOriginSnapshot {
         request: Some("the operator's request".into()),
         answer: Some("the agent's answer".into()),
     }
+}
+
+fn origin_runtime() -> (SharedRuntime, crate::links::worker::LinkWorker) {
+    backlog_runtime_with(FakeGh::new(), |runtime| {
+        runtime.github.projects[0].issues.issues = [41, 42, 43, 99]
+            .into_iter()
+            .map(|number| crate::issues::IssueSnapshot {
+                reference: crate::issues::IssueReference {
+                    repository: "acme/project".into(),
+                    number,
+                },
+                title: format!("Issue {number}"),
+                url: format!("https://github.com/acme/project/issues/{number}"),
+                state: "OPEN".into(),
+                project_status: None,
+                updated_at_unix_ms: None,
+                created_at_unix_ms: None,
+                closed_at_unix_ms: None,
+                blocked_by: vec![],
+                sub_issues: Default::default(),
+                labels: vec![],
+                author: None,
+                assignees: vec![],
+            })
+            .collect();
+        runtime.snapshot.navigator.workspaces[0].home_issues =
+            runtime.github.projects[0].issues.clone();
+        runtime.sync_tasks();
+    })
 }
 
 fn origin_keys(shared: &SharedRuntime) -> Vec<String> {
@@ -1273,8 +1384,7 @@ fn origin_keys(shared: &SharedRuntime) -> Vec<String> {
 
 #[test]
 fn each_items_origin_has_its_own_slot_and_closing_one_leaves_the_others() {
-    let gh = FakeGh::new();
-    let (shared, _worker) = backlog_runtime(gh);
+    let (shared, _worker) = origin_runtime();
     // Two windows show two items' panels.
     shared.lock().unwrap().snapshot.issue_work.origins = vec![
         shown_origin("github:acme/project#41"),
@@ -1284,7 +1394,7 @@ fn each_items_origin_has_its_own_slot_and_closing_one_leaves_the_others() {
     send(
         &shared,
         "backlog_origin",
-        serde_json::json!({"workspace_id": "w", "task_key": "github:acme/project#43"}),
+        serde_json::json!({"workspace_id": "w", "device_id": crate::node::TEST_NODE, "task_key": "github:acme/project#43"}),
     );
     assert_eq!(
         origin_keys(&shared),
@@ -1297,7 +1407,7 @@ fn each_items_origin_has_its_own_slot_and_closing_one_leaves_the_others() {
     send(
         &shared,
         "backlog_origin_close",
-        serde_json::json!({"task_key": "github:acme/project#41"}),
+        serde_json::json!({"workspace_id": "w", "device_id": crate::node::TEST_NODE, "task_key": "github:acme/project#41"}),
     );
     assert_eq!(
         origin_keys(&shared),
@@ -1308,14 +1418,13 @@ fn each_items_origin_has_its_own_slot_and_closing_one_leaves_the_others() {
 
 #[test]
 fn a_second_window_opening_an_item_already_shown_keeps_the_turn_it_shows() {
-    let gh = FakeGh::new();
-    let (shared, _worker) = backlog_runtime(gh);
+    let (shared, _worker) = origin_runtime();
     shared.lock().unwrap().snapshot.issue_work.origins =
         vec![shown_origin("github:acme/project#41")];
     send(
         &shared,
         "backlog_origin",
-        serde_json::json!({"workspace_id": "w", "task_key": "github:acme/project#41"}),
+        serde_json::json!({"workspace_id": "w", "device_id": crate::node::TEST_NODE, "task_key": "github:acme/project#41"}),
     );
     let runtime = shared.lock().unwrap();
     let origin = &runtime.snapshot.issue_work.origins[0];
@@ -1328,15 +1437,14 @@ fn a_second_window_opening_an_item_already_shown_keeps_the_turn_it_shows() {
 
 #[test]
 fn an_origin_past_the_open_limit_is_logged_and_shows_no_error() {
-    let gh = FakeGh::new();
-    let (shared, _worker) = backlog_runtime(gh);
+    let (shared, _worker) = origin_runtime();
     shared.lock().unwrap().snapshot.issue_work.origins = (0..32)
         .map(|number| shown_origin(&format!("github:acme/project#{number}")))
         .collect();
     send(
         &shared,
         "backlog_origin",
-        serde_json::json!({"workspace_id": "w", "task_key": "github:acme/project#99"}),
+        serde_json::json!({"workspace_id": "w", "device_id": crate::node::TEST_NODE, "task_key": "github:acme/project#99"}),
     );
     let runtime = shared.lock().unwrap();
     assert_eq!(runtime.snapshot.issue_work.origins.len(), 32);
@@ -1344,6 +1452,28 @@ fn an_origin_past_the_open_limit_is_logged_and_shows_no_error() {
         runtime.snapshot.status.last_error.is_none(),
         "nobody looking at the panel can act on the cap"
     );
+}
+
+#[test]
+fn an_origin_requires_the_admitted_workspace_device_and_item() {
+    let (shared, _worker) = origin_runtime();
+    for payload in [
+        serde_json::json!({"workspace_id": "absent", "device_id": crate::node::TEST_NODE, "task_key": "github:acme/project#41"}),
+        serde_json::json!({"workspace_id": "w", "device_id": "another-device", "task_key": "github:acme/project#41"}),
+        serde_json::json!({"workspace_id": "w", "device_id": crate::node::TEST_NODE, "task_key": "github:acme/project#404"}),
+        serde_json::json!({"workspace_id": "w", "device_id": crate::node::TEST_NODE, "task_key": "local:/elsewhere#1"}),
+    ] {
+        send(&shared, "backlog_origin", payload);
+        assert!(
+            shared
+                .lock()
+                .unwrap()
+                .snapshot
+                .issue_work
+                .origins
+                .is_empty()
+        );
+    }
 }
 
 #[test]

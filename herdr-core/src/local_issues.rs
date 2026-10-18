@@ -32,6 +32,9 @@ pub const BODY_LIMIT: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LocalIssue {
+    /// The explicit add intent, retained through restart and title edits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<String>,
     pub number: u32,
     pub title: String,
     #[serde(default)]
@@ -179,6 +182,7 @@ impl LocalIssueStore {
         let number = project.next_number.max(1);
         project.next_number = number + 1;
         project.issues.push(LocalIssue {
+            intent: None,
             number,
             title,
             body,
@@ -188,6 +192,30 @@ impl LocalIssueStore {
             closed_at_unix_ms: None,
         });
         self.version = VERSION;
+        Ok(number)
+    }
+
+    /// A repeated add resolves to the memo the first add made.
+    pub fn create_once(
+        &mut self,
+        machine: Option<&str>,
+        path: &str,
+        intent: &str,
+        title: &str,
+        now: u64,
+    ) -> Result<u32, String> {
+        if let Some(issue) = self.project(machine, path).and_then(|project| {
+            project
+                .issues
+                .iter()
+                .find(|issue| issue.intent.as_deref() == Some(intent))
+        }) {
+            return Ok(issue.number);
+        }
+        let number = self.create(machine, path, title, "", now)?;
+        self.issue_mut(machine, path, number)
+            .expect("new memo")
+            .intent = Some(intent.to_owned());
         Ok(number)
     }
 
@@ -300,6 +328,51 @@ pub fn save(path: &Path, store: &LocalIssueStore) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// D14: retrying an add after a restart returns its first memo even
+    /// when the operator has since edited or closed that memo.
+    #[test]
+    fn an_add_intent_survives_reload_and_later_edits() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("local-issues.json");
+        let mut store = LocalIssueStore::default();
+        assert_eq!(
+            store
+                .create_once(None, "/p", "add-1", "First title", 1)
+                .unwrap(),
+            1
+        );
+        store
+            .update(None, "/p", 1, "Edited title", "Private body", 2)
+            .unwrap();
+        store.set_open(None, "/p", 1, false, 3);
+        save(&path, &store).unwrap();
+        let mut loaded = load(&path).unwrap();
+        assert_eq!(
+            loaded
+                .create_once(None, "/p", "add-1", "First title", 4)
+                .unwrap(),
+            1
+        );
+        assert_eq!(loaded.project(None, "/p").unwrap().issues.len(), 1);
+        let memo = loaded.issue(None, "/p", 1).unwrap();
+        assert_eq!(
+            (memo.title.as_str(), memo.body.as_str(), memo.open),
+            ("Edited title", "Private body", false)
+        );
+        assert_eq!(
+            loaded
+                .create_once(None, "/p", "add-2", "First title", 5)
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            loaded
+                .create_once(Some("node"), "/p", "add-1", "Node memo", 6)
+                .unwrap(),
+            1
+        );
+    }
 
     #[test]
     fn numbers_never_repeat_and_ids_read_back() {

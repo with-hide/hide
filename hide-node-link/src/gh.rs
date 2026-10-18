@@ -39,6 +39,91 @@ pub fn is_repository(value: &str) -> bool {
 /// `run_gh` lets it ask for.
 pub const ISSUE_DETAIL_FIELDS: &str = "body,labels,author,assignees,comments,createdAt";
 
+const ISSUE_DETAIL_QUERY: &str = "query=query HideIssueDetail($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){issue(number:$number){body createdAt author{login} labels(first:100){nodes{name color}} assignees(first:100){nodes{login}} comments(first:50,after:$after){totalCount nodes{author{login} createdAt body} pageInfo{endCursor hasNextPage}}}}}";
+
+/// Cursors come from GitHub, stay opaque, and cannot grow the next call.
+pub fn issue_detail_cursor_valid(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 1024 && value.is_ascii()
+}
+
+/// A fixed, read-only detail page. Values are separate GraphQL variables.
+pub fn issue_detail_arguments(
+    repository: &str,
+    number: u32,
+    after: Option<&str>,
+) -> Option<Vec<String>> {
+    if !is_repository(repository)
+        || number == 0
+        || after.is_some_and(|value| !issue_detail_cursor_valid(value))
+    {
+        return None;
+    }
+    let (owner, name) = repository.split_once('/')?;
+    Some(vec![
+        "api".into(),
+        "graphql".into(),
+        "-f".into(),
+        ISSUE_DETAIL_QUERY.into(),
+        "-f".into(),
+        format!("owner={owner}"),
+        "-f".into(),
+        format!("name={name}"),
+        "-F".into(),
+        format!("number={number}"),
+        if after.is_some() { "-f" } else { "-F" }.into(),
+        format!("after={}", after.unwrap_or("null")),
+    ])
+}
+
+fn is_issue_detail_call(arguments: &[&str]) -> bool {
+    let [
+        "api",
+        "graphql",
+        "-f",
+        query,
+        "-f",
+        owner,
+        "-f",
+        name,
+        "-F",
+        number,
+        cursor_flag,
+        cursor,
+    ] = arguments
+    else {
+        return false;
+    };
+    if *query != ISSUE_DETAIL_QUERY {
+        return false;
+    }
+    let Some(owner) = owner.strip_prefix("owner=") else {
+        return false;
+    };
+    let Some(name) = name.strip_prefix("name=") else {
+        return false;
+    };
+    let Some(number) = number
+        .strip_prefix("number=")
+        .and_then(|value| value.parse::<u32>().ok())
+    else {
+        return false;
+    };
+    let after = match (*cursor_flag, *cursor) {
+        ("-F", "after=null") => None,
+        ("-f", value) => match value.strip_prefix("after=") {
+            Some(value) => Some(value),
+            None => return false,
+        },
+        _ => return false,
+    };
+    issue_detail_arguments(&format!("{owner}/{name}"), number, after).is_some_and(|expected| {
+        expected
+            .iter()
+            .map(String::as_str)
+            .eq(arguments.iter().copied())
+    })
+}
+
 /// The fields `search` asks `gh search prs` and `gh search issues` for, and
 /// the only ones `run_gh` lets them ask for. The search has no head branch, and
 /// only a pull request has `isDraft`.
@@ -128,10 +213,11 @@ pub const PULL_REQUEST_LIMIT: &str = "200";
 /// last proves there are more.
 pub const ISSUE_LIST_LIMIT: &str = "201";
 pub const ISSUE_LIST_SEARCH: &str = "sort:updated-desc";
-pub const ISSUE_LIST_FIELDS: &str = "number,title,url,state,labels,updatedAt,createdAt,closedAt";
+pub const ISSUE_LIST_FIELDS: &str =
+    "number,title,url,state,labels,author,assignees,updatedAt,createdAt,closedAt";
 /// The same list with the projects each issue is in.
 pub const ISSUE_LIST_PROJECT_FIELDS: &str =
-    "number,title,url,state,labels,projectItems,updatedAt,createdAt,closedAt";
+    "number,title,url,state,labels,author,assignees,projectItems,updatedAt,createdAt,closedAt";
 
 /// A fresh creation-ordered read, including closed issues. A search index's
 /// absence is not proof that an interrupted create did not reach GitHub.
@@ -385,8 +471,8 @@ pub fn allowed(arguments: &[&str]) -> bool {
         )
         || matches!(
             arguments,
-            ["issue", "list", "--state", "open", "--limit", ISSUE_LIST_LIMIT, "--search", ISSUE_LIST_SEARCH, "--json", fields]
-                if *fields == ISSUE_LIST_FIELDS || *fields == ISSUE_LIST_PROJECT_FIELDS
+            ["issue", "list", "--state", state, "--limit", ISSUE_LIST_LIMIT, "--search", ISSUE_LIST_SEARCH, "--json", fields]
+                if (*state == "open" || *state == "closed") && (*fields == ISSUE_LIST_FIELDS || *fields == ISSUE_LIST_PROJECT_FIELDS)
         )
         || matches!(
             arguments,
@@ -422,6 +508,7 @@ pub fn allowed(arguments: &[&str]) -> bool {
         // The search: the registered repositories, the cap, fixed fields, and
         // the query's words after `--` so none can be read as a flag.
         || is_search_call(arguments)
+        || is_issue_detail_call(arguments)
         || (arguments.len() == 4
             && arguments[..3] == ["api", "graphql", "-f"]
             && (arguments[3].starts_with("query=query HideLinkedIssues {")
@@ -680,6 +767,32 @@ pub enum GhAnswer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Detail paging may vary only its repository, issue and bounded cursor;
+    /// a remote node never accepts an arbitrary query or write (B14).
+    #[test]
+    fn detail_pages_accept_only_the_fixed_read_query() {
+        for after in [None, Some("Y3Vyc29yOjUw")] {
+            let args = issue_detail_arguments("acme/app", 42, after).unwrap();
+            let refs: Vec<_> = args.iter().map(String::as_str).collect();
+            assert!(allowed(&refs));
+            let mut changed = args.clone();
+            changed[3] = changed[3].replace("comments(first:50", "comments(first:500");
+            assert!(!allowed(
+                &changed.iter().map(String::as_str).collect::<Vec<_>>()
+            ));
+            changed[3] =
+                "query=mutation { deleteIssue(input:{issueId:\"x\"}) { clientMutationId } }".into();
+            assert!(!allowed(
+                &changed.iter().map(String::as_str).collect::<Vec<_>>()
+            ));
+        }
+        for after in ["", "한글", &"x".repeat(1025)] {
+            assert!(issue_detail_arguments("acme/app", 42, Some(after)).is_none());
+        }
+        assert!(issue_detail_arguments("acme/app", 0, None).is_none());
+        assert!(issue_detail_arguments("acme/app/extra", 42, None).is_none());
+    }
 
     #[test]
     fn a_remote_url_names_its_repository_and_nothing_else_does() {

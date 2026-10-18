@@ -10,25 +10,36 @@ import { enterWorkspace, showTool } from "./wire";
 
 test.describe.configure({ timeout: 180_000 });
 
-test("@platform a folder's memo goes into its backlog from the input, opens in the panel, and 되돌리기 deletes it", async ({ page }) => {
+test("@platform a folder's memo is added from the toolbar, opens in the detail, and 되돌리기 deletes it", async ({ page }) => {
   const herdr = await startHerdr({ agents: false });
   let daemon: Daemon | undefined;
   try {
     daemon = await startHided(herdr, "overview-backlog");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await openOverview(page, "backlog");
-    // B26: a folder keeps memos on this device; the input says so before Enter.
-    const input = page.locator("[data-backlog-input]").first();
+    await page.locator("[data-backlog-add]").click();
+    const quick = page.locator("[data-quick-add]");
+    const input = quick.locator("[data-quick-add-input]");
     await expect(input).toBeVisible({ timeout: 30_000 });
     await expect(page.locator("[data-backlog-destination]").first()).toHaveAttribute("data-backlog-destination", "local");
     await input.fill("폴더 메모");
     await input.press("Enter");
-    // B29: the row is there at once and the input is empty for the next one.
+    await expect(quick.locator("[data-quick-add-made]")).toBeVisible();
+    await expect(quick).toHaveCount(0, { timeout: 10_000 });
+    // The local default creates one row without a GitHub write.
     const row = page.locator("[data-backlog-row]", { hasText: "폴더 메모" });
     await expect(row).toBeVisible({ timeout: 30_000 });
     await expect(row).toContainText("L-1");
-    await expect(input).toHaveValue("");
     await expect(page.locator('[data-main-tab="backlog"] [data-tab-count]')).toHaveText("1");
+    await expect(page.locator("[data-backlog-table] thead")).toHaveCount(1);
+    // All-project scope omits projects without matching rows and offers
+    // one global no-results state. Clearing restores the same memo (B12).
+    await page.locator("[data-backlog-query]").fill("no-such-backlog-item");
+    await expect(page.locator("[data-backlog-row]")).toHaveCount(0);
+    await expect(page.locator("[data-backlog-section]")).toHaveCount(0);
+    await expect(page.locator("[data-backlog-empty]")).toHaveCount(1);
+    await page.locator("[data-backlog-empty]").getByRole("button", { name: "Clear filters", exact: true }).click();
+    await expect(row).toBeVisible();
     // B31, B32: the row opens its panel, whose 되돌리기 deletes the memo.
     await row.getByRole("button").first().click();
     const item = page.locator("[data-overview-panel] [data-backlog-item]");

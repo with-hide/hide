@@ -833,24 +833,30 @@ Reintroducing a shared attachment shelf requires a supported provider contract f
 
 Web owner: `web/src/Overview.tsx` (the modal and the page, the title and the device switch), `web/src/MainScreen.tsx` (the tab row with its counts and controls, the unreachable device, the Home with no project, the side panel), `web/src/overviewTasks.ts` (a device's tasks as the record and the backlog read them), `web/src/OverviewRecord.tsx` (a session's record beside the tabs at Home), `web/src/BacklogTab.tsx` and `web/src/overviewBacklog.ts` (백로그), `web/src/ProjectsTab.tsx` and `web/src/overviewProjects.ts` (Projects), `web/src/QuickAdd.tsx` and `web/src/quickAddChoice.ts` (the quick add), `web/src/issueMarks.tsx` (an issue's glyph and labels), `web/src/IssueDialogs.tsx` and `web/src/issueStart.ts` (Start).
 Core owner: `herdr-core/src/agent_state/tally/tasks.rs` (the tasks), `herdr-core/src/runtime/backlog.rs` (the backlog's add, retry, undo and origin), `herdr-core/src/runtime/disk_sweep.rs` (the Projects tab's disk), `herdr-core/src/tasks.rs` and `herdr-core/src/local_issues.rs` (issue sources).
-The Overview is laid out by PRD overview-device-tasks and PRD sidebar-task-lens: one device at a time, with the tabs `백로그 · Projects` and Usage at the end.
-The device's tasks are the sidebar's 태스크 list, not an Overview tab (PRD sidebar-task-lens D-20).
-It replaced the Project Overview, the Agents graph, the Issues board with its List and Dependencies modes, and Conversation history; none of them is in the app, and looking at one project closely is the right lane's work.
+The Overview has five tabs in this order: Work, Projects, Backlog, History and Usage (PRD overview-redesign).
+Work and the sidebar's 태스크 list share canonical agent facts; Work adds their explicit delegation and delivery relationships without replacing the sidebar.
+Projects opens a project home, Backlog combines source-qualified issues, and History searches retained operator requests.
+The removed copied-conversation index and its raw transcript search remain retired; History uses the existing session-work ledger instead.
 
 ### The page and the device switch
 
-The Overview opens from the sidebar's Overview row, the top row's Overview button or ⌘⇧O, always on the device in front on the rail, and has no choice between all projects and one project (B1).
-It opens on the tab it was last left on, 백로그 the first time (PRD sidebar-task-lens B38).
+The Overview opens from the sidebar's Overview row, the top row's Overview button or ⌘⇧O, initially on the device in front on the rail.
+Work, Projects, Backlog and History share the chosen device and optional canonical project scope; Usage always shows the core machine's global account usage.
+It opens on Work the first time and remembers the chosen tab for the current window.
 It opens as a centered modal over a mounted Workspace, as large as the window allows with the window inset (`--size-settings-sheet-window-inset`) clear on every side and at most `--size-overview-sheet-w` by `--size-overview-sheet-h`, preserving terminal geometry and output, and otherwise as a central page.
 Its head is the title `Overview` and the device switch: every connected device as its rail tile and name, the rail's front device marked `rail`, a device that does not answer marked `연결 안 됨`, and every other device's tooltip carrying `내 차례 N` (B2).
 With This Mac alone there is no switch, since there is nothing to choose.
 Choosing a device changes only what the Overview shows; the rail, the sidebar and the Workspace in front stay, and a project chip that was set clears.
-The tab row is `백로그 · Projects` and, at its end, `Usage`: 백로그 carries its open items and Projects its project count (B3).
-A device that does not answer dims the tabs, and the body holds only `<device>가 응답하지 않는다 · <언제부터>` and `다시 연결`; the age is the core's `unreachable_since_unix_ms` on that device's status row, set when it first stopped answering, and the reason is the line's tooltip; when it answers again the body fills in place (B4).
-백로그 carries the project chip at the row's right (`모든 프로젝트 ▾`); choosing a project makes it show that project alone, the chip names it while it filters, and changing the device clears it (B5).
-백로그's label chips and search sit at the row's right end beside the chip.
+The tab row shows Work, Projects, Backlog, History and Usage, with counts derived from the same scoped records each view shows.
+A device that does not answer dims the live Work, Projects and Backlog tabs, and their body holds `<device>가 응답하지 않는다 · <언제부터>` and `다시 연결`; the age is the core's `unreachable_since_unix_ms`, and the diagnostic reason stays in the line's tooltip.
+History keeps searching the core's retained requests for that device and marks its disconnected state in the view.
+Usage stays available because choosing a different device does not change the core machine that owns its ledger.
+The project chip at the row's right filters the four device views; changing the device clears it.
+Usage replaces the project choice with one global account scope line naming the actual core machine.
 
-A backlog row, a project row or a session's record at Home opens the side panel at the right of the tab, as wide as the lane's minimum; below a 1280 px window it floats over the tab instead of narrowing it (B65).
+A backlog row or session record opens the Overview's detail surface, while a project row opens its project home.
+Issue and History record details use the wide detail surface with Back; the underlying list remains mounted and inert, preserving its search, filters, page and scroll.
+Other records keep the existing side panel, floating below the Overview panel breakpoint.
 Escape closes the panel first and the Overview after it, background click and ⌘⇧O close the modal, and closing returns the keyboard to where it was before the Overview opened (B16).
 Choosing another tab closes the panel.
 The Overview replaces the search palette in one action and returns to the palette's original keyboard owner; Settings and other dialogs prevent a second Overview modal, and navigation from inside the Overview closes it as part of that action.
@@ -858,19 +864,31 @@ Native browser displays use the existing dialog still rules without reloading.
 Every tab, the device switch, the project chip, a row, a fold line and every button of the panel take the keyboard with a visible focus ring and an accessible name, and a state is written as a word (`묻는 중`, `일하는 중`) as well as drawn in its colour (B64).
 The Overview draws its first screen from the snapshot without waiting for any disk or GitHub read, and a closed Overview adds nothing to terminal output or key input (B63).
 
-The Home with no project shows the next step in the place of 백로그 and of Projects (PRD first-run-onboarding D-16; PRD sidebar-task-lens B42): `Add a project to start an agent.` and Add project with its chord (⇧⌘N), which a browser tab, unable to pick a folder, shows as the sentence alone.
-With projects and no agent, 백로그 stays as it is, and the sidebar's 태스크 list offers New agent in its empty line.
+The Home with no project shows `Add a project to start an agent.` and Add project with its chord (⇧⌘N), which a browser tab, unable to pick a folder, shows as the sentence alone.
+With projects and no agent, Work shows its empty state and the existing New agent route; the backlog remains available.
 Before the first snapshot the shell's own connecting state shows instead.
 
 ### A device's tasks
 
-The sidebar's 태스크 list draws a device's tasks (PRD sidebar-task-lens D-20); the Overview keeps no Tasks tab, and an old Tasks place opens 백로그 (B38).
+The sidebar's 태스크 list draws a device's tasks; Overview Work reads the same canonical agents and explicit relationships.
 A task is a root agent and every descendant it has on any device, with the checkouts they work in and every pull request the link record joined to one of their sessions; an issue or a memo the task started from rides it (B10).
 An agent Hide AI started for a home (PRD hide-ai-work-home) is a task only while it calls the operator, the same rule the sidebar's Needs You follows.
 The core derives the tasks from facts it already holds, stores none of them, and rebuilds them only when their inputs change, so a new agent, an ended one or a new pull request changes the task in place.
 A fork is a root of its own and so a task of its own.
 A task belongs to the device its root agent runs on.
-The Overview reads the same tasks for the Projects tab's `지금` counts and the order of 백로그's sections.
+The Overview reads the same tasks for the Projects tab's `지금` counts and the order of Backlog's sections.
+
+### Work
+
+Web owners are `web/src/overviewGraphModel.ts`, `web/src/OverviewGraph.tsx`, `web/src/overviewGraphNodes.tsx` and `web/src/dependencyLayout.ts`.
+Work offers graph and list views over real live agents, grouped by project and explicit parentage, with state counts and local group folds.
+Each agent shows its canonical task identity, agent, state and actual current progress; a model is shown only when the current launch proves it.
+Edges distinguish delegation from retained deliveries, whose graph metadata is direction, kind, time and count; no letter subject or body reaches this projection.
+An unresolved endpoint is never joined by a similar name or pane number.
+Group folds aggregate the facts of their members and never invent progress or an inferred relationship.
+The list is paged at fifty rows and stays usable when graph layout fails; the graph offers Retry beside that failure.
+Graph focus, pan, zoom, folding and hover stay local to the mounted view.
+Reduced motion removes decorative movement, and closing the view ends its layout work and listeners.
 
 ### A record beside the tabs
 
@@ -885,41 +903,49 @@ Closing the panel reads the 보기 slot's own record again when the slot holds o
 
 ### 백로그
 
-Every project has one issue source, chosen in the project row's Issue source menu or in its 백로그 section's source chip (Auto, GitHub or Local, the stored choice checked): GitHub issues, read and written through the operator's own `gh`, or memos, Local issues that Hide keeps in `local-issues.json` in its state directory, numbered per project and shown as `L-N`, on this device only.
+Backlog lists both Local issues and eligible GitHub issues for a project, with source-qualified identities so `L-N` and `#N` never collide.
+The saved Issue source choice (Auto, GitHub or Local) remains the default for older entry points; it does not hide either source in Overview.
+Local issues remain in `local-issues.json`, numbered per project; GitHub issues are read and written through the owning machine's `gh`.
 An open Issue source menu follows the core's stored choice as it arrives, including an acknowledgement received after the menu reopened; selecting an item does not create a second, optimistic choice in the shell.
 A project's source defaults to GitHub when its repository reads as a GitHub repository and to Local otherwise (a folder, a repository with no GitHub remote, or `gh` not installed); a project of a device the core dials has no source, while a project of a node that dials the core keeps its source, its issues and its Start as it had them before the core moved (PRD core-host-node-move D-29).
 The core hands the web a source-neutral task (the id the source shows, URL, title, open or closed, labels, when it was made and last changed), so no view reads a GitHub shape, and a new source is one more adapter in `herdr-core/src/tasks.rs`.
-A GitHub project keeps only GitHub issues and no memos.
+A GitHub project can therefore keep Local issues beside its GitHub issues.
 
 Above the projects, while the device has open missed work and Hide AI's summaries are on, one folded line `놓친 일 N ›` in the warning colour gathers it (PRD sidebar-task-lens D-52, B52).
 It opens in place to every open missed item of the device's sessions, live or ended, newest first: the missed sentence with `백로그로 · 무시` as in a record, and under it the session's title and the item's kind, which open that session's record in the panel.
 With no open missed item, or with summaries off, the line is not drawn.
 
 백로그 has one section per project, the projects with a task that needs the operator first, then the most recently active (B25).
-A section's head is the project's name, the source chip (`GitHub 이슈` or `메모`), which opens the same Issue source menu as the sidebar, `열림 N`, and, while some of its items are started, `· 진행 중 N` as a number alone, with no way to Tasks (B25, B34; PRD sidebar-task-lens B41).
-Under the head is the input `<project>에 이슈 적기` (GitHub) or `<project>에 메모 적기`, with `Enter · GitHub에 바로 만듦` (`· 공개` for a public repository, `· 공개일 수 있음` while its visibility could not be read) or `Enter · 이 기기에만 저장` always beside it (B26).
-Enter makes the item at once with no form: a memo stands as an `L-N` row at the top right away, and a GitHub project shows a dimmed `만드는 중` row at the top that becomes the `#N` row once the issue exists (B29).
-The input empties and keeps the keyboard for the next title; an empty or blank Enter does nothing, a title stops at 256 characters, and the characters left show at the input's end as it nears the limit.
+A section identifies its project, source-qualified items and open or started counts.
+Status, source, author, assignee, labels and literal title search filter before the initial fifty visible rows; Load more increases the visible bound.
+The add control opens the shared quick add, whose explicit destination and repository disclosure apply here too.
+Enter submits the title through that quick add: a memo stands as an `L-N` row, and an explicit GitHub destination shows a dimmed `만드는 중` row that becomes the `#N` row once the issue exists (B29).
+The input locks during creation, then shows its success line and closes as described below; an empty or blank Enter does nothing, and a title stops at 256 characters.
 A GitHub issue made here, by the quick add or by `백로그로` carries the title alone: no request, answer or body leaves the device.
 A failed GitHub create keeps its row with one line of why (`gh가 없음`, `GitHub에 로그인 안 됨`, `GitHub 원격 없음`, `네트워크 또는 사용량 제한`), `다시 시도` and `지우기` (B30).
 A failure no retry can change (an add the core refused, or a repository that moved) offers `지우기` alone; the core keeps at most eight such rows, the oldest leaving first.
 `다시 시도` names the same add, so an issue the first try made is joined rather than made again, even after a restart; past eight waiting creates a new add fails at once with `만들 것이 너무 많이 밀려 있음`.
 A GitHub create is made only in the repository the project was connected to when it was asked; when Connections changes meanwhile, the create stops before the issue exists, fails with `프로젝트 저장소가 바뀜`, and its `다시 시도` makes nothing in the new repository.
 
-Only unstarted items are listed: an item a checkout works on leaves the list and adds one to `진행 중 N` (B28).
+Open unstarted items are the initial view; status filters can include started and closed items without changing their identity or Start eligibility.
 A GitHub row is `#N`, the title, a flag when it came from missed work, its labels, its age, `↗` (GitHub) and `▷ 시작`; a memo row is `L-N`, the title, the flag, its age and `▷ 시작` (B27).
-The newest eight rows show and the rest fold under `나머지 이슈 N ›` (`나머지 메모 N ›`); the label chips and `이슈, 메모 검색` at the tab's head filter the rows.
-When the source cannot be read the section keeps the last rows it read, and its head carries ⚠ with one line of why and where to fix it; a source never read has the line alone in the rows' place, and the input still works (B35).
+Memo flags belong to the memo's device and path/number; GitHub flags remain shared by repository/number.
+When one source cannot be read, its last known rows and failure remain beside the other source's usable rows; an unreadable source is never an empty successful result.
 On a device the core dials every section is the one line `이 기기의 <project>는 이슈를 읽지 않는다`, with no input and no `▷ 시작` (B36).
 
-A row opens the item in the panel: its title, `#N` or `L-N`, its source, when it was made, its labels, `어디서 왔나` for an item from missed work (the session's title, the assigned work it came from and the missed sentence, which open that session's record), `▷ 시작`, `GitHub에서 열기` for a GitHub issue, and `되돌리기` while it is not started and Hide made it: every memo, and a GitHub issue made by the quick add, the backlog's input or `백로그로`; an issue someone else made never offers it (B31).
+A row opens the item in wide detail: its title, `#N` or `L-N`, its source, when it was made, its labels, `어디서 왔나` for an item from missed work (the session's title, the assigned work it came from and the missed sentence, which open that session's record), `▷ 시작`, `GitHub에서 열기` for a GitHub issue, and `되돌리기` while it is not started and Hide made it: every memo, and a GitHub issue made by the quick add, the backlog's input or `백로그로`; an issue someone else made never offers it (B31).
+The wide detail renders the real body as sanitized Markdown with actual metadata and comments, retaining loading, stale and failed states.
+Comments load fifty at a time up to two hundred, with each comment bounded to four thousand characters; truncation remains visible.
 `되돌리기` deletes a memo or closes a GitHub issue and the row leaves the backlog; a missed line it came from opens again with `백로그로 · 무시`, and a close that fails leaves why and `다시 시도` in the panel with the row in place (B32).
+Undoing a memo on one device preserves another device's memo, origin and missed line even when their path and number match.
 The record that names a Hide-made GitHub issue keeps the newest 256 typed items, so an older issue no longer offers `되돌리기`; a refusal from the core (the issue is not one Hide made, or not the project's repository), which sent nothing anywhere, reads `되돌리지 못함` with no `다시 시도`, while Hide's record that could not be read just now (`unavailable`) says so with `다시 시도` (`undoRetryable` in `web/src/overviewBacklog.ts`).
 
 `▷ 시작` opens the Start dialog, which turns an item into work in one step: a worktree named for the item, its base, the agent, and the agent's first prompt.
 The name opens as the issue number and the title's English words (`192-hided-sigterm-handler`, `L-3-...`, or `issue-192` when the title has none), and when Settings > Hide AI > Features allows it the background AI's name replaces it once it answers, unless the operator has typed; `↺ AI 이름으로` brings the AI's name back.
 A name that is already a branch says so, and when a worktree has it the primary button opens that worktree instead.
 The first prompt is filled from the item's body, which the dialog reads when it opens, names the item, and for a GitHub issue asks for a pull request that closes it when Settings > Agents > Starting work says so; for an item that came from missed work it also carries the original request and the answer of that turn, which stay on this device and are never written to GitHub (B33).
+The detail, origin, Start prompt and naming body use the selected workspace and device as well as the item key; a same-path memo or a late read from another device supplies none of their words.
+Closing a panel or Start dialog releases only its owner's origin, including when the connection closes.
 The operator edits the prompt before starting.
 Starting creates the worktree, writes the link into it, starts the agent with the prompt as its first instruction, then brings the new pane's Workspace to the front; a folder project has no worktree, so its agent starts in the folder with the prompt.
 
@@ -928,8 +954,11 @@ Starting creates the worktree, writes the link into it, starts the agent with th
 `백로그에 추가` (⇧⌘M; Alt+Shift+M on Windows and Linux; ⌥⇧M in a browser tab, where Chrome keeps ⇧⌘M) opens one input at the top center of any screen, even while a terminal holds the keyboard, and takes the keyboard; ⌘K or the find bar closes first (B37).
 A second press closes it.
 Above the input stand the project it will go to and why it was chosen: `고른 일감의 프로젝트` (the project of the record, item or project the Overview's panel shows), `걸러 보는 프로젝트` (the Overview's project chip), `앞에 있는 체크아웃`, or `백로그가 있는 첫 프로젝트` when none of them keeps a backlog (B38).
-Tab and Shift+Tab walk the projects of that device that keep a backlog; a project of a device the core dials has none and is never offered, and with no project to offer the input reads `백로그를 둘 프로젝트가 없음` and Enter does nothing.
-Under the input the destination always shows and follows the project: `GitHub 이슈로 바로 만듦 · 공개`, `GitHub 이슈로 바로 만듦` for a private repository, `GitHub 이슈로 바로 만듦 · 공개일 수 있음` when whether it is public could not be read, and `메모 · 이 기기에만` (B39).
+Tab from the title walks the projects of that device that keep a backlog, resetting the destination to Local; Shift+Tab moves focus back to the explicit destination controls.
+A project of a device the core dials has none and is never offered, and with no project to offer the input reads `백로그를 둘 프로젝트가 없음` and Enter does nothing.
+Quick add defaults to Local, independently of the project's older Issue source preference.
+GitHub requires an explicit destination choice, with the canonical repository and public, private or unknown visibility shown before Enter.
+Only the typed title is sent to GitHub; neither the session request nor its answer or body is copied there.
 Enter makes the item; the input locks as `만드는 중` until it exists, and a failure keeps the typed title with one line of why and `Enter로 다시 시도`, which names the same add, so the issue is made once (B41).
 A failure no retry can change hands the input back with its reason: the title can be edited, Tab chooses another project, and Enter makes a new add.
 Once made, `<project>에 이슈 #N 만듦 · 보기` or `<project> 백로그에 메모 L-N 저장 · 보기` takes the input's place for about 2.4 seconds and the input closes; `보기` opens the item in the Overview's 백로그 (B40).
@@ -953,7 +982,24 @@ Leaving the tab starts nothing more, and a measurement stays fresh for ten minut
 A project whose measurement fails or runs out of time keeps its last value (or `-`) with ⚠ and one line of why in its tooltip, and the next project's measurement goes on (B55).
 A project of a device the core dials is not measured: its cell is empty and nothing spins (B56).
 
-A row opens the project in the panel: its name and ✕, the path with `폴더` and the last activity, `열기 ↗` and `＋ New agent`, one line of `지금` as words alone (`지금 Needs You 1 · 일하는 중 3 · 끝남 2`, Needs You in the warning colour) with no way to Tasks (PRD sidebar-task-lens B41), one line of the backlog's source and open count with `보기 →`, the storage bar with its legend, the worktree count with `정리`, how far main is behind origin, the Issue source choice under `프로젝트 설정`, and `등록 해제` (B57).
+A row opens the project home (`web/src/OverviewProjectHome.tsx`) within Projects.
+It retains the project's path, last activity, Open, New agent, actual activity, source preference, storage, cleanup and registration settings.
+Beside those controls it lists the project's actual sessions and checkouts, and links to Work, Backlog and History with the same canonical project scope.
+Back returns to all projects; opening a checkout closes Overview and uses the existing device-qualified Workspace route.
+
+### History
+
+Web owners are `web/src/OverviewHistory.tsx`, `web/src/overviewHistoryState.ts` and `web/src/RequestHighlight.tsx`; the source is the existing session-work ledger.
+History initially searches original retained operator requests, including requests saved while summaries were Off or failed.
+Generated titles and task summaries are an explicit additional search scope; no raw copied-transcript index is restored.
+Project scope means the immutable original project recorded for the session, never its current checkout, branch or guessed title.
+Device, original project, agent, status and time filters apply before a fifty-result page is selected.
+The query is literal text of at most two hundred characters; each session shows at most two matching snippets and names further matches.
+The UI keeps the current page and a bounded cursor history, with loading, empty, failed, disconnected and retained-offline states kept distinct.
+Typing uses one cancellable debounce and stale query or connection replies cannot replace the current results.
+Selecting a saved request opens the record's Requests, unfolds it, centers its exact saved offset and highlights the literal match.
+A request that retention removed says it is unavailable; the record never substitutes another request with similar text.
+Back restores the list's query, filters, page and scroll, and returns keyboard focus to the selected row.
 
 ### Ways in, and the views it replaced
 
@@ -962,8 +1008,8 @@ An issue or a memo from ⌘K, a Factory card, a session record or a missed line'
 A pane head's agent tree button shows that agent's row in the sidebar's 태스크 list, unfolded and selected, with its record in the 보기 slot, and no Overview opens (B40).
 A link panel's `대화 보기` and parent line open that session's record, in the 보기 slot when a Workspace is in front and otherwise in the Overview's panel (B58).
 `⇧⌘A` and the `Agents overview` command are gone, and no menu or shortcut list names them (B59).
-The Overview starts on 백로그 when the window loads and keeps the tab chosen while the window runs; neither the tab nor a Recent Panels visit outlives the window, so a Home view chosen before the update (Agents, the Tasks board or tab, 요청) or a visit to a Project Overview cannot come back as an empty screen or an error (B61; PRD sidebar-task-lens B38).
-Nothing of Conversation history remains: the screen, its search and copying are removed, the session reads the labels, the phone's conversation and Memory use stay, and the per-project choice it kept is read only as how long session records are kept (B58; ARCHITECTURE.md, Project sessions and Memory).
+The Overview starts on Work when the window loads and keeps the tab chosen while that window runs; obsolete Home places resolve to a current view rather than an empty screen.
+The old copied Conversation history and its index remain removed; retained-request History follows the session-work retention choice described in [Project sessions and Memory](ARCHITECTURE.md#project-sessions-and-memory).
 
 ## Tasks, the 보기 slot and the PRs tool
 
@@ -1530,7 +1576,7 @@ Search continues to index the complete project tree; choosing a folded result br
 ### Tools and Overview
 
 The rail's tools are Memory, PRs, Files (the View areas and the Explorer) and Changes (History), with the 보기 slot above them while it holds something; the device's task list is the sidebar's, described in [The sidebar's 태스크 list](#the-sidebars-태스크-list).
-The top row's Overview button opens the device's [Overview](#overview), `백로그 · Projects · Usage`, and while agents need the operator it carries the sidebar section's name and count, `내 차례 N` (`Needs You N` in English; status-marks D-20, B30); there is no Overview of one project, since looking at one project closely is the lane's work.
+The top row's Overview button opens [Overview](#overview), `Work · Projects · Backlog · History · Usage`, with device and optional project scope for the four device views and global core-machine scope for Usage.
 
 
 ### Disk allocation and cleanup
@@ -1620,6 +1666,13 @@ A `~/hide` that Hide did not make is left untouched, and the start that wanted i
 A Home agent reads and edits the projects through their links, the change shows on that project's checkout row, and its own row is found in Needs You and Done, the 태스크 list and ⌘K.
 
 ## First run
+
+The startup's real connecting state draws one flying owl around the lowercase hide mark and brand line, then a thin indeterminate bar with the host's localized preparing sentence.
+It shows no progress percentage and never delays the shell; failure stops and hides the loading scene so the existing Retry and Copy diagnostics remain primary.
+Reduced motion keeps a static owl and bar; hidden or offscreen decoration pauses, and leaving its screen releases its animation resources.
+The wizard's existing agents, notifications and project steps carry their matching brand owl without changing their actions or platform policies.
+The ready Home with no projects carries the ai owl, and the Factory's first-visit line or no-Factory state carries one factory owl while Factory remains Soon.
+
 
 Core owner: `herdr-core/src/runtime/first_run.rs`, `herdr-core/src/runtime/kit.rs` (`apply_agent_onboarding`). Web owner: `web/src/FirstRunWizard.tsx`, `web/src/firstRun.ts`, `web/src/NotificationControls.tsx`, `web/src/agentNotices.ts`, `web/src/ScreenIntro.tsx`. Desktop owner: `desktop/src/main/notify.ts`, `desktop/src/main/notificationPermission.ts`, `desktop/src/main/host.ts` (`showBadge`, `openNotification`), `desktop/static/status.html`.
 
@@ -1971,14 +2024,22 @@ The countdown advances once a minute only while the popover or Usage tab is open
 With no history there is no grass section; available account rows remain, and with no visible account chips the footer's chart button opens the available history.
 
 Full history opens Overview's global Usage tab, not a per-project ledger.
-The table starts at the most recent thirty days, with seven-day and retained-year choices and an agent filter.
+The table starts at the most recent thirty days, with seven-day, ninety-day and retained-year choices and an agent filter.
 The retained year is the existing core projection's bound; Full history does not claim to expose an unlimited lifetime ledger.
 Each recorded date has a summary row, followed by agent rows when expanded; today starts expanded.
 Under the agent rows an expanded date has a `Hide AI` row with the same columns, itself expandable into one row per feature (agent summaries, Memory, Factory, issues and worktrees, other) with its call count and the providers that served it, and a `Calls with no reported usage` row that has a count and no amount.
 The agent filter has a `Hide AI` choice that lists only the days Hide AI was counted on, with the feature rows directly under each date (no second Hide AI row); a date of only unknown calls is still a date, and its popover line reads `Calls with no reported usage` instead of an amount.
 A footnote under the table says the amounts are lower bounds when any unknown call is in the period, and names the day Hide AI is counted from, since earlier days are not backfilled.
 Choosing one agent hides Hide AI, which belongs to the all-agents range only.
-Columns are Date / Agent, estimated cost, new tokens, input, output, cache write, cache read and all tokens, with period totals and an exact-number toggle.
+The headline shows the selected period's estimated API cost, new tokens and separate cache reads above stacked daily new-token bars.
+Only real agent and Hide AI contributions form each stack; there is no minimum fabricated usage height.
+Left and Right move by day and Home and End reach the visible range's ends; selecting a day narrows the totals and detail, and Show full period clears it.
+Changing period clears the selected day, while changing agent or daily/model view keeps a selected day still in range.
+Columns are Date / Agent, estimated cost, new tokens, input, output, cache write, cache read and all tokens, with a leading selected-period total and an exact-number toggle.
+The model view groups actual recorded date, agent, model and session-or-Hide-AI reports, never an allocation inferred from an agent total.
+An absent model says Model not reported; an older history without model dimensions says those details are unavailable.
+The newest 4,096 model records are retained in deterministic order with a visible limited marker when truncated; daily totals remain complete and model subtotals may then be incomplete.
+Model shares use known new tokens, and Hide AI model reports may outnumber the backend attempts counted by its headline.
 Year-view dates include the year, and changing the filter or page clears expanded rows.
 At most thirty recorded dates are mounted per page, with agent rows only for expanded dates; an empty filter says there is no usage for the chosen agent and period.
 The table scrolls sideways within its own region at narrow widths and large Interface text, never the whole page.

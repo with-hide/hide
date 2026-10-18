@@ -9,6 +9,14 @@ use usage::{
 pub const ADAPTERS: &[AgentAdapter] = &[
     AgentAdapter {
         key: AgentId::ClaudeCode,
+        fake_home: journey::FakeHome::Proven {
+            key_env: "ANTHROPIC_API_KEY",
+            auto_update: journey::AutoUpdate::Environment {
+                name: "DISABLE_AUTOUPDATER",
+                value: "1",
+            },
+            evidence: "https://code.claude.com/docs/en/settings-reference",
+        },
         id: "claude-code",
         label: "Claude Code",
         picker_label: "Claude",
@@ -79,6 +87,15 @@ pub const ADAPTERS: &[AgentAdapter] = &[
     },
     AgentAdapter {
         key: AgentId::Codex,
+        fake_home: journey::FakeHome::Proven {
+            key_env: "JOURNEY_FAKE_KEY",
+            auto_update: journey::AutoUpdate::Config {
+                path: ".codex/config.toml",
+                key: "check_for_update_on_startup",
+                value: "false",
+            },
+            evidence: "https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/core/config.schema.json",
+        },
         id: "codex",
         label: "Codex",
         picker_label: "Codex",
@@ -149,6 +166,14 @@ pub const ADAPTERS: &[AgentAdapter] = &[
     },
     AgentAdapter {
         key: AgentId::Grok,
+        fake_home: journey::FakeHome::Proven {
+            key_env: "JOURNEY_FAKE_KEY",
+            auto_update: journey::AutoUpdate::Environment {
+                name: "GROK_DISABLE_AUTOUPDATER",
+                value: "1",
+            },
+            evidence: "https://docs.x.ai/build/settings/reference.md",
+        },
         id: "grok",
         label: "Grok",
         picker_label: "Grok",
@@ -226,6 +251,15 @@ pub const ADAPTERS: &[AgentAdapter] = &[
     },
     AgentAdapter {
         key: AgentId::OpenCode,
+        fake_home: journey::FakeHome::Proven {
+            key_env: "JOURNEY_FAKE_KEY",
+            auto_update: journey::AutoUpdate::Config {
+                path: ".config/opencode/opencode.json",
+                key: "update",
+                value: "\"disable\"",
+            },
+            evidence: "https://opencode.ai/v2/docs/config/",
+        },
         id: "opencode",
         label: "OpenCode",
         picker_label: "OpenCode",
@@ -310,6 +344,14 @@ pub const ADAPTERS: &[AgentAdapter] = &[
     },
     AgentAdapter {
         key: AgentId::Pi,
+        fake_home: journey::FakeHome::Proven {
+            key_env: "JOURNEY_FAKE_KEY",
+            auto_update: journey::AutoUpdate::Environment {
+                name: "PI_OFFLINE",
+                value: "1",
+            },
+            evidence: "https://unpkg.com/@earendil-works/pi-coding-agent@1.0.4/docs/models.md",
+        },
         id: "pi",
         label: "Pi",
         picker_label: "Pi",
@@ -395,6 +437,15 @@ pub const ADAPTERS: &[AgentAdapter] = &[
     },
     AgentAdapter {
         key: AgentId::Omp,
+        fake_home: journey::FakeHome::Proven {
+            key_env: "JOURNEY_FAKE_KEY",
+            auto_update: journey::AutoUpdate::Config {
+                path: ".omp/agent/config.yml",
+                key: "startup",
+                value: "{\"checkUpdate\":false}",
+            },
+            evidence: "https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/coding-agent/src/main.ts",
+        },
         id: "omp",
         label: "omp",
         picker_label: "omp",
@@ -480,6 +531,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
     },
     AgentAdapter {
         key: AgentId::Cursor,
+        fake_home: journey::FakeHome::Exception {
+            auto_update: None,
+            reason: "The API-key environment and auto-update policy have not been proven.",
+        },
         id: "cursor",
         label: "Cursor",
         picker_label: "Cursor",
@@ -585,6 +640,13 @@ pub const ADAPTERS: &[AgentAdapter] = &[
     },
     AgentAdapter {
         key: AgentId::Antigravity,
+        fake_home: journey::FakeHome::Exception {
+            auto_update: Some(journey::AutoUpdate::Environment {
+                name: "AGY_CLI_DISABLE_AUTO_UPDATE",
+                value: "1",
+            }),
+            reason: "The installer cannot select a pinned release.",
+        },
         id: "antigravity",
         label: "Antigravity",
         picker_label: "Antigravity",

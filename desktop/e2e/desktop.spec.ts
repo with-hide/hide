@@ -291,7 +291,7 @@ test("failure: a missing CLI shows its reason and Retry attaches once it exists"
   await expect(page.locator("#diagnostics")).toHaveText("reason: cli_missing");
   await expect(page.getByRole("button", { name: "Copy diagnostics" })).toBeVisible();
   await page.evaluate(() => (location.hash = "connecting"));
-  await expect(page.locator("#connecting")).toHaveText("Starting Hide…");
+  await expect(page.getByRole("status")).toHaveText("Starting Hide…");
   await expect(page.locator("#failed")).toBeHidden();
   await page.evaluate(() => (location.hash = "failed=cli_missing"));
   fs.mkdirSync(path.dirname(cli), { recursive: true });

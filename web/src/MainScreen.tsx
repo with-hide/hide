@@ -1,20 +1,22 @@
 import { UsageOverview } from "./UsageOverview";
+import { BrandOwl } from "./components/brand-owl";
+import { firstRunStep } from "./firstRun";
+import { useSetupWalk } from "./FirstRunWizard";
 import { useInterfaceTranslation } from "./i18n/client";
-import { ChevronDownIcon, SearchIcon } from "lucide-react";
-import { useEffect, useMemo, type ReactNode } from "react";
+import { ChevronDownIcon } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./components/ui/dropdown-menu";
-import { Input } from "./components/ui/input";
 import { Kbd } from "./components/ui/kbd";
 import { Tabs, TabsList, TabsTrigger } from "./components/ui/tabs";
-import { useEscapeLayer } from "./components/ui/layer";
+import { useEscapeLayer, useReturnFocus } from "./components/ui/layer";
 import { cn } from "./lib/utils";
 import { boardProjects, mainSections, type DeviceAvailability } from "./navigation";
 import { readsHere } from "./devices";
 import { machineName } from "./screenMachine";
 import type { Device } from "./snapshot";
-import { ageWords } from "./overviewLens";
+import { ageWords, scopeAgents } from "./overviewLens";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { useShellStore } from "./store";
 import { MAIN_VIEWS, useUiStore, type MainView } from "./ui";
@@ -23,21 +25,24 @@ import { commandLabel } from "./shortcutLabels";
 import { everyAgent } from "./overviewTasks";
 import { backlogTally } from "./overviewBacklog";
 import { TaskRecordPanel } from "./OverviewRecord";
-import { BacklogItemPanel, BacklogLabelFilter, OverviewBacklog } from "./BacklogTab";
+import { BacklogItemPanel, OverviewBacklog } from "./BacklogTab";
 import { OverviewProjects, ProjectPanel } from "./ProjectsTab";
+import { OverviewGraph } from "./OverviewGraph";
+import { OverviewHistory } from "./OverviewHistory";
+import { workKey } from "./sessionWork";
+import { OverviewProjectHome } from "./OverviewProjectHome";
 
-// The Overview of one device (PRD overview-device-tasks D-01..D-03, B1-B5;
-// PRD sidebar-task-lens D-20, B38): 백로그 and Projects with Usage at the
-// end, each tab's controls at the row's right, and the panel a record, a row
-// or a project opens beside the tab. The device's tasks are the sidebar's
-// 태스크 list. Everything drawn is a value the snapshot carries; a device that
-// cannot answer shows why in the body and dims the tabs (B4).
+// The five Overview tabs share a device and project scope. Account usage
+// keeps its global scope. A wide detail retains the list beneath it, so
+// returning restores the exact filters, page and scroll position.
 
-const TAB_LABEL: Record<MainView, "overviewTasks.backlogTab" | "overview.projects" | "usage.title"> = {
+const TAB_LABEL = {
+  work: "overviewRedesign.work",
   backlog: "overviewTasks.backlogTab",
   projects: "overview.projects",
+  history: "overviewRedesign.history",
   usage: "usage.title",
-};
+} as const satisfies Record<MainView, string>;
 
 export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: string }) {
   const { t } = useInterfaceTranslation();
@@ -46,15 +51,19 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
   const view = useUiStore((s) => s.mainView);
   const setView = useUiStore((s) => s.setMainView);
   const panel = useUiStore((s) => s.overview.panel);
+  const projectId = useUiStore((s) => s.overview.projectId);
   const section = useMemo(() => mainSections(rest, agents, deviceId)[0] ?? null, [rest, agents, deviceId]);
   const availability: DeviceAvailability = section?.availability ?? { state: "ready" };
   const projects = useMemo(() => boardProjects(rest, agents, deviceId), [rest, agents, deviceId]);
   const rows = useMemo(() => everyAgent(rest, agents), [rest, agents]);
-  const backlog = useMemo(() => backlogTally(projects), [projects]);
+  const scoped = useMemo(() => projectId ? projects.filter(({ workspace }) => workspace.id === projectId) : projects, [projects, projectId]);
+  const backlog = useMemo(() => backlogTally(scoped), [scoped]);
+  const selectedProject = projectId ? scoped[0] : null;
+  const workCount = useMemo(() => new Set(scopeAgents(scoped).map(({ agent }) => agent.pane_id)).size, [scoped]);
   // Every Git project whose issues the core reads is read while the backlog is on screen.
   const devices = rest?.navigator?.devices;
   const localGit = useMemo(() => projects.filter(({ workspace }) => workspace.is_git && readsHere(workspace, devices)).map(({ workspace }) => workspace.id).join("\n"), [projects, devices]);
-  const reads = view === "backlog";
+  const reads = view === "backlog" || view === "projects";
   useEffect(() => {
     if (!reads || !localGit) return;
     for (const id of localGit.split("\n")) actions.readProjectTasks(id);
@@ -62,63 +71,81 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
   // Esc closes the panel before the Overview (B16).
   useEscapeLayer(panel !== null, () => useUiStore.getState().setOverview({ panel: null }));
   const unavailable = availability.state === "unavailable" && section ? section.device : null;
+  const needsLiveDevice = view !== "usage" && view !== "history";
   // A Home with no project says what to do first in the backlog's and the Projects' place (sidebar-task-lens B42).
   const noProject = availability.state === "ready" && projects.length === 0;
   const counts: Record<MainView, ReactNode> = {
+    work: <Count value={workCount} />,
     backlog: <Count value={backlog.open} />,
     projects: <Count value={projects.length} />,
+    history: null,
     usage: null,
   };
+  const widePanel = panel?.kind === "item" || (panel?.kind === "record" && panel.returnTo === "history");
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-background" aria-label={t("overview.title")} data-main-screen="true" data-main-view={view}>
       <OpeningStatus actions={actions} />
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-md border-b border-border px-lg py-xs">
-        <Tabs value={view} onValueChange={(value) => { setView(value as MainView); useUiStore.getState().setOverview({ panel: null }); }}>
-          <TabsList aria-label={t("overview.viewLabel")} className={cn(unavailable && "opacity-(--opacity-dimmed)")}>
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-md border-b border-border px-lg py-xs" data-overview-navigation="true">
+        <Tabs className="min-w-0 overflow-x-auto" value={view} onValueChange={(value) => { setView(value as MainView); useUiStore.getState().setOverview({ panel: null }); }}>
+          <TabsList aria-label={t("overview.viewLabel")} className={cn("gap-md rounded-none bg-transparent p-0", unavailable && needsLiveDevice && "opacity-(--opacity-dimmed)")}>
             {MAIN_VIEWS.map((choice) => (
-              <TabsTrigger key={choice} value={choice} data-main-tab={choice} className={choice === "usage" ? "ml-md" : undefined}>
+              <TabsTrigger key={choice} value={choice} data-main-tab={choice} className="h-auto rounded-none border-b-2 border-transparent px-xs py-sm data-[state=active]:border-primary data-[state=active]:bg-transparent">
                 {t(TAB_LABEL[choice])}
                 {counts[choice]}
               </TabsTrigger>
             ))}
           </TabsList>
         </Tabs>
-        {unavailable || noProject ? null : view === "backlog" ? <BacklogControls projects={projects} /> : null}
+        {view !== "usage" ? <ProjectChip projects={projects.map(({ workspace }) => workspace)} /> : null}
       </div>
-      {unavailable ? (
+      {unavailable && needsLiveDevice ? (
         <DeviceUnanswered device={unavailable} availability={availability} actions={actions} />
       ) : (
         <div className="relative flex min-h-0 flex-1">
-          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto" data-overview-body={view}>
+          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto" data-overview-body={view} inert={widePanel || undefined} aria-hidden={widePanel || undefined}>
             {availability.state === "loading" ? <p role="status" className="px-lg pt-sm text-caption text-muted-foreground" data-device-loading="true">{availability.text}</p> : null}
             {view === "usage" ? (
               <UsageOverview actions={actions} />
+            ) : view === "history" ? (
+              <OverviewHistory projects={projects} deviceId={deviceId} actions={actions} />
             ) : noProject ? (
               <NoProjectView actions={actions} />
+            ) : view === "work" ? (
+              <OverviewGraph projects={projects} deviceId={deviceId} actions={actions} onOpenRecord={(session) => useUiStore.getState().setOverview({ panel: { kind: "record", session, returnTo: "work" } })} />
             ) : view === "backlog" ? (
               <OverviewBacklog projects={projects} deviceId={deviceId} actions={actions} />
+            ) : selectedProject ? (
+              <OverviewProjectHome project={selectedProject} deviceId={deviceId} actions={actions} />
             ) : (
               <OverviewProjects projects={projects} deviceId={deviceId} actions={actions} />
             )}
           </div>
           {panel && view !== "usage" ? (
-            <aside
-              className="flex w-(--size-lane-min) shrink-0 flex-col border-l border-border bg-background overview-narrow:absolute overview-narrow:inset-y-0 overview-narrow:right-0 overview-narrow:z-10 overview-narrow:shadow-lg"
-              data-overview-panel={panel.kind}
-            >
+            <OverviewDetail key={panel.kind} kind={panel.kind} wide={widePanel}>
               {panel.kind === "record" ? (
-                <TaskRecordPanel key={`${panel.session.device_id}:${panel.session.session_id}`} panel={panel} rows={rows} actions={actions} />
+                <TaskRecordPanel key={workKey(panel.session)} panel={panel} rows={rows} actions={actions} />
               ) : panel.kind === "item" ? (
                 <BacklogItemPanel key={`${panel.workspaceId}:${panel.taskKey}`} panel={panel} projects={projects} actions={actions} />
               ) : (
                 <ProjectPanel key={panel.workspaceId} panel={panel} projects={projects} deviceId={deviceId} actions={actions} />
               )}
-            </aside>
+            </OverviewDetail>
           ) : null}
         </div>
       )}
     </section>
   );
+}
+
+function OverviewDetail({ kind, wide, children }: { kind: string; wide: boolean; children: ReactNode }) {
+  const frame = useRef<HTMLElement>(null);
+  const returnFocus = useReturnFocus(true);
+  useLayoutEffect(() => {
+    const target = frame.current?.querySelector<HTMLElement>("button, a[href], input, [tabindex='0']");
+    (target ?? frame.current)?.focus({ preventScroll: true });
+    return () => queueMicrotask(() => returnFocus(new Event("closeAutoFocus", { cancelable: true })));
+  }, [returnFocus]);
+  return <aside ref={frame} tabIndex={-1} className={cn("flex shrink-0 flex-col bg-background outline-none", wide ? "absolute inset-0 z-10 overflow-y-auto" : "w-(--size-lane-min) border-l border-border overview-narrow:absolute overview-narrow:inset-y-0 overview-narrow:right-0 overview-narrow:z-10 overview-narrow:shadow-lg")} data-overview-panel={kind}>{children}</aside>;
 }
 
 function Count({ value }: { value: number }) {
@@ -139,36 +166,13 @@ function ProjectChip({ projects }: { projects: readonly { id: string; label: str
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="max-h-(--radix-dropdown-menu-content-available-height) overflow-y-auto">
-        <DropdownMenuRadioGroup value={chosen?.id ?? ""} onValueChange={(value) => useUiStore.getState().setOverview({ projectId: value || null })}>
+        <DropdownMenuRadioGroup value={chosen?.id ?? ""} onValueChange={(value) => useUiStore.getState().setOverview({ projectId: value || null, panel: null })}>
           <DropdownMenuRadioItem value="">{t("overviewTasks.allProjects")}</DropdownMenuRadioItem>
           <DropdownMenuSeparator />
           {projects.map((project) => <DropdownMenuRadioItem key={project.id} value={project.id} data-overview-project-choice={project.id}>{project.label}</DropdownMenuRadioItem>)}
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
-  );
-}
-
-function SearchBox({ value, placeholder, onChange, name }: { value: string; placeholder: string; onChange: (value: string) => void; name: string }) {
-  return (
-    <span className="relative flex w-(--size-panel-min) items-center">
-      <SearchIcon aria-hidden="true" className="pointer-events-none absolute left-sm size-(--size-icon) text-muted-foreground" />
-      <Input type="search" value={value} placeholder={placeholder} aria-label={placeholder} className="pl-xl" onChange={(event) => onChange(event.target.value)} data-overview-search={name} />
-    </span>
-  );
-}
-
-/** The backlog's label chips and search (B27), and the project chip (B5). */
-function BacklogControls({ projects }: { projects: readonly import("./projectBoard").BoardProject[] }) {
-  const { t } = useInterfaceTranslation();
-  const query = useUiStore((s) => s.overview.backlogQuery);
-  const set = useUiStore((s) => s.setOverview);
-  return (
-    <span className="flex flex-wrap items-center gap-sm" data-backlog-controls="true">
-      <BacklogLabelFilter projects={projects} />
-      <ProjectChip projects={projects.map(({ workspace }) => workspace)} />
-      <SearchBox value={query} placeholder={t("backlog.search")} onChange={(backlogQuery) => set({ backlogQuery })} name="backlog" />
-    </span>
   );
 }
 
@@ -200,10 +204,13 @@ function DeviceUnanswered({ device, availability, actions }: { device: Device; a
  */
 function NoProjectView({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
+  const firstRun = useShellStore((s) => firstRunStep(s.rest, hostBridge() !== null));
+  const setup = useSetupWalk((s) => s.step);
   const chord = commandLabel("new_workspace");
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-md p-xl text-center" data-main-empty-home="no_project">
-      <p className="text-subhead text-subtle-foreground">{t("firstRun.home.noProject")}</p>
+    <div className="flex min-h-full flex-1 flex-col items-center justify-center gap-md p-xl text-center" data-main-empty-home="no_project">
+      {firstRun === null && setup === null ? <BrandOwl pose="ai" className="size-(--size-owl-empty)" /> : null}
+      <p className="text-subhead break-keep text-subtle-foreground">{t("firstRun.home.noProject")}</p>
       {hostBridge() ? (
         <span className="flex items-center gap-sm">
           <Button onClick={() => actions.openAddProject()} data-main-empty-home-action="new_workspace">

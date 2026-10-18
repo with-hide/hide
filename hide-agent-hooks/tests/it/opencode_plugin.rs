@@ -31,8 +31,8 @@ fn the_plugin_keeps_its_pinned_bytes() {
         (&TUI, include_str!("../fixtures/hook-bytes/opencode-tui.js")),
     ] {
         assert_eq!(
-            file.text(helper),
-            pinned,
+            file.text(crate::hook_target(helper)),
+            crate::routed_script(pinned),
             "{} changed: raise its version and regenerate the fixture",
             file.name()
         );
@@ -91,7 +91,14 @@ fn the_plugin_behaves_as_opencode_runs_it() {
     let helper = stand_in(dir.path());
     // `.mjs`: Node reads the plugin as the ES module OpenCode loads.
     let plugin = dir.path().join("hide.mjs");
-    std::fs::write(&plugin, V1.text(&helper)).unwrap();
+    std::fs::write(
+        &plugin,
+        V1.text(
+            hide_agent_hooks::route::HookTarget::new(&helper, Path::new("/captured-state"))
+                .unwrap(),
+        ),
+    )
+    .unwrap();
     node_test(
         dir.path(),
         "plugin.test.mjs",
@@ -105,13 +112,27 @@ fn the_plugin_behaves_as_opencode_2_runs_it() {
     let dir = tempfile::tempdir().unwrap();
     let helper = stand_in(dir.path());
     let plugin = dir.path().join("hide.mjs");
-    std::fs::write(&plugin, V1.text(&helper)).unwrap();
+    std::fs::write(
+        &plugin,
+        V1.text(
+            hide_agent_hooks::route::HookTarget::new(&helper, Path::new("/captured-state"))
+                .unwrap(),
+        ),
+    )
+    .unwrap();
     // The folder as the kit writes it, read as ES modules as OpenCode reads it.
     let folder = dir.path().join("hide-opencode");
     std::fs::create_dir(&folder).unwrap();
     std::fs::write(folder.join("package.json"), r#"{"type":"module"}"#).unwrap();
     for file in [&SERVER, &TUI] {
-        std::fs::write(folder.join(file.file_name), file.text(&helper)).unwrap();
+        std::fs::write(
+            folder.join(file.file_name),
+            file.text(
+                hide_agent_hooks::route::HookTarget::new(&helper, Path::new("/captured-state"))
+                    .unwrap(),
+            ),
+        )
+        .unwrap();
     }
     node_test(
         dir.path(),

@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 const HELPER = __HIDE_HELPER__;
+const ROUTE = __HIDE_ROUTE__;
 
 // The prompt budget is Claude Code's prompt hook's; the tool budget is the
 // spawn guard's. OpenCode puts no limit on a hook, so these are the limits.
@@ -108,7 +109,7 @@ function helper(state, operation, input, budgetMs) {
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(HELPER, ["opencode", operation], { stdio: ["pipe", "pipe", "ignore"] });
+      child = spawn(HELPER, ["opencode", operation, ...ROUTE], { stdio: ["pipe", "pipe", "ignore"] });
     } catch {
       resolve(null);
       return;

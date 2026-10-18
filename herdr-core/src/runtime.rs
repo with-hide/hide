@@ -44,6 +44,7 @@ mod memory_verify;
 mod op_timing;
 mod operations;
 pub(crate) mod output_language;
+mod overview_graph;
 mod pane_prediction;
 mod pane_reopen;
 pub(crate) mod project_memory;
@@ -1489,6 +1490,7 @@ pub struct Runtime {
     /// What the link worker was last handed, and its panel reads.
     links_work: links::LinksWork,
     backlog_work: backlog::BacklogWork,
+    issue_detail_work: issues::IssueDetailWork,
     /// The minute the PRs tool's list was last judged against the clock
     /// (`runtime/request_view.rs`, `tick_work_clock`).
     work_clock_minute: u64,
@@ -1884,6 +1886,8 @@ impl Runtime {
         let mut snapshot = Snapshot::initial(&options);
         if let Ok(ledger) = &delivery_ledger {
             snapshot.delivery_watches = ledger.watches.iter().map(|watch| watch.view()).collect();
+            snapshot.overview_graph =
+                crate::model::OverviewGraphSnapshot::from_ledger(ledger, unix_milliseconds());
         }
         snapshot.status.environment = environment.statuses;
         let (ui_state, pane_terminal_sizes, disposition) = persistence::load(&state_path);
@@ -2207,6 +2211,7 @@ impl Runtime {
             archive_detail_load_generation: 0,
             links_work: links::LinksWork::default(),
             backlog_work: backlog::BacklogWork::default(),
+            issue_detail_work: issues::IssueDetailWork::default(),
             work_clock_minute: 0,
             memory_work: Default::default(),
             project_memory: Default::default(),

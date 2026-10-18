@@ -42,7 +42,7 @@ fn write(agent: &str, files: &[&PluginFile], home: &Path, helper: &Path) -> Path
     if let [file] = files {
         // `.mjs`: Node reads the file as the ES module each host loads.
         let script = home.join(format!("{agent}.mjs"));
-        std::fs::write(&script, file.text(helper)).unwrap();
+        std::fs::write(&script, file.text(crate::hook_target(helper))).unwrap();
         return script;
     }
     // OpenCode 2's folder, whose halves import each other by name, read as ES
@@ -51,7 +51,11 @@ fn write(agent: &str, files: &[&PluginFile], home: &Path, helper: &Path) -> Path
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(folder.join("package.json"), r#"{"type":"module"}"#).unwrap();
     for file in files {
-        std::fs::write(folder.join(file.file_name), file.text(helper)).unwrap();
+        std::fs::write(
+            folder.join(file.file_name),
+            file.text(crate::hook_target(helper)),
+        )
+        .unwrap();
     }
     folder.join(files[0].file_name)
 }

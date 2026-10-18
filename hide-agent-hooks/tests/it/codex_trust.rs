@@ -50,8 +50,12 @@ impl Fixture {
 
     /// Hide's entries as the kit writes them.
     fn install(&self) {
-        hide_agent_hooks::install(AgentRuntime::Codex, self.home.path(), Path::new(HELPER))
-            .unwrap();
+        hide_agent_hooks::install(
+            AgentRuntime::Codex,
+            self.home.path(),
+            crate::hook_target(Path::new(HELPER)),
+        )
+        .unwrap();
     }
 
     fn hooks_json(&self) -> PathBuf {
@@ -74,7 +78,7 @@ impl Fixture {
         trust_own_hooks(
             &self.codex,
             self.home.path(),
-            Path::new(HELPER),
+            crate::hook_target(Path::new(HELPER)),
             herdr,
             &self.stop,
         )
@@ -84,7 +88,7 @@ impl Fixture {
         trust_own_hooks_within(
             &self.codex,
             self.home.path(),
-            Path::new(HELPER),
+            crate::hook_target(Path::new(HELPER)),
             &[],
             &self.stop,
             limits,
@@ -347,7 +351,7 @@ fn what_codex_does_not_do_is_a_failure_with_its_cause() {
     let missing = trust_own_hooks(
         &fixture.home.path().join("no-such-codex"),
         fixture.home.path(),
-        Path::new(HELPER),
+        crate::hook_target(Path::new(HELPER)),
         &[],
         &fixture.stop,
     );

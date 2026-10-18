@@ -2093,14 +2093,12 @@ fn handle_client_text(
         // An item's origin is read for each window that shows it and closed
         // in the core only when the last such window lets it go.
         Some("backlog_origin") => {
-            state
-                .origin_holds
-                .hold(connection, &payload_str(&event, "task_key"))?;
+            let owner = origin_identity(&event)?;
+            state.origin_holds.hold(connection, &owner)?;
         }
         Some("backlog_origin_close") => {
-            let key = payload_str(&event, "task_key");
-            crate::demand::origin_key(&key)?;
-            state.origin_holds.let_go(connection, &key, |key| {
+            let owner = origin_identity(&event)?;
+            state.origin_holds.let_go(connection, &owner, |key| {
                 close_backlog_origin(&state.core, connection, key)
             });
             return Ok(ClientAction::Replies(Vec::new()));
@@ -2509,12 +2507,16 @@ impl Demand {
 
 /// Runs under the demand lock (`ObservationDemand::set`), so it only logs
 /// and hands the event to the core's channel.
-/// Tells the core no window shows `task_key`'s origin any more.
-fn close_backlog_origin(core: &CoreHandle, connection: u64, task_key: &str) {
+/// Tells the core no window shows this owner's origin any more.
+fn close_backlog_origin(
+    core: &CoreHandle,
+    connection: u64,
+    owner: &herdr_core::links::ledger::BacklogOriginIdentity,
+) {
     let event = json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "backlog_origin_close",
-        "payload": {"task_key": task_key},
+        "payload": owner,
     });
     if let Err(error) = core.dispatch(event.to_string().into_bytes()) {
         eprintln!(
@@ -2522,6 +2524,20 @@ fn close_backlog_origin(core: &CoreHandle, connection: u64, task_key: &str) {
             json!({"component": "hided", "kind": "backlog.origin_release_failed", "connection": connection, "message": error})
         );
     }
+}
+
+fn origin_identity(
+    event: &Value,
+) -> Result<herdr_core::links::ledger::BacklogOriginIdentity, String> {
+    let owner: herdr_core::links::ledger::BacklogOriginIdentity = serde_json::from_value(
+        event
+            .get("payload")
+            .cloned()
+            .ok_or_else(|| "backlog_origin.payload is required".to_owned())?,
+    )
+    .map_err(|error| format!("backlog_origin: {error}"))?;
+    owner.validate()?;
+    Ok(owner)
 }
 
 pub(crate) fn dispatch_observation(

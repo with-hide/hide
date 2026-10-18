@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleDotIcon, CircleHelpIcon, Clock3Icon, SquareIcon, GitPullRequestIcon, LightbulbIcon, MessageSquareIcon, TriangleAlertIcon, HouseIcon, LoaderCircleIcon, SquareTerminalIcon } from "lucide-react";
+import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleDotIcon, CircleHelpIcon, Clock3Icon, SquareIcon, GitPullRequestIcon, InfoIcon, LightbulbIcon, MessageSquareIcon, TriangleAlertIcon, HouseIcon, LoaderCircleIcon, SquareTerminalIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -31,6 +31,9 @@ import { summariesEnabled } from "./hideAi";
 import { PR_LOOK } from "./prMark";
 import { archivedChildrenOf, archivedMemberOf } from "./archive";
 import type { ArchivedMember, ArchivedSession } from "./snapshot";
+import { HighlightedRequest } from "./RequestHighlight";
+
+type RequestLocator = { request_offset: number; query?: string };
 
 const ROW = "min-w-0 rounded-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring";
 /** Under a task's line: the icon column's width and its gap, so what hangs from a task lines up with its name. */
@@ -49,6 +52,8 @@ export type RecordFrame = {
   head?: ReactNode;
   /** A line above the record (the dashed card's B14 note). */
   note?: string | null;
+  /** A retained History hit, scoped by the target's full session identity. */
+  locator?: RequestLocator;
   /** The children drilled into, outermost first (B20). */
   trail: readonly WorkSession[];
   onTrail: (trail: readonly WorkSession[]) => void;
@@ -137,7 +142,7 @@ export function SessionRecord({ actions, target, frame }: { actions: Actions; ta
     {!own || own.loading ? <div className="space-y-md px-md py-sm" aria-busy="true" data-record-loading="true">{[0, 1, 2].map((key) => <div key={key} className="h-(--size-control-lg) rounded-sm bg-muted" />)}</div> : own.failure ? <div role="status" className="px-md py-sm text-caption"><p>{t("sessionWork.failed")}</p><Button size="sm" variant="ghost" onClick={frame.onRead}>{t("common.retry")}</Button></div> : shown ? <div className={cn("min-h-0 flex-1 overflow-y-auto px-lg pb-lg text-caption [word-break:keep-all]", !connected && "opacity-(--opacity-disabled)")} data-record-content="true">
       <h2 className="flex min-w-0 items-center gap-xs py-sm text-subhead font-semibold"><AgentMark kind={shown.session.agent} /><span className="min-w-0 whitespace-normal [overflow-wrap:anywhere]" title={recordTitle(shown, summaries)}>{recordTitle(shown, summaries)}</span></h2>
       <RecordPlace record={shown} actions={actions} />
-      <Work key={`work:${workKey(shown.session)}`} record={shown} summaries={summaries} onOpen={open} actions={actions} parent={parent ? recordTitle(parent, summaries) : liveParent} />
+      <Work key={`work:${workKey(shown.session)}`} record={shown} summaries={summaries} onOpen={open} actions={actions} parent={parent ? recordTitle(parent, summaries) : liveParent} locator={workKey(shown.session) === workKey(target) ? frame.locator : undefined} />
     </div> : null}
   </div>;
 }
@@ -295,11 +300,11 @@ function OutputMark({ output, actions }: { output: WorkOutput; actions: Actions 
 }
 
 /** The current session owns the requested work and tabs. Children expand without replacing it. */
-function Work({ record, summaries, onOpen, actions, parent }: { record: RecordValue; summaries: boolean; onOpen: (child: RecordValue) => void; actions: Actions; parent: string | null }) {
+function Work({ record, summaries, onOpen, actions, parent, locator }: { record: RecordValue; summaries: boolean; onOpen: (child: RecordValue) => void; actions: Actions; parent: string | null; locator?: RequestLocator }) {
   const { t } = useInterfaceTranslation();
   return <>
     <RequestedWork record={record} summaries={summaries} />
-    <RecordTabs record={record} summaries={summaries} actions={actions} parent={parent} />
+    <RecordTabs record={record} summaries={summaries} actions={actions} parent={parent} locator={locator} />
     {record.children.length ? <section className="mt-lg min-w-0" data-record-delegated={record.children.length}>
       <SectionHead label={t("recordCard.children")} count={record.children.length} />
       <ChildRows parent={record} summaries={summaries} onOpen={onOpen} actions={actions} />
@@ -353,9 +358,10 @@ function TaskRow({ item, mark }: { item: ChecklistTask; mark: RowMark | null }) 
   </div>;
 }
 
-function RecordTabs({ record, summaries, actions, parent }: { record: RecordValue; summaries: boolean; actions: Actions; parent: string | null }) {
+function RecordTabs({ record, summaries, actions, parent, locator }: { record: RecordValue; summaries: boolean; actions: Actions; parent: string | null; locator?: RequestLocator }) {
   const { t } = useInterfaceTranslation();
-  const [selected, setSelected] = useState(record.missed.some((item) => item.status === "open") && summaries ? "findings" : "prs");
+  const [selected, setSelected] = useState(locator ? "requests" : record.missed.some((item) => item.status === "open") && summaries ? "findings" : "prs");
+  useEffect(() => { if (locator) setSelected("requests"); }, [locator?.request_offset, locator?.query]);
   const own = workKey(record.session);
   const outputs = orderedOutputs(record.outputs.filter((output) => workKey(output.source) === own));
   const found = summaries ? record.missed.filter((item) => item.status === "open") : [];
@@ -378,7 +384,7 @@ function RecordTabs({ record, summaries, actions, parent }: { record: RecordValu
       <p className="mb-sm text-micro text-muted-foreground">{t(found.length ? "recordCard.unassigned" : "recordCard.noFindings")}</p>
       {found.map((missed) => <MissedLine key={missed.id} missed={missed} session={record.session} cwd={record.cwd} note={null} actions={actions} />)}
     </TabsContent> : null}
-    <TabsContent value="requests" className="min-w-0"><Words record={record} parent={parent} /></TabsContent>
+    <TabsContent value="requests" className="min-w-0"><Words record={record} parent={parent} locator={locator} /></TabsContent>
   </Tabs>;
 }
 
@@ -483,21 +489,32 @@ export function MissedRow({ missed, record, actions }: { missed: MissedWork; rec
 }
 
 /** Full request history, author and timestamp, with the latest four initially visible. */
-function Words({ record, parent }: { record: RecordValue; parent: string | null }) {
+function Words({ record, parent, locator }: { record: RecordValue; parent: string | null; locator?: RequestLocator }) {
   const { t, i18n } = useInterfaceTranslation();
   const [all, setAll] = useState(false);
   const requests = useMemo(() => [...record.requests].sort((a, b) => a.at_unix_ms - b.at_unix_ms || a.offset - b.offset), [record.requests]);
-  const hidden = all ? 0 : Math.max(0, requests.length - FIRST_WORDS);
+  const hidden = all || locator ? 0 : Math.max(0, requests.length - FIRST_WORDS);
+  const target = useRef<HTMLLIElement>(null);
+  const located = locator && requests.some((request) => request.offset === locator.request_offset);
+  useEffect(() => {
+    if (located && target.current) {
+      target.current.focus({ preventScroll: true });
+      target.current.scrollIntoView({ block: "center" });
+    }
+  }, [located, locator?.request_offset, locator?.query]);
   const language = requireInterfaceLanguage(i18n.language);
   return <section className="min-w-0" data-record-words={requests.length}>
+    {locator ? <Hint label={t("overviewHistory.limit")}><button type="button" className="inline-flex items-center gap-xs rounded-xs py-xs text-micro text-muted-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring" data-record-retention="true"><InfoIcon aria-hidden="true" className="size-(--size-icon-sm)" />{t("overviewHistory.limitLabel")}</button></Hint> : null}
+    {locator && !located ? <p role="status" className="py-xs text-caption text-muted-foreground" data-record-request-unavailable="true">{t("overviewHistory.requestUnavailable")}</p> : null}
     {!requests.length ? <p className="text-micro text-muted-foreground">{t("sessionWork.empty")}</p> : null}
     {hidden ? <button type="button" className={cn(ROW, "flex items-center gap-xxs py-xxs text-micro text-muted-foreground hover:text-foreground")} aria-expanded="false" onClick={() => setAll(true)} data-record-words-earlier={hidden}>{t("sessionWork.earlierTurns", { count: hidden })}<ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" /></button> : null}
     <ol className="min-w-0">
       {requests.slice(hidden).map((request) => {
         const who = request.author === "operator" ? t("sessionWork.me") : parent ?? t("sessionWork.parent");
-        return <li key={request.offset} className="flex min-w-0 flex-wrap items-baseline gap-sm py-sm" data-record-request={request.offset}>
+        const matched = locator?.request_offset === request.offset;
+        return <li key={request.offset} ref={matched ? target : undefined} tabIndex={matched ? -1 : undefined} className={cn("flex min-w-0 flex-wrap items-baseline gap-sm py-sm", matched && "rounded-xs bg-accent/40 px-xs outline-none focus:ring-1 focus:ring-ring")} data-record-request={request.offset} data-record-request-match={matched ? "true" : undefined}>
           <span className="w-(--size-control) shrink-0 truncate text-micro text-muted-foreground" title={who}>{who}</span>
-          <span className="min-w-0 flex-1 whitespace-pre-wrap text-subtle-foreground [overflow-wrap:anywhere]" title={request.text}>{request.text}</span>
+          <span className="min-w-0 flex-1 whitespace-pre-wrap text-subtle-foreground [overflow-wrap:anywhere]" title={request.text}>{matched ? <HighlightedRequest text={request.text} query={locator.query ?? ""} /> : request.text}</span>
           <time className="shrink-0 font-mono text-micro text-muted-foreground" dateTime={new Date(request.at_unix_ms).toISOString()}>{formatDateTime(language, request.at_unix_ms, { hour: "2-digit", minute: "2-digit", hour12: false })}</time>
         </li>;
       })}

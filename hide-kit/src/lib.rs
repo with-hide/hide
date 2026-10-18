@@ -37,6 +37,7 @@ mod refusal;
 mod retired_agents;
 pub mod retirement_inspection;
 pub mod runtime;
+mod state_route;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -569,6 +570,9 @@ pub fn status(target: &KitTarget) -> KitReport {
         Ok(record) => record,
         Err(refusal) => return KitReport::refused(refusal),
     };
+    if let Err(refusal) = state_route::claim(target, &record) {
+        return KitReport::refused(refusal);
+    }
     // A machine the kit never ran on reads as `apply` will leave it until the
     // operator chooses; nothing is written for that.
     agent_kit::hold_for_onboarding(&mut record);
@@ -758,6 +762,12 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
         Ok(record) => record,
         Err(refusal) => return KitReport::refused(refusal),
     };
+    // Keep a departed owner's state locked until the account update finishes.
+    // A second live daemon sharing HOME must never redirect its hooks.
+    let _previous_owner = match state_route::claim(target, &record) {
+        Ok(lock) => lock,
+        Err(refusal) => return KitReport::refused(refusal),
+    };
     let (mut legacy_retirement, retirement_failure) = match coordination_retirement::install(target)
     {
         Ok(report) => (report, None),
@@ -765,6 +775,7 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
     };
     let labels_retirement = labels::retire(target);
     let mut changed = agent_kit::hold_for_onboarding(&mut record);
+    changed |= record.remember_state_route(layout::state_dir_from_process(&target.home));
     if retirement_failure.is_none() && !record.has_retired(HCOORD_PLUGIN_ID) {
         record.mark_retired(HCOORD_PLUGIN_ID);
         changed = true;

@@ -17,6 +17,8 @@ fn issue(number: u32) -> IssueSnapshot {
         blocked_by: Vec::new(),
         sub_issues: Default::default(),
         labels: Vec::new(),
+        author: None,
+        assignees: Vec::new(),
     }
 }
 

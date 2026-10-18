@@ -11,6 +11,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 const HELPER = __HIDE_HELPER__;
+const ROUTE = __HIDE_ROUTE__;
 const AGENT = __HIDE_AGENT__;
 const VERSION = __HIDE_VERSION__;
 
@@ -121,7 +122,7 @@ function helper(state, operation, input, budgetMs) {
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(HELPER, [AGENT, operation], { stdio: ["pipe", "pipe", "ignore"] });
+      child = spawn(HELPER, [AGENT, operation, ...ROUTE], { stdio: ["pipe", "pipe", "ignore"] });
     } catch {
       state.lost += 1;
       resolve(null);

@@ -22,11 +22,14 @@ pub const HELPER_BINARY_NAME: &str = if cfg!(windows) {
     "hide-agent-hooks"
 };
 
-/// The version of the installed entry. Raise it when the command Hide writes
-/// changes shape, so an older entry is reported as outdated and the operator
-/// is offered a reinstall rather than being silently left with a hook that
-/// reports nothing. Version 8 selects the file tools for the guardrails.
+/// The pane's `hide_hooks` reporting protocol. Raise it only when older
+/// reports cannot be interpreted: changing an installed command must not
+/// disconnect an already-running pane whose reports are still valid.
 pub const HOOK_VERSION: u32 = 8;
+
+/// The installed Claude Code and Codex command version, independent of the
+/// pane reporting protocol. Version 9 captures the daemon's state route.
+pub const HOOK_ENTRY_VERSION: u32 = 9;
 
 /// The one sentence SessionStart adds to either agent runtime inside Hide.
 /// Both runtimes accept the same `hookSpecificOutput.additionalContext`
@@ -189,7 +192,7 @@ pub const BLOCKED_TOKEN: &str = "hide_sub_blocked";
 
 /// `hide-subagents@N`, the exact value the helper writes into its command.
 pub fn hook_source_id() -> String {
-    format!("{HOOK_SOURCE_NAME}@{HOOK_VERSION}")
+    format!("{HOOK_SOURCE_NAME}@{HOOK_ENTRY_VERSION}")
 }
 
 /// Reads the version out of a `hide-subagents@N` source id.

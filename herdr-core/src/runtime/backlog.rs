@@ -12,7 +12,8 @@
 
 use super::*;
 use crate::links::ledger::{
-    AttemptKey, BacklogIntent, LedgerAnswer, LedgerCall, MissedSource, PendingBacklog,
+    AttemptKey, BacklogIntent, BacklogOriginIdentity, BacklogTarget, LedgerAnswer, LedgerCall,
+    MissedSource, PendingBacklog,
 };
 use crate::links::worker::LinkClient;
 use crate::model::{BacklogFailure, BacklogItemSnapshot, BacklogPhase};
@@ -86,9 +87,9 @@ pub(super) struct BacklogWork {
     evicted: VecDeque<String>,
     undo_generation: u64,
     origin_generation: u64,
-    /// The newest read of each origin in `issue_work.origins`, by item key:
+    /// The newest read of each origin in `issue_work.origins`, by owner:
     /// an answer for an older read lands in nothing.
-    origin_reads: HashMap<String, u64>,
+    origin_reads: HashMap<BacklogOriginIdentity, u64>,
     keys_generation: u64,
 }
 
@@ -101,6 +102,11 @@ pub(super) struct BacklogAddPayload {
     pub(super) title: String,
     #[serde(default)]
     pub(super) missed: Option<MissedSource>,
+    /// An omitted destination is always a private local memo.
+    #[serde(default)]
+    pub(super) destination: Option<String>,
+    #[serde(default)]
+    pub(super) repository: Option<String>,
 }
 
 /// `backlog_retry` and `backlog_dismiss`.
@@ -110,18 +116,11 @@ pub(super) struct BacklogIntentPayload {
     pub(super) intent: String,
 }
 
-/// `backlog_undo` and `backlog_origin`.
+/// `backlog_undo`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct BacklogItemPayload {
     pub(super) workspace_id: String,
-    pub(super) task_key: String,
-}
-
-/// `backlog_origin_close`.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct BacklogKeyPayload {
     pub(super) task_key: String,
 }
 
@@ -294,7 +293,7 @@ impl Runtime {
             .count()
     }
 
-    /// A refusal of an undo or a read, which has no row of its own.
+    /// A refusal of an undo, which has no row of its own.
     fn refuse_backlog(&mut self, code: &str, message: &str) -> bool {
         crate::diagnostic!(serde_json::json!({"component":"backlog","kind":code}));
         self.set_error(code, message, false);
@@ -415,7 +414,50 @@ impl Runtime {
         if self.retryable_failed() >= FAILED_LIMIT {
             return self.refuse_add(payload, BacklogFailure::QueueFull, "backlog.queue_full");
         }
-        let memo = self.project_source_kind(&workspace) == crate::tasks::SourceKind::Local;
+        let memo = match payload.destination.as_deref() {
+            None | Some("local") if payload.repository.is_none() => true,
+            Some("github") => false,
+            _ => {
+                return self.refuse_add(
+                    payload,
+                    BacklogFailure::Refused,
+                    "backlog.destination_invalid",
+                );
+            }
+        };
+        let pin = if memo {
+            None
+        } else {
+            let Some(repository) = payload
+                .repository
+                .as_deref()
+                .filter(|repository| crate::issues::is_repository(repository))
+            else {
+                return self.refuse_add(
+                    payload,
+                    BacklogFailure::Refused,
+                    "backlog.repository_required",
+                );
+            };
+            let Some(pin) =
+                self.current_pin(node.as_deref(), &workspace.device_id, &workspace.path)
+            else {
+                return self.refuse_add(
+                    payload,
+                    BacklogFailure::NoGithubRemote,
+                    "backlog.repository_unknown",
+                );
+            };
+            if !matches!(&pin.target, crate::github::Where::Repository(known) if known.eq_ignore_ascii_case(repository))
+            {
+                return self.refuse_add(
+                    payload,
+                    BacklogFailure::RepositoryChanged,
+                    "backlog.repository_changed",
+                );
+            }
+            Some(pin)
+        };
         if !memo {
             let device = &workspace.device_id;
             let waiting = self
@@ -431,9 +473,6 @@ impl Runtime {
             "component": "backlog", "kind": "backlog.add",
             "intent": payload.intent, "project": workspace.path, "missed": payload.missed.is_some(),
         }));
-        let pin = (!memo)
-            .then(|| self.current_pin(node.as_deref(), &workspace.device_id, &workspace.path))
-            .flatten();
         let job = Job {
             workspace_id: workspace.id.clone(),
             device: workspace.device_id.clone(),
@@ -463,8 +502,20 @@ impl Runtime {
             missed: job.missed.clone(),
             at_unix_ms: unix_milliseconds(),
         };
-        match self.create_local_issue(job.node.as_deref(), &job.project, &job.title, "") {
+        let made = match self.local_issues.as_mut() {
+            Ok(store) => store.create_once(
+                job.node.as_deref(),
+                &job.project,
+                &intent,
+                &job.title,
+                unix_milliseconds(),
+            ),
+            Err(_) => Err("The memo store is unavailable".to_owned()),
+        };
+        match made {
             Ok(number) => {
+                self.persist_local_issues();
+                self.refresh_issue_rows(job.node.as_deref());
                 let key = crate::tasks::local_key(&job.project, number);
                 row.task_key = Some(key.clone());
                 if let Some(source) = job.missed.clone() {
@@ -549,7 +600,23 @@ impl Runtime {
     /// The repository target and connection epoch a GitHub item of `project`
     /// would be made under now, when its repository is known.
     fn current_pin(&self, node: Option<&str>, device: &str, project: &str) -> Option<Pin> {
-        let target = self.github_place(node, project).ok()?;
+        let target = match self.github_place(node, project).ok()? {
+            crate::github::Where::Repository(repository) => {
+                crate::github::Where::Repository(repository)
+            }
+            crate::github::Where::Checkout(_) => {
+                let repository = self
+                    .snapshot
+                    .navigator
+                    .workspaces
+                    .iter()
+                    .find(|workspace| workspace.path == project)?
+                    .home_issues
+                    .repository
+                    .clone()?;
+                crate::github::Where::Repository(repository)
+            }
+        };
         Some(Pin {
             target,
             epoch: self.connection_epoch(device, project),
@@ -901,7 +968,14 @@ impl Runtime {
         self.backlog_work.undo_generation += 1;
         let generation = self.backlog_work.undo_generation;
         let task_key = payload.task_key.clone();
+        let owner = BacklogOriginIdentity {
+            workspace_id: workspace.id.clone(),
+            device_id: workspace.device_id.clone(),
+            task_key: task_key.clone(),
+        };
         let mut snapshot = crate::model::BacklogUndoSnapshot {
+            workspace_id: owner.workspace_id.clone(),
+            device_id: owner.device_id.clone(),
             task_key: task_key.clone(),
             phase: "working".into(),
             failure: None,
@@ -921,7 +995,15 @@ impl Runtime {
                     self.persist_local_issues();
                     self.refresh_issue_rows(node.as_deref());
                     snapshot.phase = "done".into();
-                    self.release_backlog(client, task_key);
+                    self.release_backlog(
+                        client,
+                        owner,
+                        BacklogTarget::Local {
+                            device_id: workspace.device_id.clone(),
+                            path: path.to_owned(),
+                            number,
+                        },
+                    );
                 }
                 Err(reason) => {
                     crate::diagnostic!(
@@ -995,7 +1077,7 @@ impl Runtime {
                     Ok(reference) => {
                         runtime.forget_created_issue(node.as_deref(), &project, reference);
                         let client = runtime.links_work.client.clone();
-                        runtime.release_backlog(client, task_key);
+                        runtime.release_backlog(client, owner, BacklogTarget::Github(reference.clone()));
                         ("done", None)
                     }
                     Err(failure) => {
@@ -1022,17 +1104,26 @@ impl Runtime {
         true
     }
 
-    fn release_backlog(&mut self, client: Option<LinkClient>, backlog_key: String) {
-        self.snapshot
-            .issue_work
-            .backlog
-            .retain(|row| row.task_key.as_deref() != Some(backlog_key.as_str()));
+    fn release_backlog(
+        &mut self,
+        client: Option<LinkClient>,
+        owner: BacklogOriginIdentity,
+        target: BacklogTarget,
+    ) {
+        let local = target.local_device().is_some();
+        self.snapshot.issue_work.backlog.retain(|row| {
+            row.task_key.as_deref() != Some(owner.task_key.as_str())
+                || (local && row.workspace_id != owner.workspace_id)
+        });
+        if local {
+            self.close_backlog_origin(owner);
+        }
         let Some(client) = client else {
             return;
         };
         let spawned = self.spawn_backlog_worker(
             "backlog-release",
-            move || client.call(LedgerCall::ReleaseBacklog { backlog_key }),
+            move || client.call(LedgerCall::ReleaseBacklog { target }),
             |runtime, result| {
                 if let Err(code) = result {
                     crate::diagnostic!(serde_json::json!({"component":"backlog","kind":"backlog.release_failed","code":code}));
@@ -1052,33 +1143,57 @@ impl Runtime {
     /// `backlog_origin_close`: no window shows the item's panel or Start
     /// dialog any more (the daemon sends it when the last holder lets go), so
     /// the turn's words leave the snapshot.
-    pub(super) fn close_backlog_origin(&mut self, payload: BacklogKeyPayload) -> bool {
+    pub(super) fn close_backlog_origin(&mut self, payload: BacklogOriginIdentity) -> bool {
         // A read still on its way is answered into nothing.
-        self.backlog_work.origin_reads.remove(&payload.task_key);
+        self.backlog_work.origin_reads.remove(&payload);
         let origins = &mut self.snapshot.issue_work.origins;
         let before = origins.len();
-        origins.retain(|origin| origin.task_key != payload.task_key);
+        origins.retain(|origin| !origin.matches(&payload));
         origins.len() != before
     }
 
-    fn origin_slot(&mut self, task_key: &str) -> Option<&mut crate::model::BacklogOriginSnapshot> {
+    fn origin_slot(
+        &mut self,
+        owner: &BacklogOriginIdentity,
+    ) -> Option<&mut crate::model::BacklogOriginSnapshot> {
         self.snapshot
             .issue_work
             .origins
             .iter_mut()
-            .find(|origin| origin.task_key == task_key)
+            .find(|origin| origin.matches(owner))
+    }
+
+    fn origin_target(&self, owner: &BacklogOriginIdentity) -> Option<BacklogTarget> {
+        owner.validate().ok()?;
+        let (_, workspace) = self.issue_project(&owner.workspace_id)?;
+        if workspace.device_id != owner.device_id
+            || !workspace
+                .tasks
+                .tasks
+                .iter()
+                .any(|task| task.key == owner.task_key)
+        {
+            return None;
+        }
+        BacklogTarget::for_project(&workspace.device_id, &workspace.path, &owner.task_key)
     }
 
     /// `backlog_origin`: where an item came from, for its panel's `어디서
     /// 왔나` and the Start prompt (B31, B33). The turn's words are read on the
     /// session's device and stay in this app. Each item has its own slot, so
     /// one window's item does not replace another's.
-    pub(super) fn read_backlog_origin(&mut self, payload: BacklogItemPayload) -> bool {
-        let task_key = payload.task_key;
+    pub(super) fn read_backlog_origin(&mut self, owner: BacklogOriginIdentity) -> bool {
+        let Some(target) = self.origin_target(&owner) else {
+            crate::diagnostic!(serde_json::json!({
+                "component": "backlog", "kind": "backlog.origin_unknown_item",
+                "workspace_id": owner.workspace_id, "device_id": owner.device_id,
+            }));
+            return false;
+        };
         // Another window already showing it keeps what it shows: a read in
         // flight or a turn already read is not blanked by a second open. Only
         // a failed read is tried again.
-        if let Some(slot) = self.origin_slot(&task_key) {
+        if let Some(slot) = self.origin_slot(&owner) {
             if slot.phase != "failed" {
                 return false;
             }
@@ -1097,9 +1212,11 @@ impl Runtime {
         let generation = self.backlog_work.origin_generation;
         self.backlog_work
             .origin_reads
-            .insert(task_key.clone(), generation);
+            .insert(owner.clone(), generation);
         let slot = crate::model::BacklogOriginSnapshot {
-            task_key: task_key.clone(),
+            workspace_id: owner.workspace_id.clone(),
+            device_id: owner.device_id.clone(),
+            task_key: owner.task_key.clone(),
             phase: "reading".into(),
             session: None,
             session_title: None,
@@ -1108,12 +1225,12 @@ impl Runtime {
             request: None,
             answer: None,
         };
-        match self.origin_slot(&task_key) {
+        match self.origin_slot(&owner) {
             Some(known) => *known = slot,
             None => self.snapshot.issue_work.origins.push(slot),
         }
         let Some(client) = self.links_work.client.clone() else {
-            if let Some(slot) = self.origin_slot(&task_key) {
+            if let Some(slot) = self.origin_slot(&owner) {
                 slot.phase = "failed".into();
             }
             return true;
@@ -1131,33 +1248,47 @@ impl Runtime {
                     .map(|(_, node)| (device.id.clone(), node))
             })
             .collect();
-        let asked = task_key.clone();
-        let answered = task_key.clone();
+        let asked = owner.clone();
+        let answered = owner.clone();
         let spawned = self.spawn_backlog_worker(
             "backlog-origin",
-            move || read_origin(&client, &nodes, &asked),
-            move |runtime, result| {
-                if runtime.backlog_work.origin_reads.get(&answered) != Some(&generation) {
-                    return false;
-                }
-                let Some(slot) = runtime.origin_slot(&answered) else {
-                    return false;
-                };
-                match result {
-                    Ok(read) => *slot = read,
-                    Err(code) => {
-                        crate::diagnostic!(serde_json::json!({"component":"backlog","kind":"backlog.origin_failed","code":code}));
-                        slot.phase = "failed".into();
-                    }
-                }
-                true
-            },
+            move || read_origin(&client, &nodes, &asked, target),
+            move |runtime, result| runtime.finish_backlog_origin(&answered, generation, result),
         );
         if let Err(code) = spawned {
             crate::diagnostic!(
                 serde_json::json!({"component":"backlog","kind":"backlog.worker_unavailable","code":code})
             );
-            if let Some(slot) = self.origin_slot(&task_key) {
+            if let Some(slot) = self.origin_slot(&owner) {
+                slot.phase = "failed".into();
+            }
+        }
+        true
+    }
+
+    pub(super) fn finish_backlog_origin(
+        &mut self,
+        owner: &BacklogOriginIdentity,
+        generation: u64,
+        result: Result<crate::model::BacklogOriginSnapshot, String>,
+    ) -> bool {
+        if self.backlog_work.origin_reads.get(owner) != Some(&generation)
+            || self.origin_target(owner).is_none()
+        {
+            return false;
+        }
+        let Some(slot) = self.origin_slot(owner) else {
+            return false;
+        };
+        match result {
+            Ok(read) if read.matches(owner) => *slot = read,
+            result => {
+                let code = result
+                    .err()
+                    .unwrap_or_else(|| "backlog_origin_owner_changed".into());
+                crate::diagnostic!(
+                    serde_json::json!({"component":"backlog","kind":"backlog.origin_failed","code":code})
+                );
                 slot.phase = "failed".into();
             }
         }
@@ -1199,8 +1330,8 @@ impl Runtime {
     fn admission_current(&self, job: &Job, admission: &Admission) -> bool {
         !admission.cancel.is_cancelled()
             && self
-                .github_place(job.node.as_deref(), &job.project)
-                .is_ok_and(|target| target == admission.target)
+                .current_pin(job.node.as_deref(), &job.device, &job.project)
+                .is_some_and(|pin| pin.target == admission.target)
             && self.connection_epoch(&admission.device, &admission.project) == admission.epoch
     }
 
@@ -1359,16 +1490,21 @@ fn issue_named(
         blocked_by: vec![],
         sub_issues: Default::default(),
         labels: vec![],
+        author: None,
+        assignees: Vec::new(),
     }
 }
 
 fn read_origin(
     client: &LinkClient,
     nodes: &HashMap<String, Arc<dyn NodeLink>>,
-    task_key: &str,
+    owner: &BacklogOriginIdentity,
+    target: BacklogTarget,
 ) -> Result<crate::model::BacklogOriginSnapshot, String> {
     let mut slot = crate::model::BacklogOriginSnapshot {
-        task_key: task_key.to_owned(),
+        workspace_id: owner.workspace_id.clone(),
+        device_id: owner.device_id.clone(),
+        task_key: owner.task_key.clone(),
         phase: "ready".into(),
         session: None,
         session_title: None,
@@ -1377,10 +1513,7 @@ fn read_origin(
         request: None,
         answer: None,
     };
-    let LedgerAnswer::Origin(origin) = client.call(LedgerCall::BacklogOrigin {
-        backlog_key: task_key.to_owned(),
-    })?
-    else {
+    let LedgerAnswer::Origin(origin) = client.call(LedgerCall::BacklogOrigin { target })? else {
         return Err("backlog_origin_invalid".into());
     };
     let Some(origin) = origin else {

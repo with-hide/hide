@@ -2,7 +2,7 @@
 <html lang="en" class="dark palette-hide">
   <head>
     <meta charset="utf-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'" />
     <title>hide</title>
     <link rel="stylesheet" href="tokens.css" />
     <link rel="stylesheet" href="status.css" />
@@ -10,7 +10,19 @@
   <body>
     <div id="titlebar" aria-hidden="true"></div>
     <main>
-      <p id="connecting" data-status="connecting"></p>
+      <section id="connecting" data-status="connecting">
+        <div id="flight-scene">
+          <div id="brand">
+            <strong aria-hidden="true">hide</strong><p aria-hidden="true">Run more agents. Hold less.</p>
+            <div id="preparing" role="status">
+              <span id="loading-track" aria-hidden="true"><span></span></span>
+              <span id="connecting-text"></span>
+            </div>
+          </div>
+          <img id="owl-still" src="owl-roam-still.svg" alt="" aria-hidden="true" />
+          <div id="owl-flight" aria-hidden="true"></div>
+        </div>
+      </section>
       <section id="failed" data-status="failed" hidden>
         <h1 id="failed-title"></h1>
         <p id="reason" data-reason=""></p>

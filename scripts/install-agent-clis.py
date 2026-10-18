@@ -3,8 +3,9 @@
 
 Usage: install-agent-clis.py <kind>... | --all [--prefix DIR]
 
-CI only (CI=true): on a workstation each CLI is the operator's, and this would
-hand a test a second copy. Each CLI goes under DIR (default
+CI (CI=true), or the guarded local fake journey's private cache installer.
+The latter requires --private-fake, a HOME inside the pin entry, and an installer
+that selects a version; its caller owns the sandbox, lease and byte cap. Each CLI goes under DIR (default
 $RUNNER_TEMP/agent-clis), and the script prints one `<kind>=<program>` line
 per CLI; with GITHUB_PATH set it puts each program's folder on the PATH of
 the later steps, and with GITHUB_OUTPUT set it writes the same lines as the
@@ -17,6 +18,7 @@ release moves the pin in a pull request before a lane measures it.
 
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import platform
@@ -81,7 +83,10 @@ def grok(row, prefix):
     """Grok's installer takes the version as its argument and the folder as
     GROK_BIN_DIR; on Windows it runs under Git Bash in the same form."""
     folder = prefix / "grok"
-    run([bash(), "-c", f'curl -fsSL {GROK_INSTALLER} | bash -s "$0"', row["version"]],
+    # Already on PATH means the installer never tries ~/.local/bin or
+    # /usr/local/bin links. Set this inside Bash so Git Bash converts its
+    # inherited Windows PATH before the Unix path is prepended.
+    run([bash(), "-c", f'export PATH="$GROK_BIN_DIR:$PATH"; curl -fsSL {GROK_INSTALLER} | bash -s "$0"', row["version"]],
         {"GROK_BIN_DIR": folder.as_posix() if WINDOWS else str(folder)})
     return folder / ("grok.exe" if WINDOWS else "grok")
 
@@ -142,10 +147,15 @@ def main(argv=None):
     parser.add_argument("kinds", nargs="*")
     parser.add_argument("--all", action="store_true", help="every CLI the table pins")
     parser.add_argument("--prefix", type=Path)
+    parser.add_argument("--private-fake", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if bool(args.kinds) == args.all:
         parser.error("name the CLIs or pass --all, not both")
-    if os.environ.get("CI") != "true":
+    if args.private_fake:
+        if (not args.prefix or Path.home().resolve() != (args.prefix / "home").resolve()
+                or args.all or "agy" in args.kinds):
+            parser.error("private fake installation needs a pin-local HOME and version-selecting installers")
+    elif os.environ.get("CI") != "true":
         print("install-agent-clis.py installs CLIs on a CI runner only", file=sys.stderr)
         return 2
     rows = table()
@@ -165,6 +175,13 @@ def main(argv=None):
         program = programs[kind]
         if not program.is_file():
             raise SystemExit(f"{kind}: the installer left no program at {program}")
+        # The local journey runs --version only after applying the adapter's
+        # update policy in its private HOME and entering its stricter sandbox.
+        # Starting here would bypass config-based policies during installation.
+        if args.private_fake:
+            notes.append(f"{kind}: installed pin; journey must check version")
+            lines.append(f"{kind}={program}")
+            continue
         version = answered(program)
         notes.append(f"{kind} {version}")
         if not matches(rows[kind]["version"], version):
@@ -182,6 +199,8 @@ def main(argv=None):
         if os.environ.get(name):
             with open(os.environ[name], "a", encoding="utf-8") as stream:
                 stream.write(value + "\n")
+    if args.private_fake:
+        (prefix / "installed.json").write_text(json.dumps({kind: str(path) for kind, path in programs.items()}))
     print("\n".join(lines))
     return 0
 
