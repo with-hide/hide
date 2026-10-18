@@ -37,7 +37,7 @@ pub(crate) mod links;
 pub(crate) mod memory;
 pub(crate) mod memory_analysis;
 pub(crate) mod memory_evidence;
-mod memory_promotion;
+pub(crate) mod memory_promotion;
 mod memory_verify;
 mod op_timing;
 mod operations;

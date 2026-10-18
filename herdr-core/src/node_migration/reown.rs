@@ -170,9 +170,22 @@ pub fn reown(staging: &Path, change: &OwnerChange, ids: &IdTable) -> Result<Reow
     NodeId::parse(&change.new_owner).map_err(|error| refuse(staging, error))?;
 
     let mut outcome = ReownOutcome::default();
+    // First, since the ledger names the cards of a Project folded into
+    // another by the numbers the fold changed.
+    let memory = staging.join(PROJECT_MEMORY);
+    let mut renumbered = Vec::new();
+    if memory.is_file() {
+        let (changed, folded) =
+            reown_memory(&memory, change).map_err(|reason| refuse(&memory, reason))?;
+        if changed {
+            outcome.files.push(PROJECT_MEMORY.to_owned());
+        }
+        renumbered = folded;
+    }
     let mut mapper = Mapper {
         change,
         ids,
+        renumbered: &renumbered,
         pruned: 0,
     };
     for file in [
@@ -252,13 +265,6 @@ pub fn reown(staging: &Path, change: &OwnerChange, ids: &IdTable) -> Result<Reow
         outcome.files.push(FACTORY.to_owned());
     }
 
-    let memory = staging.join(PROJECT_MEMORY);
-    if memory.is_file()
-        && reown_memory(&memory, change).map_err(|reason| refuse(&memory, reason))?
-    {
-        outcome.files.push(PROJECT_MEMORY.to_owned());
-    }
-
     let marker = serde_json::to_vec(&Marker {
         version: MARKER_VERSION,
         node: change.new_owner.clone(),
@@ -272,7 +278,17 @@ pub fn reown(staging: &Path, change: &OwnerChange, ids: &IdTable) -> Result<Reow
 struct Mapper<'a> {
     change: &'a OwnerChange,
     ids: &'a IdTable,
+    /// The cards a fold of Project Memory gave other numbers (`reown_memory`).
+    renumbered: &'a [Renumbered],
     pruned: usize,
+}
+
+/// The cards of a Project that a move folded into another copy of it
+/// renumbered: the intent prefix its promotion starts carry, and each old
+/// card number with its new one.
+struct Renumbered {
+    intent_prefix: String,
+    numbers: BTreeMap<u64, u64>,
 }
 
 /// What a mapping makes of one value: the same, another, or nothing (an
@@ -442,7 +458,9 @@ impl Mapper<'_> {
                         agent["host_scope"] = mapped;
                     }
                 }
-                self.spawn_machines(value)
+                self.spawn_machines(value)?;
+                self.promotion_targets(value);
+                Ok(())
             }
             LOCAL_ISSUES => swap_own(value, "projects", "devices", self.change),
             _ => Ok(()),
@@ -489,6 +507,42 @@ impl Mapper<'_> {
         }
         value["project_settings"] = Value::Object(moved);
         Ok(())
+    }
+
+    /// A promotion task names its card by number (`m3`), and a fold of
+    /// Project Memory gave the cards of one copy new numbers, so the task is
+    /// read through the new ones: the screen opens a task's card from this
+    /// name. A start's intent carries the digest of its Project's id, which
+    /// tells whose card a number is; the intent itself stays as it was,
+    /// since it only has to be the same when asked again.
+    fn promotion_targets(&self, value: &mut Value) {
+        for spawn in each(value, "spawns") {
+            let Some(intent) = spawn.get("intent").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(renumbered) = self
+                .renumbered
+                .iter()
+                .find(|renumbered| intent.starts_with(&renumbered.intent_prefix))
+            else {
+                continue;
+            };
+            let Some(task) = spawn.get_mut("task").filter(|task| {
+                task.get("kind").and_then(Value::as_str)
+                    == Some(crate::coordination::MEMORY_PROMOTE_TASK)
+            }) else {
+                continue;
+            };
+            let moved = task
+                .get("target")
+                .and_then(Value::as_str)
+                .and_then(hide_memory::parse_card_name)
+                .and_then(|number| renumbered.numbers.get(&number))
+                .map(|number| hide_memory::card_name(*number));
+            if let Some(name) = moved {
+                task["target"] = Value::String(name);
+            }
+        }
     }
 
     /// A spawn's `machine` is the device its child lives on when that is not
@@ -871,10 +925,11 @@ fn reown_factory(staging: &Path, change: &OwnerChange) -> Result<bool, String> {
 /// into it (`MemoryStore::convert_device_merging`), the moving Project's
 /// choices and rows winning, with one record of what was folded. A different
 /// Project at that id stops the move.
-fn reown_memory(path: &Path, change: &OwnerChange) -> Result<bool, String> {
+fn reown_memory(path: &Path, change: &OwnerChange) -> Result<(bool, Vec<Renumbered>), String> {
     let store = crate::runtime::memory::open_memory_store(path)
         .map_err(|error| format!("Project Memory does not open: {error}"))?;
     let mut changed = false;
+    let mut renumbered = Vec::new();
     for (from, to) in [
         (&change.new_owner_was, &change.new_owner),
         (&change.old_owner, &change.old_owner_as),
@@ -884,7 +939,7 @@ fn reown_memory(path: &Path, change: &OwnerChange) -> Result<bool, String> {
                 .convert_device_merging(from, to)
                 .map_err(|error| format!("Project Memory of {from}: {error}"))?;
             for conversion in &moved {
-                let Some(rows) = &conversion.merged else {
+                let Some(folded) = &conversion.merged else {
                     continue;
                 };
                 crate::diagnostic!(serde_json::json!({
@@ -892,13 +947,23 @@ fn reown_memory(path: &Path, change: &OwnerChange) -> Result<bool, String> {
                     "kind": "memory.leftover_merged",
                     "from_id": conversion.from,
                     "into_id": conversion.to,
-                    "rows": rows,
+                    "rows": folded.rows,
+                    "renumbered": folded.renumbered,
+                    "batch_dropped": folded.batch_dropped,
                 }));
+                if folded.renumbered.iter().any(|(old, new)| old != new) {
+                    renumbered.push(Renumbered {
+                        intent_prefix: crate::runtime::memory_promotion::intent_prefix(
+                            &conversion.to,
+                        ),
+                        numbers: folded.renumbered.clone(),
+                    });
+                }
             }
             changed |= !moved.is_empty();
         }
     }
-    Ok(changed)
+    Ok((changed, renumbered))
 }
 
 /// What a pattern reaches: a value, or the object whose keys it names.
@@ -1425,7 +1490,7 @@ mod tests {
                     {"id": "agent-3", "machine": X, "native_machine": "studio-machine", "actor": actor(2), "pane": "w3:p1", "host_scope": X, "project": X_ROOT, "session": "s3", "instance": "t3"},
                 ],
                 "spawns": [
-                    {"parent": "agent-1", "repo": M_ROOT, "path": M_ROOT, "requested_path": M_ROOT, "pane": "w1:p2"},
+                    {"parent": "agent-1", "repo": M_ROOT, "path": M_ROOT, "requested_path": M_ROOT, "pane": "w1:p2", "task": {"kind": "memory_promote", "target": "m1"}},
                     {"parent": "agent-1", "repo": C_ROOT, "path": C_ROOT, "requested_path": C_ROOT, "pane": "w2:p2", "machine": ALIAS},
                     {"parent": "agent-1", "repo": X_ROOT, "path": X_ROOT, "requested_path": X_ROOT, "pane": "w3:p2", "machine": X},
                 ],
@@ -2062,6 +2127,90 @@ mod tests {
             vec!["left-over".to_owned(), "s1".to_owned()]
         );
         assert_eq!(read(&state.join(MARKER_FILE))["node"], json!(M));
+    }
+
+    /// A card of `root` under `device`, in a Project that is on.
+    fn plant_memory_card(state: &Path, device: &str, root: &str, text: &str) {
+        let mut store = hide_memory::MemoryStore::open(&state.join(PROJECT_MEMORY)).unwrap();
+        let id = device_digest(device, root);
+        store.set_enabled(&id, true, true).unwrap();
+        store
+            .apply_candidates(
+                &hide_memory::AnalysisBatch {
+                    id: format!("batch-{text}"),
+                    project_id: id.clone(),
+                    provider: "codex".into(),
+                    analysis_provider: "codex".into(),
+                    session_id: "session-1".into(),
+                    content_hash: text.into(),
+                    created_at_unix_ms: 100,
+                },
+                &[hide_memory::Candidate {
+                    text: text.into(),
+                    title: String::new(),
+                    aliases: Vec::new(),
+                    kind: hide_memory::CandidateKind::Rule,
+                    confidence: 0.9,
+                    salience: 0.8,
+                    source_offsets: vec![7],
+                    human_offsets: vec![7],
+                    source_times: BTreeMap::from([(7, 90)]),
+                    cited_paths: Vec::new(),
+                    relation: hide_memory::CandidateRelation::New,
+                }],
+            )
+            .unwrap();
+    }
+
+    /// A promotion task of a Project's card, as the ledger keeps it: the
+    /// intent carries the digest of the Project's id.
+    fn promotion_spawn(project_id: &str, target: &str) -> Value {
+        json!({
+            "parent": "agent-1", "repo": C_ROOT, "path": C_ROOT, "requested_path": C_ROOT,
+            "intent": format!(
+                "{}{target}-a1-x",
+                crate::runtime::memory_promotion::intent_prefix(project_id)
+            ),
+            "task": {"kind": "memory_promote", "target": target},
+        })
+    }
+
+    /// Both copies of a Project had an m1, so the leftover's became m2: the
+    /// promotion task that named m1 for it follows its card, and the task of
+    /// the moving Project's own m1 stays.
+    #[test]
+    fn a_promotion_task_follows_its_card_to_the_number_a_fold_gave_it() {
+        let dir = macbook_folder();
+        let state = dir.path();
+        plant_memory_leftover(state, C, C_ROOT);
+        plant_memory_card(state, ALIAS, C_ROOT, "the moving Project's card");
+        plant_memory_card(state, C, C_ROOT, "the leftover's card");
+        let leftover = device_digest(C, C_ROOT);
+        let moving = device_digest(ALIAS, C_ROOT);
+        let mut ledger = read(&state.join(DELIVERY_LEDGER));
+        let spawns = ledger["spawns"].as_array_mut().unwrap();
+        spawns.push(promotion_spawn(&leftover, "m1"));
+        spawns.push(promotion_spawn(&moving, "m1"));
+        spawns.push(promotion_spawn(&leftover, "m9"));
+        std::fs::write(
+            state.join(DELIVERY_LEDGER),
+            serde_json::to_vec(&ledger).unwrap(),
+        )
+        .unwrap();
+
+        reown(state, &forward(), &forward_ids()).unwrap();
+        let ledger = read(&state.join(DELIVERY_LEDGER));
+        let targets: Vec<&str> = ledger["spawns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|spawn| spawn.pointer("/task/target")?.as_str())
+            .collect();
+        assert_eq!(
+            targets[targets.len() - 3..],
+            ["m2", "m1", "m9"],
+            "the leftover's m1 is m2; the moving Project's m1 and a card the map lacks stay"
+        );
     }
 
     #[test]
@@ -2761,6 +2910,7 @@ mod tests {
         let mut mapper = Mapper {
             change: &change,
             ids: &ids,
+            renumbered: &[],
             pruned: 0,
         };
         let mut core = json!({"device_registrations": [

@@ -694,9 +694,23 @@ pub struct Conversion {
     pub from: String,
     pub to: String,
     /// Set when the Project was folded into a copy of itself already stored
-    /// under `to`: each table's rows then under `to` that the copy held
-    /// (only tables that held any).
-    pub merged: Option<BTreeMap<String, u64>>,
+    /// under `to`.
+    pub merged: Option<Folded>,
+}
+
+/// What folding a leftover copy of a Project into it did.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Folded {
+    /// Each table's rows then under the Project that the copy held (only
+    /// tables that held any).
+    pub rows: BTreeMap<String, u64>,
+    /// The number each of the copy's cards had and the one it has now: a
+    /// number the copy shared with the moving Project's cards moved, and
+    /// everything that names a card by number is read through this.
+    pub renumbered: BTreeMap<u64, u64>,
+    /// Cards the promotion batch of a branch could no longer hold once the
+    /// batches of both Projects were joined (at most five).
+    pub batch_dropped: Vec<u64>,
 }
 
 /// Folds the Project `leftover`, stored under the id `into` that `moving`
@@ -707,7 +721,7 @@ fn fold_project(
     moving: &str,
     into: &str,
     device: &str,
-) -> Result<BTreeMap<String, u64>, MemoryError> {
+) -> Result<Folded, MemoryError> {
     let count = |table: &str, id: &str| -> Result<u64, MemoryError> {
         Ok(transaction.query_row(
             &format!("SELECT COUNT(*) FROM \"{table}\" WHERE project_id=?1"),
@@ -719,18 +733,28 @@ fn fold_project(
     for table in tables {
         leftover.insert(table.clone(), count(table, into)?);
     }
-    // The leftover's cards are numbered after the moving Project's, so the
-    // numbers a card was shown under stay with it.
-    let offset: i64 = transaction.query_row(
-        "SELECT COALESCE(MAX(number),0) FROM memory_items WHERE project_id=?1",
+    // The leftover's cards are numbered after every number the moving
+    // Project has used, so a number is never shown for two cards.
+    let (highest, moving_next): (i64, i64) = transaction.query_row(
+        "SELECT COALESCE((SELECT MAX(number) FROM memory_items WHERE project_id=?1),0),
+                (SELECT next_number FROM projects WHERE id=?1)",
         [moving],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
+    let offset = highest.max(moving_next - 1);
     let leftover_next: i64 = transaction.query_row(
         "SELECT next_number FROM projects WHERE id=?1",
         [into],
         |row| row.get(0),
     )?;
+    let renumbered: BTreeMap<u64, u64> = {
+        let mut statement =
+            transaction.prepare("SELECT number FROM memory_items WHERE project_id=?1")?;
+        statement
+            .query_map([into], |row| row.get::<_, i64>(0))?
+            .map(|number| number.map(|number| (number as u64, (number + offset) as u64)))
+            .collect::<Result<_, _>>()?
+    };
     // Through negative numbers, since the index is checked row by row and a
     // shift up could land on the next card's number.
     transaction.execute(
@@ -741,14 +765,15 @@ fn fold_project(
         "UPDATE memory_items SET number=?1-number WHERE project_id=?2",
         params![offset, into],
     )?;
+    let batch_dropped = fold_promotion_batches(transaction, moving, into, &renumbered)?;
     for table in tables {
         // The cards and the search index have no key of the Project's own
-        // to collide on; every other row of the moving Project replaces a
-        // leftover row of the same key.
-        let verb = if matches!(table.as_str(), "memory_items" | "memory_fts") {
-            "UPDATE"
-        } else {
-            "UPDATE OR REPLACE"
+        // to collide on, and the batches were joined above; every other row
+        // of the moving Project replaces a leftover row of the same key.
+        let verb = match table.as_str() {
+            "promotion_batches" => continue,
+            "memory_items" | "memory_fts" => "UPDATE",
+            _ => "UPDATE OR REPLACE",
         };
         transaction.execute(
             &format!("{verb} \"{table}\" SET project_id=?1 WHERE project_id=?2"),
@@ -768,13 +793,82 @@ fn fold_project(
     )?;
     // Nothing names the moving id any more, so its row goes alone.
     transaction.execute("DELETE FROM projects WHERE id=?1", [moving])?;
-    let mut merged = BTreeMap::new();
+    let mut rows = BTreeMap::new();
     for (table, before) in leftover {
         if before > 0 {
-            merged.insert(table.clone(), count(&table, into)?);
+            rows.insert(table.clone(), count(&table, into)?);
         }
     }
-    Ok(merged)
+    Ok(Folded {
+        rows,
+        renumbered,
+        batch_dropped,
+    })
+}
+
+/// A promotion batch lists its cards by number, so the batches of one branch
+/// in the two Projects are joined: the moving Project's cards, then the
+/// leftover's under their new numbers, at most [`crate::PROMOTION_BATCH_LIMIT`]
+/// of them, since a batch of more refuses every card added to it. Returns the
+/// numbers left out, whose cards keep their own promotion row.
+fn fold_promotion_batches(
+    transaction: &Transaction<'_>,
+    moving: &str,
+    into: &str,
+    renumbered: &BTreeMap<u64, u64>,
+) -> Result<Vec<u64>, MemoryError> {
+    let read = |id: &str| -> Result<Vec<(String, Vec<u64>)>, MemoryError> {
+        let mut statement = transaction
+            .prepare("SELECT branch, numbers FROM promotion_batches WHERE project_id=?1")?;
+        let rows = statement
+            .query_map([id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(branch, data)| {
+                serde_json::from_str(&data)
+                    .map(|numbers| (branch, numbers))
+                    .map_err(|error| MemoryError::InvalidState(error.to_string()))
+            })
+            .collect()
+    };
+    let mut joined: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+    for (branch, numbers) in read(moving)? {
+        joined.entry(branch).or_default().extend(numbers);
+    }
+    for (branch, numbers) in read(into)? {
+        joined.entry(branch).or_default().extend(
+            numbers
+                .into_iter()
+                .map(|number| renumbered.get(&number).copied().unwrap_or(number)),
+        );
+    }
+    transaction.execute(
+        "DELETE FROM promotion_batches WHERE project_id IN (?1,?2)",
+        params![moving, into],
+    )?;
+    let mut dropped = Vec::new();
+    for (branch, numbers) in joined {
+        let mut kept: Vec<u64> = Vec::new();
+        for number in numbers {
+            if kept.contains(&number) {
+                continue;
+            }
+            if kept.len() < crate::PROMOTION_BATCH_LIMIT {
+                kept.push(number);
+            } else {
+                dropped.push(number);
+            }
+        }
+        let data = serde_json::to_string(&kept)
+            .map_err(|error| MemoryError::InvalidState(error.to_string()))?;
+        transaction.execute(
+            "INSERT INTO promotion_batches(branch,project_id,numbers) VALUES(?1,?2,?3)",
+            params![branch, into, data],
+        )?;
+    }
+    Ok(dropped)
 }
 
 #[derive(Debug)]
@@ -9180,9 +9274,11 @@ PRAGMA user_version=14;"#,
             (moved[0].from.as_str(), moved[0].to.as_str()),
             (project.as_str(), leftover.as_str())
         );
-        let merged = moved[0].merged.clone().expect("folded");
-        assert_eq!(merged["memory_items"], 2);
-        assert_eq!(merged["receipt_cursors"], 3 - 1);
+        let folded = moved[0].merged.clone().expect("folded");
+        assert_eq!(folded.rows["memory_items"], 2);
+        assert_eq!(folded.rows["receipt_cursors"], 3 - 1);
+        // Both Projects had an m1; the leftover's is m2 now, and the map says so.
+        assert_eq!(folded.renumbered, BTreeMap::from([(1, 2)]));
 
         // One Project remains, with the moving one's choices and key.
         let rows: Vec<(String, String, bool)> = store
@@ -9230,6 +9326,96 @@ PRAGMA user_version=14;"#,
                 .is_empty()
         );
         assert_eq!(card_numbers(&store, &leftover), vec![1, 2]);
+    }
+
+    #[test]
+    fn a_leftover_promotion_batch_follows_its_cards_to_their_new_numbers() {
+        let (temp, mut store, project) = store();
+        let into = hide_project::project_id("node-a", temp.path());
+        store
+            .apply_candidates(
+                &batch(&project, "b-moving", "h-moving"),
+                &[candidate(
+                    "Keep the retry budget small",
+                    CandidateRelation::New,
+                )],
+            )
+            .unwrap();
+        store.ensure_project(&into, temp.path(), "node-a").unwrap();
+        store.set_enabled(&into, true, true).unwrap();
+        let texts = [
+            "alpha rule",
+            "bravo rule",
+            "charlie rule",
+            "delta rule",
+            "echo rule",
+        ];
+        store
+            .apply_candidates(
+                &batch(&into, "b-leftover", "h-leftover"),
+                &texts
+                    .iter()
+                    .map(|text| candidate(text, CandidateRelation::New))
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        let running = |attempt: u32| Promotion {
+            state: PromotionState::Running,
+            revision: 1,
+            attempt,
+            agent_id: Some("fixture-agent".into()),
+            branch: Some("shared".into()),
+            pr_number: None,
+            repository: None,
+            target_path: None,
+            started_at_unix_ms: 100,
+            updated_at_unix_ms: 100,
+            failure: None,
+            building_branch: None,
+        };
+        let all: Vec<(u64, Promotion)> = (1..=5).map(|number| (number, running(1))).collect();
+        store.set_promotion_batch(&into, "shared", &all).unwrap();
+        // The fifth card's attempt ended, so it can be tried again.
+        store
+            .set_promotion(
+                &into,
+                5,
+                &Promotion {
+                    state: PromotionState::Failed,
+                    ..running(1)
+                },
+            )
+            .unwrap();
+        store.set_enabled(&into, false, false).unwrap();
+
+        let moved = store.convert_device_merging("local", "node-a").unwrap();
+        let folded = moved[0].merged.clone().unwrap();
+        assert_eq!(
+            folded.renumbered,
+            BTreeMap::from([(1, 2), (2, 3), (3, 4), (4, 5), (5, 6)])
+        );
+        assert!(folded.batch_dropped.is_empty());
+        assert_eq!(
+            store.promotion_batch(&into, "shared").unwrap(),
+            Some(vec![2, 3, 4, 5, 6]),
+            "the batch names the cards by the numbers they have now"
+        );
+        let promoted: Vec<u64> = store
+            .promotions(&into)
+            .unwrap()
+            .into_iter()
+            .map(|(number, _)| number)
+            .collect();
+        assert_eq!(promoted, vec![2, 3, 4, 5, 6]);
+        // The failed card is tried again on its branch: the batch holds it
+        // already, so it is not a sixth.
+        store
+            .set_promotion_batch(&into, "shared", &[(6, running(2))])
+            .unwrap();
+        assert_eq!(
+            store.promotion_batch(&into, "shared").unwrap(),
+            Some(vec![2, 3, 4, 5, 6])
+        );
     }
 
     #[test]
