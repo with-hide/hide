@@ -1686,9 +1686,19 @@ impl Runtime {
                                     && tab.id.as_deref().is_some_and(|id| !has_tab(id))
                             })
                         });
+                        // On startup a coordinator's first catalog can be
+                        // empty. Its later first checkout restores the saved
+                        // group before navigator focus has a checkout yet.
+                        // Only that unchosen, request-free start may replace
+                        // the temporary Herdr keyboard here.
+                        let restoring_without_focus = restored_agent_tab.is_some()
+                            && self.snapshot.navigator.focused_checkout_id.is_none()
+                            && self.snapshot.ui_state.focused_checkout_id.is_none()
+                            && !outstanding;
                         if selected_waiting
-                            && self.snapshot.navigator.focused_checkout_id.as_deref()
+                            && (self.snapshot.navigator.focused_checkout_id.as_deref()
                                 == Some(&checkout.id)
+                                || restoring_without_focus)
                         {
                             follow_pane = checkout
                                 .tabs
@@ -2895,7 +2905,19 @@ impl Runtime {
                         || (focused_checkout.is_none()
                             && self.snapshot.ui_state.focused_checkout_id.is_some()));
                 let mut selection_changed = false;
-                if selected_pane_retired && !draft_surface {
+                if draft_surface {
+                    // The first session can have Herdr's keyboard before
+                    // path facts discover its checkout. A restored draft or
+                    // empty group clears that fallback too, or alignment
+                    // below would reveal the old pane's group again.
+                    if self.snapshot.terminal.pane_id.is_some()
+                        || self.snapshot.ui_state.selected_pane_id.is_some()
+                    {
+                        self.select_terminal_pane(None);
+                        self.operator_focused_pane_id = None;
+                        selection_changed = true;
+                    }
+                } else if selected_pane_retired {
                     let retired_pane_id = selected_pane_id.as_deref().unwrap_or("<missing>");
                     self.fail_pending_pane_focus_for_target(
                         retired_pane_id,

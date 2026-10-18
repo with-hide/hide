@@ -1157,34 +1157,64 @@ fn moving_a_root_prunes_only_its_old_groups_child_canvas_and_reveals_the_child_i
 }
 
 #[test]
-fn restored_draft_keeps_its_group_when_the_first_session_has_old_keyboard_focus() {
-    let (_folder, state) = views_path("group-first-session");
-    let (initial, checkout) = tab_order_runtime(PATH);
-    let mut initial = with_views(initial, &state);
-    ingest(&mut initial, &TABS);
-    let target = create(&mut initial, "restart-group", "문서 검토");
-    group(
-        &mut initial,
-        "restart-draft",
-        json!({"action":"new_tab","group_id":target}),
-    );
-    let draft = tabs(&initial, Some(&target))[0].clone();
-    let registrations = initial.snapshot.ui_state.workspace_registrations.clone();
-    drop(initial);
+fn restored_draft_keeps_its_group_without_a_saved_checkout_or_pane() {
+    restored_group_without_saved_focus(true);
+}
 
+#[test]
+fn restored_live_group_replaces_the_initial_ungrouped_keyboard() {
+    restored_group_without_saved_focus(false);
+}
+
+fn restored_group_without_saved_focus(draft: bool) {
+    let (folder, state) = views_path("group-first-session");
+    let path = folder.path().join("checkout");
+    fs::create_dir(&path).unwrap();
+    let path = path.to_string_lossy().into_owned();
+    let mut stored = WorkspaceViewStore::open(state.clone(), (false, RightPanelSection::Changes)).0;
+    let saved_path = fs::canonicalize(&path)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let view = stored.views.entry(crate::node::TEST_NODE, &saved_path);
+    view.last_used_unix_ms = 1;
+    view.reconcile_agent_groups(
+        &TABS
+            .iter()
+            .map(|id| ((*id).to_owned(), false))
+            .collect::<Vec<_>>(),
+        0,
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .unwrap();
+    let target = view.create_agent_group("문서 검토").unwrap();
+    let active = if draft {
+        view.create_agent_draft("a1", 1).unwrap()
+    } else {
+        view.move_agent_to_group(TABS[1], Some(&target), 1).unwrap();
+        TABS[1].to_owned()
+    };
+    crate::workspace_views::save(&state, &stored.views).unwrap();
     let mut restored = runtime();
-    restored.snapshot.ui_state.workspace_registrations = registrations;
-    restored.snapshot.ui_state.focused_checkout_id = Some(checkout.clone());
-    restored.snapshot.ui_state.selected_pane_id = Some("w-order:t1:p".into());
-    restored.snapshot.navigator.focused_checkout_id = Some(checkout.clone());
     restored.workspace_views =
         Some(WorkspaceViewStore::open(state, (false, RightPanelSection::Changes)).0);
     restored.rebuild_catalog();
     restored.sync_workspace_view();
     restored.catalog_paths = Default::default();
     restored.begin_catalog_coordinator();
-    let payload = tab_order_payload(PATH, &TABS, &TABS, TABS[0]);
-    restored.ingest_session(Ok(payload.clone()));
+    let payload = tab_order_payload(&path, &TABS, &TABS, TABS[0]);
+    // The coordinator excludes unknown cwds before building its first catalog.
+    // The saved group belongs to the canonical path discovered in the next answer.
+    restored.ingest_session_with_catalog(
+        Ok(payload.clone()),
+        Some(session_sync::PrecomputedCatalog {
+            registrations: Vec::new(),
+            worktrees: restored.worktree_catalog(),
+            workspaces: Vec::new(),
+            paths: Default::default(),
+        }),
+    );
     restored.sync_workspace_view();
     assert_eq!(
         restored
@@ -1192,7 +1222,7 @@ fn restored_draft_keeps_its_group_when_the_first_session_has_old_keyboard_focus(
             .as_ref()
             .unwrap()
             .views
-            .get(crate::node::TEST_NODE, PATH)
+            .get(crate::node::TEST_NODE, &saved_path)
             .unwrap()
             .agent_groups
             .selected
@@ -1200,7 +1230,7 @@ fn restored_draft_keeps_its_group_when_the_first_session_has_old_keyboard_focus(
         Some(target.as_str()),
         "before path facts"
     );
-    let paths = restored.ask_paths(BTreeSet::from([PATH.to_owned()]));
+    let paths = restored.ask_paths(BTreeSet::from([path.clone()]));
     let spaces = Runtime::session_spaces(&payload, &paths);
     let catalog = session_sync::PrecomputedCatalog {
         registrations: restored.snapshot.ui_state.workspace_registrations.clone(),
@@ -1221,18 +1251,26 @@ fn restored_draft_keeps_its_group_when_the_first_session_has_old_keyboard_focus(
         Some(target.as_str()),
         "first session"
     );
+    let (workspace, checkout) = restored.front_checkout_owned().unwrap();
     dispatch(
         &mut restored,
         "focus_checkout",
-        json!({"workspace_id":"workspace:order","checkout_id":checkout}),
+        json!({"workspace_id":workspace,"checkout_id":checkout}),
     );
     assert_eq!(
         published(&restored).group_id.as_deref(),
         Some(target.as_str()),
         "opening the project"
     );
-    assert_eq!(tabs(&restored, Some(&target)), [draft]);
-    assert!(restored.snapshot().terminal.pane_id.is_none());
+    assert_eq!(tabs(&restored, Some(&target)), [active]);
+    if draft {
+        assert!(restored.snapshot().terminal.pane_id.is_none());
+    } else {
+        assert_eq!(
+            restored.snapshot().terminal.pane_id.as_deref(),
+            Some("w-order:t2:p")
+        );
+    }
 }
 
 #[test]
