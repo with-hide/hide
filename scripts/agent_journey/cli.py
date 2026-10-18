@@ -763,7 +763,7 @@ def main(argv=None):
             if (not local or fake) and causes.is_file() and not causes.is_symlink():
                 with open(causes, "rb") as stream:
                     write_private(run / "delivery-diagnostics.json", ci.redact(stream.read(64 * 1024)))
-        if local:
+        if local and not fake:
             # Before the cleanup, which removes the trust the candidate recorded with its worktrees.
             check_operator_trust(report, operator, run, "during")
         try:
@@ -807,7 +807,7 @@ def main(argv=None):
                 report["configuration"] = guard.finish()
             except Exception as error:
                 report["configuration"] = {"failures": [{"reason": str(error)}]}
-        if local:
+        if local and not fake:
             check_operator_trust(report, operator, run, "after")
         if watch:
             try:
