@@ -934,6 +934,8 @@ It answers through hided's own core without a renderer, scoped by default to the
 The link store's version 2 adds the session work ledger, keyed by device, agent kind and native session id.
 Version 3 retains one immutable nullable original project and repository for each retained session, including descendants.
 An observed connection can identify only a session that started after that connection was known; first discoveries of older history and records migrated from versions 1 or 2 keep unknown repository identity.
+The original project is the deepest connected project root or recorded worktree on the session's own device whose folder holds its cwd, chosen by one SQLite query (`capture_session_origin`).
+The record keeps every worktree a project has had, so their number never bounds that choice: loading them all to choose in Rust, behind a 512-row refusal (`ledger_project_capacity`), stopped recording every new session on a machine that had made 572 task worktrees, and each record opened then read as failed.
 The writer resets its connection observation window on restart, and an accepted repository edit advances that project's window even when changes return to the same repository before the worker observes them.
 The save acknowledgement posts the new connection epoch to the writer for both local and device Projects, with an unknown repository until its new provider read answers.
 A retained cursor's same session identity cannot certify a new birth when the native file is replaced or truncated.
