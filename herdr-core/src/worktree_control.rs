@@ -1098,7 +1098,7 @@ fn start_task_agent(
         Err(reason) => TaskAgentOutcome::Failed(reason),
         Ok(reader) => {
             let expected = start.clone();
-            let current_start = || {
+            let current_intent = || -> Result<Option<crate::start_claim::BoundPane>, String> {
                 current()?;
                 let guard = runtime.lock().map_err(|_| "runtime unavailable")?;
                 if !guard.task_session_control_is_current(id, connector, generation)
@@ -1109,11 +1109,33 @@ fn start_task_agent(
                 if guard.pending_task_agent_start(id).as_ref() != Some(&expected) {
                     return Err("session_resume_intent_changed".into());
                 }
+                let binding = guard.group_start_binding(id)?;
                 drop(guard);
                 if let Some(reader) = reader.as_ref()
                     && !Arc::ptr_eq(&task_session_node(&runtime, id, &expected.kind)?, reader)
                 {
                     return Err("session_resume_intent_changed".into());
+                }
+                Ok(binding)
+            };
+            let current_start = || {
+                if let Some(binding) = current_intent()? {
+                    let node = pane_node.as_ref().ok_or_else(|| {
+                        "The terminal's device is unavailable. Reconnect and check this start's status.".to_owned()
+                    })?;
+                    let actual: hide_node_link::panes::PaneIdentity = crate::node_access::call_as(
+                        node.as_ref(),
+                        hide_node_link::protocol::Call::PaneInspect { pane_id: binding.pane_id.clone() },
+                        Duration::from_secs(5),
+                    ).map_err(|_| "The original terminal identity could not be checked. Reconnect and check this start's status.".to_owned())?;
+                    if binding.pane_id != expected.pane_id || actual != binding.identity {
+                        return Err("The original terminal changed. Inspect its tab before starting another agent.".into());
+                    }
+                    if current_intent()? != Some(binding)
+                        || !Arc::ptr_eq(&task_session_node(&runtime, id, &expected.kind)?, node)
+                    {
+                        return Err("session_resume_intent_changed".into());
+                    }
                 }
                 Ok(())
             };

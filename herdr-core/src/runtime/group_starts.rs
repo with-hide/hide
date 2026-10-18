@@ -587,6 +587,29 @@ impl Runtime {
             .is_some_and(|start| start.add_pane)
     }
 
+    /// The immutable creation proof a dependent agent launch must recheck.
+    /// Ordinary task starts have no group receipt and retain their own policy.
+    pub(crate) fn group_start_binding(
+        &self,
+        task: u64,
+    ) -> Result<Option<crate::start_claim::BoundPane>, String> {
+        let Some(active) = self
+            .group_start
+            .as_ref()
+            .filter(|active| active.task == task)
+        else {
+            return Ok(None);
+        };
+        self.workspace_views
+            .as_ref()
+            .and_then(|store| store.views.get(&active.workspace.0, &active.workspace.1))
+            .and_then(|view| view.agent_starts.get(&active.key))
+            .and_then(|start| start.effect.as_ref())
+            .and_then(|effect| effect.binding.clone())
+            .map(Some)
+            .ok_or_else(|| "The original terminal identity is not confirmed. Check this start's status before starting its agent.".into())
+    }
+
     pub(crate) fn group_start_target_is_current(&self, task: u64) -> bool {
         let Some(active) = self
             .group_start
