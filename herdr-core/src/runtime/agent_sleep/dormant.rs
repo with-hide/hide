@@ -6,7 +6,7 @@ use crate::agent_sleep::{
 };
 
 /// How long a woken Factory worker may wait for the Factory to bind its pane.
-const WOKEN_BINDING_LIMIT_MS: u64 = 60 * 60 * 1000;
+pub(in crate::runtime) const WOKEN_BINDING_LIMIT_MS: u64 = 60 * 60 * 1000;
 
 /// What a sleeping session an older build saved, which names no owner, asks
 /// of the operator while the project list does not show its checkout.
@@ -1336,7 +1336,7 @@ impl Runtime {
         }
     }
 
-    fn release_dormant_hold(&mut self, id: &str) {
+    pub(in crate::runtime) fn release_dormant_hold(&mut self, id: &str) {
         let gone = self
             .delivery_ledger
             .as_ref()

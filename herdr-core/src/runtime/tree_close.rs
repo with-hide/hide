@@ -725,7 +725,13 @@ impl Runtime {
                     .filter(|node| node.state == NodeState::Closed)
                     .map(|node| node.id.clone())
                     .collect::<HashSet<_>>();
-                self.finish_archive_close(id, &closed);
+                // The first node that failed on its own says why; an ancestor
+                // that never started only waited on it.
+                let cause = tree.nodes.iter().find_map(|node| match node.state {
+                    NodeState::Failed(reason) if reason != "descendant_open" => Some(reason),
+                    _ => None,
+                });
+                self.finish_archive_close(id, &closed, cause);
             }
             TreeFinal::Close => {
                 if failed > 0 {

@@ -15,7 +15,6 @@ export const archiveEnglish = {
   "archive.archiving": "Archiving…",
   "archive.deleting": "Deleting…",
   "archive.unknown": "State unknown",
-  "archive.closeFailed": "Not archived",
   "archive.resume": "Resume",
   "archive.resuming": "Resuming…",
   "archive.resumeFailed": "Could not resume",
@@ -25,7 +24,7 @@ export const archiveEnglish = {
   "archive.delete.action": "Delete from archive",
   "archive.delete.keep": "Keep",
   "archive.notice.full": "The archive is full. Delete archived sessions first; nothing was closed.",
-  "archive.notice.incomplete": "Some agents could not be closed, so the session was not archived. Choose Archive session again to retry.",
+  "archive.notice.incomplete": "An agent refused to close, so the session was not archived. Choose Archive session again to retry.",
   "archive.notice.saveFailed": "The archive could not be saved, so nothing was closed.",
   "archive.notice.deleteFailed": "The archived session could not be deleted; it stays in the archive.",
   "archive.notice.disconnected": "That device is not connected; try again once it reconnects.",
@@ -33,6 +32,12 @@ export const archiveEnglish = {
   "archive.notice.statusUnknown": "An agent's activity is unknown. Check its status, then archive again.",
   "archive.notice.busy": "Other closes are still running. Archive again once they finish.",
   "archive.notice.gone": "That session is no longer open; nothing was archived.",
+  "archive.notice.incompleteTimeout": "An agent did not close in time, so the session was not archived. Choose Archive session again to retry.",
+  "archive.notice.incompleteDisconnected": "A device disconnected while its agents closed, so the session was not archived. Choose Archive session again once it reconnects.",
+  "archive.notice.confirm": "An agent started working. Choose Archive session again to stop it and archive.",
+  "archive.notice.delegated": "A delegated session is archived with its root session.",
+  "archive.notice.notOffered": "This session belongs to Hide AI or a Factory, so it can't be archived.",
+  "archive.notice.tooMany": "A session with more than 64 agents can't be archived at once; nothing was closed.",
 } as const;
 
 type Messages = Catalog<typeof archiveEnglish>;
@@ -50,7 +55,6 @@ const ko: Messages = {
   "archive.archiving": "보관하는 중…",
   "archive.deleting": "지우는 중…",
   "archive.unknown": "상태 모름",
-  "archive.closeFailed": "보관 안 됨",
   "archive.resume": "이어가기",
   "archive.resuming": "이어가는 중…",
   "archive.resumeFailed": "이어가지 못함",
@@ -60,7 +64,7 @@ const ko: Messages = {
   "archive.delete.action": "보관함에서 지우기",
   "archive.delete.keep": "남겨두기",
   "archive.notice.full": "보관함이 가득 찼어요. 보관된 세션을 먼저 지워 주세요. 아무것도 닫지 않았어요.",
-  "archive.notice.incomplete": "닫지 못한 에이전트가 있어 보관하지 않았어요. 세션 보관을 다시 눌러 이어서 하세요.",
+  "archive.notice.incomplete": "닫기를 거부한 에이전트가 있어 보관하지 않았어요. 세션 보관을 다시 눌러 이어서 하세요.",
   "archive.notice.saveFailed": "보관 기록을 저장하지 못해 아무것도 닫지 않았어요.",
   "archive.notice.deleteFailed": "보관된 세션을 지우지 못했어요. 보관함에 그대로 있어요.",
   "archive.notice.disconnected": "그 기기가 연결되어 있지 않아요. 다시 연결되면 해 주세요.",
@@ -68,6 +72,12 @@ const ko: Messages = {
   "archive.notice.statusUnknown": "에이전트의 상태를 몰라요. 상태를 확인한 뒤 다시 보관해 주세요.",
   "archive.notice.busy": "다른 닫기가 아직 진행 중이에요. 끝나면 다시 보관해 주세요.",
   "archive.notice.gone": "그 세션은 이미 닫혀서 보관하지 않았어요.",
+  "archive.notice.incompleteTimeout": "제때 닫히지 않은 에이전트가 있어 보관하지 않았어요. 세션 보관을 다시 눌러 이어서 하세요.",
+  "archive.notice.incompleteDisconnected": "닫는 중에 기기 연결이 끊겨 보관하지 않았어요. 다시 연결되면 세션 보관을 다시 눌러 주세요.",
+  "archive.notice.confirm": "에이전트가 일을 시작했어요. 멈추고 보관하려면 세션 보관을 다시 눌러 주세요.",
+  "archive.notice.delegated": "맡긴 세션은 루트 세션과 함께 보관돼요.",
+  "archive.notice.notOffered": "Hide AI나 Factory의 세션이라 보관할 수 없어요.",
+  "archive.notice.tooMany": "에이전트가 64명을 넘는 세션은 한 번에 보관할 수 없어요. 아무것도 닫지 않았어요.",
 };
 
 const zh: Messages = {
@@ -83,7 +93,6 @@ const zh: Messages = {
   "archive.archiving": "正在归档…",
   "archive.deleting": "正在删除…",
   "archive.unknown": "状态未知",
-  "archive.closeFailed": "未归档",
   "archive.resume": "继续",
   "archive.resuming": "正在继续…",
   "archive.resumeFailed": "无法继续",
@@ -93,7 +102,7 @@ const zh: Messages = {
   "archive.delete.action": "从归档中删除",
   "archive.delete.keep": "保留",
   "archive.notice.full": "归档已满。请先删除已归档的会话；没有关闭任何内容。",
-  "archive.notice.incomplete": "有智能体无法关闭，所以没有归档该会话。再次选择归档会话即可重试。",
+  "archive.notice.incomplete": "有智能体拒绝关闭，所以没有归档该会话。再次选择归档会话即可重试。",
   "archive.notice.saveFailed": "无法保存归档，所以没有关闭任何内容。",
   "archive.notice.deleteFailed": "无法删除已归档的会话；它仍在归档中。",
   "archive.notice.disconnected": "该设备未连接；重新连接后再试。",
@@ -101,6 +110,12 @@ const zh: Messages = {
   "archive.notice.statusUnknown": "有智能体的活动状态未知。请先检查状态，再重新归档。",
   "archive.notice.busy": "其他关闭操作仍在进行。完成后再归档。",
   "archive.notice.gone": "该会话已不再打开；没有归档任何内容。",
+  "archive.notice.incompleteTimeout": "有智能体没有按时关闭，所以没有归档该会话。再次选择归档会话即可重试。",
+  "archive.notice.incompleteDisconnected": "关闭时设备断开了连接，所以没有归档该会话。重新连接后再次选择归档会话。",
+  "archive.notice.confirm": "有智能体开始工作了。再次选择归档会话即可停止并归档。",
+  "archive.notice.delegated": "委派的会话会随根会话一起归档。",
+  "archive.notice.notOffered": "该会话属于 Hide AI 或 Factory，无法归档。",
+  "archive.notice.tooMany": "超过 64 个智能体的会话无法一次归档；没有关闭任何内容。",
 };
 
 const ja: Messages = {
@@ -116,7 +131,6 @@ const ja: Messages = {
   "archive.archiving": "アーカイブ中…",
   "archive.deleting": "削除中…",
   "archive.unknown": "状態不明",
-  "archive.closeFailed": "アーカイブされていません",
   "archive.resume": "再開",
   "archive.resuming": "再開中…",
   "archive.resumeFailed": "再開できませんでした",
@@ -126,7 +140,7 @@ const ja: Messages = {
   "archive.delete.action": "アーカイブから削除",
   "archive.delete.keep": "残す",
   "archive.notice.full": "アーカイブがいっぱいです。先にアーカイブ済みのセッションを削除してください。何も閉じていません。",
-  "archive.notice.incomplete": "閉じられないエージェントがあったため、アーカイブしませんでした。もう一度セッションをアーカイブして再試行してください。",
+  "archive.notice.incomplete": "クローズを拒否したエージェントがあったため、アーカイブしませんでした。もう一度セッションをアーカイブして再試行してください。",
   "archive.notice.saveFailed": "アーカイブを保存できなかったため、何も閉じていません。",
   "archive.notice.deleteFailed": "アーカイブ済みのセッションを削除できませんでした。アーカイブに残っています。",
   "archive.notice.disconnected": "そのデバイスは接続されていません。再接続後にもう一度お試しください。",
@@ -134,6 +148,12 @@ const ja: Messages = {
   "archive.notice.statusUnknown": "エージェントの状態が不明です。状態を確認してから、もう一度アーカイブしてください。",
   "archive.notice.busy": "ほかのクローズがまだ実行中です。終わってからもう一度アーカイブしてください。",
   "archive.notice.gone": "そのセッションはもう開いていないため、アーカイブしませんでした。",
+  "archive.notice.incompleteTimeout": "時間内に閉じなかったエージェントがあったため、アーカイブしませんでした。もう一度セッションをアーカイブして再試行してください。",
+  "archive.notice.incompleteDisconnected": "クローズ中にデバイスの接続が切れたため、アーカイブしませんでした。再接続後にもう一度セッションをアーカイブしてください。",
+  "archive.notice.confirm": "エージェントが作業を始めました。止めてアーカイブするには、もう一度セッションをアーカイブしてください。",
+  "archive.notice.delegated": "委任したセッションはルートセッションと一緒にアーカイブされます。",
+  "archive.notice.notOffered": "Hide AI または Factory のセッションのため、アーカイブできません。",
+  "archive.notice.tooMany": "64 を超えるエージェントのセッションは一度にアーカイブできません。何も閉じていません。",
 };
 
 export const archiveCatalogs = { en: archiveEnglish, ko, "zh-CN": zh, ja } satisfies Catalogs<typeof archiveEnglish>;

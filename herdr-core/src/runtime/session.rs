@@ -3868,9 +3868,8 @@ impl Runtime {
         // follows its host; this machine's focus does not move for it.
         // An archived descendant resumed after its root opens behind it
         // (PRD session-archive B21, B23).
-        let should_focus = operation_kind != "branch_migrate"
-            && device.is_none()
-            && !self.task_stays_behind.remove(&id);
+        let behind = self.task_stays_behind.remove(&id);
+        let should_focus = operation_kind != "branch_migrate" && device.is_none() && !behind;
         match result {
             Ok(outcome) => {
                 let live::WorktreeTaskOutcome {

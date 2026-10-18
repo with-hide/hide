@@ -172,7 +172,7 @@ function RecordPlace({ record, actions }: { record: RecordValue; actions: Action
       {[device, place?.project.label ?? null].filter(Boolean).join(" · ")}
       {checkouts.map((checkout) => <span key={checkout.id} className={cn("inline-flex min-w-0 items-center gap-xxs", !checkout.exists && "text-muted-foreground/70")} data-record-checkout={checkout.id} data-removed={checkout.exists ? undefined : "true"}>· <HouseIcon aria-hidden="true" className="size-(--size-icon-sm)" /><span className="truncate">{checkout.exists ? checkout.label : t("record.worktreeGone", { label: checkout.label })}</span></span>)}
     </p>
-    {archived ? <ArchivedNow row={archived.row} member={archived.row.members[archived.index]!} connected={deviceConnected(rest, archived.row.device_id)} actions={actions} />
+    {archived ? <ArchivedNow row={archived.row} member={archived.row.members[archived.index]!} own={archived.index > 0} connected={deviceConnected(rest, archived.row.device_id)} actions={actions} />
       : root || place?.agent || record.ended_at_unix_ms !== null ? <NowBox record={record} agent={place?.agent ?? null} line={root ? cardLine(root, rows) : null} question={root ? cardQuestion(root, rows) : null} actions={actions} /> : null}
     {left ? <ArchivedChildren row={left.row} members={left.members} connected={deviceConnected(rest, left.row.device_id)} actions={actions} /> : null}
   </>;
@@ -221,17 +221,19 @@ function NowBox({ record, agent, line, question, actions }: { record: RecordValu
  * not, 상태 확인 when Hide cannot say. A device that is gone dims it and
  * waits for the device.
  */
-function ArchivedNow({ row, member, connected, actions }: { row: ArchivedSession; member: ArchivedMember; connected: boolean; actions: Actions }) {
+function ArchivedNow({ row, member, own, connected, actions }: { row: ArchivedSession; member: ArchivedMember; own: boolean; connected: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const resuming = row.members.some((one) => one.resume === "queued" || one.resume === "starting");
-  const failed = member.resume === "failed" ? member : row.members.find((one) => one.resume === "failed") ?? null;
+  // A child's own record speaks for that child; the root's for the whole session.
+  const mine = own ? [member] : row.members;
+  const resuming = mine.some((one) => one.resume === "queued" || one.resume === "starting");
+  const failed = mine.find((one) => one.resume === "failed") ?? null;
   const unknown = row.phase === "unknown" || member.resume === "unknown";
   const busy = row.phase === "archiving" || row.phase === "deleting";
   const word = row.phase === "deleting" ? t("archive.deleting") : row.phase === "archiving" ? t("archive.archiving") : unknown ? t("archive.unknown") : resuming ? t("archive.resuming") : failed ? t("archive.resumeFailed") : t("archive.state");
   const button = unknown ? (
     <Button size="sm" variant="secondary" disabled={!connected} onClick={() => actions.checkArchived(row.id)} data-record-now-button="check">{t("workspace.checkStatus")}</Button>
   ) : (
-    <Button size="sm" disabled={!connected || resuming || busy} onClick={() => actions.resumeArchived(row.id)} data-record-now-button="resume">
+    <Button size="sm" disabled={!connected || resuming || busy} onClick={() => actions.resumeArchived(row.id, own ? member.session.session_id : undefined)} data-record-now-button="resume">
       {resuming ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : null}{resuming ? t("archive.resuming") : t("archive.resume")}
     </Button>
   );

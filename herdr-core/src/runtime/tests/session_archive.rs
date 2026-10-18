@@ -456,3 +456,156 @@ fn an_archived_childs_registration_is_held_and_passes_to_the_pane_it_resumes_in(
     assert_eq!(rebinds["agent-2"].to.pane_id, "w1:p8");
     assert_eq!(rebinds["agent-2"].to.name, "reviewer");
 }
+
+/// B10, B24: a refused close archives what did close, says why, and keeps
+/// the rest open; those members show in the live root's record and stand in
+/// 보관됨 once that root is gone some other way.
+#[test]
+fn a_partial_close_keeps_what_closed_and_lists_it_once_the_root_is_gone() {
+    let mut runtime = archive_runtime(&[]);
+    archive(&mut runtime, "w1:p1", false);
+    let key = runtime
+        .close_operations
+        .iter()
+        .find(|(_, operation)| operation.target_id == "w1:p3")
+        .map(|(key, _)| key.clone())
+        .unwrap();
+    runtime.fail_close_operation(&key, "refused by Herdr".to_owned());
+    runtime.tick_async_operations(unix_milliseconds());
+    // The panes that stay open keep reporting their conversations.
+    ingest(&mut runtime, &["w1:p1", "w1:p2", "w1:p3", "w1:p4"], &[]);
+    ingest(&mut runtime, &["w1:p1", "w1:p2", "w1:p3"], &[]);
+    runtime.advance_session_archive();
+    let (id, held) = record(&runtime).expect("the partial archive");
+    assert_eq!(held.phase, ArchivePhase::CloseFailed);
+    assert_eq!(error_kind(&runtime).as_deref(), Some("archive.incomplete"));
+    let mut closed = held
+        .members
+        .iter()
+        .filter(|member| member.closed)
+        .map(|member| member.pane_id.as_str())
+        .collect::<Vec<_>>();
+    closed.sort();
+    assert_eq!(closed, ["w1:p4", "w5:p5"]);
+    let row = &runtime.snapshot.navigator.archived_sessions[0];
+    assert!(!row.listed, "shown in the live root's record");
+    assert_eq!(row.members.len(), 2, "only what closed is archived");
+
+    // 상태 확인 answers only what a restart left unknown.
+    send(
+        &mut runtime,
+        "archive_check",
+        serde_json::json!({"archive_id": id}),
+    );
+    assert_eq!(record(&runtime).unwrap().1.phase, ArchivePhase::CloseFailed);
+
+    // A retry whose save fails leaves the record as it was: the open root
+    // at its head and what closed before, still one tree that loads back.
+    let saved_path = runtime.state_path.clone();
+    let blocker = scratch_dir("herdr-core-archive-retry-unsaved-");
+    let file = blocker.path().join("file");
+    std::fs::write(&file, "").unwrap();
+    runtime.state_path = file.join("core-state.json");
+    archive(&mut runtime, "w1:p1", false);
+    runtime.state_path = saved_path;
+    let (_, kept) = record(&runtime).expect("the partial archive stays");
+    assert_eq!(kept.phase, ArchivePhase::CloseFailed);
+    assert_eq!(kept.members[0].pane_id, "w1:p1");
+    assert_eq!(
+        kept.members.iter().filter(|member| member.closed).count(),
+        2
+    );
+    let stored = serde_json::to_value(&runtime.snapshot.ui_state.session_archive).unwrap();
+    let loaded: crate::session_archive::SessionArchive = serde_json::from_value(stored).unwrap();
+    assert_eq!(loaded.records.len(), 1, "the record still loads");
+
+    // The root closes some other way: the record is no longer hidden.
+    leave(&mut runtime, &[]);
+    runtime.advance_session_archive();
+    assert!(runtime.snapshot.navigator.archived_sessions[0].listed);
+}
+
+/// B34: a close a restart left unknown is settled only from a fresh read of
+/// a machine Hide can reach; before that, every pane would look closed.
+#[test]
+fn a_status_check_waits_for_a_fresh_read_before_it_calls_a_pane_closed() {
+    use super::agent_sleep::delivery_panes;
+    let (mut runtime, id) = archived_tree();
+    let parsed = crate::session_archive::ArchiveId::parse(&id).unwrap();
+    runtime
+        .snapshot
+        .ui_state
+        .session_archive
+        .records
+        .get_mut(&parsed)
+        .unwrap()
+        .phase = ArchivePhase::CloseUnknown;
+    send(
+        &mut runtime,
+        "archive_check",
+        serde_json::json!({"archive_id": id}),
+    );
+    assert_eq!(
+        error_kind(&runtime).as_deref(),
+        Some("archive.device_disconnected")
+    );
+    assert_eq!(
+        record(&runtime).unwrap().1.phase,
+        ArchivePhase::CloseUnknown
+    );
+
+    let node = runtime.node.as_str().to_owned();
+    runtime.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::Ledger::default()));
+    runtime.observe_delivery(&node, &delivery_panes(Vec::new()), Some("scope"), None);
+    send(
+        &mut runtime,
+        "archive_check",
+        serde_json::json!({"archive_id": id}),
+    );
+    assert_eq!(record(&runtime).unwrap().1.phase, ArchivePhase::Archived);
+}
+
+/// A resumed child whose new pane closes before the delivery store sees it
+/// lets its registration go rather than holding it for a pane that is gone.
+#[test]
+fn a_resumed_childs_registration_is_released_when_its_new_pane_is_gone() {
+    use super::agent_sleep::delivery_panes;
+    let mut runtime = archive_runtime(&[]);
+    let node = with_registrations(&mut runtime);
+    archive(&mut runtime, "w1:p1", false);
+    leave(&mut runtime, &["w1:p1", "w1:p2", "w1:p4"]);
+    leave(&mut runtime, &["w1:p1"]);
+    leave(&mut runtime, &[]);
+    runtime.observe_delivery(&node, &delivery_panes(Vec::new()), Some("scope"), None);
+    let parsed = crate::session_archive::ArchiveId::parse(&record(&runtime).unwrap().0).unwrap();
+    {
+        let held = runtime
+            .snapshot
+            .ui_state
+            .session_archive
+            .records
+            .get_mut(&parsed)
+            .unwrap();
+        let child = held
+            .members
+            .iter_mut()
+            .find(|member| member.pane_id == "w1:p2")
+            .unwrap();
+        child.resume = Resume::Done {
+            pane_id: "w1:p8".into(),
+        };
+    }
+    runtime.advance_session_archive();
+    let (_, held) = record(&runtime).unwrap();
+    let child = held
+        .members
+        .iter()
+        .find(|member| member.pane_id == "w1:p2")
+        .unwrap();
+    assert!(child.registration.is_none());
+    assert!(
+        runtime
+            .delivery_registrations_gone()
+            .contains_key("agent-2")
+    );
+}

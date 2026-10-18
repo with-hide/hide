@@ -392,7 +392,7 @@ function ArchivedRow({ entry, showProject, disabled, actions }: { entry: Archive
   const parts = prMarkParts(row.members.flatMap((member) => member.pulls.map((pull) => ({ pull, state: pull.state }))));
   const items = (): MenuEntry<ArchivedMenuId>[] => [
     { id: "record", label: t("taskLens.menu.record"), unavailable: null, shortcut: "Space" },
-    { id: "resume", label: t("archive.resume"), unavailable: disabled || pending || away ? "" : null },
+    { id: "resume", label: t("archive.resume"), unavailable: disabled || pending || away || row.phase === "unknown" ? "" : null },
     ...(row.phase === "unknown" ? [{ id: "check" as const, label: t("workspace.checkStatus"), unavailable: disabled || away ? "" : null }] : []),
     { id: "delete", label: t("archive.menu.delete"), unavailable: disabled || pending ? "" : null, separated: true, destructive: true },
   ];

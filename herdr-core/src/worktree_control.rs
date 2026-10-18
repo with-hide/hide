@@ -920,6 +920,10 @@ pub struct CheckoutTabRequest {
     pub(crate) resume_reference: Option<crate::sidebar::SessionAgentSessionPayload>,
     /// Whether Herdr brings the new tab forward; false opens it behind.
     pub focus: bool,
+    /// The folder the tab's shell starts in: the checkout, or a folder inside
+    /// it where a resumed conversation ran, since a CLI may find its
+    /// conversations by folder.
+    pub cwd: String,
 }
 
 /// What the task's worker starts once the creation is settled: the pane, the
@@ -1507,7 +1511,7 @@ fn create_checkout_tab(
         crate::checkout_owner::TabHost::Workspace(workspace_id) => super::create_tab_in(
             connector,
             workspace_id,
-            &request.checkout_path,
+            &request.cwd,
             &request.label,
             request.focus,
             env,
@@ -1516,7 +1520,7 @@ fn create_checkout_tab(
         crate::checkout_owner::TabHost::Open(owner) => super::open_owner_tab(
             connector,
             owner,
-            &request.checkout_path,
+            &request.cwd,
             &request.label,
             request.focus,
             env,

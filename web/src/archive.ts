@@ -70,6 +70,18 @@ export function archiveNotice(kind: string, t: TFunction<"translation"> = transl
       return t("archive.notice.full");
     case "archive.incomplete":
       return t("archive.notice.incomplete");
+    case "archive.incomplete_timeout":
+      return t("archive.notice.incompleteTimeout");
+    case "archive.incomplete_disconnected":
+      return t("archive.notice.incompleteDisconnected");
+    case "archive.confirmation_required":
+      return t("archive.notice.confirm");
+    case "archive.delegated":
+      return t("archive.notice.delegated");
+    case "archive.not_offered":
+      return t("archive.notice.notOffered");
+    case "archive.too_many":
+      return t("archive.notice.tooMany");
     case "archive.save_failed":
       return t("archive.notice.saveFailed");
     case "archive.delete_failed":
@@ -85,6 +97,8 @@ export function archiveNotice(kind: string, t: TFunction<"translation"> = transl
       return t("archive.notice.busy");
     case "archive.target_unknown":
     case "archive.context_unavailable":
+    case "archive.unknown":
+    case "archive.identity":
       return t("archive.notice.gone");
     default:
       return null;

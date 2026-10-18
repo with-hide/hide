@@ -106,7 +106,7 @@ test("세션 보관 asks over running work, closes the tree into 보관됨, resu
     const resumedChild = await confirmResume(herdr, childSession);
     expect(resumedChild).not.toBe(resumedRoot);
     // Only the root takes the screen; its child opens behind it.
-    expect(herdrHasFocus(herdr, resumedRoot)).toBe(true);
+    await expect.poll(() => herdrHasFocus(herdr, resumedRoot)).toBe(true);
     await expect.poll(archive(daemon), { timeout: 60_000 }).toBe(0);
     await expect(tasks.locator("[data-archived-row]")).toHaveCount(0);
     await openTaskFolds(page);

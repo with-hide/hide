@@ -109,6 +109,15 @@ impl Runtime {
             .to_owned()
     }
 
+    /// The machine is reachable and its panes have been read since.
+    fn archive_machine_read(&self, machine: &str) -> bool {
+        self.archive_device_connected(machine)
+            && self
+                .delivery_panes
+                .get(machine)
+                .is_some_and(|read| read.panes.is_some())
+    }
+
     fn archive_device_connected(&self, device: &str) -> bool {
         device == self.node.as_str()
             || self
@@ -186,6 +195,17 @@ impl Runtime {
             {
                 tree.push((agent, Some(session.clone()), 1));
             }
+        }
+        // One subtree close carries the whole tree; a larger one is refused
+        // here, before anything is saved (B12).
+        if tree.len() > super::tree_close::TREE_CLOSE_PANE_LIMIT {
+            return Err((
+                "archive.too_many",
+                format!(
+                    "A session with more than {} agents cannot be archived at once; nothing was closed",
+                    super::tree_close::TREE_CLOSE_PANE_LIMIT
+                ),
+            ));
         }
         for (agent, _, _) in &tree {
             if agent.requires_close_status_check {
@@ -315,6 +335,20 @@ impl Runtime {
         )
     }
 
+    /// The live conversations, by machine, kind and session, with their pane.
+    fn archive_live(&self) -> Vec<(String, String, String, String)> {
+        self.archive_rows()
+            .filter_map(|agent| {
+                Some((
+                    self.archive_machine_of(&agent.pane_id),
+                    agent.agent_kind.clone(),
+                    agent.session_id.clone()?,
+                    agent.pane_id.clone(),
+                ))
+            })
+            .collect()
+    }
+
     fn archive_workspaces(&self, device: Option<&str>) -> &[WorkspaceSnapshot] {
         match device {
             None => &self.snapshot.navigator.workspaces,
@@ -375,7 +409,8 @@ impl Runtime {
             if written.deleting && current.deleting {
                 changed = true;
                 if ok {
-                    self.snapshot.ui_state.session_archive.records.remove(id);
+                    let removed = self.snapshot.ui_state.session_archive.records.remove(id);
+                    self.release_archive_holds(removed.iter().flat_map(|record| &record.members));
                     crate::diagnostic!(serde_json::json!({
                         "component": "session_archive", "kind": "session_archive.deleted",
                         "archive_id": id.as_str(),
@@ -416,16 +451,24 @@ impl Runtime {
         let Some(record) = archive.records.get_mut(id) else {
             return;
         };
-        record.members.retain(|member| member.closed);
-        if record.members.is_empty() || !record.members[0].closed {
-            if record.members.iter().any(|member| member.closed) {
-                record.phase = ArchivePhase::CloseFailed;
-                record.reason = Some(message.to_owned());
-            } else {
-                archive.records.remove(id);
-            }
+        if !record.members.iter().any(|member| member.closed) {
+            archive.records.remove(id);
         } else {
-            record.phase = ArchivePhase::Archived;
+            // A retry of a partial close: the root stays open and keeps its
+            // place at the head of the record, with the members that closed
+            // before, so the record still loads as one tree (B24).
+            let mut index = 0;
+            record.members.retain(|member| {
+                index += 1;
+                index == 1 || member.closed
+            });
+            record.phase = if record.members[0].closed {
+                ArchivePhase::Archived
+            } else {
+                ArchivePhase::CloseFailed
+            };
+            record.reason = Some(message.to_owned());
+            record.revision += 1;
         }
         crate::diagnostic!(serde_json::json!({
             "component": "session_archive", "kind": "session_archive.abandoned",
@@ -469,7 +512,12 @@ impl Runtime {
 
     /// The subtree close of an archive ended: `closed` are the panes
     /// confirmed gone.
-    pub(super) fn finish_archive_close(&mut self, id: &ArchiveId, closed: &HashSet<String>) {
+    pub(super) fn finish_archive_close(
+        &mut self,
+        id: &ArchiveId,
+        closed: &HashSet<String>,
+        cause: Option<&'static str>,
+    ) {
         let Some(record) = self
             .snapshot
             .ui_state
@@ -519,8 +567,15 @@ impl Runtime {
                 "archive_id": id.as_str(), "members": record.members.len(),
             }));
         } else {
+            let (kind, why) = match cause {
+                Some("device_disconnected") => {
+                    ("archive.incomplete_disconnected", "its device disconnected")
+                }
+                Some("timed_out") => ("archive.incomplete_timeout", "the close timed out"),
+                _ => ("archive.incomplete", "the close was refused"),
+            };
             let message = format!(
-                "{open} of {total} could not be closed, so the session was not archived. Choose Archive session again to retry."
+                "{open} of {total} could not be closed because {why}, so the session was not archived. Choose Archive session again to retry."
             );
             record.phase = ArchivePhase::CloseFailed;
             record.reason = Some(message.clone());
@@ -530,8 +585,9 @@ impl Runtime {
             crate::diagnostic!(serde_json::json!({
                 "component": "session_archive", "kind": "session_archive.close_failed",
                 "archive_id": id.as_str(), "open": open, "members": total,
+                "cause": cause,
             }));
-            self.set_error("archive.incomplete", message, true);
+            self.set_error(kind, message, true);
         }
         self.persist_ui_state();
         self.refresh_archived_rows();
@@ -566,7 +622,17 @@ impl Runtime {
             self.set_error("archive.unknown", "That archived session is gone", false);
             return true;
         };
-        if record.phase.in_flight() || record.deleting {
+        // A delete the link worker is carrying out takes the record away;
+        // nothing starts that its answer would then strand.
+        if record.phase.in_flight() || record.deleting || self.archive_deletes_sent.contains(&id) {
+            return true;
+        }
+        if record.phase == ArchivePhase::CloseUnknown {
+            self.set_error(
+                "archive.status_unknown",
+                "Hide cannot say whether this session closed; check its status before resuming it",
+                true,
+            );
             return true;
         }
         let device = record.members[0].machine.clone();
@@ -620,6 +686,38 @@ impl Runtime {
         let Some(id) = ArchiveId::parse(&payload.archive_id) else {
             return false;
         };
+        let Some(record) = self.snapshot.ui_state.session_archive.records.get(&id) else {
+            self.set_error("archive.unknown", "That archived session is gone", false);
+            return true;
+        };
+        // Only what a restart left unknown is checked; a save, close or
+        // resume still in flight answers for itself.
+        if record.phase != ArchivePhase::CloseUnknown
+            && !record
+                .members
+                .iter()
+                .any(|member| matches!(member.resume, Resume::Unknown { .. }))
+        {
+            return false;
+        }
+        // A pane is read as closed only from a fresh read of a machine Hide
+        // can reach: before the first read, or while a device is away, every
+        // pane would look gone and a session still open would be archived.
+        if let Some(member) = record
+            .members
+            .iter()
+            .find(|member| !self.archive_machine_read(&member.machine))
+        {
+            self.set_error(
+                "archive.device_disconnected",
+                format!(
+                    "{} cannot be checked until its machine is connected and read",
+                    member.title
+                ),
+                true,
+            );
+            return true;
+        }
         let rows = self
             .archive_rows()
             .filter_map(|agent| {
@@ -782,9 +880,29 @@ impl Runtime {
             .into_iter()
             .map(|session| (session.device_id, session.agent, session.session_id))
             .collect::<Vec<_>>();
+        let before = self.snapshot.ui_state.session_archive.clone();
         if !self.snapshot.ui_state.session_archive.drop_pruned(&keys) {
             return false;
         }
+        let kept = self
+            .snapshot
+            .ui_state
+            .session_archive
+            .held_registrations()
+            .map(|registration| registration.id.clone())
+            .collect::<HashSet<_>>();
+        self.release_archive_holds(
+            before
+                .records
+                .values()
+                .flat_map(|record| &record.members)
+                .filter(|member| {
+                    member
+                        .registration
+                        .as_ref()
+                        .is_some_and(|registration| !kept.contains(&registration.id))
+                }),
+        );
         crate::diagnostic!(serde_json::json!({
             "component": "session_archive", "kind": "session_archive.pruned",
             "sessions": keys.len(),
@@ -805,18 +923,7 @@ impl Runtime {
         }
         let now = unix_milliseconds();
         let mut changed = false;
-        // The live conversations, by machine, kind and session.
-        let live = self
-            .archive_rows()
-            .filter_map(|agent| {
-                Some((
-                    self.archive_machine_of(&agent.pane_id),
-                    agent.agent_kind.clone(),
-                    agent.session_id.clone()?,
-                    agent.pane_id.clone(),
-                ))
-            })
-            .collect::<Vec<_>>();
+        let live = self.archive_live();
         let task = self.snapshot.task_operation.clone();
         let ids = self
             .snapshot
@@ -916,7 +1023,7 @@ impl Runtime {
                 }
             }
         }
-        changed |= self.continue_archived_registrations();
+        changed |= self.continue_archived_registrations(now);
         changed |= self.start_next_resume(now);
         // A record whose every member is live again is done.
         let before = self.snapshot.ui_state.session_archive.records.len();
@@ -946,7 +1053,7 @@ impl Runtime {
 
     /// A resumed member's registration moves to its new pane through the
     /// delivery store's rebind, as a sleep wake's does.
-    fn continue_archived_registrations(&mut self) -> bool {
+    fn continue_archived_registrations(&mut self, now: u64) -> bool {
         let waiting = self
             .snapshot
             .ui_state
@@ -969,13 +1076,41 @@ impl Runtime {
             })
             .collect::<Vec<_>>();
         let mut changed = false;
+        self.archive_registration_waits.retain(|agent, _| {
+            waiting
+                .iter()
+                .any(|(_, _, _, registration)| registration.id == *agent)
+        });
         for (id, index, pane, registration) in waiting {
-            if self.continue_dormant_registration(&registration, &pane)
+            // The pane it resumed in closed before the delivery store saw it
+            // there, or the store has not seen it within the hour a woken
+            // sleeper gets: nothing will take the registration over, so it
+            // is let go rather than held for a pane that will not answer.
+            let since = *self
+                .archive_registration_waits
+                .entry(registration.id.clone())
+                .or_insert(now);
+            let gone =
+                !self.pane_listed(&pane) && !self.archive_rows().any(|agent| agent.pane_id == pane);
+            let expired = now.saturating_sub(since) >= super::agent_sleep::WOKEN_BINDING_LIMIT_MS;
+            let released = gone || expired;
+            if released {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "session_archive", "kind": "session_archive.registration_released",
+                    "archive_id": id.as_str(), "agent_id": registration.id, "pane_id": pane,
+                    "reason": if gone { "pane_gone" } else { "unbound" },
+                }));
+            }
+            if (released || self.continue_dormant_registration(&registration, &pane))
                 && let Some(record) = self.snapshot.ui_state.session_archive.records.get_mut(&id)
             {
                 record.members[index].registration = None;
                 record.revision += 1;
                 changed = true;
+                self.archive_registration_waits.remove(&registration.id);
+                if released {
+                    self.release_dormant_hold(&registration.id);
+                }
             }
         }
         changed
@@ -1072,7 +1207,7 @@ impl Runtime {
         }
         let reuse = self.archived_resume_pane(member);
         if let Some(pane) = reuse {
-            return self.restart_in_pane(member, &pane, request, front);
+            return self.restart_in_pane(member, &pane, request);
         }
         let resume_session_path = member
             .source_reference
@@ -1092,6 +1227,7 @@ impl Runtime {
                 resume_session_path,
             },
             front,
+            member.cwd.clone(),
         );
         if let Some(operation) = self
             .snapshot
@@ -1128,7 +1264,6 @@ impl Runtime {
         member: &ArchivedMember,
         pane: &str,
         request: &str,
-        front: bool,
     ) -> Result<u64, String> {
         let Some(mut arguments) =
             super::projects::resume_session_arguments(&member.kind, &member.native_session_id)
@@ -1165,13 +1300,23 @@ impl Runtime {
         if let Some(launch) = self.task_agent_launch.as_mut() {
             launch.resume_reference = member.source_reference.clone();
         }
-        if !front {
-            self.task_stays_behind.insert(id);
-        }
         if let Err(message) = live::spawn_task_agent_start(context, id) {
             self.ingest_task_agent_result(id, live::TaskAgentOutcome::Failed(message));
         }
         Ok(id)
+    }
+
+    /// A record that goes takes its hold on its members' registrations with
+    /// it; one whose pane is already gone ends now, as a woken sleeper's
+    /// does, instead of waiting for a pane change that will not come.
+    fn release_archive_holds<'a>(&mut self, members: impl Iterator<Item = &'a ArchivedMember>) {
+        let ids = members
+            .filter_map(|member| member.registration.as_ref())
+            .map(|registration| registration.id.clone())
+            .collect::<Vec<_>>();
+        for id in ids {
+            self.release_dormant_hold(&id);
+        }
     }
 
     /// Whether the registration of an archived session holds this actor, so
@@ -1199,29 +1344,56 @@ impl Runtime {
         let rows = if archive.is_empty() {
             Vec::new()
         } else {
-            let pulls = self
-                .snapshot
-                .navigator
-                .workspaces
-                .iter()
-                .chain(
-                    self.snapshot
-                        .status
-                        .remote
-                        .iter()
-                        .filter_map(|remote| remote.session.as_ref())
-                        .flat_map(|session| session.workspaces.iter()),
-                )
-                .flat_map(|workspace| &workspace.pull_requests)
-                .map(|pull| (pull.url.as_str(), pull.state()))
-                .collect::<HashMap<_, _>>();
+            // Pull requests are looked up only for records that have any.
+            let any_pulls = archive
+                .records
+                .values()
+                .any(|record| record.members.iter().any(|member| !member.pulls.is_empty()));
+            let pulls = (if any_pulls {
+                self.snapshot.navigator.workspaces.as_slice()
+            } else {
+                &[]
+            })
+            .iter()
+            .chain(
+                self.snapshot
+                    .status
+                    .remote
+                    .iter()
+                    .filter(|_| any_pulls)
+                    .filter_map(|remote| remote.session.as_ref())
+                    .flat_map(|session| session.workspaces.iter()),
+            )
+            .flat_map(|workspace| &workspace.pull_requests)
+            .map(|pull| (pull.url.as_str(), pull.state()))
+            .collect::<HashMap<_, _>>();
             let mut rows = archive.snapshots(&|url| pulls.get(url).copied());
+            let live = self.archive_live();
             for row in &mut rows {
-                if ArchiveId::parse(&row.id)
-                    .is_some_and(|id| self.archive_deletes_sent.contains(&id))
+                let id = ArchiveId::parse(&row.id);
+                if id
+                    .as_ref()
+                    .is_some_and(|id| self.archive_deletes_sent.contains(id))
                 {
                     row.phase = "deleting";
                 }
+                // Members kept by a partial close or a failed resume show in
+                // their live root's record; once that root is gone on a
+                // machine Hide can see, the record stands in 보관됨 itself,
+                // so a saved conversation is never left without a row (B24).
+                let root_gone = id
+                    .as_ref()
+                    .and_then(|id| archive.records.get(id))
+                    .filter(|record| !record.phase.in_flight())
+                    .map(|record| record.root())
+                    .is_some_and(|root| {
+                        self.archive_device_connected(&root.machine)
+                            && !live
+                                .iter()
+                                .any(|(machine, kind, session, _)| root.is(machine, kind, session))
+                    });
+                row.listed |=
+                    root_gone && row.members.iter().any(|member| member.resume != "resumed");
             }
             rows
         };

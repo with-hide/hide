@@ -311,8 +311,9 @@ impl<'de> Deserialize<'de> for SessionArchive {
                     Ok((id, record))
                 });
             match parsed {
-                Ok((id, record)) if members + record.members.len() <= MAX_ARCHIVED_SESSIONS => {
-                    members += record.members.len();
+                // Counted as `admit` counts: the sessions still archived.
+                Ok((id, record)) if members + record.held().count() <= MAX_ARCHIVED_SESSIONS => {
+                    members += record.held().count();
                     records.insert(id, record);
                 }
                 Ok(_) => crate::diagnostic!(serde_json::json!({

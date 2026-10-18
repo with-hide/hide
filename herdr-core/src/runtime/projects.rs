@@ -3986,16 +3986,19 @@ impl Runtime {
     /// worktree sheet already reports through. The shell starts the provider
     /// in the pane the slot names, so `terminal` needs nothing more from it.
     pub(super) fn agent_start_in_checkout(&mut self, payload: AgentStartInCheckoutPayload) -> bool {
-        self.start_in_checkout(payload, true)
+        self.start_in_checkout(payload, true, None)
     }
 
     /// A start in a checkout's new tab; `front` false opens the tab behind
     /// what the screen shows and leaves the keyboard where it is (an archived
-    /// descendant resumed after its root, PRD session-archive B23).
+    /// descendant resumed after its root, PRD session-archive B23). `cwd`
+    /// is a folder inside the checkout the resumed conversation ran in; one
+    /// outside it is ignored and the tab starts at the checkout.
     pub(super) fn start_in_checkout(
         &mut self,
         payload: AgentStartInCheckoutPayload,
         front: bool,
+        cwd: Option<String>,
     ) -> bool {
         let request_id = payload.request_id.clone();
         let agent_kind = match payload.provider.as_str() {
@@ -4138,10 +4141,12 @@ impl Runtime {
             operation.request_id = request_id;
             operation.device_id = (!local).then(|| device.clone());
         }
-        if !front {
+        if front {
+            self.remember_agent_choice(agent_kind.as_deref(), model.as_deref());
+        } else {
+            // A start behind the screen is not the operator's choice of agent.
             self.task_stays_behind.insert(id);
         }
-        self.remember_agent_choice(agent_kind.as_deref(), model.as_deref());
         let mut arguments = resume.unwrap_or_default();
         arguments.extend(agent_choice::agent_arguments(
             agent_kind.as_deref(),
@@ -4152,6 +4157,9 @@ impl Runtime {
         if let Some(launch) = self.task_agent_launch.as_mut() {
             launch.resume_reference = resume_reference.clone();
         }
+        let cwd = cwd
+            .filter(|cwd| hide_platform::path::wire_relative(&checkout_path, cwd).is_ok())
+            .unwrap_or_else(|| checkout_path.clone());
         let request = live::CheckoutTabRequest {
             id,
             agent_kind,
@@ -4162,8 +4170,9 @@ impl Runtime {
                 .filter(|_| proof.is_some())
                 .map(|id| hide_session::SessionReadScope {
                     id: id.clone(),
-                    cwd: checkout_path.clone(),
+                    cwd: cwd.clone(),
                 }),
+            cwd,
             checkout_path,
             label,
             host,
