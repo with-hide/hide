@@ -105,12 +105,28 @@ Its ignored run report records active detection-manifest versions and native out
 The adapter declaration is a reviewed product decision; the tool never changes it automatically.
 The shared agent adapter declares bell eligibility separately from prompt intake, spawn refusal and session format; its contract rejects a bell without a prompt hook, and adding prompt intake alone never widens the bell targets.
 Claude Code's plan approval reads `blocked`; Codex's does not, and the session read guards it instead (next section).
-Cursor is not a target because its menus were not observed (no logged-in CLI was available for the check).
-Grok is not a target for what its terminal was seen to do on 2026-10-18: Grok 1.0.52 and 1.0.62 on an isolated Herdr 0.9.5 (Grok detection manifest 2026.10.05.1), answered by a scripted stand-in model, each line typed with the doorbell's own call (`pane.send_input`, the line and Enter), observed by hand rather than by the local measurement tool's matrix.
+Cursor is not a target: its menus have not been observed, and the agent checks leave Cursor out by the operator's decision of 2026-10-17.
+Grok is not a target for what its terminal was seen to do on 2026-10-18, on Grok 1.0.52 and 1.0.62 under an isolated Herdr 0.9.5 (Grok detection manifest 2026.10.05.1), answered by a scripted stand-in model, with each line typed by the doorbell's own call (`pane.send_input`, the line and Enter), observed by hand rather than by the local measurement tool's matrix.
 Two findings rule it out.
-Its prompt hook cannot carry the letters: `UserPromptSubmit` runs with the prompt and the session id, but nothing it prints reaches the model (Grok's hooks guide: "stdout of an allowing hook is discarded"), so a bell turn would bring the line and not the letter, while a `PreToolUse` hook's added context and a `Stop` hook's block reason do reach the model.
-Its plan review reads `working` for as long as it waits (the terminal title says `Running: Plan: Exit`), and a bell target is rung while it works: the line opened a comment on the plan and was lost, and the same text typed as keys approved the plan with its `a`.
-The rest of what was seen: at rest the line is submitted as one prompt, over the welcome panel and over a suggested next line alike; during a turn it waits in Grok's own queue and runs as a turn of its own after the current one; the permission and question menus read `blocked`, and a line typed into the question menu chose its first option with the line's `1`; the `/model` and `/resume` pickers read `idle` and swallow the line, as a model name and as a search; the folder-trust question at start reads `idle` and ready before Grok has a session, where the line's Enter trusts the folder, which the missing native session holds today (`session_changed`).
+First, its prompt hook cannot carry the letters, so a bell turn would bring the line and not the letter.
+Second, its plan review reads `working` for as long as it waits, and a bell target is rung while it works, so a bell would act on the review.
+Grok's three hooks did the same on both versions:
+
+- `UserPromptSubmit` runs with the prompt and the session id, but nothing it prints reaches the model (Grok's hooks guide: "stdout of an allowing hook is discarded").
+- A `PreToolUse` hook's `additionalContext` reaches the model after the tool's result, which is how Grok's letters are handed over while it works.
+- A `Stop` hook's block reason reaches the model as "Stop hook feedback", and the turn goes on.
+
+| Scene | Herdr reads | What the line did | Seen on |
+|---|---|---|---|
+| At rest, over the welcome panel or a suggested next line | `idle` | Submitted as one prompt | 1.0.52, 1.0.62 |
+| A turn running | `working` | Waited in Grok's own queue and ran as a turn of its own after the current one | 1.0.52 |
+| Shell and file permission menus | `blocked` | Typed into the shell menu, chose nothing | 1.0.52 |
+| A question (`ask_user_question`) | `blocked` | Chose the first option with the line's `1` | 1.0.52 |
+| Plan review (the terminal title says `Running: Plan: Exit`) | `working` while it waits | Opened a comment on the plan and was lost; the same text typed as keys approved the plan with its `a` (1.0.52) | 1.0.52, 1.0.62 |
+| `/model` picker | `idle` | Taken as a model name: "Unknown model" | 1.0.52 |
+| `/resume` picker | `idle` | Taken as a search; the picker stayed open | 1.0.52 |
+| Folder-trust question at start, before Grok has a session | `idle`, ready | Its Enter trusted the folder; the missing native session holds the bell today (`session_changed`) | 1.0.52, 1.0.62 |
+
 At rest Grok's and Cursor's letters are read through `hide inbox`, and while they work their own tool hook hands them over ([Letters while the agent works](#letters-while-the-agent-works)).
 OpenCode, Pi and omp are not targets either, though Hide's plugin and extension give them a prompt hook: on 2026-10-07 OpenCode's previous-session picker read `done`, and a bell's Enter there opened another session, and Pi's and omp's resume pickers read `done` too.
 Their letters ride their next prompt instead (below), or a tool result while they work, and a bell is reconsidered only in the change that would flip an adapter declaration, once the live-check tool has found a bell harmless in every scene that agent does not read as `blocked`.
