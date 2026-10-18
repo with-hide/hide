@@ -533,6 +533,7 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
           {area.displays.map((display) => (
             <EntryContextMenu
               key={display.id}
+              title={tree.adapter.label(display)}
               label={t(`panes.area.itemActions.${column}` as const, { label: tree.adapter.label(display) })}
               items={() => tree.menu(display.id)}
               onSelect={(id) => tree.adapter.runMenu(id, display.id)}
@@ -561,6 +562,7 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
       {switcher ? <AreaSwitcher current={area.id} /> : null}
       {shown ? (
         <EntryDropdown
+          title={tree.adapter.label(shown)}
           label={t("panes.area.actionsFor", { actions: tree.adapter.actionsLabel, label: tree.adapter.label(shown) })}
           hint={t("panes.area.actionsFor", { actions: tree.adapter.actionsLabel, label: tree.adapter.label(shown) })}
           items={tree.menu(shown.id)}

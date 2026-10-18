@@ -51,9 +51,15 @@ fn fork_with(
     let checkout = cwd
         .to_str()
         .ok_or_else(|| HostError::new(ErrorCode::InvalidPath, "session_route_cwd_unconfirmed"))?;
-    match hide_session::opencode::fork_route(home, source, checkout)
-        .map_err(|reason| HostError::new(ErrorCode::Io, reason))?
-    {
+    // Busy only while the route's read met OpenCode writing its database,
+    // before anything was forked, so the core may ask again.
+    match hide_session::opencode::fork_route(home, source, checkout).map_err(|refusal| {
+        let code = match refusal {
+            hide_session::ReadRefusal::InMotion(_) => ErrorCode::Busy,
+            hide_session::ReadRefusal::Refused(_) => ErrorCode::Io,
+        };
+        HostError::new(code, refusal.reason())
+    })? {
         ForkRoute::Flag => Ok(OpenCodeFork::Flag),
         ForkRoute::Server => fork_on_server(opencode(), source, cwd, OPENCODE_FORK_TIME, stop),
     }
@@ -141,12 +147,10 @@ mod tests {
     }
 
     /// The root session both recorded OpenCode fixtures hold.
-    #[cfg(unix)]
     const ROOT: &str = "ses_0a1b2c3d4e5f60718293a4b5c6";
 
     /// An OpenCode database in `home` from a recorded fixture, its sessions
     /// moved to `checkout`.
-    #[cfg(unix)]
     fn database(home: &Path, fixture: &str, sessions: &str, checkout: &Path) {
         let folder = home.join(".local/share/opencode");
         std::fs::create_dir_all(&folder).unwrap();
@@ -158,6 +162,43 @@ mod tests {
                 [checkout.to_str().unwrap()],
             )
             .unwrap();
+    }
+
+    /// A fork whose route read meets OpenCode writing its database answers
+    /// busy before it forks anything, so the core asks again, and forks
+    /// once OpenCode is done.
+    #[test]
+    fn a_fork_that_meets_opencode_writing_its_database_is_busy_and_forks_nothing() {
+        let home = tempfile::tempdir().unwrap();
+        let checkout = hide_platform::fs::identity::canonical(home.path()).unwrap();
+        database(
+            home.path(),
+            include_str!(
+                "../../hide-session/tests/fixtures/adapters/opencode-1.18.30/opencode.sql"
+            ),
+            "session",
+            &checkout,
+        );
+        let writer =
+            rusqlite::Connection::open(home.path().join(".local/share/opencode/opencode.db"))
+                .unwrap();
+        writer.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let fork = || {
+            fork_with(
+                home.path(),
+                ROOT,
+                &checkout,
+                &AtomicBool::new(false),
+                || panic!("a 1.x session runs no opencode"),
+            )
+        };
+        let error = fork().unwrap_err();
+        assert_eq!(
+            (error.code, error.message.as_str()),
+            (ErrorCode::Busy, "opencode_db_busy")
+        );
+        drop(writer);
+        assert_eq!(fork(), Ok(OpenCodeFork::Flag));
     }
 
     #[cfg(unix)]

@@ -270,33 +270,60 @@ pub(crate) fn run_cli_with_input(
         })?;
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|_| "format")?;
     if !output.status.success() || value["ok"] != true {
-        return Err(match value["reason"].as_str() {
-            Some("ledger_unavailable") => "ledger",
-            Some("capacity") => "capacity",
-            Some("agent_pane_required" | "caller_identity_conflict" | "caller_context_changed") => {
-                "identity"
-            }
-            _ => "cli",
-        }
-        .into());
+        return Err(refusal_cause(value["reason"].as_str()).into());
     }
     value.get("result").cloned().ok_or_else(|| "format".into())
+}
+
+/// The cause a `hide` answer that is not `ok` is recorded under, from its
+/// `reason`. A hook's request to its daemon names the step it stopped at
+/// (`hided`'s `workspace_cli::request_hook`), and each step has a cause of
+/// its own: no daemon published its socket (`unavailable`), the record
+/// naming it is not trusted (`record`), nothing took the connection
+/// (`connect`), the request was not written whole (`unsent`), no answer came
+/// in time (`timeout`), the answer was unreadable (`answer`). A reason with
+/// no cause of its own is the daemon's refusal (`refused`), and an answer
+/// without one is malformed (`format`); `cli` is kept for a `hide` that could
+/// not be run.
+pub fn refusal_cause(reason: Option<&str>) -> &'static str {
+    match reason {
+        Some("ledger_unavailable") => "ledger",
+        Some("capacity") => "capacity",
+        Some("agent_pane_required" | "caller_identity_conflict" | "caller_context_changed") => {
+            "identity"
+        }
+        Some("hide_unavailable") => "unavailable",
+        Some("invalid_bootstrap_socket_record") => "record",
+        Some("hide_unreachable") => "connect",
+        Some("request_unsent") => "unsent",
+        Some("request_timeout") => "timeout",
+        Some("invalid_response") => "answer",
+        Some(_) => "refused",
+        None => "format",
+    }
 }
 
 #[derive(Deserialize, Serialize, Default)]
 struct Diagnostics {
     last: BTreeMap<String, u64>,
+    /// The step a cause that does not name one itself last stopped at
+    /// (Memory's `memory_unavailable`), one of [`CAUSES`]. A file written
+    /// before steps were kept has none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    step: BTreeMap<String, String>,
 }
 
-/// The fixed causes a hook may record: the delivery intake's eight, the
-/// spawn guard's one (`guard`: the daemon could not be asked), OpenCode's
-/// plugin's one (`plugin`: it skipped or gave up on a helper call),
-/// Memory's two (`crate::memory`: the core could not be asked, or did not
-/// answer in time) and the guardrails' three (`guardrails`: the policy file
-/// could not be read; `guardrails_words`: a shell call named more words than
-/// are checked; `guardrails_failed`: the hook failed or ran out of time
-/// before it judged a call).
-const CAUSES: [&str; 17] = [
+/// The fixed causes a hook may record: the delivery intake's sixteen (the
+/// steps and refusals of [`refusal_cause`], `cli`, `deadline`, `format`,
+/// `confirm`, `stdout` and `session_conflict`), the spawn guard's one (`guard`: the daemon could
+/// not be asked), OpenCode's plugin's one (`plugin`: it skipped or gave up on
+/// a helper call), Memory's three (`crate::memory`: the core could not be
+/// asked, did not answer in time, or the thread asking panicked) and the
+/// guardrails' three (`guardrails`: the policy file could not be read;
+/// `guardrails_words`: a shell call named more words than are checked;
+/// `guardrails_failed`: the hook failed or ran out of time before it judged a
+/// call).
+const CAUSES: [&str; 24] = [
     "session_conflict",
     "cli",
     "deadline",
@@ -305,6 +332,13 @@ const CAUSES: [&str; 17] = [
     "ledger",
     "capacity",
     "identity",
+    "unavailable",
+    "record",
+    "connect",
+    "unsent",
+    "timeout",
+    "answer",
+    "refused",
     "stdout",
     "guard",
     "plugin",
@@ -341,7 +375,13 @@ pub fn diagnose_failure(home: &Path, failure: &Failure) -> bool {
 /// True only when this call persisted the claim; a cause outside [`CAUSES`], a
 /// busy lock and damaged or unavailable storage all answer false.
 pub(crate) fn claim(home: &Path, cause: &str) -> bool {
-    if !CAUSES.contains(&cause) {
+    claim_at(home, cause, None)
+}
+
+/// [`claim`], keeping the `step` the failure stopped at beside a cause that
+/// does not name it; a step outside [`CAUSES`] answers false.
+pub(crate) fn claim_at(home: &Path, cause: &str, step: Option<&str>) -> bool {
+    if !CAUSES.contains(&cause) || step.is_some_and(|step| !CAUSES.contains(&step)) {
         return false;
     }
     let path = diagnostic_path(home);
@@ -369,9 +409,12 @@ pub(crate) fn claim(home: &Path, cause: &str) -> bool {
             Err(error) => return Err(error),
         };
         if state.last.len() > CAUSES.len()
+            || state.step.len() > CAUSES.len()
             || state
                 .last
                 .keys()
+                .chain(state.step.keys())
+                .chain(state.step.values())
                 .any(|cause| !CAUSES.contains(&cause.as_str()))
         {
             return Err(std::io::Error::other("diagnostic capacity"));
@@ -391,6 +434,9 @@ pub(crate) fn claim(home: &Path, cause: &str) -> bool {
             return Err(std::io::Error::other("diagnostic capacity"));
         }
         state.last.insert(cause.to_owned(), now);
+        if let Some(step) = step {
+            state.step.insert(cause.to_owned(), step.to_owned());
+        }
         let bytes = serde_json::to_vec(&state).map_err(std::io::Error::other)?;
         fs::atomic::write_file(&path, &bytes, fs::Access::Private)?;
         Ok(true)
@@ -475,11 +521,71 @@ mod tests {
         );
     }
 
+    /// Each step of a hook's request (`hided`'s `request_hook`) is recorded
+    /// under a cause of its own, and every cause a refusal can have is one a
+    /// hook may record, so no refusal goes unrecorded.
+    #[test]
+    fn each_step_of_a_hook_request_is_recorded_under_its_own_cause() {
+        let steps = [
+            ("hide_unavailable", "unavailable"),
+            ("invalid_bootstrap_socket_record", "record"),
+            ("hide_unreachable", "connect"),
+            ("request_unsent", "unsent"),
+            ("request_timeout", "timeout"),
+            ("invalid_response", "answer"),
+        ];
+        for (reason, cause) in steps {
+            assert_eq!(refusal_cause(Some(reason)), cause, "{reason}");
+        }
+        for (reason, cause) in [
+            (Some("ledger_unavailable"), "ledger"),
+            (Some("capacity"), "capacity"),
+            (Some("caller_identity_conflict"), "identity"),
+            (Some("pane_unavailable"), "refused"),
+            (None, "format"),
+        ] {
+            assert_eq!(refusal_cause(reason), cause, "{reason:?}");
+        }
+        let home = tempfile::tempdir().unwrap();
+        for (reason, _) in steps {
+            assert!(
+                diagnose(home.path(), refusal_cause(Some(reason))),
+                "{reason}"
+            );
+        }
+        assert!(diagnose(
+            home.path(),
+            refusal_cause(Some("pane_unavailable"))
+        ));
+    }
+
+    /// A file an earlier helper wrote, with no steps, is read and kept; a
+    /// cause that does not name its step keeps the one it stopped at.
+    #[test]
+    fn a_step_is_kept_beside_its_cause_and_an_earlier_file_still_reads() {
+        let home = tempfile::tempdir().unwrap();
+        let path = diagnostic_path(home.path());
+        private::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::atomic::write_file(&path, br#"{"last":{"cli":0}}"#, fs::Access::Private).unwrap();
+        assert!(claim_at(home.path(), "memory_unavailable", Some("connect")));
+        let state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(state["last"]["cli"], 0);
+        assert!(state["last"]["memory_unavailable"].is_u64(), "{state}");
+        assert_eq!(state["step"]["memory_unavailable"], "connect");
+        assert!(!claim_at(
+            home.path(),
+            "memory_deadline",
+            Some("not a cause")
+        ));
+    }
+
     #[test]
     fn corrupt_or_unavailable_diagnostic_storage_never_bypasses_throttle() {
         for damaged in [
             b"damaged private bytes".as_slice(),
             b"{\"last\":{\"unknown\":0}}".as_slice(),
+            b"{\"last\":{},\"step\":{\"memory_unavailable\":\"unknown\"}}".as_slice(),
         ] {
             let home = tempfile::tempdir().unwrap();
             let path = diagnostic_path(home.path());

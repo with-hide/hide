@@ -3,16 +3,21 @@ use rusqlite::{Connection, OpenFlags, ffi};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
+use crate::ReadRefusal;
+
 type ReadGate = (std::path::PathBuf, Weak<Mutex<()>>);
 static READ_GATES: Mutex<Vec<ReadGate>> = Mutex::new(Vec::new());
 
 /// Closing any descriptor for an inode drops this process's POSIX locks on
-/// it. Keep all OpenCode guard handles inside the same per-database gate as
+/// it. Keep all provider guard handles inside the same per-database gate as
 /// SQLite, including admission and destruction. Refuse contention rather
-/// than making a session worker wait behind another read.
+/// than making a session worker wait behind another read, with the reasons
+/// of the database read.
 /// The canonical namespace, not its inode, survives provider replacement.
-pub(crate) fn read_gate(path: &Path) -> Result<Arc<Mutex<()>>, &'static str> {
-    let mut gates = READ_GATES.lock().map_err(|_| "opencode_db_unreadable")?;
+fn read_gate(path: &Path, reasons: &Reasons) -> Result<Arc<Mutex<()>>, ReadRefusal> {
+    let mut gates = READ_GATES
+        .lock()
+        .map_err(|_| ReadRefusal::Refused(reasons.unreadable.to_owned()))?;
     gates.retain(|(_, gate)| gate.strong_count() != 0);
     if let Some(gate) = gates
         .iter()
@@ -21,7 +26,7 @@ pub(crate) fn read_gate(path: &Path) -> Result<Arc<Mutex<()>>, &'static str> {
         return Ok(gate);
     }
     if gates.len() >= 64 {
-        return Err("opencode_db_busy");
+        return Err(ReadRefusal::InMotion(reasons.busy));
     }
     let gate = Arc::new(Mutex::new(()));
     gates.push((path.to_path_buf(), Arc::downgrade(&gate)));
@@ -126,6 +131,9 @@ const BUSY_WAIT: std::time::Duration = std::time::Duration::from_millis(50);
 /// The VFS forbids writes even if the provider removes a WAL between
 /// admission and SQLite opening it. A checkpointed main is read without
 /// asking SQLite to create companions; a live WAL retains locking.
+/// Whether the read met the provider writing is decided here, at the read's
+/// two edges: the database held when the read takes its snapshot, or its
+/// files changed by the time the read ends ([`ReadRefusal::InMotion`]).
 pub(crate) fn with_read<T>(
     home: &Path,
     folder: &str,
@@ -133,40 +141,36 @@ pub(crate) fn with_read<T>(
     reasons: &Reasons,
     steps: usize,
     read: impl FnOnce(&Connection) -> T,
-) -> Result<T, String> {
+) -> Result<T, ReadRefusal> {
+    let unreadable = || ReadRefusal::Refused(reasons.unreadable.to_owned());
     let metadata = std::fs::symlink_metadata(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
-            "session_file_missing".to_owned()
+            ReadRefusal::Refused("session_file_missing".to_owned())
         } else {
-            reasons.unreadable.to_owned()
+            unreadable()
         }
     })?;
     if metadata.file_type().is_symlink() {
-        return Err("label_session_linked".to_owned());
+        return Err(ReadRefusal::Refused("label_session_linked".to_owned()));
     }
     if !metadata.is_file() {
-        return Err("label_session_not_regular".to_owned());
+        return Err(ReadRefusal::Refused("label_session_not_regular".to_owned()));
     }
     // Resolve OS aliases such as macOS /var before SQLite's NOFOLLOW check.
     // The final database symlink was refused above.
-    let path = crate::native_file::checked_path_under(home, folder, path)
-        .map_err(|_| reasons.unreadable.to_owned())?;
-    let gate = read_gate(&path).map_err(str::to_owned)?;
+    let path =
+        crate::native_file::checked_path_under(home, folder, path).map_err(|_| unreadable())?;
+    let gate = read_gate(&path, reasons)?;
     let _read_guard = gate.try_lock().map_err(|error| match error {
-        std::sync::TryLockError::WouldBlock => reasons.busy.to_owned(),
-        std::sync::TryLockError::Poisoned(_) => reasons.unreadable.to_owned(),
+        std::sync::TryLockError::WouldBlock => ReadRefusal::InMotion(reasons.busy),
+        std::sync::TryLockError::Poisoned(_) => unreadable(),
     })?;
     // Drop order matters: Source's raw handles close before this gate opens.
-    let source = Source::admit(home, &path).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::WouldBlock {
-            reasons.busy.to_owned()
-        } else {
-            reasons.unreadable.to_owned()
-        }
-    })?;
+    let source = Source::admit(home, &path).map_err(|fence| fence.refusal(reasons))?;
     let failed = |error: &rusqlite::Error| refusal(reasons, error);
     let connection = open_readonly(
-        &read_uri(&path, !source.checkpointed_wal).map_err(str::to_owned)?,
+        &read_uri(&path, !source.checkpointed_wal)
+            .map_err(|reason| ReadRefusal::Refused(reason.to_owned()))?,
         OpenFlags::SQLITE_OPEN_READ_ONLY
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
             | OpenFlags::SQLITE_OPEN_URI
@@ -177,15 +181,20 @@ pub(crate) fn with_read<T>(
         .busy_timeout(BUSY_WAIT)
         .map_err(|error| failed(&error))?;
     work_budget(&connection, steps);
+    // The schema cookie is the first page read, so the read's snapshot (its
+    // shared lock, or its WAL read mark) is taken here and kept until the
+    // rollback: a provider holding the database is met now, and no
+    // statement of `read` waits on it.
     connection
         .execute_batch("BEGIN")
+        .and_then(|()| connection.query_row("PRAGMA schema_version", [], |_| Ok(())))
         .map_err(|error| failed(&error))?;
     let result = read(&connection);
     connection
         .execute_batch("ROLLBACK")
         .map_err(|error| failed(&error))?;
     connection.close().map_err(|(_, error)| failed(&error))?;
-    source.validate().map_err(|_| reasons.changed.to_owned())?;
+    source.validate().map_err(|fence| fence.refusal(reasons))?;
     Ok(result)
 }
 
@@ -201,13 +210,15 @@ pub(crate) fn work_budget(connection: &Connection, steps: usize) {
     );
 }
 
-pub(crate) fn refusal(reasons: &Reasons, error: &rusqlite::Error) -> String {
+pub(crate) fn refusal(reasons: &Reasons, error: &rusqlite::Error) -> ReadRefusal {
     match error.sqlite_error_code() {
         Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
-            reasons.busy.to_owned()
+            ReadRefusal::InMotion(reasons.busy)
         }
-        Some(rusqlite::ErrorCode::OperationInterrupted) => reasons.work.to_owned(),
-        _ => reasons.unreadable.to_owned(),
+        Some(rusqlite::ErrorCode::OperationInterrupted) => {
+            ReadRefusal::Refused(reasons.work.to_owned())
+        }
+        _ => ReadRefusal::Refused(reasons.unreadable.to_owned()),
     }
 }
 
@@ -222,6 +233,43 @@ fn mark(file: &std::fs::File) -> std::io::Result<Mark> {
     ))
 }
 
+/// Why [`Source`] could not fence a read.
+#[derive(Debug)]
+pub(crate) enum Fence {
+    /// The provider holds the database for now: a rollback journal, a WAL
+    /// without its index, or a file another process holds
+    /// ([`hide_platform::fs::in_use::held_by_another`]).
+    Held,
+    /// A file, companion or folder is no longer the one admitted.
+    Changed,
+    /// The files cannot be read, or are not files Hide reads.
+    Refused,
+}
+
+impl Fence {
+    /// What an error opening, reading or naming a file the fence found says:
+    /// a holder that lets go, the file gone since it was found, or neither.
+    fn of(error: std::io::Error) -> Self {
+        if hide_platform::fs::in_use::held_by_another(&error) {
+            Self::Held
+        } else if error.kind() == std::io::ErrorKind::NotFound {
+            Self::Changed
+        } else {
+            Self::Refused
+        }
+    }
+
+    /// Met the provider writing for a held or changed database, so a read a
+    /// moment later can answer; refused otherwise.
+    pub(crate) fn refusal(self, reasons: &Reasons) -> ReadRefusal {
+        match self {
+            Self::Held => ReadRefusal::InMotion(reasons.busy),
+            Self::Changed => ReadRefusal::InMotion(reasons.changed),
+            Self::Refused => ReadRefusal::Refused(reasons.unreadable.to_owned()),
+        }
+    }
+}
+
 /// Retained handles and names fence one bounded native-database read. No
 /// result escapes until every file, companion and ancestor still agrees.
 pub(crate) struct Source {
@@ -233,11 +281,11 @@ pub(crate) struct Source {
 }
 
 impl Source {
-    pub(crate) fn admit(root: &Path, path: &Path) -> std::io::Result<Self> {
-        let root = hide_platform::fs::identity::canonical(root)?;
-        let path = hide_platform::fs::identity::canonical(path)?;
+    pub(crate) fn admit(root: &Path, path: &Path) -> Result<Self, Fence> {
+        let root = hide_platform::fs::identity::canonical(root).map_err(Fence::of)?;
+        let path = hide_platform::fs::identity::canonical(path).map_err(Fence::of)?;
         if !path.starts_with(&root) {
-            return Err(changed());
+            return Err(Fence::Refused);
         }
         let mut files = Vec::with_capacity(4);
         let mut wal = false;
@@ -259,31 +307,31 @@ impl Source {
             let held = match std::fs::symlink_metadata(&name) {
                 Ok(_) => {
                     if index == 3 {
-                        return Err(std::io::ErrorKind::WouldBlock.into());
+                        return Err(Fence::Held);
                     }
-                    let file = crate::open_session_file_nofollow(&name)?;
-                    if hide_platform::fs::identity::link_count(&file)? != 1 {
-                        return Err(changed());
+                    let file = crate::open_session_file_nofollow(&name).map_err(Fence::of)?;
+                    if hide_platform::fs::identity::link_count(&file).map_err(Fence::of)? != 1 {
+                        return Err(Fence::Refused);
                     }
-                    let stamp = mark(&file)?;
+                    let stamp = mark(&file).map_err(Fence::of)?;
                     if index == 0 {
                         use std::io::Read;
                         let mut header = [0; 20];
-                        (&file).read_exact(&mut header)?;
+                        (&file).read_exact(&mut header).map_err(Fence::of)?;
                         wal_mode = header[18] == 2 && header[19] == 2;
                     }
                     if index == 1 {
-                        wal = file.metadata()?.len() != 0;
+                        wal = file.metadata().map_err(Fence::of)?.len() != 0;
                     }
                     Some((file, stamp))
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound && index != 0 => None,
-                Err(error) => return Err(error),
+                Err(error) => return Err(Fence::of(error)),
             };
             files.push((name, held));
         }
         if wal && files[2].1.is_none() {
-            return Err(std::io::ErrorKind::WouldBlock.into());
+            return Err(Fence::Held);
         }
         let mut folders = Vec::new();
         for folder in path
@@ -292,10 +340,10 @@ impl Source {
             .take_while(|folder| folder.starts_with(&root))
         {
             if folders.len() >= 64 {
-                return Err(changed());
+                return Err(Fence::Refused);
             }
-            let handle = hide_platform::fs::open_dir_nofollow(folder)?;
-            let stamp = mark(&handle)?;
+            let handle = hide_platform::fs::open_dir_nofollow(folder).map_err(Fence::of)?;
+            let stamp = mark(&handle).map_err(Fence::of)?;
             folders.push((folder.to_path_buf(), handle, stamp));
         }
         let source = Self {
@@ -309,38 +357,39 @@ impl Source {
         Ok(source)
     }
 
-    pub(crate) fn validate(&self) -> std::io::Result<()> {
-        if hide_platform::fs::identity::canonical(&self.path)? != self.path
+    pub(crate) fn validate(&self) -> Result<(), Fence> {
+        if hide_platform::fs::identity::canonical(&self.path).map_err(Fence::of)? != self.path
             || !self.path.starts_with(&self.root)
         {
-            return Err(changed());
+            return Err(Fence::Changed);
         }
         for (path, held) in &self.files {
             match held {
                 Some((handle, before)) => {
-                    let current = crate::open_session_file_nofollow(path)?;
-                    if mark(handle)? != *before || mark(&current)? != *before {
-                        return Err(changed());
+                    let current = crate::open_session_file_nofollow(path).map_err(Fence::of)?;
+                    if mark(handle).map_err(Fence::of)? != *before
+                        || mark(&current).map_err(Fence::of)? != *before
+                    {
+                        return Err(Fence::Changed);
                     }
                 }
                 None => match std::fs::symlink_metadata(path) {
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    _ => return Err(changed()),
+                    Ok(_) => return Err(Fence::Changed),
+                    Err(error) => return Err(Fence::of(error)),
                 },
             }
         }
         for (path, handle, before) in &self.folders {
-            let current = hide_platform::fs::open_dir_nofollow(path)?;
-            if mark(handle)? != *before || mark(&current)? != *before {
-                return Err(changed());
+            let current = hide_platform::fs::open_dir_nofollow(path).map_err(Fence::of)?;
+            if mark(handle).map_err(Fence::of)? != *before
+                || mark(&current).map_err(Fence::of)? != *before
+            {
+                return Err(Fence::Changed);
             }
         }
         Ok(())
     }
-}
-
-fn changed() -> std::io::Error {
-    std::io::Error::other("native database changed or requires recovery")
 }
 
 pub(crate) fn read_uri(path: &Path, wal: bool) -> Result<String, &'static str> {
@@ -408,7 +457,29 @@ mod tests {
             drop(writer);
             value
         });
-        assert_eq!(result, Err("opencode_db_changed".to_owned()));
+        assert_eq!(result, Err(ReadRefusal::InMotion("opencode_db_changed")));
+    }
+
+    /// Only a change of the admitted files is the writer's: a source that
+    /// cannot be read any more when the read ends is refused, which a read
+    /// a moment later would not answer either.
+    #[cfg(unix)]
+    #[test]
+    fn a_checkpointed_read_whose_source_turns_unreadable_is_refused_not_in_motion() {
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: geteuid reads the process's own id and cannot fail.
+        if unsafe { libc::geteuid() } == 0 {
+            // Root opens a file whatever its mode, so nothing turns unreadable.
+            return;
+        }
+        let (home, path) = checkpointed();
+        let mode = |bits| std::fs::set_permissions(&path, std::fs::Permissions::from_mode(bits));
+        let result = crate::opencode::with_unchecked_read(home.path(), |_| mode(0o000).unwrap());
+        mode(0o600).unwrap();
+        assert_eq!(
+            result,
+            Err(ReadRefusal::Refused("opencode_db_unreadable".into()))
+        );
     }
 
     #[test]
@@ -454,7 +525,7 @@ mod tests {
                 });
                 assert_eq!(
                     competing.join().unwrap(),
-                    Err("opencode_db_busy".to_owned())
+                    Err(ReadRefusal::InMotion("opencode_db_busy"))
                 );
                 assert_eq!(
                     crate::opencode::with_unchecked_read(other.path(), read_value)
@@ -486,10 +557,10 @@ mod tests {
                 crate::opencode::with_unchecked_read(home.path(), |_| panic!(
                     "replacement bypassed gate"
                 )),
-                Err("opencode_db_busy".to_owned())
+                Err(ReadRefusal::InMotion("opencode_db_busy"))
             );
         });
-        assert_eq!(result, Err("opencode_db_changed".to_owned()));
+        assert_eq!(result, Err(ReadRefusal::InMotion("opencode_db_changed")));
         assert!(crate::opencode::with_unchecked_read(home.path(), |_| ()).is_ok());
     }
 }

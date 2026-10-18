@@ -118,7 +118,8 @@ A live `HIDE_CAP_REF` must agree with the fresh proof and, on a node, its own li
 An absent named reference falls back to the fresh proof and records `hook.reference_missing` with the request identity, never its path or token.
 Local and device refusals include the same `next_action` recovery advice.
 The selected route receives one request with no retry through another transport; ambiguous node bridges are refused before any command is sent.
-Every write and read uses the time remaining from the request's start, so partial responses cannot renew the deadline.
+The request's stream carries its deadline ([ARCHITECTURE.md](ARCHITECTURE.md#the-platform-layer)), so the connect and every write and read wait only for the time left, and partial responses cannot renew the deadline.
+Each step that can fail answers its own reason, which the hook records under a cause of its own ([What a hook records when it fails](#what-a-hook-records-when-it-fails)).
 Requests and responses are capped at 16 KiB and 64 KiB, and the existing bootstrap and node proof worker caps still apply.
 The letter and Memory children run independently and in parallel under their existing caller deadlines and fail-open outcomes.
 The core takes the Project from the caller's attested checkout, read by that checkout's own node, never from anything the hook sends.
@@ -200,6 +201,26 @@ The parent's `Stop` replaces the running ids with the ones it lists: a subagent 
 A `Stop` that lists nothing (an input cut off, or a Claude Code that sends no `background_tasks`) changes nothing; nothing sweeps, since no signal says a running subagent ended.
 The running ids are capped at 256 per session, the remembered finished ids at 256 (the oldest go first, and the done count keeps them); crossing the running cap fails the event and is written down as the pane's last report failure.
 Codex and the runtimes whose input carries no subagent id keep the older rule: a start adds one, a stop moves one to done, and the turn's `Stop` sets `working` to what the runtime lists, none for Codex.
+
+### What a hook records when it fails
+
+A hook that cannot get its answer goes on without it and records why in `~/.hide/agent-hooks/delivery-diagnostics.json`, private to the account, at most once per cause every ten minutes, with one JSON line on its standard error when it records.
+The causes are a fixed list (`CAUSES` in `hide-agent-hooks/src/delivery.rs`), so the file stays small and holds no path or text.
+A hook's request to its daemon (`hide inbox --hook`, `hide workspace memory`) answers a reason for the step it stopped at, and each step has a cause of its own:
+
+| Step | `hide` reason | Cause |
+| --- | --- | --- |
+| No daemon published its bootstrap socket for the state folder, and no device's node answers | `hide_unavailable` | `unavailable` |
+| The record naming that socket is not the account's own and private, or names a folder that is gone | `invalid_bootstrap_socket_record` | `record` |
+| Nothing took the connection at the socket the record or the pane's reference names | `hide_unreachable` | `connect` |
+| The request was not written whole, because its time ran out or the stream broke; nothing ran | `request_unsent` | `unsent` |
+| No answer came before the deadline; the command may have run | `request_timeout` | `timeout` |
+| The answer ended, broke off, or was not one bounded JSON line for this request | `invalid_response` | `answer` |
+
+The daemon's own refusals keep the causes a hook acts on (`ledger`, `capacity`, `identity`), and any other reason is `refused`; an answer with no reason is `format`, and `cli` means the helper could not run the `hide` beside it.
+The `hide` whose request failed also writes `hook.request_failed` on its standard error, with the request id, the reason and the system's error kind.
+Memory's request records every failure but a deadline as `memory_unavailable` and keeps the step's cause beside it under `step`, so the file says where it stopped; a file an earlier helper wrote has no `step` and is read as it is.
+Each step has its own reason because they used to share one: every step answered `hide_unavailable`, recorded as `cli`, so a Windows hook that never wrote a byte to its daemon read like a missing `hide`.
 
 ### After Herdr hands off or restarts
 

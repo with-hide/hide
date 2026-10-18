@@ -59,19 +59,19 @@ Numeric shortcuts follow the sidebar's drawn order and deduplicate repeated sess
 ## Pane header and focus
 
 The identity row is 28pt: child-only parent Return, status mark, provider, title, real session PR/CI, Zoom, Menu and Close.
-The approved B2 child total and state counts start the second-row terminal overlay, compacting to the total and operator-raised count beside an ask band; without a core band, the core-ranked child's existing line fills the remaining space.
+The second-row terminal overlay is only the operator's turn or the pane's children: a parent's children button (`자식 N`, after the operator-raised count) keeps its right end, and without an ask the rest of the row names each child with its row mark, a child with news first.
 Shell panes carry only the shell mark, title and pane actions.
 The title truncates before retained facts and actions; the parent name becomes an icon first at narrow widths.
 Not connected, instrumentation uncertainty and the zoomed `+N` remain in this row.
 The old child-chip row and relationship sheet are removed.
 
-One state band overlays the terminal without changing its viewport or PTY size.
-Priority is connection/sleep, own Approval/Answer, raised child, then the pane's task verb.
-Approval, Answer, Stopped and raised children are warning; Fix is destructive; Review/Merge uses PR color; Result is done.
-Working uses only a thin blue line, and CI wait, Waiting, Idle and Shell have no task band.
-Normal waiting and termination use gray; wake failure, nonzero exit and Unavailable use red.
-The band carries its icon, core reason and the same elapsed-time reference as Sessions.
-Only Fix/Review/Merge exposes PR Open, and only a raised child exposes Open; connection and sleep actions stay in the body.
+One ask band overlays the terminal without changing its viewport or PTY size, and stays until the ask is answered, dimmed once read.
+Priority is own Approval/Answer/Blocked, raised child, then own Stopped; the pane's own ask leads with its verb and a raised child's with that child's name.
+Fix, Review, Merge and Result have no band: the identity row's PR mark and status mark say them.
+Working uses only a thin blue line, and CI wait, Waiting, Idle and Shell have no band.
+Why a terminal is not live (device away, restoration failure, sleep, ended, unavailable, reconnecting) is said in the pane body, never on the second row; nonzero exit and Unavailable use red.
+The band carries the core reason and the same elapsed-time reference as Sessions.
+Only a raised child exposes Open; connection and sleep actions stay in the body.
 The removed band's covered terminal rows reappear without resizing.
 
 Click, Enter or Space on the child badge opens the shared direct-child popover.

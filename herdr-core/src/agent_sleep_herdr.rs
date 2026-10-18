@@ -3,9 +3,11 @@
 //!
 //! Herdr has no hibernate: the pinned release ends nothing on request and
 //! forgets an agent whose process ended. So sleeping is Hide ending the
-//! pane's foreground process group with SIGTERM, which returns the pane to
-//! its shell, and waking is Herdr's own `agent.start` in that same pane with
-//! the provider's resume arguments; the signal is sent by the pane's node.
+//! agent, which returns the pane to its shell: first with the agent's own
+//! quit keys, then, for an agent still running, by the pane's node ending
+//! its foreground job (SIGTERM to its process group on Unix, the agent's
+//! process tree at once on Windows). Waking is Herdr's own `agent.start` in
+//! that same pane with the provider's resume arguments.
 //! When Herdr offers a hibernate or an
 //! exit mark of its own, this file is what changes; the decision, the
 //! records and the screens in `agent_sleep.rs` and the runtime stay.
@@ -17,6 +19,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use hide_herdr_client::{ApiConnector, ApiError, request_with_connector};
+use hide_node_link::process::GroupEnd;
 use hide_node_link::protocol::Call;
 
 use crate::node_access::{NodeLink, call_as};
@@ -43,6 +46,13 @@ const END_TIMEOUT: Duration = Duration::from_secs(10);
 /// write has its own request timeout (`REQUEST_TIMEOUT`), so this is the hang guard.
 const WRITE_DRAIN_LIMIT: Duration = Duration::from_secs(6);
 const END_POLL_INTERVAL: Duration = Duration::from_millis(200);
+/// How long an agent asked to quit with its own keys has to hand the
+/// terminal back before it is ended instead.
+const EXIT_GRACE: Duration = Duration::from_secs(5);
+/// The time between two presses of the agent's quit keys: each is read as a
+/// press of its own, well inside the shortest double-press window declared
+/// (Claude Code's 800 ms, `LaunchDialect::exit_keys`).
+const EXIT_KEY_GAP: Duration = Duration::from_millis(150);
 /// `agent.start` waits this long for the agent to be ready; the read waits a
 /// little longer so a slow start is not reported as an unanswered one.
 const AGENT_START_TIMEOUT_MS: u64 = 120_000;
@@ -70,11 +80,20 @@ impl std::fmt::Display for EndError {
 ///
 /// It reads the agent again first, because the decision was made on a list
 /// up to a second old and a parent's prompt may have set it working since.
-/// The signal goes to the pane's foreground process group only, and only
-/// when that group is not the shell's: the agent and what it started in its
-/// own group (MCP servers, tool processes) end, the shell and every other
+/// The end reaches the pane's foreground job only, and only when that job is
+/// not the shell's: the agent and what it started (MCP servers, tool
+/// processes; its group on Unix, its process tree on Windows, where Herdr
+/// names the agent's process as the group) end, the shell and every other
 /// pane stay (B7).
-#[allow(clippy::disallowed_methods)] // a production wait, not test code
+///
+/// The agent is first asked to quit with its own keys, as the operator quits
+/// it, so it puts back the terminal modes it set: Herdr wraps the wake's
+/// start line in bracketed paste while the pane's terminal says the mode is
+/// on, and a PowerShell prompt reads that wrapping as keys, so an agent ended
+/// without its own quit left a Windows pane whose next start never ran
+/// (herdrdev/herdr#5371; the Windows reason goes once it is closed and the
+/// pin moves past it). Only an agent still running after `EXIT_GRACE` is
+/// ended by the node.
 pub(crate) fn end_agent(
     connector: &dyn ApiConnector,
     node: &dyn NodeLink,
@@ -121,8 +140,31 @@ pub(crate) fn end_agent(
             "the pane's shell already holds the terminal".into(),
         ));
     }
-    // The group Herdr reported as the pane's foreground gets SIGTERM.
-    call_as::<()>(
+    let exit_keys = hide_agent_adapter::adapter(kind)
+        .and_then(|adapter| adapter.sleep)
+        .map_or(&[][..], hide_agent_adapter::LaunchDialect::exit_keys);
+    if !exit_keys.is_empty() {
+        let unanswered = match press_exit_keys(connector, pane_id, exit_keys) {
+            Ok(()) if shell_takes_terminal_within(connector, pane_id, shell, EXIT_GRACE)? => {
+                return Ok(state.state_change_seq);
+            }
+            Ok(()) => format!(
+                "still running {} s after its quit keys",
+                EXIT_GRACE.as_secs()
+            ),
+            Err(error) => error,
+        };
+        crate::diagnostic!(serde_json::json!({
+            "component": "agent_sleep",
+            "kind": "agent_sleep.exit_keys_unanswered",
+            "pane_id": pane_id,
+            "provider": kind,
+            "reason": unanswered,
+        }));
+    }
+    // The job Herdr reported as the pane's foreground ends. One that ended on
+    // its own since is gone, and the shell is waited for all the same.
+    let ended = call_as::<GroupEnd>(
         node,
         Call::TerminateGroup { leader: foreground },
         REQUEST_TIMEOUT,
@@ -130,18 +172,70 @@ pub(crate) fn end_agent(
     .map_err(|error| {
         EndError::Failed(format!("ending process group {foreground} failed: {error}"))
     })?;
-    let deadline = Instant::now() + END_TIMEOUT;
+    if let GroupEnd::Ended { left } = &ended
+        && !left.is_empty()
+    {
+        crate::diagnostic!(serde_json::json!({
+            "component": "agent_sleep",
+            "kind": "agent_sleep.end_left_running",
+            "pane_id": pane_id,
+            "provider": kind,
+            "leader": foreground,
+            "left": left
+                .iter()
+                .map(|process| serde_json::json!({"pid": process.pid, "reason": process.reason}))
+                .collect::<Vec<_>>(),
+        }));
+    }
+    if shell_takes_terminal_within(connector, pane_id, shell, END_TIMEOUT)? {
+        return Ok(state.state_change_seq);
+    }
+    Err(EndError::Failed(format!(
+        "the agent did not hand the terminal back to its shell within {} s",
+        END_TIMEOUT.as_secs()
+    )))
+}
+
+/// Presses the agent's quit keys, one request per key and `EXIT_KEY_GAP`
+/// apart, so the agent reads each as a press of its own.
+#[allow(clippy::disallowed_methods)] // the gap between two presses is the subject
+fn press_exit_keys(
+    connector: &dyn ApiConnector,
+    pane_id: &str,
+    keys: &[&str],
+) -> Result<(), String> {
+    for (index, key) in keys.iter().enumerate() {
+        if index > 0 {
+            thread::sleep(EXIT_KEY_GAP);
+        }
+        request_with_connector(
+            connector,
+            "pane.send_keys",
+            wire::pane_send_keys_params(pane_id, &[key])?,
+            REQUEST_TIMEOUT,
+        )
+        .map_err(|error| format!("pane.send_keys failed: {error}"))?;
+    }
+    Ok(())
+}
+
+/// Whether the pane's shell holds the terminal again within `within`.
+#[allow(clippy::disallowed_methods)] // a production wait, not test code
+fn shell_takes_terminal_within(
+    connector: &dyn ApiConnector,
+    pane_id: &str,
+    shell: u32,
+    within: Duration,
+) -> Result<bool, EndError> {
+    let deadline = Instant::now() + within;
     loop {
         thread::sleep(END_POLL_INTERVAL);
         let group = process_group(connector, pane_id).map_err(EndError::Failed)?;
         if group.foreground_process_group_id == Some(shell) {
-            return Ok(state.state_change_seq);
+            return Ok(true);
         }
         if Instant::now() >= deadline {
-            return Err(EndError::Failed(format!(
-                "the agent did not hand the terminal back to its shell within {} s",
-                END_TIMEOUT.as_secs()
-            )));
+            return Ok(false);
         }
     }
 }
@@ -417,7 +511,8 @@ pub(crate) fn spawn_wake(context: SleepTarget, request: WakeRequest) -> Result<(
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -599,27 +694,131 @@ mod tests {
         drop(admission);
     }
 
+    const AGENT_TREE: &str = "HIDE_TEST_AGENT_TREE";
+
+    fn agent_tree_command(role: &str) -> Command {
+        let mut command = Command::new(std::env::current_exe().expect("the test binary"));
+        command
+            .args([
+                "--exact",
+                "agent_sleep_herdr::tests::agent_tree_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(AGENT_TREE, role)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null());
+        command
+    }
+
+    /// Plays the agent of the test below when `AGENT_TREE` is set: `agent`
+    /// starts a `tool`, as an agent starts an MCP server, says its pid and
+    /// waits on it; `tool` waits to be ended.
     #[test]
-    fn ending_signals_the_foreground_group_and_waits_for_the_shell() {
-        let mut child =
-            process::OwnedChild::spawn(Command::new("/bin/sleep").arg("60")).expect("sleep starts");
-        let pid = child.id();
-        let exited = Arc::new(AtomicBool::new(false));
-        let seen = Arc::clone(&exited);
-        let herdr = FakeHerdr::start("agent-sleep-end", move |method, _| match method {
+    #[allow(clippy::disallowed_methods)] // a stand-in agent: it sleeps to stay alive until it is ended
+    fn agent_tree_child() {
+        let Some(role) = std::env::var_os(AGENT_TREE) else {
+            return;
+        };
+        if role == "agent" {
+            let mut tool = agent_tree_command("tool")
+                .stdout(Stdio::null())
+                .spawn()
+                .expect("the tool starts");
+            println!("READY {}", tool.id());
+            std::io::stdout().flush().expect("the pid is said");
+            let _ = tool.wait();
+        } else {
+            thread::sleep(Duration::from_secs(60));
+        }
+    }
+
+    /// A node that answers nothing: an end that reaches it fails the test.
+    struct NoNode;
+
+    impl NodeLink for NoNode {
+        fn call(
+            &self,
+            call: Call,
+            _: Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            panic!("the node was asked {call:?}");
+        }
+    }
+
+    /// An agent that quits on its own keys, as Claude Code does on a second
+    /// Ctrl+C, puts its terminal back itself: each key reaches Herdr as a
+    /// press of its own, and the node is never asked to end anything.
+    #[test]
+    fn an_agent_that_quits_on_its_keys_is_never_ended_by_the_node() {
+        let mut agent =
+            process::OwnedChild::spawn(&mut agent_tree_command("tool")).expect("the agent starts");
+        let pid = agent.id();
+        let presses = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let pressed = Arc::clone(&presses);
+        let herdr = FakeHerdr::start("agent-sleep-quit", move |method, _| match method {
             "agent.get" => agent_info("idle", 7),
             "pane.process_info" => {
-                // The shell (this test process stands in for it) takes the
-                // terminal back only once the agent's group is really gone.
                 let shell = std::process::id();
-                let gone = !process::is_alive(pid) || seen.load(Ordering::SeqCst);
-                process_info(shell, if gone { shell } else { pid })
+                process_info(shell, if process::is_alive(pid) { pid } else { shell })
+            }
+            "pane.send_keys" => {
+                // The agent quits on the second press.
+                if pressed.fetch_add(1, Ordering::SeqCst) == 1 {
+                    process::terminate(pid).expect("the agent quits");
+                }
+                json!({"type": "ok"})
             }
             other => panic!("unexpected {other}"),
         });
-        let reaper = thread::spawn(move || {
-            let _ = child.wait();
-            exited.store(true, Ordering::SeqCst);
+        assert_eq!(
+            end_agent(&herdr.connector(), &NoNode, "w1:p1", "claude"),
+            Ok(7)
+        );
+        let keys: Vec<Value> = herdr
+            .calls()
+            .into_iter()
+            .filter(|(method, _)| method == "pane.send_keys")
+            .map(|(_, params)| params["keys"].clone())
+            .collect();
+        assert_eq!(keys, [json!(["ctrl+c"]), json!(["ctrl+c"])]);
+        agent.wait().expect("the agent is reaped");
+    }
+
+    /// Sleep ends the pane's foreground job on every system when the agent
+    /// does not quit on its keys: Herdr names the agent's process as the
+    /// pane's foreground group (on Windows, which keeps no group, the job's
+    /// first process stands in for it), the agent and the tool it started
+    /// end, and the end waits for the shell to hold the terminal again. On
+    /// Windows the node refused the end as unsupported, so every Claude Code,
+    /// Codex and Antigravity agent stayed awake.
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a polling wait for the tool's end, bounded by a deadline
+    fn an_agent_that_does_not_quit_on_its_keys_is_ended_with_what_it_started() {
+        // Owned, so a failing test still ends the tree; on Unix it leads its
+        // own group, as a terminal's foreground job does.
+        let mut agent =
+            process::OwnedChild::spawn(agent_tree_command("agent").stdout(Stdio::piped()))
+                .expect("the agent starts");
+        let said = std::io::BufRead::lines(std::io::BufReader::new(
+            agent.take_stdout().expect("the agent's output"),
+        ))
+        .map_while(Result::ok)
+        .find_map(|line| line.split_once("READY ")?.1.trim().parse::<u32>().ok());
+        let tool = said.expect("the agent said its tool's pid");
+        let pid = agent.id();
+        let herdr = FakeHerdr::start("agent-sleep-end", move |method, _| match method {
+            "agent.get" => agent_info("idle", 7),
+            "pane.process_info" => {
+                // This test process stands in for the shell, which takes the
+                // terminal back once the agent has ended.
+                let shell = std::process::id();
+                process_info(shell, if process::is_alive(pid) { pid } else { shell })
+            }
+            // The stand-in reads no keys, as an agent with a draft does not
+            // quit on two presses.
+            "pane.send_keys" => json!({"type": "ok"}),
+            other => panic!("unexpected {other}"),
         });
         assert_eq!(
             end_agent(
@@ -630,8 +829,62 @@ mod tests {
             ),
             Ok(7)
         );
-        reaper.join().expect("reaped");
-        assert!(!process::is_alive(pid));
+        assert!(!agent.wait().expect("the agent is reaped").success());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while process::is_alive(tool) {
+            assert!(Instant::now() < deadline, "the agent's tool kept running");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// A node that answers each end with what it is given, and says it was
+    /// asked.
+    struct EndingNode(Value, Arc<AtomicBool>);
+
+    impl NodeLink for EndingNode {
+        fn call(
+            &self,
+            call: Call,
+            _: Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            assert!(
+                matches!(call, Call::TerminateGroup { leader: 9 }),
+                "{call:?}"
+            );
+            self.1.store(true, Ordering::SeqCst);
+            Ok(crate::node_access::LinkAnswer::Parsed(self.0.clone()))
+        }
+    }
+
+    /// The agent may quit between the last look at its pane and the node's
+    /// end, or leave a process the node could not end once the agent itself
+    /// is down. Neither is a failed sleep: the shell holds the terminal, so
+    /// the agent sleeps.
+    #[test]
+    fn an_end_that_finds_the_agent_gone_or_leaves_a_process_still_sleeps_it() {
+        for answer in [
+            json!({"outcome": "gone"}),
+            json!({"outcome": "ended", "left": [{"pid": 11, "reason": "Access is denied."}]}),
+        ] {
+            let asked = Arc::new(AtomicBool::new(false));
+            let node = EndingNode(answer.clone(), Arc::clone(&asked));
+            let herdr = FakeHerdr::start_with_errors("agent-sleep-gone", move |method, _| {
+                match method {
+                    "agent.get" => Ok(agent_info("idle", 7)),
+                    "pane.process_info" if asked.load(Ordering::SeqCst) => Ok(process_info(42, 42)),
+                    "pane.process_info" => Ok(process_info(42, 9)),
+                    // Refused keys go to the node at once, so no grace is
+                    // waited out here.
+                    "pane.send_keys" => Err(("pane_send_failed".into(), "refused".into())),
+                    other => panic!("unexpected {other}"),
+                }
+            });
+            assert_eq!(
+                end_agent(&herdr.connector(), &node, "w1:p1", "claude"),
+                Ok(7),
+                "{answer}"
+            );
+        }
     }
 
     #[test]

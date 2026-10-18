@@ -134,7 +134,7 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
     ),
     empty: () => <AreaEmpty state="no-view" text={t("documents.view.empty")} />,
     floating: (display) => <>{displayMark(display)}<span className={`truncate ${display.preview ? "italic" : ""}`}>{display.label}</span></>,
-    menu: (id, geometry, sizes) => [{ id: "new_tab", label: t("panes.area.newTab"), unavailable: null }, ...displayMenu(layout, geometry, sizes, id, { host: revealHost(), device: workspace.device_id, node: windowDeviceId(useShellStore.getState().rest?.navigator?.devices) })],
+    menu: (id, geometry, sizes) => [{ id: "new_tab", icon: "add", label: t("panes.area.newTab"), unavailable: null }, ...displayMenu(layout, geometry, sizes, id, { host: revealHost(), device: workspace.device_id, node: windowDeviceId(useShellStore.getState().rest?.navigator?.devices) })],
     runMenu: (id, displayId) => id === "new_tab" ? actions.openBrowser("", workspace, locateDisplay(layout.root, displayId)?.area.id) : actions.runViewMenu(id as ViewMenuId, displayId),
     focus: actions.focusView,
     focusArea: actions.focusViewArea,

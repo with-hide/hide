@@ -5,7 +5,7 @@
 // reason, never hidden behind an action that would fail.
 
 import { DropdownMenu as MenuPrimitive } from "radix-ui";
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "../lib/utils";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger } from "./ui/context-menu";
 import {
@@ -22,14 +22,16 @@ import {
 } from "./ui/dropdown-menu";
 import { useEscapeLayer, useReturnFocus } from "./ui/layer";
 import { menuContent } from "./ui/menu-styles";
+import { useInterfaceTranslation } from "../i18n/client";
+import { menuGroupSymbols, menuSymbols, type MenuPresentation, type MenuGroup } from "./menu-symbols";
 import { Hint } from "./ui/tooltip";
 
-export type MenuEntry<Id extends string = string> = {
+export type MenuEntry<Id extends string = string> = MenuPresentation & {
   id: Id;
   label: string;
   /** Why the action is not offered here; the item is drawn disabled with this as its reason. */
   unavailable: string | null;
-  /** A destructive or closing action, drawn after a separator. */
+  /** Starts a new visual section, drawn after a separator. */
   separated?: boolean;
   /** An action that removes or discards something, drawn in the destructive color. */
   destructive?: boolean;
@@ -39,9 +41,11 @@ export type MenuEntry<Id extends string = string> = {
   choices?: { id: Id; label: string; checked: boolean }[];
 };
 
+const entryBounds = "max-h-(--radix-dropdown-menu-content-available-height) max-w-[calc(100vw-var(--spacing-md))]";
+
 type Parts = { Item: typeof DropdownMenuItem | typeof ContextMenuItem; Separator: typeof DropdownMenuSeparator | typeof ContextMenuSeparator };
 
-function EntryItems<Id extends string>({ items, onSelect, parts }: { items: MenuEntry<Id>[]; onSelect: (id: Id) => void; parts: Parts }) {
+function FlatEntryItems<Id extends string>({ items, onSelect, parts, withIcons = items.some((item) => item.icon) }: { items: MenuEntry<Id>[]; onSelect: (id: Id) => void; parts: Parts; withIcons?: boolean }) {
   const { Item, Separator } = parts;
   return (
     <>
@@ -51,7 +55,8 @@ function EntryItems<Id extends string>({ items, onSelect, parts }: { items: Menu
           {item.choices ? (
             <DropdownMenuSub>
               <DropdownMenuSubTrigger disabled={item.unavailable !== null} data-menu-item={item.id}>
-                <span data-menu-label="">{item.label}</span>
+                <MenuSymbolSlot name={item.icon} reserved={withIcons} destructive={item.destructive} />
+                <span data-menu-label="">{item.menuLabel ?? item.label}</span>
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent aria-label={item.label} data-menu-choices={item.id}>
                 <DropdownMenuRadioGroup value={item.choices.find((choice) => choice.checked)?.id ?? ""} onValueChange={(value) => onSelect(value as Id)}>
@@ -64,18 +69,89 @@ function EntryItems<Id extends string>({ items, onSelect, parts }: { items: Menu
               </DropdownMenuSubContent>
             </DropdownMenuSub>
           ) : (
-            <Item disabled={item.unavailable !== null} variant={item.destructive ? "destructive" : "default"} data-menu-item={item.id} className="flex-col items-stretch gap-none" onSelect={() => onSelect(item.id)}>
+            <Item disabled={item.unavailable !== null} variant={item.destructive ? "destructive" : "default"} data-menu-item={item.id} textValue={item.menuLabel ?? item.label} className="flex-col items-stretch gap-none" onSelect={() => onSelect(item.id)}>
               <span className="flex items-center gap-sm">
-                <span data-menu-label="">{item.label}</span>
+                <MenuSymbolSlot name={item.icon} reserved={withIcons} destructive={item.destructive} />
+                <span data-menu-label="">{item.menuLabel ?? item.label}</span>
                 {item.shortcut ? <ContextMenuShortcut data-menu-shortcut={item.shortcut}>{item.shortcut}</ContextMenuShortcut> : null}
               </span>
-              {item.unavailable ? <span data-menu-reason="" className="text-caption text-muted-foreground">{item.unavailable}</span> : null}
+              {item.unavailable ? <span data-menu-reason="" className={cn("text-caption text-muted-foreground", withIcons && "pl-[calc(var(--size-icon)+var(--spacing-sm))]")}>{item.unavailable}</span> : null}
             </Item>
           )}
         </Fragment>
       ))}
     </>
   );
+}
+
+function MenuSymbolSlot({ name, reserved, destructive }: { name?: MenuPresentation["icon"]; reserved: boolean; destructive?: boolean }) {
+  if (!name) return reserved ? <span aria-hidden="true" className="size-(--size-icon) shrink-0" /> : null;
+  const Icon = menuSymbols[name];
+  return <Icon aria-hidden="true" data-menu-icon={name} className={cn("size-(--size-icon) shrink-0", destructive && "text-destructive")} />;
+}
+
+/** Only the visual grouping changes: callers keep one flat, checked command list. */
+function EntryItems<Id extends string>({ items, onSelect, parts }: { items: MenuEntry<Id>[]; onSelect: (id: Id) => void; parts: Parts }) {
+  const runs: MenuEntry<Id>[][] = [];
+  for (const item of items) {
+    const last = runs.at(-1);
+    if (last && last[0]?.group === item.group) last.push(item);
+    else runs.push([item]);
+  }
+  return runs.map((entries) => {
+    const first = entries[0]!;
+    return first.group
+      ? <ActionSubmenu key={first.id} group={first.group} items={entries} onSelect={onSelect} parts={parts} />
+      : <FlatEntryItems key={first.id} withIcons={items.some((item) => item.icon || item.group)} items={entries} onSelect={onSelect} parts={parts} />;
+  });
+}
+
+function ActionSubmenu<Id extends string>({ group, items, onSelect, parts }: { group: MenuGroup; items: MenuEntry<Id>[]; onSelect: (id: Id) => void; parts: Parts }) {
+  const { t } = useInterfaceTranslation();
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const reason = items[0]!.unavailable;
+  // Collapse an identical refusal once; different reasons remain beside each choice.
+  const unavailable = reason !== null && items.every((item) => item.unavailable === reason) ? reason : null;
+  useLayoutEffect(() => {
+    if (open && unavailable !== null) {
+      setOpen(false);
+      trigger.current?.focus();
+    }
+  }, [open, unavailable]);
+  useEscapeLayer(open && unavailable === null, () => { setOpen(false); trigger.current?.focus(); });
+  const label = t(`menus.group.${group}`);
+  const { Separator } = parts;
+  return (
+    <>
+      {items[0]!.separated ? <Separator /> : null}
+      <DropdownMenuSub open={open && unavailable === null} onOpenChange={setOpen}>
+        <DropdownMenuSubTrigger ref={trigger} disabled={unavailable !== null} textValue={label} data-menu-group={group}
+          onPointerLeave={(event) => {
+            // A submenu can flip left at the window edge. When the pointer
+            // already reached it, keep focus there instead of relying on the
+            // previous horizontal direction used by Radix's grace polygon.
+            if (event.relatedTarget instanceof Node && content.current?.contains(event.relatedTarget)) event.preventDefault();
+          }}>
+          <MenuSymbolSlot name={menuGroupSymbols[group]} reserved />
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span data-menu-label="">{label}</span>
+            {unavailable ? <span data-menu-reason="" className="text-caption text-muted-foreground">{unavailable}</span> : null}
+          </span>
+        </DropdownMenuSubTrigger>
+        <MenuPrimitive.Portal>
+          <DropdownMenuSubContent ref={content} className={entryBounds} aria-label={label} data-menu-submenu={group} onEscapeKeyDown={(event) => { event.preventDefault(); setOpen(false); trigger.current?.focus(); }}>
+            <FlatEntryItems items={items.map((item, index) => index === 0 ? { ...item, separated: false } : item)} onSelect={onSelect} parts={parts} />
+          </DropdownMenuSubContent>
+        </MenuPrimitive.Portal>
+      </DropdownMenuSub>
+    </>
+  );
+}
+
+function MenuTitle({ title }: { title?: string }) {
+  return title ? <MenuPrimitive.Label title={title} className="max-w-(--size-relationship-list-max) truncate border-b border-border px-sm py-xs text-caption text-muted-foreground" data-menu-title="">{title}</MenuPrimitive.Label> : null;
 }
 
 /**
@@ -90,6 +166,7 @@ function EntryItems<Id extends string>({ items, onSelect, parts }: { items: Menu
  */
 export function EntryContextMenu<Id extends string>({
   label,
+  title,
   items,
   onSelect,
   children,
@@ -100,6 +177,7 @@ export function EntryContextMenu<Id extends string>({
   ...data
 }: {
   label: string;
+  title?: string;
   items: () => MenuEntry<Id>[];
   onSelect: (id: Id) => void;
   children: ReactNode;
@@ -119,7 +197,8 @@ export function EntryContextMenu<Id extends string>({
         {children}
       </ContextMenuTrigger>
       {entries.length ? (
-        <ContextMenuContent aria-label={label} onCloseAutoFocus={onCloseAutoFocus} {...data}>
+        <ContextMenuContent className={entryBounds} aria-label={label} onCloseAutoFocus={onCloseAutoFocus} {...data}>
+          <MenuTitle title={title} />
           <EntryItems items={entries} onSelect={onSelect} parts={{ Item: ContextMenuItem, Separator: ContextMenuSeparator }} />
         </ContextMenuContent>
       ) : null}
@@ -133,6 +212,7 @@ export function EntryContextMenu<Id extends string>({
  */
 export function EntryDropdown<Id extends string>({
   label,
+  title,
   items,
   onSelect,
   trigger,
@@ -142,6 +222,7 @@ export function EntryDropdown<Id extends string>({
   ...data
 }: {
   label: string;
+  title?: string;
   /** The items, or a reader called while open so confirmed changes keep its choices current. */
   items: MenuEntry<Id>[] | (() => MenuEntry<Id>[]);
   onSelect: (id: Id) => void;
@@ -161,7 +242,8 @@ export function EntryDropdown<Id extends string>({
       }}
     >
       {hint ? <Hint label={hint}>{control}</Hint> : control}
-      <DropdownMenuContent aria-label={label} align={align} {...data}>
+      <DropdownMenuContent className={entryBounds} aria-label={label} align={align} {...data}>
+        <MenuTitle title={title} />
         <EntryItems items={entries} onSelect={onSelect} parts={{ Item: DropdownMenuItem, Separator: DropdownMenuSeparator }} />
       </DropdownMenuContent>
     </DropdownMenu>
@@ -175,6 +257,7 @@ export function EntryDropdown<Id extends string>({
  */
 export function EntryPointMenu<Id extends string>({
   label,
+  title,
   items,
   onSelect,
   at,
@@ -182,6 +265,7 @@ export function EntryPointMenu<Id extends string>({
   ...data
 }: {
   label: string;
+  title?: string;
   items: MenuEntry<Id>[];
   onSelect: (id: Id) => void;
   /** The viewport point the menu opens at. */
@@ -196,7 +280,8 @@ export function EntryPointMenu<Id extends string>({
         <span aria-hidden="true" className="pointer-events-none fixed size-(--spacing-none)" style={{ left: at?.x ?? 0, top: at?.y ?? 0 }} />
       </MenuPrimitive.Trigger>
       <MenuPrimitive.Portal>
-        <MenuPrimitive.Content aria-label={label} align="start" sideOffset={0} className={menuContent} onCloseAutoFocus={returnFocus} {...data}>
+        <MenuPrimitive.Content aria-label={label} align="start" sideOffset={0} className={cn(menuContent, entryBounds)} onCloseAutoFocus={returnFocus} {...data}>
+          <MenuTitle title={title} />
           <EntryItems items={items} onSelect={onSelect} parts={{ Item: DropdownMenuItem, Separator: DropdownMenuSeparator }} />
         </MenuPrimitive.Content>
       </MenuPrimitive.Portal>

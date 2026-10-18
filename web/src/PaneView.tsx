@@ -21,6 +21,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { modChord, TERMINAL_COPY, TERMINAL_PASTE } from "./shortcuts";
 import { wakeFailureReason, wakingLine } from "./sleep";
 import type { AgentSleep, AgentStatusCode, PaneRow, RowMark, TerminalPane } from "./snapshot";
+import { PaneNoticeBody } from "./PaneNotice";
 import { caughtUp } from "./operatorFocus";
 import { useShellStore } from "./store";
 import { attachTerminal, bracketedPaste, focusTerminal, requestView, setTextScale, terminalLinkAt, terminalSelectionText } from "./terminals";
@@ -417,6 +418,7 @@ export const PaneView = memo(function PaneView({
             <Button size="sm" variant="outline" onClick={() => actions.closePane(paneId)}>{t("panes.restore.close")}</Button>
           </div>
         ) : sleep ? <SleepBody paneId={paneId} sleep={sleep} actions={actions} /> : null}
+        {header?.notice && !caption?.reconnects && !sleep && !pane.failed_terminal_id ? <PaneNoticeBody notice={header.notice} /> : null}
         {caption?.reconnects && !sleep && !pane.failed_terminal_id ? (
           <button
             type="button"
