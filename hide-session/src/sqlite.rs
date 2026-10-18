@@ -3,16 +3,21 @@ use rusqlite::{Connection, OpenFlags, ffi};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
+use crate::ReadRefusal;
+
 type ReadGate = (std::path::PathBuf, Weak<Mutex<()>>);
 static READ_GATES: Mutex<Vec<ReadGate>> = Mutex::new(Vec::new());
 
 /// Closing any descriptor for an inode drops this process's POSIX locks on
-/// it. Keep all OpenCode guard handles inside the same per-database gate as
+/// it. Keep all provider guard handles inside the same per-database gate as
 /// SQLite, including admission and destruction. Refuse contention rather
-/// than making a session worker wait behind another read.
+/// than making a session worker wait behind another read, with the reasons
+/// of the database read.
 /// The canonical namespace, not its inode, survives provider replacement.
-pub(crate) fn read_gate(path: &Path) -> Result<Arc<Mutex<()>>, &'static str> {
-    let mut gates = READ_GATES.lock().map_err(|_| "opencode_db_unreadable")?;
+fn read_gate(path: &Path, reasons: &Reasons) -> Result<Arc<Mutex<()>>, ReadRefusal> {
+    let mut gates = READ_GATES
+        .lock()
+        .map_err(|_| ReadRefusal::Refused(reasons.unreadable.to_owned()))?;
     gates.retain(|(_, gate)| gate.strong_count() != 0);
     if let Some(gate) = gates
         .iter()
@@ -21,7 +26,7 @@ pub(crate) fn read_gate(path: &Path) -> Result<Arc<Mutex<()>>, &'static str> {
         return Ok(gate);
     }
     if gates.len() >= 64 {
-        return Err("opencode_db_busy");
+        return Err(ReadRefusal::InMotion(reasons.busy));
     }
     let gate = Arc::new(Mutex::new(()));
     gates.push((path.to_path_buf(), Arc::downgrade(&gate)));
@@ -126,6 +131,9 @@ const BUSY_WAIT: std::time::Duration = std::time::Duration::from_millis(50);
 /// The VFS forbids writes even if the provider removes a WAL between
 /// admission and SQLite opening it. A checkpointed main is read without
 /// asking SQLite to create companions; a live WAL retains locking.
+/// Whether the read met the provider writing is decided here, at the read's
+/// two edges: the database held when the read takes its snapshot, or its
+/// files changed by the time the read ends ([`ReadRefusal::InMotion`]).
 pub(crate) fn with_read<T>(
     home: &Path,
     folder: &str,
@@ -133,40 +141,42 @@ pub(crate) fn with_read<T>(
     reasons: &Reasons,
     steps: usize,
     read: impl FnOnce(&Connection) -> T,
-) -> Result<T, String> {
+) -> Result<T, ReadRefusal> {
+    let unreadable = || ReadRefusal::Refused(reasons.unreadable.to_owned());
     let metadata = std::fs::symlink_metadata(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
-            "session_file_missing".to_owned()
+            ReadRefusal::Refused("session_file_missing".to_owned())
         } else {
-            reasons.unreadable.to_owned()
+            unreadable()
         }
     })?;
     if metadata.file_type().is_symlink() {
-        return Err("label_session_linked".to_owned());
+        return Err(ReadRefusal::Refused("label_session_linked".to_owned()));
     }
     if !metadata.is_file() {
-        return Err("label_session_not_regular".to_owned());
+        return Err(ReadRefusal::Refused("label_session_not_regular".to_owned()));
     }
     // Resolve OS aliases such as macOS /var before SQLite's NOFOLLOW check.
     // The final database symlink was refused above.
-    let path = crate::native_file::checked_path_under(home, folder, path)
-        .map_err(|_| reasons.unreadable.to_owned())?;
-    let gate = read_gate(&path).map_err(str::to_owned)?;
+    let path =
+        crate::native_file::checked_path_under(home, folder, path).map_err(|_| unreadable())?;
+    let gate = read_gate(&path, reasons)?;
     let _read_guard = gate.try_lock().map_err(|error| match error {
-        std::sync::TryLockError::WouldBlock => reasons.busy.to_owned(),
-        std::sync::TryLockError::Poisoned(_) => reasons.unreadable.to_owned(),
+        std::sync::TryLockError::WouldBlock => ReadRefusal::InMotion(reasons.busy),
+        std::sync::TryLockError::Poisoned(_) => unreadable(),
     })?;
     // Drop order matters: Source's raw handles close before this gate opens.
     let source = Source::admit(home, &path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::WouldBlock {
-            reasons.busy.to_owned()
+            ReadRefusal::InMotion(reasons.busy)
         } else {
-            reasons.unreadable.to_owned()
+            unreadable()
         }
     })?;
     let failed = |error: &rusqlite::Error| refusal(reasons, error);
     let connection = open_readonly(
-        &read_uri(&path, !source.checkpointed_wal).map_err(str::to_owned)?,
+        &read_uri(&path, !source.checkpointed_wal)
+            .map_err(|reason| ReadRefusal::Refused(reason.to_owned()))?,
         OpenFlags::SQLITE_OPEN_READ_ONLY
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
             | OpenFlags::SQLITE_OPEN_URI
@@ -177,15 +187,22 @@ pub(crate) fn with_read<T>(
         .busy_timeout(BUSY_WAIT)
         .map_err(|error| failed(&error))?;
     work_budget(&connection, steps);
+    // The schema cookie is the first page read, so the read's snapshot (its
+    // shared lock, or its WAL read mark) is taken here and kept until the
+    // rollback: a provider holding the database is met now, and no
+    // statement of `read` waits on it.
     connection
         .execute_batch("BEGIN")
+        .and_then(|()| connection.query_row("PRAGMA schema_version", [], |_| Ok(())))
         .map_err(|error| failed(&error))?;
     let result = read(&connection);
     connection
         .execute_batch("ROLLBACK")
         .map_err(|error| failed(&error))?;
     connection.close().map_err(|(_, error)| failed(&error))?;
-    source.validate().map_err(|_| reasons.changed.to_owned())?;
+    source
+        .validate()
+        .map_err(|_| ReadRefusal::InMotion(reasons.changed))?;
     Ok(result)
 }
 
@@ -201,13 +218,15 @@ pub(crate) fn work_budget(connection: &Connection, steps: usize) {
     );
 }
 
-pub(crate) fn refusal(reasons: &Reasons, error: &rusqlite::Error) -> String {
+pub(crate) fn refusal(reasons: &Reasons, error: &rusqlite::Error) -> ReadRefusal {
     match error.sqlite_error_code() {
         Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
-            reasons.busy.to_owned()
+            ReadRefusal::InMotion(reasons.busy)
         }
-        Some(rusqlite::ErrorCode::OperationInterrupted) => reasons.work.to_owned(),
-        _ => reasons.unreadable.to_owned(),
+        Some(rusqlite::ErrorCode::OperationInterrupted) => {
+            ReadRefusal::Refused(reasons.work.to_owned())
+        }
+        _ => ReadRefusal::Refused(reasons.unreadable.to_owned()),
     }
 }
 
@@ -408,7 +427,7 @@ mod tests {
             drop(writer);
             value
         });
-        assert_eq!(result, Err("opencode_db_changed".to_owned()));
+        assert_eq!(result, Err(ReadRefusal::InMotion("opencode_db_changed")));
     }
 
     #[test]
@@ -454,7 +473,7 @@ mod tests {
                 });
                 assert_eq!(
                     competing.join().unwrap(),
-                    Err("opencode_db_busy".to_owned())
+                    Err(ReadRefusal::InMotion("opencode_db_busy"))
                 );
                 assert_eq!(
                     crate::opencode::with_unchecked_read(other.path(), read_value)
@@ -486,10 +505,10 @@ mod tests {
                 crate::opencode::with_unchecked_read(home.path(), |_| panic!(
                     "replacement bypassed gate"
                 )),
-                Err("opencode_db_busy".to_owned())
+                Err(ReadRefusal::InMotion("opencode_db_busy"))
             );
         });
-        assert_eq!(result, Err("opencode_db_changed".to_owned()));
+        assert_eq!(result, Err(ReadRefusal::InMotion("opencode_db_changed")));
         assert!(crate::opencode::with_unchecked_read(home.path(), |_| ()).is_ok());
     }
 }

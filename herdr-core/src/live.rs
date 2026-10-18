@@ -3670,9 +3670,10 @@ const ANTIGRAVITY_FORK_POLL: Duration = Duration::from_millis(250);
 const ANTIGRAVITY_INDEX_IN_MOTION_LIMIT: usize = 20;
 
 /// One read of agy's index on the pane's node, read again while it only met
-/// agy writing the index (`hide_session::antigravity::index_in_motion`). A
-/// read that answers is one consistent snapshot of the index, so it needs no
-/// second read to agree with; the wait ends at `deadline` or after
+/// agy writing the index, which the node answers as busy
+/// (`hide_session::ReadRefusal::InMotion`). A read that answers is one
+/// consistent snapshot of the index, so it needs no second read to agree
+/// with; the wait ends at `deadline` or after
 /// [`ANTIGRAVITY_INDEX_IN_MOTION_LIMIT`] reads in a row, whichever is first.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code: bounded by count and deadline
 fn read_antigravity_index<T: serde::de::DeserializeOwned>(
@@ -3684,7 +3685,7 @@ fn read_antigravity_index<T: serde::de::DeserializeOwned>(
     loop {
         match crate::node_access::call_as(node, call(), Duration::from_secs(5)) {
             Err(crate::node_access::LinkError::Refused(error))
-                if hide_session::antigravity::index_in_motion(&error.message)
+                if error.code == hide_node_link::ErrorCode::Busy
                     && in_motion + 1 < ANTIGRAVITY_INDEX_IN_MOTION_LIMIT
                     && Instant::now() < deadline =>
             {
@@ -5188,10 +5189,12 @@ mod tests {
                     "unreadable" => 1,
                     _ => 0,
                 }),
-                reason: if case == "unreadable" {
-                    "antigravity_db_unreadable"
+                // What the node answers for each: agy writing its index is
+                // busy, an index Hide cannot read is not.
+                refusal: if case == "unreadable" {
+                    (hide_node_link::ErrorCode::Io, "antigravity_db_unreadable")
                 } else {
-                    "antigravity_db_changed"
+                    (hide_node_link::ErrorCode::Busy, "antigravity_db_changed")
                 },
             };
             let index_home = home.path().to_path_buf();
@@ -5321,7 +5324,7 @@ mod tests {
     struct IndexInMotion {
         inner: hide_node::Local,
         left: std::sync::atomic::AtomicUsize,
-        reason: &'static str,
+        refusal: (hide_node_link::ErrorCode, &'static str),
     }
 
     impl crate::node_access::NodeLink for IndexInMotion {
@@ -5344,7 +5347,7 @@ mod tests {
                 .is_ok()
             {
                 return Err(crate::node_access::LinkError::Refused(
-                    hide_node_link::HostError::new(hide_node_link::ErrorCode::Io, self.reason),
+                    hide_node_link::HostError::new(self.refusal.0, self.refusal.1),
                 ));
             }
             self.inner.call(call, timeout)

@@ -1095,7 +1095,7 @@ mod omp {
             }
         }
 
-        fn read(&self) -> Result<LabelTranscript, String> {
+        fn read(&self) -> Result<LabelTranscript, hide_session::ReadRefusal> {
             read(self.home.path(), &self.request)
         }
         fn resume(&mut self, answer: &LabelTranscript) {
@@ -1586,7 +1586,7 @@ mod grok {
             fs::rename(temporary, self.folder().join("summary.json")).unwrap();
         }
 
-        fn read(&self) -> Result<LabelTranscript, String> {
+        fn read(&self) -> Result<LabelTranscript, hide_session::ReadRefusal> {
             read(self.home.path(), &self.request)
         }
 
@@ -2315,7 +2315,7 @@ mod pi {
             }
         }
 
-        fn read(&self) -> Result<LabelTranscript, String> {
+        fn read(&self) -> Result<LabelTranscript, hide_session::ReadRefusal> {
             read(self.home.path(), &self.request)
         }
 
@@ -2396,7 +2396,10 @@ mod pi {
         native.request.cwd = Some(native.cwd.display().to_string());
         native.request.reference_kind = "id".to_owned();
         native.request.reference_value = "not-the-id".to_owned();
-        assert_eq!(native.read().unwrap_err(), "session_file_missing");
+        assert_eq!(
+            native.read().unwrap_err(),
+            hide_session::ReadRefusal::Refused("session_file_missing".into())
+        );
         assert!(
             SessionLocator::new(native.home.path())
                 .locate(
@@ -2805,7 +2808,10 @@ mod pi {
             .unwrap();
         }
         let error = native.read().unwrap_err();
-        assert_eq!(error, "session_capacity");
+        assert_eq!(
+            error,
+            hide_session::ReadRefusal::Refused("session_capacity".into())
+        );
     }
 
     #[test]
@@ -3001,7 +3007,7 @@ fn a_locked_opencode_database_is_a_skipped_read_that_never_blocks_opencode() {
     let started = std::time::Instant::now();
     assert_eq!(
         read(home.path(), &request(Agent::OpenCode)).unwrap_err(),
-        "opencode_db_busy"
+        hide_session::ReadRefusal::InMotion("opencode_db_busy")
     );
     assert!(started.elapsed() < std::time::Duration::from_secs(1));
     // OpenCode's write goes on and the next read takes it.
@@ -3258,7 +3264,7 @@ fn opencode_bounds_sql_work_when_a_part_sort_cannot_use_an_index() {
     writer.execute_batch("WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM rows WHERE n<100000) INSERT INTO part SELECT printf('prt_many_%06d', n), 'msg_big_000', 'ses_0a1b2c3d4e5f60718293a4b5c6', n, n, '' FROM rows;").unwrap();
     assert_eq!(
         read(home.path(), &request(Agent::OpenCode)).unwrap_err(),
-        "opencode_db_work_capacity"
+        hide_session::ReadRefusal::Refused("opencode_db_work_capacity".into())
     );
     let parts: i64 = writer
         .query_row("SELECT count(*) FROM part", [], |row| row.get(0))
@@ -3846,7 +3852,7 @@ fn more_opencode_questions_than_the_cap_refuse_the_read_rather_than_miss_one() {
     }
     assert_eq!(
         read(home.path(), &request(Agent::OpenCode)).unwrap_err(),
-        "user_turn_capacity"
+        hide_session::ReadRefusal::Refused("user_turn_capacity".into())
     );
 }
 
@@ -3996,7 +4002,7 @@ fn an_unknown_opencode_question_state_refuses_the_read_rather_than_guessing() {
         .unwrap();
     assert_eq!(
         read(home.path(), &request(Agent::OpenCode)).unwrap_err(),
-        "user_turn_invalid"
+        hide_session::ReadRefusal::Refused("user_turn_invalid".into())
     );
 }
 
@@ -4016,7 +4022,7 @@ fn an_opencode_child_session_is_never_read_into_or_as_the_root_conversation() {
     child.reference_value = "ses_0a1b2c3d4e5f60718293child".into();
     assert_eq!(
         read(home.path(), &child).unwrap_err(),
-        "label_session_not_root"
+        hide_session::ReadRefusal::Refused("label_session_not_root".into())
     );
 }
 
@@ -4027,12 +4033,12 @@ fn an_opencode_session_proves_its_checkout_and_refuses_another_one() {
     other.cwd = Some("/work/other".into());
     assert_eq!(
         read(home.path(), &other).unwrap_err(),
-        "label_session_cwd_mismatch"
+        hide_session::ReadRefusal::Refused("label_session_cwd_mismatch".into())
     );
     other.cwd = None;
     assert_eq!(
         read(home.path(), &other).unwrap_err(),
-        "label_session_cwd_unconfirmed"
+        hide_session::ReadRefusal::Refused("label_session_cwd_unconfirmed".into())
     );
     other.cwd = Some("/work/app/".into());
     let confirmed = read(home.path(), &other).unwrap().confirmed;
@@ -4043,7 +4049,7 @@ fn an_opencode_session_proves_its_checkout_and_refuses_another_one() {
     path.reference_value = "/work/app/.opencode/session".into();
     assert_eq!(
         read(home.path(), &path).unwrap_err(),
-        "session_kind_unsupported"
+        hide_session::ReadRefusal::Refused("session_kind_unsupported".into())
     );
 }
 
@@ -4057,7 +4063,7 @@ fn a_linked_opencode_database_is_refused() {
         .unwrap();
     assert_eq!(
         read(home.path(), &request(Agent::OpenCode)).unwrap_err(),
-        "label_session_linked"
+        hide_session::ReadRefusal::Refused("label_session_linked".into())
     );
 }
 
@@ -4231,7 +4237,7 @@ fn opencode_conversation_page_is_its_label_read_by_message_with_receipts_as_inje
     assert_eq!(
         hide_session::opencode::read_conversation(home.path(), &scope("/work/other"), None)
             .unwrap_err(),
-        "label_session_cwd_mismatch"
+        hide_session::ReadRefusal::Refused("label_session_cwd_mismatch".into())
     );
 }
 

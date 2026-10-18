@@ -13,7 +13,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
 use crate::native_file::Header;
-use crate::{ConversationEvent, DiscoveryBudget, EventKind, LineResult, SessionError};
+use crate::{ConversationEvent, DiscoveryBudget, EventKind, LineResult, ReadRefusal, SessionError};
 
 /// agy's own folder under the home folder.
 pub const FOLDER: &str = ".gemini/antigravity-cli";
@@ -37,13 +37,6 @@ const REASONS: crate::sqlite::Reasons = crate::sqlite::Reasons {
     changed: "antigravity_db_changed",
     work: "antigravity_db_work_capacity",
 };
-
-/// Whether an index read failed only because it met agy writing its index
-/// (agy held it, or it moved during the read), so a read a moment later can
-/// answer. A refusal for any other reason stays a refusal.
-pub fn index_in_motion(reason: &str) -> bool {
-    reason == REASONS.busy || reason == REASONS.changed
-}
 
 /// agy names a conversation by a lowercase UUID.
 pub fn valid_id(id: &str) -> bool {
@@ -167,7 +160,10 @@ fn to_row((id, uris, parent, title): Columns) -> Option<Row> {
     })
 }
 
-fn with_index<T>(home: &Path, read: impl FnOnce(&Connection) -> T) -> Result<T> {
+fn with_index<T>(
+    home: &Path,
+    read: impl FnOnce(&Connection) -> T,
+) -> std::result::Result<T, ReadRefusal> {
     crate::sqlite::with_read(
         home,
         FOLDER,
@@ -176,7 +172,6 @@ fn with_index<T>(home: &Path, read: impl FnOnce(&Connection) -> T) -> Result<T> 
         SQL_STEPS,
         read,
     )
-    .map_err(|reason| anyhow!(reason))
 }
 
 /// Conversation `id`'s row, `None` when the index has none for this app.
@@ -192,7 +187,7 @@ pub(crate) fn row(home: &Path, id: &str) -> Result<Option<Row>> {
         )
         .optional()
     })?
-    .map_err(|error| anyhow!(crate::sqlite::refusal(&REASONS, &error)))?;
+    .map_err(|error| crate::sqlite::refusal(&REASONS, &error))?;
     match found {
         None => Ok(None),
         Some(columns) => to_row(columns)
@@ -231,28 +226,22 @@ pub(crate) fn checkout(home: &Path, id: &str) -> std::result::Result<Option<Path
     );
     match found {
         Ok(Ok(columns)) => Ok(columns.and_then(to_row).map(|row| row.cwd)),
-        Ok(Err(_)) => Err(IndexBusy),
-        Err(reason)
-            if [
-                REASONS.busy,
-                REASONS.unreadable,
-                REASONS.changed,
-                REASONS.work,
-            ]
-            .contains(&reason.as_str()) =>
+        Ok(Err(_)) | Err(ReadRefusal::InMotion(_)) => Err(IndexBusy),
+        Err(ReadRefusal::Refused(reason))
+            if [REASONS.unreadable, REASONS.work].contains(&reason.as_str()) =>
         {
             Err(IndexBusy)
         }
         // Missing, a link or not a regular file: no index Hide reads.
-        Err(_) => Ok(None),
+        Err(ReadRefusal::Refused(_)) => Ok(None),
     }
 }
 
 /// The newest conversation the operator started in `cwd` (canonical),
 /// among the newest rows the index holds.
 fn newest_root(home: &Path, cwd: &Path) -> Result<Option<Row>> {
-    let rows = with_index(home, roots)?
-        .map_err(|error| anyhow!(crate::sqlite::refusal(&REASONS, &error)))?;
+    let rows =
+        with_index(home, roots)?.map_err(|error| crate::sqlite::refusal(&REASONS, &error))?;
     Ok(in_checkout(rows, cwd).next())
 }
 
@@ -270,7 +259,11 @@ pub struct ForkMark {
 
 /// [`ForkMark`] for `source` in `cwd`; `session_route_missing` when agy's
 /// index has no row for `source`.
-pub fn fork_mark(home: &Path, source: &str, cwd: &Path) -> Result<ForkMark> {
+pub fn fork_mark(
+    home: &Path,
+    source: &str,
+    cwd: &Path,
+) -> std::result::Result<ForkMark, ReadRefusal> {
     let (steps, rows) = with_index(home, |db| -> rusqlite::Result<_> {
         let steps: Option<i64> = db
             .query_row(
@@ -284,8 +277,8 @@ pub fn fork_mark(home: &Path, source: &str, cwd: &Path) -> Result<ForkMark> {
             .optional()?;
         Ok((steps, roots(db)?))
     })?
-    .map_err(|error| anyhow!(crate::sqlite::refusal(&REASONS, &error)))?;
-    let steps = steps.ok_or_else(|| anyhow!("session_route_missing"))?;
+    .map_err(|error| crate::sqlite::refusal(&REASONS, &error))?;
+    let steps = steps.ok_or("session_route_missing")?;
     Ok(ForkMark {
         known: in_checkout(rows, cwd).map(|row| row.id).collect(),
         steps,
@@ -298,11 +291,16 @@ pub fn fork_mark(home: &Path, source: &str, cwd: &Path) -> Result<ForkMark> {
 /// mark's count and the source's count now, and no transcript until its next
 /// prompt; a new conversation or another fork with more steps is not it. `None` while no such row is written; more than one
 /// is refused, since Hide could not tell which one is its fork.
-pub fn forked(home: &Path, source: &str, cwd: &Path, mark: &ForkMark) -> Result<Option<String>> {
+pub fn forked(
+    home: &Path,
+    source: &str,
+    cwd: &Path,
+    mark: &ForkMark,
+) -> std::result::Result<Option<String>, ReadRefusal> {
     // A mark lists at most the rows [`fork_mark`] reads; a longer one did
     // not come from it.
     if mark.known.len() > SEARCH_ROWS as usize {
-        return Err(anyhow!("antigravity_fork_mark_invalid"));
+        return Err("antigravity_fork_mark_invalid".into());
     }
     let rows = with_index(home, |db| -> rusqlite::Result<_> {
         let mut statement = db.prepare(&format!(
@@ -320,11 +318,11 @@ pub fn forked(home: &Path, source: &str, cwd: &Path, mark: &ForkMark) -> Result<
             )?
             .collect::<rusqlite::Result<Vec<_>>>()
     })?
-    .map_err(|error| anyhow!(crate::sqlite::refusal(&REASONS, &error)))?;
+    .map_err(|error| crate::sqlite::refusal(&REASONS, &error))?;
     let mut forks = in_checkout(rows, cwd).filter(|row| !mark.known.contains(&row.id));
     let fork = forks.next();
     if forks.next().is_some() {
-        return Err(anyhow!("antigravity_fork_ambiguous"));
+        return Err("antigravity_fork_ambiguous".into());
     }
     Ok(fork.map(|row| row.id))
 }
@@ -423,14 +421,14 @@ pub(crate) fn locate(
             let expected = hide_platform::fs::identity::canonical(Path::new(cwd))
                 .map_err(|_| SessionError::CwdUnavailable)?;
             newest_root(home, &expected)
-                .map_err(|error| SessionError::Checkpoint(error.to_string()))?
+                .map_err(|error| SessionError::unproven(&error))?
                 .ok_or(SessionError::SessionFileMissing)?
                 .id
         }
     };
     let path = transcript(home, &id);
     crate::confirm_session_file(home, crate::Agent::Antigravity, &path, Some(&id), Some(cwd))
-        .map_err(|error| SessionError::Checkpoint(error.to_string()))?;
+        .map_err(|error| SessionError::unproven(&error))?;
     Ok(path)
 }
 

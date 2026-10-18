@@ -765,18 +765,32 @@ pub fn label_transcript(
     to_value(transcript)
 }
 
-/// A session reader's refusal, its stable reason code as the message.
-fn label_refusal(reason: String) -> HostError {
-    let code = match reason.as_str() {
-        "session_file_missing" => ErrorCode::NotFound,
-        "opencode_db_busy" | "opencode_db_changed" => ErrorCode::Busy,
-        "session_kind_unsupported"
-        | "opencode_db_schema_unknown"
-        | "opencode_data_home_invalid" => ErrorCode::Unsupported,
-        reason if reason.starts_with("session_capacity:") => ErrorCode::TooLarge,
-        _ => ErrorCode::Io,
+/// A session reader's refusal, its stable reason code as the message: a
+/// read that met the agent writing is busy, which keeps what an earlier read
+/// proved, and every other refusal says why the read cannot answer.
+fn label_refusal(refusal: hide_session::ReadRefusal) -> HostError {
+    let code = match &refusal {
+        hide_session::ReadRefusal::InMotion(_) => ErrorCode::Busy,
+        hide_session::ReadRefusal::Refused(reason) => match reason.as_str() {
+            "session_file_missing" => ErrorCode::NotFound,
+            "session_kind_unsupported"
+            | "opencode_db_schema_unknown"
+            | "opencode_data_home_invalid" => ErrorCode::Unsupported,
+            reason if reason.starts_with("session_capacity:") => ErrorCode::TooLarge,
+            _ => ErrorCode::Io,
+        },
     };
-    HostError::new(code, reason)
+    HostError::new(code, refusal.reason())
+}
+
+/// An agy fork's index read refused: busy while it met agy writing its
+/// index, which the fork reads again, and otherwise the fork's reason.
+fn antigravity_fork_refusal(refusal: hide_session::ReadRefusal) -> HostError {
+    let code = match refusal {
+        hide_session::ReadRefusal::InMotion(_) => ErrorCode::Busy,
+        hide_session::ReadRefusal::Refused(_) => ErrorCode::Io,
+    };
+    HostError::new(code, refusal.reason())
 }
 
 /// Local and remote activity share this path-free, metadata-only answer.
@@ -1194,7 +1208,7 @@ pub fn handle_with_progress(
                 return Err(HostError::new(ErrorCode::Io, "antigravity_fork_untrusted"));
             }
             let mark = hide_session::antigravity::fork_mark(Path::new(&home), &source, &cwd)
-                .map_err(|error| HostError::new(ErrorCode::Io, error.to_string()))?;
+                .map_err(antigravity_fork_refusal)?;
             to_value(crate::protocol::AntigravityForkMark {
                 known: mark.known,
                 steps: mark.steps,
@@ -1209,7 +1223,7 @@ pub fn handle_with_progress(
             };
             to_value(
                 hide_session::antigravity::forked(Path::new(&home), &source, &cwd, &mark)
-                    .map_err(|error| HostError::new(ErrorCode::Io, error.to_string()))?,
+                    .map_err(antigravity_fork_refusal)?,
             )
         }
         Call::OpenCodeFork { source, cwd } => {

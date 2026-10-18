@@ -44,7 +44,7 @@ fn writer(home: &Path) -> Connection {
     Connection::open(database(home)).unwrap()
 }
 
-fn read_root(home: &Path) -> Result<LabelTranscript, String> {
+fn read_root(home: &Path) -> Result<LabelTranscript, hide_session::ReadRefusal> {
     read(home, &request(Agent::OpenCode))
 }
 
@@ -212,7 +212,10 @@ fn a_locked_opencode_2_database_is_a_skipped_read_that_never_blocks_opencode() {
     let home = home();
     let writer = writer(home.path());
     writer.execute_batch("BEGIN EXCLUSIVE;").unwrap();
-    assert_eq!(read_root(home.path()).unwrap_err(), "opencode_db_busy");
+    assert_eq!(
+        read_root(home.path()).unwrap_err(),
+        hide_session::ReadRefusal::InMotion("opencode_db_busy")
+    );
     // OpenCode's write goes on and the next read takes it.
     writer.execute_batch("COMMIT;").unwrap();
     assert!(read_root(home.path()).is_ok());
@@ -497,7 +500,7 @@ fn opencode_2_bounds_sql_work_when_message_order_cannot_use_an_index() {
         .unwrap();
     assert_eq!(
         read_root(home.path()).unwrap_err(),
-        "opencode_db_work_capacity"
+        hide_session::ReadRefusal::Refused("opencode_db_work_capacity".into())
     );
     let rows: i64 = writer
         .query_row("SELECT count(*) FROM session_message", [], |row| row.get(0))
@@ -654,7 +657,10 @@ fn more_opencode_2_questions_than_the_cap_refuse_the_read_rather_than_miss_one()
         })
         .collect();
     assistant(&writer, ADDED, ADDED_SEQ, ADDED_AT, false, items);
-    assert_eq!(read_root(home.path()).unwrap_err(), "user_turn_capacity");
+    assert_eq!(
+        read_root(home.path()).unwrap_err(),
+        hide_session::ReadRefusal::Refused("user_turn_capacity".into())
+    );
 }
 
 #[test]
@@ -784,7 +790,10 @@ fn an_unknown_opencode_2_question_state_refuses_the_read_rather_than_guessing() 
     let mut item = question_item("running");
     item["state"]["status"] = json!("future");
     assistant(&writer, ADDED, ADDED_SEQ, ADDED_AT, true, vec![item]);
-    assert_eq!(read_root(home.path()).unwrap_err(), "user_turn_invalid");
+    assert_eq!(
+        read_root(home.path()).unwrap_err(),
+        hide_session::ReadRefusal::Refused("user_turn_invalid".into())
+    );
 }
 
 #[test]
@@ -802,7 +811,7 @@ fn an_opencode_2_child_session_is_never_read_into_or_as_the_root_conversation() 
     child.reference_value = "ses_0a1b2c3d4e5f60718293child".into();
     assert_eq!(
         read(home.path(), &child).unwrap_err(),
-        "label_session_not_root"
+        hide_session::ReadRefusal::Refused("label_session_not_root".into())
     );
 }
 
@@ -813,12 +822,12 @@ fn an_opencode_2_session_proves_its_checkout_and_refuses_another_one() {
     other.cwd = Some("/work/other".into());
     assert_eq!(
         read(home.path(), &other).unwrap_err(),
-        "label_session_cwd_mismatch"
+        hide_session::ReadRefusal::Refused("label_session_cwd_mismatch".into())
     );
     other.cwd = None;
     assert_eq!(
         read(home.path(), &other).unwrap_err(),
-        "label_session_cwd_unconfirmed"
+        hide_session::ReadRefusal::Refused("label_session_cwd_unconfirmed".into())
     );
     other.cwd = Some("/work/app/".into());
     let confirmed = read(home.path(), &other).unwrap().confirmed;
@@ -827,7 +836,7 @@ fn an_opencode_2_session_proves_its_checkout_and_refuses_another_one() {
     other.reference_value = "ses_absent".into();
     assert_eq!(
         read(home.path(), &other).unwrap_err(),
-        "session_file_missing"
+        hide_session::ReadRefusal::Refused("session_file_missing".into())
     );
 }
 
@@ -968,7 +977,7 @@ fn opencode_2_conversation_page_is_its_label_read_by_message_with_receipts_as_in
     assert_eq!(
         hide_session::opencode::read_conversation(home.path(), &scope("/work/other"), None)
             .unwrap_err(),
-        "label_session_cwd_mismatch"
+        hide_session::ReadRefusal::Refused("label_session_cwd_mismatch".into())
     );
 }
 
@@ -1082,14 +1091,17 @@ mod schema {
     fn a_database_that_holds_neither_schema_is_refused_with_its_reason_by_every_reader() {
         use hide_session::session_activity::{SessionActivityRequest, read as activity};
         let home = home_with("CREATE TABLE sample (value);");
-        assert_eq!(read_root(home.path()).unwrap_err(), NEITHER);
+        assert_eq!(
+            read_root(home.path()).unwrap_err(),
+            hide_session::ReadRefusal::Refused(NEITHER.into())
+        );
         let scope = hide_session::SessionReadScope {
             id: ROOT.to_owned(),
             cwd: "/work/app".to_owned(),
         };
         assert_eq!(
             hide_session::opencode::read_conversation(home.path(), &scope, None).unwrap_err(),
-            NEITHER
+            hide_session::ReadRefusal::Refused(NEITHER.into())
         );
         assert_eq!(
             hide_session::opencode::message_checkpoint(home.path(), ROOT, "/work/app", 0)
@@ -1138,7 +1150,10 @@ mod schema {
                  ALTER TABLE session_message DROP COLUMN seq;",
             )
             .unwrap();
-        assert_eq!(read_root(home.path()).unwrap_err(), NEITHER);
+        assert_eq!(
+            read_root(home.path()).unwrap_err(),
+            hide_session::ReadRefusal::Refused(NEITHER.into())
+        );
     }
 }
 

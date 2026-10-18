@@ -501,6 +501,72 @@ fn an_opencode_transaction_keeps_proof_and_caps_its_pending_reread() {
 }
 
 #[test]
+fn an_agy_index_agy_is_writing_keeps_the_proven_conversation_until_it_is_gone() {
+    let harness = Harness::new();
+    let id = "a9c0e2f4-0000-4000-8000-000000000001";
+    let cwd = harness.home.path().join("checkout");
+    std::fs::create_dir(&cwd).unwrap();
+    let cwd = hide_platform::fs::identity::canonical(&cwd).unwrap();
+    crate::fixture::antigravity_conversation(harness.home.path(), &cwd, id, 4, None);
+    let transcript = hide_session::antigravity::transcript(harness.home.path(), id);
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    std::fs::write(
+        &transcript,
+        include_str!(
+            "../../../hide-session/tests/fixtures/adapters/antigravity-1.3.6/transcript_full.jsonl"
+        ),
+    )
+    .unwrap();
+    let (mut worker, woken, _) = harness.worker(harness.store());
+    worker.set_summaries(false, Instant::now());
+    let mut observed = ObservedAgent {
+        pane_id: "w1:p1".into(),
+        agent: Some("agy".into()),
+        status: Some("idle".into()),
+        reference: Some(("id".into(), id.into())),
+        cwd: Some(cwd.to_str().unwrap().into()),
+        state_change_seq: 1,
+    };
+    let session = |worker: &LabelWorker, observed: &ObservedAgent| {
+        shown_facts(worker, observed).and_then(|facts| facts.native_session_id)
+    };
+    observe(&mut worker, &observed);
+    settle(&mut worker, &woken);
+    assert_eq!(session(&worker, &observed).as_deref(), Some(id));
+    // agy writes its index after a turn; a read that meets the write, here
+    // its rollback journal, disproves nothing (CI run 39099935719: the row
+    // lost its id and Fork was refused until the next read).
+    let index = harness
+        .home
+        .path()
+        .join(".gemini/antigravity-cli/conversation_summaries.db");
+    let journal = index.with_file_name("conversation_summaries.db-journal");
+    std::fs::write(&journal, b"agy writing its index").unwrap();
+    observed.state_change_seq += 1;
+    observe(&mut worker, &observed);
+    settle(&mut worker, &woken);
+    assert_eq!(session(&worker, &observed).as_deref(), Some(id));
+    std::fs::remove_file(&journal).unwrap();
+    observed.state_change_seq += 1;
+    observe(&mut worker, &observed);
+    settle(&mut worker, &woken);
+    assert_eq!(session(&worker, &observed).as_deref(), Some(id));
+    // A conversation agy no longer indexes is gone, and its proof with it.
+    rusqlite::Connection::open(&index)
+        .unwrap()
+        .execute(
+            "DELETE FROM conversation_summaries WHERE conversation_id = ?1",
+            [id],
+        )
+        .unwrap();
+    observed.state_change_seq += 1;
+    observe(&mut worker, &observed);
+    settle(&mut worker, &woken);
+    assert_eq!(session(&worker, &observed), None);
+    assert_eq!(harness.backend.calls(), 0);
+}
+
+#[test]
 fn a_titles_only_opencode_session_keeps_its_native_title_and_generated_goal() {
     let harness = Harness::new();
     let directory = harness.home.path().join(".local/share/opencode");

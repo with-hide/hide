@@ -197,10 +197,10 @@ pub(super) fn read(home: &Path, saved: Option<Checkpoint>) -> Result<Step, Refus
     crate::opencode::with_read_legacy(home, |db, schema, legacy| {
         read_connection(home, db, schema, legacy, saved)
     })
-    .map_err(|reason| {
-        if reason == crate::opencode::SCHEMA_UNKNOWN {
+    .map_err(|refusal| {
+        if refusal.reason() == crate::opencode::SCHEMA_UNKNOWN {
             Refusal::Schema
-        } else if reason == crate::environment::OPENCODE_DATA_HOME_INVALID {
+        } else if refusal.reason() == crate::environment::OPENCODE_DATA_HOME_INVALID {
             Refusal::Environment
         } else {
             Refusal::Database
