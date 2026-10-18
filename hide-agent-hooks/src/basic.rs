@@ -57,28 +57,21 @@ pub fn session(
     payload: &[u8],
     truncated: bool,
     dialect: hide_agent_adapter::HookDialect,
-) -> Option<String> {
-    #[derive(Deserialize)]
-    struct Grok {
-        #[serde(rename = "sessionId")]
-        session_id: Option<String>,
-    }
+) -> Result<Option<String>, crate::delivery::Failure> {
     #[derive(Deserialize)]
     struct Cursor {
         conversation_id: Option<String>,
     }
     if truncated {
-        return None;
+        return Ok(None);
     }
     let session = match dialect {
-        hide_agent_adapter::HookDialect::Cursor => {
-            serde_json::from_slice::<Cursor>(payload)
-                .ok()?
-                .conversation_id
-        }
-        _ => serde_json::from_slice::<Grok>(payload).ok()?.session_id,
+        hide_agent_adapter::HookDialect::Cursor => serde_json::from_slice::<Cursor>(payload)
+            .ok()
+            .and_then(|input| input.conversation_id),
+        _ => return crate::delivery::read_session(payload, truncated),
     };
-    session.filter(|id| crate::delivery::valid_session(id))
+    Ok(session.filter(|id| crate::delivery::valid_session(id)))
 }
 
 /// The answer that lets a tool call run and hands the agent `context` with
@@ -110,7 +103,7 @@ pub enum GrokStop {
     Ignore,
     /// The main session's turn ended with this many background subagents
     /// still running.
-    Running(u32),
+    Running { running: u32, hook_active: bool },
 }
 
 /// Reads a Grok `Stop` payload. Every `backgroundTasks` entry is in flight
@@ -121,6 +114,8 @@ pub fn grok_stop(payload: &[u8], truncated: bool) -> GrokStop {
     #[serde(rename_all = "camelCase")]
     struct Stop {
         subagent_type: Option<Value>,
+        #[serde(default)]
+        stop_hook_active: bool,
         #[serde(default)]
         background_tasks: Vec<Task>,
     }
@@ -147,7 +142,10 @@ pub fn grok_stop(payload: &[u8], truncated: bool) -> GrokStop {
         .iter()
         .filter(|task| task.kind.as_deref() == Some("subagent"))
         .count();
-    GrokStop::Running(u32::try_from(running).unwrap_or(u32::MAX))
+    GrokStop::Running {
+        running: u32::try_from(running).unwrap_or(u32::MAX),
+        hook_active: stop.stop_hook_active,
+    }
 }
 
 #[cfg(test)]
@@ -187,14 +185,26 @@ mod tests {
             {"id":"b","type":"shell","status":"running","command":"npm run dev"},
             {"id":"c","type":"subagent","status":"running"},
             {"id":"d","type":"monitor","status":"running"}],"sessionCrons":[]}"#;
-        assert_eq!(grok_stop(stop, false), GrokStop::Running(2));
+        assert_eq!(
+            grok_stop(stop, false),
+            GrokStop::Running {
+                running: 2,
+                hook_active: false
+            }
+        );
         assert_eq!(
             grok_stop(br#"{"sessionId":"s","backgroundTasks":[]}"#, false),
-            GrokStop::Running(0)
+            GrokStop::Running {
+                running: 0,
+                hook_active: false
+            }
         );
         assert_eq!(
             grok_stop(br#"{"sessionId":"s"}"#, false),
-            GrokStop::Running(0)
+            GrokStop::Running {
+                running: 0,
+                hook_active: false
+            }
         );
         let child = br#"{"sessionId":"child","subagentType":"explore","backgroundTasks":[]}"#;
         assert_eq!(grok_stop(child, false), GrokStop::Ignore);
@@ -203,7 +213,10 @@ mod tests {
                 br#"{"sessionId":"s","subagentType":"","backgroundTasks":[]}"#,
                 false
             ),
-            GrokStop::Running(0)
+            GrokStop::Running {
+                running: 0,
+                hook_active: false
+            }
         );
         assert_eq!(grok_stop(b"not json", false), GrokStop::Ignore);
         assert_eq!(grok_stop(stop, true), GrokStop::Ignore);

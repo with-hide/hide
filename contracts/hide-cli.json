@@ -580,6 +580,22 @@
                         }
                     ]
                 },
+                "BellTurn": {
+                    "description": "The native session and submitted bell digest that own this intake.",
+                    "properties": {
+                        "digest": {
+                            "type": "string"
+                        },
+                        "session": {
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "session",
+                        "digest"
+                    ],
+                    "type": "object"
+                },
                 "InboxEntry": {
                     "description": "One letter of `hide inbox`.",
                     "properties": {
@@ -626,6 +642,17 @@
                         },
                         "bell_sent": {
                             "type": "boolean"
+                        },
+                        "bell_turn": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/BellTurn"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "default": null
                         },
                         "body": {
                             "type": "string"
@@ -735,6 +762,7 @@
                         "watch_warning",
                         "answer_wait_ended",
                         "bell_line",
+                        "bell_turn",
                         "intake_from",
                         "immediate",
                         "tool_handovers"
@@ -866,6 +894,22 @@
                         }
                     ]
                 },
+                "BellTurn": {
+                    "description": "The native session and submitted bell digest that own this intake.",
+                    "properties": {
+                        "digest": {
+                            "type": "string"
+                        },
+                        "session": {
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "session",
+                        "digest"
+                    ],
+                    "type": "object"
+                },
                 "State": {
                     "enum": [
                         "pending",
@@ -944,6 +988,17 @@
                 },
                 "bell_sent": {
                     "type": "boolean"
+                },
+                "bell_turn": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/BellTurn"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null
                 },
                 "body": {
                     "type": "string"
@@ -1053,6 +1108,7 @@
                 "watch_warning",
                 "answer_wait_ended",
                 "bell_line",
+                "bell_turn",
                 "intake_from",
                 "immediate",
                 "tool_handovers"
@@ -1773,7 +1829,21 @@
                     }
                 },
                 {
+                    "conflicts": [
+                        "--turn-end"
+                    ],
                     "name": "--tool",
+                    "required": false,
+                    "requires": [
+                        "--session"
+                    ],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--tool"
+                    ],
+                    "name": "--turn-end",
                     "required": false,
                     "requires": [
                         "--session"
@@ -1915,7 +1985,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:7fc873235e1d925093f2bf9ce60beba2d2855d13218d9281fa74549e8619403a",
+    "digest": "sha256:664d21d95baf7f8c6b93da7fa21cd5811f4cc7a5f89b0934fc5e240fdf8a13a4",
     "envelopes": {
         "agent": {
             "answer": "value",

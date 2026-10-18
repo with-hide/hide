@@ -252,7 +252,7 @@ mod tests {
     /// lost, the current one would match.
     #[test]
     fn a_node_on_an_older_protocol_is_refused_and_its_link_closed() {
-        for older in [27, 32] {
+        for older in [27, 32, 43, 44, 45, 46] {
             let (core, node) = node_answering(older, "node-a");
             let refused = establish(inbound("node-a"), core, None, None)
                 .err()

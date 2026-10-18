@@ -19,7 +19,39 @@ const CONFIRM_RESERVE: Duration = Duration::from_millis(400);
 #[derive(Deserialize)]
 struct PromptInput {
     prompt: Option<String>,
+    #[serde(flatten)]
+    session: SessionInput,
+}
+
+#[derive(Deserialize)]
+struct SessionInput {
     session_id: Option<String>,
+    #[serde(rename = "sessionId")]
+    camel_session_id: Option<String>,
+}
+
+impl SessionInput {
+    fn resolve(self) -> Result<Option<String>, Failure> {
+        // Some runtimes send both spellings. They must name one session;
+        // choosing either side could hand another session its letters.
+        let session = match (self.session_id, self.camel_session_id) {
+            (Some(snake), Some(camel)) if snake != camel => return Err("session_conflict".into()),
+            (Some(id), _) | (None, Some(id)) => Some(id),
+            (None, None) => None,
+        };
+        Ok(session.filter(|id| valid_session(id)))
+    }
+}
+
+/// The native identity used by prompt, tool and turn-end letter intake.
+pub fn read_session(payload: &[u8], truncated: bool) -> Result<Option<String>, Failure> {
+    if truncated {
+        return Ok(None);
+    }
+    match serde_json::from_slice::<SessionInput>(payload) {
+        Ok(input) => input.resolve(),
+        Err(_) => Ok(None),
+    }
 }
 
 /// The digest of the submitted prompt and the session id of a runtime's
@@ -32,19 +64,17 @@ pub struct Prompt {
     pub session: Option<String>,
 }
 
-pub fn read_prompt(payload: &[u8], truncated: bool) -> Prompt {
+pub fn read_prompt(payload: &[u8], truncated: bool) -> Result<Prompt, Failure> {
     let input = (!truncated)
         .then(|| serde_json::from_slice::<PromptInput>(payload).ok())
         .flatten();
-    Prompt {
-        digest: input
-            .as_ref()
-            .and_then(|input| input.prompt.as_deref())
-            .map(prompt_digest),
-        session: input
-            .and_then(|input| input.session_id)
-            .filter(|id| valid_session(id)),
-    }
+    let Some(input) = input else {
+        return Ok(Prompt::default());
+    };
+    Ok(Prompt {
+        digest: input.prompt.as_deref().map(prompt_digest),
+        session: input.session.resolve()?,
+    })
 }
 
 /// What the hook tells the core about the submitted prompt: the SHA-256 of
@@ -61,7 +91,9 @@ pub fn prompt_digest(prompt: &str) -> String {
 }
 
 /// Accept the canonical digest and the whole-line digest older hooks send
-/// during an upgrade. The saved line needs no migration.
+/// during an upgrade. Remove whole-line compatibility only when no hook
+/// older than this build can still run. A saved old bell becomes ineligible
+/// at its letter's delivery deadline, so the ledger needs no migration.
 pub fn matches_prompt_digest(line: &str, digest: &str) -> bool {
     prompt_digest(line) == digest || full_prompt_digest(line) == digest
 }
@@ -77,6 +109,11 @@ fn full_prompt_digest(prompt: &str) -> String {
 /// Whether `digest` is one [`prompt_digest`] could have made, so it may travel
 /// as a `hide` argument.
 pub fn valid_prompt_digest(digest: &str) -> bool {
+    valid_sha256_digest(digest)
+}
+
+/// A lowercase SHA-256 digest, whether of a prompt or a native session.
+pub fn valid_sha256_digest(digest: &str) -> bool {
     digest.len() == 64
         && digest
             .bytes()
@@ -141,9 +178,17 @@ pub fn pull(deadline: Instant, prompt: &Prompt) -> Result<Option<Intake>, Failur
 /// agent, a letter still waiting and a session that is not the pane's own
 /// get nothing.
 pub fn pull_at_tool(deadline: Instant, session: &str) -> Result<Option<Intake>, Failure> {
+    pull_at_gap(deadline, session, "--tool")
+}
+
+pub fn pull_at_turn_end(deadline: Instant, session: &str) -> Result<Option<Intake>, Failure> {
+    pull_at_gap(deadline, session, "--turn-end")
+}
+
+fn pull_at_gap(deadline: Instant, session: &str, point: &str) -> Result<Option<Intake>, Failure> {
     let pull_deadline = deadline.checked_sub(CONFIRM_RESERVE).ok_or("deadline")?;
     let answer = run_cli(
-        &["inbox", "--hook", "--session", session, "--tool"],
+        &["inbox", "--hook", "--session", session, point],
         pull_deadline,
     )?;
     intake(answer)
@@ -284,9 +329,9 @@ struct Diagnostics {
     step: BTreeMap<String, String>,
 }
 
-/// The fixed causes a hook may record: the delivery intake's fifteen (the
+/// The fixed causes a hook may record: the delivery intake's sixteen (the
 /// steps and refusals of [`refusal_cause`], `cli`, `deadline`, `format`,
-/// `confirm` and `stdout`), the spawn guard's one (`guard`: the daemon could
+/// `confirm`, `stdout` and `session_conflict`), the spawn guard's one (`guard`: the daemon could
 /// not be asked), OpenCode's plugin's one (`plugin`: it skipped or gave up on
 /// a helper call), Memory's three (`crate::memory`: the core could not be
 /// asked, did not answer in time, or the thread asking panicked) and the
@@ -294,7 +339,8 @@ struct Diagnostics {
 /// `guardrails_words`: a shell call named more words than are checked;
 /// `guardrails_failed`: the hook failed or ran out of time before it judged a
 /// call).
-const CAUSES: [&str; 23] = [
+const CAUSES: [&str; 24] = [
+    "session_conflict",
     "cli",
     "deadline",
     "format",
@@ -460,7 +506,7 @@ mod tests {
         let payload = |prompt: &str| {
             serde_json::to_vec(&serde_json::json!({"session_id":"s","prompt":prompt})).unwrap()
         };
-        let digest = |bytes: &[u8], truncated| read_prompt(bytes, truncated).digest;
+        let digest = |bytes: &[u8], truncated| read_prompt(bytes, truncated).unwrap().digest;
         // The SHA-256 of "abc", from FIPS 180-2's first example.
         let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
         assert_eq!(digest(&payload("abc"), false).as_deref(), Some(abc));
@@ -474,12 +520,32 @@ mod tests {
         assert!(!valid_prompt_digest(&abc.to_uppercase()));
         assert!(!valid_prompt_digest(&abc[1..]));
         assert_eq!(
-            read_prompt(&payload("x"), false).session.as_deref(),
+            read_prompt(&payload("x"), false)
+                .unwrap()
+                .session
+                .as_deref(),
             Some("s")
         );
-        assert_eq!(read_prompt(&payload("x"), true).session, None);
+        assert_eq!(read_prompt(&payload("x"), true).unwrap().session, None);
+        for input in [
+            br#"{"sessionId":"s","prompt":"abc"}"#.as_slice(),
+            br#"{"sessionId":"s","session_id":"s","prompt":"abc"}"#.as_slice(),
+        ] {
+            let prompt = read_prompt(input, false).unwrap();
+            assert_eq!(prompt.session.as_deref(), Some("s"));
+            assert_eq!(prompt.digest.as_deref(), Some(abc));
+        }
         assert_eq!(
-            read_prompt(b"{\"session_id\":\"-rf\"}", false).session,
+            read_prompt(br#"{"sessionId":"child","session_id":"parent"}"#, false)
+                .err()
+                .unwrap()
+                .code,
+            "session_conflict"
+        );
+        assert_eq!(
+            read_prompt(b"{\"session_id\":\"-rf\"}", false)
+                .unwrap()
+                .session,
             None
         );
     }

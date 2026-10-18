@@ -1,9 +1,9 @@
-//! The line the doorbell types into an idle agent pane: who wrote, what kind
+//! The line the doorbell submits through Herdr's `agent.prompt`: who wrote, what kind
 //! of letter it is and the letter's first line, so the operator watching the
 //! pane can tell what arrived (`docs/delivery.md`, The bell line).
 //!
-//! The line is typed into an agent's composer and submitted with Enter, so it
-//! is one line and carries nothing a composer acts on while it is typed: no
+//! The line reaches an agent's composer through that API, so it is one line
+//! and carries nothing a composer acts on while it is received: no
 //! control or invisible character, and none of the characters that open a
 //! picker or continue the line in the runtimes the doorbell rings.
 
@@ -59,8 +59,7 @@ pub(crate) fn line(ring: &Ring) -> String {
 /// arrives with neither the letter nor the session guidance that says what
 /// the line means. Claude Code runs every user-level hook it is given.
 pub(crate) fn names_inbox(kind: &str) -> bool {
-    hide_agent_adapter::adapter(kind)
-        .is_some_and(|row| row.key == hide_agent_adapter::AgentId::Codex)
+    hide_agent_adapter::adapter(kind).is_some_and(|row| row.bell_names_inbox)
 }
 
 /// Whether a letter may keep `line` as its bell.
@@ -181,6 +180,18 @@ mod tests {
         assert_eq!(ring("a", "block", "x", 0), "🦉 a 막힘: x");
         assert_eq!(ring("a", "reply", "x", 0), "🦉 a 답장: x");
         assert_eq!(ring("a", "watch", "x", 2), "🦉 a 감시: x · 외 2통");
+    }
+
+    #[test]
+    fn a_bell_with_a_non_bmp_summary_is_recognized_when_console_input_drops_it() {
+        let bell = ring("sender", "report", "Read🐈the letter", 0);
+        assert_eq!(bell, "🦉 sender 보고: Read🐈the letter");
+        // SHA-256 of the received "sender 보고: Readthe letter", independently
+        // calculated after both the leading owl and summary's cat were lost.
+        assert!(hide_agent_hooks::delivery::matches_prompt_digest(
+            &bell,
+            "25b30086ee8c322631a41392425753beb05ed84f46d8aeadc5a682ddea42018b"
+        ));
     }
 
     #[test]

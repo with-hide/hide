@@ -43,6 +43,13 @@ impl AnswerWaitEnd {
     }
 }
 
+/// The native session and submitted bell digest that own this intake.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BellTurn {
+    pub session: String,
+    pub digest: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Letter {
     pub id: String,
@@ -75,6 +82,8 @@ pub struct Letter {
     /// line; older hooks' whole-line digests remain accepted too.
     #[serde(default)]
     pub bell_line: Option<String>,
+    #[serde(default)]
+    pub bell_turn: Option<BellTurn>,
     /// Where the letter's wait for intake began: on its recipient machine's
     /// clock while the ledger keeps one (`Ledger::node_clocks`), on the wall
     /// clock otherwise; null is its creation on the wall clock.
@@ -308,6 +317,11 @@ impl Ledger {
                 || letter.body.len() > BODY_LIMIT
                 || letter.body.trim().is_empty()
                 || letter.bell_errors > 3
+                || letter.bell_turn.as_ref().is_some_and(|turn| {
+                    !hide_agent_hooks::delivery::valid_sha256_digest(&turn.session)
+                        || !hide_agent_hooks::delivery::valid_prompt_digest(&turn.digest)
+                        || letter.recipient.session.as_ref() != Some(&turn.session)
+                })
                 || letter.bell_attempts.is_some_and(|attempts| attempts > 3)
                 || letter
                     .bell_line

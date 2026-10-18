@@ -213,7 +213,7 @@ class Verdicts(unittest.TestCase):
         rows = {row["id"]: row for row in contract()}
         self.assertEqual({key: (rows[key]["letter"], rows[key]["wake"]) for key in rows if key != "cursor"}, {
             "claude-code": ("bell", "pane"), "codex": ("bell", "pane"), "antigravity": ("next_prompt", "pane"),
-            "grok": ("tool", "sleeping_session"), "opencode": ("next_prompt", "sleeping_session"),
+            "grok": ("bell", "sleeping_session"), "opencode": ("next_prompt", "sleeping_session"),
             "pi": ("next_prompt", "sleeping_session"), "omp": ("next_prompt", "sleeping_session")})
 
     def test_sleep_and_wake_and_resume(self):
