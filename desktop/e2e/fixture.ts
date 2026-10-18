@@ -4,7 +4,7 @@
 // own userData all sit under this run's temporary directory.
 
 import { _electron as electron, test as base, expect, type ElectronApplication, type Page } from "@playwright/test";
-import { spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -215,7 +215,7 @@ export const NEEDS_FOCUS = "@needs-focus";
 const FOCUS_GUARD = path.join(__dirname, "focus-guard.cjs");
 
 /** The running test's report folder and the apps it launched; null outside a test from this module's `test`. */
-let focusReports: { dir: string; apps: { app: ElectronApplication; child: ChildProcess }[] } | null = null;
+let focusReports: { dir: string; apps: { close: () => Promise<void>; child: ChildProcess }[] } | null = null;
 
 /**
  * The desktop e2e `test`: after each test not tagged `NEEDS_FOCUS`, any app
@@ -241,9 +241,9 @@ export const test = base.extend<{ focusGuard: void }>({
         // Test failures and timeouts skip local finally blocks. The fixture
         // still closes each app; cleanup retains any home whose candidate
         // has not exited, even if close returned or threw.
-        for (const { app, child } of focusReports.apps) {
+        for (const { close, child } of focusReports.apps) {
           if (child.exitCode === null && child.signalCode === null) {
-            try { await app.close(); } catch (error) { errors.push(error); }
+            try { await close(); } catch (error) { errors.push(error); }
           }
         }
         for (const { cleanup } of [...isolations.values()]) {
@@ -340,11 +340,37 @@ async function start(appDir: string, env: Record<string, string>, executablePath
     // retains this handle beyond test teardown if closing the app fails.
     const child = app.process();
     owner.candidates.add(child);
-    focusReports.apps.push({ app, child });
+    focusReports.apps.push({ close: () => app.close(), child });
     return app;
   } finally {
     owner.launching--;
   }
+}
+
+/** Native visibility cannot be measured with a Playwright renderer attached:
+ * its focus emulation holds a visible capturer even when BrowserWindow hides.
+ * The private main-process probe observes the DOM without a renderer session.
+ */
+export function launchNative(env: Record<string, string>, probe: string, executablePath?: string): () => Promise<void> {
+  assertIsolated(env);
+  const owner = isolations.get(env.HOME!);
+  if (!focusReports || !owner) throw new Error("native launch needs an active isolated desktop fixture");
+  for (const child of owner.candidates) {
+    if (child.exitCode !== null || child.signalCode !== null) owner.candidates.delete(child);
+  }
+  if (owner.candidates.size + owner.launching >= MAX_CANDIDATES_PER_HOME) throw new Error("too many native candidates");
+  if (env.HIDE_CLI_PATH === bundledExecutable("hide")) linkBundle();
+  fixtureLoginShellPath(env.HOME!, env.PATH!);
+  const fused = executablePath ?? process.env[FUSED_ELECTRON_ENV];
+  if (!fused) throw new Error(`${FUSED_ELECTRON_ENV} is not set`);
+  const report = path.join(focusReports.dir, `launch-${focusReports.apps.length + 1}.jsonl`);
+  const child = spawn(fused, ["-r", FOCUS_GUARD, "-r", probe, ...(!executablePath ? [DESKTOP_DIR] : []), `--${SHOW_INACTIVE_SWITCH}`, "--disable-backgrounding-occluded-windows", `--hide-e2e-focus-report=${report}`], { cwd: DESKTOP_DIR, env, stdio: "ignore" });
+  // This observer has no automation transport for app.quit(). End only its
+  // recorded candidate; isolate() separately stops the private daemon.
+  const close = async () => { child.kill("SIGKILL"); await endChild(child); };
+  owner.candidates.add(child);
+  focusReports.apps.push({ close, child });
+  return close;
 }
 
 /** `appDir` is the app folder to run, the desktop package unless a test copies it. */
