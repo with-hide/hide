@@ -50,11 +50,14 @@ fn read(
         .map_err(|error| format!("session_locate_failed: {error}"))?;
     let id = match &identity {
         hide_session::SessionIdentity::Id(id) => id.clone(),
-        hide_session::SessionIdentity::Path(_) => path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .ok_or("session_id_unavailable")?
-            .to_owned(),
+        // The id the file itself names, as Hide's own reads prove it in the
+        // checkout; a file name is not one (Pi's carries a timestamp before its id).
+        hide_session::SessionIdentity::Path(_) => {
+            hide_session::confirm_session_file(home, agent, &path, None, Some(cwd))
+                .map_err(|error| format!("session_id_unconfirmed: {error}"))?
+                .native_session_id
+                .ok_or("session_id_unavailable")?
+        }
     };
     let scope = hide_session::SessionReadScope {
         id,
