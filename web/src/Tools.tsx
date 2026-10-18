@@ -1,3 +1,4 @@
+import { TreeButton } from "./TreeButton";
 import { BrainIcon, EllipsisIcon, FileDiffIcon, FilesIcon, FolderIcon, GitBranchIcon, GitPullRequestIcon, Maximize2Icon, Minimize2Icon, PinIcon, XIcon, type LucideIcon } from "lucide-react";
 import { Fragment, useState } from "react";
 import type { Actions } from "./actions";
@@ -238,6 +239,7 @@ export function Lane({ view, tool: drawn, frame, files, sizes, checkout, actions
             {scope(tool)}
           </span>
         </span>
+        {tool === "files" ? <TreeButton actions={actions} /> : null}
         <Hint label={pinHint}>
           <Button variant={view.pinned ? "secondary" : "ghost"} size="icon-sm" className={view.pinned ? "text-primary" : "text-muted-foreground"} aria-pressed={view.pinned} aria-label={t("panes.lane.pin")} data-lane-pin={view.pinned ? (frame.narrowPin ? "narrow" : "on") : "off"} onClick={() => actions.setLanePinned(!view.pinned)}>
             <PinIcon className={view.pinned ? "fill-current" : undefined} />

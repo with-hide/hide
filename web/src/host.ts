@@ -80,6 +80,7 @@ export type BrowserPageState = {
 };
 
 export type BrowserHostEvent =
+  | { kind: "window-focus"; focused: boolean }
   | { kind: "state"; workspace: string; id: string; load: number; state: BrowserPageState }
   /** Actual debugger ownership, scoped to `device_id + NUL + checkout_path`. */
   | { kind: "attached"; workspace: string; id: string; attached: boolean }

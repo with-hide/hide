@@ -49,7 +49,8 @@ test("an agent's View wears its mark, and the operator's line comment reaches th
     // B1, B5: the agent's open marks the View with its logo; the mark says who and leads to its pane.
     await hide(["file", "open", "notes.md"]);
     await expect(front(page)).toHaveAttribute("aria-label", /\/notes\.md/);
-    const mark = front(page).locator("[data-view-opener]");
+    await expect(front(page).locator("[data-view-opener]")).toHaveCount(0);
+    const mark = page.locator("[data-document-header] [data-view-opener]");
     await expect(mark).toHaveAttribute("data-view-opener", pane);
     await expect(mark).toHaveAttribute("aria-label", /Claude Code/);
     // B8: the agent's pane counts the View it opened.
@@ -128,7 +129,7 @@ test("an area dragged on an image reaches its agent with a screenshot of that ar
     await showTool(page, "files");
     await page.locator("[data-lane-pin]").click();
     await hide(["file", "open", "mock.png"]);
-    await expect(front(page).locator("[data-view-opener]")).toHaveAttribute("data-view-opener", pane);
+    await expect(page.locator("[data-document-header] [data-view-opener]")).toHaveAttribute("data-view-opener", pane);
 
     // B13: Comment draws the image's page; a drag over it opens the note for that area.
     await page.locator("[data-view-comment-mode]").click();

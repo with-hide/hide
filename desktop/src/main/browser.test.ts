@@ -176,9 +176,24 @@ describe("native held cycle delivery", () => {
     blur();
     expect(forwarded()).toEqual([
       expect.objectContaining({ kind: "cycle-input", cycleId: 1 }),
+      expect.objectContaining({ kind: "window-focus", focused: false }),
       expect.objectContaining({ kind: "cycle-cancel", id: "origin", cycleId: 1 }),
     ]);
     expect(shellInput("keyUp", "Control", false)).not.toHaveBeenCalled();
+  });
+  it("reports window activation once per transition without borrowing native page focus", () => {
+    const { page, forwarded, blur, windowReturn } = candidate();
+    const native = page("native");
+    native.takeFocus();
+    blur();
+    blur();
+    windowReturn();
+    windowReturn();
+    expect(forwarded().filter((event) => event.kind === "window-focus")).toEqual([
+      { kind: "window-focus", focused: false },
+      { kind: "window-focus", focused: true },
+    ]);
+    expect(native.pageFocus).not.toHaveBeenCalled();
   });
   it("gives the keyboard back to a blur-cancelled origin once when the window returns", () => {
     const { page, blur, windowReturn } = candidate();

@@ -84,3 +84,48 @@ describe("a terminal link to a file of this window's own checkout", () => {
     expect(payload).not.toHaveProperty("device_id");
   });
 });
+
+describe("input after a confirmed View close", () => {
+  const workspace = { device_id: "local", path: "/repo" };
+  const frame = (ids: string[], selected: string) => ({ ...workspace, tool: "files", tree: true, layout: { active_area: "a1", display_count: ids.length, root: { area: { id: "a1", active: selected, displays: ids.map((id) => ({ id, kind: "browser", state: "open", label: id, url: "", tab_id: null })) } } } });
+  const setup = async () => {
+    vi.stubGlobal("CSS", { escape: (value: string) => value });
+    const { installKeyboardOwner } = await import("./viewFocus");
+    const remove = installKeyboardOwner();
+    const checkout = { id: "c", path: "/repo" };
+    const rest = { navigator: { focused_checkout_id: "c", focused_workspace_id: "w", workspaces: [{ id: "w", device_id: "local", checkouts: [checkout] }] }, workspace_view: frame(["d1", "d2"], "d1") } as never;
+    useShellStore.setState({ rest, connection: "live", editor: null });
+    document.body.innerHTML = '<div data-workspace-screen="c"><div data-view-area-id="a1"><button role="tab" aria-selected="true">next</button><div class="cm-content" tabindex="0" contenteditable="true"></div></div><input data-other /></div>';
+    const content = document.querySelector<HTMLElement>(".cm-content")!;
+    content.focus();
+    const actions = createActions(() => true);
+    const land = () => useShellStore.setState({ rest: { ...useShellStore.getState().rest, workspace_view: frame(["d2"], "d2") } as never });
+    return { remove, actions, content, land };
+  };
+  afterEach(() => { useShellStore.setState({ rest: null }); vi.unstubAllGlobals(); document.body.innerHTML = ""; });
+
+  it("waits for removal, then follows the replacement content", async () => {
+    const { remove, actions, content, land } = await setup();
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.push(callback); return 1; });
+    try {
+      actions.closeView("d1");
+      expect(frames).toHaveLength(0);
+      content.blur();
+      land();
+      frames.forEach((callback) => callback(0));
+      expect(document.activeElement).toBe(content);
+    } finally { remove(); }
+  });
+
+  it("keeps newer input when a delayed close finally removes its View", async () => {
+    const { remove, actions, land } = await setup();
+    const other = document.querySelector<HTMLInputElement>("[data-other]")!;
+    try {
+      actions.closeView("d1");
+      other.focus();
+      land();
+      expect(document.activeElement).toBe(other);
+    } finally { remove(); }
+  });
+});

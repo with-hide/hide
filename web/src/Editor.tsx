@@ -1,3 +1,4 @@
+import { OpenerMark } from "./ViewComments";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { adoptNodeDrafts, allBuffers, bufferDecision, bufferFor, claimLegacyBuffer, deleteBuffer, draftStorageHold, flushBuffer, identity, MAX_STORED_BYTES, queueBuffer, tabBufferKey, type BufferKey } from "./buffers";
@@ -11,7 +12,6 @@ import { downloadFile } from "./fileBytes";
 import { relativeTo } from "./explorer";
 import { changesFor, editorTabFor, frontCheckout, localDeviceId, type EditorDocumentSnapshot, type EditorTabSnapshot, type ViewDisplaySnapshot } from "./snapshot";
 import { useShellStore } from "./store";
-import { TreeButton } from "./TreeButton";
 import { useUiStore } from "./ui";
 import { FileViewer } from "./viewers/FileViewer";
 import { useFileSource } from "./viewers/useFileBytes";
@@ -230,7 +230,7 @@ export function DisplayEditor({ display, workspace, placeKey, actions }: { displ
   const scaleValue = useShellStore((s) => s.rest?.ui_state?.editor_text_scale);
   const scale = typeof scaleValue === "number" ? scaleValue : DEFAULT_SCALE;
   const { t } = useInterfaceTranslation();
-  if (!tab) return <Notice text={t("common.loading")} state="loading" />;
+  if (!tab) return <><PendingDocumentHeader display={display} actions={actions} /><Notice text={t("common.loading")} state="loading" /></>;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-editor={tab.id} data-editor-kind={display.kind} data-editor-display={display.id}>
       <EditorHeader display={display} tab={tab} document={document} actions={actions} />
@@ -276,6 +276,17 @@ function crumbs(path: string): string {
   return absolutePathRoot(path) ? path : path.split("/").filter(Boolean).join(" › ");
 }
 
+/** Provenance remains reachable while a document is loading or unavailable. */
+export function PendingDocumentHeader({ display, actions }: { display: ViewDisplaySnapshot; actions: Actions }) {
+  const root = useShellStore((s) => frontCheckout(s.rest)?.path ?? null);
+  return <div className="flex h-(--size-tab-strip) shrink-0 items-center gap-sm border-b border-border px-sm text-caption text-subtle-foreground" data-document-header="true">
+    <Hint label={display.path} reveals>
+      <span className="min-w-0 flex-1 truncate text-left [direction:rtl]" data-editor-path="true"><bdi dir="ltr">{crumbs(root ? relativeTo(display.path, root) : display.path)}</bdi></span>
+    </Hint>
+    {display.opener ? <OpenerMark opener={display.opener} actions={actions} /> : null}
+  </div>;
+}
+
 function EditorHeader({
   display,
   tab,
@@ -297,7 +308,6 @@ function EditorHeader({
   const path = root ? relativeTo(display.path, root) : display.path;
   return (
     <div className="flex h-[var(--size-tab-strip)] shrink-0 items-center gap-sm border-b border-border pl-xs pr-md text-caption text-subtle-foreground" data-document-header="true">
-      <TreeButton actions={actions} />
       <Hint label={file ? display.path : display.committed ? t("documents.committedPath", { path: display.path }) : t("documents.uncommittedPath", { path: display.path })} reveals>
       <span className="min-w-0 flex-1 truncate text-left [direction:rtl]" data-editor-path="true">
         <bdi dir="ltr">{file ? crumbs(path) : display.committed ? t("documents.branchDiffPath", { path: crumbs(path) }) : t("documents.workingDiffPath", { path: crumbs(path) })}</bdi>
@@ -351,6 +361,7 @@ function EditorHeader({
           </Button>
         </Hint>
       ) : null}
+      {display.opener ? <OpenerMark opener={display.opener} actions={actions} /> : null}
     </div>
   );
 }

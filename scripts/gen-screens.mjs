@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {readTokens} from './gen-tokens.mjs';
-import {screenSheets, readLocalVariables, ALIAS, LIBRARY_PATH, RETIRED_SHEETS} from './pen-screens.mjs';
+import {screenSheets, readLocalVariables, themedOverrides, ALIAS, LIBRARY_PATH, RETIRED_SHEETS} from './pen-screens.mjs';
 import {THEMES} from './pen-tokens.mjs';
 import {serialize} from './pen-bands.mjs';
 import {transplant} from './pen-transplant.mjs';
@@ -33,6 +33,7 @@ export function generate(root, ownedSheets = []) {
   const tokens = readTokens(root);
   const variables = readLocalVariables(root);
   const existing = loadExisting(root);
+  const before = existing ? serialize(existing) : null;
   const generated = screenSheets(tokens, root);
 
   // A retired sheet drew a screen that is gone, so it goes with it; an authored sheet the generator never built stays.
@@ -51,7 +52,22 @@ export function generate(root, ownedSheets = []) {
     // A scoped run keeps every other sheet as it is, except one the product retired.
     document = transplant(document, {...existing, variables, children: existing.children.filter(node => !RETIRED_SHEETS.includes(node.name))}, ownedSheets).document;
   }
-  const before = existing ? serialize(existing) : null;
+  // An existing screen may import a master that gained a colorable child.
+  // Restate only missing inherited colors, including authored sheets, without
+  // replacing their layout, content or explicit overrides (Dark import rule).
+  function restate(node) {
+    if (node.type === 'ref' && node.ref.startsWith(`${ALIAS}:`)) {
+      const colors = themedOverrides(node.ref.slice(ALIAS.length + 1));
+      for (const [key, props] of Object.entries(colors.descendants)) {
+        const address = key.split('/').map(part => `${ALIAS}:${part}`).join('/');
+        const patch = node.descendants?.[address] ?? {};
+        const missing = Object.entries(props).filter(([prop]) => !Object.hasOwn(patch, prop));
+        if (missing.length) (node.descendants ??= {})[address] = {...patch, ...Object.fromEntries(missing)};
+      }
+    }
+    for (const child of node.children ?? []) restate(child);
+  }
+  document.children.forEach(restate);
   const after = serialize(document);
   return {file: path.join(root, FILE), before, after, sheetCount: generated.length};
 }

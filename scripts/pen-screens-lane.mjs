@@ -113,6 +113,7 @@ export function laneBoards(tokens, {themedXref, template, alias}, suffix) {
   function header(id, tool, scope, {pinned, expanded}) {
     return themedXref(id, 'lane-header', 'Lane header', {width: 'fill_container'}, {
       'lane-header-tool': {content: tool},
+      'lane-header-explorer': {enabled: tool === 'Files'},
       'lane-header-scope': {content: scope},
       // The scope's icon: a folder for the Project's tools, the default branch glyph for the checkout's (PRD work-tab-pr-lens D-37).
       ...(tool === 'PRs' ? {'lane-header-scope-glyph': {icon: 'folder'}} : {}),
@@ -131,13 +132,13 @@ export function laneBoards(tokens, {themedXref, template, alias}, suffix) {
   const viewTabs = (id, tabs) => frame(id, 'View tab strip', {width: 'fill_container', height: TOP, layout: 'horizontal', alignItems: 'center', stroke: '$--border', strokeWidth: {bottom: 1}, strokeAlignment: 'inner'}, tabs);
   const documentHeader = (id, treeOn) => themedXref(id, 'GGXfK', 'Document header', {width: 'fill_container'}, {
     BUboy: {content: 'docs › 설정검토.md'},
-    ...(treeOn ? {'GGXfK-tree': {fill: '$--secondary'}, 'GGXfK-tree/lane-tree-button-glyph': {fill: '$--foreground'}, 'GGXfK-tree/lane-tree-button-label': {fill: '$--foreground'}} : {}),
+    'GGXfK-tree': {enabled: false},
   });
   const DOC = {
     title: '설정 화면 검토', path: 'docs/설정검토.md · settings-ui',
     sections: [
       ['1. 공간', 'View를 열어도 왼쪽 터미널의 폭과 pane 배치는 그대로다. 핀을 켜면 그때 한 번만 자리를 나눈다.'],
-      ['2. 찾기', '파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는 끌 때까지 남고, View가 그만큼 넓어져 문서는 작아지지 않는다.'],
+      ['2. 찾기', 'Files 최상단의 탐색기 버튼으로 트리를 켜고 찾는다. 트리는 끌 때까지 남고, View가 그만큼 넓어져 문서는 작아지지 않는다.'],
       ['3. 읽기', '길게 읽을 땐 확대한다. 돌아오면 이전 배치가 그대로 있다.'],
     ],
     code: ['- 핀 끄면 겹침, 켜면 분할', '- 트리는 켜고 끄기, 끌 때까지 남음', '- 문서가 없으면 트리만'],
