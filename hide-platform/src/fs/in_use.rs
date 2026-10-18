@@ -10,16 +10,46 @@
 //! it without write sharing, so each file is opened that way, written
 //! nothing, and closed. Elsewhere a running program never stops its folder
 //! being removed, and nothing is in use.
+//!
+//! The same refusal meets a reader: Windows refuses an open the holder did
+//! not share and a read of a range it locked, for as long as it holds the
+//! file ([`held_by_another`]).
 
 use std::io;
 use std::path::{Path, PathBuf};
+
+/// `ERROR_SHARING_VIOLATION`.
+#[cfg(windows)]
+const SHARING_VIOLATION: i32 = 32;
+/// `ERROR_LOCK_VIOLATION`.
+#[cfg(windows)]
+const LOCK_VIOLATION: i32 = 33;
+
+/// Whether `error`, from opening or reading a file, says another process
+/// holds the file for now, so the same open or read can answer once it lets
+/// go: on Windows an open the holder did not share, or a read of a range it
+/// locked. Elsewhere a holder never refuses an open or a read, and no error
+/// says this. Access denied is not one: a refusing ACL or a pending delete
+/// answers it too, and neither lets go.
+pub fn held_by_another(error: &io::Error) -> bool {
+    #[cfg(windows)]
+    {
+        matches!(
+            error.raw_os_error(),
+            Some(SHARING_VIOLATION | LOCK_VIOLATION)
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = error;
+        false
+    }
+}
 
 /// The first file under `folder` that a process holds in use, if any.
 #[cfg(windows)]
 pub fn first_in_use(folder: &Path) -> io::Result<Option<PathBuf>> {
     use std::os::windows::fs::OpenOptionsExt;
-    /// `ERROR_SHARING_VIOLATION`.
-    const SHARING_VIOLATION: i32 = 32;
     for entry in std::fs::read_dir(folder)? {
         let entry = entry?;
         let kind = entry.file_type()?;
