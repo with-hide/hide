@@ -35,7 +35,7 @@ pub struct JourneyAdapter {
     pub title: Option<JourneyTitle>,
     /// The most model requests a signed-in CI run of the journey may make
     /// for this agent, which its lane fails above: each turn the declared
-    /// cells start, at most `REQUESTS_PER_TURN` each; absent for an agent
+    /// cells start, at most `requests_per_turn` each; absent for an agent
     /// Hide cannot start.
     pub request_budget: Option<u32>,
 }
@@ -44,6 +44,18 @@ pub struct JourneyAdapter {
 /// agent that answers in more than one (a tool call it chose, a retry it
 /// makes itself), and a run past it means the journey's turns are wrong.
 pub const REQUESTS_PER_TURN: u32 = 3;
+
+/// The most model requests one token-only turn may take, declared for each
+/// agent's CLI: `REQUESTS_PER_TURN`, but Grok 1.0.52 makes four for every
+/// turn, three chat requests and one more (its title request to `grok-4.6`
+/// in a new session), measured with the journey's fake model on 2026-10-18.
+const fn requests_per_turn(start: super::LaunchDialect) -> u32 {
+    use super::LaunchDialect::*;
+    match start {
+        Grok => 4,
+        Claude | Codex | OpenCode | Pi | Omp | Cursor | Antigravity => REQUESTS_PER_TURN,
+    }
+}
 
 /// The path a letter takes to an agent at rest, as the core chooses it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
@@ -168,7 +180,7 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             model_flag: row.start.map_or(&[], |start| start.options().model),
             untitled: row.sidebar_label.unwrap_or(row.herdr.name),
             cells,
-            request_budget: start.then_some(turns * REQUESTS_PER_TURN),
+            request_budget: row.start.map(|start| turns * requests_per_turn(start)),
             letter,
             wake,
             title,

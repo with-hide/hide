@@ -425,7 +425,7 @@ Model requests each agent made, measured with the fake model on 2026-10-18 (each
 | --- | --- | --- | --- |
 | Claude Code | 2.1.302 | 1 per prompt and 1 title request per new session: 6 for start, letter, resume and the never-trusted start | local, every built cell |
 | Codex | 0.163.0 | the same as Claude Code: 6 | local, every built cell |
-| Grok | 1.0.52 | 3 chat requests per prompt and 1 more to `grok-4.6` per new session: 12 for start, resume and the never-trusted start, its whole budget | local, every built cell but its letter |
+| Grok | 1.0.52 | 4 for every prompt, 3 chat requests and 1 more (its title request to `grok-4.6` in a new session): 16 for start, fork, resume and the never-trusted start, within the 4 a turn its row declares (20) | CI fake model lane on Linux, every built cell but its letter |
 | Pi | 1.0.4 | 1 per prompt | local; the spawn was refused before its cells |
 | omp | 18.7.0 | not measured: the spawn was refused | local |
 | agy | 1.4.0 | not measured yet | CI only |

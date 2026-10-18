@@ -87,7 +87,7 @@
     "letter": "tool",
     "wake": "sleeping_session",
     "title": "automatic",
-    "request_budget": 15
+    "request_budget": 20
   },
   {
     "id": "opencode",
