@@ -434,29 +434,58 @@ impl Mapper<'_> {
                         agent["host_scope"] = mapped;
                     }
                 }
-                for spawn in each(value, "spawns") {
-                    let Some(object) = spawn.as_object_mut() else {
-                        continue;
-                    };
-                    match object.get("machine").and_then(Value::as_str) {
-                        // A child on the owner's machine names none.
-                        None => {
-                            object.insert(
-                                "machine".to_owned(),
-                                Value::String(self.change.old_owner_as.clone()),
-                            );
-                        }
-                        Some(machine) if machine == self.change.new_owner_was => {
-                            object.remove("machine");
-                        }
-                        Some(_) => {}
-                    }
-                }
-                Ok(())
+                self.spawn_machines(value)
             }
             LOCAL_ISSUES => swap_own(value, "projects", "devices", self.change),
             _ => Ok(()),
         }
+    }
+
+    /// A spawn's `machine` is the device its child lives on when that is not
+    /// its caller's own, and none when it is (`coordination::spawn_machine`:
+    /// the caller's machine stands in for it). So none says nothing about
+    /// the core's machine: a delegation an agent on a device made names none
+    /// and its child is on that device. The child's machine keeps its meaning
+    /// by being read against the caller's machine after the move, which the
+    /// agents' rows already carry: a machine the move renames is mapped, and
+    /// one that is now the caller's own is written as none, since the ledger
+    /// refuses a child whose machine is not the spawn's. A spawn whose caller
+    /// the ledger lacks stops the move, since its meaning cannot be read.
+    fn spawn_machines(&self, value: &mut Value) -> Result<(), String> {
+        let machines: BTreeMap<String, String> = each(value, "agents")
+            .filter_map(|agent| {
+                Some((
+                    agent.get("id")?.as_str()?.to_owned(),
+                    agent.get("machine")?.as_str()?.to_owned(),
+                ))
+            })
+            .collect();
+        for (index, spawn) in each(value, "spawns").enumerate() {
+            let Some(object) = spawn.as_object_mut() else {
+                continue;
+            };
+            let Some(machine) = object.get("machine").and_then(Value::as_str) else {
+                continue;
+            };
+            let caller = object
+                .get("parent")
+                .and_then(Value::as_str)
+                .and_then(|parent| machines.get(parent))
+                .ok_or_else(|| format!("/spawns/{index}/parent is not an agent of the ledger"))?;
+            match self.change.device(machine) {
+                Some(moved) if &moved == caller => {
+                    object.remove("machine");
+                }
+                Some(moved) => {
+                    object.insert("machine".to_owned(), Value::String(moved));
+                }
+                None if machine == caller => {
+                    object.remove("machine");
+                }
+                None => {}
+            }
+        }
+        Ok(())
     }
 
     /// The old owner gets the registration the change carries; the new
@@ -1241,14 +1270,14 @@ mod tests {
                 })).collect::<Vec<_>>(),
                 "watches": (0..3).map(|index| json!({"parent": actor(index), "target": actor((index + 2) % 3)})).collect::<Vec<_>>(),
                 "agents": [
-                    {"machine": M, "native_machine": M, "actor": actor(0), "pane": "w1:p1", "host_scope": M_SOCKET, "project": M_ROOT, "session": "s1", "instance": "t1"},
-                    {"machine": ALIAS, "native_machine": C, "actor": actor(1), "pane": "w2:p1", "host_scope": ALIAS, "project": C_ROOT, "session": "s2", "instance": "t2"},
-                    {"machine": X, "native_machine": "studio-machine", "actor": actor(2), "pane": "w3:p1", "host_scope": X, "project": X_ROOT, "session": "s3", "instance": "t3"},
+                    {"id": "agent-1", "machine": M, "native_machine": M, "actor": actor(0), "pane": "w1:p1", "host_scope": M_SOCKET, "project": M_ROOT, "session": "s1", "instance": "t1"},
+                    {"id": "agent-2", "machine": ALIAS, "native_machine": C, "actor": actor(1), "pane": "w2:p1", "host_scope": ALIAS, "project": C_ROOT, "session": "s2", "instance": "t2"},
+                    {"id": "agent-3", "machine": X, "native_machine": "studio-machine", "actor": actor(2), "pane": "w3:p1", "host_scope": X, "project": X_ROOT, "session": "s3", "instance": "t3"},
                 ],
                 "spawns": [
-                    {"repo": M_ROOT, "path": M_ROOT, "requested_path": M_ROOT, "pane": "w1:p2"},
-                    {"repo": C_ROOT, "path": C_ROOT, "requested_path": C_ROOT, "pane": "w2:p2", "machine": ALIAS},
-                    {"repo": X_ROOT, "path": X_ROOT, "requested_path": X_ROOT, "pane": "w3:p2", "machine": X},
+                    {"parent": "agent-1", "repo": M_ROOT, "path": M_ROOT, "requested_path": M_ROOT, "pane": "w1:p2"},
+                    {"parent": "agent-1", "repo": C_ROOT, "path": C_ROOT, "requested_path": C_ROOT, "pane": "w2:p2", "machine": ALIAS},
+                    {"parent": "agent-1", "repo": X_ROOT, "path": X_ROOT, "requested_path": X_ROOT, "pane": "w3:p2", "machine": X},
                 ],
                 "identity_waits": ([M, ALIAS, X].iter().enumerate().map(|(index, machine)| json!({
                     "id": format!("wait-{index}"), "machine": machine, "pane": format!("w{}:p3", index + 1),
@@ -1430,8 +1459,12 @@ mod tests {
         assert_eq!(ledger["agents"][0]["host_scope"], json!(M));
         assert_eq!(ledger["agents"][1]["host_scope"], json!(C_SOCKET));
         assert_eq!(ledger["agents"][2]["host_scope"], json!(X));
-        assert_eq!(ledger["spawns"][0]["machine"], json!(M));
-        assert!(ledger["spawns"][1].get("machine").is_none());
+        // A spawn's machine is read against its caller's, which is the
+        // MacBook's agent on both cores: none stays none, the mini is now
+        // the core's own machine and so named by its node id, and a third
+        // device stays as it is.
+        assert!(ledger["spawns"][0].get("machine").is_none());
+        assert_eq!(ledger["spawns"][1]["machine"], json!(C));
         assert_eq!(ledger["spawns"][2]["machine"], json!(X));
         // A wait still names the machine whose writer judges it, and its pane
         // stays that machine's own.
@@ -2169,6 +2202,196 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(1, "on the mini"), (2, "made on the mini's core")]
         );
+    }
+
+    /// A ledger the MacBook's core kept, in the shapes a core's spawns come
+    /// in, written through the ledger's own writer: a delegation an agent on
+    /// the mini made (the spawn names no machine, its child is on the mini),
+    /// a handoff the MacBook's agent made to the mini, a delegation on the
+    /// MacBook itself, and a delegation a mini agent made onto the MacBook.
+    /// Letters and a watch cross the two machines.
+    fn ledger_folder() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DELIVERY_LEDGER);
+        // (id, machine, pane, parent, origin): an agent on the owner has an
+        // unqualified pane, one on the mini a qualified one.
+        let rows = [
+            ("agent-1", M, "w1:p1", None, None),
+            ("agent-2", ALIAS, "w1:p2", None, None),
+            ("agent-3", ALIAS, "w2:p2", Some("agent-2"), None),
+            ("agent-4", ALIAS, "w3:p2", None, Some("agent-1")),
+            ("agent-5", M, "w2:p1", Some("agent-1"), None),
+            ("agent-6", M, "w3:p1", Some("agent-2"), None),
+        ];
+        let actor = |index: usize| {
+            let (_, machine, pane, ..) = rows[index];
+            let pane_id = if machine == M {
+                pane.to_owned()
+            } else {
+                format!("remote:{machine}:pane:{pane}")
+            };
+            json!({"pane_id": pane_id, "name": format!("a{index}"), "kind": "claude",
+                   "device_id": machine, "session": crate::wire::session_digest(&format!("s{index}"))})
+        };
+        let agents: Vec<Value> = rows
+            .iter()
+            .enumerate()
+            .map(|(index, (id, machine, pane, parent, origin))| {
+                let (native, scope, root) = if *machine == M {
+                    (M, M_SOCKET, M_ROOT)
+                } else {
+                    (C, ALIAS, C_ROOT)
+                };
+                json!({"id": id, "name": format!("a{index}"), "machine": machine, "host_scope": scope,
+                       "native_machine": native, "session": format!("s{index}"), "instance": format!("t{index}"),
+                       "pane": pane, "parent": parent, "origin": origin, "project": root,
+                       "actor": actor(index), "ended": false})
+            })
+            .collect();
+        // (id, parent, mode, machine, child, pane)
+        let spawn_rows = [
+            ("spawn-7", "agent-2", "delegation", None, "agent-3", "w2:p2"),
+            (
+                "spawn-8",
+                "agent-1",
+                "handoff",
+                Some(ALIAS),
+                "agent-4",
+                "w3:p2",
+            ),
+            ("spawn-9", "agent-1", "delegation", None, "agent-5", "w2:p1"),
+            (
+                "spawn-10",
+                "agent-2",
+                "delegation",
+                Some(M),
+                "agent-6",
+                "w3:p1",
+            ),
+        ];
+        let spawns: Vec<Value> = spawn_rows
+            .iter()
+            .map(|(id, parent, mode, machine, child, pane)| {
+                let mut row = json!({"id": id, "parent": parent, "mode": mode, "intent": id, "name": "child",
+                       "kind": "claude", "repo": C_ROOT, "branch": "main", "requested_path": null, "args": [],
+                       "path": C_ROOT, "pane": pane, "child": child, "completed": true});
+                if let Some(machine) = machine {
+                    row["machine"] = json!(machine);
+                }
+                row
+            })
+            .collect();
+        let letter = |id: &str, from: usize, to: usize| {
+            json!({"id": id, "intent": id, "sender": actor(from), "recipient": actor(to),
+                   "kind": "request", "body": "synthetic", "state": "delivered", "hook_confirmed": true,
+                   "waiting_answer": false, "reply_to": null, "created_at_unix_ms": 1,
+                   "finished_at_unix_ms": 2, "bell_errors": 0, "bell_sent": true})
+        };
+        store_with(
+            DELIVERY_LEDGER,
+            &path,
+            json!({
+                "next_id": 20,
+                "letters": [letter("letter-11", 0, 1), letter("letter-12", 2, 4), letter("letter-13", 5, 3)],
+                "watches": [{"id": "watch-14", "parent": actor(1), "target": actor(2),
+                             "last_activity_at_unix_ms": 1, "first_warning_at_unix_ms": null, "warning_count": 0,
+                             "activity_failures": 0, "last_status": "idle", "last_state_change_seq": null,
+                             "status_changed_at_unix_ms": 1}],
+                "agents": agents,
+                "spawns": spawns,
+            }),
+        );
+        write(
+            &dir.path().join(MARKER_FILE),
+            &serde_json::to_vec(&json!({"version": 1, "node": M})).unwrap(),
+        )
+        .unwrap();
+        // The fixture is a ledger the MacBook's core loads.
+        crate::delivery::ledger::load(&path).unwrap();
+        dir
+    }
+
+    /// The machine each spawn says its child is on after a move, read the way
+    /// the ledger reads it: its own, or its caller's.
+    fn spawn_machines(ledger: &Value) -> Vec<(String, String)> {
+        let machine_of = |agent: &str| {
+            ledger["agents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == agent)
+                .unwrap()["machine"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        ledger["spawns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|spawn| {
+                (
+                    spawn["id"].as_str().unwrap().to_owned(),
+                    spawn["machine"].as_str().map_or_else(
+                        || machine_of(spawn["parent"].as_str().unwrap()),
+                        str::to_owned,
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    /// The ledger a move writes is one the new core loads: every spawn's
+    /// machine is where its child is, whoever made it, on the way and on the
+    /// way back (the mini's core refused the copy of a real move because
+    /// a delegation its own agent made named the MacBook).
+    #[test]
+    fn the_ledger_a_move_writes_loads_and_every_spawn_keeps_its_childs_machine() {
+        let dir = ledger_folder();
+        let state = dir.path();
+        let path = state.join(DELIVERY_LEDGER);
+        let original = crate::delivery::ledger::load(&path).unwrap();
+
+        reown(state, &forward(), &IdTable::default()).unwrap();
+        crate::delivery::ledger::load(&path).expect("the mini's core loads the moved ledger");
+        let moved = read(&path);
+        // Children that were on the mini are on the core's own machine now,
+        // those on the MacBook are on a device under its node id.
+        assert_eq!(
+            spawn_machines(&moved),
+            [
+                ("spawn-7", C),
+                ("spawn-8", C),
+                ("spawn-9", M),
+                ("spawn-10", M)
+            ]
+            .map(|(id, machine)| (id.to_owned(), machine.to_owned()))
+        );
+        // Written only where the child is not its caller's machine.
+        assert!(moved["spawns"][0].get("machine").is_none());
+        assert_eq!(moved["spawns"][1]["machine"], json!(C));
+        assert!(moved["spawns"][2].get("machine").is_none());
+        assert_eq!(moved["spawns"][3]["machine"], json!(M));
+        // Letters and the watch name the machines of the agents they are
+        // between.
+        let devices = |rows: &str, side: &str| -> Vec<Value> {
+            moved[rows]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row[side]["device_id"].clone())
+                .collect()
+        };
+        assert_eq!(devices("letters", "sender"), [json!(M), json!(C), json!(M)]);
+        assert_eq!(
+            devices("letters", "recipient"),
+            [json!(C), json!(M), json!(C)]
+        );
+        assert_eq!(devices("watches", "parent"), [json!(C)]);
+        assert_eq!(devices("watches", "target"), [json!(C)]);
+
+        reown(state, &back(), &IdTable::default()).unwrap();
+        assert_eq!(crate::delivery::ledger::load(&path).unwrap(), original);
     }
 
     /// The machine taking the core keeps the name the operator registered it
