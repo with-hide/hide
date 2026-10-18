@@ -3173,7 +3173,6 @@ impl Runtime {
                     return true;
                 };
                 let request = ForkRequest {
-                    parent_state_change_seq: agent.state_change_seq,
                     connection_generation: self.live_generation,
                     parent_pane_id: pane_id.clone(),
                     agent: agent_kind,

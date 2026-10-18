@@ -4677,7 +4677,6 @@ mod tests {
                     kind: "path".into(),
                     value: source.display().to_string(),
                 }),
-                parent_state_change_seq: None,
                 connection_generation: 0,
                 codex_daemon: Default::default(),
                 parent_pane_id: "parent-pane".into(),
@@ -4874,7 +4873,6 @@ mod tests {
                     kind: "id".into(),
                     value: session.into(),
                 }),
-                parent_state_change_seq: None,
                 connection_generation: 0,
                 codex_daemon: Default::default(),
                 parent_pane_id: "parent-pane".into(),
@@ -5049,7 +5047,6 @@ mod tests {
                     kind: "id".into(),
                     value: "ses_root".into(),
                 }),
-                parent_state_change_seq: None,
                 connection_generation: 0,
                 codex_daemon: Default::default(),
                 parent_pane_id: "parent-pane".into(),
@@ -5185,7 +5182,6 @@ mod tests {
                     kind: "path".into(),
                     value: source.display().to_string(),
                 }),
-                parent_state_change_seq: None,
                 connection_generation: 0,
                 codex_daemon: Default::default(),
                 parent_pane_id: "parent-pane".into(),
@@ -5349,7 +5345,6 @@ mod tests {
             });
             let request = ForkRequest {
                 source_reference: None,
-                parent_state_change_seq: None,
                 connection_generation: 0,
                 codex_daemon: Default::default(),
                 parent_pane_id: "parent-pane".into(),
@@ -5491,7 +5486,6 @@ mod tests {
             };
             let request = ForkRequest {
                 source_reference: None,
-                parent_state_change_seq: None,
                 connection_generation: 0,
                 codex_daemon: Default::default(),
                 parent_pane_id: "parent-pane".into(),
@@ -5575,7 +5569,6 @@ mod tests {
         });
         let request = ForkRequest {
             source_reference: None,
-            parent_state_change_seq: None,
             connection_generation: 0,
             codex_daemon: crate::codex_launch::CodexDaemon::Present,
             parent_pane_id: "parent-pane".to_owned(),

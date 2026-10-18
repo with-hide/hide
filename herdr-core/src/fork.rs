@@ -121,7 +121,6 @@ pub enum ForkPlacement {
 /// so the worker thread carries no reference back into runtime state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ForkRequest {
-    pub(crate) parent_state_change_seq: Option<u64>,
     pub(crate) connection_generation: u64,
     pub parent_pane_id: String,
     pub agent: ForkableAgent,
@@ -320,7 +319,6 @@ mod tests {
     fn request(agent: ForkableAgent) -> ForkRequest {
         ForkRequest {
             source_reference: None,
-            parent_state_change_seq: None,
             connection_generation: 0,
             codex_daemon: Default::default(),
             parent_pane_id: "w1:p2".to_owned(),
