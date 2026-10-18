@@ -42,6 +42,7 @@ fn request(deadline: Duration) -> AiRequest {
         pick: None,
         output_language: None,
         answer: hide_ai::AnswerMode::default(),
+        provider_efforts: Vec::new(),
     }
 }
 
@@ -227,6 +228,44 @@ fn a_non_json_message_is_invalid_output() {
     });
 }
 
+/// A feature's effort for Codex reaches the turn when the caller picked
+/// none, and the attempt's log line names it (label-judgment-fixes B17).
+#[test]
+fn a_features_codex_effort_is_sent_with_the_turn_and_logged() {
+    with_mode("ok", || {
+        let turn =
+            std::env::temp_dir().join(format!("hide-ai-effort-turn-{}.json", std::process::id()));
+        unsafe { std::env::set_var("FAKE_TURN_FILE", &turn) };
+        let attempts = Arc::new(Attempts::default());
+        let router = AiRouter::new(
+            vec![Arc::new(backend())],
+            RouterConfig {
+                priority: vec![ProviderId::CODEX],
+                ..RouterConfig::default()
+            },
+            attempts.clone(),
+        );
+        let request = AiRequest {
+            provider_efforts: vec![
+                (ProviderId::CLAUDE, "high".to_owned()),
+                (ProviderId::CODEX, "medium".to_owned()),
+            ],
+            ..request(Duration::from_secs(10))
+        };
+        let outcome = router.execute(&request, &CancelToken::new());
+        unsafe { std::env::remove_var("FAKE_TURN_FILE") };
+        let params: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&turn).unwrap()).unwrap();
+        let _ = std::fs::remove_file(&turn);
+        outcome.unwrap();
+        assert_eq!(params["effort"], "medium");
+        assert_eq!(
+            *attempts.efforts.lock().unwrap(),
+            [Some("medium".to_owned())]
+        );
+    });
+}
+
 /// The label END schema's shape: a `oneOf` of task kinds with unique ids,
 /// which the API's strict mode refuses.
 fn one_of_schema() -> serde_json::Value {
@@ -380,6 +419,8 @@ struct Attempts {
     started: Mutex<usize>,
     /// Each `ai.request.finished` as its request id and detail.
     finished: Mutex<Vec<(Option<String>, Option<String>)>>,
+    /// The effort each `ai.attempt` names.
+    efforts: Mutex<Vec<Option<String>>>,
 }
 
 impl AiUsageSink for Attempts {
@@ -392,6 +433,7 @@ impl AiLogSink for Attempts {
     fn log(&self, event: AiLogEvent) {
         if event.event == "ai.attempt" {
             *self.started.lock().unwrap() += 1;
+            self.efforts.lock().unwrap().push(event.effort.clone());
         }
         if event.event == "ai.request.finished" {
             self.finished

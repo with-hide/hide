@@ -133,6 +133,9 @@ A request reports progress once a second while it runs, and a cancel in the core
   The router's validation of the answer against the full schema is what stands in for strict mode, and an answer that fails it is `InvalidOutput`, never drawn.
   The text-mode CLIs have no schema surface, so the mode changes nothing for them.
 
+  A feature may also name the reasoning effort it asks of a provider (`AiRequest.provider_efforts`, one entry per provider), which applies whenever that provider answers, first or as a fallback, unless the caller picked an agent and effort of its own (`AiPick`), which replaces it; a provider with no entry runs at its default (`AiRequest::effort`).
+  Agent summaries ask Codex for `medium` and Claude for nothing, so Claude's thinking stays off: measured 2026-10-18 by re-asking real label turns on gpt-5.6-luna, `medium` turned none of 104 label answers from a question into done, while Codex's default turned one of 31 and `low` turned a done into a question.
+
   One child per request, never a persistent one: a second request to a live child reuses its `session_id` and the conversation accumulates.
   A cancelled or expired request kills the child, which is safe because print mode holds no state worth draining.
 
@@ -589,7 +592,7 @@ The label worker parks a turn for good on a settled failure and asks again after
 ## Logging
 
 The router emits `ai.attempt`, `ai.request.finished`, `ai.request.joined`, `ai.fallback`, `ai.usage_limit`, `ai.provider.degraded`, `ai.provider.recovered`, `ai.budget.exceeded`, `ai.app_server.over_budget` and, once per UTC day, `ai.daily_rollup`; the codex backend emits `ai.app_server.idle_exit`, `ai.codex_home.swept` and `ai.codex_home.sweep_failed`.
-A line carries the request id, feature id, provider, outcome class, attempt, duration, input length, output tokens and schema version; an `ai.attempt` line also carries `thinking_tokens` when the provider reported some above zero.
+A line carries the request id, feature id, provider, outcome class, attempt, duration, input length, output tokens and schema version; an `ai.attempt` line also carries `thinking_tokens` when the provider reported some above zero, and `effort` when the attempt asked its provider for one.
 Every `ai.request.finished` of a provider that declares itself measurable (`AiBackend::measurable()`, today only codex, whose app-server is resident) also carries the app-server pid and the process measurement (`app_server_pid`, `descendants`, `rss_bytes`), or `measurement=unavailable` where the platform cannot measure it.
 It never carries the prompt, the input, the generated text, a token, a file path from a transcript, or a provider thread id.
 Hide's core writes the events of its own routers and backends (the label analyzer, the Factory's judgments, the Settings probe and Project Memory) to its diagnostic log, `Logs/core.jsonl` beside `state.json`, as records with `component` `ai` and the event name as `kind`.

@@ -264,7 +264,7 @@ impl CodexAppServerBackend {
         if request.answer == AnswerMode::Schema {
             turn_start["outputSchema"] = request.output_schema.clone();
         }
-        if let Some(effort) = request.effort() {
+        if let Some(effort) = request.effort(ProviderId::CODEX) {
             turn_start["effort"] = json!(effort);
         }
         let turn = session

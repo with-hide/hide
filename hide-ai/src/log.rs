@@ -39,6 +39,10 @@ pub struct AiLogEvent {
     pub thinking_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt: Option<u8>,
+    /// The reasoning effort an attempt asked its provider for, when it
+    /// asked one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -73,6 +77,7 @@ impl AiLogEvent {
             output_tokens: None,
             thinking_tokens: None,
             attempt: None,
+            effort: None,
             schema_version: None,
             app_server_pid: None,
             descendants: None,
