@@ -1372,7 +1372,7 @@ fn pending_creation_occupies_its_draft_once_even_when_topology_beats_the_answer(
             "the staging tab is neither a second visible tab nor overflow"
         );
         assert_eq!(tabs(&runtime, None), existing);
-        assert_eq!(tabs(&runtime, Some(&target)), [draft.clone()]);
+        assert_eq!(tabs(&runtime, Some(&target)), std::slice::from_ref(&draft));
         runtime.complete_group_start(130, Some(stage), &format!("{stage}:p"));
         runtime.ingest_session(Ok(payload));
         runtime.sync_workspace_view();
