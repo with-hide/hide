@@ -953,7 +953,13 @@ async fn input(
         // Before the write, so the doorbell cannot judge the pane clean
         // while the key is landing; a refused write only holds the pane.
         writer.note_input(&core_pane_id);
-        let sent = pane::send(&connector, &pane_id, input);
+        let sent = pane::send(
+            writer.terminals(),
+            &core_pane_id,
+            &connector,
+            &pane_id,
+            input,
+        );
         if reply && sent.is_ok() {
             writer.note_submit(&core_pane_id);
         }
@@ -963,8 +969,14 @@ async fn input(
     .unwrap_or_else(|error| (true, Err(PaneError::Unavailable(error.to_string()))));
     // Nothing reached Herdr, or Herdr says the pane is gone: nothing was
     // written and the id may be sent again. Any other failure may have landed.
-    let certain =
-        !attempted || matches!(result, Err(PaneError::Gone | PaneError::DeviceUnreachable));
+    let certain = !attempted
+        || matches!(
+            result,
+            Err(PaneError::Gone
+                | PaneError::DeviceUnreachable
+                | PaneError::InputRefused
+                | PaneError::Asleep)
+        );
     let settled = match &result {
         Ok(()) => Some(InputState::Written),
         Err(_) if certain => None,

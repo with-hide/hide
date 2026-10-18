@@ -529,7 +529,7 @@ Fork agent and Fork agent to the side follow it in the same group (PRD fork-oper
 Fork agent opens the fork in a new tab immediately right of the source's tab in its Agent area, or at the end when the source's tab has closed meanwhile; Fork agent to the side splits the source's tab and puts the fork to the right of the source.
 Either moves the keyboard to the fork as soon as Herdr has made its pane, as a new tab does, with the fork's tab or split drawn from that moment rather than from Herdr's later layout, unless the operator chose another view after the press or the Agent area has no room to show the tab, where the fork then waits; what is typed before the fork's agent has started reaches that agent, never the shell that starts it, with the node retaining it until the fork ends, up to 64 KiB and 30 seconds per holder.
 Crossing either bound discards that queue and shows a dismissible notice asking the operator to type again once the pane is ready; later keys remain refused until the fork ends.
-This rule covers NodeLink input; phone input still uses its separate Herdr path pending migration.
+This rule covers NodeLink keys and phone input; a phone waits for the same node holder before its reply or quick key is written.
 A second press while a fork of the same pane is starting, either item, is refused with `pane.fork_already_running`, and a fork whose agent does not start closes the pane it made and shows the same failure notice for both.
 On such a window's own machine, bringing a tab forward wakes what sleeps there once that machine's Herdr has it in front.
 Web owner: `web/src/PaneView.tsx` (`SleepBody`), `web/src/sleep.ts`, `web/src/PaneRelations.tsx`.
@@ -2366,6 +2366,10 @@ The phones group is titled 연결된 폰 · n / 4; each row shows the phone's na
 The push to the phone is on Settings > Notifications, not on this page (PRD settings-left-nav B7): one dropdown of 끔 (the default), 앱이 닫혀 있을 때만 and 항상, with the description of the chosen mode only under it, and the choice survives a restart (B59).
 
 ### The phone app
+
+A reply or quick key sent while its pane is being forked waits for that fork under the same 64 KiB and 30-second holder bounds as desktop input.
+The phone reports success only after Herdr confirms the write; a holder refusal keeps the reply text and shows the existing send-failure line so the operator can retry once the pane is ready.
+A pane outside the desktop's attached tabs remains writable without attaching it or moving the desktop's keyboard.
 
 The QR opens a page with the hide icon, "<Mac>에 연결", a line on what the phone can do, 연결, and a note that the code expires in five minutes.
 연결 opens the list and a one-time hint to keep hide on the Home Screen; an expired or spent code says so, a fifth phone is told the limit and to revoke one on the Mac, and a page opened with no code or credential says to scan the QR in Settings > Mobile.

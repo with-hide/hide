@@ -94,6 +94,7 @@ pub(super) struct HeldChunk {
     pub(super) typed_at: Instant,
     pub(super) typed_at_unix_ms: u64,
     pub(super) bytes: Vec<u8>,
+    pub(super) permit: Option<super::permit::Permit>,
 }
 
 /// The keys a pane can still be given at `now`, in order; those held longer
@@ -796,6 +797,7 @@ mod tests {
 
     fn chunk(bytes: &[u8], typed_at: Instant) -> HeldChunk {
         HeldChunk {
+            permit: None,
             typed_at,
             typed_at_unix_ms: 0,
             bytes: bytes.to_vec(),

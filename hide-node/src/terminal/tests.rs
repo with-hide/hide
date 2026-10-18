@@ -1581,3 +1581,133 @@ fn a_close_that_runs_before_a_spawn_s_worker_waits_and_nothing_opens_after_it() 
         "a session opened after its service's close returned"
     );
 }
+
+fn side_input(
+    service: &Service,
+    pane: &str,
+    bytes: usize,
+) -> Receiver<Result<(), hide_node_link::terminal::InputPermitError>> {
+    let (reply, result) = channel();
+    service.input_permit(
+        pane,
+        bytes,
+        Box::new(move |outcome| {
+            let _ = reply.send(outcome);
+        }),
+    );
+    result
+}
+
+#[test]
+fn side_channel_input_waits_for_the_fork_without_a_control_attach() {
+    let harness = harness(RetryPolicy::Automatic);
+    harness.service.control(TerminalControl::RequestOpen {
+        request: "fork".into(),
+        fork: true,
+    });
+    harness.service.control(TerminalControl::RequestHold {
+        request: "fork".into(),
+        pane: "w1:p2".into(),
+    });
+    let held = side_input(&harness.service, "w1:p2", 20);
+    assert!(matches!(
+        held.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    assert_eq!(
+        side_input(&harness.service, "w1:p3", 20)
+            .recv_timeout(WAIT)
+            .unwrap(),
+        Ok(())
+    );
+    harness.service.control(TerminalControl::RequestResolve {
+        request: "fork".into(),
+        pane: "w1:p2".into(),
+    });
+    assert_eq!(held.recv_timeout(WAIT).unwrap(), Ok(()));
+    assert!(matches!(
+        harness.opened.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    assert_eq!(harness.service.attached(), 0);
+}
+
+#[test]
+fn side_channel_input_shares_the_fork_caps_and_does_not_acknowledge_discarded_input() {
+    use hide_node_link::terminal::InputPermitError;
+    for timeout in [false, true] {
+        let harness = harness(RetryPolicy::Automatic);
+        harness.service.control(TerminalControl::RequestOpen {
+            request: "fork".into(),
+            fork: true,
+        });
+        harness.service.control(TerminalControl::RequestHold {
+            request: "fork".into(),
+            pane: "w1:p2".into(),
+        });
+        let held = side_input(
+            &harness.service,
+            "w1:p2",
+            hide_node_link::terminal::INPUT_HOLD_LIMIT_BYTES,
+        );
+        if timeout {
+            harness
+                .service
+                .shared
+                .run(|inner, shared| inner.tick(shared, Instant::now() + input::FORK_HOLD_MAX_AGE));
+        } else {
+            // A desktop key crosses the shared cap, including the phone's reservation.
+            harness.key("w1:p2", b"x");
+        }
+        assert_eq!(
+            held.recv_timeout(WAIT).unwrap(),
+            Err(InputPermitError::Discarded)
+        );
+        assert_eq!(
+            side_input(&harness.service, "w1:p2", 1)
+                .recv_timeout(WAIT)
+                .unwrap(),
+            Err(InputPermitError::Discarded)
+        );
+        harness.service.control(TerminalControl::RequestResolve {
+            request: "fork".into(),
+            pane: "w1:p2".into(),
+        });
+        assert_eq!(
+            side_input(&harness.service, "w1:p2", 1)
+                .recv_timeout(WAIT)
+                .unwrap(),
+            Ok(())
+        );
+    }
+}
+
+#[test]
+fn side_channel_waiters_are_bounded_and_node_close_refuses_them() {
+    use hide_node_link::terminal::InputPermitError;
+    let harness = harness(RetryPolicy::Automatic);
+    harness.service.control(TerminalControl::RequestOpen {
+        request: "fork".into(),
+        fork: true,
+    });
+    harness.service.control(TerminalControl::RequestHold {
+        request: "fork".into(),
+        pane: "w1:p2".into(),
+    });
+    let waiting = (0..64)
+        .map(|_| side_input(&harness.service, "w1:p2", 1))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        side_input(&harness.service, "w1:p2", 1)
+            .recv_timeout(WAIT)
+            .unwrap(),
+        Err(InputPermitError::Limit)
+    );
+    harness.service.close();
+    for result in waiting {
+        assert_eq!(
+            result.recv_timeout(WAIT).unwrap(),
+            Err(InputPermitError::Discarded)
+        );
+    }
+}

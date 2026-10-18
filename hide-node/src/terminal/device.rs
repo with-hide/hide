@@ -542,6 +542,20 @@ impl hide_host::serve::Terminals for NodeTerminals {
         }
         match down {
             TerminalDown::Control { control } => self.take_control(control),
+            TerminalDown::InputPermit {
+                ticket,
+                pane,
+                bytes,
+            } => {
+                let uplink = Arc::clone(&self.uplink);
+                self.input_permit(
+                    &pane,
+                    bytes,
+                    Box::new(move |outcome| {
+                        uplink.push_report(TerminalReport::InputPermit { ticket, outcome });
+                    }),
+                );
+            }
             TerminalDown::Key {
                 target,
                 data,
@@ -591,6 +605,19 @@ impl hide_host::serve::Terminals for NodeTerminals {
 
 /// The node's own screens reach its panes here, without the link.
 impl TerminalNode for NodeTerminals {
+    fn input_permit(
+        &self,
+        pane: &str,
+        bytes: usize,
+        reply: hide_node_link::terminal::InputPermitReply,
+    ) {
+        if let Some(service) = lock(&self.service).as_ref() {
+            service.input_permit(pane, bytes, reply);
+        } else {
+            reply(Err(hide_node_link::terminal::InputPermitError::Unavailable));
+        }
+    }
+
     fn control(&self, control: TerminalControl) {
         self.take_control(control);
     }
@@ -696,6 +723,7 @@ struct ProxyState {
     /// reported it.
     states: HashMap<String, Option<PaneTerminalState>>,
     stopping: bool,
+    permits: HashMap<u64, (Instant, super::permit::Permit)>,
 }
 
 /// Notes in a report-once set that `pane` was told: true the first time.
@@ -850,6 +878,7 @@ struct ProxyShared {
     sink: Arc<dyn DeviceSink>,
     /// The log records this link's lines made in the current second.
     records: Mutex<RecordWindow>,
+    permits: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// How many log records, and how many bytes of them, a device's lines may
@@ -932,6 +961,7 @@ impl DeviceTerminals {
             state: Mutex::default(),
             ready: Condvar::new(),
             records: Mutex::default(),
+            permits: Arc::default(),
             sink,
         });
         let writer = Arc::clone(&shared);
@@ -994,12 +1024,47 @@ impl Drop for DeviceTerminals {
     fn drop(&mut self) {
         // The writer ends after the line it is writing, if any; nothing
         // waits for it here, since this runs under the core's lock.
-        lock(&self.shared.state).stopping = true;
+        {
+            let mut state = lock(&self.shared.state);
+            state.stopping = true;
+            state.permits.clear();
+        }
         self.shared.ready.notify_all();
     }
 }
 
 impl TerminalNode for DeviceTerminals {
+    fn input_permit(
+        &self,
+        pane: &str,
+        bytes: usize,
+        reply: hide_node_link::terminal::InputPermitReply,
+    ) {
+        use hide_node_link::terminal::InputPermitError;
+        static NEXT_PERMIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let now = Instant::now();
+        let mut state = lock(&self.shared.state);
+        state
+            .permits
+            .retain(|_, (since, _)| now.duration_since(*since) < Duration::from_secs(35));
+        if state.stopping || state.failed.is_some() {
+            drop(state);
+            reply(Err(InputPermitError::Unavailable));
+            return;
+        }
+        let Some(permit) = super::permit::Permit::take(&self.shared.permits, reply) else {
+            return;
+        };
+        let ticket = NEXT_PERMIT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        state.permits.insert(ticket, (now, permit));
+        drop(state);
+        self.send(TerminalDown::InputPermit {
+            ticket,
+            pane: pane.to_owned(),
+            bytes,
+        });
+    }
+
     fn control(&self, control: TerminalControl) {
         if let TerminalControl::Attach { pane, .. } = &control {
             // Attached again: the pane's flow starts over.
@@ -1207,6 +1272,13 @@ impl ProxyShared {
             // the core's relay; a device's panes end in its pane events.
             TerminalUp::Forget { .. } => {}
             TerminalUp::Report { report } => {
+                if let TerminalReport::InputPermit { ticket, outcome } = report {
+                    let pending = lock(&self.state).permits.remove(&ticket);
+                    if let Some((_, permit)) = pending {
+                        permit.finish(outcome);
+                    }
+                    return;
+                }
                 // A device's errors are its own word about its panes: they
                 // reach the log as notes and never become the operator's
                 // last error, which the screen reads as a refusal of what
@@ -1308,9 +1380,11 @@ fn write_lines(shared: &ProxyShared, link: &dyn LineLink) {
             let mut state = lock(&shared.state);
             loop {
                 if state.stopping {
+                    state.permits.clear();
                     return;
                 }
                 if state.end_link {
+                    state.permits.clear();
                     let reason = state.failed.clone().unwrap_or_else(|| STALLED.to_owned());
                     drop(state);
                     link.end(&reason);
@@ -1381,6 +1455,7 @@ fn write_lines(shared: &ProxyShared, link: &dyn LineLink) {
         state.waiting_bytes = 0;
         state.end_link = false;
         state.failed = Some(reason.clone());
+        state.permits.clear();
         drop(state);
         shared.log_unwritten(unwritten, &reason);
         return;

@@ -24,6 +24,7 @@
 
 pub mod device;
 mod input;
+mod permit;
 pub mod protocol;
 pub mod router;
 pub mod session;
@@ -237,6 +238,7 @@ struct Inner {
     refusals: Refusals,
     /// Its owner ended it ([`Service::close`]): no session starts again.
     closed: bool,
+    permits: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[derive(Default)]
@@ -308,6 +310,39 @@ fn unix_ms() -> u64 {
         .map_or(0, |elapsed| {
             u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
         })
+}
+
+impl Service {
+    fn route_input(&self, target: KeyTarget, chunk: HeldChunk) {
+        let now = Instant::now();
+        self.shared.run(|inner, _| {
+            let target = match target {
+                KeyTarget::Pane(ref pane) => inner
+                    .requests
+                    .holder(pane)
+                    .map(KeyTarget::Request)
+                    .unwrap_or(target),
+                _ => target,
+            };
+            match target {
+                KeyTarget::Pane(pane) => inner.write_key(&pane, chunk, true, now),
+                KeyTarget::Request(request) => match inner.requests.route(&request, chunk) {
+                    (KeyRoute::Pane(pane), Some(chunk)) => {
+                        inner.write_key(&pane, chunk, false, now)
+                    }
+                    (KeyRoute::Dropped { limit: true }, _) => {
+                        inner.reports.push(TerminalReport::RequestDiscarded {
+                            request,
+                            reason: "limit".to_owned(),
+                        })
+                    }
+                    (KeyRoute::Held, _) => inner.wake_clock = true,
+                    _ => {}
+                },
+            }
+            inner.expire_fork_input(now);
+        });
+    }
 }
 
 impl Service {
@@ -387,6 +422,32 @@ impl Drop for Service {
 }
 
 impl TerminalNode for Service {
+    fn input_permit(
+        &self,
+        pane: &str,
+        bytes: usize,
+        reply: hide_node_link::terminal::InputPermitReply,
+    ) {
+        use hide_node_link::terminal::InputPermitError;
+        if bytes > hide_node_link::terminal::INPUT_HOLD_LIMIT_BYTES {
+            reply(Err(InputPermitError::Limit));
+            return;
+        }
+        let count = Arc::clone(&self.shared.lock().permits);
+        let Some(permit) = permit::Permit::take(&count, reply) else {
+            return;
+        };
+        self.route_input(
+            KeyTarget::Pane(pane.to_owned()),
+            HeldChunk {
+                typed_at: Instant::now(),
+                typed_at_unix_ms: unix_ms(),
+                bytes: vec![0; bytes.max(1)],
+                permit: Some(permit),
+            },
+        );
+    }
+
     fn control(&self, control: TerminalControl) {
         self.shared
             .run(|inner, shared| inner.control(shared, control));
@@ -395,37 +456,12 @@ impl TerminalNode for Service {
     fn key(&self, target: KeyTarget, bytes: Vec<u8>, typed_at_unix_ms: u64) {
         let now = Instant::now();
         let chunk = HeldChunk {
+            permit: None,
             typed_at: now,
             typed_at_unix_ms,
             bytes,
         };
-        self.shared.run(|inner, _| {
-            let target = match target {
-                KeyTarget::Pane(ref pane) => inner
-                    .requests
-                    .holder(pane)
-                    .map(KeyTarget::Request)
-                    .unwrap_or(target),
-                _ => target,
-            };
-            match target {
-                KeyTarget::Pane(pane) => inner.write_key(&pane, chunk, true, now),
-                KeyTarget::Request(request) => match inner.requests.route(&request, chunk) {
-                    (KeyRoute::Pane(pane), Some(chunk)) => {
-                        inner.write_key(&pane, chunk, false, now)
-                    }
-                    (KeyRoute::Dropped { limit: true }, _) => {
-                        inner.reports.push(TerminalReport::RequestDiscarded {
-                            request,
-                            reason: "limit".to_owned(),
-                        });
-                    }
-                    (KeyRoute::Held, _) => inner.wake_clock = true,
-                    _ => {}
-                },
-            }
-            inner.expire_fork_input(now);
-        });
+        self.route_input(target, chunk);
     }
 
     fn view(&self, pane: &str, size: GridSize, new_view: bool) {
@@ -1101,6 +1137,18 @@ impl Inner {
     /// this pane on the screen; a key held for a creation reaches its new
     /// pane without moving the keyboard.
     fn write_key(&mut self, pane: &str, chunk: HeldChunk, focus: bool, now: Instant) {
+        if let Some(permit) = &chunk.permit {
+            use hide_node_link::terminal::InputPermitError;
+            let result = if self.closed || self.panes.get(pane).is_some_and(|entry| entry.closing) {
+                Err(InputPermitError::Unavailable)
+            } else if self.panes.get(pane).is_some_and(|entry| entry.asleep) {
+                Err(InputPermitError::Asleep)
+            } else {
+                Ok(())
+            };
+            permit.finish(result);
+            return;
+        }
         if !self.panes.contains_key(pane) && !self.requests.names(pane) {
             // A pane this node was never told of takes no key and records no
             // fact: a screen could name any number of them.

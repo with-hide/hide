@@ -1685,6 +1685,7 @@ impl Runtime {
 
     fn ingest_terminal_report(&mut self, report: TerminalReport) -> bool {
         match report {
+            TerminalReport::InputPermit { .. } => false,
             TerminalReport::State { pane, state } => {
                 // A pane Herdr no longer lists is not brought back by a late
                 // report from its node.

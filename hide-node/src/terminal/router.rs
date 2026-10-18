@@ -376,6 +376,19 @@ impl Router {
 }
 
 impl TerminalNode for Router {
+    fn input_permit(
+        &self,
+        pane: &str,
+        bytes: usize,
+        reply: hide_node_link::terminal::InputPermitReply,
+    ) {
+        match self.route(pane) {
+            Route::Local => self.local.input_permit(pane, bytes, reply),
+            Route::Device { node, pane, .. } => node.input_permit(&pane, bytes, reply),
+            Route::Unrouted => reply(Err(hide_node_link::terminal::InputPermitError::Unavailable)),
+        }
+    }
+
     fn control(&self, mut control: TerminalControl) {
         match &mut control {
             TerminalControl::Shown { panes } => {

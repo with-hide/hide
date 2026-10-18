@@ -709,7 +709,9 @@ fn take_down(text: &str, terminals: &dyn TerminalNode, own_prefix: &str) -> Resu
             }
             terminals.redraw(&pane);
         }
-        TerminalDown::Control { .. } => return Err("control".to_owned()),
+        TerminalDown::Control { .. } | TerminalDown::InputPermit { .. } => {
+            return Err("control".to_owned());
+        }
     }
     Ok(())
 }
@@ -729,6 +731,21 @@ mod tests {
         }
         fn view(&self, _: &str, _: hide_node_link::terminal::GridSize, _: bool) {}
         fn redraw(&self, _: &str) {}
+    }
+
+    #[test]
+    fn a_screen_cannot_request_an_input_permit() {
+        let keys = Keys::default();
+        let line = serde_json::to_string(&TerminalLine {
+            terminal: TerminalDown::InputPermit {
+                ticket: 1,
+                pane: "core-pane".into(),
+                bytes: 4,
+            },
+        })
+        .unwrap();
+        assert_eq!(take_down(&line, &keys, "device:"), Err("control".into()));
+        assert!(lock(&keys.0).is_empty());
     }
 
     /// A send the node does not take (a large message over a slow forward)
