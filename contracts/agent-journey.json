@@ -26,6 +26,7 @@
     },
     "letter": "bell",
     "wake": "pane",
+    "title": "automatic",
     "request_budget": 18
   },
   {
@@ -55,6 +56,7 @@
     },
     "letter": "bell",
     "wake": "pane",
+    "title": "automatic",
     "request_budget": 18
   },
   {
@@ -81,6 +83,7 @@
     },
     "letter": "tool",
     "wake": "sleeping_session",
+    "title": "automatic",
     "request_budget": 15
   },
   {
@@ -108,6 +111,7 @@
     },
     "letter": "next_prompt",
     "wake": "sleeping_session",
+    "title": "automatic",
     "request_budget": 18
   },
   {
@@ -135,6 +139,9 @@
     },
     "letter": "next_prompt",
     "wake": "sleeping_session",
+    "title": {
+      "named": "/name"
+    },
     "request_budget": 18
   },
   {
@@ -162,6 +169,7 @@
     },
     "letter": "next_prompt",
     "wake": "sleeping_session",
+    "title": "automatic",
     "request_budget": 18
   },
   {
@@ -188,6 +196,7 @@
     },
     "letter": "tool",
     "wake": "sleeping_session",
+    "title": null,
     "request_budget": 12
   },
   {
@@ -218,6 +227,7 @@
     },
     "letter": "next_prompt",
     "wake": "pane",
+    "title": "automatic",
     "request_budget": 18
   }
 ]

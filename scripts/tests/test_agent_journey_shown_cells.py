@@ -126,6 +126,12 @@ class Title(unittest.TestCase):
         status, reason = title.verdict({"identity_label": "Reply with a token", "message": "Replying."}, "Codex")
         self.assertIn("with Hide's label sentences", reason)
 
+    def test_a_named_title_passes_only_with_the_name_the_operator_gave(self):
+        self.assertEqual(title.verdict({"identity_label": "JOURNEY-1"}, "pi", "JOURNEY-1")[0], cells.PASS)
+        self.assertEqual(title.verdict({"identity_label": "Reply with a token"}, "pi", "JOURNEY-1"),
+                         (cells.FAIL, "the row shows 'Reply with a token', not 'JOURNEY-1', the name the operator "
+                                      "gave the session"))
+
 
 def usage_section(node="node-1", agent="codex", consumption=None):
     return {"nodes": [{"node": node, "agents": [{"agent": agent, "limits": {"state": "unsupported"},

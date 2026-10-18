@@ -28,6 +28,9 @@ pub struct JourneyAdapter {
     pub letter: Option<JourneyLetter>,
     /// How a sleeping agent is woken; absent when it cannot sleep.
     pub wake: Option<JourneyWake>,
+    /// Where the native title the `title` cell reads comes from, measured the
+    /// way the operator makes it; absent when the cell is not declared.
+    pub title: Option<JourneyTitle>,
     /// The most model requests a signed-in CI run of the journey may make
     /// for this agent, which its lane fails above: each turn the declared
     /// cells start, at most `REQUESTS_PER_TURN` each; absent for an agent
@@ -66,6 +69,19 @@ pub enum JourneyWake {
     /// `wake_sleeping_session` opens in a new pane
     /// (`LaunchDialect::closes_pane_when_sleeping`).
     SleepingSession,
+}
+
+/// The native title source a `title` cell measures (docs/status-model.md,
+/// Task identity: the automatic or source-less slot of each format).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JourneyTitle {
+    /// The agent titles its session itself, with a model request of its own
+    /// that the journey's model answers.
+    Automatic,
+    /// Only a name the operator gives the session with this command: Pi's
+    /// `session_info.name`, which its `/name` writes.
+    Named(&'static str),
 }
 
 #[derive(serde::Serialize)]
@@ -137,6 +153,10 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             Some(dialect) if dialect.closes_pane_when_sleeping() => JourneyWake::SleepingSession,
             _ => JourneyWake::Pane,
         });
+        let title = cells.title.then(|| match row.titles {
+            Some(super::SessionFormat::Pi) => JourneyTitle::Named("/name"),
+            _ => JourneyTitle::Automatic,
+        });
         JourneyAdapter {
             id: row.id,
             herdr_kind: row.herdr.name,
@@ -148,6 +168,7 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             request_budget: start.then_some(turns * REQUESTS_PER_TURN),
             letter,
             wake,
+            title,
         }
     })
 }
