@@ -5,7 +5,7 @@
 // their order among the sessions.
 
 import { describe, expect, it } from "vitest";
-import { confirmHolds, fileOpen, mergeWhy, milestones, prFacts, primaryAction, splitFiles, timeline } from "./prCardModel";
+import { checkSummary, confirmHolds, fileOpen, mergeWhy, milestones, prFacts, primaryAction, splitFiles, timeline } from "./prCardModel";
 import type { PrCard, PullRequest } from "./snapshot";
 
 const pr = (over: Omit<Partial<PullRequest>, "work"> & { work?: Record<string, unknown> }): PullRequest =>
@@ -132,4 +132,17 @@ describe("timeline", () => {
       "opened", "checks_passed", "approved", "s", "merged",
     ]);
   });
+});
+
+it("reports actual CI totals without counting skipped or unknown checks as passes", () => {
+  const counts = { total: 18, passed: 14, running: 3, waiting: 1, failed: 0, skipped: 0, unknown: 0 };
+  const summary = (over = {}) => checkSummary(pr({ checks: "pending", work: { check_counts: { ...counts, ...over } } }));
+  expect(summary()).toEqual({ key: "recordCard.ciRunning", values: { count: 3, total: 18 } });
+  expect(summary({ running: 0, waiting: 4 })).toEqual({ key: "recordCard.ciWaiting", values: { count: 4, total: 18 } });
+  expect(summary({ failed: 2, passed: 12 })).toEqual({ key: "recordCard.ciFailed", values: { count: 2, total: 18 } });
+  expect(summary({ passed: 18, running: 0, waiting: 0 }).key).toBe("recordCard.ciPassed");
+  expect(summary({ passed: 16, running: 0, waiting: 0, skipped: 2 })).toEqual({ key: "recordCard.ciFinished", values: { count: 16, total: 18 } });
+  expect(summary({ passed: 16, running: 0, waiting: 0, unknown: 2 }).key).toBe("recordCard.ciUnknown");
+  expect(checkSummary(pr({ checks: "passing" })).key).toBe("recordCard.ciUnknown");
+  expect(checkSummary(pr({ checks: "none", work: { check_counts: { ...counts, total: 0 } } })).key).toBe("recordCard.ciNone");
 });

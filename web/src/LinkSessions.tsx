@@ -15,7 +15,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { deviceLabel, failureKey, foldTimeline, resumeProvider, resumeBlock, resumeCheckout, sessionLines, spanText, timeText, viewBlock, type Blocked, type SessionLine } from "./linkPanel";
 import { allAgents } from "./navigation";
-import { timeline, type Milestone, type TimelineEntry } from "./prCardModel";
+import { checkSummary, timeline, type Milestone, type TimelineEntry } from "./prCardModel";
 import { recordTitle } from "./sessionWork";
 import { catalogOf, localDeviceId, type LinkPanel, type PullRequest, type Workspace } from "./snapshot";
 import { startAnswer, startRequestId } from "./startAnswer";
@@ -125,7 +125,7 @@ export function LinkTimeline({
           {shown.map((entry) => {
             if (entry.kind === "session") return <SessionLineView key={entry.session.line.id} entry={entry.session} project={project} checkoutBranch={branchOf(entry.session.line.pr)} opener={lines.length > 1} actions={actions} />;
             if (entry.kind === "milestone") return <MilestoneRow key={`${entry.milestone.kind}:${entry.milestone.at ?? ""}`} milestone={entry.milestone} />;
-            return <NowRow key="now" running={entry.running} />;
+            return <NowRow key="now" running={entry.running} pr={pr} />;
           })}
         </ol>
       ) : null}
@@ -163,9 +163,10 @@ function MilestoneRow({ milestone }: { milestone: Milestone }) {
 }
 
 /** `지금` at the end of an open pull request (B6; PRD record-card-readability D-12, B21): one line, `지금 · 검사 N개 도는 중` with the dashed ring of proven work it waits on while checks run (status-marks D-06, D-25), otherwise `지금` and an empty slot. */
-function NowRow({ running }: { running: number }) {
+function NowRow({ running, pr }: { running: number; pr: PullRequest | null }) {
   const { t } = useInterfaceTranslation();
-  return <SessionRow mark={<span className={ON_RAIL}><StatusMark mark={running > 0 ? "waiting" : null} /></span>} title={running > 0 ? `${t("work.card.now")} · ${t("work.card.why.ci", { count: running })}` : t("work.card.now")} data-timeline-now={running} />;
+  const summary = pr?.work?.check_counts ? checkSummary(pr) : null;
+  return <SessionRow mark={<span className={ON_RAIL}><StatusMark mark={running > 0 ? "waiting" : null} /></span>} title={summary ? `${t("work.card.now")} · ${t(summary.key, summary.values)}` : running > 0 ? `${t("work.card.now")} · ${t("work.card.why.ci", { count: running })}` : t("work.card.now")} data-timeline-now={running} />;
 }
 
 /** A resume in flight: the request it sent, then the core's refusal if it came. */

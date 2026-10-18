@@ -117,11 +117,11 @@ impl Hold {
     }
 }
 
-/// The agent kinds a bell may be typed into: those whose permission and
-/// selection menus Herdr was observed to report as `blocked` in an isolated
-/// run (`docs/delivery.md`, Verification). A menu Herdr reads as a stop
-/// (Codex's plan approval) is guarded by the session read instead
-/// ([`Turn`]), so a kind that was not observed is not in this list.
+/// The adapter declares whether a kind accepts a bell. The verdict still
+/// requires a resting or eligible working state, no Hide-routed draft and
+/// no native wait; a kind with tool letters is rung only at rest.
+/// `docs/delivery.md` records the observed menu states and the residual
+/// for input that bypasses Hide.
 pub(crate) fn bell_target(kind: &str) -> bool {
     hide_agent_adapter::adapter(kind).is_some_and(|row| row.bell)
 }
@@ -184,6 +184,7 @@ pub(crate) fn judge(observation: &Observation, patience: Patience, now: u64) -> 
         "idle" | "done" if observation.state_change_seq.is_some() => {}
         "working"
             if observation.state_change_seq.is_some()
+                && !super::mailbox::tool_letters(&observation.actor.kind)
                 && patience.due(observation.entered_working_at_unix_ms, now) => {}
         "working" => return Err(Hold::Working),
         "blocked" => return Err(Hold::Blocked),
@@ -795,6 +796,42 @@ mod tests {
                 assert_eq!(judge(&pane, WAITED, NOW), Ok(()), "{kind} {status}");
             }
         }
+    }
+
+    #[test]
+    fn a_tool_letters_kind_rings_only_at_rest_with_no_draft_or_native_wait() {
+        let mut pane = at_rest("grok");
+        pane.turn = Turn::Read(Waiting::Nothing);
+        for status in ["idle", "done"] {
+            pane.status = status.into();
+            assert_eq!(judge(&pane, WAITED, NOW), Ok(()));
+        }
+        pane.status = "working".into();
+        pane.entered_working_at_unix_ms = 1;
+        assert_eq!(judge(&pane, WAITED, NOW), Err(Hold::Working));
+        assert_eq!(
+            judge(
+                &pane,
+                Patience {
+                    now: true,
+                    ..WAITED
+                },
+                NOW
+            ),
+            Err(Hold::Working)
+        );
+        pane.status = "idle".into();
+        pane.last_input_at_unix_ms += 1;
+        assert_eq!(judge(&pane, WAITED, NOW), Err(Hold::Draft));
+        pane.last_submit_at_unix_ms = pane.last_input_at_unix_ms;
+        for wait in [Waiting::PlanApproval, Waiting::Question] {
+            pane.turn = Turn::Read(wait);
+            assert_eq!(judge(&pane, WAITED, NOW), Err(Hold::AwaitingOperator));
+        }
+        pane.turn = Turn::Unread;
+        assert_eq!(judge(&pane, WAITED, NOW), Err(Hold::SessionUnread));
+        pane.turn = Turn::Read(Waiting::Nothing);
+        assert_eq!(judge(&pane, WAITED, NOW), Ok(()));
     }
 
     #[test]
@@ -1710,11 +1747,11 @@ mod tests {
     }
 
     #[test]
-    fn the_bell_rings_for_claude_code_and_codex_and_never_for_opencode() {
-        for kind in ["claude", "claude-code", "claude_code", "codex"] {
+    fn the_bell_targets_match_the_reviewed_adapter_declarations() {
+        for kind in ["claude", "claude-code", "claude_code", "codex", "grok"] {
             assert!(bell_target(kind), "{kind}");
         }
-        for kind in ["opencode", "pi", "grok", "cursor", "gemini", "amp", ""] {
+        for kind in ["opencode", "pi", "cursor", "gemini", "amp", ""] {
             assert!(!bell_target(kind), "{kind}");
         }
     }

@@ -5063,6 +5063,9 @@ pub struct PullRequestWork {
     /// are still running: the second line's `✗ <name>` and `CI · N`.
     pub failed_checks: Vec<PrFailedCheck>,
     pub pending_checks: u32,
+    /// The open head's complete GitHub rollup; absent when it was not read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_counts: Option<PrCheckCounts>,
     /// How many of those checks have reported and still run (`QUEUED`,
     /// `IN_PROGRESS`, `WAITING`, `PENDING`, `REQUESTED`), leaving out a
     /// required check that never reported (`EXPECTED`): only a running one
@@ -5081,6 +5084,18 @@ pub struct PullRequestWork {
     pub sessions: Vec<String>,
     #[serde(skip)]
     pub checkouts: Vec<String>,
+}
+
+/// Disjoint counts from one GitHub status-check rollup, never inferred from its summary.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct PrCheckCounts {
+    pub total: u32,
+    pub passed: u32,
+    pub failed: u32,
+    pub running: u32,
+    pub waiting: u32,
+    pub skipped: u32,
+    pub unknown: u32,
 }
 
 impl PullRequestSnapshot {

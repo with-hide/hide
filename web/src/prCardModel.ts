@@ -9,6 +9,18 @@
 import type { PrReason } from "./agentScope";
 import type { PrCard, PrMergeMethod, PullRequest, PullRequestWork } from "./snapshot";
 
+/** One truthful summary for the card and timeline; unknown totals stay unknown. */
+export function checkSummary(pr: PullRequest) {
+  const counts = pr.work?.check_counts;
+  const values = { count: 0, total: counts?.total ?? 0 };
+  if (!counts || counts.total === 0) return { key: pr.checks === "none" ? "recordCard.ciNone" as const : "recordCard.ciUnknown" as const, values };
+  if (counts.failed > 0) return { key: "recordCard.ciFailed" as const, values: { ...values, count: counts.failed } };
+  if (counts.running > 0) return { key: "recordCard.ciRunning" as const, values: { ...values, count: counts.running } };
+  if (counts.waiting > 0) return { key: "recordCard.ciWaiting" as const, values: { ...values, count: counts.waiting } };
+  if (counts.passed === counts.total) return { key: "recordCard.ciPassed" as const, values };
+  return { key: counts.unknown === 0 ? "recordCard.ciFinished" as const : "recordCard.ciUnknown" as const, values: { ...values, count: counts.passed } };
+}
+
 /** What the primary button of the button row is (D-21). */
 export type PrimaryAction = "merge" | "update" | "review" | "assign" | "answer" | "view_pane" | "assign_reviewer" | "github";
 

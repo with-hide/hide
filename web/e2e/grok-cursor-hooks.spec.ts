@@ -141,14 +141,16 @@ test("the switches write Hide's Grok file and Cursor entries beside the others, 
     const switchOf = (id: string, state: "on" | "off") => list.locator(`[data-agent-switch="${daemon.node}:${id}:${state}"]`);
     await expect(switchOf("grok", "off")).toBeVisible({ timeout: 60_000 });
     await expect(switchOf("cursor", "off")).toBeVisible();
-    // B1: Grok's own file appears with the five events; Cursor's entries join the operator's and Orca's.
+    // Grok's rest bell needs the prompt observer beside its tool and Stop hooks; Cursor keeps version 6.
     await switchOf("grok", "off").click();
     await expect(switchOf("grok", "on")).toBeVisible();
-    await expect.poll(() => read(grokFile(home)), { timeout: 60_000 }).toContain("hide-guidance@6");
+    await expect.poll(() => read(grokFile(home)), { timeout: 60_000 }).toContain("hide-guidance@7");
     await switchOf("cursor", "off").click();
     await expect(switchOf("cursor", "on")).toBeVisible();
     await expect.poll(() => read(cursorFile(home)), { timeout: 60_000 }).toContain("hide-guidance@6");
-    expect(Object.keys(json<Grouped>(grokFile(home)).hooks)).toEqual(["SessionStart", "PreToolUse", "SubagentStart", "SubagentStop", "Stop"]);
+    expect(Object.keys(json<Grouped>(grokFile(home)).hooks).sort()).toEqual(["PreToolUse", "SessionStart", "Stop", "SubagentStart", "SubagentStop", "UserPromptSubmit"]);
+    expect(json<Grouped>(grokFile(home)).hooks.UserPromptSubmit![0]!.matcher).toBeUndefined();
+    expect(installed.grok(home, "UserPromptSubmit")).toContain("--event UserPromptSubmit");
     // B6 (letters-to-busy-agents): the tool hook carries no matcher, so every tool call is a gap a due letter goes at.
     expect(json<Grouped>(grokFile(home)).hooks.PreToolUse![0]!.matcher).toBeUndefined();
     expect(Object.keys(json<Flat>(cursorFile(home)).hooks).sort()).toEqual(["preToolUse", "sessionStart", "stop"]);
@@ -164,7 +166,7 @@ test("the switches write Hide's Grok file and Cursor entries beside the others, 
     await expect(list.locator("[data-agent-problem]")).toHaveCount(0);
     await list.locator('[data-agent-partial="grok"]').click();
     const popover = page.locator('[data-agent-partial-popover="grok"]');
-    for (const feature of ["spawn_guard:yes", "letters:no", "bell:no"]) await expect(popover.locator(`[data-agent-feature="${feature}"]`)).toBeVisible();
+    for (const feature of ["spawn_guard:yes", "letters:no", "bell:yes"]) await expect(popover.locator(`[data-agent-feature="${feature}"]`)).toBeVisible();
     await screenshot(page, "grok-cursor-hooks-on");
     await page.keyboard.press("Escape");
 
@@ -190,7 +192,8 @@ test("a Grok file the operator removed or edited shows on its row until Reinstal
   const wire = watchWire(page);
   try {
     const list = await openAgents(page, daemon);
-    await expect.poll(() => read(grokFile(home)), { timeout: 60_000 }).toContain("hide-guidance@6");
+    await expect.poll(() => read(grokFile(home)), { timeout: 60_000 }).toContain("hide-guidance@7");
+    const original = json<Grouped>(grokFile(home));
     // B8: the hook the operator took out is not put back; its row says so with Reinstall, on that row only.
     fs.rmSync(grokFile(home));
     await list.locator("[data-agents-check]").click();
@@ -199,7 +202,8 @@ test("a Grok file the operator removed or edited shows on its row until Reinstal
     await expect(list.locator("[data-agent-problem]")).toHaveCount(1);
     expect(fs.existsSync(grokFile(home))).toBe(false);
     await problem.locator("[data-hook-reinstall]").click();
-    await expect.poll(() => read(grokFile(home)), { timeout: 60_000 }).toContain("hide-guidance@6");
+    await expect.poll(() => (fs.existsSync(grokFile(home)) ? json<Grouped>(grokFile(home)) : null), { timeout: 60_000 }).toEqual(original);
+    await expect.poll(() => wire.hook("grok")?.state, { timeout: 60_000 }).toBe("installed");
     await expect(list.locator("[data-agent-problem]")).toHaveCount(0);
     expect(read(path.join(home, ".grok", "hooks", "herdr.json"))).toBe(HERDR_FILE);
 
@@ -211,8 +215,12 @@ test("a Grok file the operator removed or edited shows on its row until Reinstal
     await expect(list.locator("[data-agent-problem]")).toHaveCount(1);
     expect(read(grokFile(home))).toBe(edited);
     await problem.locator("[data-hook-reinstall]").click();
-    await expect.poll(() => read(grokFile(home)), { timeout: 60_000 }).not.toContain("--verbose");
+    // Reinstall restores every event and command, including the prompt observer, regardless of formatting.
+    await expect.poll(() => json<Grouped>(grokFile(home)), { timeout: 60_000 }).toEqual(original);
+    await expect.poll(() => wire.hook("grok")?.state, { timeout: 60_000 }).toBe("installed");
     await expect(list.locator("[data-agent-problem]")).toHaveCount(0);
+    expect(read(path.join(home, ".grok", "hooks", "herdr.json"))).toBe(HERDR_FILE);
+    expect(read(path.join(home, ".grok", "hooks", "orca.json"))).toBe(ORCA_FILE);
 
     // B8: an agent that is on but has not made its folder gets nothing made, and its row says why in a quiet
     // line without Reinstall (the kit piece's reason).

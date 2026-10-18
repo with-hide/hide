@@ -1,22 +1,169 @@
 {
   "session-record": {
-    "description": "The approved Sessions work record, summaries off, missed-work issue preview and search states.",
+    "description": "The current session stays primary, with requested work, scoped tabs and expandable child sessions.",
     "file": "design/hide-screens.pen",
-    "sheet": "screen-session-record",
+    "sheet": "aPmwQ",
     "scene": "session-record",
     "selector": "[data-gallery-scene=session-record]",
     "measurement": "web/e2e/session-record-geometry.mjs",
     "frames": [
-      { "node": "swr-record-l", "theme": "light", "width": 420, "scale": 1, "content": "reference", "state": "rest" },
-      { "node": "swr-record-d", "theme": "dark", "width": 420, "scale": 1, "content": "reference", "state": "rest" },
-      { "node": "swr-off-l", "theme": "light", "width": 360, "scale": 1, "content": "reference", "state": "off" },
-      { "node": "swr-off-d", "theme": "dark", "width": 360, "scale": 1, "content": "reference", "state": "off" }
+      {
+        "node": "UjBt0",
+        "theme": "light",
+        "width": 680,
+        "scale": 1,
+        "content": "reference",
+        "state": "rest"
+      },
+      {
+        "node": "qzilw",
+        "theme": "dark",
+        "width": 680,
+        "scale": 1,
+        "content": "reference",
+        "state": "rest"
+      },
+      {
+        "node": "jfBPl",
+        "theme": "light",
+        "width": 360,
+        "scale": 1,
+        "content": "reference",
+        "state": "rest"
+      },
+      {
+        "node": "B7kEEH",
+        "theme": "dark",
+        "width": 360,
+        "scale": 1,
+        "content": "reference",
+        "state": "rest"
+      }
     ],
-    "conditions": { "themes": ["light", "dark"], "widths": [420, 300], "contents": ["reference", "long"], "scales": [1, 1.3076923076923077] },
-    "states": { "rest": "Approved record at rest", "off": "Native title and raw requests only", "loading": "First read skeleton", "failed": "Read failure and retry", "draft": "Editable issue draft", "ended": "Folded missed-work group", "search": "Separate session search group" },
-    "urlStates": ["off", "loading", "failed", "draft", "ended", "search"],
-    "rules": { "noOverlap": true, "noSidewaysOverflow": true },
-    "judgment": ["Does the actual record preserve the approved order and compact hierarchy in both themes?", "Do long Korean requests and missed rows remain legible in a narrow lane? Native behavior is verified separately."]
+    "conditions": {
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "widths": [
+        680,
+        360,
+        300
+      ],
+      "contents": [
+        "reference",
+        "long"
+      ],
+      "scales": [
+        1,
+        1.3076923076923077
+      ]
+    },
+    "states": {
+      "rest": "Requested work, findings and five children",
+      "off": "AI off with raw request",
+      "pending": "Awaiting extraction with raw request",
+      "question": "A question without an invented task",
+      "loading": "First read skeleton",
+      "failed": "Read failure and retry"
+    },
+    "urlStates": [
+      "off",
+      "pending",
+      "question",
+      "loading",
+      "failed"
+    ],
+    "rules": {
+      "noOverlap": true,
+      "noSidewaysOverflow": true
+    },
+    "judgment": [
+      "Does the actual record preserve the approved order and compact hierarchy in both themes?",
+      "Do long Korean requests and missed rows remain legible in a narrow lane? Native behavior is verified separately."
+    ]
+  },
+  "pr-card": {
+    "description": "The approved PR card without duplicate agent action box, with real CI counts and labelled GitHub link.",
+    "file": "design/hide-screens.pen",
+    "sheet": "u80Zy",
+    "scene": "pr-card",
+    "selector": "[data-gallery-scene=pr-card]",
+    "measurement": "web/e2e/pr-card-geometry.mjs",
+    "frames": [
+      {
+        "node": "pxFt9",
+        "theme": "light",
+        "width": 520,
+        "scale": 1,
+        "content": "reference",
+        "state": "rest"
+      },
+      {
+        "node": "HHUGV",
+        "theme": "dark",
+        "width": 520,
+        "scale": 1,
+        "content": "reference",
+        "state": "rest"
+      },
+      {
+        "node": "PvWzp",
+        "theme": "light",
+        "width": 360,
+        "scale": 1,
+        "content": "reference",
+        "state": "rest"
+      },
+      {
+        "node": "GJUxV",
+        "theme": "dark",
+        "width": 360,
+        "scale": 1,
+        "content": "reference",
+        "state": "rest"
+      }
+    ],
+    "conditions": {
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "widths": [
+        520,
+        360,
+        300
+      ],
+      "contents": [
+        "reference",
+        "long"
+      ],
+      "scales": [
+        1,
+        1.3076923076923077
+      ]
+    },
+    "states": {
+      "rest": "18 total, 14 passed, 3 running, 1 waiting",
+      "failed": "Two checks failed",
+      "ready": "18 checks passed",
+      "unknown": "No rollup read",
+      "skipped": "16 passed, 2 skipped"
+    },
+    "urlStates": [
+      "failed",
+      "ready",
+      "unknown",
+      "skipped"
+    ],
+    "rules": {
+      "noOverlap": true,
+      "noSidewaysOverflow": true
+    },
+    "judgment": [
+      "Are the GitHub action, CI breakdown, timeline, files and body clear at narrow widths?",
+      "Native host, external GitHub writes and provider behavior require separate runtime evidence."
+    ]
   },
   "sidebar-task-lens": {
     "description": "The sidebar's 프로젝트 | 태스크 switch and 태스크 list, the lane's 보기 slot holding a PR card or a session record, the rail Memory · PRs | Files · Changes and the PRs tool (PRD sidebar-task-lens D-50, the approved v4 boards).",

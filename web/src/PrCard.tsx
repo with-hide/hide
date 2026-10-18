@@ -1,20 +1,19 @@
-import { ChevronDownIcon, ChevronRightIcon, EllipsisIcon, ExternalLinkIcon, SquareTerminalIcon, TriangleAlertIcon } from "lucide-react";
+import { CheckCircle2Icon, LoaderCircleIcon, ChevronDownIcon, ChevronRightIcon, EllipsisIcon, ExternalLinkIcon, SquareTerminalIcon, TriangleAlertIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./components/ui/dropdown-menu";
 import { Hint } from "./components/ui/tooltip";
 import { PrMark } from "./components/pr-mark";
-import { StateBox, type StateBoxTone } from "./components/state-box";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { LinkTimeline } from "./LinkSessions";
 import { renderMarkdown } from "./mobile/markdown";
 import { boardProjects } from "./navigation";
-import { confirmHolds, defaultMethod, fileOpen, mergeWhy, milestones, prFacts, primaryAction, splitFiles, type Confirmed, type PrFact, type PrimaryAction } from "./prCardModel";
-import { PrLinks } from "./PrLinks";
+import { checkSummary, confirmHolds, defaultMethod, fileOpen, mergeWhy, milestones, prFacts, primaryAction, splitFiles, type Confirmed, type PrFact, type PrimaryAction } from "./prCardModel";
+import { IssuePicker, PrLinks } from "./PrLinks";
 import { ReasonLine } from "./prReason";
-import { staleLabel, staleness } from "./prMark";
+import { badgeWord, staleLabel, staleness } from "./prMark";
 import { findPrEntry, opensCard, type PrEntry } from "./prWork";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { catalogWorkspaces, frontCheckout, type LinkPanel, type PrCard, type PrMergeMethod, type PullRequest, type Workspace } from "./snapshot";
@@ -22,18 +21,10 @@ import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { useRequestViewDemand } from "./requestViewDemand";
 
-// A pull request's decision card (PRD work-tab-pr-lens D-06, D-21, D-22;
-// PRD sidebar-task-lens D-28, B32, B33, B37; PRD pr-card-and-session-record-
-// redesign D-01 to D-10, D-15): the body of the lane's 보기 slot, under the
-// slot's own head (←, `PR #N · <project>`, ↗, ✕). From the top: a one-line
-// head with its meta line and its issue and worktree line, the decision box
-// holding the case's word, facts, blockers and button, the 타임라인 of the
-// sessions that made or worked on it and the pull request's own milestones
-// oldest first, the changed files folded into one line, and the body as
-// Markdown under a sticky row of its `##` headings. The head, the box and
-// the milestones are drawn from the list's own values, so they stand while
-// the card reads its body, files and review threads; each of those is a
-// part with its own placeholder, failure and retry.
+// The PR card keeps its list identity, CI counts, merge controls, timeline,
+// changed files and Markdown body in the lane's existing detail slot.
+// Agent actions belong to the timeline; each remotely read part keeps its
+// own loading, failure and retry state.
 
 /**
  * Whether the operator opened the files line, per card. The card leaves the
@@ -101,8 +92,8 @@ export function PrCardView({ workspaceId, number, actions }: { workspaceId: stri
   if (!project) return <p className="p-lg text-caption text-muted-foreground" data-pr-card-missing={number}>{t("work.card.unlisted", { number })}</p>;
   const panel: LinkPanel | null = record && record.workspace_id === project.id && record.target.kind === "pr" && record.target.number === number ? record : null;
   return (
-    <article ref={scroller} aria-label={t("work.card.aria", { number })} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto text-foreground" data-pr-card={number} data-pr-card-project={project.id} data-pr-card-head={card?.head ?? undefined}>
-      <div className="flex w-full flex-col gap-md p-md">
+    <article ref={scroller} aria-label={t("work.card.aria", { number })} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto [overflow-wrap:anywhere] text-foreground" data-pr-card={number} data-pr-card-project={project.id} data-pr-card-head={card?.head ?? undefined}>
+      <div className="flex w-full flex-col gap-lg p-lg">
         {pr ? <Head project={project} pr={pr} entry={entry} card={card} panel={panel} actions={actions} /> : <p className="text-caption text-muted-foreground" data-pr-card-unlisted={number}>{t("work.card.unlisted", { number })}</p>}
         {pr ? <DecisionBox project={project} pr={pr} entry={entry} card={card} actions={actions} /> : null}
         <Timeline project={project} pr={pr} card={card} panel={panel} number={number} actions={actions} />
@@ -115,11 +106,7 @@ export function PrCardView({ workspaceId, number, actions }: { workspaceId: stri
 
 // --- head ---------------------------------------------------------------------
 
-/**
- * One line of mark, number, title and author, the Workspace button, then
- * `branch → base · files · +/-` (B32), then the issue and the worktree of
- * the branch in one quiet line (D-04, B2).
- */
+/** PR identity and GitHub access, wrapping title, branch facts and actual links. */
 function Head({ project, pr, entry, card, panel, actions }: { project: Workspace; pr: PullRequest; entry: PrEntry | null; card: PrCard | null; panel: LinkPanel | null; actions: Actions }) {
   const { t, i18n } = useInterfaceTranslation();
   const checkoutId = entry?.row.checkout_ids[0] ?? entry?.row.checkout_id ?? null;
@@ -130,34 +117,23 @@ function Head({ project, pr, entry, card, panel, actions }: { project: Workspace
   const removed = files?.reduce((sum, file) => sum + file.deletions, 0) ?? 0;
   const stale = staleness(project.checkouts.find((row) => row.github)?.github);
   const staleText = staleLabel(stale, t, requireInterfaceLanguage(i18n.language));
-  const local = project.tasks?.source?.kind === "local";
-  const worktree = checkout?.is_worktree === true && checkout.is_primary !== true;
-  const merged = pr.state === "merged" || pr.state === "closed";
   return (
     <header className="flex flex-col gap-xs" data-pr-card-header="true">
-      <div className="flex min-w-0 items-start gap-sm">
-        <h2 className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-xs text-body font-semibold">
-          <PrMark state={pr.state} number={pr.number} />
-          <span className="min-w-0 break-words break-keep" data-pr-card-title="true">{pr.title}</span>
-          {author ? <span className="text-caption font-normal text-muted-foreground" data-pr-card-author={author}>{t("work.row.author", { name: author })}</span> : null}
-        </h2>
-        {checkout ? (
-          <Hint label={t("work.card.openWorkspace")}>
-            <Button variant="ghost" size="sm" className="shrink-0" onClick={() => actions.openWorkspace(project.device_id, checkout.workspace_id, checkout.id)} data-pr-card-workspace={pr.number}>
-              <SquareTerminalIcon aria-hidden="true" />
-              {t("work.card.workspace")}
-            </Button>
-          </Hint>
-        ) : null}
+      <div className="flex min-w-0 flex-wrap items-center gap-xs">
+        <button type="button" className="mr-auto rounded-xs outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" onClick={() => actions.openPullRequest(pr.url, project.device_id, true)} data-pr-card-number={pr.number}><span className="inline-flex items-center gap-xs"><PrMark state={pr.state} number={pr.number} /><span className="text-micro text-muted-foreground">{badgeWord(pr, t).label}</span></span></button>
+        <Button variant="outline" size="sm" onClick={() => actions.openPullRequest(pr.url, project.device_id, true)} data-pr-card-github="true">{t("recordCard.github")}<ExternalLinkIcon aria-hidden="true" /></Button>
         <CardMenu project={project} pr={pr} entry={entry} />
       </div>
+      <h2 className="min-w-0 whitespace-normal text-subhead font-semibold [overflow-wrap:anywhere]" data-pr-card-title="true">{pr.title}</h2>
+      {author ? <span className="text-caption text-muted-foreground" data-pr-card-author={author}>{t("work.row.author", { name: author })}</span> : null}
       <p className="flex min-w-0 flex-wrap items-center gap-x-xs gap-y-xxs font-mono text-micro text-muted-foreground" data-pr-card-facts="true">
         <span className="min-w-0 truncate" data-pr-card-branch={pr.head_branch}>{pr.head_branch}</span>
         {pr.base_branch ? <><span aria-hidden="true">→</span><span className="min-w-0 truncate">{pr.base_branch}</span></> : null}
         {files ? <><span aria-hidden="true">·</span><span className="font-sans" data-pr-card-files={card?.files_total ?? files.length}>{t("work.card.files", { count: card?.files_total ?? files.length })}</span><span aria-hidden="true">·</span><span className="text-pr-mergeable">+{added}</span><span className="text-pr-failed">−{removed}</span></> : null}
         {staleText ? <Hint label={staleText}><span role="img" aria-label={staleText} className="inline-flex text-warning" data-pr-card-stale="true"><TriangleAlertIcon aria-hidden="true" className="size-(--size-icon-sm)" /></span></Hint> : null}
       </p>
-      <PrLinks number={pr.number} issue={entry?.row.issue ?? null} checkout={checkout} linkable={!merged && !entry?.row.issue && (!local || worktree)} record={panel} project={project} actions={actions} />
+      {checkout ? <Button variant="ghost" size="sm" className="self-start px-none" onClick={() => actions.openWorkspace(project.device_id, checkout.workspace_id, checkout.id)} data-pr-card-workspace={pr.number}><SquareTerminalIcon aria-hidden="true" />{t("work.card.workspace")}</Button> : null}
+      <PrLinks issue={entry?.row.issue ?? null} checkout={checkout} record={panel} project={project} actions={actions} />
     </header>
   );
 }
@@ -166,34 +142,30 @@ function Head({ project, pr, entry, card, panel, actions }: { project: Workspace
 function CardMenu({ project, pr, entry }: { project: Workspace; pr: PullRequest; entry: PrEntry | null }) {
   const { t } = useInterfaceTranslation();
   const merged = pr.state === "merged" || pr.state === "closed";
-  const linkable = !merged && !entry?.row.issue;
+  const checkout = entry?.row.checkout_id ? project.checkouts.find((row) => row.id === entry.row.checkout_id) : null;
+  const worktree = checkout?.is_worktree === true && !checkout.is_primary && checkout.exists && !checkout.worktree?.missing;
+  const linkable = !merged && !entry?.row.issue && (project.tasks?.source?.kind !== "local" || worktree);
+  const [linking, setLinking] = useState(false);
   return (
-    <DropdownMenu>
+    <IssuePicker number={pr.number} project={project} open={linking} onOpenChange={setLinking}>
+    <span className="inline-flex"><DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="icon-sm" className="shrink-0" aria-label={t("work.card.menu")} data-pr-card-menu={pr.number}>
           <EllipsisIcon aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent align="end" onCloseAutoFocus={(event) => { if (linking) event.preventDefault(); }}>
+        {linkable ? <DropdownMenuItem onSelect={() => setLinking(true)}>{t("prList.linkIssue")}</DropdownMenuItem> : null}
         {!merged ? <DropdownMenuItem onSelect={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_delegate", workspaceId: project.id, prNumber: pr.number })}>{t("prList.delegate")}</DropdownMenuItem> : null}
         {linkable ? <DropdownMenuItem onSelect={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_new_issue", workspaceId: project.id, prNumber: pr.number })}>{t("prList.newIssue")}</DropdownMenuItem> : null}
         <DropdownMenuItem onSelect={() => void navigator.clipboard?.writeText(pr.head_branch ?? "")} data-pr-card-copy="true">{t("prList.copyBranch")}</DropdownMenuItem>
       </DropdownMenuContent>
-    </DropdownMenu>
+    </DropdownMenu></span>
+    </IssuePicker>
   );
 }
 
 // --- decision box ----------------------------------------------------------------
-
-/** The box's edge says the case: green to merge, red when blocked, amber when it waits on the operator, purple once merged. */
-function boxTone(pr: PullRequest, entry: PrEntry | null): StateBoxTone {
-  if (pr.state === "merged") return "merged";
-  if (!entry) return "quiet";
-  if (entry.reason.kind === "merge") return "merge";
-  if (entry.row.group === "blocked" || entry.reason.kind === "failed" || entry.reason.kind === "conflict") return "failed";
-  if (entry.row.group === "needs_you") return "attention";
-  return "quiet";
-}
 
 function factText(fact: PrFact, t: ReturnType<typeof useInterfaceTranslation>["t"]): string {
   switch (fact.kind) {
@@ -218,22 +190,28 @@ function factText(fact: PrFact, t: ReturnType<typeof useInterfaceTranslation>["t
   }
 }
 
-/**
- * The decision box (B33, D-01): the case's word and reason as the list row
- * says them, its button at the right, one line of facts and what blocks it;
- * the merge confirmation and the last write's line stay inside it.
- */
+/** Real CI counts beside the existing merge controls, with review facts and blockers below. */
 function DecisionBox({ project, pr, entry, card, actions }: { project: Workspace; pr: PullRequest; entry: PrEntry | null; card: PrCard | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const facts = prFacts(pr);
+  const counts = pr.work?.check_counts;
+  const facts = prFacts(pr).filter((fact) => !counts || !fact.kind.startsWith("checks_"));
+  const failed = (counts?.failed ?? 0) > 0 || pr.checks === "failed";
+  const passing = pr.checks === "passing";
+  const summary = checkSummary(pr);
+  const Icon = failed ? TriangleAlertIcon : passing ? CheckCircle2Icon : LoaderCircleIcon;
   return (
-    <StateBox tone={boxTone(pr, entry)} data-pr-card-reason={entry?.reason.kind} data-pr-card-group={entry?.row.group}>
+    <section className="flex min-w-0 flex-col gap-xs border-t border-border pt-md" data-pr-card-reason={entry?.reason.kind} data-pr-card-group={entry?.row.group}>
       <Buttons project={project} pr={pr} entry={entry} card={card} actions={actions}>
-        {entry ? <ReasonLine reason={entry.reason} group={entry.row.group} noAgent={entry.row.group === "blocked"} className="min-w-0 flex-1 whitespace-normal text-caption font-medium" /> : <span className="flex-1" />}
+        <div className="min-w-0 flex-1" data-pr-card-checks="true">
+          <p className={cn("flex items-start gap-xs text-caption font-medium", failed ? "text-destructive" : passing ? "text-success" : "text-agent-working")}><Icon aria-hidden="true" className="mt-xxs size-(--size-icon-sm) shrink-0" /><span>{t(summary.key, summary.values)}</span></p>
+          {counts && counts.total > 0 ? <p className="mt-xs flex flex-wrap gap-x-sm gap-y-xxs text-micro text-muted-foreground" data-pr-card-check-counts="true">{(["passed", "running", "waiting", "failed", "skipped", "unknown"] as const).filter((key) => counts[key] > 0).map((key) => <span key={key}>{t(`recordCard.ci.${key}`, { count: counts[key] })}</span>)}</p> : null}
+          <button type="button" className="mt-xs inline-flex items-center gap-xxs rounded-xs text-micro text-muted-foreground outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" onClick={() => actions.openPullRequest(`${pr.url}/checks`, project.device_id, true)}>{t("recordCard.checksLink")}<ExternalLinkIcon aria-hidden="true" className="size-(--size-icon-sm)" /></button>
+        </div>
       </Buttons>
+      {entry && ["queued", "unjudged", "checking"].includes(entry.reason.kind) ? <ReasonLine reason={entry.reason} group={entry.row.group} className="whitespace-normal [overflow-wrap:anywhere]" /> : null}
       {facts.length > 0 ? <p className="text-micro text-muted-foreground" data-pr-card-fact-line="true">{facts.map((fact) => factText(fact, t)).join(" · ")}</p> : null}
       <Blocked pr={pr} entry={entry} card={card} actions={actions} projectId={project.id} />
-    </StateBox>
+    </section>
   );
 }
 
@@ -293,7 +271,6 @@ function Buttons({ project, pr, entry, card, actions, children }: { project: Wor
   const primary: PrimaryAction = primaryAction(kind);
   const mine = pr.work?.mine === true;
   const working = entry?.row.group === "working";
-  const agent = entry?.agents[0] ?? null;
   const method = picked ?? defaultMethod(card);
   const queue = card?.merge?.queue === true;
   const queued = pr.work?.queue.state === "at";
@@ -315,7 +292,7 @@ function Buttons({ project, pr, entry, card, actions, children }: { project: Wor
   const canAsk = head !== null && !writing && !repeats;
   const MergeButton = (
     <span className="flex min-w-0 items-center gap-xs" data-pr-card-merge-slot="true">
-      {why ? <span className="min-w-0 truncate text-micro text-muted-foreground" data-pr-card-merge-why={why.key}>{t(`work.card.why.${why.key}`, { count: why.count, base: why.base })}</span> : null}
+      {why && !(why.key === "ci" && pr.work?.check_counts) ? <span className="min-w-0 whitespace-normal text-micro text-muted-foreground" data-pr-card-merge-why={why.key}>{t(`work.card.why.${why.key}`, { count: why.count, base: why.base })}</span> : null}
       {!queue && (card?.merge?.methods.length ?? 0) > 1 ? (
         <select aria-label={t("work.card.merge")} className="rounded-xs border border-border bg-background px-xs py-xxs text-micro outline-none focus-visible:ring-1 focus-visible:ring-ring" value={method ?? ""} onChange={(event) => setPicked(event.target.value as PrMergeMethod)} data-pr-card-method="true">
           {card!.merge!.methods.map((each) => <option key={each} value={each}>{t(`work.card.method.${each}`)}</option>)}
@@ -329,7 +306,6 @@ function Buttons({ project, pr, entry, card, actions, children }: { project: Wor
   const UpdateButton = (
     <Button variant={primary === "update" ? "default" : "secondary"} size="sm" disabled={!canAsk || write?.phase === "working"} onClick={() => head !== null && setConfirm({ action: "update", head, method: null, queue })} data-pr-card-update="true">{t("work.card.updateBranch")}</Button>
   );
-  const askPane = agent ? () => actions.openAgent(agent.pane_id) : null;
   return (
     <div className="flex flex-col gap-sm" data-pr-card-buttons={primary}>
       <div className="flex min-w-0 flex-wrap items-center gap-sm">
@@ -338,8 +314,6 @@ function Buttons({ project, pr, entry, card, actions, children }: { project: Wor
           {primary === "update" || pr.work?.merge_state === "behind" ? UpdateButton : null}
           {primary === "review" ? <><Button size="sm" variant="outline" onClick={() => review(project, pr)} data-pr-card-review-agent="true">{t("work.card.reviewAgent")}</Button><Button size="sm" onClick={() => github("/files")} data-pr-card-review-github="true"><ExternalLinkIcon aria-hidden="true" />{t("work.card.reviewGithub")}</Button></> : null}
           {primary === "assign" ? <Button size="sm" onClick={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_delegate", workspaceId: project.id, prNumber: pr.number })} data-pr-card-assign="true">{t("work.card.assign")}</Button> : null}
-          {primary === "answer" && askPane ? <Button size="sm" onClick={askPane} data-pr-card-answer="true"><SquareTerminalIcon aria-hidden="true" />{t("work.card.answer")}</Button> : null}
-          {primary === "view_pane" && askPane ? <Button size="sm" onClick={askPane} data-pr-card-view-pane="true"><SquareTerminalIcon aria-hidden="true" />{t("work.card.viewPane")}</Button> : null}
           {primary === "assign_reviewer" ? <Button size="sm" variant="outline" onClick={() => github()} data-pr-card-assign-reviewer="true">{t("work.card.assignReviewer")}</Button> : null}
           {mine && primary !== "review" ? MergeButton : null}
         </span>
