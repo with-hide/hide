@@ -14,7 +14,7 @@ import path from "node:path";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { altScreenProgram, bytesReceived } from "./alt-screen-program";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
-import { startDraftTerminal } from "./group-start-helper";
+import { executeTerminalCheck, startDraftTerminal } from "./group-start-helper";
 import { startHided, type Daemon } from "./hided-fixture";
 import { projectRow } from "./overview-entry";
 import { FACTORY_OPEN } from "../src/factory/launch";
@@ -255,8 +255,7 @@ test("a tab switch mounts the new tab, ⌥T creates one draft, its terminal star
     const labelled = () => (herdr.run(["api", "snapshot"]) as { result: { snapshot: { tabs: { tab_id: string; label?: string }[] } } }).result.snapshot.tabs.find((tab) => tab.tab_id === startedTab)?.label;
     await expect.poll(labelled).toBeTruthy();
     await expect(page.locator("[data-tab][aria-selected=true]")).toHaveAttribute("data-tab", startedTab);
-    await page.locator("[data-terminal-host]").click();
-    await expect.poll(() => screen(page), { timeout: 15_000 }).toContain("fixture %");
+    await executeTerminalCheck(page, herdr, (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!, 15_000);
 
     // ⌥` in the Agent area walks the recent agent panes. The new tab and the
     // second one run plain shells, so the first candidate is the agent pane
@@ -704,7 +703,7 @@ test("starting a terminal in a sixth tab keeps the four retained tabs, and two r
     await startDraftTerminal(page);
     await expect(page.locator("[data-pane-view]")).not.toHaveAttribute("data-pane-view", warmPane);
     await expect(page.locator("[data-pane-view]")).toHaveAttribute("data-transport", "controlling");
-    await expect.poll(() => screen(page)).toContain("fixture %");
+    await executeTerminalCheck(page, flow.herdr, (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!);
     const sixth = (await page.locator("[data-canvas]").getAttribute("data-canvas"))!;
     tabPanes.set(sixth, [(await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!]);
     await mark(tabPanes.get(sixth)![0], "keep-sixth");

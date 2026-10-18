@@ -1,11 +1,10 @@
 // B1-B7/B14: real cold restoration and one Hide-triggered terminal split.
 import { expect, test } from "@playwright/test";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
-import { startDraftTerminal } from "./group-start-helper";
+import { executeTerminalCheck, startDraftTerminal } from "./group-start-helper";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
 import { countSent, enterWorkspace, screenshot } from "./wire";
@@ -33,8 +32,7 @@ test("Starting a terminal in a new draft and splitting it keeps one real Herdr t
     await expect(page.locator("[data-pane-view]")).toHaveCount(1);
     const tab = await page.locator("[data-canvas]").getAttribute("data-canvas");
     const first = await page.locator("[data-pane-view]").getAttribute("data-pane-view");
-    await page.locator("[data-terminal-host]").click();
-    await expect.poll(() => page.evaluate(() => window.__hideProbe?.screenText())).toContain("fixture %");
+    await executeTerminalCheck(page, herdr, first!);
     await page.keyboard.press(chord("split_right"));
     await expect(page.locator("[data-pane-view]")).toHaveCount(2);
     await expect.poll(() => sent.get("create_pane")).toBe(1);
@@ -45,11 +43,7 @@ test("Starting a terminal in a new draft and splitting it keeps one real Herdr t
     await expect.poll(() => snapshot(herdr).layouts.find((layout) => layout.tab_id === tab)?.splits).toEqual([expect.objectContaining({ direction: "right", ratio: 0.5 })]);
     const pane = ids.find((id) => id !== first)!;
     await expect(page.locator(`[data-pane-view="${pane}"]`)).toHaveAttribute("data-focused", "true");
-    await expect.poll(() => page.evaluate(() => window.__hideProbe?.screenText())).toContain("fixture %");
-    await page.keyboard.type("printf 'COEXISTENCE_TERMINAL_OK\\n'");
-    await page.keyboard.press("Enter");
-    await expect.poll(() => page.evaluate(() => window.__hideProbe?.screenText())).toContain("COEXISTENCE_TERMINAL_OK");
-    await expect.poll(() => execFileSync(herdr.bin, ["pane", "read", pane, "--source", "visible"], { env: herdr.env, encoding: "utf8", timeout: 10_000 })).toContain("COEXISTENCE_TERMINAL_OK");
+    await executeTerminalCheck(page, herdr, pane);
     await screenshot(page, "coexistence-new-tab-two-panes");
   } finally { daemon?.stop(); herdr.stop(); }
 });

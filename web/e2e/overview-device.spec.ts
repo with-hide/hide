@@ -3,6 +3,7 @@
 import { expect, test } from "@playwright/test";
 import { labelAgent, startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
+import { startDraftTerminal } from "./group-start-helper";
 import { openOverview } from "./overview-entry";
 import { FIRST_GOAL } from "./session-work-fixture";
 import { enterWorkspace, showTool } from "./wire";
@@ -96,6 +97,7 @@ test("@platform an agent pane's head opens its session record in the lane and le
     await expect(terminal).toBeFocused();
     // B24: a shell pane's head stays plain.
     await page.getByRole("button", { name: /^New tab/ }).first().click();
+    await startDraftTerminal(page);
     const shell = page.locator("[data-pane-view]:visible");
     await expect(shell).toHaveCount(1, { timeout: 30_000 });
     expect(herdr.panes).not.toContain(await shell.getAttribute("data-pane-view"));

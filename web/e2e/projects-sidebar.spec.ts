@@ -250,6 +250,8 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     expect((await emptyButton.boundingBox())!.height).toBe(await emptyButton.evaluate((node) => parseFloat(getComputedStyle(node).getPropertyValue("--size-checkout-row"))));
     await emptyButton.click();
     await expect(emptyButton).toHaveAttribute("aria-current", "true");
+    const emptyId = await emptyButton.getAttribute("data-checkout");
+    await expect.poll(() => last.get("focus_checkout")?.checkout_id).toBe(emptyId);
     expect(last.get("focus_checkout")?.expanded).toBeUndefined();
 
     // The chevron opens the agent rows below the row: their own marks stand
