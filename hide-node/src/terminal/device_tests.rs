@@ -1123,3 +1123,50 @@ fn side_channel_permission_waits_for_the_device_and_ends_with_its_link() {
         Err(hide_node_link::terminal::InputPermitError::Discarded)
     );
 }
+
+#[test]
+fn pending_device_permissions_expire_without_new_input_and_end_with_the_link() {
+    use hide_node_link::terminal::InputPermitError;
+    for expire in [true, false] {
+        let (proxy, link, _) = proxy();
+        link.release();
+        let (reply, result) = channel();
+        proxy.input_permit(
+            "w1:p1",
+            12,
+            Box::new(move |outcome| {
+                let _ = reply.send(outcome);
+            }),
+        );
+        wait_for(|| !link.lines().is_empty());
+        {
+            let mut state = lock(&proxy.shared.state);
+            if expire {
+                // Advance the pending request's age, then wake the real
+                // writer. No new input arrives to clean up this request.
+                for (since, _) in state.permits.values_mut() {
+                    *since = Instant::now() - super::super::permit::MAX_AGE;
+                }
+            } else {
+                state.end_link = true;
+                state.failed = Some("test link ended".into());
+            }
+        }
+        proxy.shared.ready.notify_all();
+        assert_eq!(
+            result.recv_timeout(WAIT).unwrap(),
+            Err(InputPermitError::Discarded)
+        );
+        assert!(lock(&proxy.shared.state).permits.is_empty());
+        assert_eq!(
+            proxy
+                .shared
+                .permits
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        if !expire {
+            wait_for(|| link.ended.lock().unwrap().is_some());
+        }
+    }
+}

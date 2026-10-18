@@ -2,10 +2,13 @@
 use hide_node_link::terminal::{InputPermitError, InputPermitReply};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 pub(super) const LIMIT: usize = 64;
+pub(super) const MAX_AGE: Duration = Duration::from_secs(35);
 
 struct Pending {
+    expires: Instant,
     reply: Mutex<Option<InputPermitReply>>,
     count: Arc<AtomicUsize>,
 }
@@ -51,9 +54,13 @@ impl Permit {
             return None;
         }
         Some(Self(Arc::new(Pending {
+            expires: Instant::now() + MAX_AGE,
             reply: Mutex::new(Some(reply)),
             count: Arc::clone(count),
         })))
+    }
+    pub(super) fn deadline(&self) -> Instant {
+        self.0.expires
     }
     pub(super) fn finish(&self, result: Result<(), InputPermitError>) {
         let reply = self

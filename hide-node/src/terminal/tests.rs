@@ -1641,6 +1641,86 @@ fn side_input(
 }
 
 #[test]
+fn a_phone_permission_follows_earlier_desktop_keys_through_the_attach_queue() {
+    let harness = harness(RetryPolicy::Automatic);
+    harness.service.control(TerminalControl::RequestOpen {
+        request: "fork".into(),
+        fork: true,
+    });
+    harness.service.control(TerminalControl::RequestHold {
+        request: "fork".into(),
+        pane: "w1:p2".into(),
+    });
+    harness.key("w1:p2", b"ab");
+    let permission = side_input(&harness.service, "w1:p2", 3);
+    harness.service.control(TerminalControl::RequestResolve {
+        request: "fork".into(),
+        pane: "w1:p2".into(),
+    });
+    assert!(matches!(
+        permission.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    harness.attach("w1:p2", Some(SIZE));
+    let opened = harness.opened();
+    assert_eq!(permission.recv_timeout(WAIT).unwrap(), Ok(()));
+    // Once the phone is permitted, the older desktop bytes have already
+    // reached the controller pipe. Reservation bytes are never written.
+    let mut written = Vec::new();
+    while let Ok(line) = opened.input.try_recv() {
+        if line["type"] == "terminal.input" {
+            written.extend(protocol::decode_base64(line["bytes"].as_str().unwrap()).unwrap());
+        }
+    }
+    assert_eq!(written, b"ab");
+}
+
+#[test]
+fn a_non_fork_permission_expires_and_releases_its_reserved_bytes() {
+    let harness = harness(RetryPolicy::Automatic);
+    harness.service.control(TerminalControl::RequestOpen {
+        request: "new".into(),
+        fork: false,
+    });
+    harness.service.control(TerminalControl::RequestHold {
+        request: "new".into(),
+        pane: "w1:p2".into(),
+    });
+    let permission = side_input(
+        &harness.service,
+        "w1:p2",
+        hide_node_link::terminal::INPUT_HOLD_LIMIT_BYTES,
+    );
+    let deadline = harness
+        .service
+        .shared
+        .lock()
+        .next_deadline()
+        .expect("permission owns a deadline");
+    harness.service.shared.run(|inner, shared| {
+        inner.tick(shared, deadline);
+    });
+    assert_eq!(
+        permission.recv_timeout(WAIT).unwrap(),
+        Err(hide_node_link::terminal::InputPermitError::Discarded)
+    );
+    let next = side_input(
+        &harness.service,
+        "w1:p2",
+        hide_node_link::terminal::INPUT_HOLD_LIMIT_BYTES,
+    );
+    harness.service.control(TerminalControl::RequestResolve {
+        request: "new".into(),
+        pane: "w1:p2".into(),
+    });
+    assert_eq!(
+        next.recv_timeout(WAIT).unwrap(),
+        Ok(()),
+        "expired reservation no longer consumes the cap"
+    );
+}
+
+#[test]
 fn side_channel_input_waits_for_the_fork_without_a_control_attach() {
     let harness = harness(RetryPolicy::Automatic);
     harness.service.control(TerminalControl::RequestOpen {

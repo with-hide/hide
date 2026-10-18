@@ -108,14 +108,14 @@ pub enum Input<'a> {
     Key(&'static str),
 }
 
-pub fn send(
+pub fn wait_for_input(
     terminals: &dyn TerminalNode,
     core_pane_id: &str,
-    connector: &Arc<dyn ApiConnector>,
-    pane_id: &str,
-    input: Input<'_>,
+    input: &Input<'_>,
 ) -> Result<(), PaneError> {
     let bytes = match &input {
+        // Reserve payload plus Enter; Herdr's bracketed-paste wrapper is
+        // protocol framing and is not part of this held payload budget.
         Input::Reply(text) => text.len() + 1,
         // Herdr's supported quick keys encode as one byte or a three-byte
         // cursor sequence (CSI/SS3), not the length of their logical name.
@@ -136,6 +136,14 @@ pub fn send(
         Ok(Err(InputPermitError::Asleep)) => return Err(PaneError::Asleep),
         Ok(Err(_)) | Err(_) => return Err(PaneError::InputRefused),
     }
+    Ok(())
+}
+
+pub fn send(
+    connector: &Arc<dyn ApiConnector>,
+    pane_id: &str,
+    input: Input<'_>,
+) -> Result<(), PaneError> {
     let params = match input {
         Input::Reply(text) => wire::pane_reply_params(pane_id, text),
         Input::Key(key) => wire::pane_key_params(pane_id, key),
@@ -266,13 +274,10 @@ mod tests {
             }))));
             let (done, result) = mpsc::channel();
             let worker = std::thread::spawn(move || {
-                done.send(send(
-                    gate.as_ref(),
-                    "w1:p1",
-                    &connector,
-                    "w1:p1",
-                    Input::Reply("yes"),
-                ))
+                done.send(
+                    wait_for_input(gate.as_ref(), "w1:p1", &Input::Reply("yes"))
+                        .and_then(|()| send(&connector, "w1:p1", Input::Reply("yes"))),
+                )
                 .unwrap();
             });
             let grant = permission.recv_timeout(Duration::from_secs(5)).unwrap();

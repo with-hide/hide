@@ -932,6 +932,14 @@ async fn input(
     let herdr_key = herdr_key.and_then(pane::herdr_key);
     // `attempted` is whether the write reached Herdr at all.
     let (attempted, result) = tokio::task::spawn_blocking(move || {
+        let input = match (&text, herdr_key) {
+            (Some(text), _) => Input::Reply(text),
+            (None, Some(key)) => Input::Key(key),
+            (None, None) => unreachable!("validated above"),
+        };
+        if let Err(error) = pane::wait_for_input(writer.terminals(), &core_pane_id, &input) {
+            return (false, Err(error));
+        }
         // Asked here, at the write, and held until it returns: a reply queued
         // while the agent was awake is refused if its pane has closed since,
         // and a sleep that starts now waits for this write to land first. The
@@ -944,22 +952,11 @@ async fn input(
             Ok(connector) => connector,
             Err(error) => return (false, Err(error)),
         };
-        let input = match (&text, herdr_key) {
-            (Some(text), _) => Input::Reply(text),
-            (None, Some(key)) => Input::Key(key),
-            (None, None) => unreachable!("validated above"),
-        };
         let reply = matches!(input, Input::Reply(_));
         // Before the write, so the doorbell cannot judge the pane clean
         // while the key is landing; a refused write only holds the pane.
         writer.note_input(&core_pane_id);
-        let sent = pane::send(
-            writer.terminals(),
-            &core_pane_id,
-            &connector,
-            &pane_id,
-            input,
-        );
+        let sent = pane::send(&connector, &pane_id, input);
         if reply && sent.is_ok() {
             writer.note_submit(&core_pane_id);
         }
@@ -1094,6 +1091,78 @@ mod tests {
 
     fn reason(answer: &Value) -> Option<&str> {
         answer["reason"].as_str()
+    }
+
+    #[tokio::test]
+    async fn refused_permissions_allow_retry_and_waiting_permissions_do_not_block_sleep() {
+        use hide_node_link::terminal::{
+            GridSize, InputPermitError, InputPermitReply, KeyTarget, TerminalControl, TerminalNode,
+            TerminalRoutes,
+        };
+        struct Pending(tokio::sync::mpsc::UnboundedSender<InputPermitReply>);
+        impl TerminalNode for Pending {
+            fn input_permit(&self, pane: &str, _: usize, reply: InputPermitReply) {
+                assert_eq!(pane, "w1:p1");
+                assert!(self.0.send(reply).is_ok());
+            }
+            fn control(&self, _: TerminalControl) {}
+            fn key(&self, _: KeyTarget, _: Vec<u8>, _: u64) {
+                panic!("no raw phone keys");
+            }
+            fn view(&self, _: &str, _: GridSize, _: bool) {
+                panic!("no phone attach");
+            }
+            fn redraw(&self, _: &str) {
+                panic!("no phone redraw");
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        let (asked, mut pending) = tokio::sync::mpsc::unbounded_channel();
+        mobile
+            .config
+            .core
+            .terminals
+            .install_device("mini", Arc::new(Pending(asked)));
+        for attempt in 0..3 {
+            let writer = Arc::clone(&mobile);
+            let task = tokio::spawn(async move {
+                let listed = super::super::projection::project(
+                    &json!({
+                        "navigator": {"agents": []},
+                        "status": {"remote": [{"target_id": "mini", "state": "connected", "session": {
+                            "agents": [{"pane_id": "remote:mini:pane:w1:p1", "group": "seen", "mark": "quiet", "identity_label": "Review", "agent_kind": "pi", "status_code": "idle", "demand": "none"}]
+                        }}]}
+                    }),
+                    "test-node",
+                );
+                input(&writer, "phone-a", &json!({"type": "input", "request_id": "retry", "device_id": "mini", "pane_id": "remote:mini:pane:w1:p1", "text": "yes"}), &listed).await
+            });
+            let permission = tokio::time::timeout(Duration::from_secs(5), pending.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            if attempt == 2 {
+                gate.close("remote:mini:pane:w1:p1");
+                assert_eq!(
+                    gate.wait_drained("remote:mini:pane:w1:p1", Duration::ZERO),
+                    herdr_core::input_gate::Drain::Drained
+                );
+                permission(Ok(()));
+            } else {
+                permission(Err(InputPermitError::Discarded));
+            }
+            let answer = task.await.unwrap();
+            assert_eq!(
+                reason(&answer),
+                Some(if attempt == 2 {
+                    "asleep"
+                } else {
+                    "input_refused"
+                })
+            );
+        }
     }
 
     /// A reply meant for the agent must never reach the shell under it. The

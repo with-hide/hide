@@ -755,6 +755,18 @@ struct Stalled {
 }
 
 impl ProxyState {
+    fn expire_permits(&mut self, now: Instant) {
+        self.permits
+            .retain(|_, (since, _)| now.saturating_duration_since(*since) < super::permit::MAX_AGE);
+    }
+
+    fn permit_deadline(&self) -> Option<Instant> {
+        self.permits
+            .values()
+            .map(|(since, _)| *since + super::permit::MAX_AGE)
+            .min()
+    }
+
     /// Whether a control, view or redraw line of `bytes` passes what may
     /// wait for the link.
     fn would_overflow(&self, bytes: usize) -> bool {
@@ -1044,9 +1056,7 @@ impl TerminalNode for DeviceTerminals {
         static NEXT_PERMIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let now = Instant::now();
         let mut state = lock(&self.shared.state);
-        state
-            .permits
-            .retain(|_, (since, _)| now.duration_since(*since) < Duration::from_secs(35));
+        state.expire_permits(now);
         if state.stopping || state.failed.is_some() {
             drop(state);
             reply(Err(InputPermitError::Unavailable));
@@ -1274,8 +1284,16 @@ impl ProxyShared {
             TerminalUp::Report { report } => {
                 if let TerminalReport::InputPermit { ticket, outcome } = report {
                     let pending = lock(&self.state).permits.remove(&ticket);
-                    if let Some((_, permit)) = pending {
-                        permit.finish(outcome);
+                    if let Some((since, permit)) = pending {
+                        permit.finish(
+                            if Instant::now().saturating_duration_since(since)
+                                < super::permit::MAX_AGE
+                            {
+                                outcome
+                            } else {
+                                Err(hide_node_link::terminal::InputPermitError::Discarded)
+                            },
+                        );
                     }
                     return;
                 }
@@ -1379,6 +1397,7 @@ fn write_lines(shared: &ProxyShared, link: &dyn LineLink) {
         let next = {
             let mut state = lock(&shared.state);
             loop {
+                state.expire_permits(Instant::now());
                 if state.stopping {
                     state.permits.clear();
                     return;
@@ -1393,10 +1412,18 @@ fn write_lines(shared: &ProxyShared, link: &dyn LineLink) {
                 if let Some(next) = state.lines.pop_front() {
                     break next;
                 }
-                state = shared
-                    .ready
-                    .wait(state)
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                state = if let Some(deadline) = state.permit_deadline() {
+                    shared
+                        .ready
+                        .wait_timeout(state, deadline.saturating_duration_since(Instant::now()))
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .0
+                } else {
+                    shared
+                        .ready
+                        .wait(state)
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                };
             }
         };
         // A run of keys stays counted against its pane until it is written.
