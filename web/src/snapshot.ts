@@ -2040,6 +2040,31 @@ export function localDeviceId(rest: SnapshotRest | null): string {
   return rest?.navigator?.devices?.find((device) => device.kind !== "remote")?.id ?? "";
 }
 
+/**
+ * Every device row named by the device it runs on. The core publishes a
+ * device's agents inside that device's status, where the row does not say
+ * whose it is, but a session's ledger row is kept under the device id, so
+ * every reader that names a row's session (a pane head, a task row, a reveal)
+ * has to find the id on the row. This is the one place that sets it; rows
+ * already carrying it, and statuses with no agents, are returned as they are
+ * so `share` keeps their identity.
+ */
+export function stampDeviceAgents(rest: SnapshotRest): SnapshotRest {
+  const remote = rest.status?.remote;
+  if (!remote?.some((status) => status.session?.agents?.some((agent) => agent.device_id !== status.target_id))) return rest;
+  return {
+    ...rest,
+    status: {
+      ...rest.status!,
+      remote: remote.map((status) => {
+        const session = status.session;
+        if (!session?.agents?.some((agent) => agent.device_id !== status.target_id)) return status;
+        return { ...status, session: { ...session, agents: session.agents.map((agent) => (agent.device_id === status.target_id ? agent : { ...agent, device_id: status.target_id })) } };
+      }),
+    },
+  };
+}
+
 export function focusedRemoteDevice(rest: SnapshotRest | null): Device | null {
   const id = rest?.navigator?.focused_device_id;
   if (!id) return null;

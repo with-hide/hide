@@ -393,6 +393,31 @@ it("names the pane's title and agent product on its record button", async () => 
   } finally { await act(async () => root.unmount()); }
 });
 
+// A device's rows reach the page without a device on them; the record button
+// must still name the device the pane runs on, since the core keeps that
+// session's ledger row under the device id and not under its own node id.
+it("opens a device pane's session record under the device, not under the core's node", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  initializeInterfaceI18n("en");
+  const agent = legacyAgentRow({ id: "a", pane_id: "remote:hq3mini:pane:w1:p4", identity_label: "Fix the login", agent_kind: "claude", session_id: "s-1" });
+  expect(agent.device_id).toBeUndefined();
+  useShellStore.getState().applyFrame({ type: "snapshot", payload: { revision: 1, rest: {
+    navigator: { devices: [{ id: "14ad0319-60d7-5a7c-ae5a-f71550dc8a60", kind: "local" }, { id: "hq3mini", kind: "remote" }] },
+    status: { pane_focus_request: null, remote: [{ target_id: "hq3mini", state: "connected", message: null, herdr_version: null, session: { agents: [agent] } }] },
+  } as unknown as SnapshotRest } });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<TooltipProvider><PaneRecordButton paneId="remote:hq3mini:pane:w1:p4" title="Fix the login" product="Claude Code" actions={createActions(() => true)} plain={<span />}>Fix the login</PaneRecordButton></TooltipProvider>));
+  try {
+    // No workspace is in front here, so the press shows the record in the Overview of the session's device.
+    await act(async () => container.querySelector<HTMLButtonElement>("[data-pane-record]")!.click());
+    const { deviceId, panel } = useUiStore.getState().overview;
+    expect(deviceId).toBe("hq3mini");
+    expect(panel).toEqual({ kind: "record", session: { device_id: "hq3mini", agent: "claude", session_id: "s-1" } });
+  } finally { await act(async () => root.unmount()); }
+});
+
 it("says a waiting pane's mark words on its record button, the words its tab and row say", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   initializeInterfaceI18n("en");
