@@ -902,7 +902,7 @@ A partial close keeps the record as `CloseFailed`: the members that closed stay 
 A restart reads a save or close in flight as `CloseUnknown`, and a resume in flight as unknown, keeping the pane it made; `archive_check` settles both from Herdr's answer, and nothing is resent on its own.
 
 이어가기 (`archive_resume`, the whole record or one member) runs the members one at a time through the task-operation slot, root first, each with `agent_start_in_checkout` under the request `archive:<id>:<session>` and the provider's resume arguments for the saved native session and cwd.
-The root takes the screen as an ordinary start does; descendants stay behind (`task_stays_behind`), because only the operator's pane moves the screen.
+The root takes the screen as an ordinary start does; a descendant's tab is created without focus (`CheckoutTabRequest::focus`) and its start moves nothing (`task_stays_behind`), because only the operator's pane moves the screen and Herdr would otherwise bring the new tab forward and have the core follow it.
 A retry reuses the pane the earlier attempt made instead of opening another.
 A member is done once any live row on its machine shows the same kind and native session, which also covers the operator resuming it by hand; a failed member keeps its reason and its own 이어가기, and the record goes once every member is back.
 A member's delivery registration is held while it is archived (`held_registrations`, `archive_holds_actor`): its pane's absence ends neither the registration nor the watches on it, and the resume continues it as a wake does (`continue_dormant_registration`).
