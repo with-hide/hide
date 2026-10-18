@@ -9,6 +9,10 @@ if (!root) throw new Error("native owl probe requires isolated userData");
 fs.mkdirSync(root, { recursive: true });
 const command = path.join(root, "owl-command.json");
 const answer = path.join(root, "owl-answer.json");
+function publish(value) {
+  fs.writeFileSync(`${answer}.tmp`, JSON.stringify(value));
+  fs.renameSync(`${answer}.tmp`, answer);
+}
 let last = 0;
 let busy = false;
 const timer = setInterval(async () => {
@@ -31,10 +35,13 @@ const timer = setInterval(async () => {
         pose: owl?.dataset.brandOwl, owls: document.querySelectorAll('[data-brand-owl]').length,
         connecting: !!document.getElementById('connecting'), shell: !!document.querySelector('[data-main-screen]')};
     })()`);
-    fs.writeFileSync(answer, JSON.stringify({ id, pid: process.pid, visible: window.isVisible(), minimized: window.isMinimized(), ...state }));
-  } catch (error) { fs.writeFileSync(answer, JSON.stringify({ id, error: String(error) })); }
+    publish({ id, pid: process.pid, visible: window.isVisible(), minimized: window.isMinimized(), ...state });
+  } catch (error) { publish({ id, error: String(error) }); }
   finally { busy = false; }
 }, 20);
 const deadline = setTimeout(() => app.exit(1), 85_000);
 app.once("before-quit", () => { clearInterval(timer); clearTimeout(deadline); });
 process.once("SIGTERM", () => app.exit(0));
+process.stdin.once("end", () => app.exit(0));
+process.stdin.once("error", () => app.exit(1));
+process.stdin.resume();

@@ -54,6 +54,8 @@ main {
 #flight-scene {
   position: relative;
   isolation: isolate;
+  /* The shifted still's transparent canvas must not widen the window. */
+  overflow: clip;
   width: min(var(--size-brand-flight), 100%, calc((100vh - var(--size-brand-clearance)) * 16 / 9));
   aspect-ratio: 16 / 9;
   margin: auto;

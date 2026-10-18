@@ -351,7 +351,7 @@ async function start(appDir: string, env: Record<string, string>, executablePath
  * its focus emulation holds a visible capturer even when BrowserWindow hides.
  * The private main-process probe observes the DOM without a renderer session.
  */
-export function launchNative(env: Record<string, string>, probe: string, executablePath?: string): () => Promise<void> {
+export async function launchNative(env: Record<string, string>, probe: string, executablePath?: string): Promise<() => Promise<void>> {
   assertIsolated(env);
   const owner = isolations.get(env.HOME!);
   if (!focusReports || !owner) throw new Error("native launch needs an active isolated desktop fixture");
@@ -364,13 +364,25 @@ export function launchNative(env: Record<string, string>, probe: string, executa
   const fused = executablePath ?? process.env[FUSED_ELECTRON_ENV];
   if (!fused) throw new Error(`${FUSED_ELECTRON_ENV} is not set`);
   const report = path.join(focusReports.dir, `launch-${focusReports.apps.length + 1}.jsonl`);
-  const child = spawn(fused, ["-r", FOCUS_GUARD, "-r", probe, ...(!executablePath ? [DESKTOP_DIR] : []), `--${SHOW_INACTIVE_SWITCH}`, "--disable-backgrounding-occluded-windows", `--hide-e2e-focus-report=${report}`], { cwd: DESKTOP_DIR, env, stdio: "ignore" });
-  // This observer has no automation transport for app.quit(). End only its
-  // recorded candidate; isolate() separately stops the private daemon.
-  const close = async () => { child.kill("SIGKILL"); await endChild(child); };
-  owner.candidates.add(child);
-  focusReports.apps.push({ close, child });
-  return close;
+  owner.launching++;
+  try {
+    // The probe exits on stdin EOF even if its worker is killed before cleanup.
+    const child = spawn(fused, ["-r", FOCUS_GUARD, "-r", probe, ...(!executablePath ? [DESKTOP_DIR] : []), `--${SHOW_INACTIVE_SWITCH}`, "--disable-backgrounding-occluded-windows", `--hide-e2e-focus-report=${report}`], { cwd: DESKTOP_DIR, env, stdio: ["pipe", "ignore", "ignore"] });
+    const owned = ownUntilWorkerExit(() => { child.kill("SIGKILL"); });
+    owner.candidates.add(child);
+    child.once("exit", () => owned.disown());
+    await new Promise<void>((resolve, reject) => {
+      child.once("spawn", resolve);
+      child.once("error", (error) => {
+        if (!child.pid) { owner.candidates.delete(child); owned.disown(); }
+        reject(error);
+      });
+    });
+    // End only the recorded candidate; isolate() stops its private daemon.
+    const close = async () => { child.kill("SIGKILL"); await endChild(child); owned.disown(); };
+    focusReports.apps.push({ close, child });
+    return close;
+  } finally { owner.launching--; }
 }
 
 /** `appDir` is the app folder to run, the desktop package unless a test copies it. */

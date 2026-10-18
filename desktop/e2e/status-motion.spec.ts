@@ -62,8 +62,14 @@ test("the local flight draws offline, freezes live for reduced motion, and yield
   await captureElectronWindow(app, "startup-flight", { packaged: Boolean(packaged), offline: true });
   await captureNativeWindow(app, "startup-flight-native", { method: "screencapture exact candidate window without activation", packaged: Boolean(packaged), privateSocket: herdr.socket });
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(720, 480));
+  const overflow = () => page.evaluate(() => ({
+    width: innerWidth, html: document.documentElement.scrollWidth, body: document.body.scrollWidth,
+  }));
   for (let phase = 0; phase < 5; phase++) {
-    await captureElectronWindow(app, `startup-flight-min-${phase}`, { packaged: Boolean(packaged), viewport: "720x480", phase });
+    const flyingOverflow = await overflow();
+    expect(flyingOverflow.html).toBe(flyingOverflow.width);
+    expect(flyingOverflow.body).toBe(flyingOverflow.width);
+    await captureElectronWindow(app, `startup-flight-min-${phase}`, { packaged: Boolean(packaged), viewport: "720x480", phase, overflow: flyingOverflow });
     await page.evaluate(() => new Promise<void>((resolve) => {
       let frames = 120;
       const advance = () => { if (--frames === 0) resolve(); else requestAnimationFrame(advance); };
@@ -77,7 +83,10 @@ test("the local flight draws offline, freezes live for reduced motion, and yield
   const frozen = await frame();
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   expect(await frame()).toBe(frozen);
-  await captureElectronWindow(app, "startup-reduced-motion-min", { packaged: Boolean(packaged), viewport: "720x480", reducedMotion: true });
+  const restingOverflow = await overflow();
+  expect(restingOverflow.html).toBe(restingOverflow.width);
+  expect(restingOverflow.body).toBe(restingOverflow.width);
+  await captureElectronWindow(app, "startup-reduced-motion-min", { packaged: Boolean(packaged), viewport: "720x480", reducedMotion: true, overflow: restingOverflow });
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await expect.poll(frame).not.toBe(frozen);
   release();
@@ -153,7 +162,7 @@ for (const boundary of ["canvas", "clipPath", "still"] as const) {
 test("real native visibility pauses startup and first-run owls without renderer focus emulation", async () => {
   const release = gate("ready");
   fs.rmSync(path.join(run.env.HOME!, ".hide/kit/installed.json"));
-  const close = launchNative(run.env, path.join(__dirname, "status-motion-probe.cjs"), packaged);
+  const close = await launchNative(run.env, path.join(__dirname, "status-motion-probe.cjs"), packaged);
   const dir = run.env.HIDE_DESKTOP_USER_DATA_DIR!;
   fs.mkdirSync(dir, { recursive: true });
   let id = 0;
