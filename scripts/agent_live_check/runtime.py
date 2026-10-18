@@ -11,7 +11,7 @@ import time
 import urllib.request
 import zipfile
 
-from .processes import COMMAND_SECONDS, MAX_OUTPUT, OwnedProcesses, ProcessError
+from .processes import COMMAND_SECONDS, GUARDIAN_FAILURES, MAX_FAILURE_REASON, MAX_OUTPUT, OwnedProcesses, ProcessError
 from .authentication import require_no_login
 from .protection import ProtectionError, beneath, private_directory, validate_isolation, write_private
 from .system import READY, WINDOWS, PaneShell, exe, git, home_env, remove_tree, temp_env, tool_path
@@ -92,6 +92,13 @@ class ResidentOutput:
         write_private(self.file, bytes(self.data))
         if self.failed:
             raise ProcessError("resident_output_over_budget")
+
+    def guardian_failures(self):
+        """Why the resident's guardian failed or ended it, from the lines it
+        wrote beside the resident's own output."""
+        with self.lock:
+            text = bytes(self.data).decode("utf-8", errors="replace")
+        return [line[:MAX_FAILURE_REASON] for line in text.splitlines() if line.startswith(GUARDIAN_FAILURES)]
 
 
 class Runtime:
@@ -398,11 +405,14 @@ class Runtime:
                 processes_confirmed = True
             except Exception as error:
                 failures.append(str(error))
-            for _, output, _ in self.servers:
+            for _, output, label in self.servers:
                 try:
                     output.finish()
                 except Exception as error:
                     failures.append(str(error))
+                # A resident its guardian ended mid-run fails the cells after it
+                # with an exit code alone; the report says why.
+                failures.extend(f"{label} guardian: {line}" for line in output.guardian_failures())
             # A log or protocol failure must not retain disposable auth copies.
             # These exact roots were registered before copying, so even a
             # partially failed copy is removed without touching operator HOME.

@@ -224,6 +224,7 @@ Those errors remain failures with exit 2; missing process confirmation retains t
 An unseen double-fork descendant that clears its marker and leaves the owned group may escape attribution; record this limitation in the PR's Review section.
 This ownership boundary follows the explicitly recorded B8/D-09 scope decision; it does not claim complete workstation process attribution.
 Linux fixture supervision uses a child subreaper and validates its procfs namespace and visibility before using process identities.
+The subreaper keeps an adopted process that ended as a zombie until the run's cleanup, and Herdr's pane close on Linux asks `kill(pid, 0)`, which a zombie answers, so Herdr logs `pane session still alive after forced shutdown` for an agent it did end; the warning is the harness's, and a desktop's init reaps the same process at once.
 On Windows each child starts suspended and joins a job object of its own before it runs, so everything it starts is in the job (`scripts/agent_live_check/windows.py`, after hide-platform's `process`).
 The job holds the same caps: 128 processes, and 2 GiB of committed memory, the job's own measure in place of RSS.
 Its handle is never inheritable, and closing it ends what the job holds, so an owner that dies takes the tree with it.
@@ -355,7 +356,9 @@ The clone reads this checkout's objects and writes only its own, so the run's br
 
 The journey runs them in this order, each from the state the last left: `start` and `reply`, `integration`, `guidance_memory`, `letter`, `fork` (before Sleep, while the source still runs the session it copies), `sleep_wake`, `resume`, `title`, `usage`, then `start_untrusted`.
 Only `start`, `start_untrusted`, `guidance_memory`, `letter`, `fork` and `resume` start a turn; the others judge what Hide shows of them and spend no model request.
-Once an agent's cells are settled, the journey closes the panes it opened for that agent, its start, its fork and its untrusted start, before the next agent starts: the run's process guardian ends the private Herdr when everything under it passes 2 GiB together, and two Claude Code processes left running beside a Codex fork crossed it.
+The journey closes each pane no later cell types into: a fork's after the `fork` cell, the agent's own before `start_untrusted`, and the untrusted start's before the next agent starts.
+The run's process guardian ends the private Herdr when everything under it passes 2 GiB together: two Claude Code processes left running beside a Codex fork crossed it, and so did omp's fork, its woken session and its untrusted start held at once on Linux (2.17 GB, 2026-10-18).
+A crossed memory cap names the five live processes holding the most, and the report's cleanup failures carry the reason a guardian ended Herdr or hided, so the cells that fail after it with `herdr_command_exit_1` have their cause in the same report.
 The cells an adapter declares, and its letter and wake forms, come from `contracts/agent-journey.json`, which `hide-agent-adapter` generates and its contract test keeps current ([contracts/README.md](../contracts/README.md#agent-journey)).
 Grok's letter is `not measured`: Grok takes a letter only at a tool call its model chooses or through a `hide inbox` it runs, and the journey never asks a model to choose an action; it closes once the adapter gives Grok a prompt hook or a bell.
 It does not prove the desktop window, a physical keyboard, an agent other than the declared rows, or a model, provider or CLI version other than the ones its report names.

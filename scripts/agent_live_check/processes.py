@@ -41,6 +41,9 @@ COMMAND_SECONDS = 15
 RUN_SECONDS = 30 * 60
 POLL_SECONDS = 0.1
 RSS_CONSECUTIVE_MISS_LIMIT = 3
+# The lines a guardian writes to its child's stderr when it fails or ends the child.
+GUARDIAN_FAILURES = ("guardian_failure:", "guardian_cleanup_failure:", "guardian_orphan_scan_failure:",
+                     "guardian_signal_failure:")
 # How long a child's end may take to confirm: the guardian's exit on Unix,
 # the job holding no process on Windows.
 END_SECONDS = 4
@@ -115,6 +118,13 @@ def signal_identity(process, signum):
         if state is ProcessState.LIVE:
             raise
     return state
+
+
+def largest(table, count=5):
+    """The live processes holding the most memory, by executable name, so a
+    crossed memory cap says what held it."""
+    live = sorted((p for p in table.values() if p.rss > 0 and not p.zombie), key=lambda p: p.rss, reverse=True)
+    return [{"executable": p.name[:32], "rss_bytes": p.rss} for p in live[:count]]
 
 
 class RssSamples:
@@ -416,8 +426,7 @@ class OwnedProcesses:
                     self.end(child)
                 except ProcessError as error:
                     reasons = [line[:MAX_FAILURE_REASON] for line in output[1].decode("utf-8", errors="replace").splitlines()
-                               if line.startswith(("guardian_failure:", "guardian_cleanup_failure:",
-                                                   "guardian_orphan_scan_failure:", "guardian_signal_failure:"))]
+                               if line.startswith(GUARDIAN_FAILURES)]
                     raise type(error)(str(error) + (": " + "; ".join(reasons[:4]) if reasons else "")) from error
             finally:
                 # The ended tree closed the pipes' other ends, so the readers stop.
@@ -811,7 +820,7 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
             rss = rss_samples.measure(table)["rss_bytes"]
             if rss > MAX_RSS_BYTES:
                 raise ProcessError("owned_processes_over_budget:" + json.dumps(
-                    {"descendants": len(table), "rss_bytes": rss}, separators=(",", ":")))
+                    {"descendants": len(table), "rss_bytes": rss, "largest": largest(table)}, separators=(",", ":")))
             root = table.get(child.pid)
             if root is None:
                 raise ProcessError("unreaped_owned_root_missing")
