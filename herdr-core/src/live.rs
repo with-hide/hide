@@ -3584,6 +3584,13 @@ fn run_agent_fork_with_registration(
         )
         .map_err(start_error_message);
         let started = started.and_then(|pane_id| {
+            crate::agent_start::confirm_fork_started(
+                mutation_connector,
+                &pane_id,
+                &request.name,
+                request.agent.kind(),
+                current,
+            )?;
             if request.agent == crate::fork::ForkableAgent::Antigravity {
                 fork_antigravity(mutation_connector, node, request, &pane_id)?;
             }
@@ -4516,6 +4523,7 @@ mod tests {
         for case in [
             "success",
             "refused",
+            "not-started",
             "panic-created",
             "duplicate-before",
             "duplicate-after",
@@ -4617,6 +4625,13 @@ mod tests {
                         json!({"type":"agent_started","argv":[],"agent":{
                             "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"idle","revision":2}})
                     }
+                    "agent.get" if case == "not-started" => {
+                        return Err(("agent_not_found".into(), "start failed".into()));
+                    }
+                    "agent.get" => json!({"type":"agent_info","agent":{
+                        "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2",
+                        "name":"fork-pi-1","agent":kind,"interactive_ready":true,
+                        "focused":false,"agent_status":"idle","revision":3}}),
                     "pane.close" => {
                         assert_eq!(params["pane_id"], "child-pane");
                         json!({"type":"ok"})
@@ -4719,6 +4734,11 @@ mod tests {
                 expected = vec!["session.snapshot", "layout.apply", "pane.close"];
             } else if refused {
                 expected.push("pane.close");
+            } else {
+                expected.push("agent.get");
+                if case == "not-started" {
+                    expected.push("pane.close");
+                }
             }
             assert_eq!(herdr.methods(), expected, "{case}");
         }
@@ -4814,6 +4834,10 @@ mod tests {
                         json!({"type":"agent_started","argv":[],"agent":{
                             "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"idle","revision":2}})
                     }
+                    "agent.get" => json!({"type":"agent_info","agent":{
+                        "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2",
+                        "name":"fork-opencode-1","agent":"opencode","interactive_ready":true,
+                        "focused":false,"agent_status":"idle","revision":3}}),
                     "pane.close" => {
                         assert_eq!(params["pane_id"], "child-pane");
                         json!({"type":"ok"})
@@ -4860,6 +4884,7 @@ mod tests {
                     "pane.process_info",
                     "pane.get",
                     "agent.start",
+                    "agent.get",
                 ],
                 "refused" => &[
                     "session.snapshot",
@@ -4988,6 +5013,10 @@ mod tests {
                             json!({"type":"agent_started","argv":[],"agent":{
                             "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"idle","revision":2}})
                         }
+                        "agent.get" => json!({"type":"agent_info","agent":{
+                        "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2",
+                        "name":"fork-opencode-2","agent":"opencode","interactive_ready":true,
+                        "focused":false,"agent_status":"idle","revision":3}}),
                         "pane.close" => {
                             assert_eq!(params["pane_id"], "child-pane");
                             json!({"type":"ok"})
@@ -5033,7 +5062,10 @@ mod tests {
             match case {
                 "forked" => {
                     assert_eq!(result.unwrap(), "child-pane");
-                    assert_eq!(*log.lock().unwrap(), opened);
+                    assert_eq!(
+                        *log.lock().unwrap(),
+                        [opened.as_slice(), &["agent.get"]].concat()
+                    );
                 }
                 "refused" => {
                     let error = result.unwrap_err();
@@ -5127,6 +5159,10 @@ mod tests {
                         json!({"type":"agent_started","argv":[],"agent":{
                             "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"idle","revision":2}})
                     }
+                    "agent.get" => json!({"type":"agent_info","agent":{
+                        "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2",
+                        "name":"fork-grok-1","agent":"grok","interactive_ready":true,
+                        "focused":false,"agent_status":"idle","revision":3}}),
                     "pane.close" => json!({"type":"ok"}),
                     other => panic!("unexpected {other}"),
                 })
@@ -5172,6 +5208,7 @@ mod tests {
                     "pane.process_info",
                     "pane.get",
                     "agent.start",
+                    "agent.get",
                 ],
                 "refused" => &[
                     "session.snapshot",
@@ -5523,6 +5560,10 @@ mod tests {
                 "workspace_id": "w1", "tab_id": "w1:t1", "focused": true,
                 "agent_status": "idle", "revision": 2
             }}),
+            "agent.get" => json!({"type":"agent_info","agent":{
+                        "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2",
+                        "name":"fork-parent-pane-1","agent":"codex","interactive_ready":true,
+                        "focused":false,"agent_status":"idle","revision":3}}),
             other => panic!("unexpected {other}"),
         });
         let request = ForkRequest {
@@ -5552,7 +5593,12 @@ mod tests {
         assert_eq!(pane_id, "child-pane");
         assert_eq!(
             herdr.methods(),
-            ["pane.split", "pane.process_info", "agent.start"]
+            [
+                "pane.split",
+                "pane.process_info",
+                "agent.start",
+                "agent.get"
+            ]
         );
     }
 
