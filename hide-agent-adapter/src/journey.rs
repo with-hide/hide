@@ -167,7 +167,7 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             Some(dialect) if dialect.closes_pane_when_sleeping() => JourneyWake::SleepingSession,
             _ => JourneyWake::Pane,
         });
-        let title = cells.title.then(|| match row.titles {
+        let title = cells.title.then_some(match row.titles {
             Some(super::SessionFormat::Pi) => JourneyTitle::Named("/name"),
             _ => JourneyTitle::Automatic,
         });
