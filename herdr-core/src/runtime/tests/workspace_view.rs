@@ -634,16 +634,25 @@ fn each_lane_field_ends_at_its_sent_value_and_a_repeat_converges() {
         serde_json::json!({"lane_width": 700, "tree_width": 300}),
     );
     layout(&mut runtime, serde_json::json!({"tree_width": 99_999}));
+    // The other tools keep a width of their own, so a wide document leaves
+    // them as they were.
+    layout(&mut runtime, serde_json::json!({"panel_width": 440}));
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
     assert_eq!(
-        (view.lane_width, view.tree_width),
-        (Some(700), Some(crate::workspace_views::MAX_WIDTH))
+        (view.lane_width, view.panel_width, view.tree_width),
+        (Some(700), Some(440), Some(crate::workspace_views::MAX_WIDTH))
     );
     let (saved, _) = crate::workspace_views::load(&state, 0);
     let saved = saved.get(&view.device_id, &view.path).unwrap();
     assert_eq!(
-        (saved.tool, saved.pinned, saved.tree, saved.lane_width),
-        (Some(Tool::Files), true, true, Some(700))
+        (
+            saved.tool,
+            saved.pinned,
+            saved.tree,
+            saved.lane_width,
+            saved.panel_width
+        ),
+        (Some(Tool::Files), true, true, Some(700), Some(440))
     );
     let written = std::fs::read_to_string(&state).unwrap();
     for retired in ["\"views\"", "\"tools\"", "views_width", "lane_called"] {

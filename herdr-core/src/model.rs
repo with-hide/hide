@@ -258,9 +258,11 @@ pub struct WorkspaceViewSnapshot {
     pub pinned: bool,
     /// Whether the files tool shows the file tree column (D-05).
     pub tree: bool,
-    /// The lane's width in CSS pixels, or null for the shell's default
-    /// until it is resized.
+    /// The files tool's document width in CSS pixels, or null for the
+    /// shell's default until it is resized.
     pub lane_width: Option<u32>,
+    /// The other tools' and the 보기 slot's width, the same way.
+    pub panel_width: Option<u32>,
     /// The tree column's width, the same way.
     pub tree_width: Option<u32>,
     /// The last width request the core accepted for this Workspace. Runtime

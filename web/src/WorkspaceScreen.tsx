@@ -74,6 +74,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
     pinned: view?.pinned === true,
     tree: view?.tree === true,
     laneWidth: view?.lane_width ?? null,
+    panelWidth: view?.panel_width ?? null,
     treeWidth: view?.tree_width ?? null,
     hasViews,
     shown,

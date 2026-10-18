@@ -78,6 +78,18 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     const widened = () => page.locator('[data-lane-frame="overlay"]').boundingBox().then((box) => Math.round(box!.width));
     await expect.poll(async () => Math.abs((await widened()) - (laneBox.width + 120))).toBeLessThanOrEqual(1);
     await expect(grip).toHaveAttribute("aria-valuenow", String(await widened()));
+    const wide = await widened();
+    await screenshot(page, "right-lane-files-wide");
+
+    // Every other tool keeps a width of its own: the wide document leaves
+    // Memory at the default, and Files comes back at its width (B6).
+    await railTool(page, "memory").click();
+    await expect(page.locator("[data-lane-header]")).toContainText("Memory");
+    await expect.poll(widened).toBe(Math.round(laneBox.width));
+    await screenshot(page, "right-lane-memory-own-width");
+    await railTool(page, "files").click();
+    await expect(page.locator("[data-lane-header]")).toContainText("Files");
+    await expect.poll(widened).toBe(wide);
     await expect(pane(page, lane.herdr.panes[0]!)).toBeVisible();
     expect(resizes(lane)).toBe(before);
 
