@@ -193,13 +193,18 @@ def agy_set_up(home):
         "enterpriseOnboardingComplete": False}).encode())
 
 
+def claude_project(folder):
+    """The key Claude Code's configuration names `folder` by: it names a
+    Windows folder with `/` between names (docs/agent-hooks.md)."""
+    return folder.as_posix() if WINDOWS else str(folder)
+
+
 def claude_settings(home, root, secret):
     """The disposable ~/.claude.json a signed-in Claude would hold for the measured repository."""
     write_private(home / ".claude.json", json.dumps({
         "hasCompletedOnboarding": True,
         "customApiKeyResponses": {"approved": [secret[-20:]], "rejected": []},
-        # Claude Code names a Windows folder with `/` between names (docs/agent-hooks.md).
-        "projects": {root.as_posix() if WINDOWS else str(root): {"hasTrustDialogAccepted": True}},
+        "projects": {claude_project(root): {"hasTrustDialogAccepted": True}},
     }).encode())
 
 

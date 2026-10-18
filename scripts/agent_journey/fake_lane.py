@@ -42,7 +42,7 @@ def claude_config(root):
     measured repository trusted; the never-trusted repository is left out."""
     return {"hasCompletedOnboarding": True,
             "customApiKeyResponses": {"approved": [KEY[-20:]], "rejected": []},
-            "projects": {str(root): {"hasTrustDialogAccepted": True}}}
+            "projects": {ci.claude_project(root): {"hasTrustDialogAccepted": True}}}
 
 
 def claude(home, url, root, local):
