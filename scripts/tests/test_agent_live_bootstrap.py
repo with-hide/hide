@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_live_check.runtime import Runtime
-from agent_live_check.system import PaneShell, READY, WINDOWS, remove_pane_files
+from agent_live_check.system import PaneShell, READY, WINDOWS, remove_pane_files, tool_path
 from agent_live_check.processes import MAX_OUTPUT, ProcessError
 from agent_journey import cells, report
 
@@ -201,6 +201,32 @@ class PaneFileRelease(unittest.TestCase):
                         with self.assertRaisesRegex(ProcessError, "pane_file_release_timeout"):
                             remove_pane_files(file)
                         self.assertEqual(clock.now, 105)
+
+
+@unittest.skipIf(WINDOWS, "Windows panes use cmd.exe and the private user PATH")
+class PaneShellPath(unittest.TestCase):
+    def test_login_and_nonlogin_shells_run_the_private_program_before_system_programs(self):
+        # macOS's /etc/zprofile runs path_helper, which places /usr/bin and
+        # /usr/local/bin before an inherited private PATH. No system file or
+        # installed CLI is changed: uname is a finite executable stand-in.
+        with tempfile.TemporaryDirectory(prefix="journey shell '") as folder:
+            home = Path(folder)
+            private_bin = home / "bin"
+            private_bin.mkdir()
+            program = private_bin / "uname"
+            program.write_text("#!/bin/sh\nprintf 'private-program\\n'\n")
+            program.chmod(0o700)
+            shell = PaneShell()
+            path = tool_path(private_bin)
+            for name, data in shell.files(path):
+                (home / name).write_bytes(data)
+            environment = {"HOME": str(home), "PATH": path, "LC_ALL": "C", **shell.environment(home)}
+            for flags in ("-ic", "-ilc"):
+                with self.subTest(flags=flags):
+                    ran = subprocess.run(["/bin/zsh", flags, "uname"], env=environment,
+                                         capture_output=True, text=True, timeout=5)
+                    self.assertEqual(ran.returncode, 0, ran.stderr)
+                    self.assertEqual(ran.stdout.strip(), "private-program")
 
 
 if __name__ == "__main__":

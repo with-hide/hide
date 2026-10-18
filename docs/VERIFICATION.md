@@ -344,6 +344,9 @@ Every prompt asks only for a fresh token (`Reply with exactly <token>`), so a mo
 The measured repository is a shared clone (`git clone --shared`) of this checkout's commit, on `main`, at `projects/measured` in the candidate's HOME, added as a project the way Add project adds one, and the journey starts its agents only once the navigator lists it as a registered Git project.
 An operator starts agents in a project they added inside their HOME, and Hide adds none outside it (`outside_home`); a Wake after a Sleep that closed the pane (Grok, Pi, omp, OpenCode) finds the agent's checkout among that project's, so a repository outside the candidate's HOME left those Wakes with no checkout to open.
 The clone reads this checkout's objects and writes only its own, so the run's branches and worktrees never reach the operator's repository; each agent's folder trust names the clone.
+The private pane's `.zshrc` restores the controlled PATH after system login profiles run, keeping the run's wrappers before system programs.
+macOS's `path_helper` otherwise moves system folders ahead of them, so an installer's `/usr/local/bin` link can bypass the wrapper's private HOME and fake key even though the preflight version check passed.
+`test_agent_live_bootstrap.py` checks the program actually executed by both login and non-login shells against a private executable that shares a system command's name.
 
 | Step | Passes when |
 | --- | --- |
@@ -428,6 +431,8 @@ The four guards are enforced before or during every admitted agent's journey:
 
 1. The executable comes only from the pinned cache, never the operator's PATH or aliases.
    The installer itself has a private HOME and a write sandbox permitting only that cache entry; the agent's controlled PATH contains the candidate wrappers, the Node runtime and system tools.
+   Before installation, that exact sandbox must allow a cache write and deny both a write and a link in a disposable fixture outside the cache; otherwise installation fails.
+   Grok's installer receives its target directory on PATH so it does not attempt additional links in `~/.local/bin` or `/usr/local/bin`; the sandbox still denies every write outside the pin.
 2. The Rust adapter declares how automatic updates are disabled, projected into `contracts/agent-journey.json` and applied before any CLI starts.
    The agent's write sandbox also denies changes to the cached program, operator agent folders and keychain files, and permits model traffic only to loopback.
 3. The run inspects the following operator watch at its start and after cleanup for traces of this run: its directory, fake server addresses with ports, and a per-run fake key (including the tail Claude stores).
@@ -495,7 +500,7 @@ Operator skills must neither enter a fake run nor alter its folder-trust measure
 The fixture seeds no Pi trust decision, and the untrusted-start path remains untrusted.
 Private fake runs use the bounded before/after watch above instead of the real-login route's trust-entry inventory, which includes project paths.
 The candidate's Hide AI is off in both fake modes, and native titles are what the title cell reads.
-The macOS fake CI lane temporarily records Grok's authentication method, key-variable name/presence, and wrapper HOME/config paths relative to the run to investigate its CI-only login prompt.
+The macOS fake CI lane temporarily records Grok's authentication method, key-variable name/presence, and wrapper HOME/config paths relative to the run to distinguish a key-route failure from bypassing the wrapper.
 It streams the native debug log through a private FIFO, retains only the selected facts, and removes the FIFO at cleanup; the reader has a 32 MiB input cap, a 4 MiB line cap and a 64-event cap.
 The configured route and the native model-config observation are separate evidence; this diagnostic does not trace filesystem opens.
 `scripts/tests/test_agent_journey_private_home.py` exercises content, top-level entry and link changes on fake watch roots, concurrent SQLite copies, unchanged source bytes, missing proof, cache refusal and authenticated requests; no test watches or changes the operator's folders.

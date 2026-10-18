@@ -16,6 +16,24 @@ from .processes import OwnedProcesses
 from .protection import ProtectionError, beneath, private_directory, write_private
 
 
+def verify_write_boundary(owner, env, command, allowed, outside):
+    """Exercise writes and links against disposable stand-ins, never operator files."""
+    forbidden, link = outside / "forbidden", outside / "forbidden-link"
+    write_private(forbidden, b"unchanged")
+    script = ("import pathlib,sys\n"
+              f"pathlib.Path({str(allowed)!r}).write_bytes(b'allowed')\n"
+              f"try: pathlib.Path({str(forbidden)!r}).write_bytes(b'changed')\n"
+              "except PermissionError: pass\n"
+              "else: sys.exit(31)\n"
+              f"try: pathlib.Path({str(link)!r}).symlink_to({str(allowed)!r})\n"
+              "except PermissionError: pass\n"
+              "else: sys.exit(32)\n")
+    code, _, _ = owner.run(command([sys.executable, "-c", script]), env=env, check=False)
+    if code or forbidden.read_bytes() != b"unchanged" or link.is_symlink() or not allowed.is_file():
+        raise ProtectionError("private_home_write_guard_not_enforced")
+    allowed.unlink()
+
+
 def spellings(paths: list[Path]) -> list[Path]:
     """Protect every alias traversed, its endpoint and each ancestor chain."""
     pending, seen = list(paths), {}
@@ -164,17 +182,7 @@ class WriteSandbox:
 
         The attempted forbidden write is a disposable stand-in, never an operator file.
         """
-        forbidden, allowed = outside / "forbidden", self.probe / "private-guard-proof"
-        write_private(forbidden, b"unchanged")
-        script = ("import pathlib,sys\n"
-                  f"pathlib.Path({str(allowed)!r}).write_bytes(b'allowed')\n"
-                  f"try: pathlib.Path({str(forbidden)!r}).write_bytes(b'changed')\n"
-                  "except PermissionError: pass\n"
-                  "else: sys.exit(31)\n")
-        code, _, error = owner.run(self.command([sys.executable, "-c", script]), env=env, check=False)
-        if code or forbidden.read_bytes() != b"unchanged" or not allowed.is_file():
-            raise ProtectionError("private_home_write_guard_not_enforced: " + error.strip()[:500])
-        allowed.unlink()
+        verify_write_boundary(owner, env, self.command, self.probe / "private-guard-proof", outside)
 
     def verify(self, owner: OwnedProcesses, env: dict, outside: Path) -> None:
         """Exercise declared-file/control protection and Unix socket isolation.

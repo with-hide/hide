@@ -99,16 +99,18 @@ class PrivateCLI(unittest.TestCase):
         self.assertEqual([row['reason'] for row in report['failures']],
                          ['operator_watch_database_snapshot_unreadable: OperationalError'])
 
-    def test_failed_installer_removes_its_incomplete_pin_after_child_cleanup(self):
+    def test_installer_outside_write_fails_and_removes_its_incomplete_pin_after_child_cleanup(self):
         from agent_journey.cli_cache import Cache, pin_key
         from agent_live_check.processes import OwnedProcesses
         from agent_live_check.protection import ProtectionError, private_directory
         from agent_live_check.runtime import Runtime
+        outside = self.base / 'outside-cache'
+        outside.write_text('unchanged')
         script = self.checkout / 'scripts/install-agent-clis.py'
         script.write_text("import pathlib, sys\n"
                           "prefix = pathlib.Path(sys.argv[sys.argv.index('--prefix') + 1])\n"
                           "(prefix / 'partial').write_text('incomplete')\n"
-                          "sys.exit(7)\n")
+                          f"pathlib.Path({str(outside)!r}).write_text('outside write')\n")
         private_directory(self.run)
         owner = OwnedProcesses(diagnostics=self.run / 'process-diagnostics')
         runtime = Runtime(self.checkout, self.run, self.operator, owner,
@@ -120,6 +122,7 @@ class PrivateCLI(unittest.TestCase):
         with self.assertRaisesRegex(ProtectionError, 'journey_cli_install_failed'):
             cache.install(runtime, 'fixture', pin, {})
         self.assertFalse((cache.root / pin_key('fixture', pin)).exists())
+        self.assertEqual(outside.read_text(), 'unchanged')
         self.assertFalse(owner.children)
         owner.attribution_report()
 

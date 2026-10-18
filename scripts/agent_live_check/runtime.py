@@ -202,7 +202,7 @@ class Runtime:
                         **temp_env(run / "agent-tmp"),
                         PATH=tool_path(self.bin))
             self.env = base
-            for name, data in self.shell.files():
+            for name, data in self.shell.files(base["PATH"]):
                 write_private(self.home / name, data)
             write_private(run / "herdr.toml", ("[update]\nversion_check = false\n[sound]\nenabled = false\n"
                                                + self.shell.herdr_config()).encode())

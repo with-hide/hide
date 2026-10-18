@@ -83,7 +83,10 @@ def grok(row, prefix):
     """Grok's installer takes the version as its argument and the folder as
     GROK_BIN_DIR; on Windows it runs under Git Bash in the same form."""
     folder = prefix / "grok"
-    run([bash(), "-c", f'curl -fsSL {GROK_INSTALLER} | bash -s "$0"', row["version"]],
+    # Already on PATH means the installer never tries ~/.local/bin or
+    # /usr/local/bin links. Set this inside Bash so Git Bash converts its
+    # inherited Windows PATH before the Unix path is prepended.
+    run([bash(), "-c", f'export PATH="$GROK_BIN_DIR:$PATH"; curl -fsSL {GROK_INSTALLER} | bash -s "$0"', row["version"]],
         {"GROK_BIN_DIR": folder.as_posix() if WINDOWS else str(folder)})
     return folder / ("grok.exe" if WINDOWS else "grok")
 

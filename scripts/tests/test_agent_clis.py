@@ -4,6 +4,7 @@ install fails here, not on a runner."""
 from pathlib import Path
 import importlib.util
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -40,6 +41,34 @@ class Table(unittest.TestCase):
 
 
 class Install(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "Unix installer link behavior")
+    def test_native_installer_sees_its_target_on_path_and_leaves_no_other_link(self):
+        # The external download is a finite Bash installer fixture with the
+        # vendor's PATH condition. Run our actual entrypoint and Bash route.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix, tools = root / "cache", root / "tools"
+            home = prefix / "home"
+            home.mkdir(parents=True)
+            tools.mkdir()
+            outside = root / "outside-link"
+            installer = ('set -eu\n'
+                         'mkdir -p "$GROK_BIN_DIR"\n'
+                         ': > "$GROK_BIN_DIR/grok"\n'
+                         'case ":$PATH:" in *":$GROK_BIN_DIR:"*) ;;\n'
+                         f'*) ln -s "$GROK_BIN_DIR/grok" {str(outside)!r} ;; esac\n')
+            curl = tools / "curl"
+            curl.write_text(f"#!{sys.executable}\nprint({installer!r})\n")
+            curl.chmod(0o700)
+            env = {"HOME": str(home), "PATH": os.pathsep.join((str(tools), "/usr/bin", "/bin")),
+                   "LC_ALL": "C"}
+            ran = subprocess.run([sys.executable, str(SCRIPTS / "install-agent-clis.py"), "grok",
+                                  "--prefix", str(prefix), "--private-fake"],
+                                 env=env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+            self.assertTrue((prefix / "grok/grok").is_file())
+            self.assertFalse(outside.is_symlink())
+
     def install(self, answer):
         """main() for Pi, its npm install replaced by a program that answers `answer`."""
         with tempfile.TemporaryDirectory() as temporary:

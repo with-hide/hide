@@ -6,10 +6,12 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import tempfile
 import time
 
 from agent_live_check.protection import ProtectionError, beneath, private_directory, write_private
 from agent_live_check.runtime import clean_env
+from agent_live_check.sandbox import verify_write_boundary
 
 
 def size(root, cap):
@@ -113,6 +115,10 @@ class Cache:
                        **update_env}
         for name in ("GITHUB_PATH", "GITHUB_OUTPUT", "BASH_ENV", "ENV", "NODE_OPTIONS", "NODE_PATH"):
             environment.pop(name, None)
+        command = lambda argv: ["/usr/bin/sandbox-exec", "-f", str(profile), *argv]
+        with tempfile.TemporaryDirectory(prefix="install-write-guard-", dir=runtime.run) as outside:
+            verify_write_boundary(runtime.owner, environment, command,
+                                  folder / "home/install-write-proof", Path(outside))
         import sys
         child = runtime.resident(Path("/usr/bin/sandbox-exec"),
                                  ["-f", str(profile), sys.executable,
