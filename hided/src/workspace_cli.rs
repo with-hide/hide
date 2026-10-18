@@ -626,13 +626,11 @@ fn hook_request(
                 .as_ref()
                 .and_then(|(path, _)| path.parent().and_then(Path::parent))
                 .unwrap_or(&env.state_dir);
-            match crate::pane_auth::bootstrap_socket_path(state) {
-                Ok(socket) => connect(&socket),
-                Err(reason) if reason == "invalid_bootstrap_socket_record" => {
-                    Err(("invalid_bootstrap_socket_record", None))
-                }
-                Err(_) => Err(("hide_unavailable", None)),
-            }
+            hide_node::pane_proof::recorded_socket_path(&crate::pane_auth::bootstrap_socket_record(
+                state,
+            ))
+            .map_err(|refusal| (refusal.code(), None))
+            .and_then(|socket| connect(&socket))
         }
     };
     let mut stream = match selected {
