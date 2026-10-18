@@ -170,15 +170,18 @@ fn every_windows_command_preserves_the_captured_unicode_state_path() {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    assert_route(
-        hide_platform::process::OwnedChild::spawn(&mut command)
-            .unwrap()
-            .capture_until(
-                std::time::Instant::now() + std::time::Duration::from_secs(15),
-                64 * 1024,
-            )
-            .unwrap(),
-    );
+    let output = hide_platform::process::OwnedChild::spawn(&mut command)
+        .unwrap()
+        .capture_until(
+            std::time::Instant::now() + std::time::Duration::from_secs(15),
+            64 * 1024,
+        )
+        .unwrap();
+    assert_route(Output {
+        status: output.status,
+        stdout: output.stdout,
+        stderr: output.stderr,
+    });
 }
 
 #[test]
