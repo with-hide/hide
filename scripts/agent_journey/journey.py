@@ -260,7 +260,7 @@ class Journey:
         self.record["start"] = {"activities": observed, "turn": turn, "herdr_agent": native,
                                 "row": self.daemon.row(self.pane)}
         evidence = self.evidence("start", self.record["start"])
-        verdict = cells.start_verdict(spawned, turn, cells.emitter_verdict(self.reference, self.kind))
+        verdict = cells.start_verdict(spawned, turn, cells.emitter_verdict(self.reference, self.row["herdr_source"]))
         if not self.settle("start", verdict, evidence):
             return
         self.record["reply"] = {"token": first, "read": read}
@@ -609,7 +609,7 @@ class Journey:
             native = self.herdr_agent() or {}
             record["herdr_agent"], record["turn"], record["read"] = native, turn, read
             self.settle("start_untrusted", cells.start_verdict(spawned, turn,
-                                                               cells.emitter_verdict(native.get("agent_session"), self.kind),
+                                                               cells.emitter_verdict(native.get("agent_session"), self.row["herdr_source"]),
                                                                cells.reply_verdict(read, self.session, value)),
                         self.evidence("start-untrusted", record))
         finally:

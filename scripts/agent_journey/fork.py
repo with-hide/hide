@@ -33,7 +33,7 @@ def panes(runtime):
     return {pane["pane_id"] for pane in runtime.json(["api", "snapshot"])["snapshot"].get("panes", [])}
 
 
-def verdict(row, source_session, herdr_session, kind, listed, source_agent):
+def verdict(row, source_session, herdr_session, source, listed, source_agent):
     """`row` the forked row, `herdr_session` its pane's session as Herdr
     reports it, `listed` its `hide agent list` entry."""
     if not row:
@@ -41,7 +41,7 @@ def verdict(row, source_session, herdr_session, kind, listed, source_agent):
     session = row.get("session_id")
     if not session or session == source_session:
         return cells.FAIL, f"the forked row's session is {session}, not one of its own"
-    status, reason = cells.emitter_verdict(herdr_session, kind)
+    status, reason = cells.emitter_verdict(herdr_session, source)
     if status != cells.PASS:
         return status, "the fork's " + reason[0].lower() + reason[1:]
     if (herdr_session or {}).get("value") != session:
@@ -103,7 +103,7 @@ def measure(journey):
                    if pane and item.get("pane") == pane), None)
     record["prompt"].update(turn=turn, read=read)
     record.update(herdr_session=herdr_session, listed=listed, errors=list(journey.daemon.errors))
-    status, reason = verdict(row, source_session, herdr_session, journey.kind, listed, journey.agent)
+    status, reason = verdict(row, source_session, herdr_session, journey.row["herdr_source"], listed, journey.agent)
     if status == cells.PASS:
         answer = cells.with_turn(cells.reply_verdict(read, row["session_id"], value), turn)
         status, reason = (status, reason + "; " + answer[1]) if answer[0] == cells.PASS else \

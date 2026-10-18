@@ -194,12 +194,13 @@ def with_turn(verdict, turn):
     return PASS, verdict[1] + "; " + turn[1]
 
 
-def emitter_verdict(session, kind):
-    """Herdr's own integration reported the pane's session as herdr:<kind>."""
+def emitter_verdict(session, expected):
+    """Herdr's own integration reported the pane's session under `expected`,
+    the contract's `herdr_source`."""
     source = (session or {}).get("source")
-    if source == "herdr:" + kind:
+    if source == expected:
         return PASS, "Herdr integration reported the session as " + source
-    return FAIL, "Herdr integration did not report the session (source " + str(source) + ")"
+    return FAIL, f"Herdr integration did not report the session (source {source}, not {expected})"
 
 
 def start_verdict(*verdicts):

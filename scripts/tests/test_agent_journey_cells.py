@@ -144,9 +144,13 @@ class Verdicts(unittest.TestCase):
                          (cells.FAIL, "Hide's reader found no answer to the prompt"))
 
     def test_the_emitter_must_be_herdrs_own_integration(self):
-        self.assertEqual(cells.emitter_verdict({"source": "herdr:codex"}, "codex")[0], cells.PASS)
-        self.assertEqual(cells.emitter_verdict({"source": "hide:hook"}, "codex")[0], cells.FAIL)
-        self.assertEqual(cells.emitter_verdict(None, "codex")[0], cells.FAIL)
+        self.assertEqual(cells.emitter_verdict({"source": "herdr:codex"}, "herdr:codex")[0], cells.PASS)
+        self.assertEqual(cells.emitter_verdict({"source": "hide:hook"}, "herdr:codex")[0], cells.FAIL)
+        self.assertEqual(cells.emitter_verdict(None, "herdr:codex")[0], cells.FAIL)
+        # agy's integration reports under its target, not its kind (the contract's `herdr_source`).
+        self.assertEqual(cells.emitter_verdict({"source": "herdr:antigravity_cli"}, "herdr:antigravity_cli")[0],
+                         cells.PASS)
+        self.assertEqual(cells.emitter_verdict({"source": "herdr:agy"}, "herdr:antigravity_cli")[0], cells.FAIL)
 
     def test_a_reply_passes_only_with_the_token_from_the_assistant_in_that_session(self):
         events = [{"role": "user", "text": "Reply with exactly JOURNEY-1"}, {"role": "assistant", "text": "JOURNEY-1"}]

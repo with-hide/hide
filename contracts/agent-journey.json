@@ -2,6 +2,7 @@
   {
     "id": "claude-code",
     "herdr_kind": "claude",
+    "herdr_source": "herdr:claude",
     "home_folder": [
       ".claude"
     ],
@@ -32,6 +33,7 @@
   {
     "id": "codex",
     "herdr_kind": "codex",
+    "herdr_source": "herdr:codex",
     "home_folder": [
       ".codex"
     ],
@@ -62,6 +64,7 @@
   {
     "id": "grok",
     "herdr_kind": "grok",
+    "herdr_source": "herdr:grok",
     "home_folder": [
       ".grok"
     ],
@@ -89,6 +92,7 @@
   {
     "id": "opencode",
     "herdr_kind": "opencode",
+    "herdr_source": "herdr:opencode",
     "home_folder": [
       ".config",
       "opencode"
@@ -117,6 +121,7 @@
   {
     "id": "pi",
     "herdr_kind": "pi",
+    "herdr_source": "herdr:pi",
     "home_folder": [
       ".pi",
       "agent"
@@ -147,6 +152,7 @@
   {
     "id": "omp",
     "herdr_kind": "omp",
+    "herdr_source": "herdr:omp",
     "home_folder": [
       ".omp",
       "agent"
@@ -175,6 +181,7 @@
   {
     "id": "cursor",
     "herdr_kind": "cursor",
+    "herdr_source": "herdr:cursor",
     "home_folder": [
       ".cursor"
     ],
@@ -202,6 +209,7 @@
   {
     "id": "antigravity",
     "herdr_kind": "agy",
+    "herdr_source": "herdr:antigravity_cli",
     "home_folder": [
       ".gemini",
       "config"

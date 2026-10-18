@@ -417,6 +417,14 @@ pub struct HerdrIntegration {
     pub folder: &'static [&'static str],
 }
 
+impl HerdrIntegration {
+    /// The source the agent's own Herdr integration reports its sessions
+    /// under, named by the integration target (`herdr:antigravity_cli` for agy).
+    pub fn session_source(&self) -> String {
+        format!("herdr:{}", self.target.replace('-', "_"))
+    }
+}
+
 /// These are facts for later Factory consumers, not switches activating them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Capability<T> {
