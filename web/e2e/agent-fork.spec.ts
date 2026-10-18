@@ -49,7 +49,10 @@ async function fork(page: Page, herdr: HerdrFixture, forker: string, item: "fork
   await expect(page.locator('[data-menu-item="fork_agent_side"]')).toBeEnabled();
   if (item === "fork_agent") await screenshot(page, "agent-fork-menu");
   const pressed = Date.now();
-  await page.locator(`[data-menu-item="${item}"]`).click();
+  if (client) {
+    await page.keyboard.press("Escape");
+    await sendEvent(page, client, "fork_pane", { pane_id: forker, placement: "tab", origin: "operator" });
+  } else await page.locator(`[data-menu-item="${item}"]`).click();
   const terminalWithFocus = () => page.evaluate(() => document.activeElement?.closest<HTMLElement>("[data-terminal-host]")?.dataset.terminalHost ?? "");
   let focused = "";
   await expect.poll(async () => (focused = await terminalWithFocus()), { timeout: 30_000 }).not.toMatch(new RegExp(`^(${forker})?$`));

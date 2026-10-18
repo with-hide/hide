@@ -202,7 +202,9 @@ impl Requests {
             }
             return;
         }
-        self.make_room(true);
+        if !self.make_room(true) {
+            return;
+        }
         self.requests.push_back(Request::new(request_id, true, now));
     }
 
@@ -260,7 +262,7 @@ impl Requests {
         expired
     }
 
-    fn make_room(&mut self, known: bool) {
+    fn make_room(&mut self, known: bool) -> bool {
         let limit = if known {
             INPUT_REQUEST_LIMIT
         } else {
@@ -272,17 +274,20 @@ impl Requests {
             .filter(|request| request.known == known)
             .count();
         if count < limit {
-            return;
+            return true;
         }
-        if let Some(index) = self
-            .requests
-            .iter()
-            .position(|request| request.known == known)
-            && let Some(mut evicted) = self.requests.remove(index)
-            && evicted.state == RequestState::Pending
-        {
+        let Some(index) = self.requests.iter().position(|request| {
+            request.known == known
+                && !(request.fork
+                    && (request.pane.is_some() || request.state == RequestState::Pending))
+        }) else {
+            return false;
+        };
+        let mut evicted = self.requests.remove(index).expect("found");
+        if evicted.state == RequestState::Pending {
             evicted.discard("evicted");
         }
+        true
     }
 
     fn find(&mut self, request_id: &str) -> Option<&mut Request> {
@@ -307,7 +312,9 @@ impl Requests {
         }
         self.expire_unknown(chunk.typed_at);
         if self.find(request_id).is_none() {
-            self.make_room(false);
+            if !self.make_room(false) {
+                return (KeyRoute::Dropped { limit: true }, None);
+            }
             self.requests
                 .push_back(Request::new(request_id, false, chunk.typed_at));
         }
@@ -351,7 +358,9 @@ impl Requests {
             return Vec::new();
         }
         if self.find(request_id).is_none() {
-            self.make_room(true);
+            if !self.make_room(true) {
+                return Vec::new();
+            }
             self.requests.push_back(Request::new(request_id, true, now));
         }
         let request = self.find(request_id).expect("just made");
@@ -382,7 +391,9 @@ impl Requests {
             return;
         }
         if self.find(request_id).is_none() {
-            self.make_room(true);
+            if !self.make_room(true) {
+                return;
+            }
             self.requests.push_back(Request::new(request_id, true, now));
         }
         let request = self.find(request_id).expect("just made");

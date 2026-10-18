@@ -117,10 +117,10 @@ impl InputRequests {
     /// still pending is discarded. An id already naming another creation is
     /// that client's newer request, so the old row leaves rather than keep
     /// pointing keys at the old pane.
-    pub(super) fn open(&mut self, request_id: &str, origin: InputOrigin, now: Instant) {
+    pub(super) fn open(&mut self, request_id: &str, origin: InputOrigin, now: Instant) -> bool {
         if !valid_request_id(request_id) {
             report_invalid_request_id(request_id);
-            return;
+            return false;
         }
         if let Some(index) = self
             .requests
@@ -128,11 +128,18 @@ impl InputRequests {
             .position(|request| request.request_id == request_id)
         {
             if self.requests[index].origin == origin {
-                return;
+                return true;
+            }
+            if self.requests[index].state == InputRequestState::Pending
+                && matches!(self.requests[index].origin, InputOrigin::Fork(_))
+            {
+                return false;
             }
             self.requests.remove(index);
         }
-        self.make_room();
+        if !self.make_room() {
+            return false;
+        }
         let fork = matches!(origin, InputOrigin::Fork(_));
         self.requests.push_back(InputRequest {
             request_id: request_id.to_owned(),
@@ -147,15 +154,24 @@ impl InputRequests {
             request: request_id.to_owned(),
             fork,
         });
+        true
     }
 
-    fn make_room(&mut self) {
-        if self.requests.len() >= INPUT_REQUEST_LIMIT
-            && let Some(mut evicted) = self.requests.pop_front()
-            && evicted.state == InputRequestState::Pending
-        {
+    fn make_room(&mut self) -> bool {
+        if self.requests.len() < INPUT_REQUEST_LIMIT {
+            return true;
+        }
+        let Some(index) = self.requests.iter().position(|request| {
+            request.state != InputRequestState::Pending
+                || !matches!(request.origin, InputOrigin::Fork(_))
+        }) else {
+            return false;
+        };
+        let mut evicted = self.requests.remove(index).expect("found");
+        if evicted.state == InputRequestState::Pending {
             self.discard_row(&mut evicted, "evicted");
         }
+        true
     }
 
     fn discard_row(&mut self, request: &mut InputRequest, reason: &str) {
@@ -274,7 +290,9 @@ impl InputRequests {
         {
             return false;
         }
-        self.make_room();
+        if !self.make_room() {
+            return false;
+        }
         self.requests.push_back(InputRequest {
             request_id: request_id.to_owned(),
             origin: InputOrigin::Refused,
@@ -533,9 +551,10 @@ impl super::Runtime {
             .map(|operation| operation.id);
         let before = self.input_requests.snapshot();
         match task {
-            Some(id) => self
-                .input_requests
-                .open(request_id, InputOrigin::Task(id), Instant::now()),
+            Some(id) => {
+                self.input_requests
+                    .open(request_id, InputOrigin::Task(id), Instant::now());
+            }
             None => {
                 self.input_requests.refuse_unopened(request_id);
             }
@@ -673,6 +692,28 @@ mod tests {
 
     fn controls(requests: &mut InputRequests) -> Vec<TerminalControl> {
         requests.take_controls()
+    }
+
+    #[test]
+    fn pending_forks_keep_their_holder_when_other_creations_reach_the_cap() {
+        let mut requests = InputRequests::default();
+        let now = Instant::now();
+        for index in 0..INPUT_REQUEST_LIMIT {
+            assert!(requests.open(
+                &format!("fork-{index}"),
+                InputOrigin::Fork(format!("source-{index}")),
+                now,
+            ));
+        }
+        requests.take_controls();
+        assert!(!requests.open("tab", InputOrigin::TabCreate(1), now));
+        assert!(!requests.open("fork-extra", InputOrigin::Fork("extra".into()), now));
+        assert!(!requests.open("fork-0", InputOrigin::TabCreate(2), now));
+        assert!(requests.take_controls().is_empty());
+        let origin = InputOrigin::Fork("source-0".into());
+        assert!(requests.hold_for(&origin, "fork-pane"));
+        assert!(requests.resolve(&origin, "fork-pane"));
+        assert!(requests.open("fork-extra", InputOrigin::Fork("extra".into()), now));
     }
 
     #[test]

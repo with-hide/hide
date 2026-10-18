@@ -98,6 +98,9 @@ test("roots stay in one sidebar, open their children in place, and the header's 
     // B16: when the child goes, the tree and its button go with it. The reveal left the sidebar on 태스크; the row is in 프로젝트.
     await page.locator('[data-sidebar-lens-option="projects"]').click();
     await page.locator(`nav[data-sidebar] [data-pane="${parent}"] [data-agent-open="${parent}"]`).first().click();
+    // The record the reveal opened stays up over the panes' right edge, where
+    // the children button sits, until the operator closes it.
+    await page.locator("[data-detail-close]").click();
     await treeButton.click();
     herdr.run(["pane", "close", child]);
     await expect(tree).toHaveCount(0, { timeout: 20_000 });

@@ -173,6 +173,13 @@ use crate::error::HostError;
 /// interactive command has no `--fork` (docs/ARCHITECTURE.md, OpenCode). A
 /// helper on 42 would refuse the call, so no OpenCode session on that device
 /// could be forked; it is refused at Hello and upgraded.
+/// 44: a Hide AI request carries the effort it asks of each provider
+/// (`provider_efforts`), and the device's Codex backend honours a
+/// `PlainJson` request by naming the schema in its instructions instead of
+/// sending a strict `outputSchema` (PRD label-judgment-fixes D-01, D-12). A
+/// helper on 43 would drop the effort and still send the schema Codex
+/// refuses, so every agent label judged on that device's Codex would fail;
+/// it is refused at Hello and upgraded.
 /// 45: creation requests declare fork holds and bind their pane on the node.
 /// Older helpers cannot protect bare pane keys; Hello refuses them and the
 /// existing helper replacement installs a compatible build.
