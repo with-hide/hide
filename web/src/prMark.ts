@@ -130,6 +130,15 @@ export function sessionPulls(root: AgentRow, byPane: ReadonlyMap<string, AgentRo
   return [...pulls.values()].sort((a, b) => PR_RANK[a.state] - PR_RANK[b.state]);
 }
 
+/**
+ * What a row's PR mark gathers: a parent's family, itself and every
+ * descendant, or undefined for a row with no child in the list, which shows
+ * its own PRs. The 태스크 row, the 프로젝트 root row and the pane header agree.
+ */
+export function familyPulls(agent: AgentRow, byPane: ReadonlyMap<string, AgentRow>): SessionPull[] | undefined {
+  return (agent.lineage_child_pane_ids ?? []).some((pane) => byPane.has(pane)) ? sessionPulls(agent, byPane) : undefined;
+}
+
 /** Any stale contributing GitHub read dims the tree's mark, using its oldest failed read. */
 export function sessionStaleness(rest: SnapshotRest | null, pulls: SessionPull[]): PrStaleness | undefined {
   const urls = new Set(pulls.map(({ pull }) => pull.url));

@@ -19,7 +19,8 @@ import { GithubIcon } from "./components/github-icon";
 import { Hint } from "./components/ui/tooltip";
 import { CHECKOUT_KIND_ICON } from "./components/checkout-icon";
 import { PrMark } from "./components/pr-mark";
-import { PR_LOOK } from "./prMark";
+import { agentsByPane } from "./paneAgents";
+import { familyPulls, PR_LOOK, type SessionPull } from "./prMark";
 import { CheckoutCardHint, pullRequestOpenExternal } from "./components/pr-card";
 import { DeviceRail } from "./components/device-rail";
 import { frontDeviceId, frontTitle, railShown, readsHere, sidebarBody } from "./devices";
@@ -833,6 +834,7 @@ function RaisedAgentRow({ listed: { agent, device }, context }: { listed: Listed
       inset={PROJECT_COLUMN}
       number={context.numberOf?.(agent.pane_id, null) ?? null}
       menu={context.agentRowMenu}
+      family={rootFamily(agent, context.agents)}
     />
   );
 }
@@ -1687,6 +1689,7 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, context }: { ch
             branchShown={false}
             number={depth === 0 ? context.numberOf?.(agent.pane_id, checkoutId) ?? null : null}
             menu={context.agentRowMenu}
+            family={depth === 0 ? rootFamily(agent, context.agents) : undefined}
           />
         );
       })}
@@ -1695,6 +1698,11 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, context }: { ch
 }
 
 const NO_PANES: ReadonlySet<string> = new Set();
+
+/** A root row's PR mark gathers its descendants' PRs, as its 태스크 row does; a child row keeps its own (PRD project-tree-pr-family D-01, D-02). */
+function rootFamily(agent: AgentRow, agents: AgentRow[]): SessionPull[] | undefined {
+  return agent.state.root ? familyPulls(agent, agentsByPane(agents)) : undefined;
+}
 
 /** What a row's menu reads from the host when it opens: the OS file manager, and the new-tab chord the registry binds here. */
 function menuHost(): MenuHost {
