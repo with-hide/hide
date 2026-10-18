@@ -913,6 +913,7 @@ Two owners keep it apart from sleep: `herdr-core/src/session_archive.rs` holds t
 The records live beside the dormant records in `core-state.json` (`session_archive`) and hold at most 256 sessions, each member counting; an archive that would cross the cap is refused before anything closes (`archive.full`), and nothing older is evicted.
 A record names its device, project root and checkout, and for each member the machine, pane, kind, native session, source reference, cwd, title, last line, pull requests, the delivery registration it held, its parent and depth.
 A load drops a record that does not parse rather than refusing the file, and a record being deleted is never written again.
+A core move carries each member's machine, pane, resumed pane and held registration with the machine it names (`node_migration::KEYS`), and its folders stay beside that machine id.
 
 Admission is one event, `archive_session`, with the root pane and whether the operator confirmed stopping running work; the tree is the root's lineage children and the close descendants the close sheet would list.
 A child, Hide AI's own agents, a Factory worker, an agent whose conversation Hide has not seen, a device that is not connected and an agent whose activity is unknown are refused with their own kinds; pressing it again on a session already being archived converges on the same record.
