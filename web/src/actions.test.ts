@@ -6,6 +6,8 @@ import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { workspaceKey } from "./viewLayout";
 import type { DispatchFn } from "./ws";
+import { FindBar } from "./Overlays";
+import { TooltipProvider } from "./components/ui/tooltip";
 
 // No terminal renders here. Keep the real actions import while answering
 // xterm's canvas capability probe at the browser boundary.
@@ -50,8 +52,6 @@ describe("Find while an agent answers its own search request", () => {
   it.each([false, true])("follows the answer only while the keyboard stays at its origin (moved: %s)", async (moved) => {
     const { act, createElement } = await import("react");
     const { createRoot } = await import("react-dom/client");
-    const { FindBar } = await import("./Overlays");
-    const { TooltipProvider } = await import("./components/ui/tooltip");
     const { installKeyboardOwner, keyboardCommandOwner, keyboardOwner, noteKeyboardOwner } = await import("./viewFocus");
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     useUiStore.setState({ overlay: "none", agentFindRequest: null, screen: { kind: "workspace" } });
