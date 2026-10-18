@@ -9,6 +9,7 @@ import { herdrTabs } from "./failure-dump";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { herdrGate } from "./herdr-gate";
 import { startHided, type Daemon } from "./hided-fixture";
+import { fixtureLoginShellPath } from "./platform-fixture";
 import { quietFor } from "./wait";
 import { enterWorkspace } from "./wire";
 
@@ -59,6 +60,19 @@ function plainCommand(shell: string): string[] {
     : [shell];
 }
 
+function privateShellEnv(herdr: HerdrFixture): Record<string, string> {
+  const home = herdr.env.HOME!;
+  fixtureLoginShellPath(home, herdr.fixturePath);
+  const rc = path.join(home, "plain-shell.rc");
+  fs.writeFileSync(rc, "PS1='fixture $ '\nexport PS1\n");
+  // macOS /etc/bashrc overwrites an inherited PS1. The private account's
+  // startup files restore it afterward; ENV covers interactive POSIX sh.
+  for (const file of [".profile", ".bash_profile", ".bashrc"]) {
+    fs.appendFileSync(path.join(home, file), "\nPS1='fixture $ '\nexport PS1\n");
+  }
+  return { PS1: "fixture $ ", BASH_SILENCE_DEPRECATION_WARNING: "1", ENV: rc };
+}
+
 async function open(page: Page, daemon: Daemon) {
   await page.goto("about:blank");
   await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
@@ -88,11 +102,14 @@ async function acceptsInput(herdr: HerdrFixture, pane: string, suffix = "INPUT_O
   // terminal echo alone cannot satisfy this assertion.
   const sent = spawnSync(herdr.bin, ["pane", "run", pane, `printf '%s%s\\n' PLAIN_ ${suffix}`], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
   expect(sent.status, sent.stderr).toBe(0);
+  let output = "";
   await expect.poll(() => {
-    const read = spawnSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
+    const read = spawnSync(herdr.bin, ["pane", "read", pane, "--source", "recent-unwrapped", "--lines", "80", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
     expect(read.status, read.stderr).toBe(0);
-    return read.stdout;
+    output = read.stdout;
+    return output;
   }).toContain(`PLAIN_${suffix}`);
+  expect(output).toContain("fixture $ ");
 }
 
 async function startClaude(page: Page, prompt: string) {
@@ -116,7 +133,9 @@ async function claudeIsRunning(herdr: HerdrFixture, pane: string, prompt: string
   }, { timeout: 30_000 }).toBe("claude");
   await expect.poll(() => JSON.stringify(herdr.run(["pane", "process-info", "--pane", pane])), { timeout: 30_000 }).toContain("opus");
   await expect.poll(() => {
-    const read = spawnSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
+    // Herdr removes only terminal soft wrapping. Preserve the exact prompt,
+    // including its spaces, rather than normalizing arbitrary output text.
+    const read = spawnSync(herdr.bin, ["pane", "read", pane, "--source", "recent-unwrapped", "--lines", "80", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
     expect(read.status, read.stderr).toBe(0);
     return read.stdout;
   }, { timeout: 30_000 }).toContain(prompt);
@@ -138,14 +157,16 @@ for (const scenario of [
   test(scenario.name, async ({ page }) => {
     test.skip(!fs.existsSync(scenario.shell), `This regression requires ${scenario.shell}`);
     const herdr = await startHerdr({ agents: false });
+    let gate: Awaited<ReturnType<typeof herdrGate>> | undefined;
     let daemon: Daemon | null = null;
     let failure: unknown;
     try {
+      gate = await herdrGate(herdr, privateShellEnv(herdr));
       const home = path.join(herdr.root, "plain-home");
       fs.mkdirSync(path.join(home, ".hide"), { recursive: true });
       const blocked = path.join(home, ".hide", "shell-integration");
       if (scenario.blockIntegration) fs.writeFileSync(blocked, "integration directory deliberately unavailable\n");
-      daemon = await startHided(herdr, "group-plain-shell", home, { SHELL: scenario.shell });
+      daemon = await startHided(herdr, "group-plain-shell", home, { SHELL: scenario.shell, HERDR_SOCKET_PATH: gate.socket });
       await open(page, daemon);
       await createGroup(page, "Plain terminal");
       const pane = await startTerminal(page);
@@ -195,7 +216,7 @@ for (const scenario of [
       }
       if (scenario.blockIntegration) expect(fs.statSync(blocked).isFile()).toBe(true);
     } catch (error) { failure = error; }
-    finally { await cleanup(failure, [() => daemon?.stop(), () => herdr.stop()]); }
+    finally { await cleanup(failure, [() => daemon?.stop(), async () => { await gate?.stop(); }, () => herdr.stop()]); }
   });
 }
 
@@ -205,7 +226,7 @@ test("a plain sh start with a lost answer adopts the same shell after daemon res
   let daemon: Daemon | null = null;
   let failure: unknown;
   try {
-    gate = await herdrGate(herdr);
+    gate = await herdrGate(herdr, privateShellEnv(herdr));
     daemon = await startHided(herdr, "group-plain-recover", undefined, { SHELL: "/bin/sh", HERDR_SOCKET_PATH: gate.socket });
     await open(page, daemon);
     await createGroup(page, "Owner");
