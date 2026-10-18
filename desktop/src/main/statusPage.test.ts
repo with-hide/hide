@@ -13,14 +13,18 @@ const WORDS = {
 };
 
 describe("the status page file", () => {
+  // `path.join` spells the result in the system's separator; the layout is what the test pins.
+  const file = (dirname: string) => statusPageFile(dirname).replace(/\\/g, "/");
+
   it("is read beside the archive, never from inside it", () => {
-    expect(statusPageFile("/Applications/hide.app/Contents/Resources/app.asar/dist")).toBe("/Applications/hide.app/Contents/Resources/app.asar.unpacked/dist/static/status.html");
-    expect(statusPageFile("C:\\Program Files\\hide\\resources\\app.asar\\dist").replace(/\\/g, "/")).toBe("C:/Program Files/hide/resources/app.asar.unpacked/dist/static/status.html");
+    expect(file("/Applications/hide.app/Contents/Resources/app.asar/dist")).toBe("/Applications/hide.app/Contents/Resources/app.asar.unpacked/dist/static/status.html");
+    expect(file("C:\\Program Files\\hide\\resources\\app.asar\\dist")).toBe("C:/Program Files/hide/resources/app.asar.unpacked/dist/static/status.html");
+    expect(file("/Applications/hide.app/Contents/Resources/app.asar/dist")).not.toMatch(/app\.asar\/dist/);
   });
 
   it("stays where an unpackaged run keeps it, and does not unpack twice", () => {
-    expect(statusPageFile("/work/hide/desktop/dist")).toBe("/work/hide/desktop/dist/static/status.html");
-    expect(statusPageFile("/r/app.asar.unpacked/dist")).toBe("/r/app.asar.unpacked/dist/static/status.html");
+    expect(file("/work/hide/desktop/dist")).toBe("/work/hide/desktop/dist/static/status.html");
+    expect(file("/r/app.asar.unpacked/dist")).toBe("/r/app.asar.unpacked/dist/static/status.html");
   });
 });
 
