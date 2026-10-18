@@ -3743,14 +3743,15 @@ mod tests {
     /// adapter. Every first prompt travels in argv, never as PTY input.
     #[test]
     fn a_first_prompt_travels_as_the_agents_own_argument() {
-        for (kind, prompt_flag, extra_roots) in [
-            ("claude", "--", true),
-            ("codex", "--", true),
-            ("grok", "--", false),
-            ("opencode", "--prompt", false),
-            ("pi", "--", false),
-            ("omp", "--", true),
-            ("cursor", "--", true),
+        // OpenCode takes no model, so its start names none.
+        for (kind, prompt_flag, extra_roots, model) in [
+            ("claude", "--", true, Some("fixture-model")),
+            ("codex", "--", true, Some("fixture-model")),
+            ("grok", "--", false, Some("fixture-model")),
+            ("opencode", "--prompt", false, None),
+            ("pi", "--", false, Some("fixture-model")),
+            ("omp", "--", true, Some("fixture-model")),
+            ("cursor", "--", true, Some("fixture-model")),
         ] {
             let server = server(vec![
                 shell_ready(),
@@ -3758,7 +3759,7 @@ mod tests {
             ]);
             let args = crate::runtime::agent_choice::agent_arguments(
                 Some(kind),
-                Some("fixture-model"),
+                model,
                 &["/work/my app".into()],
             );
             let outcome = launch_with_prompt(
@@ -3787,7 +3788,7 @@ mod tests {
                 ["pane.process_info", "agent.start"],
                 "{kind}"
             );
-            let mut expected = vec!["--model", "fixture-model"];
+            let mut expected: Vec<&str> = model.into_iter().flat_map(|m| ["--model", m]).collect();
             if extra_roots {
                 expected.extend(["--add-dir", "/work/my app"]);
             }

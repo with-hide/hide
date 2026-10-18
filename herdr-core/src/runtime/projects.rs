@@ -3750,6 +3750,10 @@ impl Runtime {
             id,
             prompt,
             agent_choice::agent_arguments(payload.agent_kind.as_deref(), model.as_deref(), &[]),
+            hide_agent_adapter::LaunchChoice {
+                model,
+                effort: None,
+            },
         );
         if let Some(operation) = self.snapshot.task_operation.as_mut() {
             operation.device_id = device.clone();
@@ -4142,7 +4146,15 @@ impl Runtime {
             model.as_deref(),
             &[],
         ));
-        self.set_task_agent_launch(id, prompt, arguments);
+        self.set_task_agent_launch(
+            id,
+            prompt,
+            arguments,
+            hide_agent_adapter::LaunchChoice {
+                model,
+                effort: None,
+            },
+        );
         if let Some(launch) = self.task_agent_launch.as_mut() {
             launch.resume_reference = resume_reference.clone();
         }
@@ -4621,6 +4633,7 @@ pub(super) fn resume_session_arguments(kind: &str, session_id: &str) -> Option<V
     crate::recent_closed::resume_arguments(&crate::recent_closed::ClosedAgent {
         kind: kind.to_owned(),
         session_id: Some(session_id.to_owned()),
+        ..Default::default()
     })
 }
 

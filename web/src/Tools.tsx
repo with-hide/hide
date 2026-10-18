@@ -200,10 +200,11 @@ function LaneMenu({ actions }: { actions: Actions }) {
  * The lane (B2, B4, B5, B8, B9-B14): its header names the tool and its
  * scope, with the pin, expand and close at its right; its body is the tool.
  * The files tool stays mounted under another tool, so its documents, tabs,
- * scroll and previews are as they were when it comes back (B2); its tree
+ * scroll and previews are as they were when it comes back (B2), laid out out
+ * of sight at its own width (`files`) rather than the other tool's; its tree
  * column is drawn only while the files tool shows.
  */
-export function Lane({ view, tool: drawn, frame, sizes, checkout, actions }: { view: WorkspaceView; tool: LaneTool; frame: LaneFrame; sizes: LaneSizes; checkout: Checkout; actions: Actions }) {
+export function Lane({ view, tool: drawn, frame, files, sizes, checkout, actions }: { view: WorkspaceView; tool: LaneTool; frame: LaneFrame; files: LaneFrame; sizes: LaneSizes; checkout: Checkout; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const expanded = frame.mode === "expanded";
   // The pane zoom's chord expands the lane while the keyboard is in it (`keyboard.ts`).
@@ -219,8 +220,8 @@ export function Lane({ view, tool: drawn, frame, sizes, checkout, actions }: { v
     return (
       <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col">
         <DetailPanel actions={actions} />
-        <div className="absolute inset-0 flex min-h-0 min-w-0" inert data-lane-hidden="true">
-          <FilesTool view={view} frame={frame} sizes={sizes} shown={false} actions={actions} />
+        <div className="absolute inset-y-0 right-0 flex min-h-0 min-w-0" style={{ width: files.width }} inert data-lane-hidden="true">
+          <FilesTool view={view} frame={files} sizes={sizes} shown={false} actions={actions} />
         </div>
       </div>
     );
@@ -254,8 +255,8 @@ export function Lane({ view, tool: drawn, frame, sizes, checkout, actions }: { v
         </Hint>
       </div>
       <div className="relative flex min-h-0 min-w-0 flex-1">
-        <div className={cn("flex min-h-0 min-w-0 flex-1", !filesShown && "absolute inset-0")} inert={!filesShown} data-lane-hidden={filesShown ? undefined : "true"}>
-          <FilesTool view={view} frame={frame} sizes={sizes} shown={filesShown} actions={actions} />
+        <div className={cn("flex min-h-0 min-w-0", filesShown ? "flex-1" : "absolute inset-y-0 right-0")} style={filesShown ? undefined : { width: files.width }} inert={!filesShown} data-lane-hidden={filesShown ? undefined : "true"}>
+          <FilesTool view={view} frame={files} sizes={sizes} shown={filesShown} actions={actions} />
         </div>
         {filesShown ? null : (
           <section className="flex min-h-0 min-w-0 flex-1 flex-col" aria-label={t(TOOL_NAMES[tool])} data-tool={tool}>

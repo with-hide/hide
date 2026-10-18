@@ -1077,6 +1077,9 @@ pub(crate) struct TaskAgentLaunch {
     pub(crate) task: u64,
     pub(crate) prompt: Option<String>,
     pub(crate) args: Vec<String>,
+    /// The model and effort among `args`, which the started pane keeps for
+    /// the agent's restarts.
+    pub(crate) launch: hide_agent_adapter::LaunchChoice,
     pub(crate) resume_reference: Option<crate::sidebar::SessionAgentSessionPayload>,
 }
 

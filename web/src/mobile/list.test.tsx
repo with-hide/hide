@@ -21,7 +21,7 @@ function agent(pane: string, over: Partial<PhoneAgent>): PhoneAgent {
 it("dims an unknown row on the phone's list and leaves a sleeping one bright", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   patch({ screen: "app", groups: [{ group: "seen", count: 3, agents: [
-    agent("unknown", { status_code: "unknown", line: { text: "", mode: "kept", tone: "subtle" } }),
+    agent("unknown", { mark: "unknown", status_code: "unknown", line: { text: "", mode: "kept", tone: "subtle" } }),
     agent("asleep", { mark: "asleep", status_code: "sleeping" }),
     agent("idle", {}),
   ] }] });

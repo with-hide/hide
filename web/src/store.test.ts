@@ -49,6 +49,17 @@ describe("snapshot merge", () => {
     expect(useShellStore.getState().usage).toBeNull();
   });
 
+  it("names each device's agent rows by their device and keeps their identity across frames", () => {
+    const store = useShellStore.getState();
+    const device = (agents: unknown[]) => ({ target_id: "hq3mini", state: "connected", message: null, herdr_version: null, session: { agents } });
+    const row = { id: "a", pane_id: "remote:hq3mini:pane:w1:p4", agent_kind: "claude", session_id: "s-1" };
+    store.applyFrame({ type: "snapshot", payload: { revision: 1, rest: { status: { remote: [device([row])] } } } as never });
+    const stamped = useShellStore.getState().rest?.status?.remote?.[0]?.session?.agents[0];
+    expect(stamped?.device_id).toBe("hq3mini");
+    store.applyFrame({ type: "delta", payload: { revision: 2, rest: { status: { remote: [device([{ ...row }])] } } } as never });
+    expect(useShellStore.getState().rest?.status?.remote?.[0]?.session?.agents[0]).toBe(stamped);
+  });
+
   it("advances the view generation only on a self-contained snapshot", () => {
     const store = useShellStore.getState();
     store.applyFrame({ type: "snapshot", payload: { revision: 1, rest: {} } });
@@ -61,7 +72,7 @@ describe("snapshot merge", () => {
 
   it("drops the front Workspace's view when a delta no longer carries one", () => {
     const store = useShellStore.getState();
-    const view = { device_id: "local", path: "/h/hide", tool: "files", pinned: false, tree: true, lane_width: null, tree_width: null, lane_called: 0, lane_calls: 0 };
+    const view = { device_id: "local", path: "/h/hide", tool: "files", pinned: false, tree: true, lane_width: null, panel_width: null, tree_width: null, lane_called: 0, lane_calls: 0 };
     store.applyFrame({ type: "snapshot", payload: { revision: 1, rest: { workspace_view: view } as never } });
     expect(useShellStore.getState().rest?.workspace_view?.path).toBe("/h/hide");
     store.applyFrame({ type: "delta", payload: { revision: 2, rest: { focused: { pane_id: "p2" } } } });
@@ -167,7 +178,7 @@ describe("snapshot merge", () => {
     const state = useShellStore.getState();
     expect(state.agents[0]?.unknown).toBe(true);
     // A state Hide cannot read draws no mark rather than a `!` (status-marks B16).
-    expect(state.agents[0]?.mark).toBe("quiet");
+    expect(state.agents[0]?.mark).toBe("unknown");
     expect(state.diagnostics[0]).toContain("brand_new");
   });
 
@@ -177,7 +188,7 @@ describe("snapshot merge", () => {
       payload: { rest: { navigator: { agents: [legacyAgentRow({ id: "a", pane_id: "p1", identity_label: "x", agent_kind: "x", mark: "sparkle" as never, group: "working", status_code: "working", changed_at_unix_ms: null, emphasized: false, unread: false })] } } },
     });
     const state = useShellStore.getState();
-    expect([state.agents[0]?.mark, state.agents[0]?.status_code]).toEqual(["quiet", "unknown"]);
+    expect([state.agents[0]?.mark, state.agents[0]?.status_code]).toEqual(["unknown", "unknown"]);
     expect(state.diagnostics.some((line) => line.includes("mark=sparkle"))).toBe(true);
   });
 

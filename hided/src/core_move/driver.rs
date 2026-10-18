@@ -328,6 +328,9 @@ pub fn stage(
         "files": outcome.files,
         "pruned": outcome.pruned,
     }));
+    // The target loads the copy before it is placed; this machine asks the
+    // same of it first, while its own core can still be started again.
+    copy::check_loadable(&staging).map_err(failed)?;
     copy::digest(&staging).map_err(failed)
 }
 

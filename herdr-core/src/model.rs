@@ -258,9 +258,11 @@ pub struct WorkspaceViewSnapshot {
     pub pinned: bool,
     /// Whether the files tool shows the file tree column (D-05).
     pub tree: bool,
-    /// The lane's width in CSS pixels, or null for the shell's default
-    /// until it is resized.
+    /// The files tool's document width in CSS pixels, or null for the
+    /// shell's default until it is resized.
     pub lane_width: Option<u32>,
+    /// The other tools' and the 보기 slot's width, the same way.
+    pub panel_width: Option<u32>,
     /// The tree column's width, the same way.
     pub tree_width: Option<u32>,
     /// The last width request the core accepted for this Workspace. Runtime
@@ -1173,6 +1175,11 @@ pub struct SidebarAgentSnapshot {
     /// cannot stand in for this.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub herdr_name: Option<String>,
+    /// The name Herdr reports the agent by, a name Hide made up included,
+    /// which a pane's launch record is matched by (`runtime::agent_choice`).
+    /// Never on the wire.
+    #[serde(skip_serializing)]
+    pub started_name: Option<String>,
     /// What this pane declares about the agent it was forked from: the
     /// source's pane and the digest of the session it hosted
     /// (`wire::fork_declaration`). A fork is the operator's root, so this is
@@ -3671,6 +3678,11 @@ pub struct UiStateSnapshot {
     /// (`agent_state::apply_completions`). The store owns it.
     #[serde(default, skip_serializing)]
     pub pane_completions: BTreeMap<String, PaneCompletion>,
+    /// The model and effort Hide started each pane's agent with, keyed by
+    /// pane id, so a sleep, a close or a fork captures them for the restart
+    /// it makes (`runtime::agent_choice`). The store owns it.
+    #[serde(default, skip_serializing)]
+    pub pane_launches: BTreeMap<String, PaneLaunch>,
     /// Each agent pane's request-view verb and when it took it, so the time
     /// a row has waited survives a restart (PRD overview-request-view D-40).
     /// The store owns it; the shell reads it on the row.
@@ -3817,6 +3829,26 @@ pub struct PaneCompletion {
     pub server: Option<String>,
     #[serde(default)]
     pub state_change_seq: Option<u64>,
+}
+
+/// The launch choice of the agent Hide started in a pane, under the name it
+/// started it with.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PaneLaunch {
+    /// The agent kind, in Herdr's spelling.
+    pub kind: String,
+    /// The Herdr name Hide started the agent under (a task's, a wake's, a
+    /// fork's, a reopen's, or `hide agent spawn --name`). Herdr keeps a name
+    /// unique among its live agents, and an agent started in the pane by hand,
+    /// or one Herdr gives the pane's id to again, has another name or none,
+    /// so the record never describes it.
+    pub name: String,
+    pub choice: hide_agent_adapter::LaunchChoice,
+    /// The conversation the named agent last reported, so the same agent
+    /// still matches when it comes back from a Herdr restart without its
+    /// name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
 }
 
 /// The scale a pane has until the user zooms it.
@@ -4361,6 +4393,7 @@ impl Default for UiStateSnapshot {
             conversation_pane_ids: BTreeSet::new(),
             pane_read_records: BTreeMap::new(),
             pane_completions: BTreeMap::new(),
+            pane_launches: BTreeMap::new(),
             request_verbs: BTreeMap::new(),
             agent_sleep_after_hours: None,
             project_issue_sources: BTreeMap::new(),
@@ -6521,6 +6554,7 @@ mod wire_enum_tests {
             RowMark::Done,
             RowMark::Unread,
             RowMark::Quiet,
+            RowMark::Unknown,
             RowMark::Asleep,
         ];
         for variant in marks {
@@ -6531,6 +6565,7 @@ mod wire_enum_tests {
                 | RowMark::Done
                 | RowMark::Unread
                 | RowMark::Quiet
+                | RowMark::Unknown
                 | RowMark::Asleep => {}
             }
         }

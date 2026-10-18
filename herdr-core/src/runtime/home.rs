@@ -126,6 +126,10 @@ impl Runtime {
             id,
             prompt,
             agent_choice::agent_arguments(agent_kind.as_deref(), model.as_deref(), &[]),
+            hide_agent_adapter::LaunchChoice {
+                model,
+                effort: None,
+            },
         );
         let projects = self.home_projects(device);
         self.home_links

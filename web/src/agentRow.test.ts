@@ -82,7 +82,7 @@ describe("the mark and the badge (status-marks D-01, D-02, B19)", () => {
     expect(markWords(t, { mark: "unread", status_code: "unfinished" })).toBe("읽을 것 · 일 남음");
     expect(markWords(t, { mark: "unread", status_code: "stopped" })).toBe("읽을 것 · 멈춤");
     expect(markWords(t, { mark: "quiet", status_code: "idle" })).toBe("조용함");
-    expect(markWords(t, { mark: "quiet", status_code: "unknown" })).toBe("조용함 · 상태 모름");
+    expect(markWords(t, { mark: "unknown", status_code: "unknown" })).toBe("상태 모름");
     // A finished turn names the tasks it left (B27); a sleeping row says only its own words (B31).
     expect(markWords(t, { mark: "done", status_code: "done", background_left: 2 })).toBe("읽을 것 · 끝남 · 백그라운드 2개 남음");
     expect(markWords(t, { mark: "asleep", status_code: "sleeping" })).toBe("재움 · 열면 깨어남");
@@ -243,7 +243,9 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
       expect(treeLine(agent)).not.toBeNull();
       expect(rowDimmed(agent)).toBe(false);
     }
-    expect(rowDimmed(row("u", { status_code: "unknown", mark: "quiet" }))).toBe(true);
+    // The core names the unknown row; a resting one is not dimmed (sidebar-quiet-mark-indent D-04).
+    expect(rowDimmed(row("u", { status_code: "unknown", mark: "unknown" }))).toBe(true);
+    expect(rowDimmed(row("q", { activity: "stopped", status_code: "idle", mark: "quiet" }))).toBe(false);
     // The operator's turn outranks the moon (D-10): its ask draws as on any other row.
     const asked = row("y", { activity: "stopped", mark: "turn", status_code: "sleeping", demand: "question", detail: "어느 쪽으로 나눌까요?" });
     expect(sidebarLine(asked)).toMatchObject({ text: "어느 쪽으로 나눌까요?", mode: "request" });

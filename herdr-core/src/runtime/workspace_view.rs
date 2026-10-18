@@ -187,9 +187,12 @@ pub(super) struct WorkspaceViewPayload {
     /// Whether the PRs tool's scope is `<checkout> only`.
     #[serde(default)]
     pub(super) prs_only_checkout: Option<bool>,
-    /// The lane's width, in CSS pixels.
+    /// The files tool's document width, in CSS pixels.
     #[serde(default)]
     pub(super) lane_width: Option<u32>,
+    /// The other tools' and the 보기 slot's width, in CSS pixels.
+    #[serde(default)]
+    pub(super) panel_width: Option<u32>,
     /// The tree column's width, in CSS pixels.
     #[serde(default)]
     pub(super) tree_width: Option<u32>,
@@ -703,6 +706,9 @@ impl Runtime {
         if let Some(width) = payload.lane_width {
             entry.lane_width = Some(workspace_views::clamp_width(width));
         }
+        if let Some(width) = payload.panel_width {
+            entry.panel_width = Some(workspace_views::clamp_width(width));
+        }
         if let Some(width) = payload.tree_width {
             entry.tree_width = Some(workspace_views::clamp_width(width));
         }
@@ -714,7 +720,9 @@ impl Runtime {
             store.call_lane(&key);
         }
         let leaves_detail = tool.is_some() || payload.reveal.is_some();
-        let width_request_changed = if payload.lane_width.is_some() || payload.tree_width.is_some()
+        let width_request_changed = if payload.lane_width.is_some()
+            || payload.panel_width.is_some()
+            || payload.tree_width.is_some()
         {
             let next = payload.width_request_id.map(|id| (key.clone(), id));
             let changed = store.width_request != next;
@@ -1054,6 +1062,7 @@ impl Runtime {
                 pinned: view.pinned,
                 tree: view.tree,
                 lane_width: view.lane_width,
+                panel_width: view.panel_width,
                 tree_width: view.tree_width,
                 width_request_id: store
                     .width_request
