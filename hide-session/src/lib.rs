@@ -47,7 +47,7 @@ pub mod stamp;
 pub mod turns;
 pub mod usage;
 
-pub use envelope::{envelope_from_operator, envelope_header, envelope_sender};
+pub use envelope::{envelope_from_operator, envelope_header, envelope_names, envelope_sender};
 pub use refusal::ReadRefusal;
 pub use sightings::{
     MAX_SIGHTINGS_PER_OUTPUT, PrSighting, issue_addresses, pull_request_addresses,

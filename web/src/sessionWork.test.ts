@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { MissedWork, SessionRecord, SessionWorkSummary, WorkRequest, WorkTask } from "./snapshot";
-import { checklist, openMissedWork, outputPrState, recordTitle } from "./sessionWork";
+import { checklist, openMissedWork, outputPrState, recordTitle, taskState } from "./sessionWork";
 
 const missed = (id: string, at: number, status: MissedWork["status"] = "open"): MissedWork => ({ id, kind: "problem", text: id, status, at_unix_ms: at, turn_offset: 1, issue_repository: null, issue_number: null, creating: false, backlog_key: null });
 const work = (id: string, cwd: string, items: MissedWork[]): SessionWorkSummary => ({
@@ -22,7 +22,7 @@ it("titles a record by its manual name, else the model's goal or the native name
 });
 
 const SESSION = { device_id: "local", agent: "claude", session_id: "root" };
-const task = (id: string, chapter: string, at: number, done = false, end: WorkTask["end"] = "done"): WorkTask => ({ id, chapter_id: chapter, name: `task ${id}`, at_unix_ms: at, last_at_unix_ms: at, end, done });
+const task = (id: string, chapter: string, at: number, done = false, end: WorkTask["end"] = "done"): WorkTask => ({ id, chapter_id: chapter, name: `task ${id}`, at_unix_ms: at, last_at_unix_ms: at, end, done, unjudged: false });
 const request = (offset: number, at: number, task_ids: string[], judged = true): WorkRequest => ({ offset, at_unix_ms: at, text: `request ${offset}`, author: "operator", task_ids, chapter_id: null, judged });
 const record = (patch: Partial<SessionRecord>): SessionRecord => ({
   session: SESSION, title: "Goal", fallback_title: "Claude", native_title: null, manual_title: null, state: "idle", last_end: null, cwd: null, path: null, started_at_unix_ms: 0, ended_at_unix_ms: null,
@@ -47,6 +47,23 @@ it("hangs each child under the task whose time it started in, a request's tasks 
   }));
   expect(list.tasks.map((item) => item.children.map((one) => one.session.session_id))).toEqual([["at-start", "in-split"], [], ["at-next", "late"]]);
   expect(list.delegated.map((one) => one.session.session_id)).toEqual(["early", "unknown"]);
+});
+
+it("hangs a child under the task its spawn turn worked on, over the newer task its start time falls in (PRD task-continuation B7)", () => {
+  const list = checklist(record({
+    tasks: [task("task-1", "c", 10), task("task-1.2", "c", 10), task("task-4", "c", 40)],
+    children: [{ ...child("spawned-in-letter-turn", 50), spawn_task: "task-1" }, { ...child("by-time", 45), spawn_task: null }, { ...child("gone-task", 5), spawn_task: "task-9" }],
+  }));
+  expect(list.tasks.map((item) => item.children.map((one) => one.session.session_id))).toEqual([["spawned-in-letter-turn"], [], ["by-time"]]);
+  expect(list.delegated.map((one) => one.session.session_id)).toEqual(["gone-task"]);
+});
+
+it("reads an unjudged task that is not done as unjudged, while PR facts and done still win (PRD task-continuation D-09)", () => {
+  const unjudged = { ...task("t1", "c", 10, false, "unfinished"), unjudged: true };
+  expect(taskState(unjudged, [])).toBe("unjudged");
+  expect(taskState({ ...unjudged, done: true }, [])).toBe("done");
+  const open = { kind: "pr" as const, repository: "a/b", number: 1, title: "", url: "", state: "open", stale: false, last_read_at_unix_ms: null, created_at_unix_ms: 0, task_id: "t1", source: SESSION, source_name: "" };
+  expect(taskState(unjudged, [open])).toBe("review");
 });
 
 it("lists every child at the end of a record with no task", () => {

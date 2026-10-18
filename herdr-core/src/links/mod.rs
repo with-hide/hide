@@ -202,6 +202,14 @@ pub struct ParentFact {
     pub parent_agent: String,
     pub parent_session_id: String,
     pub parent_name: String,
+    /// The child's own name, as its letters' envelopes carry it.
+    pub name: String,
+    /// When the child last sent its parent a report letter, while the
+    /// delivery ledger keeps that letter.
+    pub reported_at_unix_ms: Option<u64>,
+    /// A pane runs the child's session now; only a live child can hold its
+    /// task open while it works (PRD task-continuation B23).
+    pub live: bool,
 }
 
 /// Why a session is on a pull request's panel.

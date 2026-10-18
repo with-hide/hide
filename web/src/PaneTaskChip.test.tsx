@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 const SESSION = { device_id: "mac", agent: "claude", session_id: "s-1" };
-const task = (id: string, name: string, done = false): WorkTask => ({ id, chapter_id: "chapter-1", name, at_unix_ms: 1_000, last_at_unix_ms: 2_000, end: done ? "done" : "waiting", done });
+const task = (id: string, name: string, done = false): WorkTask => ({ id, chapter_id: "chapter-1", name, at_unix_ms: 1_000, last_at_unix_ms: 2_000, end: done ? "done" : "waiting", done, unjudged: false });
 const pr = (number: number, taskId: string, state = "open"): WorkOutput => ({ kind: "pr", repository: "acme/app", number, title: `PR ${number}`, url: `https://github.com/acme/app/pull/${number}`, state, stale: false, last_read_at_unix_ms: null, created_at_unix_ms: 1_500, task_id: taskId, source: SESSION, source_name: "root" });
 const progress = (tasks: WorkTask[], extra: Partial<WorkProgress> = {}): WorkProgress => ({ session: SESSION, done: tasks.filter((row) => row.done).length, total: tasks.length, tasks, outputs: [], children: null, ...extra });
 /** On: the feature switch alone decides; whether a provider can answer now does not (B15). */
@@ -219,5 +219,21 @@ it("draws no current line when the agent has none rather than a placeholder", as
   try {
     await act(async () => view.chip()!.focus());
     expect(view.list()!.querySelector("[data-task-list-line], [data-task-list-now]")).toBeNull();
+  } finally { await view.unmount(); }
+});
+
+it("keeps `!` before a done task whose turn ended on a question and draws an unjudged task with no word (PRD task-continuation B3, B18)", async () => {
+  const asked: WorkTask = { ...task("task-3", "쉬는 행 빈 원", true), end: "question" };
+  const unknown: WorkTask = { ...task("task-5", "다른 일"), end: "unfinished", unjudged: true };
+  const view = await mount([progress([asked, unknown], { children: { children: ["done", "done"], done: 2 } })]);
+  try {
+    expect(view.chip()?.textContent).toBe("1/2");
+    await act(async () => view.chip()!.focus());
+    const item = (id: string) => view.list()!.querySelector(`[data-task-list-item="${id}"]`)!;
+    expect(item("task-3").querySelector("[data-task-box]")?.getAttribute("data-task-box")).toBe("checked");
+    expect(item("task-3").querySelector("[data-task-asks]")).not.toBeNull();
+    expect(item("task-5").querySelector("[data-task-box]")?.getAttribute("data-task-box")).toBe("empty");
+    expect(item("task-5").querySelector("[data-task-word]")).toBeNull();
+    expect(view.list()?.querySelector("[data-task-list-children]")?.textContent).toBe("Delegated2· Done 2");
   } finally { await view.unmount(); }
 });

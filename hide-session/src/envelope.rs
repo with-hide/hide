@@ -13,6 +13,15 @@ pub fn envelope_sender(text: &str) -> Option<String> {
     envelope_header(text).map(|(sender, _)| sender)
 }
 
+/// Whether an envelope's sender names the agent called `name`: the envelope
+/// keeps a trimmed, bounded copy of the name, so the name is read the same way.
+pub fn envelope_names(sender: &str, name: &str) -> bool {
+    name.trim()
+        .chars()
+        .take(MAX_SENDER_CHARS)
+        .eq(sender.chars())
+}
+
 /// Whether the first Hide letter header is the operator's own: the letter a
 /// View feedback Send makes (PRD view-opener-feedback D-11). The core alone
 /// writes the `operator` sender kind; an agent's kind is the provider Herdr
@@ -102,7 +111,13 @@ mod tests {
                 )),
                 Some("배".repeat(128)),
             );
+            // The name the envelope was written from still names its sender.
+            assert!(envelope_names(
+                &"배".repeat(128),
+                &format!(" {} ", "배".repeat(chars))
+            ));
         }
+        assert!(!envelope_names("배", "배배"));
     }
 
     #[test]
