@@ -2287,6 +2287,35 @@ fn herdr_reporting_a_fork_tab_before_its_answer_is_not_followed() {
     assert_eq!(diagnostic_count(&runtime, "tab.focus.followed"), 0);
 }
 
+#[test]
+fn unconfirmed_fork_input_keeps_the_successful_fork_pane() {
+    let source = "w-order:t1:p";
+    let pane = "w-order:t4:p";
+    let (mut runtime, _) = setup();
+    let terminals = record_terminals(&mut runtime);
+    pending_fork(&mut runtime, source, Some("fork-keys"));
+    runtime.ingest_fork_pane(source, Some("w-order:t4"), pane);
+    let screen = fork_on_screen(&runtime);
+    terminals.take();
+    runtime.discard_fork_input(source);
+    runtime.ingest_fork_result(source, Ok(pane.into()), 0);
+    assert_eq!(fork_on_screen(&runtime), screen);
+    assert!(runtime.forks_in_flight.is_empty());
+    assert_eq!(
+        input_state(&runtime, "fork-keys"),
+        Some(InputRequestState::Discarded)
+    );
+    let controls = terminals.take();
+    assert!(controls.iter().any(|control| matches!(control,
+        TerminalControl::RequestDiscard { request, reason } if request == "fork-keys" && reason == "unconfirmed")));
+    assert!(
+        !controls
+            .iter()
+            .any(|control| matches!(control, TerminalControl::RequestResolve { .. }))
+    );
+    assert_eq!(diagnostic_count(&runtime, "pane.fork_failed"), 0);
+}
+
 /// A panicking worker and a vanished runtime both end the node's holder.
 #[test]
 fn fork_worker_panic_and_runtime_teardown_discard_the_node_request() {

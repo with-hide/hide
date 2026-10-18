@@ -72,6 +72,7 @@ const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A typed start is not proof that its program exists. Keep the fork's node
 /// holder until Herdr observes this named agent ready in the created pane.
+/// This determines only input release, never whether the fork succeeded.
 /// Reads also settle Herdr's pending start (#3853); nothing is typed again.
 /// Runs on the existing fork worker, with no Runtime lock or new timer.
 #[allow(clippy::disallowed_methods)] // bounded production polling, not a test sleep
@@ -81,28 +82,18 @@ pub(crate) fn confirm_fork_started(
     name: &str,
     kind: &str,
     current: &dyn Fn() -> Result<(), String>,
-) -> Result<(), String> {
-    // The start acknowledgment itself can take READ_TIMEOUT. Stop before
-    // Herdr's deadline, when a read could release the reserved name.
-    let deadline = Instant::now() + AGENT_START_DEADLINE - READ_TIMEOUT;
-    confirm_fork_within(connector, pane, name, kind, current, deadline)
-}
-
-#[allow(clippy::disallowed_methods)] // bounded production polling
-fn confirm_fork_within(
-    connector: &dyn ApiConnector,
-    pane: &str,
-    name: &str,
-    kind: &str,
-    current: &dyn Fn() -> Result<(), String>,
     deadline: Instant,
 ) -> Result<(), String> {
     let params = wire::agent_target_params(name)?;
+    let mut last_read_error = None;
     loop {
         current()?;
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return Err("The fork's agent did not become ready; held input was discarded.".into());
+            return Err(match last_read_error {
+                Some(error) => format!("The fork's input readiness deadline elapsed: {error}"),
+                None => "The fork's input readiness deadline elapsed.".into(),
+            });
         }
         let agent = request_with_connector(
             connector,
@@ -111,19 +102,26 @@ fn confirm_fork_within(
             remaining.min(READ_TIMEOUT),
         )
         .map_err(|error| format!("The fork's agent could not be confirmed: {error}"))
-        .and_then(wire::delivery_agent)?;
-        if agent.pane_id != pane || agent.name != name {
-            return Err("The fork's agent identity changed; held input was discarded.".into());
-        }
-        if let Some(observed) = agent.kind {
-            if hide_agent_adapter::canonical_kind(&observed)
-                != hide_agent_adapter::canonical_kind(kind)
-            {
-                return Err("The fork's agent kind changed; held input was discarded.".into());
+        .and_then(wire::delivery_agent);
+        // A transient read failure proves neither readiness nor a closed
+        // pane. Keep refusing input until a positive answer or the deadline.
+        if let Ok(agent) = agent {
+            last_read_error = None;
+            if agent.pane_id != pane || agent.name != name {
+                return Err("The fork's agent identity changed.".into());
             }
-            if agent.readiness == wire::Readiness::Ready {
-                return current();
+            if let Some(observed) = agent.kind {
+                if hide_agent_adapter::canonical_kind(&observed)
+                    != hide_agent_adapter::canonical_kind(kind)
+                {
+                    return Err("The fork's agent kind changed.".into());
+                }
+                if agent.readiness.accepts_input() {
+                    return current();
+                }
             }
+        } else {
+            last_read_error = agent.err();
         }
         thread::sleep(
             deadline
@@ -710,6 +708,74 @@ mod tests {
     const SHELL: u32 = 4100;
 
     #[test]
+    fn every_fork_kind_uses_delivery_readiness_and_checks_its_owner_after_the_read() {
+        use crate::fork::ForkableAgent::*;
+        for agent in [Claude, Codex, Grok, Pi, Omp, OpenCode, Antigravity] {
+            for reported in [true, false] {
+                for owner_ends in [true, false] {
+                    let reads = Arc::new(AtomicUsize::new(0));
+                    let observed = reads.clone();
+                    let herdr = FakeHerdr::start("fork-ready-kinds", move |method, _| {
+                        assert_eq!(method, "agent.get");
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        let mut reply = json!({"type":"agent_info", "agent": {
+                            "pane_id":"w1:p1", "terminal_id":"terminal-one", "workspace_id":"w1", "tab_id":"w1:t1",
+                            "name":"fork-one", "agent":agent.kind(), "launch_pending":false,
+                            "focused":false, "agent_status":"idle", "revision":1
+                        }});
+                        if reported {
+                            reply["agent"]["interactive_ready"] = json!(true);
+                        }
+                        reply
+                    });
+                    let result = confirm_fork_started(
+                        &herdr.connector(),
+                        "w1:p1",
+                        "fork-one",
+                        agent.kind(),
+                        &|| {
+                            if owner_ends && reads.load(Ordering::SeqCst) > 0 {
+                                Err("daemon ended".into())
+                            } else {
+                                Ok(())
+                            }
+                        },
+                        Instant::now() + Duration::from_secs(5),
+                    );
+                    assert_eq!(
+                        result.is_ok(),
+                        !owner_ends,
+                        "{agent:?}, reported={reported}"
+                    );
+                    assert_eq!(reads.load(Ordering::SeqCst), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_still_pending_fork_reaches_its_deadline_without_typing() {
+        let herdr = FakeHerdr::start("fork-remains-pending", |method, _| {
+            assert_eq!(method, "agent.get", "input never reaches the shell");
+            json!({"type":"agent_info", "agent": {
+                "pane_id":"w1:p1", "terminal_id":"terminal-one", "workspace_id":"w1", "tab_id":"w1:t1",
+                "name":"fork-one", "agent":"claude", "launch_pending":true,
+                "interactive_ready":false, "focused":false, "agent_status":"idle", "revision":1
+            }})
+        });
+        let result = confirm_fork_started(
+            &herdr.connector(),
+            "w1:p1",
+            "fork-one",
+            "claude",
+            &|| Ok(()),
+            Instant::now() + Duration::from_millis(200),
+        );
+        assert!(result.unwrap_err().contains("deadline elapsed"));
+        assert!(!herdr.methods().is_empty());
+    }
+
+    #[test]
     fn a_fork_waits_for_its_named_agent_instead_of_releasing_keys_to_a_shell() {
         let reads = Arc::new(AtomicUsize::new(0));
         let observed = reads.clone();
@@ -730,6 +796,7 @@ mod tests {
             "fork-one",
             "claude",
             &|| Ok(()),
+            Instant::now() + Duration::from_secs(5),
         )
         .unwrap();
         assert_eq!(
@@ -740,14 +807,13 @@ mod tests {
     }
 
     #[test]
-    fn a_fork_with_no_confirmed_agent_fails_without_sending_input() {
+    fn a_fork_with_no_confirmed_agent_refuses_input() {
         for case in [
             "gone",
             "pane-changed",
             "name-changed",
             "kind-changed",
             "shell",
-            "unreported",
             "owner-ended",
             "deadline",
         ] {
@@ -759,25 +825,22 @@ mod tests {
                 if case == "gone" || read > 0 {
                     return Err(("agent_not_found".into(), "start failed".into()));
                 }
-                let mut agent = json!({
+                let agent = json!({
                     "pane_id":if case == "pane-changed" { "w1:p2" } else { "w1:p1" },
                     "name":if case == "name-changed" { "replacement" } else { "fork-one" },
                     "agent":if case == "kind-changed" { json!("pi") } else if case == "shell" { Value::Null } else { json!("claude") },
                     "terminal_id":"terminal-one", "workspace_id":"w1", "tab_id":"w1:t1",
                     "interactive_ready":true, "focused":false, "agent_status":"idle", "revision":1
                 });
-                if case == "unreported" {
-                    agent.as_object_mut().unwrap().remove("interactive_ready");
-                }
                 Ok(json!({"type":"agent_info", "agent":agent}))
             });
             let deadline = Instant::now()
                 + if case == "deadline" {
                     Duration::ZERO
                 } else {
-                    Duration::from_secs(5)
+                    Duration::from_millis(200)
                 };
-            let result = confirm_fork_within(
+            let result = confirm_fork_started(
                 &herdr.connector(),
                 "w1:p1",
                 "fork-one",

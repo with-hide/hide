@@ -2625,6 +2625,13 @@ impl Runtime {
         Some(checkout_path)
     }
 
+    /// Readiness affects held keys only. A slow or unreadable agent keeps
+    /// its successful fork and pane; the node reports actual lost bytes.
+    pub(crate) fn discard_fork_input(&mut self, parent_pane_id: &str) {
+        let origin = super::terminal_input::InputOrigin::Fork(parent_pane_id.to_owned());
+        self.discard_input_request(&origin, "unconfirmed");
+    }
+
     pub fn ingest_fork_result(
         &mut self,
         parent_pane_id: &str,

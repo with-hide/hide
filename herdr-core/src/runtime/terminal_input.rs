@@ -260,9 +260,11 @@ impl InputRequests {
     /// The node discarded what it held for `request_id` at its own cap: the
     /// row ends, so the shell's mark ends with it. Returns whether it changed.
     pub(super) fn discarded_by_node(&mut self, request_id: &str) -> bool {
-        let Some(request) = self.requests.iter_mut().find(|request| {
-            request.request_id == request_id && request.state != InputRequestState::Discarded
-        }) else {
+        let Some(request) = self
+            .requests
+            .iter_mut()
+            .find(|request| request.request_id == request_id)
+        else {
             return false;
         };
         if request.input_lost {
@@ -1066,6 +1068,18 @@ mod tests {
         assert_eq!(requests.snapshot()[0].state, WireState::Discarded);
         assert!(!requests.discarded_by_node("r1"));
         assert!(requests.resolve(&InputOrigin::TabCreate(1), "w1:p2"));
+    }
+
+    #[test]
+    fn a_fork_loss_report_after_core_discard_is_shown_once() {
+        let mut requests = InputRequests::default();
+        let origin = InputOrigin::Fork("w1:p1".into());
+        requests.open("fork-1", origin.clone(), Instant::now());
+        requests.hold_for(&origin, "w1:p2");
+        assert!(requests.discard(&origin, "unconfirmed"));
+        assert!(requests.discarded_by_node("fork-1"));
+        assert!(!requests.discarded_by_node("fork-1"));
+        assert!(!requests.resolve(&origin, "w1:p2"));
     }
 
     #[test]
