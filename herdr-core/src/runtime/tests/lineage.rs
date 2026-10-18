@@ -2051,6 +2051,7 @@ fn a_reinstall_queues_only_the_parts_that_need_it() {
             codex_daemon_unreadable: None,
             codex_daemon_off: None,
             herdr: None,
+            refused: None,
         },
     );
     let local = |runtime: &Runtime| {
@@ -2096,6 +2097,7 @@ fn a_reinstall_queues_only_the_parts_that_need_it() {
             codex_daemon_unreadable: None,
             codex_daemon_off: None,
             herdr: None,
+            refused: None,
         },
     );
     assert!(!local(&runtime).busy);

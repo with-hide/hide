@@ -205,6 +205,7 @@ fn completed(device_id: &str, scope: &hide_kit::Scope, report: &hide_kit::KitRep
             "state": part.state,
             "reason": part.reason,
         })).collect::<Vec<_>>(),
+        "refused": report.refused,
     }));
 }
 
