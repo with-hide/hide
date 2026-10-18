@@ -290,7 +290,7 @@ test("@platform ⌘⇧M adds a backlog issue from the terminal and hands the key
     await quick.locator("[data-quick-add-input]").fill("빠른 추가\n두 번째 줄");
     await expect(quick.locator("[data-quick-add-input]")).toHaveValue("빠른 추가 두 번째 줄");
     // B40: Enter makes it, the made line names it, and the input closes on its own.
-    await page.keyboard.press("Enter");
+    await quick.locator("[data-quick-add-input]").press("Enter");
     // The response is lost after GitHub creates it. Enter retries the same
     // intent and joins #77 rather than making another external issue.
     await expect(quick.locator("[data-quick-add-failure]")).toBeVisible({ timeout: 30_000 });
