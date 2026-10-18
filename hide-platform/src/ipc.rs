@@ -15,13 +15,19 @@
 //!   `Ok(0)`.
 //! - A read timeout ends a read with `ErrorKind::TimedOut` once the time has
 //!   passed; it never returns early with no data.
+//! - A write timeout ends a write a peer that stopped reading holds, with
+//!   `TimedOut` once the time has passed and never earlier; a write that had
+//!   moved some bytes by then answers with their count, and the next one
+//!   times out.
+//! - A stream opened for one exchange ([`LocalStream::connect_until`]) waits
+//!   for its connect, and for each later read and write, no later than the
+//!   exchange's deadline, and answers `TimedOut` once it has passed.
 //! - A [`LocalStream::duplicate`] reads on one thread while the original
 //!   writes on another, and the bytes of each direction arrive whole.
 //! - [`ShutdownHandle::shutdown`] called from another thread ends a read
 //!   that is blocked, with `Ok(0)`, and a write a peer that stopped reading
 //!   holds, with an error; later reads return `Ok(0)` and later writes fail
-//!   with `BrokenPipe`. A caller that bounds a write on every system ends it
-//!   this way, since a Windows pipe has no write timeout.
+//!   with `BrokenPipe`.
 //! - [`LocalListener::bind`] fails with `AddrInUse` while another listener
 //!   lives at the path, whether or not its queue is full (#403), and replaces
 //!   what a dead one left behind. A listener is alive while it holds a lock
@@ -44,15 +50,15 @@
 //!   refused with `PermissionDenied`.
 //!
 //! Where the system cannot answer, the call says `ErrorKind::Unsupported`:
-//! a Windows pipe has no write timeout.
+//! a peer's pid where the system does not report it.
 
 use std::fmt;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use interprocess::local_socket::Stream as RawStream;
@@ -109,6 +115,29 @@ fn timeout_of(nanos: &AtomicU64) -> Option<Duration> {
     }
 }
 
+/// What every deadline is counted from, so one fits in an atomic.
+fn epoch() -> Instant {
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    *EPOCH.get_or_init(Instant::now)
+}
+
+/// One past the deadline's offset from [`epoch`], so 0 stays "none"; a
+/// deadline from before the epoch is the epoch, which has passed.
+fn deadline_nanos(deadline: Instant) -> u64 {
+    let offset = deadline.saturating_duration_since(epoch()).as_nanos();
+    u64::try_from(offset)
+        .unwrap_or(u64::MAX - 1)
+        .min(u64::MAX - 1)
+        + 1
+}
+
+fn deadline_of(nanos: &AtomicU64) -> Option<Instant> {
+    match nanos.load(Ordering::Relaxed) {
+        0 => None,
+        nanos => Some(epoch() + Duration::from_nanos(nanos - 1)),
+    }
+}
+
 struct Shared {
     raw: RawStream,
     #[cfg(windows)]
@@ -120,6 +149,7 @@ pub struct LocalStream {
     shared: Arc<Shared>,
     read_timeout: AtomicU64,
     write_timeout: AtomicU64,
+    deadline: AtomicU64,
 }
 
 impl fmt::Debug for LocalStream {
@@ -140,6 +170,7 @@ impl LocalStream {
             }),
             read_timeout: AtomicU64::new(0),
             write_timeout: AtomicU64::new(0),
+            deadline: AtomicU64::new(0),
         }
     }
 
@@ -148,7 +179,32 @@ impl LocalStream {
     /// the listener's backlog is full; `TimedOut` on Windows when a listener
     /// exists but takes no connection within two seconds.
     pub fn connect(path: &Path) -> io::Result<Self> {
-        sys::connect(path).map(Self::from_raw)
+        sys::connect(path, None).map(Self::from_raw)
+    }
+
+    /// Connects to the listener at `path` for one exchange that must be over
+    /// by `deadline`, which then bounds every later read and write on this
+    /// handle ([`set_deadline`](Self::set_deadline)). Answers as
+    /// [`connect`](Self::connect) does, except that a Windows connect waits
+    /// for a busy listener no later than the deadline, and a deadline already
+    /// passed is `TimedOut` before anything is tried.
+    pub fn connect_until(path: &Path, deadline: Instant) -> io::Result<Self> {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        let stream = sys::connect(path, Some(left)).map(Self::from_raw)?;
+        stream.set_deadline(deadline);
+        Ok(stream)
+    }
+
+    /// Bounds every later read and write on this handle by `deadline`: each
+    /// waits no longer than its own timeout or the time left, whichever is
+    /// shorter, and once the deadline has passed each answers `TimedOut`
+    /// without touching the stream. A duplicate made afterwards keeps it.
+    pub fn set_deadline(&self, deadline: Instant) {
+        self.deadline
+            .store(deadline_nanos(deadline), Ordering::Relaxed);
     }
 
     /// Bounds every later read. `None` blocks until data, end of stream or a
@@ -160,9 +216,8 @@ impl LocalStream {
         Ok(())
     }
 
-    /// Bounds every later write. `Unsupported` on Windows, whose pipes have
-    /// none: a request that fits the pipe's buffer never blocks, and
-    /// [`ShutdownHandle::shutdown`] frees a writer a stalled peer holds.
+    /// Bounds every later write. `None` blocks until the peer has taken the
+    /// bytes or a shutdown. A zero timeout is `InvalidInput`.
     pub fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
         let nanos = timeout_nanos(timeout)?;
         sys::set_write_timeout(&self.shared, timeout)?;
@@ -172,13 +227,28 @@ impl LocalStream {
 
     /// A second handle on the same stream, so one thread reads while another
     /// writes. A write timeout set through either applies to both; a read
-    /// timeout belongs to the handle it was set on.
+    /// timeout and a deadline belong to the handle they were set on.
     pub fn duplicate(&self) -> Self {
         Self {
             shared: Arc::clone(&self.shared),
             read_timeout: AtomicU64::new(self.read_timeout.load(Ordering::Relaxed)),
             write_timeout: AtomicU64::new(self.write_timeout.load(Ordering::Relaxed)),
+            deadline: AtomicU64::new(self.deadline.load(Ordering::Relaxed)),
         }
+    }
+
+    /// How long the next read or write may wait: its own `timeout`, cut to
+    /// what is left before the deadline. `TimedOut` once the deadline has
+    /// passed.
+    fn within_deadline(&self, timeout: Option<Duration>) -> io::Result<Option<Duration>> {
+        let Some(deadline) = deadline_of(&self.deadline) else {
+            return Ok(timeout);
+        };
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        Ok(Some(timeout.map_or(left, |timeout| timeout.min(left))))
     }
 
     /// A handle another thread uses to end this stream's blocked reads and
@@ -210,13 +280,21 @@ impl LocalStream {
 
 impl Read for LocalStream {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        sys::read(&self.shared, timeout_of(&self.read_timeout), buffer)
+        let timeout = self.within_deadline(timeout_of(&self.read_timeout))?;
+        sys::read(&self.shared, timeout, buffer)
     }
 }
 
 impl Write for LocalStream {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        sys::write(&self.shared, timeout_of(&self.write_timeout), buffer)
+        let timeout = timeout_of(&self.write_timeout);
+        let bounded = self.within_deadline(timeout)?;
+        if bounded != timeout {
+            // A Unix socket keeps its send timeout, so a write the deadline
+            // cuts sets it for itself.
+            sys::set_write_timeout(&self.shared, bounded)?;
+        }
+        sys::write(&self.shared, bounded, buffer)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -597,7 +675,8 @@ mod sys {
 
     use super::*;
 
-    pub(super) fn connect(path: &Path) -> io::Result<RawStream> {
+    /// A Unix connect never waits, so it has no use for `_wait`.
+    pub(super) fn connect(path: &Path, _wait: Option<Duration>) -> io::Result<RawStream> {
         RawStream::connect(endpoint_name(path)?)
     }
 
@@ -841,14 +920,16 @@ mod sys {
     use windows_sys::Win32::Foundation::{
         ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_NO_DATA,
         ERROR_OPERATION_ABORTED, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, HANDLE,
-        INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
+        INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
     };
     use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, FlushFileBuffers, PIPE_ACCESS_DUPLEX,
         ReadFile, WriteFile,
     };
-    use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
+    use windows_sys::Win32::System::IO::{
+        CancelIoEx, GetOverlappedResult, GetOverlappedResultEx, OVERLAPPED,
+    };
     use windows_sys::Win32::System::Pipes::{
         ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeClientProcessId,
         GetNamedPipeServerProcessId, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
@@ -860,17 +941,18 @@ mod sys {
 
     use super::*;
 
-    /// Connects with a bounded wait: the default of `connect` waits for ever
-    /// for a pipe whose instances are all busy, which is how Herdr's own
-    /// probe avoids it too.
-    pub(super) fn connect(path: &Path) -> io::Result<RawStream> {
+    /// Connects with a bounded wait, `CONNECT_BOUND` or `wait` if that is
+    /// shorter: the default of `connect` waits for ever for a pipe whose
+    /// instances are all busy, which is how Herdr's own probe avoids it too.
+    pub(super) fn connect(path: &Path, wait: Option<Duration>) -> io::Result<RawStream> {
         use interprocess::ConnectWaitMode;
         use interprocess::os::windows::named_pipe::{DuplexPipeStream, pipe_mode::Bytes};
 
         let name = pipe_name(path);
+        let wait = wait.map_or(CONNECT_BOUND, |wait| wait.min(CONNECT_BOUND));
         let pipe = DuplexPipeStream::<Bytes>::connect_by_path_with_wait_mode(
             name.as_str(),
-            ConnectWaitMode::Timeout(CONNECT_BOUND),
+            ConnectWaitMode::Timeout(wait),
         )
         .map_err(|error| match error.kind() {
             // The wait mode documents `TimedOut` and reports `WouldBlock`.
@@ -921,8 +1003,14 @@ mod sys {
 
         /// One read or write, overlapped as the handle was opened, waited for
         /// on this thread's own event so a read and a write on two threads
-        /// never take each other's completion.
-        fn io(&self, start: impl FnOnce(HANDLE, *mut OVERLAPPED) -> i32) -> io::Result<usize> {
+        /// never take each other's completion. With a `timeout`, an operation
+        /// still pending once it has passed is cancelled: `TimedOut`, or the
+        /// count of what it moved before the cancel took.
+        fn io(
+            &self,
+            timeout: Option<Duration>,
+            start: impl FnOnce(HANDLE, *mut OVERLAPPED) -> i32,
+        ) -> io::Result<usize> {
             thread_local! {
                 static EVENT: std::cell::OnceCell<OwnedHandle> = const { std::cell::OnceCell::new() };
             }
@@ -945,10 +1033,43 @@ mod sys {
                     }
                 }
                 let mut transferred = 0_u32;
+                if let Some(timeout) = timeout {
+                    // Rounded up, so the wait is never shorter than asked;
+                    // `INFINITE` is the one value it may not reach.
+                    let millis = u32::try_from(timeout.as_micros().div_ceil(1000))
+                        .unwrap_or(INFINITE)
+                        .min(INFINITE - 1);
+                    // SAFETY: the operation started on this OVERLAPPED, which
+                    // stays on this frame until a wait has seen it end.
+                    let done = unsafe {
+                        GetOverlappedResultEx(handle, &overlapped, &mut transferred, millis, 0)
+                    };
+                    if done != 0 {
+                        return Ok(transferred as usize);
+                    }
+                    let code = last_error_code();
+                    if code != WAIT_TIMEOUT {
+                        return Err(os_error(code));
+                    }
+                    // SAFETY: cancels only the operation started on this
+                    // OVERLAPPED, which is still on this frame; the wait
+                    // below sees it end, cancelled or completed first.
+                    unsafe { CancelIoEx(handle, &overlapped) };
+                }
                 // SAFETY: the operation started on this OVERLAPPED, which
-                // stays on this frame until the wait below has seen it end.
+                // stays on this frame until this wait has seen it end.
                 if unsafe { GetOverlappedResult(handle, &overlapped, &mut transferred, 1) } == 0 {
-                    return Err(io::Error::last_os_error());
+                    let error = io::Error::last_os_error();
+                    if timeout.is_some()
+                        && error.raw_os_error() == Some(ERROR_OPERATION_ABORTED as i32)
+                    {
+                        return if transferred > 0 {
+                            Ok(transferred as usize)
+                        } else {
+                            Err(io::ErrorKind::TimedOut.into())
+                        };
+                    }
+                    return Err(error);
                 }
                 Ok(transferred as usize)
             })
@@ -1000,26 +1121,24 @@ mod sys {
             let length = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
             let data = buffer.as_mut_ptr();
             // SAFETY: the buffer outlives the operation, which `io` waits for.
-            self.io(|handle, overlapped| unsafe {
+            self.io(None, |handle, overlapped| unsafe {
                 ReadFile(handle, data, length, std::ptr::null_mut(), overlapped)
             })
         }
     }
 
-    impl Write for &Pipe {
-        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+    impl Pipe {
+        /// Writes from `buffer`, waiting at most `timeout` for the peer to
+        /// take the bytes.
+        fn write_within(&self, buffer: &[u8], timeout: Option<Duration>) -> io::Result<usize> {
             let length = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
             let data = buffer.as_ptr();
             // SAFETY: the buffer outlives the operation, which `io` waits for.
-            let written = self.io(|handle, overlapped| unsafe {
+            let written = self.io(timeout, |handle, overlapped| unsafe {
                 WriteFile(handle, data, length, std::ptr::null_mut(), overlapped)
             })?;
             self.written.store(true, Ordering::Relaxed);
             Ok(written)
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
         }
     }
 
@@ -1054,14 +1173,9 @@ mod sys {
         Ok(())
     }
 
-    pub(super) fn set_write_timeout(_: &Shared, timeout: Option<Duration>) -> io::Result<()> {
-        match timeout {
-            None => Ok(()),
-            Some(_) => Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "a Windows named pipe has no write timeout",
-            )),
-        }
+    pub(super) fn set_write_timeout(_: &Shared, _: Option<Duration>) -> io::Result<()> {
+        // Applied by `write`, which cancels a write still pending at its end.
+        Ok(())
     }
 
     fn peer_gone(error: &io::Error) -> bool {
@@ -1148,7 +1262,11 @@ mod sys {
         }
     }
 
-    pub(super) fn write(shared: &Shared, _: Option<Duration>, buffer: &[u8]) -> io::Result<usize> {
+    pub(super) fn write(
+        shared: &Shared,
+        timeout: Option<Duration>,
+        buffer: &[u8],
+    ) -> io::Result<usize> {
         let stop = &shared.stop;
         // Counted before the cancel check, as a read is, so a shutdown that
         // lands between the check and the write cancels it again.
@@ -1156,8 +1274,7 @@ mod sys {
         let result = if stop.cancelled.load(Ordering::SeqCst) {
             Err(io::ErrorKind::BrokenPipe.into())
         } else {
-            let mut raw = &shared.raw;
-            raw.write(buffer)
+            shared.raw.write_within(buffer, timeout)
         };
         stop.blocked.fetch_sub(1, Ordering::SeqCst);
         result.map_err(|error| {

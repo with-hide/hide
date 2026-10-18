@@ -839,8 +839,7 @@ fn shutdown_from_another_thread_frees_a_blocked_read() {
 }
 
 /// A peer that stops reading holds a writer once the stream's buffer is
-/// full; a shutdown from another thread ends that write with an error, the
-/// one bound a caller has on Windows, whose pipe takes no write timeout.
+/// full; a shutdown from another thread ends that write with an error.
 #[test]
 fn shutdown_from_another_thread_frees_a_write_a_silent_peer_holds() {
     let (_folder, path) = endpoint();
@@ -1014,18 +1013,92 @@ fn the_connecting_side_names_the_listening_process() {
     assert_eq!(client.peer_pid().unwrap(), holder.child.id());
 }
 
-#[test]
-fn the_write_timeout_is_either_kept_or_refused_explicitly() {
-    let (_folder, path) = endpoint();
-    let _listener = LocalListener::bind(&path).unwrap();
-    let client = LocalStream::connect(&path).unwrap();
-    let outcome = client.set_write_timeout(Some(Duration::from_secs(1)));
-    if cfg!(windows) {
-        assert_eq!(outcome.unwrap_err().kind(), std::io::ErrorKind::Unsupported);
-    } else {
-        outcome.unwrap();
+/// A listener at `path` whose one connection never reads, held open until
+/// the returned sender is dropped.
+fn silent_peer(path: &Path) -> (mpsc::Sender<()>, thread::JoinHandle<()>) {
+    let listener = LocalListener::bind(path).unwrap();
+    let (release, released) = mpsc::channel::<()>();
+    let held = thread::spawn(move || {
+        let stream = listener.accept().unwrap();
+        // Bounded only so a write that never ends fails the test.
+        let _ = released.recv_timeout(Duration::from_secs(30));
+        drop(stream);
+    });
+    (release, held)
+}
+
+/// Writes to a peer that never reads until a write fails, and answers that
+/// failure and the moment it came: no buffer on any system holds a
+/// gigabyte.
+fn write_until_refused(client: &mut LocalStream) -> (std::io::ErrorKind, Instant, Duration) {
+    let chunk = vec![7_u8; 64 * 1024];
+    let mut written = 0_usize;
+    while written < 1 << 30 {
+        let started = Instant::now();
+        match client.write(&chunk) {
+            Ok(count) => written += count,
+            Err(error) => return (error.kind(), Instant::now(), started.elapsed()),
+        }
     }
-    client.set_write_timeout(None).unwrap();
+    panic!("a gigabyte reached a peer that never reads");
+}
+
+/// The peer stops reading, so its stream's buffer fills and holds the next
+/// write; only the write timeout can end it.
+#[test]
+fn a_write_timeout_ends_a_write_a_silent_peer_holds_after_the_time() {
+    let (_folder, path) = endpoint();
+    let (release, held) = silent_peer(&path);
+    let mut client = LocalStream::connect(&path).unwrap();
+    let timeout = Duration::from_millis(300);
+    client.set_write_timeout(Some(timeout)).unwrap();
+    let (kind, _, waited) = write_until_refused(&mut client);
+    assert_eq!(kind, std::io::ErrorKind::TimedOut);
+    assert!(waited >= timeout, "returned early: {waited:?}");
+    drop(release);
+    held.join().unwrap();
+}
+
+/// One exchange's deadline bounds the wait of each read and write, longer
+/// timeouts included, and past it nothing waits.
+#[test]
+fn an_exchange_deadline_ends_its_reads_and_writes_once_it_has_passed() {
+    let (_folder, path) = endpoint();
+    let (release, held) = silent_peer(&path);
+    assert_eq!(
+        LocalStream::connect_until(&path, Instant::now())
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::TimedOut,
+        "a deadline already passed tries no connect"
+    );
+    let deadline = Instant::now() + Duration::from_millis(300);
+    let mut client = LocalStream::connect_until(&path, deadline).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .unwrap();
+    client
+        .set_write_timeout(Some(Duration::from_secs(30)))
+        .unwrap();
+    let error = client.read(&mut [0_u8; 1]).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut, "{error:?}");
+    assert!(Instant::now() >= deadline, "the read returned early");
+    assert_eq!(
+        client.write(b"x").unwrap_err().kind(),
+        std::io::ErrorKind::TimedOut
+    );
+    drop(release);
+    held.join().unwrap();
+
+    let (_folder, path) = endpoint();
+    let (release, held) = silent_peer(&path);
+    let deadline = Instant::now() + Duration::from_millis(300);
+    let mut client = LocalStream::connect_until(&path, deadline).unwrap();
+    let (kind, at, _) = write_until_refused(&mut client);
+    assert_eq!(kind, std::io::ErrorKind::TimedOut);
+    assert!(at >= deadline, "the write returned early");
+    drop(release);
+    held.join().unwrap();
 }
 
 #[cfg(unix)]
