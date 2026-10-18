@@ -635,10 +635,12 @@ def main(argv=None):
             daemon.close()
         for key, (launch, environment, port) in services.items():
             # Before the owner closes: the server outlives every terminal, and the run started it.
+            # Its own stop runs past the run's deadline too, as the rest of the teardown does.
             agent = next(row for row in report["agents"] if row["id"] == key)
             try:
-                agent["opencode_service"] = opencode_service.stop(launch, environment, port, str(runtime.home),
-                                                                  runtime.owner)
+                with owner.teardown():
+                    agent["opencode_service"] = opencode_service.stop(launch, environment, port,
+                                                                      str(runtime.home), runtime.owner)
             except Exception as error:
                 agent["opencode_service"] = {"port": port, "left": [f"stop failed: {error}"]}
         if runtime:

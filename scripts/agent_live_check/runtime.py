@@ -373,12 +373,7 @@ class Runtime:
         failures = []
         processes_confirmed = False
         # A cancellation stops work, but must not disable protocol teardown.
-        original_cancelled = self.owner.cancelled.is_set()
-        self.owner.cancelled.clear()
-        original_deadline = self.owner.deadline
-        # Room for each step below at its own cap, on a loaded runner too.
-        self.owner.deadline = time.monotonic() + 60
-        try:
+        with self.owner.teardown():
             for workspace in list(self.workspaces):
                 try:
                     self.close_workspace(workspace)
@@ -432,10 +427,6 @@ class Runtime:
                         remove_tree(directory)
                     except Exception as error:
                         failures.append(str(error))
-        finally:
-            self.owner.deadline = original_deadline
-            if original_cancelled:
-                self.owner.cancelled.set()
         return {"confirmed": not failures, "processes_confirmed": processes_confirmed, "failures": failures,
                 "probe_removed": not self.probe.exists(), "socket_removed": not self.short.exists(),
                 "credential_copies_removed": all(not root.exists() and not root.is_symlink()

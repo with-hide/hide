@@ -267,5 +267,20 @@ class RunDeadline(unittest.TestCase):
                 self.assertLess(time.monotonic() - started, 15)
 
 
+class Teardown(unittest.TestCase):
+    def test_a_run_past_its_deadline_and_cancelled_still_runs_its_stop(self):
+        # Windows run 39104633599: the deadline refused `opencode service stop` and the server stayed.
+        with OwnedProcesses(run_seconds=0) as owner:
+            owner.cancelled.set()
+            stop = [sys.executable, "-c", "print('stopped')"]
+            with self.assertRaisesRegex(ProcessError, "run_cancelled_or_timed_out"):
+                owner.run(stop, env=dict(os.environ))
+            with owner.teardown():
+                self.assertEqual(owner.run(stop, env=dict(os.environ))[:2], (0, "stopped\n"))
+            self.assertTrue(owner.cancelled.is_set())
+            with self.assertRaisesRegex(ProcessError, "run_cancelled_or_timed_out"):
+                owner.run(stop, env=dict(os.environ))
+
+
 if __name__ == "__main__":
     unittest.main()

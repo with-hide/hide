@@ -4,6 +4,7 @@ On Windows each child is owned by a job object instead of a guardian process
 (`windows.py`): the same caps, ended and confirmed on every exit path.
 """
 
+import contextlib
 import ctypes
 import json
 import os
@@ -42,6 +43,8 @@ MAX_COMMANDS = 4096
 MAX_OWNER_FAMILIES = 4096
 COMMAND_SECONDS = 15
 RUN_SECONDS = 30 * 60
+# The room a teardown has past the run's deadline or a cancellation, each command at its own cap.
+TEARDOWN_SECONDS = 60
 POLL_SECONDS = 0.1
 RSS_CONSECUTIVE_MISS_LIMIT = 3
 # The lines a guardian writes to its child's stderr when it fails or ends the child.
@@ -538,6 +541,21 @@ class OwnedProcesses:
         if measured["rss_bytes"] > MAX_CHILDREN * MAX_RSS_BYTES:
             raise ProcessError("owned_processes_over_budget")
         return measured
+
+    @contextlib.contextmanager
+    def teardown(self, seconds=TEARDOWN_SECONDS):
+        """Stopping what the run started is admitted past its deadline and
+        after a cancellation, for `seconds`; both come back after."""
+        cancelled = self.cancelled.is_set()
+        self.cancelled.clear()
+        deadline = self.deadline
+        self.deadline = time.monotonic() + seconds
+        try:
+            yield
+        finally:
+            self.deadline = deadline
+            if cancelled:
+                self.cancelled.set()
 
     def close(self):
         failures = []
