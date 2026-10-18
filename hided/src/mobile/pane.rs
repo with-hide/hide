@@ -1,8 +1,7 @@
-//! A phone reads and writes one agent pane straight through Herdr's socket
-//! API (PRD D-13): `pane.read` for the recent rows, `pane.send_input` for a
-//! reply or one key. Neither goes through the core's attach set or
-//! `Event::Key`, so the desktop's visible tab, focus, terminal size and
-//! attachments stay where they are. Parameters and the answer come from
+//! A phone reads one agent pane through Herdr's socket API (PRD D-13).
+//! A reply or key first waits for the pane node's existing creation holder,
+//! then uses `pane.send_input`; success means Herdr answered the write.
+//! Neither changes the core's attach set, focus, terminal size or visible tab. Parameters and the answer come from
 //! `herdr_core::wire`, which holds the generated types of the pinned Herdr
 //! schema.
 
@@ -12,6 +11,7 @@ use std::time::Duration;
 use herdr_core::wire;
 use hide_herdr_client::ApiConnector;
 use hide_herdr_client::ApiError;
+use hide_node_link::terminal::{InputPermitError, TerminalNode};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -33,6 +33,8 @@ pub enum PaneError {
     Unavailable(String),
     /// The agent is ending, asleep or waking, and what is under it is its shell.
     Asleep,
+    /// The node refused or discarded the input before any bytes were written.
+    InputRefused,
 }
 
 impl PaneError {
@@ -42,6 +44,7 @@ impl PaneError {
             Self::DeviceUnreachable => "device_unreachable",
             Self::Unavailable(_) => "unavailable",
             Self::Asleep => "asleep",
+            Self::InputRefused => "input_refused",
         }
     }
 }
@@ -105,6 +108,37 @@ pub enum Input<'a> {
     Key(&'static str),
 }
 
+pub fn wait_for_input(
+    terminals: &dyn TerminalNode,
+    core_pane_id: &str,
+    input: &Input<'_>,
+) -> Result<(), PaneError> {
+    let bytes = match &input {
+        // Reserve payload plus Enter; Herdr's bracketed-paste wrapper is
+        // protocol framing and is not part of this held payload budget.
+        Input::Reply(text) => text.len() + 1,
+        // Herdr's supported quick keys encode as one byte or a three-byte
+        // cursor sequence (CSI/SS3), not the length of their logical name.
+        Input::Key("up" | "down") => 3,
+        Input::Key("enter" | "esc" | "ctrl+c") => 1,
+        Input::Key(_) => return Err(PaneError::InputRefused),
+    };
+    let (reply, result) = std::sync::mpsc::channel();
+    terminals.input_permit(
+        core_pane_id,
+        bytes,
+        Box::new(move |outcome| {
+            let _ = reply.send(outcome);
+        }),
+    );
+    match result.recv_timeout(Duration::from_secs(35)) {
+        Ok(Ok(())) => {}
+        Ok(Err(InputPermitError::Asleep)) => return Err(PaneError::Asleep),
+        Ok(Err(_)) | Err(_) => return Err(PaneError::InputRefused),
+    }
+    Ok(())
+}
+
 pub fn send(
     connector: &Arc<dyn ApiConnector>,
     pane_id: &str,
@@ -146,5 +180,132 @@ mod tests {
             Some("too_long")
         );
         assert_eq!(reply_problem("PR 병합 전에 한 번 더 확인해 주세요"), None);
+    }
+
+    /// A phone must receive neither an early success nor a false success
+    /// when the holder refuses it; Herdr's acknowledgment remains decisive.
+    #[test]
+    fn a_phone_reply_waits_for_both_the_node_permission_and_herdr_acknowledgment() {
+        use hide_herdr_client::{ApiStream, ConnectionShutdown};
+        use hide_node_link::terminal::{GridSize, InputPermitReply, KeyTarget, TerminalControl};
+        use std::io::{Read, Write};
+        use std::sync::{Mutex, mpsc};
+
+        struct Gate(Mutex<mpsc::Sender<InputPermitReply>>);
+        impl TerminalNode for Gate {
+            fn input_permit(&self, _: &str, bytes: usize, reply: InputPermitReply) {
+                assert_eq!(bytes, 4);
+                self.0.lock().unwrap().send(reply).unwrap();
+            }
+            fn control(&self, _: TerminalControl) {
+                panic!("phone must not attach or focus");
+            }
+            fn key(&self, _: KeyTarget, _: Vec<u8>, _: u64) {
+                panic!("phone keeps Herdr logical input");
+            }
+            fn view(&self, _: &str, _: GridSize, _: bool) {
+                panic!("phone must not resize");
+            }
+            fn redraw(&self, _: &str) {
+                panic!("phone must not redraw");
+            }
+        }
+        struct Stream {
+            written: mpsc::Sender<serde_json::Value>,
+            request: Vec<u8>,
+            ack: Option<mpsc::Receiver<()>>,
+            answer: std::io::Cursor<Vec<u8>>,
+        }
+        impl Read for Stream {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                if let Some(ack) = self.ack.take() {
+                    ack.recv_timeout(Duration::from_secs(5))
+                        .map_err(std::io::Error::other)?;
+                }
+                self.answer.read(bytes)
+            }
+        }
+        impl Write for Stream {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.request.extend_from_slice(bytes);
+                if bytes.contains(&b'\n') {
+                    self.written
+                        .send(serde_json::from_slice(&self.request).unwrap())
+                        .unwrap();
+                }
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl ApiStream for Stream {
+            fn set_read_timeout(&self, _: Option<Duration>) -> Result<(), ApiError> {
+                Ok(())
+            }
+            fn set_write_timeout(&self, _: Option<Duration>) -> Result<(), ApiError> {
+                Ok(())
+            }
+            fn read_line_with_timeout(&mut self, _: Duration) -> Result<String, ApiError> {
+                unreachable!()
+            }
+            fn shutdown_handle(&self) -> Result<Box<dyn ConnectionShutdown>, ApiError> {
+                unreachable!()
+            }
+        }
+        struct Connector(Mutex<Option<Stream>>);
+        impl ApiConnector for Connector {
+            fn connect(&self) -> Result<Box<dyn ApiStream>, ApiError> {
+                Ok(Box::new(self.0.lock().unwrap().take().expect("one write")))
+            }
+        }
+        for allowed in [true, false] {
+            let (asked, permission) = mpsc::channel();
+            let gate = Arc::new(Gate(Mutex::new(asked)));
+            let (written, request) = mpsc::channel();
+            let (release, ack) = mpsc::channel();
+            let connector: Arc<dyn ApiConnector> = Arc::new(Connector(Mutex::new(Some(Stream {
+                written,
+                request: Vec::new(),
+                ack: Some(ack),
+                answer: std::io::Cursor::new(
+                    b"{\"id\":\"herdr-core:pane.send_input\",\"ok\":true,\"result\":{}}\n".to_vec(),
+                ),
+            }))));
+            let (done, result) = mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                done.send(
+                    wait_for_input(gate.as_ref(), "w1:p1", &Input::Reply("yes"))
+                        .and_then(|()| send(&connector, "w1:p1", Input::Reply("yes"))),
+                )
+                .unwrap();
+            });
+            let grant = permission.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(matches!(request.try_recv(), Err(mpsc::TryRecvError::Empty)));
+            assert!(matches!(result.try_recv(), Err(mpsc::TryRecvError::Empty)));
+            grant(if allowed {
+                Ok(())
+            } else {
+                Err(InputPermitError::Discarded)
+            });
+            if allowed {
+                let sent = request.recv_timeout(Duration::from_secs(5)).unwrap();
+                assert_eq!(sent["method"], "pane.send_input");
+                assert_eq!(
+                    sent["params"],
+                    serde_json::json!({"pane_id":"w1:p1", "text":"yes", "keys":["enter"]})
+                );
+                assert!(matches!(result.try_recv(), Err(mpsc::TryRecvError::Empty)));
+                release.send(()).unwrap();
+                assert_eq!(result.recv_timeout(Duration::from_secs(5)).unwrap(), Ok(()));
+            } else {
+                assert_eq!(
+                    result.recv_timeout(Duration::from_secs(5)).unwrap(),
+                    Err(PaneError::InputRefused)
+                );
+                assert!(request.try_recv().is_err());
+            }
+            worker.join().unwrap();
+        }
     }
 }

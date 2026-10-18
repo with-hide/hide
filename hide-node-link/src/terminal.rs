@@ -169,6 +169,11 @@ pub struct PaneTerminalState {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "report", rename_all = "snake_case")]
 pub enum TerminalReport {
+    /// A side-channel writer may now write, or its queued input was refused.
+    InputPermit {
+        ticket: u64,
+        outcome: Result<(), InputPermitError>,
+    },
     /// The pane's attach state changed.
     State {
         pane: String,
@@ -238,6 +243,11 @@ pub enum KeyTarget {
 pub enum TerminalDown {
     Control {
         control: TerminalControl,
+    },
+    InputPermit {
+        ticket: u64,
+        pane: String,
+        bytes: usize,
     },
     Key {
         target: KeyTarget,
@@ -311,10 +321,29 @@ pub struct TerminalOutput {
     pub full: bool,
 }
 
+/// A side-channel input's permission, not acknowledgment that bytes were written.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputPermitError {
+    Discarded,
+    Unavailable,
+    Asleep,
+    Limit,
+}
+
+pub type InputPermitReply = Box<dyn FnOnce(Result<(), InputPermitError>) + Send>;
+
 /// A node's terminals, as a screen and the core reach them. Every method
 /// returns at once: work that waits runs on the node's own threads.
 pub trait TerminalNode: Send + Sync {
     fn control(&self, control: TerminalControl);
+
+    /// Waits behind this node's creation holder without attaching or focusing.
+    /// The caller writes only after success, and acknowledges after its write.
+    /// Implementations invoke the callback once, including on shutdown.
+    fn input_permit(&self, _pane: &str, _bytes: usize, reply: InputPermitReply) {
+        reply(Err(InputPermitError::Unavailable));
+    }
 
     /// A key from the screen, typed at `typed_at_unix_ms`. A key the node
     /// cannot take is reported, never written elsewhere.
@@ -386,7 +415,8 @@ impl TerminalReport {
             | Self::Input { pane, .. }
             | Self::Error { pane, .. }
             | Self::Note { pane, .. } => Some(pane),
-            Self::RequestDiscarded { .. }
+            Self::InputPermit { .. }
+            | Self::RequestDiscarded { .. }
             | Self::AttachmentInput { .. }
             | Self::AttachmentDelivered { .. } => None,
         }
@@ -400,6 +430,7 @@ impl TerminalReport {
     /// one, so it loses no state and grows only by new subjects.
     pub fn same_subject(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::InputPermit { ticket: a, .. }, Self::InputPermit { ticket: b, .. }) => a == b,
             (Self::State { pane: a, .. }, Self::State { pane: b, .. })
             | (Self::FirstFrame { pane: a, .. }, Self::FirstFrame { pane: b, .. })
             | (Self::FrameShown { pane: a, .. }, Self::FrameShown { pane: b, .. })
