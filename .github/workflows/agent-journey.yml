@@ -97,6 +97,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # The journey reads UTF-8 (scripts/agent-journey-check.py); Windows's
+  # default encoding is its ANSI code page.
+  PYTHONUTF8: "1"
+
 jobs:
   fixture:
     name: agent journey stand-ins (${{ matrix.system }})
