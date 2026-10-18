@@ -37,8 +37,17 @@ fn isolated(program: &Path, home: &Path) -> Command {
 fn shell_exec_keeps_pid_start_time_and_launch_context_with_login_argv0() {
     let folder = tempfile::tempdir().unwrap();
     let home = std::fs::canonicalize(folder.path()).unwrap();
+    // macOS /bin/sh is a selector that execs /private/var/select/sh (normally
+    // /bin/bash), so its inode is not the running shell's. Select the actual
+    // executable here to keep the image assertion exact and independent of
+    // that system dispatcher. Other Unix systems provide the shell at /bin/sh.
+    let executable = Path::new(if cfg!(target_os = "macos") {
+        "/bin/bash"
+    } else {
+        "/bin/sh"
+    });
     let shell = home.join("selected shell");
-    symlink("/bin/sh", &shell).unwrap();
+    symlink(executable, &shell).unwrap();
     // This test-only entry gate lets the parent read the original kernel
     // identity before hided execs, without adding a product test hook.
     let mut command = isolated(Path::new("/bin/sh"), &home);
@@ -78,7 +87,7 @@ fn shell_exec_keeps_pid_start_time_and_launch_context_with_login_argv0() {
     assert_eq!(process::cwd_of(pid).unwrap(), home);
     assert_eq!(
         process::image_of(pid).unwrap().file,
-        hide_platform::fs::identity::file_id(Path::new("/bin/sh")).unwrap()
+        hide_platform::fs::identity::file_id(executable).unwrap()
     );
     assert!(
         process::descendants(pid).unwrap().is_empty(),
