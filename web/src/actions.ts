@@ -76,7 +76,7 @@ import type { FactoryCommand } from "./factory/commands";
 import { FACTORY_OPEN } from "./factory/launch";
 import { SECRETARY_PROMPT, paneListed } from "./factory/secretary";
 import type { DispatchFn } from "./ws";
-import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, newTabPolicy } from "./viewFocus";
+import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
 import { focusTerminal } from "./terminals";
 import { zoomViewer } from "./viewers/viewerZoom";
 import { submitDrop, type CapturedDrop } from "./explorerDrop";
@@ -2595,7 +2595,7 @@ export function createActions(send: DispatchFn) {
       const agent = paneId ? contextAgents(rest(), rest()?.navigator?.agents ?? []).find((row) => row.pane_id === paneId) : undefined;
       if (paneId && agent?.own_find) {
         const requestId = remoteRequestId();
-        ui().setAgentFindRequest({ id: requestId, owner: keyboardCommandOwner() });
+        ui().setAgentFindRequest({ id: requestId, owner: keyboardOwner() });
         dispatch({ schema_version: 2, kind: "pane_find_open", payload: { pane_id: paneId, request_id: requestId } });
         return;
       }

@@ -517547,7 +517547,8 @@
                                       "fill": "$--subtle-foreground"
                                     },
                                     "hideui:lane-header-explorer": {
-                                      "fill": "$--secondary"
+                                      "fill": "$--secondary",
+                                      "enabled": true
                                     },
                                     "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
                                       "fill": "$--subtle-foreground"
@@ -521440,7 +521441,8 @@
                                       "fill": "$--subtle-foreground"
                                     },
                                     "hideui:lane-header-explorer": {
-                                      "fill": "$--secondary"
+                                      "fill": "$--secondary",
+                                      "enabled": true
                                     },
                                     "hideui:lane-header-explorer/hideui:lane-tree-button-glyph": {
                                       "fill": "$--subtle-foreground"

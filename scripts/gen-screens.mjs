@@ -56,6 +56,11 @@ export function generate(root, ownedSheets = []) {
   // Restate only missing inherited colors, including authored sheets, without
   // replacing their layout, content or explicit overrides (Dark import rule).
   function restate(node) {
+    // Retained authored Files states are outside generated Workspace boards.
+    // Their IDs name their tool role; no translated display label decides it.
+    if (['stl-i-l-f-lane-head', 'stl-i-d-f-lane-head'].includes(node.id)) {
+      (node.descendants ??= {})[`${ALIAS}:lane-header-explorer`] = {...node.descendants[`${ALIAS}:lane-header-explorer`], enabled: true};
+    }
     if (node.type === 'ref' && node.ref.startsWith(`${ALIAS}:`)) {
       const colors = themedOverrides(node.ref.slice(ALIAS.length + 1));
       for (const [key, props] of Object.entries(colors.descendants)) {

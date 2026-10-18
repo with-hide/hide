@@ -17,6 +17,12 @@ export function updateFocusMasters(document) {
   if (!header.children.some(node => node.id === 'lane-header-explorer')) header.children.splice(3, 0,
     {id: 'lane-header-explorer', type: 'ref', ref: 'lane-tree-button', name: 'Explorer', fill: '$--secondary', enabled: false});
   required('lane-header-explorer').enabled = false;
+  // Existing authored Files state refs keep their semantic role when the
+  // shared header gains a Files-only child. Other tools inherit disabled.
+  for (const id of ['lane-l-header-files', 'lane-d-header-files']) {
+    const state = required(id);
+    (state.descendants ??= {})['lane-header-explorer'] = {...state.descendants['lane-header-explorer'], enabled: true};
+  }
   required('GGXfK-tree').enabled = false;
 
   if (!document.children.some(node => node.id === 'cmp-view-opener')) document.children.push(frame('cmp-view-opener', 'Component / View opener', {

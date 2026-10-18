@@ -164,6 +164,32 @@ describe("input after a confirmed View close", () => {
     } finally { noteDrawnViews(null); remove(); }
   });
 
+  it("routes a host Find command from a View toolbar to its document", async () => {
+    const { remove, actions, content } = await setup();
+    const { installKeyboard } = await import("./keyboard");
+    const { noteDrawnViews, keyboardOwner } = await import("./viewFocus");
+    let command: (id: string) => void = () => {};
+    const previousHost = window.hideHost;
+    Object.assign(window, { hideHost: { kind: "electron", platform: "darwin", onCommand: (listener: typeof command) => { command = listener; return () => {}; }, reportBindings: vi.fn(), reportLanguage: vi.fn() } });
+    useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { tool: "files", mode: "pinned" } as never });
+    useShellStore.setState({ editor: { active_tab_id: "d1" } as never });
+    noteDrawnViews({ workspace, layout: frame(["d1", "d2"], "d1").layout, geometry: { areas: [{ id: "a1" }] } } as never);
+    const stopKeyboard = installKeyboard(actions);
+    const header = document.createElement("div");
+    header.dataset.documentHeader = "";
+    header.innerHTML = "<button>Find in document</button>";
+    content.parentElement!.append(header);
+    try {
+      header.querySelector("button")!.focus();
+      expect(keyboardOwner().kind).toBe("tool");
+      const before = useUiStore.getState().editorFindRequest;
+      command("find_in_pane");
+      expect(useUiStore.getState().editorFindRequest).toBe(before + 1);
+      expect(useUiStore.getState().editorFindDisplay).toBe("d1");
+      expect(useUiStore.getState().overlay).not.toBe("find");
+    } finally { stopKeyboard(); noteDrawnViews(null); window.hideHost = previousHost; remove(); }
+  });
+
   it("continues a delayed menu close after automatic focus return", async () => {
     const { remove, actions, content, land } = await setup();
     const { act, createElement } = await import("react");

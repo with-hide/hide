@@ -40801,6 +40801,9 @@
                         },
                         "lane-header-scope": {
                           "content": "settings-ui"
+                        },
+                        "lane-header-explorer": {
+                          "enabled": true
                         }
                       }
                     }
@@ -41702,6 +41705,9 @@
                         },
                         "lane-header-scope": {
                           "content": "settings-ui"
+                        },
+                        "lane-header-explorer": {
+                          "enabled": true
                         }
                       }
                     }

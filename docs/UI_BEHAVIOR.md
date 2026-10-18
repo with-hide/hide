@@ -77,7 +77,7 @@ Close (the header's ×, the pressed rail icon, or the tool's chord) closes the l
 A close keeps the tool the lane showed, so ⌘E and Show right lane bring it back on that tool.
 
 The files tool shows the View areas below, with their tabs, splits, previews and browser displays, each page inside its area's bounds.
-The active document's header starts with the tree button, the checkout's name, then the path in ` › ` steps, cutting a long path at its start so the file name stays; a browser display's toolbar carries the same tree button.
+The active document's header starts with the checkout's name, then the path in ` › ` steps, cutting a long path at its start so the file name stays.
 The Files top header keeps one folder-and-Explorer toggle, with localized text, pressed background and accessible pressed state.
 It stays visible with no View and is disabled while the tree alone must remain.
 Document and page toolbars retain their path or address and controls, without another tree toggle.
