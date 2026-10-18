@@ -1155,3 +1155,112 @@ fn moving_a_root_prunes_only_its_old_groups_child_canvas_and_reveals_the_child_i
         assert_eq!(ordered_tab_ids(&runtime, &checkout), before);
     }
 }
+
+#[test]
+fn restored_draft_keeps_its_group_when_the_first_session_has_old_keyboard_focus() {
+    let (_folder, state) = views_path("group-first-session");
+    let (initial, checkout) = tab_order_runtime(PATH);
+    let mut initial = with_views(initial, &state);
+    ingest(&mut initial, &TABS);
+    let target = create(&mut initial, "restart-group", "문서 검토");
+    group(
+        &mut initial,
+        "restart-draft",
+        json!({"action":"new_tab","group_id":target}),
+    );
+    let draft = tabs(&initial, Some(&target))[0].clone();
+    let registrations = initial.snapshot.ui_state.workspace_registrations.clone();
+    drop(initial);
+
+    let mut restored = runtime();
+    restored.snapshot.ui_state.workspace_registrations = registrations;
+    restored.snapshot.ui_state.focused_checkout_id = Some(checkout.clone());
+    restored.snapshot.ui_state.selected_pane_id = Some("w-order:t1:p".into());
+    restored.snapshot.navigator.focused_checkout_id = Some(checkout.clone());
+    restored.workspace_views =
+        Some(WorkspaceViewStore::open(state, (false, RightPanelSection::Changes)).0);
+    restored.rebuild_catalog();
+    restored.sync_workspace_view();
+    restored.catalog_paths = Default::default();
+    restored.begin_catalog_coordinator();
+    let payload = tab_order_payload(PATH, &TABS, &TABS, TABS[0]);
+    restored.ingest_session(Ok(payload.clone()));
+    restored.sync_workspace_view();
+    assert_eq!(
+        restored
+            .workspace_views
+            .as_ref()
+            .unwrap()
+            .views
+            .get(crate::node::TEST_NODE, PATH)
+            .unwrap()
+            .agent_groups
+            .selected
+            .as_deref(),
+        Some(target.as_str()),
+        "before path facts"
+    );
+    let paths = restored.ask_paths(BTreeSet::from([PATH.to_owned()]));
+    let spaces = Runtime::session_spaces(&payload, &paths);
+    let catalog = session_sync::PrecomputedCatalog {
+        registrations: restored.snapshot.ui_state.workspace_registrations.clone(),
+        worktrees: restored.worktree_catalog(),
+        workspaces: workspace::build_catalog(
+            &restored.node,
+            &restored.snapshot.ui_state.workspace_registrations,
+            &spaces,
+            &restored.worktree_catalog(),
+            &paths,
+        ),
+        paths,
+    };
+    restored.ingest_session_with_catalog(Ok(payload), Some(catalog));
+    restored.sync_workspace_view();
+    assert_eq!(
+        published(&restored).group_id.as_deref(),
+        Some(target.as_str()),
+        "first session"
+    );
+    dispatch(
+        &mut restored,
+        "focus_checkout",
+        json!({"workspace_id":"workspace:order","checkout_id":checkout}),
+    );
+    assert_eq!(
+        published(&restored).group_id.as_deref(),
+        Some(target.as_str()),
+        "opening the project"
+    );
+    assert_eq!(tabs(&restored, Some(&target)), [draft]);
+    assert!(restored.snapshot().terminal.pane_id.is_none());
+}
+
+#[test]
+fn a_stored_delegated_canvas_waits_for_its_canonical_lineage() {
+    let (mut runtime, checkout, target) = with_delegated_canvases();
+    let before = ordered_tab_ids(&runtime, &checkout);
+    // The saved view and catalog can be available before agent lineage is
+    // published, as on startup or while a remote catalog is reconnecting.
+    let agents = std::mem::take(&mut runtime.snapshot.navigator.agents);
+    group(
+        &mut runtime,
+        "rename-before-lineage",
+        json!({"action":"rename","group_id":target,"name":"Renamed"}),
+    );
+    select(&mut runtime, "select-before-lineage", Some(&target));
+    assert_eq!(
+        published(&runtime).group_id.as_deref(),
+        Some(target.as_str())
+    );
+    assert_eq!(
+        published(&runtime).canvases.get("a1").map(String::as_str),
+        Some(CHILDREN[0])
+    );
+    runtime.snapshot.navigator.agents = agents;
+    runtime.sync_workspace_view();
+    assert_eq!(
+        published(&runtime).canvases.get("a1").map(String::as_str),
+        Some(CHILDREN[0])
+    );
+    assert_eq!(ordered_tab_ids(&runtime, &checkout), before);
+}

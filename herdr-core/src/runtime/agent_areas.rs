@@ -549,7 +549,10 @@ impl Runtime {
         delegated: bool,
     ) {
         let group = if delegated {
-            self.delegated_group_owner(key, tab_id)
+            let Some(group) = self.delegated_group_owner(key, tab_id) else {
+                return;
+            };
+            group
         } else {
             self.workspace_views
                 .as_ref()
@@ -738,7 +741,10 @@ impl Runtime {
             return;
         };
         let group = if delegated {
-            self.delegated_group_owner(&key, &tab_id)
+            let Some(group) = self.delegated_group_owner(&key, &tab_id) else {
+                return;
+            };
+            group
         } else {
             view.agent_tab_group(&tab_id).flatten().map(str::to_owned)
         };
@@ -772,7 +778,9 @@ impl Runtime {
         }
     }
 
-    fn delegated_group_owner(&self, key: &WorkspaceKey, id: &str) -> Option<String> {
+    // An unresolved lineage is different from a root placed in Ungrouped.
+    // A partial catalog cannot invalidate a durable delegated canvas.
+    fn delegated_group_owner(&self, key: &WorkspaceKey, id: &str) -> Option<Option<String>> {
         let checkout = self
             .catalog_workspaces()
             .filter(|w| w.device_id == key.0)
@@ -806,8 +814,8 @@ impl Runtime {
             .as_ref()?
             .views
             .get(&key.0, &key.1)?
-            .agent_tab_group(root_tab)?
-            .map(str::to_owned)
+            .agent_tab_group(root_tab)
+            .map(|group| group.map(str::to_owned))
     }
 
     /// Root membership changes invalidate only canvases belonging to that
@@ -834,7 +842,10 @@ impl Runtime {
                     .iter()
                     .map(move |(area, tab)| (group, area, tab))
             })
-            .filter(|(group, _, tab)| self.delegated_group_owner(key, tab).as_deref() != *group)
+            .filter(|(group, _, tab)| {
+                self.delegated_group_owner(key, tab)
+                    .is_some_and(|owner| owner.as_deref() != *group)
+            })
             .map(|(group, area, _)| (group.map(str::to_owned), area.clone()))
             .collect();
         let changed = !misplaced.is_empty();
