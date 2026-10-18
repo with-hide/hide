@@ -1376,6 +1376,11 @@ mod tests {
         let checkouts = before("checkout");
         let registrations = before("registration");
         let actor = |index: usize| json!({"pane_id": panes[index], "name": "a", "kind": "claude", "device_id": devices[index]});
+        let archive = json!({"archive-1": {"project_root": M_ROOT, "members": (0..3).map(|index| json!({
+            "machine": devices[index], "pane_id": panes[index], "checkout_path": M_ROOT, "cwd": M_ROOT,
+            "resume": {"state": "done", "pane_id": panes[index]},
+            "registration": {"id": format!("agent-{index}"), "actor": actor(index)},
+        })).collect::<Vec<_>>()}});
         write(
             CORE_STATE,
             json!({
@@ -1427,6 +1432,7 @@ mod tests {
                     )).collect()),
                     "dormant": {"sleep-1": {"node_id": M, "old_pane_id": panes[0], "cwd": M_ROOT}},
                 },
+                "session_archive": archive,
                 "factory_secretary_pane": panes[0],
                 "focused_checkout_id": checkouts[1],
                 "collapsed_workspace_ids": registrations,

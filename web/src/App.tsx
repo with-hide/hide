@@ -15,6 +15,7 @@ import { OverviewModal, OverviewPage } from "./Overview";
 import { FactoryScreen } from "./factory/FactoryScreen";
 import { useFactoryNotifications } from "./factory/notify";
 import { AgentCloseNotice, ConfirmClose, ConfirmTrash, CycleOverlay, NoticeBar } from "./Overlays";
+import { ConfirmArchive, ConfirmArchiveDelete } from "./ArchiveDialogs";
 import { QuickAdd } from "./QuickAdd";
 import { Palette } from "./Palette";
 import { installProbe, probeEnabled } from "./probe";
@@ -261,6 +262,8 @@ export function App() {
     ["cycle", <CycleOverlay />],
     ["confirm_close", <ConfirmClose actions={actions} />],
     ["confirm_trash", <ConfirmTrash actions={actions} />],
+    ["confirm_archive", <ConfirmArchive actions={actions} />],
+    ["confirm_archive_delete", <ConfirmArchiveDelete actions={actions} />],
     ["palette", <Palette actions={actions} />],
     ["quick_add", <QuickAdd actions={actions} />],
     ["start_panel", <StartPanelHost actions={actions} />],

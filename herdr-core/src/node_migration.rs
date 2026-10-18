@@ -333,6 +333,57 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Owned,
         Moves::Stays,
     ),
+    // An archived session names each member's machine, its pane, the pane
+    // a resume made and the registration it holds; its folders stay beside
+    // that machine id.
+    (
+        CORE_STATE,
+        "/session_archive/*/members/*/machine",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        CORE_STATE,
+        "/session_archive/*/members/*/pane_id",
+        Mechanism::Owned,
+        Moves::Pane,
+    ),
+    (
+        CORE_STATE,
+        "/session_archive/*/members/*/resume/pane_id",
+        Mechanism::Owned,
+        Moves::Pane,
+    ),
+    (
+        CORE_STATE,
+        "/session_archive/*/members/*/registration/actor/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        CORE_STATE,
+        "/session_archive/*/members/*/registration/actor/pane_id",
+        Mechanism::Owned,
+        Moves::Pane,
+    ),
+    (
+        CORE_STATE,
+        "/session_archive/*/project_root",
+        Mechanism::Owned,
+        Moves::Stays,
+    ),
+    (
+        CORE_STATE,
+        "/session_archive/*/members/*/checkout_path",
+        Mechanism::Owned,
+        Moves::Stays,
+    ),
+    (
+        CORE_STATE,
+        "/session_archive/*/members/*/cwd",
+        Mechanism::Owned,
+        Moves::Stays,
+    ),
     (
         CORE_STATE,
         "/factory_secretary_pane",
@@ -1160,6 +1211,23 @@ fn convert_core_state(value: &mut Value, node: &str, _projects: &BTreeMap<String
             changed |= rewrite(record.get_mut("node_id"), node);
         }
     }
+    if let Some(archive) = value
+        .get_mut("session_archive")
+        .and_then(Value::as_object_mut)
+    {
+        for record in archive.values_mut() {
+            for member in each(record, "members") {
+                changed |= rewrite(member.get_mut("machine"), node);
+                changed |= rewrite(
+                    member
+                        .get_mut("registration")
+                        .and_then(|registration| registration.get_mut("actor"))
+                        .and_then(|actor| actor.get_mut("device_id")),
+                    node,
+                );
+            }
+        }
+    }
     changed
 }
 
@@ -1409,6 +1477,11 @@ mod tests {
         let write = |name: &str, value: Value| {
             std::fs::write(state.join(name), serde_json::to_vec(&value).unwrap()).unwrap();
         };
+        let archive = json!({"archive-1": {"project_root": root, "members": [{
+            "machine": "local", "pane_id": "w1:p6", "checkout_path": root, "cwd": root,
+            "resume": {"state": "done", "pane_id": "w1:p7"},
+            "registration": {"id": "agent-1", "actor": {"pane_id": "w1:p6", "name": "a", "kind": "claude", "device_id": "local"}},
+        }]}});
         write(
             CORE_STATE,
             json!({
@@ -1447,6 +1520,7 @@ mod tests {
                     "records": {"w1:p1": {"parent_pane_id": "w1:p0", "cwd": root}},
                     "dormant": {"sleep-1": {"node_id": "local", "old_pane_id": "w1:p5", "cwd": root}},
                 },
+                "session_archive": archive,
                 "expanded_paths": [root],
                 "operator_tab_names": {"w1:t1": "review"},
                 "project_base_branches": {root.clone(): "main"},

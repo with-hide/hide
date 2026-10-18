@@ -308,6 +308,7 @@ impl Runtime {
             .dormant
             .values()
             .filter_map(|record| record.registration.as_ref())
+            .chain(self.snapshot.ui_state.session_archive.held_registrations())
             .map(|registration| registration.id.as_str())
             .collect();
         let read =
@@ -1207,7 +1208,8 @@ impl Runtime {
                 let gone = proven_absence_or_replacement
                     && self.delivery_connected.contains(&watch.target.device_id)
                     && !self.delivery_overflow.contains(&watch.target.device_id)
-                    && !self.dormant_holds_actor(&watch.target);
+                    && !self.dormant_holds_actor(&watch.target)
+                    && !self.archive_holds_actor(&watch.target);
                 let source = crate::delivery::worker::ActivitySource {
                     link: if self.node == watch.target.device_id {
                         Some(Arc::clone(&self.own_node))

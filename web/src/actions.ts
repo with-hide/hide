@@ -69,6 +69,7 @@ import { requestLine } from "./editor/lineRequest";
 import { terminalPathOwner, type FoundPath } from "./terminalLinkProvider";
 import { homeOpening } from "./hideAiOrigin";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
+import { archiveWorking } from "./archive";
 import { useShellStore } from "./store";
 import { FACTORY_ENTRY, useUiStore, type FactoryPlace, type MainView, type OverviewPlace, type PendingClose } from "./ui";
 import type { FactoryCommand } from "./factory/commands";
@@ -1013,6 +1014,49 @@ export function createActions(send: DispatchFn) {
     /** Sleep agent from the pane menu (B15). */
     sleepAgent(paneId: string) {
       dispatch({ schema_version: 2, kind: "agent_sleep", payload: { pane_id: paneId } });
+    },
+
+    /**
+     * `세션 보관` (PRD session-archive B5-B7): a session that is not working,
+     * or waits on the operator, goes at once; one with work running asks
+     * first with what is working.
+     */
+    archiveSession(paneId: string) {
+      const byPane = agentsByPane(allPaneAgents(useShellStore.getState().agents, rest()?.status?.remote));
+      const root = byPane.get(paneId);
+      if (root && archiveWorking(root, byPane).length > 0) return ui().setPendingArchive({ paneId });
+      dispatch({ schema_version: 2, kind: "archive_session", payload: { pane_id: paneId, confirmed: false } });
+    },
+    /** 작업 멈추고 보관: the confirmation the working session asked for (B6). */
+    confirmArchive() {
+      const pending = ui().pendingArchive;
+      if (!pending) return;
+      ui().setPendingArchive(null);
+      dispatch({ schema_version: 2, kind: "archive_session", payload: { pane_id: pending.paneId, confirmed: true } });
+    },
+    cancelArchive() {
+      ui().setPendingArchive(null);
+    },
+    /** 이어가기: the archived root and its descendants, or the one member named (B21, B24). */
+    resumeArchived(archiveId: string, sessionId?: string) {
+      dispatch({ schema_version: 2, kind: "archive_resume", payload: { archive_id: archiveId, ...(sessionId ? { session_id: sessionId } : {}) } });
+    },
+    /** 상태 확인 after a restart left an archive or a resume unknown (B34). */
+    checkArchived(archiveId: string) {
+      dispatch({ schema_version: 2, kind: "archive_check", payload: { archive_id: archiveId } });
+    },
+    /** 보관함에서 지우기…: asks first (B28). */
+    deleteArchived(archiveId: string) {
+      ui().setPendingArchiveDelete({ id: archiveId });
+    },
+    confirmArchiveDelete() {
+      const pending = ui().pendingArchiveDelete;
+      if (!pending) return;
+      ui().setPendingArchiveDelete(null);
+      dispatch({ schema_version: 2, kind: "archive_delete", payload: { archive_id: pending.id } });
+    },
+    keepArchived() {
+      ui().setPendingArchiveDelete(null);
     },
 
     /**

@@ -13,7 +13,7 @@ use super::ledger::{
     LEDGER_DEPTH_LIMIT, LEDGER_QUEUE_LIMIT, LEDGER_RPC_LIMIT, LedgerAnswer, LedgerCall,
     LedgerContext, LedgerUpdate, SessionIdentity, SessionRecord, SessionSearchHit, WorkProgress,
 };
-use super::store::{IssueLinks, LinkStore, LocalFiles, Opened, PrLinks};
+use super::store::{ArchivedSession, IssueLinks, LinkStore, LocalFiles, Opened, PrLinks};
 use super::{
     BACKFILL_MS, PaneFact, ParentFact, ProjectFacts, ProjectLinkSummary, files_present, link_code,
     now_ms,
@@ -71,6 +71,11 @@ pub trait Sink: Send + 'static {
     fn filling(&self, filling: bool);
     /// The devices whose helper is connected now (D-21).
     fn devices(&self) -> Vec<(String, Arc<dyn NodeLink>)>;
+    /// The sessions retention removed, and the archived ones it expired
+    /// (PRD session-archive B31).
+    fn pruned(&self, _sessions: Vec<SessionIdentity>) {}
+    /// How a delete of named sessions' lines went (B29, B30).
+    fn deleted(&self, _request: String, _answer: Result<(), String>) {}
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -113,7 +118,13 @@ struct Mailbox {
         std::sync::mpsc::SyncSender<Result<LedgerAnswer, String>>,
     )>,
     calls_pending: usize,
+    /// The sessions the archive holds, newest set only.
+    archived: Option<Arc<Vec<ArchivedSession>>>,
+    deletes: VecDeque<(String, Vec<SessionIdentity>)>,
 }
+
+/// Deletes waiting at once; the archive's own delete is one per row.
+const DELETE_QUEUE_LIMIT: usize = 64;
 
 /// The runtime's handle on the worker's mailbox.
 #[derive(Clone)]
@@ -270,6 +281,30 @@ impl LinkClient {
         self.post(|mailbox| mailbox.parents = Some(parents));
     }
 
+    /// The sessions the archive holds now, which retention also answers for.
+    pub fn archived(&self, archived: Arc<Vec<ArchivedSession>>) {
+        self.post(|mailbox| mailbox.archived = Some(archived));
+    }
+
+    /// Removes the named sessions' lines; the answer reaches `Sink::deleted`.
+    pub fn delete_sessions(
+        &self,
+        request: String,
+        sessions: Vec<SessionIdentity>,
+    ) -> Result<(), String> {
+        let (lock, wake) = &*self.0;
+        let mut mailbox = lock.lock().map_err(|_| "links_worker_closed")?;
+        if mailbox.stop {
+            return Err("links_worker_closed".into());
+        }
+        if mailbox.deletes.len() >= DELETE_QUEUE_LIMIT {
+            return Err("links_delete_capacity".into());
+        }
+        mailbox.deletes.push_back((request, sessions));
+        wake.notify_one();
+        Ok(())
+    }
+
     pub fn read(&self, request: PanelRequest) {
         self.post(|mailbox| {
             mailbox.panel = Some(request);
@@ -372,6 +407,8 @@ struct State {
     listed: Option<Instant>,
     panes_at: Option<Instant>,
     pruned: Option<Instant>,
+    /// The sessions the archive holds, for retention.
+    archived: Arc<Vec<ArchivedSession>>,
 }
 
 impl State {
@@ -403,6 +440,7 @@ impl State {
             listed: None,
             panes_at: None,
             pruned: None,
+            archived: Arc::default(),
         }
     }
 
@@ -529,6 +567,7 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
             && !mailbox.record_closed
             && mailbox.search.is_none()
             && mailbox.calls.is_empty()
+            && mailbox.deletes.is_empty()
             && (store.is_err() || mailbox.contexts.is_empty())
             && wait > Duration::ZERO
         {
@@ -550,6 +589,10 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
         let record_closed = std::mem::take(&mut mailbox.record_closed);
         let search = mailbox.search.take();
         let calls = std::mem::take(&mut mailbox.calls);
+        let deletes = std::mem::take(&mut mailbox.deletes);
+        if let Some(archived) = mailbox.archived.take() {
+            state.archived = archived;
+        }
         let contexts = if store.is_ok() {
             let count = mailbox.contexts.len().min(16);
             mailbox.contexts.drain(..count).collect::<Vec<_>>()
@@ -604,6 +647,9 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
         let store = match store.as_mut() {
             Ok(store) => store,
             Err(code) => {
+                for (request, _) in deletes {
+                    sink.deleted(request, Err(code.clone()));
+                }
                 for (_, answer) in calls {
                     let _ = answer.send(Err(code.clone()));
                     if let Ok(mut mailbox) = client.0.0.lock() {
@@ -626,6 +672,15 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
                 continue;
             }
         };
+        for (request, sessions) in deletes {
+            let result = store.delete_sessions(&sessions);
+            if let Err(code) = &result {
+                log_write(code, "delete");
+            } else {
+                state.dirty_at.get_or_insert_with(Instant::now);
+            }
+            sink.deleted(request, result);
+        }
         for (call, answer) in calls {
             let result = store.ledger_call(call);
             if let Err(code) = &result {
@@ -775,7 +830,7 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
             sink.filling(filling);
         }
         if state.pruned.is_none_or(|at| at.elapsed() >= PRUNE_EVERY) {
-            prune(store, own, paths);
+            prune(store, own, paths, &state.archived, sink);
             state.pruned = Some(Instant::now());
             state.dirty_at.get_or_insert_with(Instant::now);
         }
@@ -1293,7 +1348,13 @@ fn log_device(device: &str, what: &str, code: &str) {
     }));
 }
 
-fn prune(store: &mut LinkStore, own: &dyn NodeLink, paths: &Paths) {
+fn prune(
+    store: &mut LinkStore,
+    own: &dyn NodeLink,
+    paths: &Paths,
+    archived: &[ArchivedSession],
+    sink: &impl Sink,
+) {
     let policies = match store.policies(&paths.search) {
         Ok(policies) => policies,
         Err(code) => {
@@ -1306,12 +1367,27 @@ fn prune(store: &mut LinkStore, own: &dyn NodeLink, paths: &Paths) {
     };
     let days = |project: &str| policies.get(project).copied();
     let mut present = |asked: &[String]| files_present(own, asked);
-    match store.prune(&days, &paths.local_device, &mut present, now_ms()) {
-        Ok(0) => {}
-        Ok(removed) => crate::diagnostic!(serde_json::json!({
-            "component": "links", "kind": "retention.pruned", "sessions": removed,
-        })),
-        Err(code) => log_write(&code, "retention"),
+    let now = now_ms();
+    let mut gone = match store.prune(&days, &paths.local_device, &mut present, now) {
+        Ok(removed) => {
+            if !removed.is_empty() {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "links", "kind": "retention.pruned", "sessions": removed.len(),
+                }));
+            }
+            removed
+        }
+        Err(code) => {
+            log_write(&code, "retention");
+            return;
+        }
+    };
+    match store.expired_archived(archived, &days, now) {
+        Ok(expired) => gone.extend(expired),
+        Err(code) => log_write(&code, "retention_archived"),
+    }
+    if !gone.is_empty() {
+        sink.pruned(gone);
     }
 }
 
@@ -1679,7 +1755,8 @@ mod tests {
         assert_eq!(
             store
                 .prune(&|_| None, "local", &mut present, CREATED + 91 * 86_400_000)
-                .unwrap(),
+                .unwrap()
+                .len(),
             1
         );
         // A root with open work, a child whose file printed a pull request,

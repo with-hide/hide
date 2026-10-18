@@ -91,6 +91,8 @@ mod recent_panes;
 mod remote_spawn;
 #[path = "tests/repository_clone.rs"]
 mod repository_clone;
+#[path = "tests/session_archive.rs"]
+mod session_archive;
 #[path = "tests/session_navigation.rs"]
 mod session_navigation;
 #[path = "tests/session_state.rs"]

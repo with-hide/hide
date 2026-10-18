@@ -299,7 +299,8 @@ fn pruned_native_session_resumes(replaced: bool) {
     assert_eq!(
         store
             .prune(&|_| Some(1), "device-a", &mut |_| Ok(BTreeSet::new()), now)
-            .unwrap(),
+            .unwrap()
+            .len(),
         1
     );
     assert!(store.ledger_record(&identity).is_err());

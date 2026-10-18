@@ -1907,6 +1907,33 @@ export type SleepingSession = {
   checking: boolean;
 };
 
+/** One archived root and the descendants archived with it (`ArchivedSessionSnapshot`, PRD session-archive). */
+export type ArchivedSession = {
+  id: string;
+  device_id: string;
+  project_root: string;
+  project_label: string;
+  checkout_path: string;
+  phase: "archiving" | "close_failed" | "unknown" | "archived" | "deleting";
+  /** Whether the row stands in `보관됨`; otherwise its root is live and the members show in its record (B24). */
+  listed: boolean;
+  archived_at_unix_ms: number;
+  reason: string | null;
+  /** The root first. */
+  members: ArchivedMember[];
+};
+export type ArchivedMember = {
+  session: WorkSession;
+  agent_kind: string;
+  title: string;
+  depth: number;
+  parent_session_id: string | null;
+  last_line: string | null;
+  pulls: { url: string; number: number; title: string; state: PrState }[];
+  resume: "archived" | "queued" | "starting" | "failed" | "unknown" | "resumed";
+  reason: string | null;
+};
+
 export type SnapshotRest = {
   git_worktrees_loading?: boolean;
   navigator?: {
@@ -1924,6 +1951,10 @@ export type SnapshotRest = {
     agents?: AgentRow[];
     hide_ai_checkouts?: HideAiCheckout[];
     sleeping_sessions?: SleepingSession[];
+    /** Newest archived first (D-09). */
+    archived_sessions?: ArchivedSession[];
+    /** Panes a Factory runs its workers in, which offer no Archive session (D-25). */
+    factory_worker_panes?: string[];
     devices?: Device[];
     focused_device_id?: string | null;
   };

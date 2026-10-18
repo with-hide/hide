@@ -842,6 +842,7 @@ A failure before a pane or tab exists retains the same closed item for retry; on
 File reads use the filesystem worker, and missing, unreadable, already-open, and successfully reopened files each have an explicit result.
 A file close carries its matching debounced save in the same core event, writes that exact path and contents outside the runtime mutex, and removes the tab only after the current draft saves successfully.
 No reopen notice uses the shell's modal interaction alert.
+A 세션 보관 close (Session archive, below) is a subtree close whose panes never enter this stack (`archive_closes_pane` in `retain_for_reopen`): the archived session has its own way back, 이어가기, and an archived pane that Reopen Closed brought back would be a second live copy of the same conversation.
 
 ### Agent sleep
 
@@ -906,6 +907,36 @@ A `Woken` record no one binds within an hour is dropped with the `agent_sleep.wo
 The directory-chain barrier is the platform layer's on every system (The platform layer, below); a chain whose barrier fails refuses dormant persistence rather than returning a durability receipt.
 The chain is a fact about the state folder, not about one save, so the core makes it durable once per folder per process, by the folder's file identity, and again only for a folder replaced since (`persistence::establish_folder_once`); every save still flushes its file and that file's folder.
 
+### Session archive
+
+세션 보관 (PRD session-archive) closes a root session and every descendant pane with it and keeps the conversations, so the task list stops showing work the operator is done with and 이어가기 brings the whole tree back later.
+Two owners keep it apart from sleep: `herdr-core/src/session_archive.rs` holds the records (types, the load filter, the cap) and makes no call, and `herdr-core/src/runtime/session_archive.rs` drives admission, the close, resume, delete and the rows.
+The records live beside the dormant records in `core-state.json` (`session_archive`) and hold at most 256 sessions, each member counting; an archive that would cross the cap is refused before anything closes (`archive.full`), and nothing older is evicted.
+A record names its device, project root and checkout, and for each member the machine, pane, kind, native session, source reference, cwd, title, last line, pull requests, the delivery registration it held, its parent and depth.
+A load drops a record that does not parse rather than refusing the file, and a record being deleted is never written again.
+A core move carries each member's machine, pane, resumed pane and held registration with the machine it names (`node_migration::KEYS`), and its folders stay beside that machine id.
+
+Admission is one event, `archive_session`, with the root pane and whether the operator confirmed stopping running work; the tree is the root's lineage children and the close descendants the close sheet would list.
+A child, Hide AI's own agents, a Factory worker, an agent whose conversation Hide has not seen, a device that is not connected and an agent whose activity is unknown are refused with their own kinds; pressing it again on a session already being archived converges on the same record.
+The save comes first: the record is written through the coalesced state writer, and only its receipt (`ingest_archive_saved`) starts the close, so a save that fails closes nothing (`archive.save_failed`).
+The close is the subtree close (`tree_close.rs`, `TreeFinal::Archive`), local panes and a device's alike; a member counts as closed once its pane is gone, including on a connected device.
+A partial close keeps the record as `CloseFailed`: the members that closed stay archived and the live root's record lists them with their own 이어가기 (B24), the notice says once why (refused, timed out, or the device disconnected: `archive.incomplete`, `archive.incomplete_timeout`, `archive.incomplete_disconnected`), and 세션 보관 again converges on the same record; a retry whose save fails leaves the record as it was, the open root at its head.
+Once that live root is gone some other way, read from a fresh read of its machine (below) and with neither its pane, a pane its resume made, nor its conversation live, the record stands in `보관됨` itself, as does one whose root resumed and then closed with a member still archived, so a saved conversation never lacks a row.
+A tree larger than one subtree close takes (64 panes) is refused before anything is saved (`archive.too_many`).
+A restart reads a save or close in flight as `CloseUnknown`, and a resume in flight as unknown, keeping the pane it made; `archive_check` settles only those, and only once every member's machine is connected, its panes have been read since (`delivery_panes`) and, for a device, its session is loaded, because before that every pane would look closed; nothing is resent on its own, and a resume is refused while the close is unknown (`archive.close_unknown`).
+
+이어가기 (`archive_resume`, the whole record or one member) runs the members one at a time through the task-operation slot, root first, each through the checkout start (`start_in_checkout`) under the request `archive:<id>:<session>` with the provider's resume arguments for the saved native session; the tab starts in the folder the conversation ran in when that folder is inside the checkout, since a CLI may find its conversations by folder; the tab worker asks that machine's node whether the folder is still there (`Call::Directory`, off the lock) and, as a wake does, refuses a folder that is gone with that reason rather than starting the conversation somewhere it did not run; a start behind the screen does not become the operator's remembered agent choice.
+The root takes the screen as an ordinary start does; a descendant starts as a phone start does (`stay_behind`): its tab is created without focus (`CheckoutTabRequest::focus`) and its start moves nothing (`TaskOperation::stays_behind`), because only the operator's pane moves the screen and Herdr would otherwise bring the new tab forward and have the core follow it.
+A retry reuses the pane the earlier attempt made instead of opening another.
+A member is done once any live row on its machine shows the same kind and native session, which also covers the operator resuming it by hand; a failed member keeps its reason and its own 이어가기, and the record goes once every member is back.
+A member's delivery registration is held while it is archived (`held_registrations`, `archive_holds_actor`): its pane's absence ends neither the registration nor the watches on it, and the resume continues it as a wake does (`continue_dormant_registration`); a resumed pane that closes first, or that the delivery store has not seen within the hour a woken sleeper gets, lets the registration go (`session_archive.registration_released`), and a record that is deleted or pruned releases the holds of its members, leaving a move to a resumed pane already asked to finish.
+Deleting (`archive_delete`) removes the record and asks the link worker to delete those sessions' lines; the agent's own conversation file is never touched, and no resume starts while that delete is out.
+The delete is confirmed by the worker's answer (`deleted`); a failed delete keeps the record (`archive.delete_failed`).
+
+The snapshot publishes `navigator.archived_sessions` (each record's phase, whether it stands in `보관됨` or under a live root, its members' resume state and pull requests) and `navigator.factory_worker_panes`, the panes that offer no 세션 보관.
+Both are optional fields, so the protocol's version did not move: an older device daemon or phone reads the snapshot as before and simply offers no archive.
+Persistence uses the folder barrier the dormant records use, on every system (The platform layer); the Windows check lane runs `an_archived_session_saves_through_the_folders_barrier_and_loads_back`.
+
 ## The link record
 
 The link record (PRD link-graph) keeps which sessions made or worked on which pull request, which issues each pull request is linked to and from where, and which worktrees each branch had, after the panes, the branches and the provider files that said so are gone.
@@ -923,6 +954,8 @@ A line keeps the request text (500 characters at most), the branch spans, the pu
 A session is linked to a pull request when it printed the address within -2 s to +30 s of GitHub's `createdAt` (`created`), or when a branch span inside the project's folders overlaps the pull request's life, from the previous pull request on that branch closing to this one closing (`worked`); a non-interactive run (Claude `entrypoint` of SDK or print, Codex `exec`) makes no line.
 A link is closed by an end time, never deleted, and only when its source says it ended: a closing reference GitHub no longer lists, a Hide branch link that was cleared on a branch a checkout here holds; a failed GitHub read closes nothing.
 Retention follows each Project's Copied history: Off keeps a line only while its file exists, which the own node answers for all of them in one `real_paths` call (a call that fails removes nothing; an OpenCode session, which lives in OpenCode's database, until its read finds it gone), otherwise a line stays while it ended within the period, or within a year while its pull request is still open; the prune runs every 30 minutes on the worker.
+An archived session (Session archive, above) follows the same rule while it has a line; the core hands the worker the archived sessions it holds, the prune answers the sessions it removed (`pruned`), and the core drops those members, so an archive never outlives the record behind its row.
+An archived session with no line expires by its project's period counted from the archive time (`expired_archived`), Off keeping it.
 A repository is keyed by GitHub's repository id when `gh repo view` gives it, so a rename keeps its rows.
 
 A connected device's sessions come through its helper: `link_files` lists the device's changed session files and `link_read` reads up to 8 of them, each answer only link facts (helper protocol 32 and later include bounded request and issue facts); the worker asks each ready device at most once a minute, a device whose call failed is left alone for a minute before it is asked again, and a device that is gone keeps every row it gave.
