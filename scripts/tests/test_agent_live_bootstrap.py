@@ -218,15 +218,24 @@ class PaneShellPath(unittest.TestCase):
             program.chmod(0o700)
             shell = PaneShell()
             path = tool_path(private_bin)
-            for name, data in shell.files(path):
+            for name, data in shell.files():
                 (home / name).write_bytes(data)
-            environment = {"HOME": str(home), "PATH": path, "LC_ALL": "C", **shell.environment(home)}
-            for flags in ("-ic", "-ilc"):
-                with self.subTest(flags=flags):
-                    ran = subprocess.run(["/bin/zsh", flags, "uname"], env=environment,
-                                         capture_output=True, text=True, timeout=5)
-                    self.assertEqual(ran.returncode, 0, ran.stderr)
-                    self.assertEqual(ran.stdout.strip(), "private-program")
+            controller_bin = home / "controller/bin"
+            controller_bin.mkdir(parents=True)
+            controller = controller_bin / "uname"
+            controller.write_text("#!/bin/sh\nprintf 'controller-program\\n'\n")
+            controller.chmod(0o700)
+            # A controller pane uses the same private shell files but its
+            # own stand-in first, ahead of the measured native wrappers.
+            for pane_path, expected in ((path, "private-program"),
+                                        (os.pathsep.join((str(controller_bin), path)), "controller-program")):
+                environment = {"HOME": str(home), "PATH": pane_path, "LC_ALL": "C", **shell.environment(home)}
+                for flags in ("-ic", "-ilc"):
+                    with self.subTest(flags=flags, program=expected):
+                        ran = subprocess.run(["/bin/zsh", flags, "uname"], env=environment,
+                                             capture_output=True, text=True, timeout=5)
+                        self.assertEqual(ran.returncode, 0, ran.stderr)
+                        self.assertEqual(ran.stdout.strip(), expected)
 
 
 if __name__ == "__main__":

@@ -99,15 +99,17 @@ class PaneShell:
             return {"PROMPT": READY.removesuffix(">") + "$G "}
         return {"SHELL": "/bin/zsh", "ZDOTDIR": str(home), "skip_global_compinit": "1"}
 
-    def files(self, path):
+    def files(self):
         """(name, bytes) the private home holds for the shell."""
         if WINDOWS:
             return []
         # A login shell's global profile can reorder the inherited PATH
-        # (macOS path_helper does). Restore the run's path after it, before
-        # a pane resolves any command, so installed CLIs cannot bypass the
-        # wrappers that supply the private HOME and fake authentication.
-        return [(".zshrc", (f"export PATH={shlex.quote(path)}\n"
+        # (macOS path_helper does). Save each pane's incoming path before
+        # that profile, including the controller's own provider directory,
+        # and restore it before any command resolves an installed CLI.
+        return [(".zshenv", b"journey_pane_path=$PATH\n"),
+                (".zshrc", ("export PATH=${journey_pane_path:?missing pane PATH}\n"
+                            "unset journey_pane_path\n"
                             f"skip_global_compinit=1\nPS1='{READY} '\n").encode())]
 
     def herdr_config(self):

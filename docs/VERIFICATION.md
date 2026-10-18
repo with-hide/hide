@@ -344,7 +344,7 @@ Every prompt asks only for a fresh token (`Reply with exactly <token>`), so a mo
 The measured repository is a shared clone (`git clone --shared`) of this checkout's commit, on `main`, at `projects/measured` in the candidate's HOME, added as a project the way Add project adds one, and the journey starts its agents only once the navigator lists it as a registered Git project.
 An operator starts agents in a project they added inside their HOME, and Hide adds none outside it (`outside_home`); a Wake after a Sleep that closed the pane (Grok, Pi, omp, OpenCode) finds the agent's checkout among that project's, so a repository outside the candidate's HOME left those Wakes with no checkout to open.
 The clone reads this checkout's objects and writes only its own, so the run's branches and worktrees never reach the operator's repository; each agent's folder trust names the clone.
-The private pane's `.zshrc` restores the controlled PATH after system login profiles run, keeping the run's wrappers before system programs.
+The private pane's `.zshenv` saves its incoming PATH and `.zshrc` restores it after system login profiles run, preserving each pane's provider directory and keeping the run's wrappers before system programs.
 macOS's `path_helper` otherwise moves system folders ahead of them, so an installer's `/usr/local/bin` link can bypass the wrapper's private HOME and fake key even though the preflight version check passed.
 `test_agent_live_bootstrap.py` checks the program actually executed by both login and non-login shells against a private executable that shares a system command's name.
 
