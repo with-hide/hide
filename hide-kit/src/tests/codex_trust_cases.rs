@@ -593,8 +593,9 @@ fn a_refused_learn_keeps_what_was_recorded_before() {
     assert_eq!(learned(&fixture), std::slice::from_ref(&command));
 }
 
+/// A pass whose record cannot be read stops before it asks Codex anything.
 #[test]
-fn a_record_the_kit_cannot_read_trusts_only_hides_own_entries() {
+fn a_record_the_kit_cannot_read_trusts_nothing() {
     let fixture = with_codex_found();
     apply(&fixture.target, &Scope::automatic());
     let command = herdr_command(&fixture);
@@ -605,10 +606,11 @@ fn a_record_the_kit_cannot_read_trusts_only_hides_own_entries() {
     )
     .unwrap();
 
-    apply(&fixture.target, &Scope::automatic());
+    let report = apply(&fixture.target, &Scope::automatic());
 
+    assert!(report.refused.is_some(), "{report:?}");
     assert!(!trusted_at_all(&fixture, &command));
-    assert_eq!(held_keys(&fixture), hide_agent_hooks::HookEvent::ALL.len());
+    assert_eq!(held_keys(&fixture), 0);
 }
 
 #[test]

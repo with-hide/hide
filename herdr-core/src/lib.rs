@@ -60,6 +60,7 @@ pub mod remote;
 mod request_view;
 mod runtime;
 pub mod schema;
+mod session_archive;
 mod session_sync;
 mod sidebar;
 mod split_tree;

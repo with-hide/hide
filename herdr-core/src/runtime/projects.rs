@@ -3990,6 +3990,19 @@ impl Runtime {
     /// worktree sheet already reports through. The shell starts the provider
     /// in the pane the slot names, so `terminal` needs nothing more from it.
     pub(super) fn agent_start_in_checkout(&mut self, payload: AgentStartInCheckoutPayload) -> bool {
+        self.start_in_checkout(payload, true, None)
+    }
+
+    /// A start in a checkout's new tab; `remember` false keeps the start out
+    /// of the remembered agent choice (an archive resume). `cwd` is a folder
+    /// inside the checkout the resumed conversation ran in; one outside it is
+    /// ignored and the tab starts at the checkout.
+    pub(super) fn start_in_checkout(
+        &mut self,
+        payload: AgentStartInCheckoutPayload,
+        remember: bool,
+        cwd: Option<String>,
+    ) -> bool {
         let request_id = payload.request_id.clone();
         let agent_kind = match payload.provider.as_str() {
             "terminal" => None,
@@ -4139,7 +4152,11 @@ impl Runtime {
             operation.device_id = (!local).then(|| device.clone());
             operation.stays_behind = payload.stay_behind;
         }
-        self.remember_agent_choice(agent_kind.as_deref(), model.as_deref());
+        // A resume Hide makes from the archive is not the operator's choice
+        // of agent.
+        if remember {
+            self.remember_agent_choice(agent_kind.as_deref(), model.as_deref());
+        }
         let mut arguments = resume.unwrap_or_default();
         arguments.extend(agent_choice::agent_arguments(
             agent_kind.as_deref(),
@@ -4158,6 +4175,9 @@ impl Runtime {
         if let Some(launch) = self.task_agent_launch.as_mut() {
             launch.resume_reference = resume_reference.clone();
         }
+        let cwd = cwd
+            .filter(|cwd| hide_platform::path::wire_relative(&checkout_path, cwd).is_ok())
+            .unwrap_or_else(|| checkout_path.clone());
         let request = live::CheckoutTabRequest {
             id,
             agent_kind,
@@ -4168,8 +4188,9 @@ impl Runtime {
                 .filter(|_| proof.is_some())
                 .map(|id| hide_session::SessionReadScope {
                     id: id.clone(),
-                    cwd: checkout_path.clone(),
+                    cwd: cwd.clone(),
                 }),
+            cwd,
             checkout_path,
             label,
             host,

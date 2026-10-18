@@ -3,6 +3,7 @@ import { usageCatalogs, usageEnglish } from "./resources/usage";
 import { commandsCatalogs, commandsEnglish } from "./resources/commands";
 import { agentSessionsCatalogs, agentSessionsEnglish } from "./resources/agentSessions";
 import { taskLensCatalogs, taskLensEnglish } from "./resources/taskLens";
+import { archiveCatalogs, archiveEnglish } from "./resources/archive";
 import { boardCatalogs, boardEnglish } from "./resources/board";
 import { cleanupCatalogs, cleanupEnglish } from "./resources/cleanup";
 import { commonCatalogs, commonEnglish } from "./resources/common";
@@ -45,6 +46,7 @@ export const english = {
   ...deviceOverviewEnglish,
   ...agentSessionsEnglish,
   ...taskLensEnglish,
+  ...archiveEnglish,
   ...shellEnglish,
   ...editorSearchEnglish,
   ...documentsEnglish,
@@ -92,6 +94,7 @@ export const catalogs = {
     ...deviceOverviewCatalogs.ko,
     ...agentSessionsCatalogs.ko,
     ...taskLensCatalogs.ko,
+    ...archiveCatalogs.ko,
     ...shellCatalogs.ko,
     ...editorSearchCatalogs.ko,
     ...documentsCatalogs.ko,
@@ -134,6 +137,7 @@ export const catalogs = {
     ...deviceOverviewCatalogs["zh-CN"],
     ...agentSessionsCatalogs["zh-CN"],
     ...taskLensCatalogs["zh-CN"],
+    ...archiveCatalogs["zh-CN"],
     ...shellCatalogs["zh-CN"],
     ...editorSearchCatalogs["zh-CN"],
     ...documentsCatalogs["zh-CN"],
@@ -176,6 +180,7 @@ export const catalogs = {
     ...deviceOverviewCatalogs.ja,
     ...agentSessionsCatalogs.ja,
     ...taskLensCatalogs.ja,
+    ...archiveCatalogs.ja,
     ...shellCatalogs.ja,
     ...editorSearchCatalogs.ja,
     ...documentsCatalogs.ja,

@@ -238,6 +238,49 @@ it("says why the kit could not run here before anything is pressed, as after a r
   await unmount();
 });
 
+it("opens on a first pass that stopped before changing anything, says what stopped it with the variable and both ways back, and Try again sends no choice", async () => {
+  const next = state(true, []);
+  next.rest.ui_state.agent_onboarding = null as never;
+  Object.assign(next.rest.navigator.devices[0]!.kit, { components: [], refused: { cause: "unsafe", path: "D:\\", variable: "HIDE_STATE_DIR" } });
+  const { events, unmount } = await mount(next);
+  const line = document.querySelector('[data-first-run-refused="unsafe"]')?.textContent ?? "";
+  expect(line).toContain("D:\\");
+  expect(line).toContain("HIDE_STATE_DIR");
+  expect(line).toContain("~/.hide/state");
+  expect(line).not.toMatch(/retire|preflight|kit/i);
+  expect(document.querySelector("[data-first-run-no-agent]")).toBeNull();
+  expect(continueButton().textContent).toContain("Try again");
+  const before = choices(events).length;
+  await act(async () => { continueButton().click(); });
+  expect(choices(events).slice(before)).toEqual([{ schema_version: 2, kind: "agent_onboarding_apply", payload: { agents: [], finish: true } }]);
+  // While the pass runs again the step holds its button; a pass that runs brings the tiles back.
+  await act(async () => {
+    const running = state(true, [], [], { busy: true }, 2);
+    Object.assign(running.rest.navigator.devices[0]!.kit, { components: [], refused: { cause: "unsafe", path: "D:\\", variable: "HIDE_STATE_DIR" } });
+    useShellStore.setState(running as never);
+  });
+  expect(continueButton().disabled).toBe(true);
+  expect(document.querySelector("[data-first-run-refused]")).toBeNull();
+  await act(async () => { useShellStore.setState(state(true, AGENTS, [], {}, 3) as never); });
+  expect(document.querySelector("[data-first-run-refused]")).toBeNull();
+  expect(tile("claude-code", "on")).not.toBeNull();
+  await unmount();
+});
+
+it("lets a refused first step be left with Not now, which closes it with no choice, and names this Mac's command that stops its background service", async () => {
+  const next = state(true, []);
+  next.rest.ui_state.agent_onboarding = null as never;
+  const stop = "HIDE_STATE_DIR='/Volumes/Team/hide' '/Applications/hide.app/Contents/Resources/hide' stop";
+  Object.assign(next.rest.navigator.devices[0]!.kit, { components: [], refused: { cause: "unsafe", path: "/Volumes/Team", variable: "HIDE_STATE_DIR", stop } });
+  const { events, unmount } = await mount(next);
+  const line = document.querySelector('[data-first-run-refused="unsafe"]')?.textContent ?? "";
+  expect(line).toContain("quit Hide, run this in a terminal, and open Hide again: " + stop);
+  const before = choices(events).length;
+  await act(async () => { (document.querySelector("[data-first-run-refused-close]") as HTMLButtonElement).click(); });
+  expect(choices(events).slice(before)).toEqual([{ schema_version: 2, kind: "first_run_advance", payload: { from: "agents" } }]);
+  await unmount();
+});
+
 it("on a Mac that already allows Hide, opens the notification step on, and its Continue turns the switch on with the step (B16)", async () => {
   const notify = vi.fn();
   vi.stubGlobal("hideHost", { kind: "electron", platform: "darwin", notify, notificationPermission: async () => "granted", onCommand: () => () => undefined, onNotificationOpen: () => () => undefined });

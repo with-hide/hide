@@ -26,6 +26,12 @@ export function startFailure(message: string | null | undefined): StartFailure {
   return message ? startReason(message) : { key: "workspace.agentNotStarted" };
 }
 
+/** The core's reason as a sentence that another sentence can follow: a reason sent without its full stop gets one. */
+export function endedSentence(text: string): string {
+  const trimmed = text.trimEnd();
+  return /[.!?。！？]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
 type StartPanelState = {
   isOpen: boolean;
   text: string;

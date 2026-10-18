@@ -324,6 +324,194 @@ fn try_again_while_the_kit_cannot_run_records_nothing_and_reads_the_agents_again
     }
 }
 
+/// The command the app's own kit names to stop its background service.
+const STOP: &str = "HIDE_STATE_DIR='/srv/shared/hide' '/opt/hide/resources/hide' stop";
+
+/// A pass that stopped before changing anything, here a state folder
+/// `HIDE_STATE_DIR` chose that another account can change, refused by any
+/// system's rule.
+fn refused_pass() -> KitReport {
+    KitReport::refused(hide_kit::KitRefusal {
+        cause: hide_kit::RefusalCause::Unsafe,
+        path: Some("/srv/shared".to_owned()),
+        variable: Some(hide_kit::layout::StateVariable::HideStateDir),
+        stop: Some(STOP.to_owned()),
+        detail: "the Hide state override cannot be inspected at /srv/shared".to_owned(),
+    })
+}
+
+fn refused_by(cause: hide_kit::RefusalCause) -> KitReport {
+    KitReport::refused(hide_kit::KitRefusal {
+        cause,
+        path: None,
+        variable: None,
+        stop: None,
+        detail: "the kit's own words".to_owned(),
+    })
+}
+
+fn local_kit(runtime: &Runtime) -> serde_json::Value {
+    let snapshot = serde_json::to_value(runtime.snapshot()).unwrap();
+    snapshot["navigator"]["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|device| device["kind"] != "remote")
+        .expect("this Mac's row")["kit"]
+        .clone()
+}
+
+/// A new Mac whose first pass stopped before changing anything still gets
+/// the wizard, with why on its first step: the refusal reaches the screen
+/// once, with what to change and no part listed four times. Try again runs
+/// the same pass again, never a read that could look like success, and
+/// records no choice; once a pass runs, the question is asked as usual.
+#[test]
+fn a_refused_first_pass_opens_the_wizard_with_why_and_try_again_runs_the_pass() {
+    let mut runtime = runtime();
+    report_here(&mut runtime, &refused_pass());
+    assert_eq!(step(&runtime), Some(FirstRunStep::Agents));
+    assert_eq!(
+        runtime.snapshot().ui_state.agent_onboarding,
+        None,
+        "a refused pass says nothing about the record"
+    );
+    let kit = local_kit(&runtime);
+    assert_eq!(
+        kit["refused"],
+        serde_json::json!({"cause": "unsafe", "path": "/srv/shared", "variable": "HIDE_STATE_DIR", "stop": STOP}),
+        "the kit's own words stay in the log"
+    );
+    assert_eq!(kit["components"], serde_json::json!([]));
+    assert_eq!(kit["offers_reinstall"], false);
+
+    for finish in [false, true] {
+        assert!(runtime.dispatch_json(&event(
+            "agent_onboarding_apply",
+            serde_json::json!({"agents": [], "finish": finish}),
+        )));
+        assert_eq!(local_kit(&runtime)["busy"], true, "finish {finish}");
+        let scope = run_queued_pass(&mut runtime, &refused_pass());
+        assert!(scope.is_automatic(), "finish {finish}: the same pass again");
+        assert_eq!(
+            step(&runtime),
+            Some(FirstRunStep::Agents),
+            "finish {finish}"
+        );
+        assert_eq!(
+            runtime.snapshot().ui_state.agent_onboarding,
+            None,
+            "finish {finish}: no choice recorded"
+        );
+        assert!(
+            local_kit(&runtime)["refused"].is_object(),
+            "finish {finish}"
+        );
+        assert!(
+            runtime.snapshot().status.last_error.is_none(),
+            "finish {finish}"
+        );
+    }
+
+    // The operator fixed the folder: the pass runs and the question is asked.
+    assert!(runtime.dispatch_json(&event(
+        "agent_onboarding_apply",
+        serde_json::json!({"agents": []}),
+    )));
+    run_queued_pass(&mut runtime, &first_run_pass());
+    assert!(local_kit(&runtime)["refused"].is_null());
+    assert_eq!(
+        runtime.snapshot().ui_state.agent_onboarding,
+        Some(crate::model::AgentOnboarding::Pending)
+    );
+    assert_eq!(step(&runtime), Some(FirstRunStep::Agents));
+}
+
+/// Whatever stopped the first pass, a new Mac's wizard opens with it.
+#[test]
+fn a_first_pass_refused_for_any_cause_opens_the_wizard() {
+    use hide_kit::RefusalCause::{Busy, Projects, Record};
+    for cause in [Busy, Record, Projects] {
+        let mut runtime = runtime();
+        report_here(&mut runtime, &refused_by(cause));
+        assert_eq!(step(&runtime), Some(FirstRunStep::Agents), "{cause:?}");
+    }
+}
+
+/// Clearing a refusal can take a terminal and a restart, so the operator
+/// may close the wizard; the same refusal read again keeps it closed, a
+/// different one opens it, and the question stays unanswered for the pass
+/// that runs. The agent step never closes this way while a pass can run.
+#[test]
+fn not_now_closes_a_refused_wizard_until_the_refusal_changes() {
+    let mut runtime = runtime();
+    let close = || event("first_run_advance", serde_json::json!({"from": "agents"}));
+    report_here(&mut runtime, &refused_pass());
+    assert!(runtime.dispatch_json(&close()));
+    assert_eq!(step(&runtime), None);
+    assert_eq!(runtime.snapshot().ui_state.agent_onboarding, None);
+
+    report_here(&mut runtime, &refused_pass());
+    assert_eq!(step(&runtime), None, "Settings' re-read reopens nothing");
+
+    report_here(&mut runtime, &refused_by(hide_kit::RefusalCause::Busy));
+    assert_eq!(step(&runtime), Some(FirstRunStep::Agents));
+
+    report_here(&mut runtime, &first_run_pass());
+    assert!(!runtime.dispatch_json(&close()));
+    assert_eq!(step(&runtime), Some(FirstRunStep::Agents));
+}
+
+/// The kit's own words reach the log once per refusal, not on every read
+/// while Settings is open.
+#[test]
+fn a_refusal_is_logged_when_it_appears_or_changes() {
+    let mut runtime = runtime();
+    let ((), records) = crate::diagnostics::capture(|| {
+        for _ in 0..3 {
+            report_here(&mut runtime, &refused_pass());
+        }
+        report_here(&mut runtime, &refused_by(hide_kit::RefusalCause::Busy));
+        report_here(&mut runtime, &refused_by(hide_kit::RefusalCause::Busy));
+    });
+    let causes: Vec<_> = records
+        .iter()
+        .filter(|record| record["kind"] == "kit.refused")
+        .map(|record| record["cause"].clone())
+        .collect();
+    assert_eq!(
+        causes,
+        [serde_json::json!("unsafe"), serde_json::json!("busy")]
+    );
+}
+
+/// An install that was set up before gets no wizard when a later pass is
+/// refused; its machine row says why, and that row's Try again runs the
+/// same pass again.
+#[test]
+fn a_refused_pass_on_an_existing_install_opens_no_wizard_and_its_row_retries_the_pass() {
+    let mut runtime = runtime();
+    report_here(
+        &mut runtime,
+        &pass(
+            false,
+            vec![agent("claude-code", true, ComponentState::Installed)],
+        ),
+    );
+    report_here(&mut runtime, &refused_pass());
+    assert_eq!(step(&runtime), None);
+    assert!(local_kit(&runtime)["refused"].is_object());
+
+    let node = runtime.node.clone();
+    assert!(runtime.dispatch_json(&event(
+        "kit_reinstall",
+        serde_json::json!({"device_id": node.as_str()}),
+    )));
+    let scope = run_queued_pass(&mut runtime, &refused_pass());
+    assert!(scope.is_automatic());
+    assert!(runtime.snapshot().status.last_error.is_none());
+}
+
 /// B26: a browser tab's wizard is its first step alone, so applying it ends it.
 #[test]
 fn a_browser_tab_finishes_the_wizard_with_its_first_step() {

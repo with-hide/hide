@@ -16,7 +16,7 @@ import { Checkbox } from "./components/ui/checkbox";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Input } from "./components/ui/input";
 import { DiskCleanupSheet } from "./DiskCleanupSheet";
-import { startFailure } from "./startDraft";
+import { endedSentence, startFailure } from "./startDraft";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import { Note, Status } from "./components/settings-rows";
 import { SubtreeList } from "./components/subtree-list";
@@ -647,7 +647,7 @@ export function WorkspaceNotices({ actions }: { actions: Actions }) {
       <span className="min-w-0 flex-1 break-words">
         {task.agent_phase === "starting"
           ? t("workspace.startingAgent", { kind: task.agent_kind ?? t("common.agent") })
-          : `${"key" in failure ? t(failure.key) : failure.message} ${task.kind === "worktree_create" ? t("workspace.worktreePaneKept") : t("workspace.paneKept")}`}
+          : `${endedSentence("key" in failure ? t(failure.key) : failure.message)} ${task.kind === "worktree_create" ? t("workspace.worktreePaneKept") : t("workspace.paneKept")}`}
       </span>
       {task.agent_phase === "failed" ? (
         <button type="button" className="text-foreground underline" onClick={() => actions.retryTaskAgent(task.id)} data-task-agent-retry="true">

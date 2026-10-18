@@ -2,6 +2,7 @@ import type { SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { viewRefusal } from "./viewLayout";
+import { archiveNotice } from "./archive";
 
 type Shell = { rest: SnapshotRest | null };
 
@@ -30,6 +31,9 @@ export function errorNotice(error: { kind: string; message: string } | null | un
   const refusal = viewRefusal(error);
   if (refusal) return { text: refusal, refreshable: false };
   if (error.kind.startsWith("pane_reopen.")) return { text: error.message, refreshable: false };
+  // An archive that closed, saved or deleted nothing says why in one line (PRD session-archive B10, B12, B30).
+  const archive = archiveNotice(error.kind);
+  if (archive) return { text: archive, refreshable: error.kind === "archive.status_unknown" };
   return null;
 }
 
