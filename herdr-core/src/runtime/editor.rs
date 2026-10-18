@@ -910,10 +910,9 @@ impl Runtime {
                     });
                 ClosedPane {
                     pane_id: pane.id.clone(),
-                    label: pane
-                        .herdr_label
-                        .clone()
-                        .or_else(|| pane.terminal_title.clone()),
+                    label: crate::start_claim::public_label(pane.herdr_label.as_deref()).or_else(
+                        || crate::start_claim::public_label(pane.terminal_title.as_deref()),
+                    ),
                     cwd: pane.cwd.clone(),
                     agent,
                 }

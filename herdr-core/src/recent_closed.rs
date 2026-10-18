@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 
 pub const RECENT_CLOSED_LIMIT: usize = 20;
 
-pub fn push_bounded(stack: &mut VecDeque<ClosedItem>, item: ClosedItem) {
+pub fn push_bounded(stack: &mut VecDeque<ClosedItem>, mut item: ClosedItem) {
+    item.clear_start_claims();
     if stack.len() == RECENT_CLOSED_LIMIT {
         stack.pop_front();
     }
@@ -196,6 +197,21 @@ pub enum ClosedItem {
 }
 
 impl ClosedItem {
+    fn clear_start_claims(&mut self) {
+        match self {
+            Self::Pane { pane, .. } => {
+                pane.label = crate::start_claim::public_label(pane.label.as_deref());
+            }
+            Self::Tab { layout, panes, .. } => {
+                layout.root.clear_start_claims();
+                for pane in panes {
+                    pane.label = crate::start_claim::public_label(pane.label.as_deref());
+                }
+            }
+            Self::Draft { .. } | Self::File { .. } => {}
+        }
+    }
+
     pub fn key(&self) -> &str {
         match self {
             Self::Pane { key, .. }
@@ -216,7 +232,11 @@ impl ClosedItem {
 
     pub fn label(&self) -> &str {
         match self {
-            Self::Pane { pane, .. } => pane.label.as_deref().unwrap_or("Pane"),
+            Self::Pane { pane, .. } => pane
+                .label
+                .as_deref()
+                .filter(|label| !crate::start_claim::is_reserved(label))
+                .unwrap_or("Pane"),
             Self::Tab { context, .. } => &context.tab_label,
             Self::File { label, .. } => label,
             Self::Draft { .. } => "New tab",
@@ -225,6 +245,18 @@ impl ClosedItem {
 }
 
 impl ClosedLayoutNode {
+    fn clear_start_claims(&mut self) {
+        match self {
+            Self::Pane { label, .. } => {
+                *label = crate::start_claim::public_label(label.as_deref());
+            }
+            Self::Split { first, second, .. } => {
+                first.clear_start_claims();
+                second.clear_start_claims();
+            }
+        }
+    }
+
     pub fn pane_count(&self) -> usize {
         match self {
             Self::Pane { .. } => 1,
@@ -348,7 +380,8 @@ impl ClosedLayoutNode {
                 };
                 Some(Self::Pane {
                     pane_id: None,
-                    label: pane.label.clone().or_else(|| label.clone()),
+                    label: crate::start_claim::public_label(pane.label.as_deref())
+                        .or_else(|| crate::start_claim::public_label(label.as_deref())),
                     cwd: Some(restored_cwd),
                     command: None,
                     env: env.clone(),
@@ -408,6 +441,143 @@ mod tests {
             checkout_path: "/tmp".into(),
             path: format!("/tmp/{key}"),
             label: key.into(),
+        }
+    }
+
+    fn context() -> ClosedContext {
+        ClosedContext {
+            workspace_id: "w1".into(),
+            workspace_label: "Project".into(),
+            workspace_ids_before_close: vec!["w1".into()],
+            tab_ids_before_close: vec!["w1:t1".into()],
+            pane_ids_before_close: vec!["terminal".into()],
+            checkout_id: "checkout".into(),
+            checkout_path: "/repo".into(),
+            tab_id: "w1:t1".into(),
+            tab_label: "Work".into(),
+            tab_index: 0,
+            agent_area: None,
+            agent_group: None,
+            replacement_shell: false,
+            replacement_in_tab: false,
+            tab_name: ClosedTabName::Unnamed,
+        }
+    }
+
+    #[test]
+    fn recently_closed_items_discard_creation_claims_but_keep_human_names() {
+        let claim = crate::start_claim::label(&"c".repeat(64));
+        let closed = ClosedPane {
+            pane_id: "terminal".into(),
+            label: Some(claim.clone()),
+            cwd: "/repo".into(),
+            agent: None,
+        };
+        let mut leaf = pane("terminal");
+        if let ClosedLayoutNode::Pane { label, .. } = &mut leaf {
+            *label = Some(claim.clone());
+        }
+        let single = ClosedItem::Pane {
+            key: "pane".into(),
+            context: context(),
+            pane: closed.clone(),
+            placement: PanePlacement {
+                neighbor_pane_id: None,
+                parent_path: vec![],
+                direction: ClosedSplitDirection::Right,
+                ratio: 0.5,
+                target_was_first: true,
+            },
+        };
+        assert_eq!(single.label(), "Pane", "legacy records never show a claim");
+        let human = ClosedPane {
+            pane_id: "human".into(),
+            label: Some(" 작업 메모 ".into()),
+            ..closed.clone()
+        };
+        let mut human_leaf = pane("human");
+        if let ClosedLayoutNode::Pane { label, .. } = &mut human_leaf {
+            *label = human.label.clone();
+        }
+        let tab = ClosedItem::Tab {
+            key: "tab".into(),
+            context: context(),
+            layout: ClosedLayout {
+                workspace_id: "w1".into(),
+                tab_id: "w1:t1".into(),
+                zoomed: false,
+                focused_pane_id: "terminal".into(),
+                root: ClosedLayoutNode::Split {
+                    direction: ClosedSplitDirection::Right,
+                    ratio: 0.4,
+                    first: Box::new(leaf),
+                    second: Box::new(human_leaf),
+                },
+            },
+            panes: vec![closed, human],
+        };
+        let mut stack = VecDeque::new();
+        push_bounded(&mut stack, single);
+        push_bounded(&mut stack, tab);
+        let ClosedItem::Tab { layout, panes, .. } = stack.pop_back().unwrap() else {
+            panic!("tab retained")
+        };
+        assert_eq!(panes[0].label, None);
+        assert_eq!(panes[1].label.as_deref(), Some(" 작업 메모 "));
+        let saved_layout = serde_json::to_string(&layout).unwrap();
+        assert!(!saved_layout.contains(&claim));
+        assert!(saved_layout.contains(" 작업 메모 "));
+        let ClosedItem::Pane { pane, .. } = stack.pop_back().unwrap() else {
+            panic!("pane retained")
+        };
+        assert_eq!(pane.label, None);
+    }
+
+    #[test]
+    fn reopening_legacy_records_never_copies_a_creation_claim() {
+        let claim = crate::start_claim::label(&"d".repeat(64));
+        for (recorded, layout_label, expected) in [
+            (Some(claim.as_str()), Some(claim.as_str()), None),
+            (
+                Some(claim.as_str()),
+                Some("Layout name"),
+                Some("Layout name"),
+            ),
+            (Some("Pane name"), Some(claim.as_str()), Some("Pane name")),
+            (None, Some(claim.as_str()), None),
+            (
+                Some("hide-start:v1:human notes"),
+                None,
+                Some("hide-start:v1:human notes"),
+            ),
+        ] {
+            let layout: ClosedLayoutNode = serde_json::from_value(serde_json::json!({
+                "type": "pane", "pane_id": "terminal", "label": layout_label,
+                "cwd": "/repo", "env": {"PROJECT": "work"}
+            }))
+            .unwrap();
+            let panes = BTreeMap::from([(
+                "terminal".into(),
+                ClosedPane {
+                    pane_id: "terminal".into(),
+                    label: recorded.map(str::to_owned),
+                    cwd: "/repo".into(),
+                    agent: None,
+                },
+            )]);
+            let restored = layout
+                .resolve_panes(&panes, "/repo", &|_| true, &mut vec![])
+                .unwrap();
+            let ClosedLayoutNode::Pane {
+                label, cwd, env, ..
+            } = &restored
+            else {
+                panic!("pane restored")
+            };
+            assert_eq!(label.as_deref(), expected);
+            assert_eq!(cwd.as_deref(), Some("/repo"));
+            assert_eq!(env.get("PROJECT").map(String::as_str), Some("work"));
+            assert!(!serde_json::to_string(&restored).unwrap().contains(&claim));
         }
     }
 

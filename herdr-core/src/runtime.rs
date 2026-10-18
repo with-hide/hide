@@ -2712,11 +2712,27 @@ fn project_layout_panes(
                 .unwrap_or_else(|| fallback_cwd.to_owned());
             let ports = crate::ports::attributed_ports(&cwd, listening_ports);
             PaneSnapshot {
+                start_claim: source.and_then(|source| {
+                    source
+                        .start_claim
+                        .as_deref()
+                        .filter(|label| crate::start_claim::is_reserved(label))
+                        .or_else(|| {
+                            source
+                                .label
+                                .as_deref()
+                                .filter(|label| crate::start_claim::is_reserved(label))
+                        })
+                        .map(str::to_owned)
+                }),
                 terminal_id: source.and_then(|source| source.terminal_id.clone()),
                 failed_terminal_id: source.and_then(|source| source.failed_terminal_id.clone()),
                 id: pane.pane_id.clone(),
-                herdr_label: source.and_then(|source| source.label.clone()),
-                terminal_title: source.and_then(|source| source.terminal_title.clone()),
+                herdr_label: source
+                    .and_then(|source| crate::start_claim::public_label(source.label.as_deref())),
+                terminal_title: source.and_then(|source| {
+                    crate::start_claim::public_label(source.terminal_title.as_deref())
+                }),
                 cwd: cwd.clone(),
                 // This projection cannot see the read record ledger, so both
                 // read-dependent values are refilled from the navigator's

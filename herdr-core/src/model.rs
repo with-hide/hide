@@ -2245,6 +2245,9 @@ pub struct TabSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PaneSnapshot {
+    /// Exact creation descriptor used only for start reconciliation, never a title.
+    #[serde(skip_serializing)]
+    pub start_claim: Option<String>,
     /// Internal incarnation used to bind a close approval to its terminal.
     #[serde(skip_serializing)]
     pub terminal_id: Option<String>,
