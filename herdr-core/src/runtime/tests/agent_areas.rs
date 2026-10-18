@@ -2244,3 +2244,34 @@ fn focus_pane(runtime: &mut Runtime, pane: &str) {
         serde_json::json!({"pane_id": pane, "origin": "operator", "focus_device": false}),
     ));
 }
+
+// Herdr can report the fork's tab with its keyboard on it before the worker's
+// answer reaches the core, the order the journey's Grok fork on Windows was
+// first read as: that report is not followed into a checkout not in front,
+// and the answer then brings the checkout forward with the fork.
+#[test]
+fn herdr_reporting_a_fork_tab_before_its_answer_is_not_followed() {
+    let before = ["w-order:t1", "w-order:t2"];
+    let with_fork = ["w-order:t1", "w-order:t2", "w-order:t4"];
+    let (mut runtime, checkout, elsewhere) = entered_from_elsewhere(&before);
+    choose_checkout(&mut runtime, "workspace:elsewhere", &elsewhere);
+    runtime.ingest_session(Ok(fork_session(&before, "w-else:t1", None)));
+    let screen = fork_on_screen(&runtime);
+    pending_fork(&mut runtime, "w-order:t1:p", Some("fork-keys"));
+    runtime.ingest_session(Ok(fork_session(&with_fork, "w-order:t4", None)));
+    assert_eq!(fork_on_screen(&runtime), screen);
+    runtime.ingest_fork_pane("w-order:t1:p", Some("w-order:t4"), "w-order:t4:p");
+    runtime.ingest_session(Ok(fork_session(&with_fork, "w-order:t4", None)));
+    assert_eq!(
+        fork_on_screen(&runtime),
+        (
+            Some(checkout),
+            Some("w-order:t4:p".to_owned()),
+            Some("w-order:t4".to_owned()),
+            false
+        )
+    );
+    assert!(keys_held_for(&runtime, "w-order:t4:p"));
+    assert_eq!(diagnostic_count(&runtime, "pane.focus.followed"), 0);
+    assert_eq!(diagnostic_count(&runtime, "tab.focus.followed"), 0);
+}
