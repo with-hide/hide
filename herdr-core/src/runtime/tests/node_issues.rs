@@ -558,9 +558,14 @@ fn same_path_memo_details_stay_with_the_requested_device() {
 struct OriginNode {
     inner: Arc<dyn NodeLink>,
     turn: hide_session::label_transcript::WorkTurn,
+    readers: hide_node_link::sessions::ReaderFeatures,
 }
 
 impl NodeLink for OriginNode {
+    fn reader_features(&self) -> Option<&hide_node_link::sessions::ReaderFeatures> {
+        Some(&self.readers)
+    }
+
     fn call(&self, call: Call, timeout: Duration) -> Result<LinkAnswer, LinkError> {
         if matches!(call, Call::SessionWorkTurn { .. }) {
             return Ok(LinkAnswer::Parsed(
@@ -583,15 +588,21 @@ fn same_path_memo_origins_and_undo_stay_with_the_admitted_device() {
         request: "Private original request on B".into(),
         assistant: "Private original answer on B".into(),
     };
+    let readers = serde_json::from_value::<hide_node_link::sessions::ReaderFeatures>(
+        serde_json::json!([{"provider": "codex", "features": ["labels"]}]),
+    )
+    .unwrap();
     let shared = node_runtime(
         &repo,
         Arc::new(OriginNode {
             inner: FakeDevice::new(),
             turn: b_turn.clone(),
+            readers: readers.clone(),
         }),
         Arc::new(OriginNode {
             inner: FakeDevice::new(),
             turn: a_turn.clone(),
+            readers,
         }),
         crate::local_issues::LocalIssueStore::default(),
     );
