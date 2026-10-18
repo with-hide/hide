@@ -210,6 +210,197 @@ fn a_global_remote_start_follows_checkout_and_home_once_across_result_and_catalo
 }
 
 #[test]
+fn an_archived_remote_root_keeps_its_pending_follow_before_automatic_descendants() {
+    use crate::session_archive::{ArchiveId, Resume, fixture_member, fixture_record};
+    for boundary in ["catalog", "newer-visit", "reconnect"] {
+        let t = tree();
+        let (mut runtime, _saved) = setup(LinkOrigin::Inbound, &t.main);
+        let mut initial = raw(&t.main);
+        initial.workspaces[0].checkouts[0].owner_workspace_id = Some("w1".into());
+        runtime.ingest_remote_session(DEVICE, Ok(initial));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        runtime.install_remote_control(RemoteControlContext::new(
+            DEVICE,
+            Arc::new(RecordingHerdr {
+                requests: requests.clone(),
+            }),
+            Weak::new(),
+            ChangeNotifier::noop(),
+        ));
+        runtime.snapshot.navigator.focused_device_id = Some(crate::node::TEST_NODE.into());
+        let task = runtime
+            .begin_task_operation("agent_start", None, None, None, Some("claude".into()))
+            .unwrap();
+        runtime.snapshot.task_operation.as_mut().unwrap().device_id = Some(DEVICE.into());
+        runtime
+            .prepare_group_start(
+                task,
+                (DEVICE, &t.main),
+                None,
+                Some("archived-root"),
+                None,
+                false,
+            )
+            .unwrap();
+        let mut root = fixture_member("root", None);
+        root.machine = DEVICE.into();
+        root.checkout_path = t.main.clone();
+        root.resume = Resume::Starting {
+            task,
+            since_unix_ms: 1,
+            front: true,
+        };
+        let mut child = fixture_member("child", Some("root"));
+        child.machine = DEVICE.into();
+        child.checkout_path = t.main.clone();
+        child.cwd = Some(t.main.clone());
+        child.resume = Resume::Queued { front: false };
+        let id = ArchiveId::new().unwrap();
+        runtime
+            .snapshot
+            .ui_state
+            .session_archive
+            .admit(id.clone(), fixture_record(vec![root, child], 1))
+            .unwrap();
+        runtime.ingest_task_operation_result(
+            task,
+            Ok(live::WorktreeTaskOutcome {
+                path: t.main.clone(),
+                pane_id: "t3".into(),
+                created_tab_id: Some("t3".into()),
+                purpose_error: None,
+                unconfirmed_purpose_token: None,
+                issue_error: None,
+                shell: crate::agent_start::ShellStart::Plain,
+            }),
+        );
+        runtime.ingest_task_agent_result(task, live::TaskAgentOutcome::Started);
+        runtime.advance_session_archive();
+        assert!(matches!(
+            runtime.snapshot.ui_state.session_archive.records[&id].members[0].resume,
+            Resume::Confirming { .. }
+        ));
+        assert_eq!(
+            runtime.snapshot.task_operation.as_ref().unwrap().id,
+            task,
+            "an automatic child must wait while the root's screen move is pending"
+        );
+        let mut landed = raw(&t.main);
+        landed.workspaces[0].checkouts[0].owner_workspace_id = Some("w1".into());
+        landed.workspaces[0].checkouts[0].tabs.push(
+            herdr_workspace(DEVICE, "w1", &t.main, &[("t3", &t.main)])
+                .checkouts
+                .remove(0)
+                .tabs
+                .remove(0),
+        );
+        match boundary {
+            "catalog" => {
+                runtime.ingest_remote_session(DEVICE, Ok(landed.clone()));
+            }
+            "newer-visit" => dispatch(
+                &mut runtime,
+                "focus_device",
+                json!({"device_id":crate::node::TEST_NODE}),
+            ),
+            "reconnect" => {
+                runtime.ingest_remote_session(
+                    DEVICE,
+                    Err(SessionFetchError::Unreachable("fixture disconnect".into())),
+                );
+            }
+            _ => unreachable!(),
+        }
+        runtime.advance_session_archive();
+        let child = &runtime.snapshot.ui_state.session_archive.records[&id].members[1];
+        if boundary == "reconnect" {
+            assert!(
+                matches!(child.resume, Resume::Failed { .. }),
+                "the released queue reports the disconnected device"
+            );
+        } else {
+            assert_ne!(
+                runtime.snapshot.task_operation.as_ref().unwrap().id,
+                task,
+                "{boundary} releases the automatic resume queue"
+            );
+            assert!(matches!(child.resume, Resume::Starting { .. }));
+        }
+        runtime.ingest_remote_session(DEVICE, Ok(landed));
+        if boundary == "catalog" {
+            assert_eq!(next_request(&requests, 0)["method"], "pane.focus");
+        }
+        let focuses = requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|request| request["method"] == "pane.focus")
+            .count();
+        assert_eq!(focuses, usize::from(boundary == "catalog"), "{boundary}");
+        assert_eq!(
+            runtime.snapshot.navigator.focused_device_id.as_deref(),
+            Some(if boundary == "catalog" {
+                DEVICE
+            } else {
+                crate::node::TEST_NODE
+            })
+        );
+    }
+}
+
+#[test]
+fn a_first_local_home_catalog_does_not_supersede_its_start_result() {
+    let t = tree();
+    let mut runtime = runtime();
+    let (mut local, _) = live_tab_order_runtime(&t.main);
+    runtime.live = local.live.take();
+    assert!(runtime.snapshot.navigator.root_path.is_none());
+    let task = runtime
+        .begin_task_operation("agent_start", None, None, None, None)
+        .unwrap();
+    runtime
+        .snapshot
+        .ui_state
+        .workspace_registrations
+        .extend(local.snapshot.ui_state.workspace_registrations.clone());
+    runtime.snapshot.ui_state.workspace_registrations[0].home = true;
+    runtime.rebuild_catalog();
+    runtime.ingest_session_with_catalog(
+        Ok(tab_order_payload(
+            &t.main,
+            &["w-order:t1"],
+            &["w-order:t1"],
+            "w-order:t1",
+        )),
+        None,
+    );
+    runtime.ingest_task_operation_result(
+        task,
+        Ok(live::WorktreeTaskOutcome {
+            path: t.main.clone(),
+            pane_id: "w-order:t4:p".into(),
+            created_tab_id: Some("w-order:t4".into()),
+            purpose_error: None,
+            unconfirmed_purpose_token: None,
+            issue_error: None,
+            shell: crate::agent_start::ShellStart::Plain,
+        }),
+    );
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    assert_eq!(
+        runtime.snapshot.focused.pane_id.as_deref(),
+        Some("w-order:t4:p")
+    );
+    assert_eq!(
+        runtime
+            .pending_pane_focus
+            .as_ref()
+            .map(|pending| pending.target_id.as_str()),
+        Some("w-order:t4:p")
+    );
+}
+
+#[test]
 fn a_global_local_start_brings_its_device_forward_from_a_remote_screen() {
     let t = tree();
     let (mut runtime, _saved) = setup(LinkOrigin::Inbound, &t.main);

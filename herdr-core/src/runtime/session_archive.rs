@@ -1138,6 +1138,7 @@ impl Runtime {
             .flat_map(|record| &record.members)
             .any(|member| matches!(member.resume, Resume::Starting { .. }));
         if starting
+            || self.pending_remote_start_focus()
             || self
                 .snapshot
                 .task_operation

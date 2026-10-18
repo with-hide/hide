@@ -981,6 +981,7 @@ The chain is a fact about the state folder, not about one save, so the core make
 세션 보관 (PRD session-archive) closes a root session and every descendant pane with it and keeps the conversations, so the task list stops showing work the operator is done with and 이어가기 brings the whole tree back later.
 Two owners keep it apart from sleep: `herdr-core/src/session_archive.rs` holds the records (types, the load filter, the cap) and makes no call, and `herdr-core/src/runtime/session_archive.rs` drives admission, the close, resume, delete and the rows.
 The records live beside the dormant records in `core-state.json` (`session_archive`) and hold at most 256 sessions, each member counting; an archive that would cross the cap is refused before anything closes (`archive.full`), and nothing older is evicted.
+An automatic descendant waits while its root's accepted remote start still has a valid screen move pending; consuming, cancelling or expiring that move releases the shared start slot, using the same latest-navigation, connection-generation and 90-second bound as the remote follow.
 A record names its device, project root and checkout, and for each member the machine, pane, kind, native session, source reference, cwd, title, last line, pull requests, the delivery registration it held, its parent and depth.
 A load drops a record that does not parse rather than refusing the file, and a record being deleted is never written again.
 A core move carries each member's machine, pane, resumed pane and held registration with the machine it names (`node_migration::KEYS`), and its folders stay beside that machine id.
@@ -1000,6 +1001,7 @@ A group-qualified creation starts without Herdr focus; once its selected target 
 The global agent-start panel reads that result without issuing a second pane-focus intent, so a result left behind stays behind in the shell too.
 For a connected device, the current start may hold one follow for at most 90 seconds until its exact pane appears in that checkout's catalog, then sends one ordinary remote pane focus with device forwarding.
 The task captures this navigation permission before Home sync or checkout preparation, so Home and checkout starts share the same rule; Home creation itself does not move Herdr's focus ahead of that result.
+For the first local Home, the catalog choosing its first checkout is a fallback rather than a user visit; it retains that permission while the control-lane serial is unchanged and no explicit navigation has cancelled it.
 An accepted local result uses the same local device forwarding as an accepted pane press, including when a remote device was in front.
 An intervening local or remote visit, a replacement task or a changed device connection cancels that follow; repeated catalog answers cannot focus it again.
 A global start, including an archived root, may open another checkout while its original checkout, group, tab and control-lane focus serial remain current; a later explicit visit cancels that permission even if the operator returns to the same empty group or draft without sending Herdr a focus command.

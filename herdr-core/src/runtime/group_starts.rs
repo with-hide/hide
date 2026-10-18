@@ -763,17 +763,16 @@ impl Runtime {
         });
     }
 
-    pub(super) fn follow_remote_start(&mut self, device: &str) -> bool {
+    /// Automatic archive descendants share the start slot, so they wait for
+    /// this bounded follow rather than replacing their root's permission.
+    pub(super) fn pending_remote_start_focus(&mut self) -> bool {
         let Some(active) = self.task_start_focus.as_ref() else {
             return false;
         };
-        let Some(pending) = active
-            .remote_focus
-            .as_ref()
-            .filter(|pending| pending.workspace.0 == device)
-        else {
+        let Some(pending) = active.remote_focus.as_ref() else {
             return false;
         };
+        let device = &pending.workspace.0;
         let current = self
             .snapshot
             .task_operation
@@ -783,11 +782,12 @@ impl Runtime {
             && pending.generation
                 == self
                     .remote_connection_generations
-                    .get(device)
+                    .get(device.as_str())
                     .copied()
                     .unwrap_or(0)
             && std::time::Instant::now() < pending.deadline;
         if !current {
+            let device = device.clone();
             self.task_start_focus.as_mut().unwrap().remote_focus = None;
             self.push_diagnostic(
                 "agent_start.remote_focus_cancelled",
@@ -795,6 +795,21 @@ impl Runtime {
             );
             return false;
         }
+        true
+    }
+
+    pub(super) fn follow_remote_start(&mut self, device: &str) -> bool {
+        if !self.pending_remote_start_focus() {
+            return false;
+        }
+        let active = self.task_start_focus.as_ref().unwrap();
+        let Some(pending) = active
+            .remote_focus
+            .as_ref()
+            .filter(|pending| pending.workspace.0 == device)
+        else {
+            return false;
+        };
         // The exact pane must belong to this start's checkout on this
         // connection before the ordinary remote control boundary accepts it.
         let listed = self
@@ -840,10 +855,10 @@ impl Runtime {
             .filter(|active| active.task == task)
         else {
             return origin.is_none_or(|focus| {
-                focus
-                    .global_focus
-                    .as_ref()
-                    .is_some_and(|origin| *origin == self.start_focus())
+                focus.global_focus.as_ref().is_some_and(|origin| {
+                    origin.serial == self.last_view_intent_serial
+                        && (origin.workspace.is_none() || *origin == self.start_focus())
+                })
             });
         };
         let Some(view) = self
