@@ -853,7 +853,8 @@ A goal already set cannot become null and changes only on an operator turn with 
 With `goal_changed: false`, the returned goal value is ignored even when it is null; the turn's `line` and `end` are still applied.
 A line longer than 40 characters (80 in English) is cut between words and ends in `…`; a question or a block keeps its word with the cut line.
 `line` and `end` still describe the current conversation: an answered greeting or identity question with no required next action has an empty line and a stopped end of `done`, while a specific question retains its requested action.
-The call at a turn's start is asked only once the turn has worked 15 seconds (`labels/worker.rs`, `START_DELAY`): a measured 23% of turns end within 15 s and 38% within 30 s (2,384 Claude Code turns, 2026-10-16), and a turn that ends first is asked its end alone, which names the goal as well: a short turn that gives the pane a new job renames it, a short follow-up on the same job keeps the name, the turn costs one request instead of two, and the row keeps its previous line for those first seconds. A pane that has no goal yet is not held: its first turn is asked at once, so a new session is named as soon as the model answers.
+The call at a turn's start is asked only once the turn has worked 15 seconds (`labels/worker.rs`, `START_DELAY`): a measured 23% of turns end within 15 s and 38% within 30 s (2,384 Claude Code turns, 2026-10-16), and a turn that ends first is asked its end alone, which names the goal as well: a short turn that gives the pane a new job renames it, a short follow-up on the same job keeps the name, and the turn costs one request instead of two.
+The old turn's sentence clears when the worker proves the next human turn, including when Herdr stays Working; a pane that has no goal yet is asked at once, so a new session is named as soon as the model answers.
 How the turn ended is asked only once the agent has stopped: the call at a turn's start names the goal and the line and leaves the end `working`, and the call at its end picks the word by whose move is next, `question` (the operator's), `blocked` (stopped on a cause the line can state in one sentence: no disk, a failed CI run, a permission or login it cannot get, a tool that will not run), `waiting` (something other than a pull request still running: a background test, build, CI run or another agent), `unfinished` (nobody's, with the work left undone) or `done` (nobody's, with the work reported finished), taking the first in that order that fits.
 There is no "unsure means done": a turn that did not report its work finished is `unfinished`, and a `blocked` answer with no line is read as `unfinished`.
 A turn that started or handed off work that still runs is `waiting`, even when the turn itself only reported progress or answered something, unless it asks the operator; its line says what it waits for.
@@ -971,7 +972,7 @@ Regression owners: `links::store::ledger::tests`, `labels::tests`, `runtime::tes
 `agent_state/escalation.rs` reads the existing doorbell and watch decisions rather than adding delivery clocks.
 A child rises when its letter is held by a blocked parent or operator draft, when three bells are exhausted and the parent is again eligible after thirty quiet seconds, when the letter becomes undelivered after sixty minutes, when the child's own pane is Herdr blocked, or when the first watch warning has had no parent response for sixty minutes.
 An idle or done parent still owns the child; only a closed parent pane or absent parent agent invokes the existing orphan-root rule.
-`escalation::lift` carries every raised descendant to its lineage root (PRD D-10, D-27) as a `RaisedAsk`: the verb, what to do, the agent named, the pane Open goes to, since when, the titles from the root and the checkout.
+`escalation::lift` carries every raised descendant to its lineage root (PRD D-10, D-27) as a `RaisedAsk`: the verb, what to do, the originating title, the agent named, the pane Open goes to, since when, the titles from the root and the checkout.
 The verb is Approval for a blocked child (Answer when it is blocked on a native question, with that question as what to do), Answer for an undelivered or unanswered letter, Confirm for an unanswered watch and Draft for a letter held by the parent's input, which names and opens that parent; a blocked parent stands for itself and adds no ask.
 An Answer also names the parent that has not received the letter.
 The root's asks are ordered by verb, then by age; the root enters Needs You and its second line is the lead ask, unless its own demand comes first, which an AI question or a block the operator has read no longer is.
@@ -988,20 +989,23 @@ Regression owners: `agent_state::escalation::tests`, `runtime::tests::lineage`, 
 
 ### Quiet pane headers
 
-`agent_state/header.rs` publishes three things per pane: a working-line flag, at most one notice, and at most one band.
+`agent_state/header.rs` publishes a working-line flag, at most one notice, at most one band, and the current pane agent's own live Working progress when it has a nonblank sentence.
 The notice says why the terminal is not live and is drawn in the pane's body: the device away first, then Herdr's restoration failure, sleep, and the stream's own state (ended with its exit code, released, closing, unavailable, starting, or a wheel another client holds); a device's unavailable pane reads `reconnecting` or `helper_not_allowed` by what its link waits for.
-A pane with a notice takes no answer, so it has no band and no working line.
+A pane with a notice takes no answer, so it has no band, progress or working line.
 The band is the operator's turn and nothing else: the pane's own Approval, Answer or Blocked first, then the lead raised descendant, then the pane's own Stopped.
-A pull request's verb (Fix, Review, Merge) and a finished turn (Result) have no band: the header's PR mark and status mark already say them; Working has a thin blue line, while CI wait, child wait and Idle have nothing.
+A pull request's verb (Fix, Review, Merge) and a finished turn (Result) have no band: the header's PR mark and status mark already say them; Working has a thin blue line and can show its own progress, while CI wait, child wait and Idle have nothing.
 A band stays until it is answered, not until it is read: `Band.read` says the operator has had the pane focused since it arrived, and a question the operator read but did not answer keeps its Answer band although the row's verb has left Answer.
-An ask band is quiet text on the secondary fill with a warning rail (PRD D-43): the pane's own ask starts with its verb and says what is asked (for an Answer, the row's second line, so a native question reads as itself), and a raised descendant's `RaisedAsk` starts with that agent's name, the path, checkout and wait in its hover, then the verb, what to do, the unreceived parent for an Answer, the elapsed time, and Open.
+An ask band is quiet text on the secondary fill with a warning rail (PRD D-43): the pane's own ask starts with its verb and says what is asked (for an Answer, the row's second line, so a native question reads as itself).
+A raised descendant's `RaisedAsk` starts with its verb, then the originating agent's name and `(자식)` for a direct child or `(하위 세션)` for a deeper descendant, what to do, the unreceived parent for an Answer, the elapsed time, and Open.
+Its hover gives the originating agent's product, path, checkout and wait when known; a draft names the originating child but opens the parent holding the input draft.
 The duplicate `외 N건` is absent when the children button supplies raised-tree access, and remains as a fallback otherwise.
 An Approval band carries no reason: the core reads no approval command and a generated sentence is not one, so the band shows the ask's own default words.
 What Hide could not read, such as an approval command, is not written on the band, since the operator cannot act on its absence (design principle #13).
-The band and the children row overlay the terminal so state changes never resize its PTY grid.
+The band and progress row overlay the terminal so state changes never resize its PTY grid.
 The identity row reads the ancestor path, the status mark, the agent's logo, title, the letters-waiting pill from `row.letters_waiting`, the pane's own PR mark from `row.state.pr`, the Not connected chip and the existing controls; the ancestors' names drop first when narrow, leaving `›` and the accessible name.
-A parent's second row keeps the children button at its right end; without a band the rest of the row names each live direct child with its row's mark, a child with news first, and with a band the ask takes that place.
-An unavailable device anywhere in that known subtree replaces the names with the existing connection reason and drops the button's raised count, while preserving topology access.
+A parent's second row keeps the tree icon, direct-child count and chevron at its left; without a band the rest of the row shows its own valid Working progress, or no text when it has none.
+Child names and states remain in the tree popover, while the button's accessible name and tooltip describe the live count and state counts.
+An unavailable device anywhere in that known subtree preserves the last topology count and connection reason in the button's name and tooltip; without a band, it also shows that reason beside any progress.
 Pending or failed relationship navigation stays visible at its popover, ancestor step or band's Open with retry where available, and in the retained Agent-area status when the source pane is no longer on screen.
 Regression owners: `runtime::tests::session_state`, `runtime::tests::device_kit`, `web/src/PaneHeaderBand.test.tsx`, `web/src/PaneNotice.test.tsx`, `web/e2e/sidebar-status.spec.ts`, and the pane/lineage desktop checks.
 

@@ -65,19 +65,13 @@ export function buildAgentTreeParts(tokens) {
     caption('ath-mark-n', '2', '$--warning', {weight: '600', mono: true}),
   ]);
 
-  // Child states start the button; a tree icon keeps compact access when no count is drawn.
+  // The pane header exposes direct children through one stable tree/count button.
   const treeButton = frame(AGENT_TREE_MASTERS.treeButton, 'Tree button', {
     reusable: true, layout: 'horizontal', gap: '$--spacing-xxs', alignItems: 'center', height: DETAIL, padding: [0, '$--spacing-xs'],
     cornerRadius: '$--radius-xs', stroke: '$--border', strokeWidth: HAIR, strokeAlignment: 'inner',
   }, [
     icon('ath-tb-tree', 'list-tree', {size: ICON, fill: '$--muted-foreground'}),
-    // The row marks (status-marks B21): raised asks, working children, results to read; a child's own ask, an unknown or a resting child draws no mark and is named only in the hint.
-    frame('ath-tb-counts', 'Child state counts', {enabled:false,layout:'horizontal',gap:'$--spacing-xxs',alignItems:'center'}, [
-      ...[['raised','turn','$--warning'],['working','going','$--agent-working'],['result','unread','$--muted-foreground']].map(([key,state,fill])=>frame(`ath-tb-${key}`,key,{enabled:false,layout:'horizontal',alignItems:'center'},[
-        markSlot(`ath-tb-${key}-mark`, state),
-        caption(`ath-tb-${key}-n`,'1',fill,{size:'$--text-micro',mono:true}),
-      ])),
-    ]),
+    caption('ath-tb-count', '3', '$--muted-foreground', {size:'$--text-micro',mono:true}),
     icon('ath-tb-chev', 'chevron-down', {size: ICON, fill: '$--muted-foreground'}),
   ]);
 
@@ -131,9 +125,9 @@ export function buildAgentTreeParts(tokens) {
     const buttons = [
       cell('Tree button rest', ref(id('tb-rest'), AGENT_TREE_MASTERS.treeButton, 'Tree button')),
       cell('Tree button open', ref(id('tb-open'), AGENT_TREE_MASTERS.treeButton, 'Tree button', {fill: '$--secondary'})),
-      cell('Tree button with child states', ref(id('tb-counts'), AGENT_TREE_MASTERS.treeButton, 'Tree button', {fill:'$--background'}, {'ath-tb-tree':{enabled:false},'ath-tb-counts':{enabled:true},...Object.fromEntries(['working','result'].map(key=>[`ath-tb-${key}`,{enabled:true}]))})),
-      cell('Ask band compact child button', ref(id('tb-raised'), AGENT_TREE_MASTERS.treeButton, 'Tree button', {fill:'$--background'}, {'ath-tb-tree':{enabled:false},'ath-tb-counts':{enabled:true},'ath-tb-raised':{enabled:true},'ath-tb-raised-n':{content:'2'}})),
-      cell('Unknown or unavailable children: the tree alone', ref(id('tb-unknown'), AGENT_TREE_MASTERS.treeButton, 'Tree button', {fill:'$--background'})),
+      cell('Tree button with five children', ref(id('tb-counts'), AGENT_TREE_MASTERS.treeButton, 'Tree button', {fill:'$--background'}, {'ath-tb-count':{content:'5'}})),
+      cell('Tree button beside a raised ask', ref(id('tb-raised'), AGENT_TREE_MASTERS.treeButton, 'Tree button', {fill:'$--background'}, {'ath-tb-count':{content:'2'}})),
+      cell('Unavailable children keep the last known count', ref(id('tb-unknown'), AGENT_TREE_MASTERS.treeButton, 'Tree button', {fill:'$--background'}, {'ath-tb-count':{content:'3'}})),
     ];
     const rows = [
       cell('Root, opened', ref(id('row-root'), AGENT_TREE_MASTERS.row, 'Tree row', {}, {'ath-row-chev': {icon: 'chevron-down'}, ...markSwitch('ath-row', 'going'), 'ath-row-title': {content: '루트 에이전트', fill: '$--foreground'}, 'ath-row-pr/ath-pr-g': {fill: '$--pr-mergeable'}})),
