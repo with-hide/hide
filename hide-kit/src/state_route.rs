@@ -26,6 +26,14 @@ fn claim_route(
     };
     hide_agent_hooks::route::HookTarget::new(helper, previous)
         .map_err(|reason| KitRefusal::record(previous, reason))?;
+    // A spelling change is still this daemon's folder: taking its lifetime
+    // lock again would refuse our own kit pass on aliases or case changes.
+    match hide_platform::fs::identity::same_file(previous, state) {
+        Ok(true) => return Ok(None),
+        Ok(false) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(KitRefusal::unsafe_path(previous, error.to_string())),
+    }
     let path = layout::daemon_lock(previous);
     let file = match hide_platform::fs::private::open_own_file(&path, false) {
         Ok(file) => file,
@@ -72,6 +80,15 @@ mod tests {
                 .unwrap_err()
                 .cause,
             RefusalCause::Busy
+        );
+        let child = previous.join("child");
+        std::fs::create_dir(&child).unwrap();
+        let alias = child.join("..");
+        assert!(
+            claim_route(&helper, &alias, Some(&previous))
+                .unwrap()
+                .is_none(),
+            "another spelling of the current owner's folder is not another daemon"
         );
         drop(owner);
         assert!(

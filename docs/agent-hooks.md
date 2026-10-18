@@ -58,6 +58,7 @@ The current Grok and agy entries, Cursor entries, Pi and omp extensions, and bot
 The install versions are Claude Code and Codex 9, Grok and agy 8, Cursor 7, Pi and omp 8, OpenCode V1 7 and OpenCode's server plugin 2; the TUI plugin stays at 1 because it starts no helper.
 Every kit pass compares the captured folder with the running daemon's folder, so a state move or a daemon started with another environment rewrites an unedited generated command without another version bump.
 The account kit records which daemon state folder owns those commands; a different daemon sharing that HOME cannot change them while the recorded owner's lifetime lock is held.
+File identity treats aliases or case changes of the same state folder as the same owner.
 After that daemon ends, the next pass may take ownership and refresh the entries.
 Development and QA candidates use a private HOME as well as a private state folder, because changing only the state folder still shares the account's hook files.
 Before that pass, an unavailable old folder leaves mail pending and records the existing throttled `intake.failed` diagnostic with code `unavailable` in the helper's private delivery diagnostics; an invalid captured argument records `record` instead.
