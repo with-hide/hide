@@ -2756,6 +2756,63 @@ mod continuation {
     }
 
     #[test]
+    fn a_letter_turn_on_a_task_its_merge_finished_keeps_the_question_but_never_reopens_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+        observer(&mut store);
+        spawn(&mut store, &[("a", 10_300, None)]);
+        pr(&store, &child("a"), 1352, "merged", 11_000);
+        assert_eq!(tasks(&store), [(true, false, LabelEnd::Waiting); 2]);
+        // The report's turn merged the PR before its END landed, and asks (B3, D-07).
+        turn(
+            &mut store,
+            20,
+            20_000,
+            20_900,
+            LabelEnd::Question,
+            Some("impl-a"),
+            TaskDecision::None,
+        );
+        assert_eq!(tasks(&store), [(true, false, LabelEnd::Question); 2]);
+        // A later letter's END that would reopen it records on no task (B5).
+        turn(
+            &mut store,
+            30,
+            30_000,
+            30_900,
+            LabelEnd::Unfinished,
+            Some("impl-a"),
+            TaskDecision::None,
+        );
+        assert_eq!(tasks(&store), [(true, false, LabelEnd::Question); 2]);
+    }
+
+    #[test]
+    fn a_merged_task_waits_for_a_child_it_spawned_that_is_still_at_work() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+        observer(&mut store);
+        spawn(&mut store, &[("a", 10_300, None), ("b", 10_400, None)]);
+        pr(&store, &child("a"), 1352, "merged", 11_000);
+        title(&store, &child("b"), "working");
+        assert_eq!(
+            tasks(&store),
+            [(false, false, LabelEnd::Waiting); 2],
+            "a merged, b still at work (B23)"
+        );
+        title(&store, &child("b"), "idle");
+        assert_eq!(
+            tasks(&store),
+            [(true, false, LabelEnd::Waiting); 2],
+            "b rests"
+        );
+        // A child whose newest turn went unjudged holds nothing (D-05).
+        title(&store, &child("b"), "working");
+        unjudged(&mut store, &child("b"), 5);
+        assert_eq!(tasks(&store), [(true, false, LabelEnd::Waiting); 2]);
+    }
+
+    #[test]
     fn a_merged_task_is_done_unless_its_last_end_leaves_work_or_blocks() {
         let directory = tempfile::tempdir().unwrap();
         let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();

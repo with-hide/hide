@@ -1,6 +1,7 @@
 //! The work ledger shares the link writer, version, size cap and retention.
 
 use super::{LinkStore, SessionKey, failed};
+use crate::labels::analysis::LabelEnd;
 use crate::links::ledger::*;
 use crate::links::{CREATED_AFTER_MS, CREATED_BEFORE_MS, SUMMARY_SESSION_LIMIT};
 use rusqlite::{OptionalExtension, Transaction, params};
@@ -417,6 +418,23 @@ fn cap_task_groups(tx: &Transaction<'_>, session: &SessionIdentity) -> Result<()
     Ok(())
 }
 
+/// Whether a turn at this offset is already judged or recorded unjudged.
+fn turn_recorded(
+    connection: &rusqlite::Connection,
+    session: &SessionIdentity,
+    offset: u64,
+) -> Result<bool, String> {
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM ledger_turns \
+            WHERE device=?1 AND agent=?2 AND id=?3 AND offset=?4) OR EXISTS(SELECT 1 FROM ledger_unjudged \
+            WHERE device=?1 AND agent=?2 AND id=?3 AND offset=?4)",
+            params![session.device_id, session.agent, session.session_id, offset as i64],
+            |row| row.get(0),
+        )
+        .map_err(failed)
+}
+
 fn cap(
     tx: &Transaction<'_>,
     session: &SessionIdentity,
@@ -758,10 +776,24 @@ impl LinkStore {
         let letter_task = match update {
             LedgerUpdate::TurnEnd {
                 session,
+                offset,
+                end,
                 work_author: false,
                 letter: Some(sender),
                 ..
-            } => self.letter_task(session, sender)?,
+            } if !self.turn_recorded(session, *offset)? => {
+                // Placing the turn is a refinement: a lineage read that fails
+                // records the turn with no task rather than losing it.
+                self.letter_task(session, sender, *end)
+                    .unwrap_or_else(|error| {
+                        crate::diagnostic!(serde_json::json!({
+                            "component":"links", "kind":"ledger.letter_task_unavailable",
+                            "device_id":session.device_id, "session_id":session.session_id,
+                            "offset":offset, "error":error,
+                        }));
+                        None
+                    })
+            }
             _ => None,
         };
         let tx = self.connection.transaction().map_err(failed)?;
@@ -920,21 +952,7 @@ impl LinkStore {
                 turn_witness,
                 judgment,
             } => {
-                let exists: bool = tx
-                    .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM ledger_turns \
-                    WHERE device=?1 AND agent=?2 AND id=?3 AND offset=?4) OR EXISTS(SELECT 1 FROM ledger_unjudged \
-                    WHERE device=?1 AND agent=?2 AND id=?3 AND offset=?4)",
-                        params![
-                            session.device_id,
-                            session.agent,
-                            session.session_id,
-                            *offset as i64
-                        ],
-                        |row| row.get(0),
-                    )
-                    .map_err(failed)?;
-                if exists {
+                if turn_recorded(&tx, session, *offset)? {
                     return Ok(());
                 }
                 if judgment.missed.len() > NEW_MISSED_LIMIT
@@ -1440,13 +1458,23 @@ impl LinkStore {
             .collect::<Result<Vec<_>, _>>()
             .map_err(failed)?;
         let mut child_work = Vec::with_capacity(children.len());
+        // Task groups with a spawned child at work; a resting child or one
+        // whose newest turn went unjudged holds nothing (D-05, B23).
+        let mut busy_groups = BTreeSet::new();
         for child in children {
             let mut child =
                 self.record_tree(&child, visited, depth + 1, request_budget, include_requests)?;
             let spawn_task: Option<String> = self.connection.query_row("SELECT output_task FROM ledger_turns WHERE device=?1 AND agent=?2 AND id=?3 AND ?4 BETWEEN start_at AND end_at ORDER BY start_at DESC LIMIT 1",
                 params![session.device_id,session.agent,session.session_id,child.started_at_unix_ms.map(|n|n as i64)],|r|r.get(0)).optional().map_err(failed)?.flatten();
             child.spawn_task = spawn_task.clone();
-            child_work.push(ChildWork::of(&child, self.child_facts(&child.session)?));
+            let facts = self.child_facts(&child.session)?;
+            if child.state.as_deref() == Some("working")
+                && !facts.latest_unjudged
+                && let Some(task) = &spawn_task
+            {
+                busy_groups.insert(task_group(task).to_owned());
+            }
+            child_work.push(ChildWork::of(&child, facts));
             record
                 .outputs
                 .extend(child.outputs.iter().cloned().map(|mut output| {
@@ -1478,11 +1506,16 @@ impl LinkStore {
                 record.outputs.iter().filter(|o| {
                     o.kind == "pr" && o.task_id.as_deref().map(task_group) == Some(group)
                 }),
+                busy_groups.contains(group),
             );
             task.unjudged = !task.done && latest_unjudged;
         }
         record.child_progress = ChildProgress::of(child_work);
         Ok(record)
+    }
+
+    fn turn_recorded(&self, session: &SessionIdentity, offset: u64) -> Result<bool, String> {
+        turn_recorded(&self.connection, session, offset)
     }
 
     /// Whether the session's newest turn went unjudged: its transcript
@@ -1525,13 +1558,16 @@ impl LinkStore {
 
     /// The task group a letter from `sender` continues (PRD
     /// task-continuation D-02): the spawn task of the direct child whose
-    /// subtree holds the descendant of that name, while that task is not
-    /// finished. A sender outside the lineage, a name two groups share, or a
-    /// finished task continues nothing.
+    /// subtree holds the descendant of that name. A sender outside the
+    /// lineage or a name two groups share continues nothing, and a finished
+    /// task takes the turn only when its `end` keeps it finished: the
+    /// question of the turn that merged its PR keeps its `!` (B3, D-07), and
+    /// no letter reopens it (B5).
     fn letter_task(
         &self,
         session: &SessionIdentity,
         sender: &str,
+        end: LabelEnd,
     ) -> Result<Option<String>, String> {
         if self.session(&key(session))?.is_none() {
             return Ok(None);
@@ -1544,7 +1580,7 @@ impl LinkStore {
         ) -> bool {
             lineage
                 .get(&record.session)
-                .is_some_and(|child| child.name == sender)
+                .is_some_and(|child| hide_session::envelope_names(sender, &child.name))
                 || record
                     .children
                     .iter()
@@ -1564,6 +1600,12 @@ impl LinkStore {
             }));
             return Ok(None);
         }
+        if groups.is_empty() {
+            crate::diagnostic!(serde_json::json!({
+                "component":"links", "kind":"ledger.letter_sender_unknown",
+                "device_id":session.device_id, "session_id":session.session_id,
+            }));
+        }
         let Some(group) = groups.into_iter().next().flatten() else {
             return Ok(None);
         };
@@ -1572,10 +1614,19 @@ impl LinkStore {
             .iter()
             .filter(|task| task_group(&task.id) == group)
             .peekable();
-        if tasks.peek().is_none() || tasks.all(|task| task.done) {
+        if tasks.peek().is_none() {
             return Ok(None);
         }
-        Ok(Some(group))
+        // Tasks of one group finish together, so they are all done or none.
+        let reopens = tasks.all(|task| task.done)
+            && !task_done(
+                end,
+                record.outputs.iter().filter(|o| {
+                    o.kind == "pr" && o.task_id.as_deref().map(task_group) == Some(group.as_str())
+                }),
+                false,
+            );
+        Ok((!reopens).then_some(group))
     }
 
     /// A live pane's chip and checklist: `None` for a session the ledger does

@@ -502,9 +502,14 @@ pub fn pr_open(state: &str) -> bool {
 
 /// Whether a task group is finished (PRD task-continuation D-05, D-06): with
 /// a merged pull request and none still open, unless its last END says work
-/// is left or blocked; with no pull request that counts (a closed unmerged
-/// one does not), only when its last END is Done.
-pub fn task_done<'a>(end: LabelEnd, prs: impl Iterator<Item = &'a WorkOutput>) -> bool {
+/// is left or blocked or a child it spawned is still at work (B23); with no
+/// pull request that counts (a closed unmerged one does not), only when its
+/// last END is Done.
+pub fn task_done<'a>(
+    end: LabelEnd,
+    prs: impl Iterator<Item = &'a WorkOutput>,
+    child_working: bool,
+) -> bool {
     let (mut merged, mut open) = (false, false);
     for pr in prs {
         merged |= pr.state == "merged";
@@ -514,7 +519,7 @@ pub fn task_done<'a>(end: LabelEnd, prs: impl Iterator<Item = &'a WorkOutput>) -
         return false;
     }
     if merged {
-        return !matches!(end, LabelEnd::Unfinished | LabelEnd::Blocked);
+        return !child_working && !matches!(end, LabelEnd::Unfinished | LabelEnd::Blocked);
     }
     end == LabelEnd::Done
 }

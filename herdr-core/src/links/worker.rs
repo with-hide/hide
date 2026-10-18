@@ -675,6 +675,17 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
             state.filled_unknown = false;
             state.filled = store.meta(BACKFILL_DONE).is_ok_and(|done| done.is_some());
         }
+        // Lineage first: a letter's turn queued beside it is recorded against
+        // the task that spawned its sender only once the child is known
+        // (PRD task-continuation D-02).
+        if let Some(parents) = state.parents.take() {
+            let children = store.apply_parents(&parents);
+            for child in children.iter().flatten() {
+                update_context_ancestors(client, store, child);
+            }
+            state.wrote(children.map(|_| ()), "parents");
+            state.dirty_at.get_or_insert_with(Instant::now);
+        }
         if state.ledger_retry_at.is_none_or(|at| at <= Instant::now()) {
             for _ in 0..16 {
                 let Some(update) = state.ledger.front() else {
@@ -741,14 +752,6 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
                 state.dirty_at.get_or_insert_with(Instant::now);
             }
             state.panes_at = Some(Instant::now());
-        }
-        if let Some(parents) = state.parents.take() {
-            let children = store.apply_parents(&parents);
-            for child in children.iter().flatten() {
-                update_context_ancestors(client, store, child);
-            }
-            state.wrote(children.map(|_| ()), "parents");
-            state.dirty_at.get_or_insert_with(Instant::now);
         }
         for session in contexts {
             update_context(client, store, &session);

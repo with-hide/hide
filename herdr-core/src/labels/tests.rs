@@ -3955,10 +3955,11 @@ fn a_pane_with_no_goal_is_still_analyzed_after_a_restart() {
 }
 
 /// PRD task-continuation D-02, D-03, D-09: a turn a letter woke tells the
-/// ledger who sent it and when it arrived, and a watch alert's failed turn
-/// leaves no unknown behind.
+/// ledger who sent it and when it arrived, and a watch alert's or a reply's
+/// failed turn leaves no unknown behind.
 #[test]
-fn a_letter_turn_end_names_its_sender_and_start_and_a_failed_watch_turn_stays_unrecorded() {
+fn a_letter_turn_end_names_its_sender_and_start_and_a_failed_watch_or_reply_turn_stays_unrecorded()
+{
     use crate::links::ledger::{LedgerContext, LedgerUpdate, SessionIdentity};
     let harness = Harness::new();
     let store = harness.store();
@@ -4012,13 +4013,18 @@ fn a_letter_turn_end_names_its_sender_and_start_and_a_failed_watch_turn_stays_un
                 } => Some((
                     letter,
                     work_author,
-                    started_at_unix_ms <= at_unix_ms && started_at_unix_ms > 0,
+                    started_at_unix_ms,
+                    started_at_unix_ms <= at_unix_ms,
                 )),
                 _ => None,
             })
             .collect::<Vec<_>>()
     };
-    assert_eq!(turn_ends(), [(Some("impl-a".to_owned()), false, true)]);
+    // The turn starts at the letter, 2099-10-01T00:00:02Z.
+    assert_eq!(
+        turn_ends(),
+        [(Some("impl-a".to_owned()), false, 4_094_496_002_000, true)]
+    );
     let unjudged = || {
         client
             .ledger_updates_for_test()
@@ -4048,13 +4054,31 @@ fn a_letter_turn_end_names_its_sender_and_start_and_a_failed_watch_turn_stays_un
     lines.extend([
         (
             "user",
-            "Hide letter letter-3 from impl-b (claude) [progress]\n진행 중",
+            "Hide letter letter-3 from observer (claude) [reply]\n좋아요",
+        ),
+        ("assistant", "알겠습니다"),
+    ]);
+    later_session(&harness, &lines);
+    harness.backend.time_out(2);
+    observe(&mut worker, &agent(&path, "idle", 7));
+    settle(&mut worker, &woken);
+    worker.tick(Instant::now() + Duration::from_secs(1));
+    settle(&mut worker, &woken);
+    assert_eq!(
+        unjudged(),
+        before,
+        "a reply turn's failure records no unknown"
+    );
+    lines.extend([
+        (
+            "user",
+            "Hide letter letter-4 from impl-b (claude) [progress]\n진행 중",
         ),
         ("assistant", "기다립니다"),
     ]);
     later_session(&harness, &lines);
     harness.backend.time_out(2);
-    observe(&mut worker, &agent(&path, "idle", 7));
+    observe(&mut worker, &agent(&path, "idle", 9));
     settle(&mut worker, &woken);
     worker.tick(Instant::now() + Duration::from_secs(1));
     settle(&mut worker, &woken);

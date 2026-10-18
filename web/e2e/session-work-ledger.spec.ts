@@ -1,8 +1,7 @@
 import { expect, test } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { continueFixtureTranscript, setFixtureLifecycle, startHerdr } from "./herdr-fixture";
+import { claudeProjects, continueFixtureTranscript, declareParent, labelAgent, labelMarker, setFixtureLifecycle, startHerdr, type FixtureLabel } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { FIRST_GOAL, MISSED, NEXT_GOAL, nextWork, seedFirstWork, workFixture, workRepositoryReady } from "./session-work-fixture";
 import { enterWorkspace, showProjectRow, taskRow } from "./wire";
@@ -156,6 +155,55 @@ test("@platform a native session keeps its tasks, child outputs and missed work 
     await openOverview(page, "backlog");
     await expect(page.locator("[data-backlog-section]").first()).toBeVisible();
     await expect(page.locator("[data-open-missed]")).toHaveCount(0);
+  } finally { daemon?.stop(); herdr.stop(); }
+});
+
+/**
+ * A session that asks once and delegates finishes its tasks once the child's
+ * PR merges, and the turn its child's report wakes keeps `!` for the question
+ * it ends on, though the merge finished the task first; the child counts done
+ * (PRD task-continuation B1, B3, B16, D-07).
+ */
+test("a report letter's turn keeps the question's mark on the task its sender's merged PR finished", async ({ page }) => {
+  const herdr = await startHerdr();
+  let daemon: Daemon | undefined;
+  try {
+    const github = workFixture(herdr);
+    daemon = await startHided(herdr, "session-work-continuation", undefined, github.env);
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await workRepositoryReady(daemon.stateDir);
+    await enterWorkspace(page, "fixture");
+    const at = Date.now();
+    github.clock(at, at);
+    const goal = "사이드바 두 화면 개선 작업";
+    const session = labelAgent(herdr, herdr.panes[0], {
+      task: goal, at, cwd: path.join(herdr.root, "fixture"), end: "waiting",
+      work: { task: { kind: "new", names: ["쉬는 행 빈 원", "자식 PR 표시"] }, missed: [], resolved: [], output_task_id: null },
+    });
+    labelAgent(herdr, herdr.panes[1], {
+      task: "자식 세션 결과물 연결 검증", at: at + 200, cwd: path.join(herdr.root, "fixture"), end: "waiting", toolOutputs: ["https://github.com/acme/repo/pull/34"],
+    });
+    declareParent(herdr, herdr.panes[1], herdr.panes[0]);
+    const chip = page.locator(`[data-pane-task-chip="${herdr.panes[0]}"]`);
+    const list = page.locator(`[data-pane-task-list="${herdr.panes[0]}"]`);
+    // The child's merged PR finishes the task that spawned it.
+    await expect(chip).toHaveText("2/2", { timeout: 45_000 });
+    await chip.click();
+    await expect(list.locator('[data-task-box="checked"]')).toHaveCount(2);
+    await expect(list.locator("[data-task-asks]")).toHaveCount(0);
+    // The child's report wakes the parent, which ends asking; the envelope
+    // names the child by its agent name, as delivery writes it.
+    const letter: FixtureLabel = { task: goal, at: at + 5_000, end: "question", reply: "앱을 다시 설치할지 정하세요" };
+    fs.appendFileSync(path.join(claudeProjects(herdr), "e2e", `${session}.jsonl`), [
+      { type: "user", sessionId: session, timestamp: new Date(at + 5_000).toISOString(), origin: { kind: "human" }, message: { role: "user", content: `Hide letter letter-1 from two (claude) [report]\n끝났어요\n${labelMarker(letter)}` } },
+      { type: "assistant", sessionId: session, timestamp: new Date(at + 6_000).toISOString(), message: { role: "assistant", content: [{ type: "text", text: labelMarker(letter) }] } },
+    ].map((record) => `${JSON.stringify(record)}\n`).join(""));
+    await setFixtureLifecycle(herdr, herdr.panes[0], "working");
+    await setFixtureLifecycle(herdr, herdr.panes[0], "idle");
+    await expect(list.locator("[data-task-asks]")).toHaveCount(2, { timeout: 45_000 });
+    await expect(chip).toHaveText("2/2");
+    await expect(list.locator('[data-task-box="checked"]')).toHaveCount(2);
+    await expect(list.locator("[data-task-list-children]")).toHaveText("Delegated1· Done 1");
   } finally { daemon?.stop(); herdr.stop(); }
 });
 
