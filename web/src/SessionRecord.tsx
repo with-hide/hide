@@ -249,13 +249,18 @@ function ArchivedNow({ row, member, connected, actions }: { row: ArchivedSession
   </StateBox>;
 }
 
+/** An archived member's state in one word. */
+function archivedWord(t: ReturnType<typeof useInterfaceTranslation>["t"], resume: ArchivedMember["resume"]): string {
+  return resume === "queued" || resume === "starting" ? t("archive.resuming") : resume === "failed" ? t("archive.resumeFailed") : resume === "unknown" ? t("archive.unknown") : t("archive.state");
+}
+
 /** The members a live root's close or resume left archived (B24): each with its state and its own 이어가기. */
 function ArchivedChildren({ row, members, connected, actions }: { row: ArchivedSession; members: readonly ArchivedMember[]; connected: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   return <ul className={cn("mb-sm flex min-w-0 flex-col gap-xxs", !connected && "opacity-(--opacity-disabled)")} data-record-archived-children={row.id}>
     {members.map((member) => {
       const resuming = member.resume === "queued" || member.resume === "starting";
-      const word = resuming ? t("archive.resuming") : member.resume === "failed" ? t("archive.resumeFailed") : member.resume === "unknown" ? t("archive.unknown") : t("archive.state");
+      const word = archivedWord(t, member.resume);
       return <li key={member.session.session_id} className="flex min-w-0 items-center gap-xs" data-record-archived-child={member.session.session_id} data-archived-resume={member.resume}>
         <AgentMark kind={member.agent_kind} />
         <span className="min-w-0 flex-1 truncate" title={[member.title, member.reason].filter(Boolean).join("\n")}>{member.title}</span>
@@ -387,8 +392,11 @@ function ChildRows({ parent, items, hang, summaries, onOpen, actions }: { parent
       const live = [...rows.values()].find((row) => row.session_id === child.session.session_id) ?? null;
       const title = recordTitle(child, summaries);
       const agent = agentProductName(child.session.agent);
-      const done = live ? live.status_code === "done" : child.last_end === "done" || (child.tasks.length > 0 && child.tasks.every((task) => task.done));
-      const state = done ? null : live ? statusText(t, live.status_code) : child.state ? statusText(t, child.state as AgentStatusCode) : child.last_end ? statusText(t, END_STATUS[child.last_end]) : null;
+      // An archived child runs nothing, so its record's last state is not said (PRD session-archive B19).
+      const held = live ? null : archivedMemberOf(rest, child.session);
+      const away = held ? held.row.members[held.index]!.resume : null;
+      const done = live ? live.status_code === "done" : !away && (child.last_end === "done" || (child.tasks.length > 0 && child.tasks.every((task) => task.done)));
+      const state = away && away !== "resumed" ? archivedWord(t, away) : done ? null : live ? statusText(t, live.status_code) : child.state ? statusText(t, child.state as AgentStatusCode) : child.last_end ? statusText(t, END_STATUS[child.last_end]) : null;
       const status = live && !done ? <StatusMark mark={live.mark} className={markTone(live)} data-agent-status-mark={live.mark} />
         : done ? <span className="inline-flex size-(--size-agent-mark) items-center justify-center text-success" data-agent-status-mark="done-check"><CheckIcon className="size-full" /></span>
           : <StatusMark mark="quiet" data-agent-status-mark="quiet" />;
