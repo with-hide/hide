@@ -541,6 +541,9 @@ impl From<res::AgentInfo> for ProjectedAgent {
         let declared_parent_session = declared(PARENT_SESSION_TOKEN);
         Self {
             pane_id: v.pane_id,
+            // `terminal_id` and `launch_pending` serve only the start settle,
+            // a workaround for herdrdev/herdr#3853 that goes with them.
+            terminal_id: v.terminal_id,
             name: v.name,
             workspace_id: v.workspace_id,
             tab_id: v.tab_id,
@@ -1693,6 +1696,22 @@ pub(crate) fn pane_process_group(value: Value) -> Result<PaneProcessGroup, Strin
                 .collect(),
         }),
         _ => Err(missing.into()),
+    }
+}
+
+/// The terminal of the agent an `agent.start` answer started, for the start
+/// settle's record of Hide's own starts (herdrdev/herdr#3853).
+pub(crate) fn started_agent_terminal(value: &Value) -> Option<String> {
+    match response(
+        value.clone(),
+        "agent.start response is missing agent terminal",
+    )
+    .ok()?
+    {
+        res::ResponseResult::AgentStarted { agent, .. } => {
+            Some(agent.terminal_id).filter(|terminal| !terminal.is_empty())
+        }
+        _ => None,
     }
 }
 

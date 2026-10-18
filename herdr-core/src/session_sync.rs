@@ -397,6 +397,7 @@ impl ActiveSubscription {
 
 mod coordinator;
 mod launch_settle;
+pub(crate) use launch_settle::record_start;
 mod path_facts;
 mod process_info;
 mod projection;
