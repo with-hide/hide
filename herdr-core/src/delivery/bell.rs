@@ -59,8 +59,7 @@ pub(crate) fn line(ring: &Ring) -> String {
 /// arrives with neither the letter nor the session guidance that says what
 /// the line means. Claude Code runs every user-level hook it is given.
 pub(crate) fn names_inbox(kind: &str) -> bool {
-    hide_agent_adapter::adapter(kind)
-        .is_some_and(|row| row.key == hide_agent_adapter::AgentId::Codex)
+    hide_agent_adapter::adapter(kind).is_some_and(|row| row.bell_names_inbox)
 }
 
 /// Whether a letter may keep `line` as its bell.

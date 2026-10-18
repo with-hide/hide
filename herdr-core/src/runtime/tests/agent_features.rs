@@ -23,7 +23,7 @@ fn every_flag_of_the_table_is_what_the_cores_own_gates_do() {
         let hook = crate::agent_hooks::runtime_of(kind).is_some()
             || matches!(adapter.hook, hide_kit::HookSupport::Plugin(_))
             || matches!(adapter.hook, hide_kit::HookSupport::Guidance(agent)
-                if agent.dialect().is_some() && agent.dialect() == declared.prompt_hook);
+                if agent.dialect().is_some() && agent.dialect() == declared.prompt_hook.filter(|hook| hook.context).map(|hook| hook.dialect));
         assert_eq!(adapter.supports(Feature::Letters), hook, "{kind}: letters");
         // Memory needs that hook and its own declaration.
         assert_eq!(
@@ -124,6 +124,7 @@ fn the_snapshot_row_carries_the_chip_and_the_table_in_order() {
             .collect::<Vec<_>>(),
         [
             Feature::Skill,
+            Feature::Bell,
             Feature::SpawnGuard,
             Feature::HerdrIntegration,
             Feature::Sleep,
@@ -131,7 +132,7 @@ fn the_snapshot_row_carries_the_chip_and_the_table_in_order() {
             Feature::Start,
             Feature::Titles
         ],
-        "grok guards and counts through its own hook, and its session reader adds titles and the exact lifecycle"
+        "grok takes resting letters, guards and counts through its own hook, and its reader adds titles and the exact lifecycle"
     );
     assert_eq!(
         grok.features

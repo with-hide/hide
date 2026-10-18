@@ -87,7 +87,7 @@
       "title": true,
       "usage": true
     },
-    "letter": "tool",
+    "letter": "bell",
     "wake": "sleeping_session",
     "title": "automatic",
     "request_budget": 20

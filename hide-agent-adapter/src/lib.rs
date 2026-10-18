@@ -517,6 +517,13 @@ pub struct FactoryCapabilities {
     pub next_prompt_letters: Capability<HookDialect>,
 }
 
+/// A submission hook may observe a prompt even when its output is discarded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PromptHook {
+    pub dialect: HookDialect,
+    pub context: bool,
+}
+
 /// Independent gates; adding prompt intake never grants bell or shell denial.
 #[derive(Clone, Copy, Debug)]
 pub struct AgentAdapter {
@@ -531,15 +538,16 @@ pub struct AgentAdapter {
     pub hook: HookInstall,
     pub herdr: HerdrIntegration,
     pub default_on: bool,
-    pub prompt_hook: Option<HookDialect>,
+    pub prompt_hook: Option<PromptHook>,
     pub spawn_guard: Option<HookDialect>,
     pub subagent_counts: Option<HookDialect>,
     pub memory: Option<HookDialect>,
     pub bell: bool,
+    pub bell_names_inbox: bool,
+    pub turn_end_letters: Option<HookDialect>,
     /// The dialect whose hook, plugin or extension hands letters over at a
     /// tool event while the agent works (PRD letters-to-busy-agents D-02),
-    /// never beside a bell: a bell target reads its letters from the input
-    /// line instead, so one letter has one path.
+    /// A kind with this path may only be belled at rest.
     pub tool_letters: Option<HookDialect>,
     pub session: Option<SessionFormat>,
     pub sleep: Option<LaunchDialect>,
@@ -657,7 +665,7 @@ impl AgentAdapter {
                 HookInstall::Guidance(dialect) => dialect.prints_guidance(),
                 HookInstall::None => false,
             },
-            Feature::Letters => self.prompt_hook.is_some(),
+            Feature::Letters => matches!(self.prompt_hook, Some(PromptHook { context: true, .. })),
             Feature::Bell => self.bell,
             Feature::Memory => self.memory.is_some(),
             Feature::SpawnGuard => self.spawn_guard.is_some(),
@@ -671,6 +679,7 @@ impl AgentAdapter {
     }
 
     pub const fn basic(&self) -> bool {
-        self.prompt_hook.is_none() || self.spawn_guard.is_none()
+        !matches!(self.prompt_hook, Some(PromptHook { context: true, .. }))
+            || self.spawn_guard.is_none()
     }
 }

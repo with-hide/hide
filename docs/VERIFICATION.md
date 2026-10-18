@@ -349,7 +349,7 @@ The clone reads this checkout's objects and writes only its own, so the run's br
 | --- | --- |
 | `start` | The spawn answers registered, running and connected with a native session id, Hide's reader holds the answer to the first prompt and the row reads idle later than that answer's session time, and Herdr's integration reports that session as the contract's `herdr_source` (`herdr:<integration target>`, `herdr:antigravity_cli` for agy); whether the row read working is reported, not required, since Herdr's screen detection misses a turn of about two seconds |
 | `reply` | Hide's reader finds the first turn's token in an assistant message; a reply only another parser finds fails |
-| `letter` | A token sent with `hide request send` comes back in the turn the letter reached, `hide request show` says delivered, and the row reads idle after that answer; the turn is the one Hide's doorbell opened for an agent with a bell (Claude Code, Codex), and for one with a prompt hook and no bell (agy, Pi, omp, OpenCode) the next prompt the journey types, whose hook hands the letter over and confirms it (`hook_confirmed`) |
+| `letter` | A token sent with `hide request send` comes back in the turn the letter reached, `hide request show` says delivered, and the row reads idle after that answer; the turn is the one Hide's doorbell opened for an agent with a bell (Claude Code, Codex, Grok), and for one with a prompt hook and no bell (agy, Pi, omp, OpenCode) the next prompt the journey types, whose hook hands the letter over and confirms it (`hook_confirmed`) |
 | `sleep_wake` | After the daemon's Sleep event the row reads asleep, and after Wake it runs again: in the pane it slept in for an agent Hide wakes there (Claude Code, Codex, agy), and for one whose Sleep closes its pane (Grok, Pi, omp, OpenCode) once `wake_sleeping_session` opened a new pane that hosts the same session and its registration |
 | `resume` | The operator opens the woken agent (`focus_pane`), its terminal takes this screen's keys, a typed token prompt is answered in the session it slept in, the row reads idle after that answer, and Herdr reports the same session id |
 | `start_untrusted` | A start in a repository the account never trusted, with no preparation, passes once Hide has recorded the trust of the worktree it made |
@@ -365,7 +365,8 @@ The journey closes each pane no later cell types into: a fork's after the `fork`
 The run's process guardian ends the private Herdr when everything under it passes 2 GiB together: two Claude Code processes left running beside a Codex fork crossed it, and so did omp's fork, its woken session and its untrusted start held at once on Linux (2.17 GB, 2026-10-18).
 A crossed memory cap names the five live processes holding the most, and the report's cleanup failures carry the reason a guardian (on Windows, the job) ended Herdr or hided, so the cells that fail after it with `herdr_command_exit_1` have their cause in the same report.
 The cells an adapter declares, and its letter and wake forms, come from `contracts/agent-journey.json`, which `hide-agent-adapter` generates and its contract test keeps current ([contracts/README.md](../contracts/README.md#agent-journey)).
-Grok's letter is `not measured`: Grok takes a letter only at a tool call its model chooses or through a `hide inbox` it runs, and the journey never asks a model to choose an action; it closes once the adapter gives Grok a prompt hook or a bell.
+Grok's letter uses the `bell` path: the bell wakes it at rest, its prompt hook recognizes that turn without printing context, and its first tool hook or Stop hook delivers the letter body.
+The journey judges its reply in that bell turn without asking the model to choose a tool.
 It does not prove the desktop window, a physical keyboard, an agent other than the declared rows, or a model, provider or CLI version other than the ones its report names.
 
 ### Cells, reasons and exit codes
@@ -440,6 +441,7 @@ The journey reads what hide, Herdr and the agents write as UTF-8 and refuses to 
 The journey alone runs by hand with the repository's secrets: `gh workflow run agent-journey.yml --ref <branch> -f systems='["linux","macos","windows"]' -f fake=true -f live=true -f agy=rotation`; a hand run's agy requests come out of the same 20 a day as the nightly's.
 
 Each agent on the fake model lane on Linux and macOS on 2026-10-18 (runs 39097395133 and 39099935719, both systems and both runs the same but where a row says), with where its `title` cell's native title comes from, its model requests (each prompt's, a CLI's own title and helper requests included) against the budget `contracts/agent-journey.json` gives a signed-in run, and each cell that did not pass with its cause:
+These runs predate Grok's rest-bell delivery; their `letter` result remains historical evidence, not a result for the current `bell` contract.
 
 | Agent | CLI | Title source | Requests | Cells not passing, and why |
 | --- | --- | --- | --- | --- |

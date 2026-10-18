@@ -24,11 +24,16 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             folder: &[".claude"],
         },
         default_on: true,
-        prompt_hook: Some(HookDialect::ClaudeCode),
+        prompt_hook: Some(PromptHook {
+            dialect: HookDialect::ClaudeCode,
+            context: true,
+        }),
         spawn_guard: Some(HookDialect::ClaudeCode),
         subagent_counts: Some(HookDialect::ClaudeCode),
         memory: Some(HookDialect::ClaudeCode),
         bell: true,
+        bell_names_inbox: false,
+        turn_end_letters: None,
         tool_letters: None,
         session: Some(SessionFormat::Claude),
         sleep: Some(LaunchDialect::Claude),
@@ -89,11 +94,16 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             folder: &[".codex"],
         },
         default_on: true,
-        prompt_hook: Some(HookDialect::Codex),
+        prompt_hook: Some(PromptHook {
+            dialect: HookDialect::Codex,
+            context: true,
+        }),
         spawn_guard: Some(HookDialect::Codex),
         subagent_counts: Some(HookDialect::Codex),
         memory: Some(HookDialect::Codex),
         bell: true,
+        bell_names_inbox: true,
+        turn_end_letters: None,
         tool_letters: None,
         session: Some(SessionFormat::Codex),
         sleep: Some(LaunchDialect::Codex),
@@ -154,15 +164,18 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             folder: &[".grok"],
         },
         default_on: false,
-        // Grok discards what a prompt hook prints, so a new prompt's letters
-        // stay with `hide inbox` and its bell stays off; while it works, its
-        // own `PreToolUse` hook hands the due letters over as the tool's
-        // added context (`tool_letters`).
-        prompt_hook: None,
+        // The prompt hook records submission and recognizes a bell; its
+        // output is discarded. Tool and turn-end hooks carry the letters.
+        prompt_hook: Some(PromptHook {
+            dialect: HookDialect::Grok,
+            context: false,
+        }),
         spawn_guard: Some(HookDialect::Grok),
         subagent_counts: Some(HookDialect::Grok),
         memory: None,
-        bell: false,
+        bell: true,
+        bell_names_inbox: true,
+        turn_end_letters: Some(HookDialect::Grok),
         tool_letters: Some(HookDialect::Grok),
         session: Some(SessionFormat::Grok),
         sleep: Some(LaunchDialect::Grok),
@@ -228,13 +241,18 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             folder: &[".config", "opencode"],
         },
         default_on: false,
-        prompt_hook: Some(HookDialect::OpenCode),
+        prompt_hook: Some(PromptHook {
+            dialect: HookDialect::OpenCode,
+            context: true,
+        }),
         spawn_guard: Some(HookDialect::OpenCode),
         subagent_counts: Some(HookDialect::OpenCode),
         memory: Some(HookDialect::OpenCode),
         // A bell's Enter in OpenCode's session picker opens another session
         // (measured 2026-10-07); letters reach it on its next prompt instead.
         bell: false,
+        bell_names_inbox: false,
+        turn_end_letters: None,
         tool_letters: Some(HookDialect::OpenCode),
         session: Some(SessionFormat::OpenCode),
         sleep: Some(LaunchDialect::OpenCode),
@@ -307,7 +325,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             folder: &[".pi", "agent"],
         },
         default_on: false,
-        prompt_hook: Some(HookDialect::Pi),
+        prompt_hook: Some(PromptHook {
+            dialect: HookDialect::Pi,
+            context: true,
+        }),
         spawn_guard: Some(HookDialect::Pi),
         // Pi runs no subagents.
         subagent_counts: None,
@@ -317,6 +338,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         // picks the highlighted item (measured 2026-10-07). Letters reach it on
         // its next prompt instead.
         bell: false,
+        bell_names_inbox: false,
+        turn_end_letters: None,
         tool_letters: Some(HookDialect::Pi),
         session: Some(SessionFormat::Pi),
         sleep: Some(LaunchDialect::Pi),
@@ -387,7 +410,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             folder: &[".omp", "agent"],
         },
         default_on: false,
-        prompt_hook: Some(HookDialect::Omp),
+        prompt_hook: Some(PromptHook {
+            dialect: HookDialect::Omp,
+            context: true,
+        }),
         spawn_guard: Some(HookDialect::Omp),
         subagent_counts: Some(HookDialect::Omp),
         memory: Some(HookDialect::Omp),
@@ -395,6 +421,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         // resumes another session (measured 2026-10-07). Letters reach it on
         // its next prompt instead.
         bell: false,
+        bell_names_inbox: false,
+        turn_end_letters: None,
         tool_letters: Some(HookDialect::Omp),
         session: Some(SessionFormat::Omp),
         sleep: Some(LaunchDialect::Omp),
@@ -481,6 +509,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         subagent_counts: None,
         memory: None,
         bell: false,
+        bell_names_inbox: false,
+        turn_end_letters: None,
         tool_letters: Some(HookDialect::Cursor),
         session: Some(SessionFormat::Cursor),
         sleep: Some(LaunchDialect::Cursor),
@@ -572,7 +602,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         // On by default like Claude Code and Codex: the operator's amendment
         // to PRD antigravity-first-class B1/D-14 (2026-10-16).
         default_on: true,
-        prompt_hook: Some(HookDialect::Antigravity),
+        prompt_hook: Some(PromptHook {
+            dialect: HookDialect::Antigravity,
+            context: true,
+        }),
         spawn_guard: Some(HookDialect::Antigravity),
         subagent_counts: Some(HookDialect::Antigravity),
         memory: Some(HookDialect::Antigravity),
@@ -584,6 +617,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         // `PreInvocation` hook runs before and Hide answers with the letters
         // due as an injected system message (`tool_letters`).
         bell: false,
+        bell_names_inbox: false,
+        turn_end_letters: None,
         tool_letters: Some(HookDialect::Antigravity),
         session: Some(SessionFormat::Antigravity),
         sleep: Some(LaunchDialect::Antigravity),

@@ -145,7 +145,7 @@ fn observe_guidance(target: &KitTarget, adapter: &AgentAdapter, agent: GuidanceA
         HookStatus::NotInstalled | HookStatus::Off => Observed::Missing,
         HookStatus::Outdated { version } => Observed::Stale(format!(
             "version {version} of the hook is there; this build writes version {}",
-            guidance::GUIDANCE_VERSION
+            agent.version()
         )),
         HookStatus::Failed {
             reason: InstallFailure::HelperMissing { helper, .. },

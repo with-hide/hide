@@ -2295,7 +2295,9 @@ omp has native titles, Sleep and Fork from its complete session reader beside gu
 Its current native/manual title wins over a generated goal; an explicit clear returns to the existing fallback without replaying the conversation.
 An unanswered native `ask` enters the existing question state with bounded text and choices even with summaries off, and a correlated answer clears it.
 Its question keeps the existing Answer tag in the pane header even while the native session holds for an operator reply.
-Grok has native titles, Sleep and Fork from its complete session reader beside the spawn guard and subagent count from its own hook; it has no letters, so its row keeps the Basic chip.
+Grok has native titles, Sleep and Fork from its complete session reader beside the spawn guard, subagent count and letters from its own hook.
+At rest its bell opens a turn that takes letters at the first tool call or at Stop; while working it takes due letters at either hook without a bell.
+It has no new-prompt letter context or Memory, so its row keeps the Basic chip.
 Its `/rename` title wins over a generated goal, an unanswered `ask_user_question` enters the question state with bounded text and choices, and a plan awaiting approval enters the approval state with the plan text.
 Cursor has conversation, search, exact resume and Sleep from its ordinary native chat reader, with generated goal then provider as its title; it has no native title, Fork, Memory extraction, subagent count, structured question/plan wait or tool-output PR discovery.
 Its Basic chip and existing guidance and spawn-guard facts remain, and it offers no model or effort choice.
