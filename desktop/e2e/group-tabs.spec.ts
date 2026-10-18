@@ -3,7 +3,6 @@
 import { expect, type ElectronApplication } from "@playwright/test";
 import { startHerdr } from "../../web/e2e/herdr-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
-import { chord } from "../../web/e2e/chords";
 import { compositorPresents } from "../../web/e2e/wait";
 import { fitWindow, isolate, launchShell, test } from "./fixture";
 import { captureNativeWindow } from "./native-window";
@@ -40,7 +39,7 @@ test("named groups and the independent terminal action render in the candidate w
     await expect(page.locator("[data-new-agent-tab=true]")).toBeVisible();
     await compositorPresents(page);
     await captureNativeWindow(app, "group-tabs-blank-native", facts);
-    await page.keyboard.press(chord("settings"));
+    await page.locator("[data-open-settings]").click();
     await page.locator('[data-settings-tab="general"]').click();
     await page.locator('[data-theme-option="light"]').click();
     await expect(page.locator("html")).toHaveClass(/(^|\s)light(\s|$)/);
