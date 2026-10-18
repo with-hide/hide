@@ -1438,9 +1438,20 @@ export type KitComponent = {
  * `offers_reinstall` is true only while a part needs it; `shares_account_with`
  * names another registered device that reaches the same account there.
  */
+/** What stopped a machine's kit pass before it changed anything (`contracts/snapshot-wire-enums.json`: `kit_refusal_cause`). */
+export type KitRefusalCause = "unsafe" | "record" | "busy";
+
+/** The variable that chose Hide's state folder (`kit_state_variable`), named so the operator knows what to change or unset. */
+export type KitStateVariable = "HIDE_STATE_DIR" | "XDG_STATE_HOME";
+
+/** A pass that stopped before changing anything; the kit's own words stay in the log. */
+export type KitRefusal = { cause: KitRefusalCause; path: string | null; variable: KitStateVariable | null };
+
 export type Kit = {
   unavailable: string | null;
   busy: boolean;
+  /** The machine's last pass or read stopped before changing anything; its parts and agents are then empty. */
+  refused?: KitRefusal | null;
   components: KitComponent[];
   /** Every agent Hide has an adapter for; empty until the machine was checked. */
   agents: KitAgent[];

@@ -6,7 +6,7 @@ import type { TFunction } from "i18next";
 import type { DaemonInfo } from "./store";
 import type { MessageKey } from "./i18n/catalogs";
 import type { AccentName } from "./theme";
-import type { AgentRow, CoreDiagnostic, Device, DeviceHost, EnvironmentStatus, GithubFailureCategory, HerdrStatus, KitComponent, RemoteStatus, Workspace } from "./snapshot";
+import type { AgentRow, CoreDiagnostic, Device, DeviceHost, EnvironmentStatus, GithubFailureCategory, HerdrStatus, KitComponent, KitRefusal, RemoteStatus, Workspace } from "./snapshot";
 import { readsHere } from "./devices";
 import { registeredName } from "./screenMachine";
 import { redact } from "./redact";
@@ -353,6 +353,24 @@ export function kitPartText(part: Pick<KitComponent, "state" | "reason">, t: Tra
 export function kitProblems(kit: Device["kit"]): KitComponent[] {
   if (!kit || kit.unavailable) return [];
   return kit.components.filter((part) => kitPartNeedsReinstall(part));
+}
+
+/**
+ * The one line a machine says when its kit pass stopped before changing
+ * anything: what stopped it, the folder or file at fault, and what the
+ * operator changes, naming the variable that chose Hide's state folder when
+ * one did.
+ */
+export function kitRefusalLine(refusal: KitRefusal, t: Translate): string {
+  const path = refusal.path ?? "";
+  switch (refusal.cause) {
+    case "unsafe":
+      return refusal.variable ? t("devices.kitRefused.unsafeVariable", { variable: refusal.variable, path }) : t("devices.kitRefused.unsafe", { path });
+    case "record":
+      return refusal.path ? t("devices.kitRefused.record", { path }) : t("devices.kitRefused.recordCount");
+    case "busy":
+      return t("devices.kitRefused.busy");
+  }
 }
 
 /** A device Herdr socket must be an absolute single-line path on that device, or left empty. */
