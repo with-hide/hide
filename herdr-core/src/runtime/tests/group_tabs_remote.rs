@@ -350,7 +350,7 @@ fn an_archived_remote_root_keeps_its_pending_follow_before_automatic_descendants
 
 #[test]
 fn a_first_local_home_result_waits_for_its_catalog_and_respects_a_newer_visit() {
-    for registration_listed in [false, true] {
+    for registration_state in ["unlisted", "empty", "seed-pane"] {
         for boundary in ["catalog", "newer-visit", "reconnect"] {
             let t = tree();
             let home = Path::new(&t.main).parent().unwrap().join("home");
@@ -373,8 +373,30 @@ fn a_first_local_home_result_waits_for_its_catalog_and_respects_a_newer_visit() 
                 .ui_state
                 .workspace_registrations
                 .push(registration);
-            if registration_listed {
+            if registration_state != "unlisted" {
                 runtime.ingest_session_with_catalog(Ok(old.clone()), None);
+            }
+            if registration_state == "seed-pane" {
+                // workspace.create's seed can be catalogued before the
+                // replacement tab and the owner's mark reach this session.
+                let mut seed = tab_order_payload(home, &["w-home:t0"], &["w-home:t0"], "w-home:t0");
+                seed.workspaces[0].workspace_id = "w-home".into();
+                seed.tabs[0].workspace_id = "w-home".into();
+                seed.layouts[0].workspace_id = "w-home".into();
+                seed.workspaces.extend(old.workspaces.clone());
+                seed.tabs.extend(old.tabs.clone());
+                seed.layouts.extend(old.layouts.clone());
+                seed.panes.extend(old.panes.clone());
+                seed.focused_workspace_id = old.focused_workspace_id.clone();
+                seed.focused_pane_id = old.focused_pane_id.clone();
+                runtime.ingest_session_with_catalog(Ok(seed), None);
+                let checkout = runtime
+                    .catalog_workspaces()
+                    .flat_map(|workspace| &workspace.checkouts)
+                    .find(|checkout| checkout.path == home)
+                    .unwrap();
+                assert!(checkout.has_panes);
+                assert!(checkout.owner_workspace_id.is_none());
             }
             runtime.ingest_task_operation_result(
                 task,
@@ -394,7 +416,8 @@ fn a_first_local_home_result_waits_for_its_catalog_and_respects_a_newer_visit() 
             );
             assert_eq!(
                 runtime.snapshot.focused.pane_id.as_deref(),
-                Some("w-order:t1:p")
+                Some("w-order:t1:p"),
+                "{registration_state}: {boundary} waits for the returned pane, not the seed"
             );
             match boundary {
                 "newer-visit" => dispatch(

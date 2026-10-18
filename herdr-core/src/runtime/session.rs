@@ -4126,10 +4126,13 @@ impl Runtime {
                     && self.created_pane_place(&pane_id).is_none()
                     && !self.catalog_workspaces().any(|workspace| {
                         workspace.device_id == self.node.as_str()
-                            && workspace
-                                .checkouts
-                                .iter()
-                                .any(|checkout| checkout.path == path && checkout.has_panes)
+                            && workspace.checkouts.iter().any(|checkout| {
+                                checkout.path == path
+                                    && checkout
+                                        .tabs
+                                        .iter()
+                                        .any(|tab| tab.panes.iter().any(|pane| pane.id == pane_id))
+                            })
                     });
                 crate::diagnostic!(serde_json::json!({
                     "component": "agent_start",
@@ -4147,9 +4150,9 @@ impl Runtime {
                     self.queue_start_focus(id, pane_id.clone());
                     self.follow_start(Some(device));
                 } else if should_focus && waits_for_local_catalog {
-                    // The first Home can finish before its registration has a
-                    // catalog row. Moving only its pane would leave the next
-                    // session scoped to the previous checkout.
+                    // A first Home's catalog may still contain only the
+                    // owner's seed pane. Wait for this returned pane, or the
+                    // next session stays scoped to the previous checkout.
                     self.queue_start_focus(id, pane_id.clone());
                 } else if should_focus {
                     // Targeted creation intentionally did not focus Herdr.
