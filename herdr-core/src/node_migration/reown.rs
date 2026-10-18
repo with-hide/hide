@@ -864,9 +864,13 @@ fn reown_factory(staging: &Path, change: &OwnerChange) -> Result<bool, String> {
 /// another id takes its Projects with it, by the same re-key the layer-1
 /// conversion makes (`MemoryStore::convert_device`), so a Project's Memory
 /// is the new core's for the same Project and not an empty one beside it.
-/// A store that does not open, or a Project already stored under the id a
-/// move would give, stops the move: the new core would otherwise start a
-/// Memory of its own beside the old one.
+/// A store that does not open stops the move. A Project already stored under
+/// the id a move would give is that Project as another machine named it when
+/// its root is the same (a move made before Memory was re-keyed started a
+/// fresh one under its own machine's id and carried it home), and is folded
+/// into it (`MemoryStore::convert_device_merging`), the moving Project's
+/// choices and rows winning, with one record of what was folded. A different
+/// Project at that id stops the move.
 fn reown_memory(path: &Path, change: &OwnerChange) -> Result<bool, String> {
     let store = crate::runtime::memory::open_memory_store(path)
         .map_err(|error| format!("Project Memory does not open: {error}"))?;
@@ -877,8 +881,20 @@ fn reown_memory(path: &Path, change: &OwnerChange) -> Result<bool, String> {
     ] {
         if from != to {
             let moved = store
-                .convert_device(from, to)
+                .convert_device_merging(from, to)
                 .map_err(|error| format!("Project Memory of {from}: {error}"))?;
+            for conversion in &moved {
+                let Some(rows) = &conversion.merged else {
+                    continue;
+                };
+                crate::diagnostic!(serde_json::json!({
+                    "component": "core_move",
+                    "kind": "memory.leftover_merged",
+                    "from_id": conversion.from,
+                    "into_id": conversion.to,
+                    "rows": rows,
+                }));
+            }
             changed |= !moved.is_empty();
         }
     }
@@ -1975,14 +1991,91 @@ mod tests {
         assert!(refusal.reason.contains("names no root"), "{refusal}");
     }
 
-    #[test]
-    fn a_memory_project_the_move_would_land_on_stops_it_and_names_the_store() {
-        let dir = macbook_folder();
-        let state = dir.path();
-        // The core already holds a Project at the id the mini's would take.
+    /// Plants the leftover of a move made before Memory was re-keyed: the
+    /// Project of `root` under `device`, with a receipt cursor the moving
+    /// Project has no row for.
+    fn plant_memory_leftover(state: &Path, device: &str, root: &str) {
         let store = hide_memory::MemoryStore::open(&state.join(PROJECT_MEMORY)).unwrap();
         store
-            .ensure_project(&device_digest(C, C_ROOT), Path::new(C_ROOT), C)
+            .ensure_project(&device_digest(device, root), Path::new(root), device)
+            .unwrap();
+        drop(store);
+        rusqlite::Connection::open(state.join(PROJECT_MEMORY))
+            .unwrap()
+            .execute(
+                "INSERT INTO receipt_cursors VALUES(?1,'claude','left-over',0,x'',NULL,1,0)",
+                [device_digest(device, root)],
+            )
+            .unwrap();
+    }
+
+    fn memory_project_count(state: &Path) -> i64 {
+        rusqlite::Connection::open_with_flags(
+            state.join(PROJECT_MEMORY),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM projects", [], |row| row.get(0))
+        .unwrap()
+    }
+
+    fn memory_cursors(state: &Path, project: &str) -> Vec<String> {
+        let connection = rusqlite::Connection::open_with_flags(
+            state.join(PROJECT_MEMORY),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let mut statement = connection
+            .prepare("SELECT session_id FROM receipt_cursors WHERE project_id=?1 ORDER BY 1")
+            .unwrap();
+        statement
+            .query_map([project], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    /// A move made before Memory was re-keyed left a fresh Project of the
+    /// same root under the other machine's own id, and the core carried it
+    /// home: the next move, either way, folds it into the Project it
+    /// names instead of stopping on it, and a retry changes nothing.
+    #[test]
+    fn a_memory_project_the_move_would_land_on_is_folded_forward_and_back() {
+        let dir = macbook_folder();
+        let state = dir.path();
+        plant_memory_leftover(state, C, C_ROOT);
+
+        reown(state, &forward(), &forward_ids()).unwrap();
+        assert_eq!(memory_project_count(state), 3, "folded, not kept beside it");
+        let mini = device_digest(C, C_ROOT);
+        assert_eq!(
+            memory_cursors(state, &mini),
+            vec!["left-over".to_owned(), "s1".to_owned()]
+        );
+
+        // The move back lands on a leftover under the mini's registration.
+        plant_memory_leftover(state, ALIAS, C_ROOT);
+        reown(state, &back(), &back_ids()).unwrap();
+        assert_eq!(memory_project_count(state), 3);
+        assert_eq!(
+            memory_cursors(state, &device_digest(ALIAS, C_ROOT)),
+            vec!["left-over".to_owned(), "s1".to_owned()]
+        );
+        assert_eq!(read(&state.join(MARKER_FILE))["node"], json!(M));
+    }
+
+    #[test]
+    fn a_memory_project_of_another_root_at_the_new_id_stops_the_move_and_names_the_store() {
+        let dir = macbook_folder();
+        let state = dir.path();
+        // Another Project's row at the id the mini's would take.
+        let store = hide_memory::MemoryStore::open(&state.join(PROJECT_MEMORY)).unwrap();
+        store
+            .ensure_project(
+                &device_digest(C, C_ROOT),
+                Path::new("/Users/remote/other"),
+                C,
+            )
             .unwrap();
         drop(store);
         let refusal = reown(state, &forward(), &forward_ids()).unwrap_err();
