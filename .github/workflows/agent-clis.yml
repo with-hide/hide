@@ -1,0 +1,56 @@
+# Every agent CLI contracts/agent-clis.json pins, installed on each system
+# with scripts/install-agent-clis.py, which fails when a CLI answers another
+# version than its pin. `pr.yml` runs it for a change to the table, its
+# reader or an installer, so a pin moves in the pull request that proves it
+# installs (contracts/README.md, Agent CLI pins); the nightly's and a
+# release's journey install every CLI on their own.
+name: agent CLIs
+
+on:
+  workflow_dispatch:
+    inputs:
+      systems:
+        description: The systems to install on, as a JSON array of `linux`, `macos` and `windows`.
+        type: string
+        default: '["linux","macos","windows"]'
+  workflow_call:
+    inputs:
+      systems:
+        type: string
+        default: '["linux","macos","windows"]'
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: agent CLIs (${{ matrix.system }})
+    runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        system: ${{ fromJSON(inputs.systems) }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      # The installer needs Python 3.12; Windows names it python.
+      PYTHON: ${{ matrix.system == 'windows' && 'python' || 'python3' }}
+    steps:
+      - name: Keep line endings as committed
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        if: runner.os == 'Windows'
+        with:
+          python-version: "3.12"
+      - name: Install every pinned agent CLI
+        timeout-minutes: 10
+        run: '"$PYTHON" scripts/install-agent-clis.py --all'

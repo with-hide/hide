@@ -64,9 +64,10 @@ target/debug/examples/export_journey_contract > contracts/agent-journey.json
 
 # Agent CLI pins
 
-`agent-clis.json` is the one place a CI agent CLI version is written: for each agent, by its Herdr kind, the version every CI lane installs, the installer (`npm` with its package, or the vendor's own installer for Grok, omp and agy), and, for an npm package whose program is not its `.bin` shim, the program's path in the package.
-`scripts/install-agent-clis.py` reads it to install each CLI on a runner, and the agent journey reads it to say in its report whether the CLI it measured answered that version; a row whose installer takes no version (agy's) says so in `pinned`, and its version is checked, not installed.
-Move a pin in a pull request that runs the lanes that install it; no workflow restates a version.
+`agent-clis.json` is the one place a CI agent CLI version is written: for each agent, by its Herdr kind, the version every CI lane installs, the installer (`npm` with its package, or the vendor's own installer for Grok, omp and agy), for an npm package whose program is not its `.bin` shim the program's path in the package, and for an npm package that needs its install scripts why (`install_scripts`; every other package installs with `--ignore-scripts`).
+`scripts/install-agent-clis.py` reads it to install each CLI on a runner and fails when a CLI answers another version, and the agent journey reads it to say in its report whether the CLI it measured answered that version, which fails its lane otherwise; a row whose installer takes no version (agy's) says so in `pinned`, and its version is checked, not installed, so a new vendor release fails until its pin moves.
+omp's binary is checked against its release's `SHA256SUMS.txt`; Grok's and agy's vendor installers publish no checksum, so only the version each answers is checked.
+Move a pin in a pull request: a change to this file or an installer plans the `agent CLIs` lane, which installs every pinned CLI on Linux and Windows; no workflow restates a version.
 
 # hide CLI contract
 
