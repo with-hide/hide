@@ -14,7 +14,7 @@ import json
 
 from agent_live_check.protection import private_directory, write_private
 
-from . import ci, omp_state, opencode_service
+from . import ci, opencode_service
 from .fake_model import MODEL
 
 # Not a secret: the fake model takes any key, and a CLI needs one to start.
@@ -107,7 +107,7 @@ def omp(home, url, root, local):
     write_private(folder / "models.yml", (f"providers:\n  {PROVIDER}:\n    baseUrl: {url}/v1\n"
                                           f"    apiKey: JOURNEY_FAKE_KEY\n    api: openai-completions\n"
                                           f"    models:\n      - id: {MODEL}\n        name: Journey\n").encode())
-    write_private(folder / "config.yml", (omp_state.SET_UP + f"modelRoles:\n  default: {PROVIDER}/{MODEL}\n").encode())
+    write_private(folder / "config.yml", (ci.OMP_SET_UP + f"modelRoles:\n  default: {PROVIDER}/{MODEL}\n").encode())
     return {"JOURNEY_FAKE_KEY": KEY}
 
 

@@ -17,8 +17,12 @@ from agent_live_check.protection import ProtectionError, private_directory, writ
 from agent_live_check.runtime import XDG_FOLDERS, clean_env
 from agent_live_check.system import WINDOWS, home_env, launcher, temp_env
 
-from . import cells, omp_state, opencode_service
+from . import cells, opencode_service
 from .local import QUIET
+
+# What a set-up omp 18.7.0 keeps in its config.yml: without it the first
+# start runs omp's setup wizard over the prompt.
+OMP_SET_UP = "setupVersion: 2\n"
 
 LOGINS = {
     # Claude Code reads the key from ANTHROPIC_API_KEY; a fresh HOME first
@@ -163,7 +167,7 @@ def login(runtime, kind, launch, root):
     if kind == "omp":
         folder = runtime.home / ".omp/agent"
         private_directory(folder)
-        write_private(folder / "config.yml", omp_state.SET_UP.encode())
+        write_private(folder / "config.yml", OMP_SET_UP.encode())
         return None
     if kind != "codex":
         # The key in the agent's environment is the whole login.

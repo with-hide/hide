@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_journey import cells
 from agent_journey.daemon import Daemon
 from agent_live_check.processes import ProcessError
-from agent_journey.local import (codex_login_refusal, grok_login_refusal, omp_login_refusal, pi_login_refusal,
+from agent_journey.local import (codex_login_refusal, grok_login_refusal, pi_login_refusal,
                                  trust_codex, trust_grok)
 
 CHECKOUT = Path(__file__).resolve().parents[2]
@@ -276,22 +276,6 @@ class LocalRoute(unittest.TestCase):
             self.assertIn("run pi once yourself", refusal)
             auth.write_text(json.dumps({"openai": {"type": "oauth", "expires": "soon"}}))
             self.assertIn("unreadable", pi_login_refusal(auth, HOUR, now))
-
-    def test_omp_reads_its_login_expiry_from_the_private_database_copy(self):
-        import sqlite3
-        now = datetime.datetime(2026, 10, 18, tzinfo=datetime.timezone.utc).timestamp()
-        with tempfile.TemporaryDirectory() as temporary:
-            database = Path(temporary) / "agent.db"
-            self.assertIn("not logged in", omp_login_refusal(database, HOUR, now))
-            connection = sqlite3.connect(database)
-            connection.execute("create table auth_credentials (data text, disabled_cause text)")
-            connection.execute("insert into auth_credentials values (?, null)", (json.dumps({"expires": (now + 7200) * 1000}),))
-            # A disabled credential is not the login omp uses.
-            connection.execute("insert into auth_credentials values (?, 'revoked')", (json.dumps({"expires": 0}),))
-            connection.commit()
-            connection.close()
-            self.assertIsNone(omp_login_refusal(database, HOUR, now))
-            self.assertIn("near refresh", omp_login_refusal(database, HOUR, now + 5400))
 
     def test_grok_trust_adds_one_entry_for_the_resolved_repository(self):
         import tomllib

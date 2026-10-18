@@ -21,7 +21,6 @@ import os
 from pathlib import Path
 import re
 import shlex
-import sqlite3
 import sys
 import time
 import tomllib
@@ -29,7 +28,7 @@ import tomllib
 from agent_live_check.protection import ProtectionError, private_directory, write_private
 from agent_live_check.system import WINDOWS
 
-from . import omp_state, opencode_service
+from . import opencode_service
 
 # A Codex login copy older than this is not used: a refresh inside the copy
 # would rotate the operator's token (PRD D-32; Codex was seen refreshing every
@@ -111,25 +110,13 @@ ROUTES = {
         "login": lambda root, status, margin: pi_login_refusal(root / "auth.json", margin),
     },
     "omp": {
-        "args": lambda home: [],
-        # omp 18.7.0 reads the default profile's agent folder from
-        # PI_CODING_AGENT_DIR (its docs/environment-variables.md).
-        "env": lambda home: {"PI_CODING_AGENT_DIR": str(home / ".omp/agent")},
-        "unset": ["PI_CONFIG_DIR"],
-        "sessions": lambda operator, home: home,
-        "known": [".omp/agent/config.yml"],
-        "shared": {},
-        "roots": [".omp/agent"],
-        "untrusted": None,
-        "config": ".omp/agent",
-        # The login lives in agent.db, copied with its WAL only while no
-        # process has it open (agent_live_check/credential_snapshot.py).
-        "copies": [[".omp/agent/agent.db", "agent.db"], [".omp/agent/config.yml", "config.yml"]],
-        "provenance": "A private PI_CODING_AGENT_DIR holding a snapshot of agent.db and config.yml; a refresh stays in the copy.",
-        "login": lambda root, status, margin: omp_login_refusal(root / "agent.db", margin),
-        # Its run state stays in the operator's ~/.omp (omp_state.py).
-        "busy": lambda: omp_state.busy_refusal(omp_state.running()),
-        "operator_state": "omp writes ~/.omp/run and ~/.omp/logs in the operator's HOME; the run removes its own part",
+        # omp 18.7.0 names a checkout's session folder from its own HOME,
+        # which local mode keeps as the operator's, while the candidate's
+        # reader names it from the daemon's private HOME.
+        "unmeasured": ("omp names its session folder from its own HOME, and local mode's candidate daemon has a "
+                       "private HOME, so Hide's reader names another folder for the same checkout and refuses the "
+                       "session (label_session_default_directory_required); in the product hided and omp share one "
+                       "HOME; the fake model and CI lanes measure it"),
     },
     "opencode": {
         "args": lambda home: [],
@@ -313,29 +300,6 @@ def opencode_model(operator, folder):
     keep = {key: chosen[key] for key in ("model", "small_model", "provider", "providers") if key in chosen}
     private_directory(folder)
     write_private(folder / "opencode.json", json.dumps({**keep, "update": "disable"}).encode())
-
-
-def omp_login_refusal(database, margin, now=None):
-    """omp keeps each credential as JSON in agent.db, an OAuth one with
-    `expires` in ms; read from the run's private copy, never the original."""
-    if not database.is_file():
-        return "not logged in: sign in with /login in omp yourself; the journey never logs in"
-    try:
-        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
-        try:
-            rows = connection.execute("select data from auth_credentials where disabled_cause is null").fetchall()
-        finally:
-            connection.close()
-        values = [json.loads(data).get("expires") for (data,) in rows]
-    except (sqlite3.Error, ValueError, AttributeError, TypeError):
-        return expiry_refusal("omp", [], margin, now)
-    if not rows:
-        return "not logged in: sign in with /login in omp yourself; the journey never logs in"
-    # An API key keeps no expiry and never refreshes.
-    expiries = [value / 1000 for value in values if isinstance(value, (int, float))]
-    if len(expiries) < len(values) and not expiries:
-        return None
-    return expiry_refusal("omp", expiries, margin, now)
 
 
 def codex_login_refusal(auth, now=None):

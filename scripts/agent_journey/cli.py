@@ -33,7 +33,7 @@ from agent_live_check.system import STOP_SIGNALS, WINDOWS, exe, git as git_progr
 if WINDOWS:
     from agent_live_check.windows import UserPath
 
-from . import ci, clis, cells, fake_lane, fake_model, memory, omp_state, opencode_service, quota
+from . import ci, clis, cells, fake_lane, fake_model, memory, opencode_service, quota
 from .controller import Controller
 from .daemon import Daemon
 from .journey import STEPS, Journey, token
@@ -289,13 +289,6 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
         if not executables[key]:
             cells.settle_agent(table, key, f"CLI not installed: {kind} is not on PATH")
             continue
-        busy = entry.get("busy") and entry["busy"]()
-        if busy:
-            agent["busy"] = busy
-            cells.settle_agent(table, key, busy)
-            continue
-        if entry.get("operator_state"):
-            agent["operator_state"] = entry["operator_state"]
         extra = fake_lane.configure(kind, runtime.home, fake[key], root, local=True) if fake else None
         if extra is not None:
             agent["fake_env"] = sorted(extra)
@@ -424,7 +417,6 @@ def budget_failures(agents):
 
 def main(argv=None):
     args = parser().parse_args(argv)
-    started = time.time()
     checkout = Path(__file__).resolve().parents[2]
     operator = Path.home().resolve()
     local = args.mode == "local"
@@ -663,12 +655,6 @@ def main(argv=None):
         if local:
             # Before the cleanup, which removes the trust the candidate recorded with its worktrees.
             check_operator_trust(report, operator, run, "during")
-        # omp's sessions, named in its state in the operator's HOME, before the cleanup removes the private home.
-        omp_sessions = (omp_state.sessions(runtime.home / ".omp/agent")
-                        if local and runtime and any(rows[key]["herdr_kind"] == "omp" for key in measured) else None)
-        # Every folder an agent of the run started in, each start's own worktree included.
-        started_in = ([path for folder in ("worktrees", "worktrees-untrusted") for path in (runtime.probe / folder).glob("*")]
-                      + [runtime.probe / "repo-untrusted"]) if omp_sessions is not None else []
         try:
             if runtime:
                 report["cleanup"] = runtime.close()
@@ -684,14 +670,6 @@ def main(argv=None):
         if path_left:
             report["cleanup"]["confirmed"] = False
             report["cleanup"].setdefault("failures", []).append(path_left)
-        if omp_sessions is not None and report["cleanup"].get("processes_confirmed"):
-            # After every process ended, so no omp still writes its state.
-            projects = [Path(item["worktree"]) for item in report["created"] if item.get("worktree")]
-            try:
-                report["operator_state"] = omp_state.take_back(
-                    operator, list(dict.fromkeys([*projects, *started_in])), omp_sessions, started)
-            except OSError as error:
-                report["failures"].append({"type": "OSError", "reason": f"omp_state_cleanup_failed: {error}"})
         # Hide AI's model requests, apart from the agents' budget: none in
         # local mode, where it is off, and counted in CI mode, where it is on.
         try:
