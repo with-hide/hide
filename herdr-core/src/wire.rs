@@ -1333,9 +1333,7 @@ pub(crate) fn report_agent_session_params(
         .ok_or_else(|| format!("{kind} has no Herdr integration to report as"))?;
     params(req::PaneReportAgentSessionParams {
         pane_id: pane_id.into(),
-        // The source the agent's own Herdr integration reports under, named
-        // by its integration target (`herdr:antigravity_cli` for agy).
-        source: format!("herdr:{}", adapter.herdr.target.replace('-', "_")),
+        source: adapter.herdr.session_source(),
         agent: adapter.herdr.name.into(),
         agent_session_id: Some(session_id.into()),
         agent_session_path: None,

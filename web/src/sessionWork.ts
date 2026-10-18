@@ -50,6 +50,8 @@ export function taskState(task: WorkTask, outputs: readonly WorkOutput[]) {
   if (prs.some((output) => output.state === "ci_failed")) return "ci_failed";
   if (prs.some((output) => ["open", "review"].includes(output.state))) return "review";
   if (task.done) return "done";
+  // The newest turn went unjudged: its END is an earlier turn's, so no word (PRD task-continuation D-09).
+  if (task.unjudged) return "unjudged";
   return task.end === "done" ? "unfinished" : task.end === "waiting" ? "working" : task.end;
 }
 const OUTPUT_ORDER: Record<string, number> = { ci_failed: 0, review: 1, open: 2, merged: 3, closed: 4 };
@@ -137,14 +139,21 @@ export function checklist(record: SessionRecord, descendants: readonly SessionRe
   const leading = [...leaders.values()];
   const placed = new Map<string, SessionRecord[]>();
   const delegated: SessionRecord[] = [];
-  for (const child of [...record.children].sort((a, b) => (a.started_at_unix_ms ?? 0) - (b.started_at_unix_ms ?? 0))) {
+  // A child stands under the task its spawn turn worked on (PRD task-continuation B7), else by time.
+  const holderOf = (child: SessionRecord): WorkTask | undefined => {
+    const spawned = child.spawn_task ? leaders.get(taskGroup(child.spawn_task)) : undefined;
+    if (spawned) return spawned;
     const start = child.started_at_unix_ms;
     let holder: WorkTask | undefined;
     if (start !== null) for (const task of leading) if (task.at_unix_ms <= start) holder = task;
+    return holder;
+  };
+  for (const child of [...record.children].sort((a, b) => (a.started_at_unix_ms ?? 0) - (b.started_at_unix_ms ?? 0))) {
+    const holder = holderOf(child);
     if (holder) placed.set(holder.id, [...(placed.get(holder.id) ?? []), child]);
   }
   // In the record's order, as the summaries-off list draws them.
-  for (const child of record.children) if (child.started_at_unix_ms === null || !leading.some((task) => task.at_unix_ms <= child.started_at_unix_ms!)) delegated.push(child);
+  for (const child of record.children) if (!holderOf(child)) delegated.push(child);
   const taskOf = (offset: number) => {
     const id = record.requests.find((request) => request.offset === offset)?.task_ids.find((id) => taskIds.has(id));
     return id === undefined ? null : leaderOf(id)?.name ?? null;

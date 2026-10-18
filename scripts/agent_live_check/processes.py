@@ -4,6 +4,7 @@ On Windows each child is owned by a job object instead of a guardian process
 (`windows.py`): the same caps, ended and confirmed on every exit path.
 """
 
+import contextlib
 import ctypes
 import json
 import os
@@ -33,14 +34,22 @@ else:
 MAX_CHILDREN = 16
 MAX_DESCENDANTS = 128
 MAX_RSS_BYTES = 2 * 1024 * 1024 * 1024
+# Windows: the job's own limit on committed memory, the hard stop behind the
+# sampled resident cap, so an allocation between two samples ends there.
+MAX_COMMITTED_BYTES = 2 * MAX_RSS_BYTES
 MAX_OUTPUT = 1024 * 1024
 MAX_FAILURE_REASON = 512
 MAX_COMMANDS = 4096
 MAX_OWNER_FAMILIES = 4096
 COMMAND_SECONDS = 15
 RUN_SECONDS = 30 * 60
+# The room a teardown has past the run's deadline or a cancellation, each command at its own cap.
+TEARDOWN_SECONDS = 60
 POLL_SECONDS = 0.1
 RSS_CONSECUTIVE_MISS_LIMIT = 3
+# The lines a guardian writes to its child's stderr when it fails or ends the child.
+GUARDIAN_FAILURES = ("guardian_failure:", "guardian_cleanup_failure:", "guardian_orphan_scan_failure:",
+                     "guardian_signal_failure:")
 # How long a child's end may take to confirm: the guardian's exit on Unix,
 # the job holding no process on Windows.
 END_SECONDS = 4
@@ -115,6 +124,13 @@ def signal_identity(process, signum):
         if state is ProcessState.LIVE:
             raise
     return state
+
+
+def largest(table, count=5):
+    """The live processes holding the most memory, by executable name, so a
+    crossed memory cap says what held it."""
+    live = sorted((p for p in table.values() if p.rss > 0 and not p.zombie), key=lambda p: p.rss, reverse=True)
+    return [{"executable": p.name[:32], "rss_bytes": p.rss} for p in live[:count]]
 
 
 class RssSamples:
@@ -203,6 +219,25 @@ def linux_children_remain():
     raise ProcessError("adopted_child_reap_over_budget")
 
 
+def job_over_budget(job):
+    """Windows: why `job` must end, measured as the Unix guardian measures its
+    group: the resident memory (working set) of its processes summed against
+    MAX_RSS_BYTES. Not the job's own limit on committed memory, which Windows
+    counts every page a process committed, touched or not, so a run within
+    the cap on Linux and macOS would pass it."""
+    try:
+        sizes = job.working_sets()
+    except OSError as error:
+        return "rss_samples_unavailable:" + str(error)[:MAX_FAILURE_REASON]
+    rss = sum(sizes.values())
+    if rss > MAX_RSS_BYTES:
+        # Named only once the cap is crossed: a name is the failure's label, not a measure.
+        table = {pid: windows.Resident(windows.process_name(pid), size) for pid, size in sizes.items()}
+        return "owned_processes_over_budget:" + json.dumps(
+            {"descendants": len(sizes), "rss_bytes": rss, "largest": largest(table)}, separators=(",", ":"))
+    return None
+
+
 class OwnedProcesses:
     """Guardians end children on pipe EOF, including abrupt owner death.
 
@@ -210,7 +245,9 @@ class OwnedProcesses:
     final containment boundary, not a substitute for stopping a server.
     """
 
-    def __init__(self, cancelled: threading.Event | None = None, diagnostics: Path | None = None):
+    def __init__(self, cancelled: threading.Event | None = None, diagnostics: Path | None = None,
+                 run_seconds: float = RUN_SECONDS):
+        """`run_seconds` caps the whole run, every child's guardian included."""
         self.children = {}
         self.diagnostics = diagnostics
         self.receipts = {}
@@ -221,12 +258,15 @@ class OwnedProcesses:
         if diagnostics is not None:
             diagnostics.mkdir(mode=0o700)
         self.cancelled = cancelled or threading.Event()
-        self.deadline = time.monotonic() + RUN_SECONDS
+        self.deadline = time.monotonic() + run_seconds
         # Windows: the port every child's job reports a refused limit to, and
         # each end that was not confirmed, which no later close erases.
         self.port = None
         self.jobs = 0
         self.unconfirmed = []
+        # Windows: why each child's job ended it, kept past its end so the run
+        # can say what ended a resident, as a guardian's stderr says on Unix.
+        self.job_failures = {}
 
     def spawn(self, argv, *, env, cwd=None, stdin=subprocess.DEVNULL,
               stdout=subprocess.PIPE, stderr=subprocess.PIPE, _guarded=True, deadline=None):
@@ -275,7 +315,8 @@ class OwnedProcesses:
                 self.sequence += 1
                 diagnostic = str(self.diagnostics / (str(self.sequence) + ".json"))
             command = [sys.executable, str(Path(__file__).resolve()),
-                       "--guard", str(reader), diagnostic, self.family, str(launch_deadline), "--", *map(str, argv)]
+                       "--guard", str(reader), diagnostic, self.family, str(launch_deadline), str(self.deadline),
+                       "--", *map(str, argv)]
         try:
             # The only raw spawn. Only the guardian uses the unguarded branch.
             launch_env = {key: value for key, value in env.items() if key != "HIDE_LIVE_CHECK_OWNER"} if _guarded else env
@@ -301,16 +342,18 @@ class OwnedProcesses:
     def spawn_in_job(self, argv, *, env, cwd, stdin, stdout, stderr, admit):
         """Windows: the child starts suspended, joins a job of its own, and
         only then runs, so everything it starts is in the job. The job refuses
-        the process and the memory past the caps, and closing its handle,
-        which no child inherits, ends whatever it still holds."""
+        a process or an allocation past its caps, the port ends a job whose
+        resident memory passes MAX_RSS_BYTES (`job_over_budget`), and closing
+        its handle, which no child inherits, ends whatever it still holds."""
         if self.port is None:
             self.port = windows.JobPort({
                 windows.JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT: "owned_processes_over_budget:" + json.dumps(
                     {"descendants": MAX_DESCENDANTS}, separators=(",", ":")),
                 windows.JOB_OBJECT_MSG_JOB_MEMORY_LIMIT: "owned_processes_over_budget:" + json.dumps(
-                    {"memory_bytes": MAX_RSS_BYTES}, separators=(",", ":"))})
+                    {"committed_bytes": MAX_COMMITTED_BYTES}, separators=(",", ":"))},
+                job_over_budget, POLL_SECONDS)
         self.jobs += 1
-        job = windows.Job(self.port.handle, self.jobs, processes=MAX_DESCENDANTS, memory=MAX_RSS_BYTES)
+        job = windows.Job(self.port.handle, self.jobs, processes=MAX_DESCENDANTS, committed=MAX_COMMITTED_BYTES)
         self.port.register(job)
         try:
             admit()
@@ -374,7 +417,10 @@ class OwnedProcesses:
 
     def run(self, argv, *, env, cwd=None, seconds=COMMAND_SECONDS, check=True, deadline=None,
             stdin=subprocess.DEVNULL):
-        end = min(self.deadline, time.monotonic() + min(COMMAND_SECONDS, seconds),
+        if seconds > COMMAND_SECONDS:
+            # A command never runs past the cap; a longer wait is not shortened behind the caller's back.
+            raise ValueError(f"a command runs at most {COMMAND_SECONDS} s, not {seconds} s")
+        end = min(self.deadline, time.monotonic() + seconds,
                   self.deadline if deadline is None else deadline)
         child = self.spawn(argv, env=env, cwd=cwd, deadline=end, stdin=stdin)
         output = [bytearray(), bytearray()]
@@ -410,8 +456,7 @@ class OwnedProcesses:
                     self.end(child)
                 except ProcessError as error:
                     reasons = [line[:MAX_FAILURE_REASON] for line in output[1].decode("utf-8", errors="replace").splitlines()
-                               if line.startswith(("guardian_failure:", "guardian_cleanup_failure:",
-                                                   "guardian_orphan_scan_failure:", "guardian_signal_failure:"))]
+                               if line.startswith(GUARDIAN_FAILURES)]
                     raise type(error)(str(error) + (": " + "; ".join(reasons[:4]) if reasons else "")) from error
             finally:
                 # The ended tree closed the pipes' other ends, so the readers stop.
@@ -475,6 +520,7 @@ class OwnedProcesses:
         self.port.forget(job)
         job.close()
         if job.failure:
+            self.job_failures[child] = job.failure
             raise ProcessSafetyError(job.failure)
 
     def usage(self):
@@ -495,6 +541,21 @@ class OwnedProcesses:
         if measured["rss_bytes"] > MAX_CHILDREN * MAX_RSS_BYTES:
             raise ProcessError("owned_processes_over_budget")
         return measured
+
+    @contextlib.contextmanager
+    def teardown(self, seconds=TEARDOWN_SECONDS):
+        """Stopping what the run started is admitted past its deadline and
+        after a cancellation, for `seconds`; both come back after."""
+        cancelled = self.cancelled.is_set()
+        self.cancelled.clear()
+        deadline = self.deadline
+        self.deadline = time.monotonic() + seconds
+        try:
+            yield
+        finally:
+            self.deadline = deadline
+            if cancelled:
+                self.cancelled.set()
 
     def close(self):
         failures = []
@@ -649,7 +710,10 @@ class ExitWatch:
 
 
 def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
-          launch_deadline: float | None = None) -> int:
+          launch_deadline: float | None = None, run_deadline: float | None = None) -> int:
+    """`run_deadline` the owner's, on the monotonic clock every process of
+    the machine shares, so a child started first ends with the run, not
+    `RUN_SECONDS` after its own start."""
     cancelled = threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(signum, lambda *_: cancelled.set())
@@ -689,7 +753,7 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
     if not issued_family(family):
         raise ProcessError("owner_family_not_issued")
     marker = f"{family}:{identity.pid}:{identity.birth}:{secrets.token_hex(32)}"
-    deadline = time.monotonic() + RUN_SECONDS
+    deadline = time.monotonic() + RUN_SECONDS if run_deadline is None else run_deadline
 
     def unknown(process):
         nonlocal omitted
@@ -802,7 +866,7 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
             rss = rss_samples.measure(table)["rss_bytes"]
             if rss > MAX_RSS_BYTES:
                 raise ProcessError("owned_processes_over_budget:" + json.dumps(
-                    {"descendants": len(table), "rss_bytes": rss}, separators=(",", ":")))
+                    {"descendants": len(table), "rss_bytes": rss, "largest": largest(table)}, separators=(",", ":")))
             root = table.get(child.pid)
             if root is None:
                 raise ProcessError("unreaped_owned_root_missing")
@@ -930,10 +994,11 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 8 or sys.argv[1] != "--guard" or sys.argv[6] != "--":
+    if len(sys.argv) < 9 or sys.argv[1] != "--guard" or sys.argv[7] != "--":
         raise SystemExit(2)
     try:
-        code = guard(int(sys.argv[2]), sys.argv[7:], sys.argv[3], sys.argv[4], float(sys.argv[5]))
+        code = guard(int(sys.argv[2]), sys.argv[8:], sys.argv[3], sys.argv[4], float(sys.argv[5]),
+                     float(sys.argv[6]))
     except BaseException as error:
         sys.stderr.write("guardian_failure:" + type(error).__name__ + "\n")
         code = 125

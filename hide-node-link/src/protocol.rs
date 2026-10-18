@@ -188,10 +188,13 @@ use crate::error::HostError;
 /// 46: creation requests declare fork holds and bind their pane on the node.
 /// Older helpers cannot protect bare pane keys; Hello refuses them and the
 /// existing helper replacement installs a compatible build.
-/// 47: side-channel pane input waits for the node's creation holder and
+/// 47: hook letter pulls name prompt, tool or turn end.
+/// A helper on 46 cannot distinguish the intake point; Hello refuses it
+/// until the existing helper replacement installs a compatible build.
+/// 48: side-channel pane input waits for the node's creation holder and
 /// gets a permission result before writing through Herdr, without attaching.
 /// Older terminal helpers cannot grant this permission and are replaced.
-pub const PROTOCOL_VERSION: u32 = 47;
+pub const PROTOCOL_VERSION: u32 = 48;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).

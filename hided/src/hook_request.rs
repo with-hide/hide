@@ -55,7 +55,7 @@ pub(crate) fn valid(request: &HookRequest) -> bool {
             HookCommand::LetterPull {
                 prompt_digest,
                 session,
-                tool,
+                point,
             } => {
                 prompt_digest.as_ref().is_none_or(|digest| {
                     digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit())
@@ -63,7 +63,7 @@ pub(crate) fn valid(request: &HookRequest) -> bool {
                     .as_ref()
                     .is_none_or(|session| herdr_core::delivery::valid_session(session))
                     // A tool event's ask names its session.
-                    && (!tool || session.is_some())
+                    && (*point == hide_node_link::panes::PullPoint::Prompt || session.is_some())
             }
         }
 }
@@ -79,14 +79,14 @@ pub(crate) fn answer(
         HookCommand::LetterPull {
             prompt_digest,
             session,
-            tool,
+            point,
         } => delivery(
             core,
             cap,
             herdr_core::delivery::Command::Pull {
                 prompt_digest: prompt_digest.clone(),
                 session: session.clone(),
-                tool: *tool,
+                point: *point,
             },
             None,
         ),

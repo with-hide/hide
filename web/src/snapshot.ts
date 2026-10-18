@@ -1876,7 +1876,8 @@ export type LinkSummaries = {
 export type WorkSession = { device_id: string; agent: string; session_id: string };
 export type WorkRequest = { offset: number; at_unix_ms: number; text: string; author: "operator" | "parent"; task_ids: string[]; chapter_id: string | null; judged: boolean };
 export type WorkEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished";
-export type WorkTask = { id: string; chapter_id: string; name: string; at_unix_ms: number; last_at_unix_ms: number; end: WorkEnd; done: boolean };
+/** `unjudged`: the session's newest turn went unjudged and the task is not done, so `end` is an earlier turn's (PRD task-continuation D-09). */
+export type WorkTask = { id: string; chapter_id: string; name: string; at_unix_ms: number; last_at_unix_ms: number; end: WorkEnd; done: boolean; unjudged: boolean };
 export type MissedWork = { id: string; kind: "leftover" | "problem" | "follow_up"; text: string; status: "open" | "resolved" | "issue" | "dismissed" | "backlog"; at_unix_ms: number; turn_offset: number; issue_repository: string | null; issue_number: number | null; backlog_key: string | null; creating: boolean };
 export type WorkOutput = { kind: "pr" | "issue"; repository: string; number: number; title: string; url: string; state: string; stale: boolean; last_read_at_unix_ms: number | null; created_at_unix_ms: number; task_id: string | null; source: WorkSession; source_name: string };
 export type SessionRecord = {
@@ -1885,8 +1886,10 @@ export type SessionRecord = {
   chapters: { id: string; goal: string; at_unix_ms: number }[]; tasks: WorkTask[]; requests: WorkRequest[]; missed: MissedWork[]; outputs: WorkOutput[]; children: SessionRecord[];
   /** How its direct children stand; absent without children. */
   child_progress?: ChildProgress | null;
+  /** For a child, the task group of the parent's turn that spawned it (PRD task-continuation B7); null when that turn held no task. */
+  spawn_task?: string | null;
 };
-/** One direct child as its parent counts it (`contracts/snapshot-wire-enums.json`: `child_work`): by its own tasks, or with none by its last END; `unjudged` has neither. */
+/** One direct child as its parent counts it (`contracts/snapshot-wire-enums.json`: `child_work`): a resting child's report or merged pull requests, else its own tasks, else its last END; `unjudged` has no judgment that says, or a newest turn that went unjudged. */
 export type ChildWork = "done" | "working" | "other" | "unjudged";
 /** One segment per direct child; `done` is null while any child is unjudged, never a false zero. */
 export type ChildProgress = { children: ChildWork[]; done: number | null };

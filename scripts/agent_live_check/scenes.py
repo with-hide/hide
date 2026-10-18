@@ -8,6 +8,7 @@ from .conversation import bell_turn, messages
 from .authentication import AuthenticationRequired, require_no_login
 from .processes import ProcessError
 from .protection import ProtectionError, beneath, write_private
+from .system import same_path
 from .timing import Deadline, ObservationTimeout
 
 
@@ -24,7 +25,7 @@ def arrived(data: dict, screen: str, bell: str) -> bool:
 
 def owned_launch(scene, recipe, pane, actual, *, cwd, workspace):
     return bool(actual and actual.get("pane_id") == pane and actual.get("agent") == recipe["kind"]
-                and actual.get("workspace_id") == workspace and actual.get("cwd") == str(cwd)
+                and actual.get("workspace_id") == workspace and same_path(actual.get("cwd"), cwd)
                 and actual.get("name") in (None, "live-" + recipe["id"] + "-" + scene))
 
 

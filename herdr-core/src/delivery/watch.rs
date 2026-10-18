@@ -1003,6 +1003,7 @@ mod tests {
             watch_warning: None,
             answer_wait_ended: None,
             bell_line: None,
+            bell_turn: None,
             intake_from: None,
             immediate: false,
             tool_handovers: 0,

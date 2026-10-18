@@ -58,12 +58,20 @@ fn declarations_match_independent_support_samples_and_all_six_factory_facts() {
             "{}: bell requires a verified prompt hook",
             row.id
         );
-        // One letter has one mid-turn path: the input line for a bell
-        // target, a tool event for every other instrumented kind.
-        assert_ne!(
-            row.bell,
-            row.tool_letters.is_some(),
-            "{}: bell and tool letters are each other's exception",
+        assert!(
+            !row.bell
+                || row.prompt_hook.is_some_and(|hook| hook.context)
+                || row.turn_end_letters.is_some(),
+            "{}: a bell turn must receive letters even without a tool",
+            row.id
+        );
+        assert!(
+            !row.prompt_hook.is_some_and(|hook| !hook.context)
+                || !matches!(
+                    row.factory.next_prompt_letters,
+                    hide_agent_adapter::Capability::Available(_)
+                ),
+            "{}: an observe-only prompt cannot hand letters over",
             row.id
         );
         assert!(

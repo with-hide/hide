@@ -697,11 +697,16 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
         )),
         // A tool event's ask carries the caller's own pane as its target,
         // which says whether and since when it works.
-        Command::Pull { tool: true, .. } => {
+        Command::Pull {
+            point:
+                point @ (hide_node_link::panes::PullPoint::Tool
+                | hide_node_link::panes::PullPoint::TurnEnd),
+            ..
+        } => {
             let observed = target.as_ref().ok_or("agent_pane_required")?;
             let working_since =
                 (observed.status == "working").then_some(observed.entered_working_at_unix_ms);
-            let intake = mailbox::tool_pull(ledger, actor, working_since, now)?;
+            let intake = mailbox::gap_pull(ledger, actor, *point, working_since, now)?;
             // The handover is counted before the answer leaves, so a receipt
             // that never comes cannot make the same letter ride every tool;
             // the count moves nothing on screen.
@@ -1454,7 +1459,7 @@ mod tests {
             Command::Pull {
                 prompt_digest: None,
                 session: None,
-                tool: false,
+                point: hide_node_link::panes::PullPoint::Prompt,
             },
             Command::Confirm {
                 ids: vec![letter.id.clone()],

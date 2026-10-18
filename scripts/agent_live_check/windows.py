@@ -8,7 +8,8 @@ outside the job; the job ends everything in it when its last handle closes
 the tree with it. The handle is never inheritable and no child is given it.
 The private files follow hide-platform's `fs::private` (Windows): created
 with an access list naming only this account, and checked by owner and
-access list. Imported only on Windows.
+access list. The account's Path in the registry is where a pane Herdr opens
+reads its PATH (`UserPath`). Imported only on Windows.
 """
 
 import ctypes
@@ -16,6 +17,9 @@ from ctypes import wintypes
 import msvcrt
 import os
 import threading
+import time
+from typing import NamedTuple
+import winreg
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
@@ -24,6 +28,8 @@ HANDLE = wintypes.HANDLE
 INVALID_HANDLE_VALUE = HANDLE(-1).value
 INFINITE = 0xFFFFFFFF
 WAIT_OBJECT_0 = 0
+WAIT_TIMEOUT = 258
+ERROR_INVALID_PARAMETER = 87
 
 CREATE_SUSPENDED = 0x00000004
 CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -31,6 +37,7 @@ CREATE_NO_WINDOW = 0x08000000
 
 PROCESS_TERMINATE = 0x0001
 PROCESS_SET_QUOTA = 0x0100
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 THREAD_SUSPEND_RESUME = 0x0002
 TH32CS_SNAPTHREAD = 0x00000004
 
@@ -39,6 +46,7 @@ JOB_OBJECT_LIMIT_JOB_MEMORY = 0x00000200
 JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION = 0x00000400
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 JOB_BASIC_ACCOUNTING = 1
+JOB_BASIC_PROCESS_ID_LIST = 3
 JOB_ASSOCIATE_COMPLETION_PORT = 7
 JOB_EXTENDED_LIMIT = 9
 JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT = 3
@@ -79,6 +87,12 @@ class BasicAccounting(ctypes.Structure):
                 ("ActiveProcesses", wintypes.DWORD), ("TotalTerminatedProcesses", wintypes.DWORD)]
 
 
+class MemoryCounters(ctypes.Structure):
+    _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [(name, ctypes.c_size_t) for name in (
+        "PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage", "QuotaPagedPoolUsage",
+        "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")]
+
+
 class CompletionPortLink(ctypes.Structure):
     _fields_ = [("CompletionKey", ctypes.c_void_p), ("CompletionPort", HANDLE)]
 
@@ -117,6 +131,35 @@ GetQueuedCompletionStatus = declare(kernel32, "GetQueuedCompletionStatus", winty
 PostQueuedCompletionStatus = declare(kernel32, "PostQueuedCompletionStatus", wintypes.BOOL,
                                      HANDLE, wintypes.DWORD, ctypes.c_size_t, ctypes.c_void_p)
 GetConsoleCP = declare(kernel32, "GetConsoleCP", wintypes.UINT)
+K32GetProcessMemoryInfo = declare(kernel32, "K32GetProcessMemoryInfo", wintypes.BOOL,
+                                  HANDLE, ctypes.POINTER(MemoryCounters), wintypes.DWORD)
+QueryFullProcessImageNameW = declare(kernel32, "QueryFullProcessImageNameW", wintypes.BOOL,
+                                     HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD))
+
+
+def process_name(pid):
+    """The file name of `pid`'s executable, or "" when Windows does not give
+    it (it refuses some processes even this account starts), as the Unix
+    table leaves a name it could not read: a name only labels a failure."""
+    process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not process:
+        return ""
+    try:
+        image, length = ctypes.create_unicode_buffer(32768), wintypes.DWORD(32768)
+        if not QueryFullProcessImageNameW(process, 0, image, ctypes.byref(length)):
+            return ""
+        return os.path.basename(image.value)
+    finally:
+        CloseHandle(process)
+
+
+class Resident(NamedTuple):
+    """A process of a job and the memory it keeps resident, read as the
+    Unix process table's entries are. A Windows process is never a zombie: one
+    that ended is no longer listed by its job."""
+    name: str
+    rss: int
+    zombie: bool = False
 
 
 def console_flags():
@@ -128,23 +171,30 @@ def console_flags():
 
 
 class Job:
-    """One child's process tree. `processes` and `memory` are the job's own
-    limits; a process or an allocation past them is refused by Windows, and
-    the refusal arrives at `port` named by `key`."""
+    """One child's process tree. `processes` and `committed` (bytes of
+    committed memory) are the job's own limits; a process or an allocation
+    past them is refused by Windows, and the refusal arrives at `port` named
+    by `key`. Its resident memory is measured from outside (`working_sets`)."""
 
-    def __init__(self, port, key, *, processes, memory):
+    def __init__(self, port, key, *, processes, committed):
         # No security attributes: the handle is not inheritable.
         handle = CreateJobObjectW(None, None)
         if not handle:
             raise failed("CreateJobObjectW")
         self.handle, self.key, self.failure = handle, key, None
+
+        class ProcessIds(ctypes.Structure):
+            _fields_ = [("NumberOfAssignedProcesses", wintypes.DWORD), ("NumberOfProcessIdsInList", wintypes.DWORD),
+                        ("ProcessIdList", ctypes.c_size_t * processes)]
+
+        self.ids = ProcessIds()
         try:
             limits = ExtendedLimit()
             limits.BasicLimitInformation.LimitFlags = (
                 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
                 | JOB_OBJECT_LIMIT_JOB_MEMORY | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION)
             limits.BasicLimitInformation.ActiveProcessLimit = processes
-            limits.JobMemoryLimit = memory
+            limits.JobMemoryLimit = committed
             if not SetInformationJobObject(handle, JOB_EXTENDED_LIMIT, ctypes.byref(limits), ctypes.sizeof(limits)):
                 raise failed("SetInformationJobObject(limits)")
             link = CompletionPortLink(key, port)
@@ -174,6 +224,30 @@ class Job:
                                          ctypes.sizeof(accounting), None):
             raise failed("QueryInformationJobObject")
         return accounting.ActiveProcesses
+
+    def working_sets(self):
+        """The resident memory (working set) in bytes of each process the job
+        holds now, by pid; a process that ended since the job listed it is
+        left out."""
+        if not QueryInformationJobObject(self.handle, JOB_BASIC_PROCESS_ID_LIST, ctypes.byref(self.ids),
+                                         ctypes.sizeof(self.ids), None):
+            raise failed("QueryInformationJobObject(process ids)")
+        sizes = {}
+        for pid in self.ids.ProcessIdList[:self.ids.NumberOfProcessIdsInList]:
+            process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not process:
+                if ctypes.get_last_error() == ERROR_INVALID_PARAMETER:
+                    continue
+                raise failed("OpenProcess")
+            try:
+                counters = MemoryCounters()
+                counters.cb = ctypes.sizeof(counters)
+                if not K32GetProcessMemoryInfo(process, ctypes.byref(counters), counters.cb):
+                    raise failed("GetProcessMemoryInfo")
+                sizes[pid] = counters.WorkingSetSize
+            finally:
+                CloseHandle(process)
+        return sizes
 
     def terminate(self):
         if not TerminateJobObject(self.handle, 1):
@@ -215,18 +289,20 @@ def resume(pid):
 
 class JobPort:
     """The completion port every job of one owner reports to, and the thread
-    that reads it: a job whose process or memory limit refused something is
-    ended at once and keeps the reason for its owner."""
+    that reads it and, every `every` seconds, asks `watch` about each job: a
+    job whose process limit refused something, or that `watch` names a
+    reason for, is ended at once and keeps the reason for its owner."""
 
     QUIT = 0
     # A message no job sends: the port has read everything queued before it.
     SETTLED = 0xFFFFFFFF
 
-    def __init__(self, reasons):
+    def __init__(self, reasons, watch, every):
         self.handle = CreateIoCompletionPort(INVALID_HANDLE_VALUE, None, 0, 1)
         if not self.handle:
             raise failed("CreateIoCompletionPort")
         self.jobs, self.lock, self.reasons = {}, threading.Lock(), reasons
+        self.watch, self.every = watch, every
         self.settling = {}
         self.thread = threading.Thread(target=self.read, daemon=True)
         self.thread.start()
@@ -252,9 +328,22 @@ class JobPort:
 
     def read(self):
         message, key, overlapped = wintypes.DWORD(), ctypes.c_size_t(), ctypes.c_void_p()
+        due = time.monotonic()
         while True:
+            if time.monotonic() >= due:
+                # Under the lock, so no job is forgotten and closed while it is measured.
+                with self.lock:
+                    for job in self.jobs.values():
+                        if job.failure is None:
+                            reason = self.watch(job)
+                            if reason is not None:
+                                self.end(job, reason)
+                due = time.monotonic() + self.every
             if not GetQueuedCompletionStatus(self.handle, ctypes.byref(message), ctypes.byref(key),
-                                             ctypes.byref(overlapped), INFINITE):
+                                             ctypes.byref(overlapped),
+                                             max(0, int((due - time.monotonic()) * 1000))):
+                if overlapped.value is None and ctypes.get_last_error() == WAIT_TIMEOUT:
+                    continue
                 return
             if key.value == self.QUIT:
                 return
@@ -269,13 +358,17 @@ class JobPort:
                 continue
             with self.lock:
                 job = self.jobs.get(key.value)
-            if job is not None and job.failure is None:
-                job.failure = reason
-                try:
-                    job.terminate()
-                except OSError:
-                    # The owner's end() still terminates and confirms it.
-                    pass
+                if job is not None and job.failure is None:
+                    self.end(job, reason)
+
+    @staticmethod
+    def end(job, reason):
+        job.failure = reason
+        try:
+            job.terminate()
+        except OSError:
+            # The owner's end() still terminates and confirms it.
+            pass
 
     def close(self):
         if self.handle:
@@ -469,3 +562,46 @@ def is_private(path):
         return True
     finally:
         LocalFree(descriptor)
+
+
+class UserPath:
+    """`folder` first on this account's own Path in the registry until
+    `close`. Herdr builds a Windows pane's environment from the registry (its
+    portable-pty reads HKLM's and HKCU's Environment over the server's own),
+    so a PATH given to Herdr never reaches a pane Hide opens, and an agent the
+    run starts there is found only through this Path, as an operator's is.
+    It changes the account, so it is held only on a disposable CI runner and
+    refused anywhere else."""
+
+    def __init__(self, folder):
+        from .protection import ProtectionError
+        if os.environ.get("GITHUB_ACTIONS") != "true":
+            raise ProtectionError("user_path_changed_only_on_a_ci_runner: GITHUB_ACTIONS is not true, "
+                                  "and this account's registry is not the run's to change")
+        self.folder = str(folder)
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
+                            winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as key:
+            try:
+                value, kind = winreg.QueryValueEx(key, "Path")
+                self.existed = True
+            except FileNotFoundError:
+                value, kind, self.existed = "", winreg.REG_EXPAND_SZ, False
+            winreg.SetValueEx(key, "Path", 0, kind, f"{self.folder};{value}" if value else self.folder)
+
+    def close(self):
+        """Takes `folder` back out, keeping whatever else changed the Path
+        meanwhile; a Path that did not exist before is removed again."""
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
+                            winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as key:
+            try:
+                value, kind = winreg.QueryValueEx(key, "Path")
+            except FileNotFoundError:
+                return
+            entries = value.split(";")
+            wanted = os.path.normcase(self.folder)
+            entries = next(([*entries[:index], *entries[index + 1:]] for index, entry in enumerate(entries)
+                            if os.path.normcase(entry) == wanted), entries)
+            if entries or self.existed:
+                winreg.SetValueEx(key, "Path", 0, kind, ";".join(entries))
+            else:
+                winreg.DeleteValue(key, "Path")
