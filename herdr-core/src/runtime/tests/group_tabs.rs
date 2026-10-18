@@ -927,6 +927,113 @@ fn an_acknowledged_start_survives_stale_topology_then_closes_after_being_observe
     assert_eq!(ordered_tab_ids(&runtime, &checkout), TABS);
 }
 
+fn first_owner_before_catalog(named: bool) -> Runtime {
+    let (mut runtime, _) = setup();
+    let target = named.then(|| create(&mut runtime, "target", "Starting"));
+    if let Some(target) = &target {
+        group(
+            &mut runtime,
+            "existing-in-target",
+            json!({"action":"move","group_id":target,"tab_id":TABS[0]}),
+        );
+    }
+    group(
+        &mut runtime,
+        "draft",
+        json!({"action":"new_tab","group_id":target}),
+    );
+    let draft = tabs(&runtime, target.as_deref()).last().unwrap().clone();
+    let task = runtime
+        .begin_task_operation("checkout_start", None, None, None, None)
+        .unwrap();
+    let prepared = runtime
+        .prepare_group_start(
+            task,
+            (crate::node::TEST_NODE, PATH),
+            Some(super::super::group_starts::StartTarget {
+                group_id: target.clone(),
+                area_id: "a1".into(),
+                tab_id: Some(draft),
+                add_pane: false,
+            }),
+            Some("first-owner-before-catalog"),
+            None,
+            false,
+        )
+        .unwrap();
+    assert_eq!(prepared.saved.try_recv().unwrap(), Ok(()));
+    assert!(runtime.group_start_should_focus(task));
+    assert!(runtime.owner_workspace_of_path(PATH).is_none());
+    assert!(runtime.ingest_task_operation_result(
+        task,
+        Ok(live::WorktreeTaskOutcome {
+            path: PATH.into(),
+            pane_id: "w-new:t1:p".into(),
+            created_tab_id: Some("w-new:t1".into()),
+            purpose_error: None,
+            unconfirmed_purpose_token: None,
+            issue_error: None,
+            shell: crate::agent_start::ShellStart::Plain,
+        }),
+    ));
+    runtime.sync_workspace_view();
+    assert_eq!(geometry(&published(&runtime).root)["active"], "w-new:t1");
+    runtime
+}
+
+#[test]
+fn a_first_owner_start_keeps_its_selected_slot_before_the_catalog_lists_it() {
+    for named in [false, true] {
+        let mut runtime = first_owner_before_catalog(named);
+        ingest(&mut runtime, &TABS);
+        assert_eq!(geometry(&published(&runtime).root)["active"], "w-new:t1");
+
+        let mut creation = tab_order_payload(PATH, &TABS, &TABS, TABS[0]);
+        creation.tab_focus = Some(crate::sidebar::SessionTabFocus {
+            generation: 1,
+            workspace_id: "w-order".into(),
+            tab_id: TABS[0].into(),
+            revision: 1,
+            creation: true,
+        });
+        runtime.ingest_session(Ok(creation));
+        runtime.sync_workspace_view();
+        assert_eq!(geometry(&published(&runtime).root)["active"], "w-new:t1");
+
+        let live = [TABS[0], TABS[1], TABS[2], "w-new:t1"];
+        let payload = tab_order_payload(PATH, &live, &live, TABS[0]);
+        runtime.ingest_session(Ok(payload));
+        runtime.sync_workspace_view();
+        assert_eq!(geometry(&published(&runtime).root)["active"], "w-new:t1");
+        assert_eq!(
+            runtime.snapshot().focused.pane_id.as_deref(),
+            Some("w-new:t1:p")
+        );
+    }
+}
+
+#[test]
+fn explicit_external_focus_can_replace_a_started_slot_before_its_catalog_arrives() {
+    for named in [false, true] {
+        let mut runtime = first_owner_before_catalog(named);
+        let mut payload = tab_order_payload(PATH, &TABS, &TABS, TABS[0]);
+        payload.tab_focus = Some(crate::sidebar::SessionTabFocus {
+            generation: 1,
+            workspace_id: "w-order".into(),
+            tab_id: TABS[0].into(),
+            revision: 1,
+            creation: false,
+        });
+        runtime.ingest_session(Ok(payload));
+        runtime.sync_workspace_view();
+        assert_eq!(geometry(&published(&runtime).root)["active"], TABS[0]);
+        assert_eq!(
+            runtime.snapshot().focused.pane_id.as_deref(),
+            Some("w-order:t1:p")
+        );
+    }
+}
+
 const CHILDREN: [&str; 2] = ["w-order:t4", "w-order:t5"];
 
 fn with_delegated_canvases() -> (Runtime, String, String) {

@@ -593,6 +593,8 @@ Pending receipts, including those loaded after restart, recover by inspection on
 A failed recovery-worker admission and a refused unzoom after creation retain the pending receipt and its staging reservation rather than permitting another creation.
 A definite failure may retry its stable intent, and a definite agent failure retries the existing pane; an unknown launch is not blindly repeated.
 The answer fills its original group even when hidden, but a late answer does not take focus from a group the operator has since selected.
+When the selected draft becomes a live tab before a newly opened owner's catalog arrives, its selected slot remains authoritative even beside other live tabs; the old Herdr tab cannot replace it while the first layout is pending.
+No workspace or pane is invented to fill that gap, and an explicit later selection still wins.
 The inline form keeps prompt and picker edits in page memory across navigation and failures, while the durable receipt lets a new page inspect the original effect without recovering or replaying the prompt.
 Tab-bound input uses the stable tab identity rather than group membership; only a definite failed receipt can be retired after its authoritative target changes, allowing a new decision at the current target.
 Pending or unknown starts retain their original intent and target for read-only recovery.

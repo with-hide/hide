@@ -1425,6 +1425,7 @@ impl Runtime {
                 }
                 let key = (workspace.device_id.clone(), checkout.path.clone());
                 let mut restored_agent_tab = None;
+                let mut unlisted_agent_selection = false;
                 let mut placed_tabs: Option<HashSet<String>> = None;
                 if workspace.device_id == self.node.as_str() && self.workspace_views.is_some() {
                     let topology = checkout
@@ -1499,7 +1500,23 @@ impl Runtime {
                             )
                             .collect(),
                     );
+                    // A promoted draft may name a newly opened owner before
+                    // its catalog arrives. With no visible tab, the selected
+                    // slot still owns the screen; Herdr's old tab cannot
+                    // replace it while that creation becomes visible.
+                    let missing_visible_tab =
+                        self.visible_tab_ids.get(&checkout.id).is_none_or(|id| {
+                            !checkout.tabs.iter().any(|tab| tab.id.as_ref() == Some(id))
+                        });
+                    unlisted_agent_selection = !first
+                        && layout.active().is_some_and(|id| {
+                            !checkout
+                                .tabs
+                                .iter()
+                                .any(|tab| tab.id.as_deref() == Some(id))
+                        });
                     if first
+                        || missing_visible_tab
                         || self.visible_tab_ids.get(&checkout.id).is_some_and(|id| {
                             placed_tabs
                                 .as_ref()
@@ -1541,7 +1558,11 @@ impl Runtime {
                     .focused_tab_id
                     .as_deref()
                     .filter(|tab_id| {
-                        restored_agent_tab.is_none()
+                        (restored_agent_tab.is_none()
+                            // An explicit external selection can supersede a
+                            // started slot even in its first catalog gap.
+                            || (unlisted_agent_selection
+                                && herdr.focus_event.as_ref().is_some_and(|event| !event.creation)))
                             && herdr_focus_moved
                             && has_tab(tab_id)
                             // Creation provenance keeps external admissions from
@@ -2825,10 +2846,19 @@ impl Runtime {
                 // commands to Herdr's unrelated globally focused workspace.
                 let draft_surface = self
                     .front_workspace_key()
-                    .and_then(|key| self.workspace_views.as_ref()?.views.get(&key.0, &key.1))
-                    .is_some_and(|view| {
-                        view.selected_agent_layout()
-                            .active()
+                    .and_then(|key| {
+                        let view = self.workspace_views.as_ref()?.views.get(&key.0, &key.1)?;
+                        let reconciled_tab = focused_checkout
+                            .filter(|checkout| key.0 == self.node.as_str() && checkout.path == key.1)
+                            .and_then(|checkout| checkout.active_tab_id.as_deref());
+                        Some((view, reconciled_tab))
+                    })
+                    .is_some_and(|(view, reconciled_tab)| {
+                        // Reconciliation may already have followed an explicit
+                        // external choice while the layout's selection still
+                        // awaits the ordinary snapshot alignment pass.
+                        reconciled_tab
+                            .or_else(|| view.selected_agent_layout().active())
                             .is_none_or(|id| {
                                 view.agent_groups.drafts.contains(id)
                                     // An acknowledged start owns its slot
