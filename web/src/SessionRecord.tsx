@@ -107,21 +107,24 @@ export function SessionRecord({ actions, target, frame }: { actions: Actions; ta
   });
   const descendants = useMemo(() => (shown ? recordTree(shown).slice(1) : []), [shown]);
   const wasConnected = useRef(connected);
-  const asked = useRef(false);
+  // The connection this window is on: a new self-contained snapshot is a new core session (a reconnect, or a core that moved), which has read nothing.
+  const generation = useShellStore((state) => state.viewGeneration);
+  const askedIn = useRef<number | null>(null);
   const leave = useRef(frame.onLeave);
   leave.current = frame.onLeave;
   useEffect(() => () => leave.current(), []);
-  // Read again on a reconnect, and once when the slot draws a record with no
-  // read behind it: one restored after a relaunch was opened by no event. The
-  // Overview's panel starts its own read when it opens.
+  // Read again on a reconnect, and once per connection when the slot draws a
+  // record with no read behind it: one restored after a relaunch, or kept
+  // across a core that moved, was opened by no event. The Overview's panel
+  // starts its own read when it opens.
   useEffect(() => {
-    const unread = frame.kind === "lane" && !own && !asked.current;
+    const unread = frame.kind === "lane" && !own && askedIn.current !== generation;
     if (connected && (!wasConnected.current || unread)) {
-      asked.current = true;
+      askedIn.current = generation;
       frame.onRead();
     }
     wasConnected.current = connected;
-  }, [frame, connected, own]);
+  }, [frame, connected, own, generation]);
   const up = () => frame.onTrail(frame.trail.slice(0, -1));
   const open = (child: RecordValue) => frame.onTrail([...frame.trail, child.session]);
   return <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-session-record={frame.kind}>
