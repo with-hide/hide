@@ -18,6 +18,11 @@ omp (Project Memory m163), so the journey measures it only when none runs.
 import shutil
 import subprocess
 
+# What a set-up omp 18.7.0 keeps in its agent folder's config.yml: below its
+# CURRENT_SETUP_VERSION, 2, omp opens its setup wizard on a terminal, a
+# provider sign-in first, and a turn never starts.
+SET_UP = "setupVersion: 2\n"
+
 M64 = (1 << 64) - 1
 SECRET = (0xa0761d6478bd642f, 0xe7037ed1a0b428db, 0x8ebc6af09c88c6e3, 0x589965cc75374cc3)
 

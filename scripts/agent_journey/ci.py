@@ -17,7 +17,7 @@ from agent_live_check.protection import ProtectionError, private_directory, writ
 from agent_live_check.runtime import XDG_FOLDERS, clean_env
 from agent_live_check.system import WINDOWS, home_env, launcher, temp_env
 
-from . import cells, opencode_service
+from . import cells, omp_state, opencode_service
 from .local import QUIET
 
 LOGINS = {
@@ -159,6 +159,11 @@ def login(runtime, kind, launch, root):
         settings = runtime.home / ".gemini/antigravity-cli/settings.json"
         private_directory(settings.parent)
         write_private(settings, json.dumps({"modelProvider": "gemini"}).encode())
+        return None
+    if kind == "omp":
+        folder = runtime.home / ".omp/agent"
+        private_directory(folder)
+        write_private(folder / "config.yml", omp_state.SET_UP.encode())
         return None
     if kind != "codex":
         # The key in the agent's environment is the whole login.
