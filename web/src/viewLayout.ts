@@ -10,6 +10,7 @@ import type { TFunction } from "i18next";
 import type { ViewDisplaySnapshot, ViewLayoutSnapshot, ViewNode } from "./snapshot";
 import { revealExternalEntry, type RevealHost } from "./revealExternal";
 import { translate } from "./i18n/client";
+import type { MenuEntry } from "./components/entry-menu";
 import type { MessageKey } from "./i18n/catalogs";
 
 /** The order a display's menu offers directions in. */
@@ -124,7 +125,7 @@ export type ViewMenuId =
   | "reveal_external"
   | "close_view";
 
-export type ViewMenuEntry = { id: ViewMenuId; label: string; unavailable: string | null; separated?: boolean };
+export type ViewMenuEntry = MenuEntry<ViewMenuId>;
 
 /** The menu's items in docs/UI_BEHAVIOR.md's order, with its fixed labels. */
 const MENU_ITEMS: readonly { id: ViewMenuId; label: () => string }[] = [
@@ -201,7 +202,13 @@ export function displayMenu(layout: ViewLayoutSnapshot, geometry: Geometry, size
   if (!located) return [];
   return displayCommands(layout, { geometry, sizes }, located, external)
     .filter((entry) => !entry.hidden)
-    .map(({ id, label, unavailable, separated }) => ({ id, label, unavailable, ...(separated ? { separated } : {}) }));
+    .map(({ id, label, unavailable, separated }): ViewMenuEntry => {
+      const entry = { id, label, unavailable, ...(separated ? { separated } : {}) };
+      const edge = menuEdge(id);
+      if (edge) return { ...entry, icon: id.startsWith("split_") ? `split_${edge}` : edge, group: id.startsWith("split_") ? "split" : "move", menuLabel: translate(`menus.${edge}`), separated: id === "split_right" };
+      const icons = { keep_open: "pin", copy_path: "copy", select_in_tree: "folder", reveal_external: "external", close_view: "close" } as const;
+      return { ...entry, icon: icons[id as keyof typeof icons] };
+    });
 }
 
 /**

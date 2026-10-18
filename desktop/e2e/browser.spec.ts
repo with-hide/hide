@@ -323,6 +323,7 @@ test("browser: a page opens from an agent's pane, follows its area, moves withou
 
   // Split right moves B into a new area: both pages show, neither loaded again.
   await tab(page, "Page B").click({ button: "right" });
+  await page.locator('[data-menu-group="split"]').hover();
   const splitRight = page.locator('[role="menu"] [data-menu-item="split_right"]');
   await expect(splitRight, (await splitRight.textContent()) ?? "").not.toHaveAttribute("aria-disabled", "true");
   await splitRight.click();
@@ -859,6 +860,7 @@ test("area cycle native: page input previews one exact area, releases once and c
   // Two View areas side by side need the lane's width.
   await widenFiles(page);
   await tab(page, "Page B").click({ button: "right" });
+  await page.locator('[data-menu-group=split]').hover();
   await page.locator('[role=menu] [data-menu-item=split_right]').click();
   await expect(page.locator("[data-view-area-id]")).toHaveCount(2);
   expect(await openFromCli(current, ["--wait"])).toMatchObject({ ok: true });

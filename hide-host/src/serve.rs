@@ -18,7 +18,7 @@ use crate::protocol::{
 };
 use crate::root::{Root, relative_path};
 use crate::{bytes, document, git, index, list, mutate, save, worktrees};
-use hide_node_link::process::{LineInput, ProcessStart};
+use hide_node_link::process::{GroupEnd, LeftRunning, LineInput, ProcessStart};
 
 /// Requests the helper works on at once; the core also admits at most this
 /// many per device, so the helper never queues behind itself.
@@ -761,22 +761,37 @@ pub fn label_transcript(
     home: &Path,
     request: &hide_session::label_transcript::LabelTranscriptRequest,
 ) -> HostResult<Value> {
-    let transcript = hide_session::label_transcript::read(home, request).map_err(label_refusal)?;
+    let transcript =
+        hide_session::label_transcript::read(home, request).map_err(session_refusal)?;
     to_value(transcript)
 }
 
-/// A session reader's refusal, its stable reason code as the message.
-fn label_refusal(reason: String) -> HostError {
-    let code = match reason.as_str() {
-        "session_file_missing" => ErrorCode::NotFound,
-        "opencode_db_busy" | "opencode_db_changed" => ErrorCode::Busy,
-        "session_kind_unsupported"
-        | "opencode_db_schema_unknown"
-        | "opencode_data_home_invalid" => ErrorCode::Unsupported,
-        reason if reason.starts_with("session_capacity:") => ErrorCode::TooLarge,
-        _ => ErrorCode::Io,
+/// A session reader's refusal, its stable reason code as the message: a
+/// read that met the agent writing is busy, which keeps what an earlier read
+/// proved, and every other refusal says why the read cannot answer.
+fn session_refusal(refusal: hide_session::ReadRefusal) -> HostError {
+    let code = match &refusal {
+        hide_session::ReadRefusal::InMotion(_) => ErrorCode::Busy,
+        hide_session::ReadRefusal::Refused(reason) => match reason.as_str() {
+            "session_file_missing" => ErrorCode::NotFound,
+            "session_kind_unsupported"
+            | "opencode_db_schema_unknown"
+            | "opencode_data_home_invalid" => ErrorCode::Unsupported,
+            reason if reason.starts_with("session_capacity:") => ErrorCode::TooLarge,
+            _ => ErrorCode::Io,
+        },
     };
-    HostError::new(code, reason)
+    HostError::new(code, refusal.reason())
+}
+
+/// An agy fork's index read refused: busy while it met agy writing its
+/// index, which the fork reads again, and otherwise the fork's reason.
+fn antigravity_fork_refusal(refusal: hide_session::ReadRefusal) -> HostError {
+    let code = match refusal {
+        hide_session::ReadRefusal::InMotion(_) => ErrorCode::Busy,
+        hide_session::ReadRefusal::Refused(_) => ErrorCode::Io,
+    };
+    HostError::new(code, refusal.reason())
 }
 
 /// Local and remote activity share this path-free, metadata-only answer.
@@ -784,14 +799,7 @@ pub fn session_activity(
     home: &Path,
     request: &hide_session::session_activity::SessionActivityRequest,
 ) -> HostResult<Value> {
-    let activity = hide_session::session_activity::read(home, request).map_err(|reason| {
-        let code = match reason.as_str() {
-            "session_file_missing" => ErrorCode::NotFound,
-            "session_kind_unsupported" => ErrorCode::Unsupported,
-            _ => ErrorCode::Io,
-        };
-        HostError::new(code, reason)
-    })?;
+    let activity = hide_session::session_activity::read(home, request).map_err(session_refusal)?;
     to_value(activity)
 }
 
@@ -1194,7 +1202,7 @@ pub fn handle_with_progress(
                 return Err(HostError::new(ErrorCode::Io, "antigravity_fork_untrusted"));
             }
             let mark = hide_session::antigravity::fork_mark(Path::new(&home), &source, &cwd)
-                .map_err(|error| HostError::new(ErrorCode::Io, error.to_string()))?;
+                .map_err(antigravity_fork_refusal)?;
             to_value(crate::protocol::AntigravityForkMark {
                 known: mark.known,
                 steps: mark.steps,
@@ -1209,7 +1217,7 @@ pub fn handle_with_progress(
             };
             to_value(
                 hide_session::antigravity::forked(Path::new(&home), &source, &cwd, &mark)
-                    .map_err(|error| HostError::new(ErrorCode::Io, error.to_string()))?,
+                    .map_err(antigravity_fork_refusal)?,
             )
         }
         Call::OpenCodeFork { source, cwd } => {
@@ -1273,13 +1281,24 @@ pub fn handle_with_progress(
                     format!("Process group {leader} is not a pane's"),
                 ));
             }
-            hide_platform::process::terminate_group(leader).map_err(|error| {
+            let ended = hide_platform::process::terminate_group(leader).map_err(|error| {
                 HostError::new(
                     ErrorCode::Io,
                     format!("ending process group {leader} failed: {error}"),
                 )
             })?;
-            to_value(())
+            to_value(match ended {
+                hide_platform::process::GroupEnd::Ended { left } => GroupEnd::Ended {
+                    left: left
+                        .into_iter()
+                        .map(|process| LeftRunning {
+                            pid: process.pid,
+                            reason: process.reason,
+                        })
+                        .collect(),
+                },
+                hide_platform::process::GroupEnd::Gone => GroupEnd::Gone,
+            })
         }
         Call::ProcessStarts { pids } => to_value(
             pids.into_iter()
@@ -1469,7 +1488,7 @@ pub fn handle_with_progress(
                 let home = env.home("sessions_home_unavailable")?;
                 let page =
                     hide_session::opencode::read_conversation(Path::new(&home), &scope, checkpoint)
-                        .map_err(label_refusal)?;
+                        .map_err(session_refusal)?;
                 return to_value(page);
             }
             let path = session_file(env, &[agent], &path)?;
@@ -1640,6 +1659,40 @@ pub fn handle_with_progress(
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    /// An OpenCode route proof that meets OpenCode writing its database
+    /// answers busy, which the core reads again (Windows run 39104633599
+    /// refused a wake on it), and answers the session once OpenCode is done.
+    #[test]
+    fn activity_that_meets_opencode_writing_its_database_is_busy_until_it_is_done() {
+        let home = tempfile::tempdir().unwrap();
+        let folder = home.path().join(".local/share/opencode");
+        std::fs::create_dir_all(&folder).unwrap();
+        let database = folder.join("opencode.db");
+        rusqlite::Connection::open(&database)
+            .unwrap()
+            .execute_batch(include_str!(
+                "../../hide-session/tests/fixtures/adapters/opencode-1.18.30/opencode.sql"
+            ))
+            .unwrap();
+        let request = hide_session::session_activity::SessionActivityRequest {
+            agent: hide_session::Agent::OpenCode,
+            reference_kind: "id".to_owned(),
+            reference_value: "ses_0a1b2c3d4e5f60718293a4b5c6".to_owned(),
+            cwd: Some("/work/app".to_owned()),
+            exact_route: true,
+            expected_id: Some("ses_0a1b2c3d4e5f60718293a4b5c6".to_owned()),
+        };
+        let writer = rusqlite::Connection::open(&database).unwrap();
+        writer.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let error = session_activity(home.path(), &request).unwrap_err();
+        assert_eq!(
+            (error.code, error.message.as_str()),
+            (ErrorCode::Busy, "opencode_db_busy")
+        );
+        drop(writer);
+        assert!(session_activity(home.path(), &request).unwrap()["bytes"].as_u64() > Some(0));
+    }
 
     #[test]
     fn activity_helper_answers_metadata_only_and_refuses_unsupported_references() {

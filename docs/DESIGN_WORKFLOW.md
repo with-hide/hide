@@ -12,6 +12,9 @@ Three files each own one kind of truth, and none of them restates another's valu
   Its `System /` sheets are shadcn parts drawn 1:1 with the dev gallery: same name, same variants, one sheet per part with `Light` and `Dark` frames and one node per state.
   Its `Component /` sheets are hide composites built on top of `System /` masters (menus, rows, panels) that do not exist in shadcn.
   `Component / Agent graph box` is the one generated `Component /` sheet besides the two folded legacy masters: `componentSheets` in `scripts/pen-system.mjs` draws its master (a head and three rows a state turns on) and its states (primary, a worktree with an asking row, resting and dimmed, a row with a tucked badge, rows with cross-project chips, selected) as refs of that master, Light and Dark, and a new sheet lands where its `at` says until a person moves it.
+  `Component / Action menus` records the approved context-menu B layout as System menu item refs: terminal, Agent and View tabs, session and task rows, submenus and a shared disabled reason in both themes.
+  The approval came from an interactive HTML comparison; its source and run captures stay in the local run directory.
+  `scripts/pen-system.mjs` owns the sheet; `web/src/components/entry-menu.tsx` owns grouping without changing command identities.
   `Component / Sidebar chrome` is generated the same way by `scripts/pen-sidebar-chrome.mjs`: the Search row and the section header masters, the Help menu, Light and Dark.
   Only `System /` and `Component /` top-level sheets belong in this file; screen proposals, audits, and scratch never do.
 - **Numeric authority** is [design/tokens.json](../design/tokens.json): shadcn-named tokens (`--background`, `--foreground`, `--card`, `--popover`, `--primary`/`--primary-foreground`, `--secondary`, `--muted`/`--muted-foreground`, `--accent`, `--destructive`, `--border`, `--input`, `--ring`, `--sidebar-*`, and the four `--accent-choice-*` picks) each carrying a Dark value and a Light value, plus aliases.
@@ -34,6 +37,7 @@ It is excluded from the production build `hided` serves.
 `node scripts/check-pen-gallery.mjs` refuses a manifest and a library that name different parts or different states for either theme frame; see Checks below.
 
 The gallery also renders production screens on synthetic scenes, one document per scene because a scene seeds the app's own stores.
+`lang=en|ko|ja|zh-CN` initializes the gallery language, including the real action menus in `pane-header`, `area-focus`, `projects-sidebar` and `session-panel`.
 `/gallery?scene=projects-sidebar` is the shell's real `Sidebar` and `createActions` over `web/src/gallery/sceneData.ts`, a snapshot with the content `Screen / Projects Sidebar` draws; its folds go through the real actions and the scene answers them as the core would.
 Its query takes `theme` (`light`, `dark`), `width` (the sidebar's CSS width, seeded as the core's `ui_state.sidebar_width`), `scale` (the interface text scale, which reaches only what lies outside the sidebar, since the sidebar keeps its sizes at every scale) and `content` (`reference`, or `long` for long Korean titles).
 `/gallery?scene=factory` is the shell's real `Sidebar` beside the real `FactoryScreen` over `web/src/gallery/factorySceneData.ts`, a `FactorySummary` of two Factories with the content `Screen / Factory` draws; the scene answers the screen's requests as the engine does (the settings tab's `config` read, and an answer, merge, retry or cancel taking its item off 내 차례).
