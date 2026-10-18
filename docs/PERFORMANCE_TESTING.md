@@ -203,6 +203,10 @@ Both events share the helper's total 2.5 second budget, including a 400 ms confi
 A repeated Stop with `stopHookActive: true` makes no pull and still updates the count.
 The core saves only changed bell claims or handover counts; repeated observation of the same bell turn adds no claim write.
 agy's `PreInvocation` hook already runs per model call; a call after the prompt's first adds the same `hide inbox` call inside the prompt hook's 1.65 second budget.
+On Windows, agy's command starts one Windows PowerShell process between its existing `cmd` shell and the helper, at each selected hook event, to carry the command through agy's quote escaping ([agent-hooks.md](agent-hooks.md#antigravity-hides-hook-block)).
+This shell runs only for that event; it adds no resident worker, timer, retained state, pending queue or notification, and leaves the helper's input and deadlines unchanged.
+agy owns the command's existing eight-second timeout; this wrapper adds no separate descendant-cancellation guarantee.
+Measure its cold call and warmed caller-side p50, p95 and maximum against a cmd command that actually runs the same helper, reporting the old escaped command's skipped helper separately rather than counting that skipped work as a working baseline.
 Claude Code and Codex pay nothing at a tool: their letters are typed by the doorbell, on its own thread, as at rest.
 Nothing here keeps state, runs a timer or publishes; the retained data is the throttled delivery diagnostic.
 
