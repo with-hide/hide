@@ -544,8 +544,14 @@ impl Runtime {
         if context != *expected {
             return Err("caller_context_changed".into());
         }
+        // Herdr numbers panes per machine and an agent learns the numbers from
+        // its own machine's Herdr, so a bare pane id names a pane on the
+        // caller's machine; the core's panes are observed under their bare ids
+        // and a device's under `remote:<device>:pane:<id>`. A key already
+        // spelled `remote:` is a full address and stays as it is.
+        let on_core = self.node == device;
         let qualify = |pane: &str| {
-            if self.node == device || pane.starts_with(&format!("remote:{device}:pane:")) {
+            if on_core || pane.starts_with("remote:") {
                 pane.to_owned()
             } else {
                 format!("remote:{device}:pane:{pane}")
@@ -606,7 +612,7 @@ impl Runtime {
             }
         }
         let resolves_to_caller = |key: &str| {
-            key == actor.pane_id
+            qualify(key) == actor.pane_id
                 || key == actor.name
                 || self.delivery_ledger.as_ref().is_ok_and(|ledger| {
                     crate::coordination::resolve_actor(ledger, key)
@@ -681,9 +687,10 @@ impl Runtime {
                     .delivery_ledger
                     .as_ref()
                     .ok()
-                    .and_then(|ledger| crate::coordination::resolve_actor(ledger, target));
+                    .and_then(|ledger| crate::coordination::resolve_registered(ledger, target));
+                let pane = qualify(target);
                 let mut matches = self.delivery_observations.values().filter(|observation| {
-                    observation.actor.pane_id == *target
+                    observation.actor.pane_id == pane
                         || observation.actor.name == *target
                         || registered
                             .is_some_and(|registered| registered.same_identity(&observation.actor))
@@ -2690,6 +2697,171 @@ pub(crate) mod tests {
             stored.letters[0].sender.session.as_deref(),
             Some("remote-session")
         );
+        drop(worker);
+    }
+
+    /// A core with its own `w1:p2` and `w1:p9`, and a connected device whose
+    /// agents sit in `w1:p3` (the caller) and in a `w1:p2` of the device's own.
+    fn two_machines_with_one_pane_id(guard: &mut Runtime) -> (String, String) {
+        let local: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+            {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
+            {"id":"core-agent","pane_id":"w1:p2","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"core-session"},
+            {"id":"core-only","pane_id":"w1:p9","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"core-only-session"},
+        ]})).unwrap();
+        guard.observe_delivery(crate::node::TEST_NODE, &local, None, None);
+        let mut remote = guard.snapshot.navigator.workspaces[0].clone();
+        remote.device_id = "device".into();
+        remote.id = "remote-workspace".into();
+        remote.remote_target_id = Some("device".into());
+        for tab in &mut remote.checkouts[0].tabs {
+            for pane in &mut tab.panes {
+                pane.id = format!("remote:device:pane:{}", pane.id);
+            }
+        }
+        guard.snapshot.navigator.workspaces.push(remote);
+        guard
+            .snapshot
+            .status
+            .remote
+            .push(crate::model::RemoteStatusSnapshot {
+                target_id: "device".into(),
+                state: "connected".into(),
+                message: None,
+                herdr_version: None,
+                session: None,
+                files: crate::model::RemoteFileListSnapshot::idle(),
+                catalog: Default::default(),
+                unreachable_since_unix_ms: None,
+            });
+        let device: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+            {"id":"device-sender","pane_id":"sender","agent":"claude","agent_status":"working","state_change_seq":1,"lineage_session":"device-sender-session"},
+            {"id":"device-agent","pane_id":"w1:p2","agent":"claude","agent_status":"working","state_change_seq":1,"lineage_session":"device-session"},
+        ]})).unwrap();
+        guard.observe_delivery("device", &device, Some("fixture-device"), None);
+        ("sender".to_owned(), "remote:device:pane:sender".to_owned())
+    }
+
+    fn report_to(target: &str, intent: &str) -> Command {
+        Command::Send {
+            target: target.into(),
+            intent: intent.into(),
+            body: "done".into(),
+            kind: "report".into(),
+            now: false,
+        }
+    }
+
+    #[test]
+    fn a_bare_pane_id_names_a_pane_on_the_callers_own_machine() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, _, _, path) = fixture(root.path());
+        let (worker, client) = Worker::spawn(
+            Arc::downgrade(&runtime),
+            ChangeNotifier::noop(),
+            path.clone(),
+        )
+        .unwrap();
+        let (local_caller, device_caller) = {
+            let mut guard = runtime.lock().unwrap();
+            guard.install_delivery_client(client);
+            two_machines_with_one_pane_id(&mut guard)
+        };
+        let prepare = |device: &str, caller: &str, command: Command| {
+            let mut guard = runtime.lock().unwrap();
+            let context = guard
+                .workspace_control_query(device, caller, Query::Info)
+                .unwrap()
+                .context;
+            guard.prepare_delivery(device, caller, &context, None, command)
+        };
+
+        // The device's agent writes `w1:p2`, the number its own Herdr shows,
+        // and the core has a different agent under the same number.
+        let result = prepare("device", &device_caller, report_to("w1:p2", "from-device"))
+            .unwrap()
+            .run(Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(result["recipient"]["pane_id"], "remote:device:pane:w1:p2");
+        assert_eq!(result["recipient"]["device_id"], "device");
+
+        // The core's own agent writes the same number and gets its own pane.
+        let result = prepare(
+            crate::node::TEST_NODE,
+            &local_caller,
+            report_to("w1:p2", "from-core"),
+        )
+        .unwrap()
+        .run(Duration::from_secs(5))
+        .unwrap();
+        assert_eq!(result["recipient"]["pane_id"], "w1:p2");
+        assert_eq!(result["recipient"]["device_id"], crate::node::TEST_NODE);
+
+        // A pane of another machine is reached by its full address.
+        let result = prepare(
+            crate::node::TEST_NODE,
+            &local_caller,
+            report_to("remote:device:pane:w1:p2", "full-address"),
+        )
+        .unwrap()
+        .run(Duration::from_secs(5))
+        .unwrap();
+        assert_eq!(result["recipient"]["device_id"], "device");
+
+        // A number that exists only on the core is no pane of the device, and
+        // the refusal is the one a target nobody holds gets.
+        for (command, what) in [
+            (report_to("w1:p9", "core-only"), "send"),
+            (
+                Command::WatchStart {
+                    target: "w1:p9".into(),
+                    observer: None,
+                    actor: None,
+                },
+                "watch",
+            ),
+        ] {
+            let prepared = prepare("device", &device_caller, command);
+            let refused = match prepared {
+                Ok(prepared) => prepared.run(Duration::from_secs(5)).err(),
+                Err(reason) => Some(reason),
+            };
+            assert_eq!(
+                refused.as_deref(),
+                Some("target_unavailable"),
+                "{what} to a pane id only the core has"
+            );
+        }
+
+        // The caller's own bare pane id declares it, as its hint does.
+        assert!(
+            prepare(
+                "device",
+                &device_caller,
+                Command::WatchStart {
+                    target: "w1:p2".into(),
+                    observer: Some("sender".into()),
+                    actor: Some("sender".into()),
+                },
+            )
+            .is_ok()
+        );
+        // The core's pane under that number is not the device caller's.
+        assert_eq!(
+            prepare(
+                "device",
+                &device_caller,
+                Command::WatchStart {
+                    target: "w1:p2".into(),
+                    observer: Some("w1:p2".into()),
+                    actor: None,
+                },
+            )
+            .err()
+            .as_deref(),
+            Some("caller_identity_conflict")
+        );
+        let stored = crate::delivery::ledger::load(&path).unwrap();
+        assert_eq!(stored.letters.len(), 3);
         drop(worker);
     }
 
