@@ -1771,8 +1771,14 @@ impl Runtime {
                 self.push_diagnostic(kind, message);
                 true
             }
-            TerminalReport::RequestDiscarded { request, .. } => {
+            TerminalReport::RequestDiscarded { request, reason } => {
                 if self.input_requests.discarded_by_node(&request) {
+                    self.push_diagnostic(
+                        "terminal.input_discarded",
+                        format!("Request {request}: {reason}"),
+                    );
+                    self.set_error("terminal.input_hold_failed",
+                        "Queued input could not be delivered. Type it again once the pane is ready.", true);
                     self.sync_input_requests();
                     return true;
                 }

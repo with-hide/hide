@@ -2321,9 +2321,13 @@ impl Runtime {
                     None,
                     &[],
                 );
-                if let Some(request_id) = payload.request_id.as_deref() {
+                {
+                    let request_id = payload
+                        .request_id
+                        .clone()
+                        .unwrap_or_else(|| format!("fork-{}", self.fork_sequence));
                     self.input_requests.open(
-                        request_id,
+                        &request_id,
                         super::terminal_input::InputOrigin::TabCreate(admission_id),
                         std::time::Instant::now(),
                     );

@@ -2489,6 +2489,12 @@ impl Runtime {
                 },
             );
             self.discard_input_request(&origin, "not_shown");
+            self.input_requests.open(
+                &format!("fork-hold-{press}"),
+                origin.clone(),
+                std::time::Instant::now(),
+            );
+            self.hold_input_request_for(&origin, pane_id);
             return true;
         }
         let prior_intent_serial = self.last_view_intent_serial;
@@ -2497,13 +2503,18 @@ impl Runtime {
         // nothing: the fork does not hold the keys or count as a move.
         if self.snapshot.focused.pane_id.as_deref() != Some(pane_id) {
             self.discard_input_request(&origin, "not_shown");
+            self.input_requests.open(
+                &format!("fork-hold-{press}"),
+                origin.clone(),
+                std::time::Instant::now(),
+            );
+            self.hold_input_request_for(&origin, pane_id);
             return true;
         }
         if let Some(pending) = self.forks_in_flight.get_mut(source_pane_id) {
             pending.focused = Some(pane_id.to_owned());
         }
-        // The shell keeps typing against the request while the fork's pane
-        // has the keyboard, so nothing reaches its shell first.
+        // Every client's keys wait on the node while the agent starts.
         self.hold_input_request_for(&origin, pane_id);
         self.fork_focus = Some(ForkFocus {
             intent_serial: self.last_view_intent_serial,
@@ -2609,14 +2620,7 @@ impl Runtime {
                 // Keys typed since the press reach the fork's agent now that
                 // it has started, never its launch command; a fork that did
                 // not take the keyboard was not where they were going.
-                if pending
-                    .as_ref()
-                    .is_some_and(|pending| pending.focused.is_some())
-                {
-                    self.resolve_input_request(&origin, &forked_pane_id);
-                } else {
-                    self.discard_input_request(&origin, "not_shown");
-                }
+                self.resolve_input_request(&origin, &forked_pane_id);
                 true
             }
             Err(message) => {

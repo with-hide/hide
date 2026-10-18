@@ -10,12 +10,8 @@
 // core reports the request discarded, or when the core has no row for it: one
 // it listed and then dropped, or one it never listed within
 // `UNSEEN_REQUEST_LIMIT_MS` (the event never reached it, or the daemon was
-// replaced). A fork's pane holds the keyboard before its agent has started,
-// and a new tab's or split's before its shell reads keys itself: the core
-// names it as the row's `held_for`, the mark stays while that pane has the
-// keyboard, and it ends once the request is ready and that pane has the
-// keyboard. Keys typed into a pane a pending request is held for go against
-// that request even with no mark, so they wait behind the keys it holds.
+// replaced). Once the pane exists, its node owns the hold until its shell
+// or forked agent is ready, for every client sending keys to that pane.
 
 import type { InputRequest } from "./snapshot";
 import { useShellStore } from "./store";
@@ -65,15 +61,7 @@ export function armedKeyRequest(): string | null {
 export function keyPayload(paneId: string, bytesBase64: string, now: number = Date.now()): { pane_id: string; bytes_base64: string } | { pending_request: string; bytes_base64: string } {
   if (armed && !armed.seen && now - armed.armedAt > UNSEEN_REQUEST_LIMIT_MS) armed = null;
   if (armed) return { pending_request: armed.requestId, bytes_base64: bytesBase64 };
-  const holding = heldRequestOf(paneId);
-  if (holding) return { pending_request: holding, bytes_base64: bytesBase64 };
   return { pane_id: paneId, bytes_base64: bytesBase64 };
-}
-
-/** The pending request that holds keys for `paneId`, if the core lists one. */
-function heldRequestOf(paneId: string): string | null {
-  const rows = useShellStore.getState().rest?.terminal?.input_requests;
-  return rows?.find((request) => request.state === "pending" && request.held_for === paneId)?.request_id ?? null;
 }
 
 /**
@@ -84,27 +72,14 @@ function heldRequestOf(paneId: string): string | null {
  */
 export function noteTerminalFocus(paneId: string) {
   if (!armed || paneId === armed.originPaneId) return;
-  if (heldPane() === paneId) return;
   armed = null;
-}
-
-/** The pending row of the armed request, if the core lists one. */
-function heldPane(): string | null {
-  if (!armed) return null;
-  const requestId = armed.requestId;
-  const row = useShellStore.getState().rest?.terminal?.input_requests?.find((request) => request.request_id === requestId);
-  return row?.state === "pending" ? (row.held_for ?? null) : null;
 }
 
 /**
  * The operator pointed at a pane, a tab or an area: they chose where they are.
- * Pointing into the pane the keys already wait for (a fork whose agent has not
- * started) chooses nothing new, so its keys keep waiting for that agent.
+ * The node holds keys for a pane whose creation is still starting.
  */
-export function noteOperatorPointer(event?: Event) {
-  const held = heldPane();
-  const target = event?.target instanceof Element ? event.target.closest<HTMLElement>("[data-pane-view]")?.dataset.paneView : undefined;
-  if (held && target === held) return;
+export function noteOperatorPointer() {
   armed = null;
 }
 

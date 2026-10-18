@@ -95,6 +95,19 @@ impl Opened {
             }
         }
     }
+
+    fn assert_no_input(&self) {
+        let until = Instant::now() + Duration::from_millis(100);
+        while let Ok(line) = self
+            .input
+            .recv_timeout(until.saturating_duration_since(Instant::now()))
+        {
+            assert_ne!(
+                line["type"], "terminal.input",
+                "keys reached the launch shell before the fork finished"
+            );
+        }
+    }
 }
 
 pub(super) struct FakeAttacher {
@@ -856,6 +869,7 @@ fn keys_sent_before_the_core_names_their_creation_reach_the_pane_it_makes() {
     );
     harness.service.control(TerminalControl::RequestOpen {
         request: "req-1".into(),
+        fork: false,
     });
     harness.service.key(
         KeyTarget::Request("req-1".into()),
@@ -870,6 +884,71 @@ fn keys_sent_before_the_core_names_their_creation_reach_the_pane_it_makes() {
     let opened = harness.opened();
     assert_eq!(opened.pane, "w1:p5");
     assert_eq!(opened.next_input(), b"echo hi\r");
+}
+
+#[test]
+fn bare_pane_keys_wait_for_the_fork_and_reach_only_its_terminal() {
+    let harness = harness(RetryPolicy::Automatic);
+    let fork = harness.controlling("w1:p2");
+    harness.service.control(TerminalControl::RequestOpen {
+        request: "fork-1".into(),
+        fork: true,
+    });
+    harness.service.control(TerminalControl::RequestHold {
+        request: "fork-1".into(),
+        pane: "w1:p2".into(),
+    });
+    harness.key("w1:p2", b"hello\r");
+    fork.assert_no_input();
+    harness.service.control(TerminalControl::RequestResolve {
+        request: "fork-1".into(),
+        pane: "w1:p2".into(),
+    });
+    assert_eq!(fork.next_input(), b"hello\r");
+    harness.key("w1:p2", b"next\r");
+    assert_eq!(fork.next_input(), b"next\r");
+}
+
+#[test]
+fn fork_caps_report_failure_and_refuse_the_tail_until_completion() {
+    for timed_out in [false, true] {
+        let harness = harness(RetryPolicy::Automatic);
+        let fork = harness.controlling("w1:p2");
+        harness.service.control(TerminalControl::RequestOpen {
+            request: "fork-1".into(),
+            fork: true,
+        });
+        harness.service.control(TerminalControl::RequestHold {
+            request: "fork-1".into(),
+            pane: "w1:p2".into(),
+        });
+        if timed_out {
+            harness.key("w1:p2", b"lost");
+            harness.service.shared.run(|inner, shared| {
+                inner.tick(shared, Instant::now() + input::FORK_HOLD_MAX_AGE);
+            });
+        } else {
+            harness.key(
+                "w1:p2",
+                &vec![b'x'; hide_node_link::terminal::INPUT_HOLD_LIMIT_BYTES],
+            );
+            harness.key("w1:p2", b"overflow");
+        }
+        let reason = if timed_out { "timeout" } else { "limit" };
+        harness.report_where(|report| {
+            matches!(report,
+            TerminalReport::RequestDiscarded { request, reason: actual }
+                if request == "fork-1" && actual == reason)
+        });
+        harness.key("w1:p2", b"tail");
+        fork.assert_no_input();
+        harness.service.control(TerminalControl::RequestResolve {
+            request: "fork-1".into(),
+            pane: "w1:p2".into(),
+        });
+        harness.key("w1:p2", b"retry\r");
+        assert_eq!(fork.next_input(), b"retry\r");
+    }
 }
 
 #[test]

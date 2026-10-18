@@ -10,7 +10,7 @@ import { spawnSync } from "node:child_process";
 import { expect, test, type Page } from "@playwright/test";
 import { claudeProjects, herdrHasFocus, setFixtureSession, startHerdr, writeFixtureTranscript, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { countSent, screenshot } from "./wire";
+import { countSent, screenshot, sendEvent } from "./wire";
 
 test.describe.configure({ timeout: 150_000 });
 
@@ -41,7 +41,7 @@ async function forkStack(page: Page, herdr: HerdrFixture, name: string): Promise
  * fork's terminal has the keyboard. Returns the fork's pane once its agent runs
  * the clean launch, how long that took, and whether the marker was typed before.
  */
-async function fork(page: Page, herdr: HerdrFixture, forker: string, item: "fork_agent" | "fork_agent_side", marker: string): Promise<{ forked: string; startMs: number }> {
+async function fork(page: Page, herdr: HerdrFixture, forker: string, item: "fork_agent" | "fork_agent_side", marker: string, client?: Daemon): Promise<{ forked: string; startMs: number }> {
   const agents = () => (herdr.run(["agent", "list"]) as Listed).result.agents.map((agent) => agent.pane_id);
   const before = agents();
   await page.locator(`[data-pane-menu="${forker}"]`).click();
@@ -54,7 +54,8 @@ async function fork(page: Page, herdr: HerdrFixture, forker: string, item: "fork
   let focused = "";
   await expect.poll(async () => (focused = await terminalWithFocus()), { timeout: 30_000 }).not.toMatch(new RegExp(`^(${forker})?$`));
   const focusMs = Date.now() - pressed;
-  await page.keyboard.type(marker);
+  if (client) await sendEvent(page, client, "key", { pane_id: focused, bytes_base64: Buffer.from(marker).toString("base64") });
+  else await page.keyboard.type(marker);
   const launched = () => (herdr.run(["pane", "process-info", "--pane", focused]) as ProcessInfo).result.process_info.foreground_processes.map((process) => process.argv?.join(" "));
   const typedBeforeStart = !launched().includes(LAUNCH);
   let forked = "";
@@ -74,7 +75,7 @@ function screenOf(herdr: HerdrFixture, pane: string): string {
   return read.status === 0 ? read.stdout : "";
 }
 
-test("Fork agent puts the operator's own fork in a new tab right of the source and moves the keyboard there", async ({ page }) => {
+test("Fork agent accepts bare pane keys from another client and opens right of the source @platform", async ({ page }) => {
   const herdr = await startHerdr();
   let daemon: Daemon | null = null;
   try {
@@ -83,7 +84,7 @@ test("Fork agent puts the operator's own fork in a new tab right of the source a
     const stack = await forkStack(page, herdr, "agent-fork-tab");
     daemon = stack.daemon;
     const { forker, last } = stack;
-    const { forked } = await fork(page, herdr, forker, "fork_agent", "typed-before-start");
+    const { forked } = await fork(page, herdr, forker, "fork_agent", "typed-before-start", daemon);
     expect(last.get("fork_pane")).toMatchObject({ pane_id: forker, placement: "tab" });
     await expect(page.locator(`[data-pane-view="${forked}"]`)).toBeVisible({ timeout: 30_000 });
     await expect.poll(() => herdrHasFocus(herdr, forked), { timeout: 30_000 }).toBe(true);

@@ -173,7 +173,10 @@ use crate::error::HostError;
 /// interactive command has no `--fork` (docs/ARCHITECTURE.md, OpenCode). A
 /// helper on 42 would refuse the call, so no OpenCode session on that device
 /// could be forked; it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 43;
+/// 45: creation requests declare fork holds and bind their pane on the node.
+/// Older helpers cannot protect bare pane keys; Hello refuses them and the
+/// existing helper replacement installs a compatible build.
+pub const PROTOCOL_VERSION: u32 = 45;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).

@@ -17,7 +17,9 @@
 //!
 //! Crossing a cap discards what was held, with a diagnostic naming the
 //! holder and the byte count, never the content. So does each key held
-//! longer than [`HELD_INPUT_MAX_AGE`] when its pane could take it.
+//! longer than [`HELD_INPUT_MAX_AGE`] when its pane could take it, except a
+//! fork request: it keeps the complete queue until completion, or fails at
+//! [`FORK_HOLD_MAX_AGE`]. Bare pane keys join its request on this node.
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
@@ -29,6 +31,7 @@ use hide_node_link::terminal::{
 use serde_json::json;
 
 pub(super) const HELD_INPUT_MAX_AGE: Duration = Duration::from_millis(HELD_INPUT_MAX_AGE_MS);
+pub(super) const FORK_HOLD_MAX_AGE: Duration = Duration::from_secs(30);
 /// A request the core never told this node about stops holding keys after
 /// this long; its keys are older than the age limit by then anyway.
 pub(super) const UNKNOWN_REQUEST_TTL: Duration = Duration::from_secs(10);
@@ -126,6 +129,8 @@ struct Request {
     /// first.
     known: bool,
     opened: Instant,
+    fork: bool,
+    pane: Option<String>,
     state: RequestState,
     held: Vec<HeldChunk>,
     held_bytes: usize,
@@ -138,6 +143,8 @@ impl Request {
             id: id.to_owned(),
             known,
             opened: now,
+            fork: false,
+            pane: None,
             state: RequestState::Pending,
             held: Vec::new(),
             held_bytes: 0,
@@ -197,6 +204,60 @@ impl Requests {
         }
         self.make_room(true);
         self.requests.push_back(Request::new(request_id, true, now));
+    }
+
+    pub(super) fn set_fork(&mut self, request_id: &str, fork: bool) {
+        if let Some(request) = self.find(request_id) {
+            request.fork = fork;
+        }
+    }
+
+    pub(super) fn hold_for(&mut self, request_id: &str, pane: &str) {
+        if let Some(request) = self.find(request_id) {
+            request.pane = Some(pane.to_owned());
+        }
+    }
+
+    pub(super) fn holder(&self, pane: &str) -> Option<String> {
+        self.requests
+            .iter()
+            .find(|request| request.pane.as_deref() == Some(pane))
+            .map(|request| request.id.clone())
+    }
+
+    pub(super) fn forget(&mut self, pane: &str) {
+        for request in &mut self.requests {
+            if request.pane.as_deref() == Some(pane) {
+                request.discard("pane_gone");
+                request.pane = None;
+            }
+        }
+    }
+
+    pub(super) fn deadline(&self) -> Option<Instant> {
+        self.requests
+            .iter()
+            .filter(|request| {
+                request.fork && request.held_bytes > 0 && request.state == RequestState::Pending
+            })
+            .map(|request| request.opened + FORK_HOLD_MAX_AGE)
+            .min()
+    }
+
+    /// Fail once at the bound, retaining the pane guard until creation ends.
+    pub(super) fn expire_forks(&mut self, now: Instant) -> Vec<String> {
+        let mut expired = Vec::new();
+        for request in &mut self.requests {
+            if request.fork
+                && request.held_bytes > 0
+                && request.state == RequestState::Pending
+                && now >= request.opened + FORK_HOLD_MAX_AGE
+            {
+                request.discard("timeout");
+                expired.push(request.id.clone());
+            }
+        }
+        expired
     }
 
     fn make_room(&mut self, known: bool) {
@@ -295,11 +356,23 @@ impl Requests {
         }
         let request = self.find(request_id).expect("just made");
         request.known = true;
+        request.pane = None;
         if request.state != RequestState::Pending {
+            if request.fork {
+                request.state = RequestState::Ready(pane_id.to_owned());
+            }
             return Vec::new();
         }
         request.state = RequestState::Ready(pane_id.to_owned());
         request.held_bytes = 0;
+        if request.fork {
+            // The fork holder has ended. An attaching pane now owns these
+            // bytes under its own bounded hold; the original wall time
+            // remains the input fact's time.
+            for chunk in &mut request.held {
+                chunk.typed_at = now;
+            }
+        }
         std::mem::take(&mut request.held)
     }
 
@@ -314,6 +387,7 @@ impl Requests {
         }
         let request = self.find(request_id).expect("just made");
         request.known = true;
+        request.pane = None;
         if request.state != RequestState::Discarded {
             request.discard(reason);
         }
@@ -678,6 +752,27 @@ pub(super) struct AttachmentHold {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_fork_keeps_keys_older_than_three_seconds() {
+        let start = Instant::now();
+        let mut requests = Requests::default();
+        requests.open("fork-1", start);
+        requests.set_fork("fork-1", true);
+        requests.hold_for("fork-1", "w1:p2");
+        assert_eq!(
+            requests.route("fork-1", chunk(b"hello\r", start)).0,
+            KeyRoute::Held
+        );
+        let ready = start + Duration::from_secs(10);
+        assert!(requests.expire_forks(ready).is_empty());
+        let held = requests.resolve("fork-1", "w1:p2", ready);
+        let delivered: Vec<u8> = fresh_chunks("w1:p2", held, ready)
+            .into_iter()
+            .flat_map(|chunk| chunk.bytes)
+            .collect();
+        assert_eq!(delivered, b"hello\r");
+    }
 
     fn chunk(bytes: &[u8], typed_at: Instant) -> HeldChunk {
         HeldChunk {

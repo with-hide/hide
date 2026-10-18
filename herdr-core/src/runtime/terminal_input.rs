@@ -91,6 +91,7 @@ struct InputRequest {
     /// When it opened, about when its first key was typed; none for a
     /// creation refused before it reached Herdr.
     opened: Option<Instant>,
+    input_lost: bool,
 }
 
 impl InputRequest {
@@ -132,6 +133,7 @@ impl InputRequests {
             self.requests.remove(index);
         }
         self.make_room();
+        let fork = matches!(origin, InputOrigin::Fork(_));
         self.requests.push_back(InputRequest {
             request_id: request_id.to_owned(),
             origin,
@@ -139,9 +141,11 @@ impl InputRequests {
             laid_out: false,
             held_for: None,
             opened: Some(now),
+            input_lost: false,
         });
         self.controls.push(TerminalControl::RequestOpen {
             request: request_id.to_owned(),
+            fork,
         });
     }
 
@@ -211,6 +215,12 @@ impl InputRequests {
             request.laid_out = false;
         }
         request.held_for = Some(pane_id.to_owned());
+        if changed {
+            self.controls.push(TerminalControl::RequestHold {
+                request: request.request_id.clone(),
+                pane: pane_id.to_owned(),
+            });
+        }
         changed
     }
 
@@ -235,11 +245,16 @@ impl InputRequests {
     /// row ends, so the shell's mark ends with it. Returns whether it changed.
     pub(super) fn discarded_by_node(&mut self, request_id: &str) -> bool {
         let Some(request) = self.requests.iter_mut().find(|request| {
-            request.request_id == request_id && request.state == InputRequestState::Pending
+            request.request_id == request_id && request.state != InputRequestState::Discarded
         }) else {
             return false;
         };
-        request.state = InputRequestState::Discarded;
+        if request.input_lost {
+            return false;
+        }
+        // Keep the lifecycle pending so completion still releases the node's
+        // pane guard. The discarded snapshot ends the screen's request mark.
+        request.input_lost = true;
         true
     }
 
@@ -267,6 +282,7 @@ impl InputRequests {
             laid_out: false,
             held_for: None,
             opened: None,
+            input_lost: false,
         });
         self.controls.push(TerminalControl::RequestDiscard {
             request: request_id.to_owned(),
@@ -348,10 +364,14 @@ impl InputRequests {
             .iter()
             .map(|request| InputRequestSnapshot {
                 request_id: request.request_id.clone(),
-                state: match request.state {
-                    InputRequestState::Pending => WireState::Pending,
-                    InputRequestState::Ready(_) => WireState::Ready,
-                    InputRequestState::Discarded => WireState::Discarded,
+                state: if request.input_lost {
+                    WireState::Discarded
+                } else {
+                    match request.state {
+                        InputRequestState::Pending => WireState::Pending,
+                        InputRequestState::Ready(_) => WireState::Ready,
+                        InputRequestState::Discarded => WireState::Discarded,
+                    }
                 },
                 held_for: (request.state == InputRequestState::Pending)
                     .then(|| request.held_for.clone())
@@ -664,7 +684,8 @@ mod tests {
             controls(&mut requests),
             [
                 TerminalControl::RequestOpen {
-                    request: "r1".into()
+                    request: "r1".into(),
+                    fork: false,
                 },
                 TerminalControl::RequestResolve {
                     request: "r1".into(),
@@ -989,7 +1010,25 @@ mod tests {
         let mut requests = InputRequests::default();
         requests.open("r1", InputOrigin::TabCreate(1), Instant::now());
         assert!(requests.discarded_by_node("r1"));
-        assert_eq!(requests.state_of("r1"), Some(InputRequestState::Discarded));
+        assert_eq!(requests.snapshot()[0].state, WireState::Discarded);
         assert!(!requests.discarded_by_node("r1"));
+        assert!(requests.resolve(&InputOrigin::TabCreate(1), "w1:p2"));
+    }
+
+    #[test]
+    fn a_fork_cap_report_is_kept_when_completion_overtakes_its_report() {
+        let mut requests = InputRequests::default();
+        let origin = InputOrigin::Fork("w1:p1".into());
+        requests.open("fork-1", origin.clone(), Instant::now());
+        assert!(requests.hold_for(&origin, "w1:p2"));
+        assert!(
+            controls(&mut requests).contains(&TerminalControl::RequestHold {
+                request: "fork-1".into(),
+                pane: "w1:p2".into(),
+            })
+        );
+        assert!(requests.resolve(&origin, "w1:p2"));
+        assert!(requests.discarded_by_node("fork-1"));
+        assert_eq!(requests.snapshot()[0].state, WireState::Discarded);
     }
 }
