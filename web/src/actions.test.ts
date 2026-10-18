@@ -54,7 +54,7 @@ describe("Find while an agent answers its own search request", () => {
     const { TooltipProvider } = await import("./components/ui/tooltip");
     const { installKeyboardOwner, keyboardCommandOwner, keyboardOwner, noteKeyboardOwner } = await import("./viewFocus");
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    useUiStore.setState({ overlay: null, agentFindRequest: null, screen: { kind: "workspace" } });
+    useUiStore.setState({ overlay: "none", agentFindRequest: null, screen: { kind: "workspace" } });
     useShellStore.setState({ rest: { navigator: { agents: [{ pane_id: "pane-1", own_find: true }] } } as never, focusedPaneId: "pane-1", find: null });
     document.body.innerHTML = '<div data-workspace-screen="c"><div data-pane-view="pane-1"><textarea></textarea></div><div data-view-area-id="a1"><input data-document /></div></div><button role="menu">Find</button><div data-find-host></div>';
     const remove = installKeyboardOwner();
@@ -88,7 +88,7 @@ describe("Find while an agent answers its own search request", () => {
       remove();
       noteKeyboardOwner({ kind: "none" });
       document.body.innerHTML = "";
-      useUiStore.setState({ overlay: null, agentFindRequest: null });
+      useUiStore.setState({ overlay: "none", agentFindRequest: null });
       useShellStore.setState({ rest: null, focusedPaneId: null, find: null });
       vi.unstubAllGlobals();
     }
