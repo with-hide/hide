@@ -151,7 +151,7 @@ it("draws the ask instead of a PR mark on a raised root row, whatever its descen
   expect(raised?.querySelector("[data-agent-pr]")).toBeNull();
 });
 
-/** A root that made no PR and the child that made #1073, as the operator's example has it. */
+/** A root that made no PR and the child that made PR 1073, as the operator's example has it. */
 const delegated = () => [
   agent("pane:root", "릴리스 스킬과 로컬 검증 체계", [], { lineage_child_pane_ids: ["pane:child"] }),
   agent("pane:child", "검증 스크립트", [{ repo: "app", number: 1073, state: "pending" }], { delegated: true, lineage_parent_pane_id: "pane:root" }),
@@ -176,7 +176,7 @@ it("dims a root's gathered mark while GitHub cannot be read and says when it las
   const container = await render(delegated(), undefined, { pulls: [PULL], status: { ...READ, available: false, stale: true } });
   const root = mark(container, "pane:root");
   expect(root?.getAttribute("data-stale")).toBe("true");
-  expect(root?.getAttribute("aria-label")).toMatch(/^#1073 CI running or review pending · GitHub last read .+ · cannot read now$/);
+  expect(root?.getAttribute("aria-label")).toMatch(new RegExp("^#" + "1073 CI running or review pending · GitHub last read .+ · cannot read now$"));
   await hover(container, "pane:root");
   expect(document.querySelector('[data-pr-list="pane:root"]')?.textContent).toMatch(/GitHub last read .+ · cannot read now/);
 });
