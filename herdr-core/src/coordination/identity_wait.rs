@@ -478,6 +478,7 @@ mod tests {
     fn listed(pane: &str, name: &str, session: Option<&str>) -> ProjectedAgent {
         ProjectedAgent {
             pane_id: pane.into(),
+            terminal_id: format!("term-{pane}"),
             name: Some(name.into()),
             workspace_id: "w2".into(),
             tab_id: "w2:t1".into(),

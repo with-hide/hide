@@ -379,7 +379,15 @@ fn start_within(
                     return Err(StartError::Herdr(ApiError::Remote { code, message }));
                 }
             }
-            answer => return answer.map_err(StartError::Herdr),
+            answer => {
+                // The session sync reads a start Herdr then holds open only
+                // when it knows Hide made it and when (herdrdev/herdr#3853).
+                if let Some(terminal) = answer.as_ref().ok().and_then(wire::started_agent_terminal)
+                {
+                    crate::session_sync::record_start(&terminal, Instant::now());
+                }
+                return answer.map_err(StartError::Herdr);
+            }
         }
     }
 }
