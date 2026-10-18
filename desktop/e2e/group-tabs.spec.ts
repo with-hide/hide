@@ -34,6 +34,8 @@ test("named groups and the independent terminal action render in the candidate w
     await expect(row).toBeVisible();
     await page.locator("[data-new-agent-tab=true]").click();
     await expect(page.locator("[data-agent-tab-start]")).toHaveAttribute("data-agent-tab-start", /^draft:/);
+    await expect(row).toHaveAttribute("aria-current", "true");
+    await expect(page.locator('[data-agent-open][aria-current="true"]')).toHaveCount(0);
     await expect(page.locator("[data-group-start-terminal=true]")).toBeEnabled();
     await expect(page.locator("[data-new-agent-tab=true]")).toBeVisible();
     await compositorPresents(page);
