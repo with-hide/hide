@@ -3057,31 +3057,41 @@ impl Runtime {
     /// old checkout and the next session event rejects Herdr's confirmation.
     /// Moving the local context here lets the following `pane.focus` remain
     /// the single external effect.
+    ///
+    /// A pane Hide made that Herdr has not laid out yet is its checkout's
+    /// already (`created_pane_checkout`): reading only the catalog left a
+    /// fork's keyboard in a pane of a checkout not in front, where the
+    /// projection waited on it or followed that checkout's own pane instead.
     fn focus_context_for_pane(&mut self, pane_id: &str) -> bool {
-        let Some((workspace_id, checkout_id, checkout_path)) = self
-            .snapshot
-            .navigator
-            .workspaces
-            .iter()
-            .find_map(|workspace| {
-                workspace
-                    .checkouts
-                    .iter()
-                    .find(|checkout| {
-                        checkout
-                            .tabs
-                            .iter()
-                            .any(|tab| tab.panes.iter().any(|pane| pane.id == pane_id))
-                    })
-                    .map(|checkout| {
-                        (
-                            workspace.id.clone(),
-                            checkout.id.clone(),
-                            checkout.path.clone(),
-                        )
-                    })
-            })
-        else {
+        let checkout_where = |found: &dyn Fn(&CheckoutSnapshot) -> bool| {
+            self.snapshot
+                .navigator
+                .workspaces
+                .iter()
+                .find_map(|workspace| {
+                    workspace
+                        .checkouts
+                        .iter()
+                        .find(|checkout| found(checkout))
+                        .map(|checkout| {
+                            (
+                                workspace.id.clone(),
+                                checkout.id.clone(),
+                                checkout.path.clone(),
+                            )
+                        })
+                })
+        };
+        let Some((workspace_id, checkout_id, checkout_path)) = checkout_where(&|checkout| {
+            checkout
+                .tabs
+                .iter()
+                .any(|tab| tab.panes.iter().any(|pane| pane.id == pane_id))
+        })
+        .or_else(|| {
+            let made_in = self.created_pane_checkout(pane_id)?;
+            checkout_where(&|checkout| checkout.path == made_in)
+        }) else {
             return false;
         };
         if self.snapshot.navigator.focused_workspace_id.as_deref() == Some(workspace_id.as_str())

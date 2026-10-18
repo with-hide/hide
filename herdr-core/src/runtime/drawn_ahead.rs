@@ -34,12 +34,60 @@ pub(super) struct ProvisionalTab {
     pub(super) recorded_at_unix_ms: u64,
 }
 
+/// A fork's pane Herdr has named and not yet laid out. It is the checkout's
+/// it was made in for at most `PROVISIONAL_TAB_TIMEOUT_MS`, as a created tab
+/// is drawn: a split is not drawn, so until Herdr lays it out the projection
+/// reads it as a creation pending rather than a missing pane.
+#[derive(Clone, Debug)]
+pub(super) struct MadePane {
+    pub(super) pane_id: String,
+    pub(super) checkout: String,
+    pub(super) recorded_at_unix_ms: u64,
+}
+
 impl Runtime {
     /// Lays everything drawn ahead of Herdr over a session about to be
     /// ingested.
     pub(super) fn overlay_drawn_ahead(&mut self, payload: &mut SessionSnapshotPayload) {
+        let laid_out = payload
+            .layouts
+            .iter()
+            .flat_map(|layout| &layout.panes)
+            .map(|pane| pane.pane_id.as_str())
+            .collect::<HashSet<_>>();
+        self.settle_made_panes(|pane_id| laid_out.contains(pane_id), unix_milliseconds());
         self.overlay_created_tabs(payload);
         self.overlay_geometry(payload);
+    }
+
+    /// Ends each fork pane's hold once Herdr's layout lists it, or at its
+    /// bound, logged, after which a pane still missing is one the projection
+    /// waits on and says so. Says whether one lapsed.
+    pub(super) fn settle_made_panes(
+        &mut self,
+        laid_out: impl Fn(&str) -> bool,
+        now_unix_ms: u64,
+    ) -> bool {
+        let mut lapsed = false;
+        for fork in self.forks_in_flight.values_mut() {
+            let Some(made) = fork.made.as_ref() else {
+                continue;
+            };
+            if laid_out(&made.pane_id) {
+                fork.made = None;
+            } else if now_unix_ms.saturating_sub(made.recorded_at_unix_ms)
+                >= PROVISIONAL_TAB_TIMEOUT_MS
+            {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "pane_fork",
+                    "kind": "pane.fork.layout_late",
+                    "pane_id": made.pane_id,
+                }));
+                fork.made = None;
+                lapsed = true;
+            }
+        }
+        lapsed
     }
 
     /// Holds the acknowledged creation until Herdr lays it out. A known
@@ -71,9 +119,44 @@ impl Runtime {
     }
 
     pub(super) fn created_pane_awaits_layout(&self, pane_id: &str, checkout: &str) -> bool {
+        self.created_pane_checkout(pane_id) == Some(checkout)
+    }
+
+    /// The checkout a pane Hide made was made in, which holds it before
+    /// Herdr's layout lists it: a created tab's, or a starting fork's, which
+    /// is its source's whether the fork has a tab of its own or a split.
+    pub(super) fn created_pane_checkout(&self, pane_id: &str) -> Option<&str> {
         self.provisional_tabs
             .iter()
-            .any(|tab| tab.pane_id == pane_id && tab.cwd == checkout)
+            .find(|tab| tab.pane_id == pane_id)
+            .map(|tab| tab.cwd.as_str())
+            .or_else(|| {
+                self.forks_in_flight
+                    .values()
+                    .filter_map(|fork| fork.made.as_ref())
+                    .find(|made| made.pane_id == pane_id)
+                    .map(|made| made.checkout.as_str())
+            })
+    }
+
+    /// Takes back a created tab whose pane its worker closed before Herdr
+    /// laid it out.
+    pub(super) fn take_back_created_tab(&mut self, tab_id: &str) {
+        let Some(index) = self
+            .provisional_tabs
+            .iter()
+            .position(|tab| tab.tab_id == tab_id)
+        else {
+            return;
+        };
+        let tab = self.provisional_tabs.remove(index);
+        crate::diagnostic!(serde_json::json!({
+            "component": "tab_control",
+            "kind": "tab.create.taken_back",
+            "tab_id": tab.tab_id,
+            "pane_id": tab.pane_id,
+        }));
+        self.request_republish();
     }
 
     /// The Herdr workspace that holds the checkout at `path`, as the session

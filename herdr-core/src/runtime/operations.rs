@@ -350,6 +350,14 @@ impl Runtime {
         changed |= self.expire_close_operations(now_unix_ms);
         changed |= self.expire_pane_operations(now_unix_ms);
         changed |= self.expire_provisional_tabs(now_unix_ms);
+        let laid_out = self
+            .snapshot
+            .pane_layouts
+            .iter()
+            .flat_map(|layout| layout.pane_ids())
+            .map(str::to_owned)
+            .collect::<HashSet<_>>();
+        changed |= self.settle_made_panes(|pane_id| laid_out.contains(pane_id), now_unix_ms);
         changed |= self.expire_remote_operations(now_unix_ms);
         changed |= self.expire_pending_choice(now_unix_ms);
         changed |= self.advance_tree_closes();

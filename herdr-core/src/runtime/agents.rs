@@ -2453,7 +2453,11 @@ impl Runtime {
             return false;
         }
         pending.tab_id = tab_id.map(str::to_owned);
-        let (issued_serial, press) = (pending.issued_serial, pending.press);
+        let (issued_serial, press, tab_label) = (
+            pending.issued_serial,
+            pending.press,
+            pending.tab_label.clone(),
+        );
         // Another fork's own focus is not the operator choosing a view: it
         // supersedes this one only when it was pressed later, or when the
         // operator chose a view after this press and before that focus.
@@ -2464,7 +2468,40 @@ impl Runtime {
             Some(focus) => focus.press > press || focus.prior_intent_serial > issued_serial,
             None => self.last_view_intent_serial > issued_serial,
         };
-        let checkout_path = tab_id.and_then(|tab_id| self.place_fork_tab(source_pane_id, tab_id));
+        let source_workspace_id = self
+            .layout_holding_pane(source_pane_id)
+            .map(|layout| layout.workspace_id.clone());
+        let checkout_path = match tab_id {
+            Some(tab_id) => self.place_fork_tab(source_pane_id, tab_id),
+            None => self.checkout_path_holding_pane(source_pane_id),
+        };
+        // The fork's pane is its source's checkout's from Herdr's answer: its
+        // own tab is drawn as a created tab is, until Herdr lays it out, and
+        // a split waits in the source's tab for Herdr's layout as a creation,
+        // not a missing pane. Either way the keyboard can bring that checkout
+        // forward before the catalog lists the pane (`created_pane_checkout`).
+        if let Some(path) = checkout_path.as_deref()
+            && let Some(pending) = self.forks_in_flight.get_mut(source_pane_id)
+        {
+            pending.made = Some(super::drawn_ahead::MadePane {
+                pane_id: pane_id.to_owned(),
+                checkout: path.to_owned(),
+                recorded_at_unix_ms: unix_milliseconds(),
+            });
+        }
+        if let (Some(tab_id), Some(path), Some(workspace_id)) =
+            (tab_id, checkout_path.as_deref(), source_workspace_id)
+        {
+            self.draw_created_tab(super::drawn_ahead::ProvisionalTab {
+                workspace_id: Some(workspace_id),
+                tab_id: tab_id.to_owned(),
+                pane_id: pane_id.to_owned(),
+                cwd: path.to_owned(),
+                label: tab_label.unwrap_or_default(),
+                timing_id: None,
+                recorded_at_unix_ms: unix_milliseconds(),
+            });
+        }
         // A tab the Agent area has no room for waits in the strip, as a new
         // tab does, and is not where the operator's keys go.
         let waiting = tab_id
@@ -2565,6 +2602,22 @@ impl Runtime {
         Some(checkout_path)
     }
 
+    /// The checkout whose tab holds `pane_id`, by path.
+    fn checkout_path_holding_pane(&self, pane_id: &str) -> Option<String> {
+        self.snapshot
+            .navigator
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.checkouts)
+            .find(|checkout| {
+                checkout
+                    .tabs
+                    .iter()
+                    .any(|tab| tab.panes.iter().any(|pane| pane.id == pane_id))
+            })
+            .map(|checkout| checkout.path.clone())
+    }
+
     pub fn ingest_fork_result(
         &mut self,
         parent_pane_id: &str,
@@ -2616,10 +2669,11 @@ impl Runtime {
                 let (tab_id, focused, generation) = pending
                     .map(|pending| (pending.tab_id, pending.focused, Some(pending.generation)))
                     .unwrap_or_default();
-                if let Some(tab_id) = tab_id
-                    && let Some(store) = self.workspace_views.as_mut()
-                {
-                    store.agent_placements.remove(&tab_id);
+                if let Some(tab_id) = tab_id {
+                    self.take_back_created_tab(&tab_id);
+                    if let Some(store) = self.workspace_views.as_mut() {
+                        store.agent_placements.remove(&tab_id);
+                    }
                 }
                 // The worker closed the pane the keyboard went to; it goes
                 // back to the source the operator forked, unless they have
@@ -3315,8 +3369,12 @@ pub(super) struct PendingFork {
     /// the operator's, and the fork does not take the keyboard from it.
     pub(super) issued_serial: u64,
     /// The fork's tab once Herdr named it, so a fork that fails leaves no
-    /// placement waiting for a tab that was closed.
+    /// placement or drawing waiting for a tab that was closed.
     pub(super) tab_id: Option<String>,
+    /// The name the fork's tab is made with, which its drawing carries.
+    pub(super) tab_label: Option<String>,
+    /// The fork's pane from Herdr's answer until Herdr's layout lists it.
+    pub(super) made: Option<super::drawn_ahead::MadePane>,
     /// The fork's pane, once Herdr made it and it took the keyboard.
     pub(super) focused: Option<String>,
     /// The source's agent kind and launch choice, and the name the fork

@@ -3102,30 +3102,6 @@ impl Runtime {
                     &pane_id,
                     &format!("{}-{}", self.fork_sequence, unix_milliseconds()),
                 );
-                self.forks_in_flight.insert(
-                    pane_id.clone(),
-                    super::agents::PendingFork {
-                        press: self.fork_sequence,
-                        generation: self.live_generation,
-                        // A view the operator chooses after this press is
-                        // where they are now, and the fork does not take it.
-                        issued_serial: self.control_lane.issued_serial(),
-                        tab_id: None,
-                        focused: None,
-                        kind: agent.agent_kind.clone(),
-                        name: name.clone(),
-                        launch: launch.clone(),
-                    },
-                );
-                let Some(context) = self.live.as_ref().cloned() else {
-                    self.forks_in_flight.remove(&pane_id);
-                    self.set_error(
-                        "pane.control_unavailable",
-                        "Forking a pane requires a live Herdr connection",
-                        true,
-                    );
-                    return true;
-                };
                 // A fork's tab is named as a new tab is, so the strip calls it
                 // by its agent rather than by the Herdr name it starts under.
                 let (cwd, tab_label) = self
@@ -3143,6 +3119,32 @@ impl Runtime {
                         Some((pane.cwd.clone(), checkout.next_tab_label.clone()))
                     })
                     .unzip();
+                self.forks_in_flight.insert(
+                    pane_id.clone(),
+                    super::agents::PendingFork {
+                        press: self.fork_sequence,
+                        generation: self.live_generation,
+                        // A view the operator chooses after this press is
+                        // where they are now, and the fork does not take it.
+                        issued_serial: self.control_lane.issued_serial(),
+                        tab_id: None,
+                        tab_label: tab_label.clone(),
+                        made: None,
+                        focused: None,
+                        kind: agent.agent_kind.clone(),
+                        name: name.clone(),
+                        launch: launch.clone(),
+                    },
+                );
+                let Some(context) = self.live.as_ref().cloned() else {
+                    self.forks_in_flight.remove(&pane_id);
+                    self.set_error(
+                        "pane.control_unavailable",
+                        "Forking a pane requires a live Herdr connection",
+                        true,
+                    );
+                    return true;
+                };
                 let request = ForkRequest {
                     parent_state_change_seq: agent.state_change_seq,
                     connection_generation: self.live_generation,
