@@ -75,6 +75,33 @@ describe("inline tab start (group-tabs B7–B9, B22, B27)", () => {
     expect(button("terminal").disabled).toBe(true);
     expect(container.querySelector("textarea")!.readOnly).toBe(true);
   });
+  it.each(["failed", "agent_failed"] as const)("accepts multiple Korean input events after a restored %s and retries the same confirmed intent", async (phase) => {
+    const receipt: AgentStartReceipt = { request_id: "start-restored", group_id: "g1", area_id: "a1", draft_tab_id: "draft-1", live_tab_id: phase === "agent_failed" ? "live-1" : null, pane_id: phase === "agent_failed" ? "pane-1" : null, add_pane: false, state: phase === "failed" ? "failed" : "ready", agent_kind: "claude", agent_phase: phase === "agent_failed" ? "failed" : null };
+    await publishReceipts(target, [receipt]);
+    if (phase === "agent_failed") {
+      const rest = useShellStore.getState().rest!;
+      useShellStore.setState({ rest: { ...rest, task_operation: { id: 42, kind: "agent_start", phase: "ready", repository_root: "/fixture", branch: null, base_branch: null, path: "/fixture", pane_id: "pane-1", agent_kind: "claude", message: null, agent_phase: "failed", agent_message: "Enter the replacement instruction", request_id: receipt.request_id } } });
+    }
+    await mount();
+    const field = container.querySelector("textarea")!;
+    for (const text of ["다", "다시", "다시 시작할", "다시 시작할 한글 지시문"]) {
+      expect(field.readOnly).toBe(false);
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, text);
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(field.value).toBe(text);
+      expect(field.readOnly).toBe(false);
+      expect(button("agent").disabled).toBe(false);
+      expect(useInlineStarts.getState().drafts[key]!.phase).toBe(phase);
+    }
+    expect(starts()).toHaveLength(0);
+    await act(async () => button("agent").click());
+    expect(starts()).toHaveLength(1);
+    expect(starts()[0]!.payload).toMatchObject({ request_id: receipt.request_id, target, provider: "claude", prompt: "다시 시작할 한글 지시문" });
+    expect(field.readOnly).toBe(true);
+    expect(button("agent").disabled).toBe(true);
+  });
   it("retains a full store's empty-group input through draft reservation and failure, retrying the same intent", async () => {
     const emptyTarget = { ...target, tab_id: null };
     const emptyKey = inlineStartKey("local", "/fixture", emptyTarget);
