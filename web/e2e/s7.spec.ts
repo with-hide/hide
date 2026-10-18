@@ -1033,11 +1033,20 @@ test("a preview alone in its area offers its menu without the splits it cannot m
 test("a pinned view has no Keep open and, beside another area, can move there", async ({ page }) => {
   const stack = await startCaps(page, "s7-caps-pinned");
   try {
-    await pinNineAndSplit(page, stack);
+    // This menu needs two pinned views beside a single pinned view. Confirm
+    // each preview and Keep open action before preparing the next file.
+    for (const name of ["f02.txt", "f03.txt", "f04.txt"]) {
+      await explorerRow(page, stack, name).click();
+      await expect(tab(page, name)).toHaveAttribute("data-preview", "true");
+      await tabMenu(page, page, name, "keep_open");
+      await expect(tab(page, name)).toHaveAttribute("data-preview", "false");
+    }
+    await tabMenu(page, page, "f04.txt", "split_right");
+    await expect.poll(() => shape(page)).toBe("(f02.txt >f03.txt) | @(>f04.txt)");
     const left = await tabMenuRows(page, area(page, 0), "f02.txt");
     expect(left.map((row) => row.id)).toEqual(["new_tab", ...SPLITS, "move_right", "copy_path", "select_in_tree", "close_view"]);
     expect(left.every((row) => !row.disabled)).toBe(true);
-    const right = await tabMenuRows(page, area(page, 1), "f10.txt");
+    const right = await tabMenuRows(page, area(page, 1), "f04.txt");
     expect(right.map((row) => row.id)).toEqual(["new_tab", "split", "move_left", "copy_path", "select_in_tree", "close_view"]);
     expect(right.find((row) => row.id === "split")).toMatchObject({ disabled: true, reason: "This is the only view in its area." });
   } finally { stopStack(stack); }
