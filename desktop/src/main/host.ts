@@ -1138,12 +1138,16 @@ export class DesktopHost {
     }
     const loading = window.loadFile(STATUS_PAGE, { hash, query: words.query });
     this.statusLoad = loading;
+    // A load settles for the window that started it: a closed window's answer says nothing of the one that replaced it.
+    const mine = () => this.window === window && !window.isDestroyed();
     loading.then(
       () => {
+        if (!mine()) return;
         this.statusLoad = null;
         this.statusScreen = { lang: words.lang, plain: false };
       },
       (error: unknown) => {
+        if (!mine()) return;
         this.statusLoad = null;
         // A load a newer one replaced is not a failure; one that failed will fail again, so the plain screen takes its place.
         if ((error as { code?: string }).code === "ERR_ABORTED") return;
@@ -1170,13 +1174,15 @@ export class DesktopHost {
       await window.webContents.executeJavaScript(fallbackScript(screen, __HIDE_BACKGROUND__));
     })();
     this.statusLoad = showing;
+    const mine = () => this.window === window && !window.isDestroyed();
     showing.then(
       () => {
+        if (!mine()) return;
         this.statusLoad = null;
         this.statusScreen = { lang: words.lang, plain: true };
       },
       () => {
-        this.statusLoad = null;
+        if (mine()) this.statusLoad = null;
       },
     );
     this.load(showing, state.kind);
@@ -1207,8 +1213,10 @@ export class DesktopHost {
 
   /**
    * The status page's sentences in the language in effect, passed in its
-   * address so the catalogs stay the one source of the words. The page has
-   * no bridge, so a language change reloads it (`render` compares `lang`).
+   * address so the catalogs stay the one source of the words. The page gets
+   * the window's preload but `fromShell` refuses every message from it, so
+   * words cannot reach it any other way and a language change reloads it
+   * (`render` compares `lang`).
    */
   private statusWords(): { query: Record<string, string>; lang: string } {
     const t = this.language.t;
@@ -1235,7 +1243,7 @@ export class DesktopHost {
   /**
    * The failed status page's Copy diagnostics (PRD first-run-onboarding B2):
    * the app build, the reason code and where the host log is, written to
-   * the clipboard here, since the page has no bridge. The page then says it
+   * the clipboard here, since the page cannot reach it. The page then says it
    * was copied or, when the clipboard refused it, shows the same text to
    * select by hand.
    */
@@ -1328,7 +1336,11 @@ export class DesktopHost {
       }
     });
     window.on("closed", () => {
-      if (this.window === window) this.window = null;
+      if (this.window !== window) return;
+      this.window = null;
+      // What this window showed and was loading is gone with it; the next window starts from nothing.
+      this.statusScreen = null;
+      this.statusLoad = null;
     });
     window.on("enter-full-screen", () => this.sendWindowChrome(window));
     window.on("leave-full-screen", () => this.sendWindowChrome(window));
@@ -1441,7 +1453,7 @@ export class DesktopHost {
       return { action: "deny" };
     });
     // The status page asks for Retry and Copy diagnostics by moving its own
-    // hash; it has no bridge.
+    // hash; the host takes no IPC from it (`fromShell`).
     contents.on("did-navigate-in-page", (_event, url) => {
       // The status page is a file; its plain form is about:blank (`statusPage.ts`).
       if (!url.startsWith("file:") && !url.startsWith("about:blank")) return;

@@ -58,6 +58,22 @@ test("a status page file that will not load still shows the failure, and Retry s
   await expect.poll(searches).toEqual(["launch", "retry", "retry"]);
 });
 
+test("a window opened again after it was closed draws the failure again", async () => {
+  test.skip(process.platform !== "darwin", "elsewhere the app ends with its last window");
+  ({ app } = await launch(run.env));
+  let page = await app.firstWindow();
+  await expect(page.getByRole("button", { name: "Copy diagnostics" })).toBeVisible({ timeout: 20_000 });
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.close());
+  await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(0);
+  // A Dock click: the new window has nothing loaded, so the host loads the page into it rather than moving a hash.
+  const reopened = app.waitForEvent("window");
+  await app.evaluate(({ app: electronApp }) => electronApp.emit("activate"));
+  page = await reopened;
+  await expect(page.locator("#reason")).toHaveText("The hide command was not found.", { timeout: 20_000 });
+  await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy diagnostics" })).toBeVisible();
+});
+
 test("the packaged app loads its own status page, which its archive must keep readable", async () => {
   test.skip(!packaged, "a packaged app is required");
   ({ app } = await launch(run.env, { executablePath: packaged }));
