@@ -984,6 +984,58 @@ async fn a_start_from_an_unadmitted_phone_is_refused_and_nothing_reaches_the_cor
     running.stop();
 }
 
+/// The next `pong` the phone receives, with the other frames passed over.
+async fn next_pong(socket: &mut Socket) -> Value {
+    loop {
+        let frame = next_frame(socket).await.expect("a pong");
+        if frame["type"] == "pong" {
+            return frame;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_ping_gets_its_number_back_until_the_phone_is_revoked() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = FakeTailscale::new(dir.path());
+    fake.ready();
+    let running = hided::start_daemon(env(dir.path(), &fake.bin))
+        .await
+        .unwrap();
+    let mut shell = renderer(&running).await;
+    let (mut socket, phone_id, _credential) = paired_phone(&running, &mut shell).await;
+    send_phone(&mut socket, json!({"type": "ping", "id": 41})).await;
+    assert_eq!(
+        next_pong(&mut socket).await,
+        json!({"type": "pong", "id": 41})
+    );
+    // A ping with no number is refused and recorded; the connection stays and the next one is answered.
+    send_phone(&mut socket, json!({"type": "ping"})).await;
+    send_phone(&mut socket, json!({"type": "ping", "id": 42})).await;
+    assert_eq!(
+        next_pong(&mut socket).await,
+        json!({"type": "pong", "id": 42})
+    );
+    // A phone no longer let in is never answered with a pong.
+    event(&mut shell, "mobile_revoke", json!({"phone_id": phone_id})).await;
+    mobile_frame(&mut shell, |frame| {
+        frame["phones"].as_array().is_some_and(Vec::is_empty)
+    })
+    .await;
+    let _ = socket
+        .send(Message::Text(
+            json!({"type": "ping", "id": 43}).to_string().into(),
+        ))
+        .await;
+    let mut refused = false;
+    while let Some(frame) = next_frame(&mut socket).await {
+        assert_ne!(frame["type"], "pong", "{frame}");
+        refused |= frame == json!({"type": "refused", "reason": "revoked"});
+    }
+    assert!(refused, "a revoked phone is told why");
+    running.stop();
+}
+
 #[tokio::test]
 async fn a_repeated_start_request_id_starts_once_and_returns_the_first_answer() {
     let dir = tempfile::tempdir().unwrap();

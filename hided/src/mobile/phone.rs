@@ -5,8 +5,9 @@
 //! After that the phone may only: open one agent's detail, choose its
 //! conversation or its terminal, ask for older messages or more rows, close
 //! it, send that pane a reply or one key, open the start sheet and start an
-//! agent from it, wake or inspect a listed sleeping conversation, and register
-//! or report its push subscription. Anything else is refused and recorded.
+//! agent from it, wake or inspect a listed sleeping conversation, register
+//! or report its push subscription, and ask whether hided still answers
+//! (`ping`). Anything else is refused and recorded.
 //! It never receives a file, a path, a setting or the core's snapshot; the one
 //! exception is the interface language, which rides each `agents` frame so the
 //! phone speaks the language the operator chose.
@@ -648,6 +649,7 @@ async fn handle(
             }));
             None
         }
+        "ping" => liveness(message, mobile.still_admitted(phone_id), phone_id),
         "push_subscription" => {
             let subscription = message.get("subscription");
             let field = |name: &str| {
@@ -692,6 +694,23 @@ async fn handle(
             )
         }
     }
+}
+
+/// The answer to a phone's `ping`: its own number back, so the phone knows
+/// hided is there. The page cannot see the protocol-level ping hided sends, so
+/// this is how a phone learns that a Mac gone to sleep stopped answering. It
+/// reads one in-memory record and nothing else: no core lock, no Herdr call.
+/// A phone no longer let in is told why instead, as it is when its socket is
+/// closed, and a ping without a number is refused and recorded.
+fn liveness(message: &Value, admitted: Result<(), &'static str>, phone_id: &str) -> Option<Value> {
+    if let Err(reason) = admitted {
+        return Some(json!({"type": "refused", "reason": reason}));
+    }
+    let Some(id) = message.get("id").and_then(Value::as_u64) else {
+        refusal_logged("scope.refused", Some(phone_id), "ping");
+        return None;
+    };
+    Some(json!({"type": "pong", "id": id}))
 }
 
 /// The phone supplies a stable intent, never a pane, path or arbitrary event.
@@ -891,6 +910,28 @@ mod tests {
         assert!(sleep_action(&message, &projection(&row), "local").is_some());
         row["checking"] = json!(true);
         assert!(sleep_action(&message, &projection(&row), "local").is_none());
+    }
+
+    #[test]
+    fn a_ping_is_answered_with_its_number_only_while_the_phone_is_let_in() {
+        let ping = json!({"type": "ping", "id": 7});
+        assert_eq!(
+            liveness(&ping, Ok(()), "phone"),
+            Some(json!({"type": "pong", "id": 7}))
+        );
+        for reason in ["revoked", "mobile_off"] {
+            assert_eq!(
+                liveness(&ping, Err(reason), "phone"),
+                Some(json!({"type": "refused", "reason": reason}))
+            );
+        }
+        for bad in [
+            json!({"type": "ping"}),
+            json!({"type": "ping", "id": "7"}),
+            json!({"type": "ping", "id": -1}),
+        ] {
+            assert_eq!(liveness(&bad, Ok(()), "phone"), None, "{bad}");
+        }
     }
 
     #[test]
