@@ -94,7 +94,7 @@ pub fn state_path(dir: &Path) -> PathBuf {
 }
 
 pub fn lock_path(dir: &Path) -> PathBuf {
-    dir.join("hided.lock")
+    hide_kit::layout::daemon_lock(dir)
 }
 
 /// Writes the state whole and private: a reader sees the previous state or

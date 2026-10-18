@@ -22,6 +22,9 @@ pub(crate) struct Record {
     /// This proves ownership even after an old package has been deleted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cli_destination: Option<PathBuf>,
+    /// The daemon that owns this account's installed hook route.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    state_route: Option<PathBuf>,
     /// One-time retirements of older layouts this machine has finished, so a
     /// later pass does not ask again (PRD hide-home-layout D-14). A build
     /// that does not know the field ignores it.
@@ -55,6 +58,18 @@ pub(crate) struct Record {
 }
 
 impl Record {
+    pub(crate) fn state_route(&self) -> Option<&Path> {
+        self.state_route.as_deref()
+    }
+
+    pub(crate) fn remember_state_route(&mut self, route: PathBuf) -> bool {
+        if self.state_route.as_ref() == Some(&route) {
+            return false;
+        }
+        self.state_route = Some(route);
+        true
+    }
+
     pub(crate) fn contains(&self, id: ComponentId) -> bool {
         self.installed.contains(id.code())
     }
@@ -228,6 +243,7 @@ pub(crate) fn save(home: &Path, record: &Record) -> Result<(), String> {
         format: FORMAT,
         installed: record.installed.clone(),
         cli_destination: record.cli_destination.clone(),
+        state_route: record.state_route.clone(),
         retired: record.retired.clone(),
         agents: record.agents.clone(),
         awaiting_choice: record.awaiting_choice,

@@ -105,7 +105,7 @@ fn every_windows_command_preserves_the_captured_unicode_state_path() {
     // The stand-in observes argv after the agent's actual Windows shell
     // boundary, without involving a daemon or the operator's settings.
     std::fs::write(&helper, "@echo off\r\necho %*\r\nexit /b 0\r\n").unwrap();
-    let target = HookTarget::new(&helper, &state);
+    let target = HookTarget::new(&helper, &state).unwrap();
     let assert_route = |output: Output| {
         assert!(output.status.success(), "{output:?}");
         let stdout = String::from_utf8(output.stdout).unwrap();
@@ -197,7 +197,7 @@ fn the_windows_entries_run_the_helper_through_powershell_only_while_it_is_there(
     // variable outside a literal.
     let helper = home.join("it's [1] $x here").join(HELPER_BINARY_NAME);
     for runtime in AgentRuntime::ALL {
-        hide_agent_hooks::install(runtime, &home, &helper).unwrap();
+        hide_agent_hooks::install(runtime, &home, crate::hook_target(&helper)).unwrap();
         assert_eq!(
             hide_agent_hooks::installed_helper_path(runtime, &home).as_deref(),
             helper.to_str(),
@@ -371,13 +371,17 @@ fn grok_and_cursor_run_the_helper_through_the_powershell_they_start_only_while_i
         homes += 1;
         let home = root.path().join(format!("home-{homes}"));
         std::fs::create_dir_all(agent.home_directory(&home)).unwrap();
-        guidance::install(agent, &home, &helper).unwrap();
+        guidance::install(agent, &home, crate::hook_target(&helper)).unwrap();
         assert_eq!(
             guidance::installed_helper_path(agent, &home).as_deref(),
             helper.to_str(),
             "{agent:?}: the path is read back from the PowerShell guard"
         );
-        assert!(guidance::matches_install(agent, &home, &helper));
+        assert!(guidance::matches_install(
+            agent,
+            &home,
+            crate::hook_target(&helper)
+        ));
         home
     };
     let grok_command = |home: &Path| -> String {
@@ -526,7 +530,12 @@ fn agys_cmd_tool_command_leaves_the_call_to_agy_when_the_helper_is_gone_or_fails
             .path()
             .join("Hide Kit (1) & co")
             .join(HELPER_BINARY_NAME);
-        guidance::install(GuidanceAgent::Antigravity, &home, &helper).unwrap();
+        guidance::install(
+            GuidanceAgent::Antigravity,
+            &home,
+            crate::hook_target(&helper),
+        )
+        .unwrap();
         std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
         match case {
             "gone" => {}
@@ -588,7 +597,7 @@ fn agys_windows_session_hook_reads_its_input_and_injects_guidance() {
         .join(HELPER_BINARY_NAME);
     std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
     std::fs::copy(env!("CARGO_BIN_EXE_hide-agent-hooks"), &helper).unwrap();
-    guidance::install(agent, &home, &helper).unwrap();
+    guidance::install(agent, &home, crate::hook_target(&helper)).unwrap();
     assert_eq!(
         guidance::installed_helper_path(agent, &home).as_deref(),
         helper.to_str()
@@ -653,7 +662,7 @@ fn agys_windows_guard_preserves_korean_and_non_bmp_hook_answers() {
     let wire = hide_agent_hooks::runtime::ascii_json(&answer);
     std::fs::write(root.path().join("answer.json"), &wire).unwrap();
     std::fs::write(&helper, "@echo off\r\ntype \"%~dp0answer.json\"\r\n").unwrap();
-    guidance::install(agent, &home, &helper).unwrap();
+    guidance::install(agent, &home, crate::hook_target(&helper)).unwrap();
     let document: Value =
         serde_json::from_str(&std::fs::read_to_string(agent.config_path(&home)).unwrap()).unwrap();
     let mut shell = agy_shell(

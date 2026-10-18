@@ -155,7 +155,8 @@ fn explicit_routes_win_empty_routes_fall_back_and_malformed_routes_never_fall_ba
     for (captured, explicit, delivers) in [
         (encode(&other), state.to_str().unwrap(), true),
         (encode(&state), "", true),
-        ("malformed!".to_owned(), state.to_str().unwrap(), false),
+        ("malformed!".to_owned(), state.to_str().unwrap(), true),
+        ("malformed!".to_owned(), "", false),
     ] {
         let stdout = invoke(
             &helper,

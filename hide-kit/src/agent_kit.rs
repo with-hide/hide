@@ -132,6 +132,12 @@ fn observe_guidance(target: &KitTarget, adapter: &AgentAdapter, agent: GuidanceA
             adapter.label
         ));
     }
+    let wanted = helper(target);
+    let state = crate::layout::state_dir_from_process(&target.home);
+    let hook_target = match HookTarget::new(&wanted, &state) {
+        Ok(target) => target,
+        Err(reason) => return Observed::Blocked(reason.to_owned()),
+    };
     let observed = match guidance::status(agent, &target.home) {
         // Installed, but the agent has not made its settings folder yet; the
         // hook goes in on the pass after it has.
@@ -153,8 +159,6 @@ fn observe_guidance(target: &KitTarget, adapter: &AgentAdapter, agent: GuidanceA
         } => Observed::Stale(format!("the hook points at {helper}, which is gone")),
         HookStatus::Failed { reason } => return Observed::Blocked(reason.message()),
         HookStatus::Installed { .. } => {
-            let wanted = helper(target);
-            let state = crate::layout::state_dir_from_process(&target.home);
             match guidance::installed_helper_path(agent, &target.home) {
                 Some(found) if Path::new(&found) != wanted => Observed::Stale(format!(
                     "the hook runs {found}, not this build's {}",
@@ -168,7 +172,7 @@ fn observe_guidance(target: &KitTarget, adapter: &AgentAdapter, agent: GuidanceA
                 {
                     Observed::Stale("Hide AI's tool-free folder for agy is missing or untrusted".to_owned())
                 }
-                Some(_) if guidance::matches_install(agent, &target.home, HookTarget::new(&wanted, &state)) => {
+                Some(_) if guidance::matches_install(agent, &target.home, hook_target) => {
                     Observed::Current
                 }
                 Some(_) if guidance::matches_helper(agent, &target.home, &wanted) => {
@@ -199,7 +203,8 @@ fn observe_guidance(target: &KitTarget, adapter: &AgentAdapter, agent: GuidanceA
 fn install_guidance(target: &KitTarget, agent: GuidanceAgent) -> Result<(), String> {
     let helper = helper(target);
     let state = crate::layout::state_dir_from_process(&target.home);
-    hide_agent_hooks::guidance::install(agent, &target.home, HookTarget::new(&helper, &state))
+    let hook_target = HookTarget::new(&helper, &state)?;
+    hide_agent_hooks::guidance::install(agent, &target.home, hook_target)
         .map(|_| ())
         .map_err(|failure| failure.message())
 }
@@ -235,7 +240,11 @@ fn plugin_state(
     let noun = file.noun();
     let helper = helper(target);
     let state = crate::layout::state_dir_from_process(&target.home);
-    let observed = file.observe(&target.home, HookTarget::new(&helper, &state));
+    let hook_target = match HookTarget::new(&helper, &state) {
+        Ok(target) => target,
+        Err(reason) => return (ComponentState::Failed, Some(reason.to_owned())),
+    };
+    let observed = file.observe(&target.home, hook_target);
     if !matches!(
         observed,
         PluginObserved::Current | PluginObserved::ConfigAbsent | PluginObserved::Foreign(_)
@@ -298,15 +307,15 @@ fn plugin_piece(
         // failed or never ran, and the row must not read Off over it. An edited
         // one is the operator's and stays by design.
         let left = failure.or_else(|| {
+            let helper = helper(target);
+            let state = crate::layout::state_dir_from_process(&target.home);
+            let hook_target = match HookTarget::new(&helper, &state) {
+                Ok(target) => target,
+                Err(reason) => return Some(reason.to_owned()),
+            };
             (record.agent_choice(adapter.id) == Some(false)
                 && matches!(
-                    file.observe(
-                        &target.home,
-                        HookTarget::new(
-                            &helper(target),
-                            &crate::layout::state_dir_from_process(&target.home)
-                        )
-                    ),
+                    file.observe(&target.home, hook_target),
                     PluginObserved::Current | PluginObserved::Stale(_)
                 ))
             .then(|| {
@@ -866,7 +875,13 @@ pub(crate) fn apply(target: &KitTarget, scope: &Scope, record: &mut Record) -> A
         }
         let helper = helper(target);
         let state = crate::layout::state_dir_from_process(&target.home);
-        let hook_target = HookTarget::new(&helper, &state);
+        let hook_target = match HookTarget::new(&helper, &state) {
+            Ok(target) => target,
+            Err(reason) => {
+                failures.hook.insert(adapter.id, reason.to_owned());
+                continue;
+            }
+        };
         let observed = file.observe(&target.home, hook_target);
         let recorded = record.contains_piece(&code);
         let restore = scope.agent_on.contains(adapter.id);

@@ -978,7 +978,7 @@ fn grok_gets_its_own_hook_file_beside_the_others_and_only_inside_its_own_folder(
     hide_agent_hooks::guidance::install(
         hide_agent_hooks::guidance::GuidanceAgent::Grok,
         fixture.home(),
-        hide_agent_hooks::route::HookTarget::new(&helper, &previous),
+        hide_agent_hooks::route::HookTarget::new(&helper, &previous).unwrap(),
     )
     .unwrap();
     let old = std::fs::read_to_string(grok_hooks(&fixture)).unwrap();
@@ -1060,10 +1060,13 @@ fn opencode_switched_on_gets_hides_plugin_beside_herdrs_and_reads_installed() {
     assert_eq!(hook.location.as_deref(), opencode_plugin(&fixture).to_str());
     assert_eq!(
         std::fs::read_to_string(opencode_plugin(&fixture)).unwrap(),
-        hide_agent_hooks::opencode::V1.text(hide_agent_hooks::route::HookTarget::new(
-            &fixture.target.kit_dir.join("hide-agent-hooks"),
-            &crate::layout::state_dir_from_process(fixture.home()),
-        ))
+        hide_agent_hooks::opencode::V1.text(
+            hide_agent_hooks::route::HookTarget::new(
+                &fixture.target.kit_dir.join("hide-agent-hooks"),
+                &crate::layout::state_dir_from_process(fixture.home()),
+            )
+            .unwrap()
+        )
     );
     assert_eq!(std::fs::read(&herdr).unwrap(), b"herdr's plugin");
     assert!(

@@ -401,7 +401,7 @@ fn a_hide_that_never_answers_lets_the_call_run_well_inside_the_blocks_timeout() 
     hide_agent_hooks::guidance::install(
         hide_agent_hooks::guidance::GuidanceAgent::Antigravity,
         &machine.home,
-        &machine.hook,
+        crate::hook_target(&machine.hook),
     )
     .unwrap();
     let block: Value = serde_json::from_str(

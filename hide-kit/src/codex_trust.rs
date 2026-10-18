@@ -40,18 +40,19 @@ fn memory() -> std::sync::MutexGuard<'static, BTreeMap<PathBuf, String>> {
 /// asked of a machine with no Codex, and a Codex with no hook trust says
 /// nothing (D-07).
 pub(crate) fn ensure(target: &KitTarget, herdr: &[HookEntry]) -> Option<String> {
+    let helper = target.kit_dir.join(hide_agent_hooks::HELPER_BINARY_NAME);
+    let state = crate::layout::state_dir_from_process(&target.home);
+    let hook_target = match hide_agent_hooks::route::HookTarget::new(&helper, &state) {
+        Ok(target) => target,
+        Err(reason) => {
+            memory().insert(target.home.clone(), reason.to_owned());
+            return Some(reason.to_owned());
+        }
+    };
     let reason = match target.codex.as_deref() {
         None => None,
-        Some(codex) => match trust_own_hooks(
-            codex,
-            &target.home,
-            hide_agent_hooks::route::HookTarget::new(
-                &target.kit_dir.join(hide_agent_hooks::HELPER_BINARY_NAME),
-                &crate::layout::state_dir_from_process(&target.home),
-            ),
-            herdr,
-            &target.stop,
-        ) {
+        Some(codex) => match trust_own_hooks(codex, &target.home, hook_target, herdr, &target.stop)
+        {
             TrustOutcome::Unsupported | TrustOutcome::Trusted { .. } => None,
             // Hide is quitting: the pass is abandoned, so nothing is said of
             // the part and nothing is remembered.

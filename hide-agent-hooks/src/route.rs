@@ -25,11 +25,20 @@ pub struct HookTarget<'a> {
 }
 
 impl<'a> HookTarget<'a> {
-    pub fn new(helper: &'a Path, state: &'a Path) -> Self {
-        Self {
+    pub fn new(helper: &'a Path, state: &'a Path) -> Result<Self, &'static str> {
+        let text = state
+            .to_str()
+            .ok_or("the hook state folder must be UTF-8")?;
+        if !state.is_absolute() || text.contains('\0') {
+            return Err("the hook state folder must be an absolute path without NUL bytes");
+        }
+        if base64::encoded_len(text.len(), false).is_none_or(|length| length > ENCODED_LIMIT) {
+            return Err("the hook state folder exceeds the encoded route limit");
+        }
+        Ok(Self {
             helper,
             state: Some(state),
-        }
+        })
     }
 
     /// Shell-safe on POSIX and PowerShell, including paths containing quotes,
@@ -38,7 +47,12 @@ impl<'a> HookTarget<'a> {
         self.state.map_or_else(String::new, |state| {
             format!(
                 " {ARGUMENT} {}",
-                URL_SAFE_NO_PAD.encode(state.to_string_lossy().as_bytes())
+                URL_SAFE_NO_PAD.encode(
+                    state
+                        .to_str()
+                        .expect("validated hook state folder")
+                        .as_bytes()
+                )
             )
         })
     }
@@ -52,8 +66,9 @@ impl Deref for HookTarget<'_> {
     }
 }
 
-// Compatibility for callers constructing an older, environment-routed entry.
-// The install kit always supplies HookTarget::new, including for extensions.
+// Unit tests retain the pre-route byte contracts. Production callers must
+// construct a validated target, so no installer can silently omit its route.
+#[cfg(test)]
 impl<'a> From<&'a Path> for HookTarget<'a> {
     fn from(helper: &'a Path) -> Self {
         Self {
@@ -63,6 +78,7 @@ impl<'a> From<&'a Path> for HookTarget<'a> {
     }
 }
 
+#[cfg(test)]
 impl<'a> From<&'a PathBuf> for HookTarget<'a> {
     fn from(helper: &'a PathBuf) -> Self {
         helper.as_path().into()
@@ -85,9 +101,7 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Option<PathBuf>, ()>
         }
         let bytes = URL_SAFE_NO_PAD.decode(encoded).map_err(|_| ())?;
         let path = PathBuf::from(String::from_utf8(bytes).map_err(|_| ())?);
-        if !path.is_absolute() {
-            return Err(());
-        }
+        HookTarget::new(Path::new(""), &path).map_err(|_| ())?;
         route = Some(path);
     }
     Ok(route)
@@ -96,12 +110,13 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Option<PathBuf>, ()>
 /// Give every sibling CLI call the same captured route. An invalid installed
 /// route fails the hook rather than silently contacting another daemon.
 pub fn apply(command: &mut Command) -> Result<(), &'static str> {
+    if std::env::var_os(STATE_VARIABLE).is_some_and(|value| !value.is_empty()) {
+        return Ok(());
+    }
     static ROUTE: OnceLock<Result<Option<PathBuf>, ()>> = OnceLock::new();
     let route = ROUTE.get_or_init(|| parse(std::env::args().skip(1)));
     let route = route.as_ref().map_err(|_| "record")?;
-    if std::env::var_os(STATE_VARIABLE).is_none_or(|value| value.is_empty())
-        && let Some(route) = route
-    {
+    if let Some(route) = route {
         command.env(STATE_VARIABLE, route);
     }
     Ok(())
@@ -140,5 +155,27 @@ mod tests {
     #[test]
     fn an_old_command_keeps_its_environment_route() {
         assert_eq!(parse(arguments(&["hook", "--runtime", "grok"])), Ok(None));
+    }
+
+    #[test]
+    fn installation_rejects_relative_nul_and_oversized_state_folders() {
+        let home = tempfile::tempdir().unwrap();
+        let helper = home.path().join("helper");
+        for state in [
+            PathBuf::from("relative"),
+            home.path().join("bad\0route"),
+            home.path().join("x".repeat(ENCODED_LIMIT)),
+        ] {
+            assert!(HookTarget::new(&helper, &state).is_err(), "{state:?}");
+        }
+        assert!(HookTarget::new(&helper, home.path()).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installation_rejects_non_utf8_instead_of_capturing_another_path() {
+        use std::os::unix::ffi::OsStringExt;
+        let state = PathBuf::from(std::ffi::OsString::from_vec(b"/state/\xff".to_vec()));
+        assert!(HookTarget::new(Path::new("/helper"), &state).is_err());
     }
 }

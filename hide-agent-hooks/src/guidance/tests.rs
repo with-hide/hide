@@ -92,7 +92,7 @@ fn active_agents_capture_the_daemon_route_and_preserve_operator_edits() {
     ] {
         let fixture = Fixture::new(agent);
         let state = fixture.home().join("daemon ' $경로");
-        let target = HookTarget::new(&fixture.helper, &state);
+        let target = HookTarget::new(&fixture.helper, &state).unwrap();
         super::install(agent, fixture.home(), target).unwrap();
         assert!(matches_install(agent, fixture.home(), target));
         assert!(!matches_install(agent, fixture.home(), &fixture.helper));

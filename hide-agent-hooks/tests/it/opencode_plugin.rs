@@ -31,8 +31,8 @@ fn the_plugin_keeps_its_pinned_bytes() {
         (&TUI, include_str!("../fixtures/hook-bytes/opencode-tui.js")),
     ] {
         assert_eq!(
-            file.text(helper),
-            pinned,
+            file.text(crate::hook_target(helper)),
+            crate::routed_script(pinned),
             "{} changed: raise its version and regenerate the fixture",
             file.name()
         );
@@ -93,10 +93,10 @@ fn the_plugin_behaves_as_opencode_runs_it() {
     let plugin = dir.path().join("hide.mjs");
     std::fs::write(
         &plugin,
-        V1.text(hide_agent_hooks::route::HookTarget::new(
-            &helper,
-            Path::new("/captured-state"),
-        )),
+        V1.text(
+            hide_agent_hooks::route::HookTarget::new(&helper, Path::new("/captured-state"))
+                .unwrap(),
+        ),
     )
     .unwrap();
     node_test(
@@ -114,10 +114,10 @@ fn the_plugin_behaves_as_opencode_2_runs_it() {
     let plugin = dir.path().join("hide.mjs");
     std::fs::write(
         &plugin,
-        V1.text(hide_agent_hooks::route::HookTarget::new(
-            &helper,
-            Path::new("/captured-state"),
-        )),
+        V1.text(
+            hide_agent_hooks::route::HookTarget::new(&helper, Path::new("/captured-state"))
+                .unwrap(),
+        ),
     )
     .unwrap();
     // The folder as the kit writes it, read as ES modules as OpenCode reads it.
@@ -127,10 +127,10 @@ fn the_plugin_behaves_as_opencode_2_runs_it() {
     for file in [&SERVER, &TUI] {
         std::fs::write(
             folder.join(file.file_name),
-            file.text(hide_agent_hooks::route::HookTarget::new(
-                &helper,
-                Path::new("/captured-state"),
-            )),
+            file.text(
+                hide_agent_hooks::route::HookTarget::new(&helper, Path::new("/captured-state"))
+                    .unwrap(),
+            ),
         )
         .unwrap();
     }

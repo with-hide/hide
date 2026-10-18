@@ -20,7 +20,7 @@ fn extension_routes_are_updated_without_treating_operator_edits_as_generated() {
     for plugin in PLUGINS {
         let fixture = Fixture::new(plugin);
         let state = fixture.home().join("daemon ' $경로");
-        let target = HookTarget::new(&fixture.helper, &state);
+        let target = HookTarget::new(&fixture.helper, &state).unwrap();
         plugin.install(fixture.home(), target).unwrap();
         assert_eq!(
             plugin.observe(fixture.home(), target),

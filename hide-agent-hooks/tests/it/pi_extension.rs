@@ -20,13 +20,13 @@ fn crate_dir() -> PathBuf {
 fn each_extension_keeps_its_pinned_bytes() {
     let helper = Path::new("/kit path/it's/hide-agent-hooks");
     assert_eq!(
-        PI.text(helper),
-        include_str!("../fixtures/hook-bytes/pi-extension.ts"),
+        PI.text(crate::hook_target(helper)),
+        crate::routed_script(include_str!("../fixtures/hook-bytes/pi-extension.ts")),
         "the extension changed: raise pi_extension::VERSION and regenerate the fixture"
     );
     assert_eq!(
-        OMP.text(helper),
-        include_str!("../fixtures/hook-bytes/omp-extension.ts"),
+        OMP.text(crate::hook_target(helper)),
+        crate::routed_script(include_str!("../fixtures/hook-bytes/omp-extension.ts")),
         "the extension changed: raise pi_extension::VERSION and regenerate the fixture"
     );
 }
@@ -47,10 +47,10 @@ fn behaves_as_the_host_runs_it(file: &PluginFile, agent: &str) {
     let extension = dir.path().join("hide.mjs");
     std::fs::write(
         &extension,
-        file.text(hide_agent_hooks::route::HookTarget::new(
-            &helper,
-            Path::new("/captured-state"),
-        )),
+        file.text(
+            hide_agent_hooks::route::HookTarget::new(&helper, Path::new("/captured-state"))
+                .unwrap(),
+        ),
     )
     .unwrap();
 

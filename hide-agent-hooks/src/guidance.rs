@@ -1000,13 +1000,20 @@ pub fn matches_helper(agent: GuidanceAgent, home: &Path, helper: &Path) -> bool 
             continue;
         }
         match crate::route::in_command(command) {
-            Ok(Some(found)) => state = Some(found),
+            Ok(Some(found)) => {
+                if state.as_ref().is_some_and(|state| state != &found) {
+                    return false;
+                }
+                state = Some(found);
+            }
             Ok(None) => {}
             Err(()) => return false,
         }
     }
     match state {
-        Some(state) => matches_install(agent, home, HookTarget::new(helper, &state)),
+        Some(state) => {
+            HookTarget::new(helper, &state).is_ok_and(|target| matches_install(agent, home, target))
+        }
         None => false,
     }
 }

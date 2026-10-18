@@ -19,6 +19,12 @@ fn helper(target: &KitTarget) -> PathBuf {
 }
 
 pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
+    let wanted = helper(target);
+    let state = crate::layout::state_dir_from_process(&target.home);
+    let hook_target = match HookTarget::new(&wanted, &state) {
+        Ok(target) => target,
+        Err(reason) => return Observed::Blocked(reason.to_owned()),
+    };
     let status = hide_agent_hooks::install::status(runtime, &target.home);
     let observed = match status {
         HookStatus::RuntimeAbsent => {
@@ -35,14 +41,12 @@ pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
         } => Observed::Stale(format!("the hook points at {helper}, which is gone")),
         HookStatus::Failed { reason } => return Observed::Blocked(reason.message()),
         HookStatus::Installed { .. } => {
-            let wanted = helper(target);
             match hide_agent_hooks::installed_helper_path(runtime, &target.home) {
                 Some(found) if Path::new(&found) == wanted => {
-                    let state = crate::layout::state_dir_from_process(&target.home);
                     if hide_agent_hooks::install::matches_install(
                         runtime,
                         &target.home,
-                        HookTarget::new(&wanted, &state),
+                        hook_target,
                     ) {
                         Observed::Current
                     } else if hide_agent_hooks::install::matches_helper(
@@ -94,7 +98,8 @@ pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
 pub(crate) fn install(target: &KitTarget, runtime: AgentRuntime) -> Result<(), String> {
     let helper = helper(target);
     let state = crate::layout::state_dir_from_process(&target.home);
-    hide_agent_hooks::install(runtime, &target.home, HookTarget::new(&helper, &state))
+    let hook_target = HookTarget::new(&helper, &state)?;
+    hide_agent_hooks::install(runtime, &target.home, hook_target)
         .map(|_| ())
         .map_err(|failure| failure.message())
 }

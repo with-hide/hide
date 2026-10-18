@@ -43,7 +43,12 @@ pub fn cli_program() -> Option<OsString> {
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
 fn run_cli(program: &OsString, arguments: &[&str]) -> Option<Value> {
     let mut command = Command::new(program);
-    hide_agent_hooks::route::apply(&mut command).ok()?;
+    if let Err(cause) = hide_agent_hooks::route::apply(&mut command) {
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            hide_agent_hooks::delivery::diagnose(Path::new(&home), cause);
+        }
+        return None;
+    }
     command
         .args(arguments)
         .stdin(Stdio::null())

@@ -50,9 +50,12 @@ fn every_installed_hook_dialect_resolves_through_the_shared_adapter() {
                 HookInstall::Plugin(dialect) => {
                     assert!(AgentRuntime::parse(&spelling).is_none());
                     assert!(GuidanceAgent::from_id(&spelling).is_none());
-                    let text = hide_agent_hooks::plugin::of(dialect)
-                        .entry()
-                        .text(std::path::Path::new("/kit/hide-agent-hooks"));
+                    let text =
+                        hide_agent_hooks::plugin::of(dialect)
+                            .entry()
+                            .text(crate::hook_target(std::path::Path::new(
+                                "/kit/hide-agent-hooks",
+                            )));
                     assert!(text.contains("const HELPER = \"/kit/hide-agent-hooks\";"));
                 }
                 HookInstall::None => {

@@ -254,7 +254,12 @@ pub fn matches_helper(runtime: AgentRuntime, home: &Path, helper: &Path) -> bool
         {
             for text in hook_texts(hook) {
                 match crate::route::in_command(text) {
-                    Ok(Some(found)) => state = Some(found),
+                    Ok(Some(found)) => {
+                        if state.as_ref().is_some_and(|state| state != &found) {
+                            return false;
+                        }
+                        state = Some(found);
+                    }
                     Ok(None) => {}
                     Err(()) => return false,
                 }
@@ -262,7 +267,8 @@ pub fn matches_helper(runtime: AgentRuntime, home: &Path, helper: &Path) -> bool
         }
     }
     match state {
-        Some(state) => matches_install(runtime, home, HookTarget::new(helper, &state)),
+        Some(state) => HookTarget::new(helper, &state)
+            .is_ok_and(|target| matches_install(runtime, home, target)),
         // This version always installs a route. Removing it is an edit;
         // older unbound versions are upgraded by the marker-version check.
         None => false,

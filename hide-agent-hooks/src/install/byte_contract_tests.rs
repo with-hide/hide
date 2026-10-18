@@ -40,7 +40,7 @@ fn both_shells_capture_the_state_route_and_route_changes_are_distinct_from_edits
     let home = tempfile::tempdir().unwrap();
     let helper = home.path().join("kit ' $경로/hide-agent-hooks");
     let state = home.path().join("daemon ' $경로");
-    let target = HookTarget::new(&helper, &state);
+    let target = HookTarget::new(&helper, &state).unwrap();
     for runtime in AgentRuntime::ALL {
         for command in [
             posix_command(target, runtime, HookEvent::Stop),
@@ -53,10 +53,20 @@ fn both_shells_capture_the_state_route_and_route_changes_are_distinct_from_edits
         assert!(!matches_install(
             runtime,
             home.path(),
-            HookTarget::new(&helper, &home.path().join("other-state"))
+            HookTarget::new(&helper, &home.path().join("other-state")).unwrap()
         ));
         assert!(matches_helper(runtime, home.path(), &helper));
         let path = runtime.config_path(home.path());
+        let original = fs::read_to_string(&path).unwrap();
+        let other_state = home.path().join("other-state");
+        let other = HookTarget::new(&helper, &other_state).unwrap();
+        let mixed = original.replacen(target.arguments().trim(), other.arguments().trim(), 1);
+        fs::write(&path, mixed).unwrap();
+        assert!(
+            !matches_helper(runtime, home.path(), &helper),
+            "conflicting routes are an edit"
+        );
+        fs::write(&path, original).unwrap();
         let edited = fs::read_to_string(&path)
             .unwrap()
             .replace("--event Stop", "--event Stop --verbose");
