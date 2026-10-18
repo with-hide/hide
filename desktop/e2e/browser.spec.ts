@@ -1123,9 +1123,20 @@ test("page width: a page opened into the lane widens it to 900 beside Agent View
   // The page fills its slot, the lane's 900 less the area's edges; the shell
   // is zoomed to fit the window, so its CSS width is the slot's share of it.
   await expect.poll(async () => (await viewOf(site)).visible).toBe(true);
-  const slot = (await slotBounds(page, displayId)).width;
-  expect(slot).toBeGreaterThan(880);
-  await expect.poll(async () => Math.abs((await inPage<number>(site, "innerWidth")) - slot * zoom)).toBeLessThanOrEqual(1);
+  // Keep subpixel CSS edges until zooming into native window points.
+  const slot = (await page.locator(`[data-browser-slot="${displayId}"]`).boundingBox())!;
+  expect(slot.width).toBeGreaterThan(880);
+  await expect.poll(async () => {
+    const bounds = (await viewOf(site)).bounds;
+    return Math.max(
+      Math.abs(bounds.x - slot.x * zoom),
+      Math.abs(bounds.y - slot.y * zoom),
+      Math.abs(bounds.x + bounds.width - (slot.x + slot.width) * zoom),
+      Math.abs(bounds.y + bounds.height - (slot.y + slot.height) * zoom),
+    );
+  }).toBeLessThanOrEqual(1);
+  await expect.poll(async () => Math.abs((await inPage<number>(site, "innerWidth")) - slot.width * zoom)).toBeLessThanOrEqual(1);
+  await expect.poll(async () => Math.abs((await inPage<number>(site, "innerWidth")) - (await viewOf(site)).bounds.width)).toBeLessThanOrEqual(1);
   await windowShot("page-width-widened");
 
   // The operator narrows it; a file in front and the page tab chosen again
