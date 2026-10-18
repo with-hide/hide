@@ -11,16 +11,31 @@ import time
 import urllib.request
 import zipfile
 
-from .processes import COMMAND_SECONDS, MAX_OUTPUT, OwnedProcesses, ProcessError
+from .processes import COMMAND_SECONDS, GUARDIAN_FAILURES, MAX_FAILURE_REASON, MAX_OUTPUT, OwnedProcesses, ProcessError
 from .authentication import require_no_login
 from .protection import ProtectionError, beneath, private_directory, validate_isolation, write_private
 from .system import READY, WINDOWS, PaneShell, exe, git, home_env, remove_tree, temp_env, tool_path
 from .timing import Deadline
 
 
+# A provider's key in the operator's shell would reach every agent the run
+# starts, which then calls that provider outside the run's login or the fake
+# model: omp 18.7.0 sent its background requests to Google with the shell's
+# GEMINI_API_KEY (2026-10-18). Each agent gets only the key its route gives it.
+PROVIDER_KEYS = ("ANTHROPIC_AUTH_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "AWS_ACCESS_KEY_ID",
+                 "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")
+
+
+# The XDG folders under the probe's home that every process it starts reads,
+# the daemon and Hide's reader included.
+XDG_FOLDERS = {"XDG_CONFIG_HOME": "config", "XDG_STATE_HOME": "state", "XDG_DATA_HOME": "data",
+               "XDG_CACHE_HOME": "cache"}
+
+
 def clean_env() -> dict[str, str]:
     return {key: value for key, value in os.environ.items()
             if not key.startswith(("HERDR_", "HIDE_", "HCOORD_"))
+            and not key.endswith("_API_KEY") and key not in PROVIDER_KEYS
             and key not in ("CODEX_HOME", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR",
                             "PI_CODING_AGENT_SESSION_DIR", "OPENCODE_CONFIG",
                             "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT", "PI_CONFIG_DIR",
@@ -78,6 +93,13 @@ class ResidentOutput:
         if self.failed:
             raise ProcessError("resident_output_over_budget")
 
+    def guardian_failures(self):
+        """Why the resident's guardian failed or ended it, from the lines it
+        wrote beside the resident's own output."""
+        with self.lock:
+            text = bytes(self.data).decode("utf-8", errors="replace")
+        return [line[:MAX_FAILURE_REASON] for line in text.splitlines() if line.startswith(GUARDIAN_FAILURES)]
+
 
 class Runtime:
     def __init__(self, checkout: Path, run: Path, operator: Path, owner: OwnedProcesses,
@@ -122,10 +144,7 @@ class Runtime:
             self.expected_version = manifest["version"]
             base = clean_env()
             base.update(**home_env(self.home), **self.shell.environment(self.home),
-                        XDG_CONFIG_HOME=str(self.home / "config"),
-                        XDG_STATE_HOME=str(self.home / "state"),
-                        XDG_DATA_HOME=str(self.home / "data"),
-                        XDG_CACHE_HOME=str(self.home / "cache"),
+                        **{name: str(self.home / folder) for name, folder in XDG_FOLDERS.items()},
                         HERDR_SOCKET_PATH=str(self.socket), HERDR_BIN_PATH=str(self.herdr_bin),
                         HERDR_CONFIG_PATH=str(run / "herdr.toml"),
                         HERDR_SESSION_PATH=str(run / "herdr-session.json"),
@@ -354,12 +373,7 @@ class Runtime:
         failures = []
         processes_confirmed = False
         # A cancellation stops work, but must not disable protocol teardown.
-        original_cancelled = self.owner.cancelled.is_set()
-        self.owner.cancelled.clear()
-        original_deadline = self.owner.deadline
-        # Room for each step below at its own cap, on a loaded runner too.
-        self.owner.deadline = time.monotonic() + 60
-        try:
+        with self.owner.teardown():
             for workspace in list(self.workspaces):
                 try:
                     self.close_workspace(workspace)
@@ -386,11 +400,16 @@ class Runtime:
                 processes_confirmed = True
             except Exception as error:
                 failures.append(str(error))
-            for _, output, _ in self.servers:
+            for child, output, label in self.servers:
                 try:
                     output.finish()
                 except Exception as error:
                     failures.append(str(error))
+                # A resident its guardian (its job, on Windows) ended mid-run
+                # fails the cells after it with an exit code alone; the report says why.
+                failures.extend(f"{label} guardian: {line}" for line in output.guardian_failures())
+                if child in self.owner.job_failures:
+                    failures.append(f"{label} job: {self.owner.job_failures[child]}")
             # A log or protocol failure must not retain disposable auth copies.
             # These exact roots were registered before copying, so even a
             # partially failed copy is removed without touching operator HOME.
@@ -408,10 +427,6 @@ class Runtime:
                         remove_tree(directory)
                     except Exception as error:
                         failures.append(str(error))
-        finally:
-            self.owner.deadline = original_deadline
-            if original_cancelled:
-                self.owner.cancelled.set()
         return {"confirmed": not failures, "processes_confirmed": processes_confirmed, "failures": failures,
                 "probe_removed": not self.probe.exists(), "socket_removed": not self.short.exists(),
                 "credential_copies_removed": all(not root.exists() and not root.is_symlink()

@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_live_check.process_table import (BsdInfo, Process, ProcessTable, descendants, marked_descendants,
                                            procargs_owned, require_complete, snapshot, validate_linux_procfs)
 from agent_live_check.processes import (OwnedProcesses, ProcessError, ProcessSafetyError, RssSamples, guard,
-                                       control_plane, linux_children_remain, signal_reserved_group)
+                                       control_plane, largest, linux_children_remain, signal_reserved_group)
 from agent_live_check.protection import ConfigGuard, ProtectionError, stamp, validate_isolation
 from agent_live_check.sandbox import WriteSandbox
 from agent_live_check.runtime import Runtime
@@ -509,7 +509,8 @@ class ProcessProtection(unittest.TestCase):
             self.assertTrue(json.loads(receipt.read_text())["confirmed"])
 
     def test_expired_prelaunch_work_never_starts_a_child_or_owes_a_receipt(self):
-        for phase, seconds, delay in (("receipt", .1, 2), ("environment", .1, 2), ("environment", 120, 16)):
+        # The last case waits the whole command cap; a longer wait is refused before any of this.
+        for phase, seconds, delay in (("receipt", .1, 2), ("environment", .1, 2), ("environment", 15, 16)):
             with self.subTest(phase=phase, seconds=seconds), tempfile.TemporaryDirectory() as name:
                 clock = [100.0]
                 owner = OwnedProcesses(diagnostics=Path(name) / "diagnostics")
@@ -682,6 +683,16 @@ class ProcessProtection(unittest.TestCase):
                 # Neither disappearance, a zombie nor another birth carries
                 # the previous live identity's consecutive-miss streak.
                 samples.measure({123: subject(birth=11 if ending == "replaced" else 10)})
+
+    def test_a_crossed_memory_cap_names_the_live_processes_holding_the_most(self):
+        def subject(pid, rss, name, zombie=False):
+            return Process(pid, 2, 123, 10, rss, zombie, os.getuid(), name=name)
+        table = {pid: subject(pid, rss, name, zombie) for pid, rss, name, zombie in (
+            (1, 900, "omp", False), (2, 0, "claude", True), (3, -1, "zsh", False), (4, 700, "omp", False),
+            (5, 50, "herdr", False), (6, 60, "zsh", False))}
+        self.assertEqual(largest(table, count=3), [{"executable": "omp", "rss_bytes": 900},
+                                                   {"executable": "omp", "rss_bytes": 700},
+                                                   {"executable": "zsh", "rss_bytes": 60}])
 
     def test_failed_rss_read_distinguishes_exit_from_live_measurement_failure(self):
         # The sampler retains unknown live RSS for the bounded miss policy;
@@ -1258,7 +1269,9 @@ class NativeWriteProtection(unittest.TestCase):
                            # Metadata access must not disclose controller data.
                            f"\nfor parent in Path({str(settings)!r}).parents: parent.lstat()"
                            f"\nassert Path({str(settings)!r}).read_text() == 'fixture-settings'"
-                           f"\ntry: list(Path({str(run)!r}).iterdir())"
+                           # The run root lists (Bun's realpath opens it); the capabilities folder does not.
+                           f"\nlist(Path({str(run)!r}).iterdir())"
+                           f"\ntry: list(Path({str(caps)!r}).iterdir())"
                            "\nexcept PermissionError: pass"
                            "\nelse: raise SystemExit(33)"
                            f"\nassert Path({str(reference)!r}).read_text() == 'fixture-reference'"

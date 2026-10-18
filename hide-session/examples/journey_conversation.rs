@@ -37,6 +37,9 @@ fn read(
     cwd: &str,
 ) -> Result<serde_json::Value, String> {
     let agent = hide_session::Agent::from_kind(kind).ok_or("agent_kind_unknown")?;
+    if agent == hide_session::Agent::OpenCode {
+        return read_opencode(home, reference_kind, reference, cwd);
+    }
     let identity = match reference_kind {
         "id" => hide_session::SessionIdentity::id(reference),
         "path" => hide_session::SessionIdentity::path(reference),
@@ -47,11 +50,14 @@ fn read(
         .map_err(|error| format!("session_locate_failed: {error}"))?;
     let id = match &identity {
         hide_session::SessionIdentity::Id(id) => id.clone(),
-        hide_session::SessionIdentity::Path(_) => path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .ok_or("session_id_unavailable")?
-            .to_owned(),
+        // The id the file itself names, as Hide's own reads prove it in the
+        // checkout; a file name is not one (Pi's carries a timestamp before its id).
+        hide_session::SessionIdentity::Path(_) => {
+            hide_session::confirm_session_file(home, agent, &path, None, Some(cwd))
+                .map_err(|error| format!("session_id_unconfirmed: {error}"))?
+                .native_session_id
+                .ok_or("session_id_unavailable")?
+        }
     };
     let scope = hide_session::SessionReadScope {
         id,
@@ -68,6 +74,38 @@ fn read(
             |event| serde_json::json!({"role": event.role, "kind": event.kind, "text": event.text, "at": event.at_unix_ms}),
         ));
         if !page.has_more {
+            return Ok(serde_json::json!({"path": path, "events": events}));
+        }
+        checkpoint = Some(page.checkpoint);
+    }
+    Err("session_conversation_over_page_budget".to_owned())
+}
+
+/// OpenCode keeps no session file: its database is read by the id the scope
+/// names, as the node answers `Call::SessionConversation` for it.
+fn read_opencode(
+    home: &Path,
+    reference_kind: &str,
+    reference: &str,
+    cwd: &str,
+) -> Result<serde_json::Value, String> {
+    if reference_kind != "id" {
+        return Err("session_kind_unsupported".to_owned());
+    }
+    let scope = hide_session::SessionReadScope {
+        id: reference.to_owned(),
+        cwd: cwd.to_owned(),
+    };
+    let mut events = Vec::new();
+    let mut checkpoint = None;
+    for _ in 0..MAX_PAGES {
+        let page = hide_session::opencode::read_conversation(home, &scope, checkpoint.take())
+            .map_err(|error| format!("session_conversation_read_failed: {error}"))?;
+        events.extend(page.events.into_iter().map(
+            |event| serde_json::json!({"role": event.role, "kind": event.kind, "text": event.text, "at": event.at_unix_ms}),
+        ));
+        if !page.has_more {
+            let path = format!("{}{reference}", hide_session::links::OPENCODE_PREFIX);
             return Ok(serde_json::json!({"path": path, "events": events}));
         }
         checkpoint = Some(page.checkpoint);

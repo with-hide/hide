@@ -17,7 +17,9 @@ EVERY_PACKAGE = sorted(crate["name"] for crate in CRATES.values())
 # `nightly.yml`.
 MACOS_LANES = {"os-contract-macos", "desktop-e2e", "package"}
 # Every lane but `package`: what a push, the nightly and an unclassified path plan.
-FULL = [lane for lane in ci.LANES if lane != "package"]
+FULL = [lane for lane in ci.LANES if lane not in ("package", "agent-clis")]
+# A full plan with a package input: `agent-clis` is planned by its own paths only.
+PACKAGED = [lane for lane in ci.LANES if lane != "agent-clis"]
 # The paths a pull request changed when `package.yml` had its own trigger.
 PACKAGE_INPUTS = (
     "desktop/scripts/package.mjs", "desktop/scripts/build.mjs", "desktop/package.json", "desktop/resources/entitlements.plist",
@@ -271,7 +273,7 @@ class Selection(unittest.TestCase):
                 result = ci.select(entries, CRATES, ROOT)
                 self.assertTrue(result["full"])
                 package = any(path in PACKAGE_INPUTS for _, path in entries)
-                self.assertEqual(result["lanes"], list(ci.LANES) if package else FULL)
+                self.assertEqual(result["lanes"], PACKAGED if package else FULL)
                 self.assertEqual(result["rust_packages"], EVERY_PACKAGE)
 
     def test_a_push_and_a_failed_comparison_run_everything(self):
@@ -379,6 +381,13 @@ class NamedPaths(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(self.lanes(path), want)
 
+    def test_a_pin_or_its_installer_plans_the_lane_that_installs_every_pinned_cli(self):
+        for path in ("contracts/agent-clis.json", "scripts/install-agent-clis.py", ".github/workflows/agent-clis.yml"):
+            with self.subTest(path=path):
+                self.assertEqual(self.lanes(path), {"policy", "agent-clis"})
+        self.assertEqual(self.lanes("scripts/install-agy.sh"), {"policy", "agy-contract", "agent-clis"})
+        self.assertEqual(self.lanes("scripts/agent_journey/clis.py"), {"policy", "agent-journey", "agent-clis"})
+
     def test_the_journey_and_its_stand_ins_plan_the_journey_lane(self):
         for path in ("scripts/agent_journey/cells.py", "scripts/agent-journey-check.py", "scripts/agent-journey-lane.py",
                      "contracts/agent-journey.json", ".github/workflows/agent-journey.yml"):
@@ -482,7 +491,7 @@ class NamedPaths(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertTrue(plan(path)["full"])
-                self.assertEqual(plan(path)["lanes"], list(ci.LANES) if path in PACKAGE_INPUTS else FULL)
+                self.assertEqual(plan(path)["lanes"], PACKAGED if path in PACKAGE_INPUTS else FULL)
 
     def test_a_crate_readme_is_still_the_crates_change(self):
         # The crate may include it in a doc test; the documentation rule only
@@ -548,8 +557,12 @@ def runner_jobs(block):
     if "uses: ./.github/workflows/desktop-e2e.yml" in block:
         # Each shard builds in place.
         return int(re.search(r"\n      shards: (\d+)", block).group(1))
-    if "uses: ./.github/workflows/os-contract.yml" in block or "uses: ./.github/workflows/agy-contract.yml" in block:
+    if any(f"uses: ./.github/workflows/{name}.yml" in block for name in ("os-contract", "agy-contract", "agent-clis")):
         return len(json.loads(re.search(r"systems: '(\[[^']*\])'", block).group(1)))
+    if "uses: ./.github/workflows/agent-journey.yml" in block:
+        # The stand-ins run on each system but Windows, and Windows has its forms job.
+        systems = json.loads(re.search(r"systems: '(\[[^']*\])'", block).group(1))
+        return len([system for system in systems if system != "windows"]) + ("windows" in systems)
     if "uses: ./.github/workflows/package.yml" in block:
         package = (ROOT / ".github/workflows/package.yml").read_text()
         return len(re.findall(r"\n          - system: ", package)) + ("include-macos: true" in block)
@@ -564,7 +577,7 @@ class Workflows(unittest.TestCase):
         for lane, block in pr_jobs().items():
             for called in re.findall(r"uses: \./(\.github/workflows/[a-z0-9-]+\.yml)", block):
                 callers.setdefault(called, set()).add(lane)
-        self.assertEqual(len(callers), 7)
+        self.assertEqual(len(callers), 8)
         for workflow, lanes in callers.items():
             with self.subTest(workflow=workflow):
                 result = plan(workflow)
@@ -641,9 +654,11 @@ class Workflows(unittest.TestCase):
         # suite's second shard and the fifth and sixth web shards were added
         # because the suites outgrew their shards' step caps, which a smaller
         # queue does not fix (docs/TESTING.md, "Balancing the e2e shards"), and
-        # the agent journey's Linux job was added; a job beyond these is a new
-        # decision, made with this number.
-        self.assertLessEqual(most, 26, "a full run starts more jobs than the e2e shards and the agent journey need")
+        # the agent journey's Linux stand-in job and Windows forms job were
+        # added, then the agent CLIs' Linux and Windows installs, which only a
+        # pin change plans; a job beyond these is a new decision, made with
+        # this number.
+        self.assertLessEqual(most, 29, "a run starts more jobs than the e2e shards, the agent journey and the CLI pins need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 

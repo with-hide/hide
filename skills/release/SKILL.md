@@ -51,6 +51,7 @@ The table stays in `agents/runs/release-<version>-journey/report.md`, never in a
 | `not measured` cells, exit 3 | Not a stop by itself. List each with its reason in the approval question below. |
 | `excluded` cells | Show them in the table; they are not in the list of blanks. |
 | A report marked `fixture` | Not release evidence. Run the journey on the Mac with the signed-in agents. |
+| A report marked as a fake model run | Not evidence of a provider or a login. It may sit beside the signed-in table, under its own heading, for the cells the signed-in Mac run cannot reach (Claude's never-trusted start); never merge its rows into the signed-in table. |
 
 ## 4. Ask the operator to approve the version
 
