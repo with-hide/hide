@@ -29,11 +29,16 @@ export function failedReceiptMoved(rest: SnapshotRest | null, device: string, pa
 }
 
 /** A durable topology receipt takes precedence over an old transient refusal. */
-export function inlineStartAnswer(rest: SnapshotRest | null, requestId: string, receipt: AgentStartReceipt | undefined): StartAnswer {
+export function inlineStartAnswer(rest: SnapshotRest | null, requestId: string, receipt: AgentStartReceipt | undefined): StartAnswer | { phase: "unknown"; taskId: number; message: string | null } {
   if (!receipt) return startAnswer(rest, requestId);
   const operation = rest?.task_operation;
   const task = operation?.request_id === requestId ? operation : null;
-  if (receipt.state === "pending") return { phase: "pending" };
+  if (receipt.state === "pending") {
+    // A failed confirmation does not prove the original effect failed. Surface
+    // its answer now while keeping the same intent limited to status checks.
+    if (task?.kind === "agent_start" && task.phase === "failed") return { phase: "unknown", taskId: task.id, message: task.message };
+    return { phase: "pending" };
+  }
   if (receipt.state === "failed") return { phase: "failed", message: task?.message ?? null };
   if (task?.phase === "ready") return { phase: "ready", taskId: task.id, paneId: receipt.pane_id, agentPhase: task.agent_phase, agentMessage: task.agent_message };
   // No task slot remains after restart. The same intent reconstructs it before retry.

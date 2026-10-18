@@ -54,6 +54,9 @@ export function InlineStartHost() {
           store.drop(key);
         } else if (answer.phase === "ready") {
           if (draft.phase !== "agent_failed") store.put(key, { ...draft, phase: "agent_failed", taskId: answer.taskId, failure: startFailure(answer.agentMessage) });
+        } else if (answer.phase === "unknown") {
+          const failure = startFailure(answer.message);
+          if (draft.phase !== "unknown" || draft.taskId !== answer.taskId || JSON.stringify(draft.failure) !== JSON.stringify(failure)) store.put(key, { ...draft, phase: "unknown", taskId: answer.taskId, failure });
         } else if (draft.phase !== "failed") {
           store.put(key, { ...draft, phase: "failed", request: answer.phase === "refused" ? null : draft.request, failure: startFailure(answer.message) });
         }

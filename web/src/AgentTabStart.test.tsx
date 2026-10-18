@@ -75,6 +75,31 @@ describe("inline tab start (group-tabs B7–B9, B22, B27)", () => {
     expect(button("terminal").disabled).toBe(true);
     expect(container.querySelector("textarea")!.readOnly).toBe(true);
   });
+  it.each(["terminal", "claude"] as const)("immediately permits another status-only check after an uncertain %s confirmation fails", async (provider) => {
+    vi.useFakeTimers();
+    const text = "확인 중에도 보존할 한글 지시문";
+    useInlineStarts.getState().put(key, { text, selection: { kind: "claude", model: null }, request: null, phase: "editing", taskId: null, failure: null });
+    await mount();
+    await act(async () => button(provider === "terminal" ? "terminal" : "agent").click());
+    const original = starts()[0]!.payload as { request_id: string };
+    await publishReceipts(target, [{ request_id: original.request_id, ...target, draft_tab_id: target.tab_id, live_tab_id: null, pane_id: null, state: "pending", agent_kind: provider === "terminal" ? null : provider, agent_phase: null }]);
+    const message = "The original start is not yet confirmed. Retry confirmation; no second process was started.";
+    for (const taskId of [42, 43]) {
+      const rest = useShellStore.getState().rest!;
+      await act(async () => useShellStore.setState({ rest: { ...rest, task_operation: { id: taskId, kind: "agent_start", phase: "failed", repository_root: "/fixture", branch: null, base_branch: null, path: "/fixture", pane_id: null, agent_kind: provider === "terminal" ? null : provider, message, agent_phase: null, agent_message: null, request_id: original.request_id } } }));
+      expect(container.querySelector('[role="alert"]')?.textContent).toBe(message);
+      const confirm = [...container.querySelectorAll("button")].find((row) => row.textContent === "Check start status")!;
+      expect(confirm).toBeDefined();
+      expect(confirm.disabled).toBe(false);
+      expect(button("agent").disabled).toBe(true);
+      expect(button("terminal").disabled).toBe(true);
+      expect(container.querySelector("textarea")!.value).toBe(text);
+      expect(container.querySelector("textarea")!.readOnly).toBe(true);
+      await act(async () => confirm.click());
+      expect(starts().at(-1)!.payload).toMatchObject({ request_id: original.request_id, target, provider, confirm_only: true });
+    }
+    expect(starts()).toHaveLength(3);
+  });
   it.each(["failed", "agent_failed"] as const)("accepts multiple Korean input events after a restored %s and retries the same confirmed intent", async (phase) => {
     const receipt: AgentStartReceipt = { request_id: "start-restored", group_id: "g1", area_id: "a1", draft_tab_id: "draft-1", live_tab_id: phase === "agent_failed" ? "live-1" : null, pane_id: phase === "agent_failed" ? "pane-1" : null, add_pane: false, state: phase === "failed" ? "failed" : "ready", agent_kind: "claude", agent_phase: phase === "agent_failed" ? "failed" : null };
     await publishReceipts(target, [receipt]);
