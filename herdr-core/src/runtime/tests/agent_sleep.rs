@@ -2197,6 +2197,41 @@ fn a_failed_wake_says_why_and_can_be_retried_fresh() {
     assert_eq!(row(&runtime)["sleep"]["state"], "waking");
 }
 
+/// Herdr answers a wake's start once it has typed the start line; a line the
+/// pane's shell never ran (a Windows prompt reading a leftover bracketed
+/// paste as keys) brings no agent, and the wake fails with a reason once the
+/// start's deadline has passed rather than reading waking for good.
+#[test]
+fn a_wake_whose_agent_never_appears_fails_at_the_starts_deadline() {
+    let (mut runtime, _) = asleep();
+    runtime.ingest_session(Ok(session(None)));
+    assert!(runtime.dispatch_json(&event(
+        "agent_wake",
+        serde_json::json!({"pane_id": SLEEPER})
+    )));
+    let started = unix_milliseconds();
+    runtime.ingest_agent_wake(
+        SLEEPER,
+        crate::agent_sleep::WakeMode::Resume,
+        crate::agent_sleep_herdr::WakeOutcome::Started,
+    );
+    runtime.tick_agent_sleep(started + 30_000);
+    assert_eq!(
+        row(&runtime)["sleep"]["state"],
+        "waking",
+        "inside the deadline"
+    );
+
+    assert!(runtime.tick_agent_sleep(started + 130_000));
+    let failed = row(&runtime);
+    assert_eq!(failed["sleep"]["state"], "failed");
+    assert_eq!(
+        failed["sleep"]["reason"],
+        "The agent did not become ready in time."
+    );
+    assert_eq!(failed["status_code"], "sleep_failed");
+}
+
 /// B16, B17, B18: a new agent in the pane is awake whatever started it,
 /// and a closed pane takes its record with it.
 #[test]
