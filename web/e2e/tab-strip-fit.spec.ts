@@ -191,22 +191,30 @@ test("File View tabs use the same shrinking strip and transfer the longest title
     await expect(tabs).toHaveCount(names.length);
     // Pinned, the lane docks with a divider that widens it (PRD right-lane B5, B6).
     await page.locator("[data-lane-pin]").click();
+    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
+    const handle = page.locator('[data-lane-divider="lane"]');
+    const divider = await handle.boundingBox();
+    const body = await page.locator("[data-lane-row]").boundingBox();
+    if (!divider || !body) throw new Error("the docked lane has no resize geometry");
+    const sidebarWidth = (await page.locator("[data-sidebar-box]").boundingBox())!.width;
+    await page.mouse.move(divider.x + divider.width / 2, divider.y + 150);
+    expect(await handle.evaluate((node, point) => node.contains(document.elementFromPoint(point.x, point.y)), {
+      x: divider.x + divider.width / 2, y: divider.y + 150,
+    })).toBe(true);
+    await page.mouse.down();
+    await page.mouse.move(body.x + 10, divider.y + 150, { steps: 4 });
+    await expect(page.locator("[data-lane-guide]")).toHaveCount(1);
+    await page.mouse.up();
+    await expect(page.locator("[data-lane-guide]")).toHaveCount(0);
     const stages = new Set<Fit>();
-    for (const width of [2400, 2200, 2000, 1900, 1800, 1700, 1600, 1500, 1400, 1300, 1200]) {
+    // The stored lane width clamps as the window narrows. An overlay's
+    // outside-left divider can be behind the sidebar's resize hit area;
+    // dragging raw coordinates there would resize an unrelated surface.
+    for (const width of [2400, 2200, 2000, 1900, 1800, 1700, 1600, 1500, 1400, 1300, 1200, 1100]) {
       await page.setViewportSize({ width, height: 1000 });
       await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
       await expect(page.locator("[data-view-tab-bar]")).toBeVisible();
-      const handle = page.locator('[data-lane-divider="lane"]');
-      const divider = await handle.count() ? await handle.boundingBox() : null;
-      const body = await page.locator("[data-lane-row]").boundingBox();
-      if (divider && body) {
-        await page.mouse.move(divider.x + divider.width / 2, divider.y + 150);
-        await page.mouse.down();
-        await page.mouse.move(body.x + 10, divider.y + 150, { steps: 4 });
-        await page.mouse.up();
-      }
-      await expect(page.locator("[data-lane-guide]")).toHaveCount(0);
-      await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      expect((await page.locator("[data-sidebar-box]").boundingBox())!.width).toBe(sidebarWidth);
       // A divider release commits once through the core; observe that final
       // geometry rather than sampling the optimistic drag's guide frame.
       await expect.poll(async () => {
