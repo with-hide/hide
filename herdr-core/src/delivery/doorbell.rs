@@ -184,6 +184,7 @@ pub(crate) fn judge(observation: &Observation, patience: Patience, now: u64) -> 
         "idle" | "done" if observation.state_change_seq.is_some() => {}
         "working"
             if observation.state_change_seq.is_some()
+                && !super::mailbox::tool_letters(&observation.actor.kind)
                 && patience.due(observation.entered_working_at_unix_ms, now) => {}
         "working" => return Err(Hold::Working),
         "blocked" => return Err(Hold::Blocked),
@@ -794,6 +795,42 @@ mod tests {
                 assert_eq!(judge(&pane, WAITED, NOW), Ok(()), "{kind} {status}");
             }
         }
+    }
+
+    #[test]
+    fn a_tool_letters_kind_rings_only_at_rest_with_no_draft_or_native_wait() {
+        let mut pane = at_rest("grok");
+        pane.turn = Turn::Read(Waiting::Nothing);
+        for status in ["idle", "done"] {
+            pane.status = status.into();
+            assert_eq!(judge(&pane, WAITED, NOW), Ok(()));
+        }
+        pane.status = "working".into();
+        pane.entered_working_at_unix_ms = 1;
+        assert_eq!(judge(&pane, WAITED, NOW), Err(Hold::Working));
+        assert_eq!(
+            judge(
+                &pane,
+                Patience {
+                    now: true,
+                    ..WAITED
+                },
+                NOW
+            ),
+            Err(Hold::Working)
+        );
+        pane.status = "idle".into();
+        pane.last_input_at_unix_ms += 1;
+        assert_eq!(judge(&pane, WAITED, NOW), Err(Hold::Draft));
+        pane.last_submit_at_unix_ms = pane.last_input_at_unix_ms;
+        for wait in [Waiting::PlanApproval, Waiting::Question] {
+            pane.turn = Turn::Read(wait);
+            assert_eq!(judge(&pane, WAITED, NOW), Err(Hold::AwaitingOperator));
+        }
+        pane.turn = Turn::Unread;
+        assert_eq!(judge(&pane, WAITED, NOW), Err(Hold::SessionUnread));
+        pane.turn = Turn::Read(Waiting::Nothing);
+        assert_eq!(judge(&pane, WAITED, NOW), Ok(()));
     }
 
     #[test]
@@ -1709,11 +1746,11 @@ mod tests {
     }
 
     #[test]
-    fn the_bell_rings_for_claude_code_and_codex_and_never_for_opencode() {
-        for kind in ["claude", "claude-code", "claude_code", "codex"] {
+    fn the_bell_targets_match_the_reviewed_adapter_declarations() {
+        for kind in ["claude", "claude-code", "claude_code", "codex", "grok"] {
             assert!(bell_target(kind), "{kind}");
         }
-        for kind in ["opencode", "pi", "grok", "cursor", "gemini", "amp", ""] {
+        for kind in ["opencode", "pi", "cursor", "gemini", "amp", ""] {
             assert!(!bell_target(kind), "{kind}");
         }
     }

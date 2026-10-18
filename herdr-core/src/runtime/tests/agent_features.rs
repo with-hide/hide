@@ -23,7 +23,7 @@ fn every_flag_of_the_table_is_what_the_cores_own_gates_do() {
         let hook = crate::agent_hooks::runtime_of(kind).is_some()
             || matches!(adapter.hook, hide_kit::HookSupport::Plugin(_))
             || matches!(adapter.hook, hide_kit::HookSupport::Guidance(agent)
-                if agent.dialect().is_some() && agent.dialect() == declared.prompt_hook);
+                if agent.dialect().is_some() && agent.dialect() == declared.prompt_hook.filter(|hook| hook.context).map(|hook| hook.dialect));
         assert_eq!(adapter.supports(Feature::Letters), hook, "{kind}: letters");
         // Memory needs that hook and its own declaration.
         assert_eq!(

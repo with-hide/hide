@@ -77,9 +77,10 @@ fn main() -> ExitCode {
     };
     match arguments.first().map(String::as_str) {
         Some("hook") => {
-            // Grok and Cursor have no Memory and no bell: their hooks carry the
-            // spawn guard, the subagent count, Cursor's session guidance and,
-            // at a tool call, the letters due while the agent works
+            // Grok and Cursor have no Memory: their hooks carry the spawn
+            // guard, subagent counts and letters at their declared gaps.
+            // Cursor adds session guidance; Grok observes bell submissions
+            // and takes letters at the end of a turn too
             // (`hide_agent_hooks::guidance`, `hide_agent_hooks::basic`).
             if let Some(agent) = argument_value("--runtime", &arguments)
                 .and_then(|value| GuidanceAgent::from_id(&value))
@@ -166,7 +167,7 @@ fn usage() -> String {
      --event <SessionStart|UserPromptSubmit|SubagentStart|SubagentStop|Stop|PreToolUse> \
      [--memory-injection] [--source <install marker>]\n       \
      hide-agent-hooks hook --runtime <grok|cursor> \
-     --event <SessionStart|PreToolUse|SubagentStart|SubagentStop|Stop> \
+     --event <SessionStart|UserPromptSubmit|PreToolUse|SubagentStart|SubagentStop|Stop> \
      [--source <install marker>]\n       \
      hide-agent-hooks hook --runtime antigravity \
      --event <SessionStart|UserPromptSubmit|PreToolUse|Stop> [--source <install marker>]\n       \
@@ -216,8 +217,15 @@ fn run_basic_hook(agent: GuidanceAgent, arguments: &[String], started: Instant) 
     if dialect == HookDialect::Cursor && inside_grok() {
         return;
     }
+    // Stop has one payload shared by its intake and subagent count.
+    let payload = matches!(event, HookEvent::Stop | HookEvent::UserPromptSubmit)
+        .then(|| read_stdin_before_deadline(started + GUARD_PAYLOAD_BUDGET))
+        .flatten();
     let (answer, intake) = std::panic::catch_unwind(|| match event {
         HookEvent::PreToolUse => basic_tool_call(dialect, agent.id(), started),
+        HookEvent::Stop | HookEvent::UserPromptSubmit => {
+            basic_turn_event(dialect, event, payload.as_ref(), started)
+        }
         HookEvent::SessionStart => (
             guidance::stdout(
                 agent,
@@ -248,7 +256,61 @@ fn run_basic_hook(agent: GuidanceAgent, arguments: &[String], started: Instant) 
     {
         hide_agent_hooks::delivery::diagnose_failure(&home, &failure);
     }
-    let _ = std::panic::catch_unwind(|| count_basic(dialect, event, started));
+    let _ = std::panic::catch_unwind(|| count_basic(dialect, event, payload.as_ref()));
+}
+
+fn basic_turn_event(
+    dialect: HookDialect,
+    event: HookEvent,
+    payload: Option<&(Vec<u8>, bool)>,
+    started: Instant,
+) -> (Option<String>, Option<hide_agent_hooks::delivery::Intake>) {
+    use hide_agent_hooks::delivery;
+    let Some((payload, truncated)) = payload else {
+        return (None, None);
+    };
+    if !std::env::var("HERDR_PANE_ID").is_ok_and(|pane| !pane.is_empty()) {
+        return (None, None);
+    }
+    let result = match event {
+        HookEvent::UserPromptSubmit
+            if dialect
+                .adapter()
+                .prompt_hook
+                .is_some_and(|hook| !hook.context) =>
+        {
+            let prompt = delivery::read_prompt(payload, *truncated);
+            if prompt.session.is_none() {
+                return (None, None);
+            }
+            // Observe-only hooks never print or confirm, even if an older
+            // peer accidentally answers with context.
+            delivery::pull(started + GUARD_BUDGET, &prompt).map(|_| None)
+        }
+        HookEvent::Stop
+            if dialect.adapter().turn_end_letters.is_some()
+                && basic::grok_stop(payload, *truncated) != basic::GrokStop::Ignore =>
+        {
+            let Some(session) = basic::session(payload, *truncated, dialect) else {
+                return (None, None);
+            };
+            delivery::pull_at_turn_end(started + GUARD_BUDGET, &session)
+        }
+        _ => return (None, None),
+    };
+    match result {
+        Ok(Some(intake)) => (
+            Some(serde_json::json!({"decision":"block", "reason":intake.context}).to_string()),
+            Some(intake),
+        ),
+        Ok(None) => (None, None),
+        Err(failure) => {
+            if let Some(home) = home_directory() {
+                delivery::diagnose_failure(&home, &failure);
+            }
+            (None, None)
+        }
+    }
 }
 
 /// A Grok or Cursor tool call: the guards' refusal in the agent's shape, or,
@@ -574,7 +636,7 @@ fn antigravity_memory(
 /// The count a Grok or Cursor event makes. Grok's `Stop` names the
 /// background subagents still running and comes from inside a subagent too,
 /// which leaves the count alone; Cursor's subagents end with the turn.
-fn count_basic(dialect: HookDialect, event: HookEvent, started: Instant) {
+fn count_basic(dialect: HookDialect, event: HookEvent, payload: Option<&(Vec<u8>, bool)>) {
     // An agent whose adapter declares no count reports none, rather than a
     // zero its hooks never changed (Cursor, issue 911).
     if dialect.adapter().subagent_counts.is_none() {
@@ -585,12 +647,10 @@ fn count_basic(dialect: HookDialect, event: HookEvent, started: Instant) {
         (_, HookEvent::SubagentStart) => Change::Started(None),
         (_, HookEvent::SubagentStop) => Change::Stopped(None),
         (HookDialect::Grok, HookEvent::Stop) => {
-            let Some((payload, truncated)) =
-                read_stdin_before_deadline(started + GUARD_PAYLOAD_BUDGET)
-            else {
+            let Some((payload, truncated)) = payload else {
                 return;
             };
-            match basic::grok_stop(&payload, truncated) {
+            match basic::grok_stop(payload, *truncated) {
                 basic::GrokStop::Ignore => return,
                 basic::GrokStop::Running(running) => Change::Settled { running },
             }

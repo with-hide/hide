@@ -20,6 +20,8 @@ const CONFIRM_RESERVE: Duration = Duration::from_millis(400);
 struct PromptInput {
     prompt: Option<String>,
     session_id: Option<String>,
+    #[serde(rename = "sessionId")]
+    camel_session_id: Option<String>,
 }
 
 /// The digest of the submitted prompt and the session id of a runtime's
@@ -41,8 +43,14 @@ pub fn read_prompt(payload: &[u8], truncated: bool) -> Prompt {
             .as_ref()
             .and_then(|input| input.prompt.as_deref())
             .map(prompt_digest),
+        // Grok sends both spellings in one envelope. An alias on one
+        // serde field would reject the entire prompt as a duplicate field.
         session: input
-            .and_then(|input| input.session_id)
+            .and_then(|input| match (input.session_id, input.camel_session_id) {
+                (Some(snake), Some(camel)) if snake == camel => Some(snake),
+                (Some(id), None) | (None, Some(id)) => Some(id),
+                _ => None,
+            })
             .filter(|id| valid_session(id)),
     }
 }
@@ -127,9 +135,17 @@ pub fn pull(deadline: Instant, prompt: &Prompt) -> Result<Option<Intake>, Failur
 /// agent, a letter still waiting and a session that is not the pane's own
 /// get nothing.
 pub fn pull_at_tool(deadline: Instant, session: &str) -> Result<Option<Intake>, Failure> {
+    pull_at_gap(deadline, session, "--tool")
+}
+
+pub fn pull_at_turn_end(deadline: Instant, session: &str) -> Result<Option<Intake>, Failure> {
+    pull_at_gap(deadline, session, "--turn-end")
+}
+
+fn pull_at_gap(deadline: Instant, session: &str, point: &str) -> Result<Option<Intake>, Failure> {
     let pull_deadline = deadline.checked_sub(CONFIRM_RESERVE).ok_or("deadline")?;
     let answer = run_cli(
-        &["inbox", "--hook", "--session", session, "--tool"],
+        &["inbox", "--hook", "--session", session, point],
         pull_deadline,
     )?;
     intake(answer)
@@ -388,6 +404,18 @@ mod tests {
             Some("s")
         );
         assert_eq!(read_prompt(&payload("x"), true).session, None);
+        for input in [
+            br#"{"sessionId":"s","prompt":"abc"}"#.as_slice(),
+            br#"{"sessionId":"s","session_id":"s","prompt":"abc"}"#.as_slice(),
+        ] {
+            let prompt = read_prompt(input, false);
+            assert_eq!(prompt.session.as_deref(), Some("s"));
+            assert_eq!(prompt.digest.as_deref(), Some(abc));
+        }
+        assert_eq!(
+            read_prompt(br#"{"sessionId":"child","session_id":"parent"}"#, false).session,
+            None
+        );
         assert_eq!(
             read_prompt(b"{\"session_id\":\"-rf\"}", false).session,
             None

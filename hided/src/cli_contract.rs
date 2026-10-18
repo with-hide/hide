@@ -275,6 +275,12 @@ pub const COMMANDS: &[Spec] = &[
                 required: false,
                 requires: &["--session"],
             },
+            Opt {
+                name: "--turn-end",
+                value: None,
+                required: false,
+                requires: &["--session"],
+            },
         ],
         &["intake"],
     ),

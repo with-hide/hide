@@ -1,3 +1,4 @@
+pub use hide_node_link::panes::PullPoint;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -38,7 +39,7 @@ pub enum Command {
         id: String,
     },
     Inbox,
-    /// A prompt hook asks what to hand the agent. `prompt_digest` is the
+    /// A runtime hook asks what to hand the agent. `prompt_digest` is the
     /// digest of the submitted prompt (`hide_agent_hooks::delivery::
     /// prompt_digest`): the turn whose prompt is the line the doorbell typed
     /// for one of the caller's pending letters receives the letter bodies,
@@ -50,11 +51,9 @@ pub enum Command {
         /// as a submission in the pane when it is the pane's own session.
         #[serde(default)]
         session: Option<String>,
-        /// The hook asks at a tool event of a working agent, not at a
-        /// prompt: it receives the letters due mid-turn for a kind that takes
-        /// them there (`tool_letters`), and never a bell target's.
+        /// The hook point whose declared intake path receives the letters.
         #[serde(default)]
-        tool: bool,
+        point: PullPoint,
     },
     Confirm {
         ids: Vec<String>,
@@ -210,6 +209,7 @@ pub(crate) fn send(
         watch_warning: None,
         answer_wait_ended: None,
         bell_line: None,
+        bell_turn: None,
         immediate: false,
         tool_handovers: 0,
         // A letter to a machine with a clock waits on that clock from now;
@@ -349,7 +349,56 @@ pub fn apply(
         }
         // A tool event's ask is answered by the worker with the pane's own
         // observation (`tool_pull`); with none, nothing is due.
-        Command::Pull { tool: true, .. } => Ok(json!(Intake::default())),
+        Command::Pull {
+            point: PullPoint::Tool | PullPoint::TurnEnd,
+            ..
+        } => Ok(json!(Intake::default())),
+        Command::Pull {
+            prompt_digest,
+            session,
+            ..
+        } if hide_agent_adapter::adapter(&actor.kind)
+            .and_then(|row| row.prompt_hook)
+            .is_some_and(|hook| !hook.context) =>
+        {
+            let session = session
+                .as_deref()
+                .filter(|session| super::valid_session(session))
+                .and_then(crate::wire::session_digest)
+                .filter(|session| actor.session.as_ref() == Some(session))
+                .ok_or("session_mismatch")?;
+            let digest = prompt_digest
+                .as_deref()
+                .filter(|digest| rang(ledger, actor, digest));
+            // A retried hook keeps the original batch, even if a new letter
+            // arrived between the submission and its retry.
+            if digest.is_some_and(|digest| {
+                ledger.letters.iter().any(|letter| {
+                    letter.recipient.same_identity(actor)
+                        && letter
+                            .bell_turn
+                            .as_ref()
+                            .is_some_and(|turn| turn.session == session && turn.digest == digest)
+                })
+            }) {
+                return Ok(json!(Intake::default()));
+            }
+            for letter in ledger
+                .letters
+                .iter_mut()
+                .filter(|letter| letter.recipient.same_identity(actor))
+            {
+                // Every own-session submission replaces the previous turn's
+                // claim. Letters arriving later still obey the normal wait.
+                letter.bell_turn = digest.filter(|_| letter.awaiting_intake()).map(|digest| {
+                    super::ledger::BellTurn {
+                        session: session.clone(),
+                        digest: digest.to_owned(),
+                    }
+                });
+            }
+            Ok(json!(Intake::default()))
+        }
         Command::Pull {
             prompt_digest: Some(digest),
             ..
@@ -444,7 +493,8 @@ pub struct Intake {
 /// Claude Code hook that runs inside one (Grok, OpenCode) must not count as
 /// that agent having read anything.
 pub(crate) fn prompt_hook(kind: &str) -> bool {
-    hide_agent_adapter::adapter(kind).is_some_and(|row| row.prompt_hook.is_some())
+    hide_agent_adapter::adapter(kind)
+        .is_some_and(|row| row.prompt_hook.is_some_and(|hook| hook.context))
 }
 
 /// Whether the kind's prompt hook hands letters over on any prompt: it has one
@@ -499,43 +549,60 @@ fn operator_prompt_intake(ledger: &Ledger, actor: &Actor, now: u64) -> Result<In
 
 /// Whether the kind's hook, plugin or extension takes letters at a tool event
 /// while the agent works (PRD letters-to-busy-agents D-02, B3): declared on
-/// the adapter, and never for a kind a bell rings for, so one letter has one
-/// path (D-10).
+/// the adapter; a kind with this path is belled only at rest.
 pub(crate) fn tool_letters(kind: &str) -> bool {
     hide_agent_adapter::adapter(kind).is_some_and(|row| row.tool_letters.is_some())
-        && !super::doorbell::bell_target(kind)
 }
 
-/// The letters due mid-turn at a tool event of the caller, which has worked
-/// without a rest since `working_since` (`None`: it is not working): each
-/// pending letter whose wait is over (`Patience`), as a prompt pull hands
-/// them over, confirmed by the script once the host wrote them. A kind that
-/// takes no letters at a tool event, a resting pane and a letter still
-/// waiting get nothing.
 /// How many times a tool event hands one letter over without a receipt
 /// before it waits for the next prompt or `hide inbox`, as a letter does
 /// after its three bells (PRD letters-to-busy-agents D-11).
 pub(crate) const TOOL_HANDOVERS: u8 = 3;
 
+#[cfg(test)]
 pub(crate) fn tool_pull(
     ledger: &Ledger,
     actor: &Actor,
     working_since: Option<u64>,
     now: u64,
 ) -> Result<Intake, String> {
+    gap_pull(ledger, actor, PullPoint::Tool, working_since, now)
+}
+
+/// At a safe gap, take this session's bell batch immediately, then letters
+/// whose wait during uninterrupted work is over. Both hooks share the caps.
+pub(crate) fn gap_pull(
+    ledger: &Ledger,
+    actor: &Actor,
+    point: PullPoint,
+    working_since: Option<u64>,
+    now: u64,
+) -> Result<Intake, String> {
     actor.require_native_identity()?;
-    let (Some(working_since), true) = (working_since, tool_letters(&actor.kind)) else {
+    let supported = hide_agent_adapter::adapter(&actor.kind).is_some_and(|row| match point {
+        PullPoint::Tool => row.tool_letters.is_some(),
+        PullPoint::TurnEnd => row.turn_end_letters.is_some(),
+        PullPoint::Prompt => false,
+    });
+    if !supported {
         return Ok(Intake::default());
-    };
+    }
     let due: Vec<_> = ledger
         .letters
         .iter()
         .filter(|letter| {
             letter.recipient.same_identity(actor)
-                && letter.state == State::Pending
+                && letter.awaiting_intake()
                 && letter.within_deadline(&ledger.node_clocks, now)
                 && letter.tool_handovers < TOOL_HANDOVERS
-                && super::doorbell::Patience::of(letter).due(working_since, now)
+                && (letter
+                    .bell_turn
+                    .as_ref()
+                    .is_some_and(|turn| actor.session.as_ref() == Some(&turn.session))
+                    || (letter.state == State::Pending
+                        && working_since.is_some_and(|since| {
+                            super::doorbell::Patience::of(letter).due(since, now)
+                        })))
         })
         .collect();
     Ok(render(due))
@@ -733,7 +800,7 @@ mod tests {
             Command::Pull {
                 prompt_digest: None,
                 session: None,
-                tool: false,
+                point: hide_node_link::panes::PullPoint::Prompt,
             },
             Command::Show {
                 id: letter.id.clone(),
@@ -970,7 +1037,7 @@ mod tests {
             &Command::Pull {
                 prompt_digest: Some(hide_agent_hooks::delivery::prompt_digest(prompt)),
                 session: None,
-                tool: false,
+                point: hide_node_link::panes::PullPoint::Prompt,
             },
             100,
         )
@@ -983,6 +1050,137 @@ mod tests {
         ledger.letters[index]
             .reserve_bell(&Default::default(), 50, line.into())
             .unwrap();
+    }
+
+    #[test]
+    fn an_observe_only_bell_turn_takes_its_batch_at_either_gap_and_only_once_confirmed() {
+        for point in [PullPoint::Tool, PullPoint::TurnEnd] {
+            let mut ledger = Ledger::default();
+            let mut recipient = actor("recipient");
+            recipient.kind = "grok".into();
+            recipient.session = crate::wire::session_digest("native-session");
+            let ids = pending_for(&mut ledger, &recipient, 2);
+            // A receipt-less legacy acknowledgement follows the new letter,
+            // just as it does at a context-carrying prompt hook.
+            ledger.letters[1].state = State::Acknowledged;
+            ledger.letters[1].finished_at_unix_ms = Some(1);
+            ring(&mut ledger, 0, LINE);
+            let prompt = |text: &str, session: &str| Command::Pull {
+                prompt_digest: Some(hide_agent_hooks::delivery::prompt_digest(text)),
+                session: Some(session.into()),
+                point: PullPoint::Prompt,
+            };
+            assert_eq!(
+                apply(
+                    &mut ledger,
+                    &recipient,
+                    None,
+                    &prompt(LINE, "another-session"),
+                    100
+                ),
+                Err("session_mismatch".into())
+            );
+            let answer = apply(
+                &mut ledger,
+                &recipient,
+                None,
+                &prompt(LINE, "native-session"),
+                100,
+            )
+            .unwrap();
+            assert_eq!(answer, json!({"context":"", "ids":[], "remaining":0}));
+            // A letter arriving after the bell submission cannot join its batch.
+            let later = send(
+                &mut ledger,
+                &actor("late"),
+                &recipient,
+                "late",
+                "late-body",
+                "request",
+                None,
+                101,
+            )
+            .unwrap();
+            apply(
+                &mut ledger,
+                &recipient,
+                None,
+                &prompt(LINE, "native-session"),
+                102,
+            )
+            .unwrap();
+            let intake = gap_pull(&ledger, &recipient, point, Some(100), 102).unwrap();
+            assert_eq!(intake.ids, ids);
+            assert!(!intake.context.contains("late-body"));
+            record_tool_handover(&mut ledger, &intake);
+            apply(
+                &mut ledger,
+                &recipient,
+                None,
+                &Command::Confirm { ids },
+                103,
+            )
+            .unwrap();
+            assert!(
+                gap_pull(&ledger, &recipient, point, Some(100), 104)
+                    .unwrap()
+                    .ids
+                    .is_empty()
+            );
+            // A due or explicit immediate letter still travels at either gap.
+            ledger
+                .letters
+                .iter_mut()
+                .find(|letter| letter.id == later.id)
+                .unwrap()
+                .immediate = true;
+            assert_eq!(
+                gap_pull(&ledger, &recipient, point, Some(100), 105)
+                    .unwrap()
+                    .ids,
+                [later.id]
+            );
+        }
+    }
+
+    #[test]
+    fn an_operator_submission_releases_the_previous_bell_turn_claim() {
+        let mut ledger = Ledger::default();
+        let mut recipient = actor("recipient");
+        recipient.kind = "grok".into();
+        recipient.session = crate::wire::session_digest("native-session");
+        pending_for(&mut ledger, &recipient, 1);
+        ring(&mut ledger, 0, LINE);
+        for text in [LINE, "the operator's own prompt"] {
+            let answer = apply(
+                &mut ledger,
+                &recipient,
+                None,
+                &Command::Pull {
+                    prompt_digest: Some(hide_agent_hooks::delivery::prompt_digest(text)),
+                    session: Some("native-session".into()),
+                    point: PullPoint::Prompt,
+                },
+                100,
+            )
+            .unwrap();
+            assert_eq!(answer["context"], "");
+            assert_eq!(
+                gap_pull(&ledger, &recipient, PullPoint::TurnEnd, Some(100), 101)
+                    .unwrap()
+                    .ids
+                    .len(),
+                usize::from(text == LINE)
+            );
+        }
+        for point in [PullPoint::Tool, PullPoint::TurnEnd] {
+            assert!(
+                gap_pull(&ledger, &recipient, point, Some(100), 101)
+                    .unwrap()
+                    .ids
+                    .is_empty()
+            );
+        }
     }
 
     #[test]
@@ -1088,7 +1286,7 @@ mod tests {
 
     #[test]
     fn a_prompt_hook_that_runs_inside_an_agent_without_one_hands_over_nothing() {
-        for kind in ["grok", "gemini", "cursor"] {
+        for kind in ["gemini", "cursor"] {
             let mut ledger = Ledger::default();
             let mut recipient = actor("recipient");
             recipient.kind = kind.into();
@@ -1183,7 +1381,7 @@ mod tests {
             &Command::Pull {
                 prompt_digest: None,
                 session: None,
-                tool: true,
+                point: hide_node_link::panes::PullPoint::Tool,
             },
             2 + wait,
         )
@@ -1273,7 +1471,7 @@ mod tests {
                 Command::Pull {
                     prompt_digest: None,
                     session,
-                    tool: false
+                    point: hide_node_link::panes::PullPoint::Prompt
                 }
             );
         }

@@ -612,7 +612,7 @@ Grok and Cursor each document a hook that can refuse a shell call and that sees 
 Cursor declares no subagent count: Cursor CLI 2026.10.01 runs `subagentStart` and `subagentStop` only when its agent server asks for them, and a Task subagent run (issue 911) never produced one, so the count stayed 0 for a pane that had run a subagent.
 Its chat store does keep each subagent as a store of its own, in the parent's folder under `~/.cursor/chats`, with `subagentInfo` (`parentAgentId`, `toolCallId`, `typeName`), and the parent's graph holds the Task call and its tool result; a finished subagent could be counted from those, but nothing in a subagent's store says it is still running, so Hide shows no count rather than a zero it cannot stand behind (design principle 10).
 The pane's children projection follows the count's dialect, so a Cursor pane reads as Pi's does: the uninstrumented projection with the reason `unknown` and no count, which says Hide cannot tell what the session spawned ([status-model.md](status-model.md#uninstrumented-is-not-an-unknown-activity)), never a zero, and no screen draws it; the spawn guard and the guidance keep their own hooks.
-Each runs only the events its documentation names: Grok `SessionStart`, `PreToolUse` (no matcher, which Grok's guide reads as every tool call: the [project guardrails](#project-guardrails) read the shell call `run_terminal_command` and the file tools among them, and the letters due while the agent works go at any call), `SubagentStart`, `SubagentStop` and `Stop` (the hooks guide Grok ships, `~/.grok/docs/user-guide/10-hooks.md`); Cursor `sessionStart` and `preToolUse` (no matcher, every tool call, for the same two reasons).
+Each runs only the events its documentation names: Grok `SessionStart`, `UserPromptSubmit` (observe-only, no matcher), `PreToolUse` (no matcher, which Grok's guide reads as every tool call: the [project guardrails](#project-guardrails) read the shell call `run_terminal_command` and the file tools among them, and the letters due while the agent works go at any call), `SubagentStart`, `SubagentStop` and `Stop` (the hooks guide Grok ships, `~/.grok/docs/user-guide/10-hooks.md`); Cursor `sessionStart` and `preToolUse` (no matcher, every tool call, for the same two reasons).
 Grok's `SessionStart` does not fire for a subagent, so it is where the pane's count starts over and the pane first reports itself instrumented.
 
 Grok's file is Hide's own, `~/.grok/hooks/hide.json`, beside Herdr's and Orca's files in that folder (`{"hooks": {"<Event>": [{"matcher"?, "hooks": [{"type": "command", "command", "timeout"}]}]}}`, seconds); a switch-off deletes the file and nothing else there.
@@ -630,7 +630,17 @@ The helper (`src/bin/hide-agent-hooks.rs`, `run_basic_hook`; the payload and ans
 | Turn end | `Stop`: `subagentType` marks a subagent's own stop, `backgroundTasks` lists what still runs | `stop` |
 
 The refusal's reason and every rule of what is refused are the spawn guard's above, through the same `guard_refusal`.
-A call that runs, in a Herdr pane and with a session in its payload, then asks `hide inbox --hook --session <id> --tool` for the letters due while the agent works and answers them as the row above shows, confirming them once the answer is printed ([docs/delivery.md: Letters while the agent works](delivery.md#letters-while-the-agent-works)); a refused call carries none, and only the tools in each matcher reach the hook, so a letter waits through the others.
+A call that runs, in a Herdr pane and with a session in its payload, then asks `hide inbox --hook --session <id> --tool` for the letters due while the agent works and answers them as the row above shows, confirming them once the answer is printed ([docs/delivery.md: Letters while the agent works](delivery.md#letters-while-the-agent-works)); a refused call carries none, and the entries have no matcher so every tool reaches the hook.
+Grok's `UserPromptSubmit` reads `prompt` and `sessionId`, sends only the trimmed prompt's digest and session to the core, and prints and confirms nothing, because Grok discards its stdout.
+Its `Stop` reads the payload once for both the subagent count and turn-end letters; a child stop, missing session or malformed payload takes none.
+It asks `hide inbox --hook --session <id> --turn-end`, prints `{"decision":"block","reason":<letters>}` when something is due, and confirms after the flush.
+The next Stop allows the turn to end once the letters were confirmed.
+The core recognizes a bell's turn and keeps the normal five-minute wait for letters arriving during an operator's turn ([delivery.md](delivery.md#safe-intake-and-manual-fallback)).
+`GuidanceAgent::version()` is per agent: Grok writes `hide-guidance@7`; Cursor, Antigravity and every other guidance agent stay at 6, leaving their expected entries unchanged.
+Grok's version 6 file reads Outdated until the kit replaces it; `HOOK_VERSION` stays unchanged, so this does not change the pane's connection chip.
+The bell line names `hide inbox` for a session still running older hook entries.
+Grok 1.0.62 keeps the loaded entries after the file changes; `/hooks`, then `r`, reloads them without restarting the session (measured with separate command tags before and after reload in an isolated session).
+
 Cursor reads output that is not a valid answer from `preToolUse` and `subagentStart` as a refusal even when the hook exits 0, and only the CLI's own code, not its documentation, says empty output proceeds, so for those two events (`subagentStart` only from a `@2` entry an earlier build installed and the next pass has not yet removed) every path that does not refuse prints `{"permission":"allow"}`: outside a pane or a registered checkout, an unreadable payload, a daemon that is down or slow, a panic, and a failed owner handshake before anything else runs (D-04).
 Grok fails open on everything but a refusal, so its hook prints nothing on those paths, as Claude Code's does.
 A failure goes to the guard's log, never to the agent (B5).
@@ -718,7 +728,7 @@ On Windows `~/.agents/skills` is `%USERPROFILE%\.agents\skills`; no vendor page 
 | --- | --- | --- | --- | --- |
 | Claude Code | `~/.claude/skills` | done: six-event hook, a kit part | `claude` | [skills](https://code.claude.com/docs/en/skills) |
 | Codex | `~/.agents/skills` | done: six-event hook, a kit part | `codex` | [skills](https://learn.chatgpt.com/docs/build-skills) |
-| Grok | `~/.agents/skills` | done: spawn guard and subagent count in `~/.grok/hooks/hide.json`; no guidance, because `SessionStart` cannot add context, only tool-call events can | `grok` | [skills](https://docs.x.ai/build/features/skills-plugins-marketplaces) |
+| Grok | `~/.agents/skills` | done: spawn guard and subagent count in `~/.grok/hooks/hide.json`; no guidance, because `SessionStart` cannot add context, tool-call context and a Stop block reason can | `grok` | [skills](https://docs.x.ai/build/features/skills-plugins-marketplaces) |
 | OpenCode | `~/.agents/skills` | done: Hide's plugin in `~/.config/opencode/plugins/`, not a command hook; OpenCode has none, only JS plugins (<https://opencode.ai/docs/plugins/>), whose `chat.message` hook adds a synthetic part to the prompt and whose `tool.execute.before` refuses a call by throwing ([OpenCode: Hide's plugin](#opencode-hides-plugin)) | `opencode` | [skills](https://opencode.ai/docs/skills/) |
 | Pi | `~/.agents/skills` | done: Hide's extension in `~/.pi/agent/extensions/`, not a command hook; Pi has none, only TS extensions, whose `before_agent_start` adds a hidden message to the prompt and whose `tool_call` refuses a call ([Pi and omp: Hide's extension](#pi-and-omp-hides-extension)) | `pi` | [skills](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/skills.md) |
 | omp | `~/.agents/skills` | done: the same extension in `~/.omp/agent/extensions/`, with omp's subagent counts and `ask` guard | `omp`, in `~/.omp/agent` | [skills](https://omp.sh/docs/skills) |
@@ -733,10 +743,10 @@ Its popover groups the feature table into Herdr basics, session reading and mult
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `skill` | always | yes | yes | yes | yes | yes | yes | yes |
 | `guidance` | Hide's hook, plugin or extension prints the session guidance | yes | yes | yes | yes | no | yes | yes |
-| `letters` | its prompt dialect declaration (a new prompt's letters; while the agent works, `tool_letters` names the dialect whose tool event hands them over: OpenCode, Pi, omp, Grok, Cursor and Antigravity, never a bell target) | yes | yes | yes | yes | no | no | yes |
+| `letters` | its prompt dialect declaration (a new prompt's letters; while the agent works, `tool_letters` names the dialect whose tool event hands them over: OpenCode, Pi, omp, Grok, Cursor and Antigravity; a kind with this path is belled only at rest) | yes | yes | yes | yes | no | no | yes |
 | `spawn_guard` | its refusal dialect declaration | yes | yes | yes | yes | yes | yes | yes |
 | `memory` | its Memory dialect declaration | yes | yes | yes | yes | no | no | yes |
-| `bell` | the core rings the doorbell for that agent (`AgentAdapter::bell`, tied to `delivery::doorbell::bell_target`) | yes | no | no | no | no | no | no |
+| `bell` | the core rings the doorbell for that agent (`AgentAdapter::bell`, tied to `delivery::doorbell::bell_target`) | yes | no | no | no | yes (at rest) | no | no |
 | `herdr_integration` | always: every supported agent has a Herdr target | yes | yes | yes | yes | yes | yes | yes |
 | `start` | its launch declaration | yes | yes | yes | yes | yes | yes | yes |
 | `sleep` | its Sleep declaration | yes | yes | yes | yes | yes | yes | yes |

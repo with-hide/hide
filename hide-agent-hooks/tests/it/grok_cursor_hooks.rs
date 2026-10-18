@@ -22,6 +22,71 @@ const GROK: &[(&str, &str)] = &[
     ("GROK_SESSION_ID", "grok-session"),
 ];
 
+#[test]
+fn grok_observes_a_prompt_without_printing_or_confirming_its_answer() {
+    let machine = Machine::new("letters");
+    let prompt = "🔔 lead 보고: waiting";
+    let run = machine.run_event(
+        "grok",
+        "UserPromptSubmit",
+        &json!({"sessionId":"grok-session", "session_id":"grok-session", "prompt":prompt})
+            .to_string(),
+        Some(PANE),
+        GROK,
+    );
+    assert!(run.status_ok, "{run:?}");
+    assert!(run.stdout.is_empty(), "{run:?}");
+    assert_eq!(
+        machine.calls(),
+        [format!(
+            "inbox --hook --prompt-digest {} --session grok-session",
+            hide_agent_hooks::delivery::prompt_digest(prompt)
+        )]
+    );
+}
+
+#[test]
+fn grok_stop_hands_over_letters_and_the_next_stop_has_nothing_to_block_on() {
+    let machine = Machine::new("letters-once");
+    for active in [false, true] {
+        let run = machine.run_event(
+            "grok",
+            "Stop",
+            &json!({"sessionId":"grok-session", "stopHookActive":active, "backgroundTasks":[]})
+                .to_string(),
+            Some(PANE),
+            GROK,
+        );
+        assert!(run.status_ok, "{run:?}");
+        if active {
+            assert!(run.stdout.is_empty(), "{run:?}");
+        } else {
+            let answer: Value = serde_json::from_str(&run.stdout).unwrap();
+            assert_eq!(answer, json!({"decision":"block", "reason":"BODY-ONCE"}));
+        }
+    }
+    assert_eq!(
+        machine.calls(),
+        [
+            "inbox --hook --session grok-session --turn-end",
+            "inbox --confirm letter-1",
+            "inbox --hook --session grok-session --turn-end",
+        ]
+    );
+    // Neither a child stop nor a missing native identity may take the
+    // parent's letters, even when the mailbox has something to return.
+    let machine = Machine::new("letters");
+    for payload in [
+        json!({"sessionId":"child", "subagentType":"explorer"}),
+        json!({}),
+        json!({"sessionId":"-invalid"}),
+    ] {
+        let run = machine.run_event("grok", "Stop", &payload.to_string(), Some(PANE), GROK);
+        assert!(run.stdout.is_empty(), "{run:?}");
+    }
+    assert!(machine.calls().is_empty());
+}
+
 fn grok_shell(machine: &Machine, command: &str) -> String {
     json!({
         "hookEventName": "pre_tool_use",

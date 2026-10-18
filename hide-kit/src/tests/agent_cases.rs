@@ -106,7 +106,7 @@ fn an_agent_that_is_not_on_gets_nothing_until_the_operator_switches_it_on() {
             .unwrap()
             .contains(&format!(
                 "hide-guidance@{}",
-                hide_agent_hooks::guidance::GUIDANCE_VERSION
+                hide_agent_hooks::guidance::GuidanceAgent::Cursor.version()
             ))
     );
     assert_eq!(record(&fixture)["agents"]["cursor"], true);
@@ -750,7 +750,7 @@ fn cursor_gets_the_guidance_hook_with_the_switch_and_loses_it_with_it() {
     let written = std::fs::read_to_string(fixture.home().join(file)).unwrap();
     assert!(written.contains(&format!(
         "hide-guidance@{}",
-        hide_agent_hooks::guidance::GUIDANCE_VERSION
+        hide_agent_hooks::guidance::GuidanceAgent::Cursor.version()
     )));
 
     let report = apply(&fixture.target, &Scope::agents([], ["cursor"]));
@@ -827,6 +827,7 @@ fn claude_code_and_codex_do_everything_opencode_pi_omp_and_antigravity_collabora
             "grok",
             &[
                 Skill,
+                Bell,
                 SpawnGuard,
                 HerdrIntegration,
                 Sleep,
@@ -890,8 +891,11 @@ fn the_features_the_hook_gives_are_the_ones_a_hook_runtime_exists_for() {
         hide_agent_adapter::HookDialect::ALL
             .iter()
             .filter(|dialect| ADAPTERS.iter().any(|row| {
-                hide_agent_adapter::adapter(row.id)
-                    .is_some_and(|adapter| adapter.prompt_hook == Some(**dialect))
+                hide_agent_adapter::adapter(row.id).is_some_and(|adapter| {
+                    adapter
+                        .prompt_hook
+                        .is_some_and(|hook| hook.context && hook.dialect == **dialect)
+                })
             }))
             .count()
     );
@@ -900,7 +904,7 @@ fn the_features_the_hook_gives_are_the_ones_a_hook_runtime_exists_for() {
         // agy's hook entry answers its prompt event, so it carries letters.
         let instrumented = matches!(row.hook, HookSupport::Part(_) | HookSupport::Plugin(_))
             || matches!(row.hook, HookSupport::Guidance(agent)
-                if agent.dialect().is_some() && agent.dialect() == declared.prompt_hook);
+                if agent.dialect().is_some() && agent.dialect() == declared.prompt_hook.filter(|hook| hook.context).map(|hook| hook.dialect));
         assert_eq!(
             row.supports(crate::agents::Feature::Letters),
             instrumented,

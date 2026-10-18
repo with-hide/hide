@@ -580,6 +580,22 @@
                         }
                     ]
                 },
+                "BellTurn": {
+                    "description": "The native session and submitted bell digest that own this intake.",
+                    "properties": {
+                        "digest": {
+                            "type": "string"
+                        },
+                        "session": {
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "session",
+                        "digest"
+                    ],
+                    "type": "object"
+                },
                 "InboxEntry": {
                     "description": "One letter of `hide inbox`.",
                     "properties": {
@@ -626,6 +642,17 @@
                         },
                         "bell_sent": {
                             "type": "boolean"
+                        },
+                        "bell_turn": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/BellTurn"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "default": null
                         },
                         "body": {
                             "type": "string"
@@ -735,6 +762,7 @@
                         "watch_warning",
                         "answer_wait_ended",
                         "bell_line",
+                        "bell_turn",
                         "intake_from",
                         "immediate",
                         "tool_handovers"
@@ -866,6 +894,22 @@
                         }
                     ]
                 },
+                "BellTurn": {
+                    "description": "The native session and submitted bell digest that own this intake.",
+                    "properties": {
+                        "digest": {
+                            "type": "string"
+                        },
+                        "session": {
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "session",
+                        "digest"
+                    ],
+                    "type": "object"
+                },
                 "State": {
                     "enum": [
                         "pending",
@@ -944,6 +988,17 @@
                 },
                 "bell_sent": {
                     "type": "boolean"
+                },
+                "bell_turn": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/BellTurn"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null
                 },
                 "body": {
                     "type": "string"
@@ -1053,6 +1108,7 @@
                 "watch_warning",
                 "answer_wait_ended",
                 "bell_line",
+                "bell_turn",
                 "intake_from",
                 "immediate",
                 "tool_handovers"
@@ -1779,6 +1835,14 @@
                         "--session"
                     ],
                     "value": null
+                },
+                {
+                    "name": "--turn-end",
+                    "required": false,
+                    "requires": [
+                        "--session"
+                    ],
+                    "value": null
                 }
             ],
             "repeats_at_most": null,
@@ -1915,7 +1979,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:150e5688f52dfb9e8d458b5b481e86d24e7d19cdf2d9f105d224fe0597cc7340",
+    "digest": "sha256:b584de08ad436239ecc7ffb6617ecb96810c7391e25a298e40c876a751caf541",
     "envelopes": {
         "agent": {
             "answer": "value",

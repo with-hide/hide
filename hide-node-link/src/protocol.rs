@@ -180,7 +180,8 @@ use crate::error::HostError;
 /// helper on 43 would drop the effort and still send the schema Codex
 /// refuses, so every agent label judged on that device's Codex would fail;
 /// it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 44;
+// 45: hook letter pulls name prompt, tool or turn end.
+pub const PROTOCOL_VERSION: u32 = 45;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
