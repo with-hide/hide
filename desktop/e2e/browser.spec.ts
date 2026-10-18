@@ -1103,8 +1103,13 @@ test("page width: a page opened into the lane widens it to 900 beside Agent View
   const site = `${origin}/site.html`;
   const divider = page.locator('[data-lane-divider="lane"]');
 
-  // A page opened from the operator's pane comes in front and the lane, at
-  // its 520 default, widens to 900, so the site draws its desktop layout (B1).
+  // A file opens the lane at its 520 default.
+  expect(await cliFromPane(["file", "open", notes])).toMatchObject({ ok: true });
+  await expect(divider).toHaveAttribute("aria-valuenow", "520");
+  await windowShot("page-width-before");
+
+  // A page opened from the operator's pane comes in front and the lane
+  // widens to 900, so the site draws its desktop layout (B1).
   expect(await openFromCli(site, ["--wait"])).toMatchObject({ ok: true });
   await expect(divider).toHaveAttribute("aria-valuenow", "900");
   await expect.poll(storedLaneWidth).toBe(900);
