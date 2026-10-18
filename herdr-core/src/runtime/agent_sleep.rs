@@ -61,8 +61,56 @@ impl Runtime {
             return false;
         }
         self.agent_sleep_next_decision_unix_ms = now_unix_ms.saturating_add(DECISION_INTERVAL_MS);
-        let changed = self.expire_dormant_confirmation(now_unix_ms);
+        let changed =
+            self.expire_dormant_confirmation(now_unix_ms) | self.fail_unstarted_wakes(now_unix_ms);
         self.decide_agent_sleep(None, now_unix_ms) | changed
+    }
+
+    /// Fails each wake whose agent has not appeared in its pane by the
+    /// start's deadline, with the reason a start that never got ready gives.
+    /// Herdr answers `agent.start` once it has typed the start line, so a
+    /// line the pane's shell never ran (a Windows prompt reading a leftover
+    /// bracketed paste as keys) would leave the row waking for good.
+    fn fail_unstarted_wakes(&mut self, now_unix_ms: u64) -> bool {
+        let records = &self.snapshot.ui_state.agent_sleep.records;
+        self.agent_wake_started.retain(|pane_id, _| {
+            records
+                .get(pane_id)
+                .is_some_and(|record| record.phase == SleepPhase::Waking)
+        });
+        let deadline_ms =
+            u64::try_from(crate::agent_start::AGENT_START_DEADLINE.as_millis()).unwrap_or(u64::MAX);
+        let unstarted = self
+            .agent_wake_started
+            .iter()
+            .filter(|(_, started)| now_unix_ms.saturating_sub(**started) >= deadline_ms)
+            .map(|(pane_id, _)| pane_id.clone())
+            .collect::<Vec<_>>();
+        for pane_id in &unstarted {
+            self.agent_wake_started.remove(pane_id);
+            if let Some(record) = self.snapshot.ui_state.agent_sleep.records.get_mut(pane_id) {
+                let reason = "The agent did not become ready in time.".to_owned();
+                record.phase = SleepPhase::Failed;
+                record.reason = Some(reason.clone());
+                crate::diagnostic!(serde_json::json!({
+                    "component": "agent_sleep",
+                    "kind": "agent_sleep.wake_failed",
+                    "pane_id": pane_id,
+                    "provider": record.kind,
+                    "reason": reason,
+                    "detail": format!(
+                        "no agent appeared in the pane within {} s of Herdr taking the start",
+                        deadline_ms / 1000
+                    ),
+                }));
+            }
+            self.refresh_sleep_rows_of(pane_id);
+        }
+        if unstarted.is_empty() {
+            return false;
+        }
+        self.persist_ui_state();
+        true
     }
 
     /// The same decision for a node that dials this core, run by that node's
@@ -499,6 +547,8 @@ impl Runtime {
                     "mode": mode,
                     "outcome": "started",
                 }));
+                self.agent_wake_started
+                    .insert(pane_id.to_owned(), unix_milliseconds());
                 false
             }
             WakeOutcome::Failed { reason, detail } => {

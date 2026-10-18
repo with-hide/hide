@@ -567,12 +567,12 @@ test("a right-click focuses its pane and opens the terminal menu, whose Zoom pan
     await shellPane.locator("[data-terminal-host]").click({ button: "right", position: { x: 40, y: 40 } });
     const menu = page.getByRole("menu");
     await expect(menu).toBeVisible();
-    for (const item of ["Paste", "Select all", "Find", "Split right", "Split down", "Zoom pane", "Copy pane name"]) {
+    for (const item of ["Paste", "Select all", "Find", "Split right", "Split down", "Zoom terminal", "Copy details"]) {
       await expect(menu.getByRole("menuitem", { name: item, exact: false }).first()).toBeVisible();
     }
     await expect(page.locator("[data-pane-focus-outline]")).toBeVisible();
     await screenshot(page, "s2-terminal-menu");
-    await menu.getByRole("menuitem", { name: /^Zoom pane/ }).click();
+    await menu.getByRole("menuitem", { name: /^Zoom terminal/ }).click();
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-zoomed", "true");
     await expect.poll(() => sent.get("toggle_zoom")).toBe(1);
     // The zoomed pane takes the whole canvas, not just its own split cell,

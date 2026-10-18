@@ -1703,6 +1703,9 @@ pub struct Runtime {
     node_sleep_shown_tabs: HashMap<String, Vec<String>>,
     /// Panes whose agent would not end, and until when they are left alone (B8).
     agent_sleep_backoff: HashMap<String, agent_sleep::Backoff>,
+    /// When Herdr took each wake's start, for the panes still waking: one
+    /// whose agent has not appeared by the start's deadline failed.
+    agent_wake_started: HashMap<String, u64>,
     /// Panes with a Reopen running or just refused, until the pane connects,
     /// leaves, or stops showing a connection chip (B29). One entry per pane,
     /// so a second press while one runs starts nothing.
@@ -2282,6 +2285,7 @@ impl Runtime {
             node_sleep_next_decision_unix_ms: HashMap::new(),
             node_sleep_shown_tabs: HashMap::new(),
             agent_sleep_backoff: HashMap::new(),
+            agent_wake_started: HashMap::new(),
             pane_reopens: HashMap::new(),
             fork_sequence: 0,
             listening_ports: crate::model::ListeningPortsSnapshot::default(),

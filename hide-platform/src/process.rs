@@ -892,10 +892,37 @@ pub fn terminate(pid: u32) -> io::Result<()> {
     sys::terminate(checked_pid(pid)?)
 }
 
-/// `SIGTERM` to every member of the process group `leader` leads, which is how
-/// a terminal's foreground job is ended. `Unsupported` on Windows.
-pub fn terminate_group(leader: u32) -> io::Result<()> {
+/// Ends the job `leader` leads, which is how a terminal's foreground job is
+/// ended: `SIGTERM` to every member of its process group on Unix. Windows
+/// keeps no group, and names the job by its first process, so there `leader`
+/// and every process under it end at once, each held open from before the
+/// first end so no later process holding a reused pid is reached; a
+/// descendant whose parent had already exited is out of reach, as for
+/// [`kill_tree`]. An error means nothing was ended: the leader would not end,
+/// or (Windows) the process table could not be read.
+pub fn terminate_group(leader: u32) -> io::Result<GroupEnd> {
     sys::terminate_group(checked_pid(leader)?)
+}
+
+/// What [`terminate_group`] did.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GroupEnd {
+    /// The group was signalled (Unix), or its leader is down (Windows), so
+    /// the job no longer holds its terminal. `left` names each process under
+    /// a Windows leader that was left running, and why.
+    Ended { left: Vec<LeftRunning> },
+    /// No such group (Unix) or live leader (Windows) was left: the job had
+    /// ended on its own.
+    Gone,
+}
+
+/// A process under an ended job's leader that is still running: it would not
+/// end, or it could not be told apart from a later process holding its pid
+/// and was left alone.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LeftRunning {
+    pub pid: u32,
+    pub reason: String,
 }
 
 /// Whether the process with this pid has not yet ended. A process owned by
@@ -1603,8 +1630,12 @@ mod sys {
         signal(pid as libc::pid_t, libc::SIGTERM)
     }
 
-    pub(super) fn terminate_group(leader: u32) -> io::Result<()> {
-        signal(-(leader as libc::pid_t), libc::SIGTERM)
+    pub(super) fn terminate_group(leader: u32) -> io::Result<super::GroupEnd> {
+        match signal(-(leader as libc::pid_t), libc::SIGTERM) {
+            Ok(()) => Ok(super::GroupEnd::Ended { left: Vec::new() }),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(super::GroupEnd::Gone),
+            Err(error) => Err(error),
+        }
     }
 
     pub(super) fn is_alive(pid: u32) -> bool {
@@ -2836,15 +2867,19 @@ mod sys {
     }
 
     pub(super) fn kill_tree(pid: u32) -> io::Result<()> {
-        let members = descendants(pid).unwrap_or_default();
+        let root = match Held::open(pid) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            held => held?,
+        };
+        // A table that cannot be read still leaves the root ended, and says
+        // that what it started was not reached.
+        let tree = hold_tree(&root);
+        root.end()?;
+        let (members, _) = tree?;
         let mut first_error = None;
-        for target in std::iter::once(pid).chain(members) {
-            match terminate(target) {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    first_error.get_or_insert(error);
-                }
+        for member in &members {
+            if let Err(error) = member.end() {
+                first_error.get_or_insert(error);
             }
         }
         first_error.map_or(Ok(()), Err)
@@ -2859,11 +2894,156 @@ mod sys {
         Ok(())
     }
 
-    pub(super) fn terminate_group(_: u32) -> io::Result<()> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "a Windows process group cannot be signalled",
-        ))
+    /// Windows keeps no process group: a terminal's foreground job is named
+    /// by its first process, which stands in for the group (Herdr's
+    /// `foreground_process_group_id` there), so the job is that process and
+    /// everything under it. No signal asks a process on another console to
+    /// end, so each ends at once, as `terminate` ends one.
+    pub(super) fn terminate_group(leader: u32) -> io::Result<super::GroupEnd> {
+        let root = match Held::open(leader) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(super::GroupEnd::Gone);
+            }
+            held => held?,
+        };
+        // Held before the first end, and a failed read ends nothing: ending
+        // the leader alone would leave what it started running with no owner.
+        let (members, mut left) = hold_tree(&root)?;
+        root.end()?;
+        // The job no longer holds the terminal once its leader is down, so a
+        // member that would not end is told to the caller, not a failure.
+        for member in &members {
+            if let Err(error) = member.end() {
+                left.push(super::LeftRunning {
+                    pid: member.pid,
+                    reason: error.to_string(),
+                });
+            }
+        }
+        Ok(super::GroupEnd::Ended { left })
+    }
+
+    /// A live process held open, so no later process can take its pid while
+    /// the handle lives, with when it started.
+    struct Held {
+        pid: u32,
+        process: Owned,
+        started: u64,
+    }
+
+    impl Held {
+        fn open(pid: u32) -> io::Result<Self> {
+            let process = open_live(pid, PROCESS_TERMINATE)?;
+            let started = started_at(&process)?;
+            Ok(Self {
+                pid,
+                process,
+                started,
+            })
+        }
+
+        /// Ends the process; one that has already ended has what was asked.
+        fn end(&self) -> io::Result<()> {
+            // SAFETY: the handle is open with the access the call needs.
+            if unsafe { TerminateProcess(self.process.0, 1) } != 0 {
+                return Ok(());
+            }
+            // An ended process refuses the call with access denied.
+            let error = io::Error::last_os_error();
+            if running(&self.process) {
+                return Err(error);
+            }
+            Ok(())
+        }
+    }
+
+    /// Every live process under `root`, parents before children, each held
+    /// open. The process table keeps the pid a parent had when its child
+    /// started and holds no handle, so a row alone could name a later process
+    /// that took an ended one's pid. A row is taken as a child only when the
+    /// process its pid opens started no earlier than its held parent, and a
+    /// second look at the table, read while it is held, still lists it under
+    /// that parent; one opened but not matched so is left alone and named
+    /// with why. A process started while the tree is read is out of reach.
+    fn hold_tree(root: &Held) -> io::Result<(Vec<Held>, Vec<super::LeftRunning>)> {
+        let mut members: Vec<Held> = Vec::new();
+        let mut left = Vec::new();
+        let mut parents = vec![(root.pid, root.started)];
+        let mut table = process_table()?;
+        for _ in 0..MAX_DEPTH {
+            let mut opened = Vec::new();
+            for &(pid, parent) in &table {
+                let Some(&(_, parent_started)) = parents.iter().find(|(held, _)| *held == parent)
+                else {
+                    continue;
+                };
+                if pid == root.pid
+                    || pid == parent
+                    || members.iter().any(|member| member.pid == pid)
+                {
+                    continue;
+                }
+                match Held::open(pid) {
+                    // An older process listed under a pid its parent took
+                    // later: it is not this tree's.
+                    Ok(held) if held.started < parent_started => {}
+                    Ok(held) => opened.push((held, parent)),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => left.push(super::LeftRunning {
+                        pid,
+                        reason: format!("it could not be opened to tell it apart: {error}"),
+                    }),
+                }
+            }
+            if opened.is_empty() {
+                break;
+            }
+            table = process_table()?;
+            parents.clear();
+            for (held, parent) in opened {
+                match table.iter().find(|(pid, _)| *pid == held.pid) {
+                    Some(&(_, listed)) if listed == parent => {
+                        parents.push((held.pid, held.started));
+                        members.push(held);
+                    }
+                    Some(_) => left.push(super::LeftRunning {
+                        pid: held.pid,
+                        reason: "another process took its pid while the tree was read".into(),
+                    }),
+                    // It ended while held: nothing is left to end.
+                    None => {}
+                }
+            }
+            if parents.is_empty() {
+                break;
+            }
+        }
+        Ok((members, left))
+    }
+
+    /// Whether the process behind `process` has not yet ended.
+    fn running(process: &Owned) -> bool {
+        let mut code = 0u32;
+        // SAFETY: the handle is open and `code` is writable.
+        let read = unsafe { GetExitCodeProcess(process.0, &mut code) };
+        read == 0 || code == STILL_ACTIVE as u32
+    }
+
+    /// When the process behind `process` started.
+    fn started_at(process: &Owned) -> io::Result<u64> {
+        let zero = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+        // SAFETY: the handle is open and every output is writable.
+        let read = unsafe {
+            GetProcessTimes(process.0, &mut created, &mut exited, &mut kernel, &mut user)
+        };
+        if read == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
     }
 
     pub(super) fn is_alive(pid: u32) -> bool {
@@ -2879,20 +3059,7 @@ mod sys {
     }
 
     pub(super) fn start_time(pid: u32) -> io::Result<u64> {
-        let process = open_live(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
-        let zero = FILETIME {
-            dwLowDateTime: 0,
-            dwHighDateTime: 0,
-        };
-        let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
-        // SAFETY: the handle is open and every output is writable.
-        let read = unsafe {
-            GetProcessTimes(process.0, &mut created, &mut exited, &mut kernel, &mut user)
-        };
-        if read == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
+        started_at(&open_live(pid, PROCESS_QUERY_LIMITED_INFORMATION)?)
     }
 
     pub(super) fn name_of(pid: u32) -> io::Result<String> {
@@ -3010,17 +3177,40 @@ mod sys {
             })
         }
 
+        /// A row whose start, or whose parent's, cannot be read is no child:
+        /// it cannot be told from a later process holding an ended one's pid.
         pub(super) fn children_of(&mut self, pid: u32) -> Vec<u32> {
-            let parent_started = start_time(pid).ok();
+            let Ok(parent_started) = start_time(pid) else {
+                return Vec::new();
+            };
             self.table
                 .iter()
                 .filter(|(_, parent)| *parent == pid)
                 .map(|(child, _)| *child)
-                .filter(|child| match (parent_started, start_time(*child).ok()) {
-                    (Some(parent), Some(child)) => child >= parent,
-                    _ => true,
-                })
+                .filter(|child| start_time(*child).is_ok_and(|child| child >= parent_started))
                 .collect()
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// A member that ended on its own after it was held, as one often
+        /// does once its leader is down, refuses `TerminateProcess` with
+        /// access denied; it has what was asked, so it is no failure.
+        #[test]
+        fn ending_a_held_process_that_has_already_ended_is_done() {
+            let mut child = Command::new("cmd")
+                .args(["/c", "pause"])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let held = Held::open(child.id()).unwrap();
+            child.kill().unwrap();
+            child.wait().unwrap();
+            held.end().unwrap();
         }
     }
 }
