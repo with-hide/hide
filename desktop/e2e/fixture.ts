@@ -351,7 +351,7 @@ async function start(appDir: string, env: Record<string, string>, executablePath
  * its focus emulation holds a visible capturer even when BrowserWindow hides.
  * The private main-process probe observes the DOM without a renderer session.
  */
-export async function launchNative(env: Record<string, string>, probe: string, executablePath?: string): Promise<() => Promise<void>> {
+export async function launchNative(env: Record<string, string>, probe: string): Promise<() => Promise<void>> {
   assertIsolated(env);
   const owner = isolations.get(env.HOME!);
   if (!focusReports || !owner) throw new Error("native launch needs an active isolated desktop fixture");
@@ -361,13 +361,13 @@ export async function launchNative(env: Record<string, string>, probe: string, e
   if (owner.candidates.size + owner.launching >= MAX_CANDIDATES_PER_HOME) throw new Error("too many native candidates");
   if (env.HIDE_CLI_PATH === bundledExecutable("hide")) linkBundle();
   fixtureLoginShellPath(env.HOME!, env.PATH!);
-  const fused = executablePath ?? process.env[FUSED_ELECTRON_ENV];
+  const fused = process.env[FUSED_ELECTRON_ENV];
   if (!fused) throw new Error(`${FUSED_ELECTRON_ENV} is not set`);
   const report = path.join(focusReports.dir, `launch-${focusReports.apps.length + 1}.jsonl`);
   owner.launching++;
   try {
     // The probe exits on stdin EOF even if its worker is killed before cleanup.
-    const child = spawn(fused, ["-r", FOCUS_GUARD, "-r", probe, ...(!executablePath ? [DESKTOP_DIR] : []), `--${SHOW_INACTIVE_SWITCH}`, "--disable-backgrounding-occluded-windows", `--hide-e2e-focus-report=${report}`], { cwd: DESKTOP_DIR, env, stdio: ["pipe", "ignore", "ignore"] });
+    const child = spawn(fused, ["-r", FOCUS_GUARD, "-r", probe, DESKTOP_DIR, `--${SHOW_INACTIVE_SWITCH}`, "--disable-backgrounding-occluded-windows", `--hide-e2e-focus-report=${report}`], { cwd: DESKTOP_DIR, env, stdio: ["pipe", "ignore", "ignore"] });
     const owned = ownUntilWorkerExit(() => { child.kill("SIGKILL"); });
     owner.candidates.add(child);
     child.once("exit", () => owned.disown());

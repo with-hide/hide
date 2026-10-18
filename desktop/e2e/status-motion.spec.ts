@@ -19,6 +19,7 @@ test.beforeAll(async () => { herdr = await startHerdr({ agents: false }); });
 test.afterAll(() => { herdr?.stop(); });
 test.beforeEach(() => { run = isolate(herdr, "status-motion"); });
 test.afterEach(async () => {
+  if (test.info().status !== test.info().expectedStatus) console.log("[status-motion host]", JSON.stringify(hostLog(run.env)));
   await app?.close();
   app = null;
   run.cleanup();
@@ -51,6 +52,7 @@ test("the local flight draws offline, freezes live for reduced motion, and yield
   const release = gate("failed");
   ({ app } = await launch(run.env, { executablePath: packaged }));
   const page = await app.firstWindow();
+  await page.waitForURL((url) => url.protocol === "file:" && url.pathname.endsWith("/status.html"), { waitUntil: "load" });
   const consoleErrors: string[] = [];
   page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
   await page.context().setOffline(true);
@@ -113,6 +115,7 @@ test("an illustration renderer failure preserves the status and recovery actions
   const release = gate("failed");
   ({ app } = await launch(run.env, { executablePath: packaged }));
   const page = await app.firstWindow();
+  await page.waitForURL((url) => url.protocol === "file:" && url.pathname.endsWith("/status.html"), { waitUntil: "load" });
   // Fail only the SVG drawing boundary, after the script itself has loaded.
   await page.addInitScript(`const create = document.createElementNS.bind(document);
     document.createElementNS = (...args) => {
@@ -135,6 +138,7 @@ for (const boundary of ["canvas", "clipPath", "still"] as const) {
     const release = gate("failed");
     ({ app } = await launch(run.env, { executablePath: packaged }));
     const page = await app.firstWindow();
+    await page.waitForURL((url) => url.protocol === "file:" && url.pathname.endsWith("/status.html"), { waitUntil: "load" });
     if (boundary === "still") {
       await page.emulateMedia({ reducedMotion: "reduce" });
       await page.route("**/owl-roam-still.svg", (route) => route.abort());
@@ -159,10 +163,12 @@ for (const boundary of ["canvas", "clipPath", "still"] as const) {
   });
 }
 
-test("real native visibility pauses startup and first-run owls without renderer focus emulation", async () => {
+test("the native dev host pauses startup and first-run owls without renderer focus emulation", async () => {
   const release = gate("ready");
   fs.rmSync(path.join(run.env.HOME!, ".hide/kit/installed.json"));
-  const close = await launchNative(run.env, path.join(__dirname, "status-motion-probe.cjs"), packaged);
+  // The packaged executable ignores Node -r observers. This same-fuse dev host
+  // uses the identical built status files; packaged loading is tested above.
+  const close = await launchNative(run.env, path.join(__dirname, "status-motion-probe.cjs"));
   const dir = run.env.HIDE_DESKTOP_USER_DATA_DIR!;
   fs.mkdirSync(dir, { recursive: true });
   let id = 0;
@@ -197,7 +203,7 @@ test("real native visibility pauses startup and first-run owls without renderer 
     await expect.poll(command).toMatchObject({ hidden: false, motion: "playing" });
   } finally {
     const evidence = process.env.HIDE_E2E_SCREENSHOT_DIR;
-    if (evidence) fs.writeFileSync(path.join(evidence, "native-owl-visibility.json"), JSON.stringify(observations, null, 2));
+    if (evidence) fs.writeFileSync(path.join(evidence, "native-owl-visibility.json"), JSON.stringify({ surface: "isolated native dev host with shipped fuses and built status bytes", packaged: false, observations }, null, 2));
     await close();
   }
 });
