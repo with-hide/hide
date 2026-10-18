@@ -52,6 +52,14 @@
       "modification": "as published: the press kit primary logo, saved as pi.svg",
       "note": "The primary logo rather than the press kit badge (https://pi.dev/favicon.svg): the badge turns #f6f6f6 under prefers-color-scheme: dark, which an <img> takes from the app's dark theme, so it nearly vanished on the white --logo-plate; the primary logo keeps its three colours in both themes and still reads at 18 px, though its mark fills about 60 percent of its frame.",
       "retrieved": "2026-10-06"
+    },
+    {
+      "id": "antigravity",
+      "file": "antigravity.svg",
+      "source_url": "https://antigravity.google/press",
+      "license": "Google's brand terms ask for a request before a Google logo is used and forbid altering one (https://partnermarketinghub.withgoogle.com/brands/google/trademarks-and-terms/); the press page offers the mark for download and states no usage terms of its own",
+      "modification": "as published: the press kit Icon - Full Color SVG (https://antigravity.google/assets/image/brand/antigravity-icon__full-color.svg, also svg/antigravity-icon__full-color.svg in the press kit zip) byte for byte, saved as antigravity.svg",
+      "retrieved": "2026-10-18"
     }
   ],
   "existing": [
@@ -66,10 +74,5 @@
       "note": "the artwork the app already bundles for the provider; kept"
     }
   ],
-  "monogram": [
-    {
-      "id": "antigravity",
-      "reason": "no official Antigravity mark with a confirmed license yet (PRD antigravity-first-class D-15); the tile draws the label's monogram"
-    }
-  ]
+  "monogram": []
 }
