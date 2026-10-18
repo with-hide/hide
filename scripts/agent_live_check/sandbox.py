@@ -132,7 +132,9 @@ class WriteSandbox:
                           '(allow network-outbound (remote ip "localhost:*"))',
                           f"(allow network-outbound (remote unix-socket (subpath {quote(self.sockets)})))",
                           f"(allow network-outbound (remote unix-socket (subpath {quote(self.run)})))"])
-            for name in (".claude", ".claude.json", ".codex", ".gemini", ".grok", ".omp", ".pi",
+            # A changed HOME makes ancestor ~/.agents/skills look project-local
+            # to Pi. Conceal metadata too, so operator skills cannot enter a run.
+            for name in (".agents", ".claude", ".claude.json", ".codex", ".gemini", ".grok", ".omp", ".pi",
                          ".config/opencode", ".local/share/opencode", "Library/Keychains"):
                 rules.append(f"(deny file-read* file-write* (subpath {quote(operator_home / name)}))")
         self.profile = self.run / ("fake-write-guard.sb" if fake_private else "native-write-guard.sb")

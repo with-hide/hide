@@ -491,7 +491,10 @@ agy keeps the local exception and is not started: its installer cannot select th
 Cursor remains excluded by operator decision.
 A missing key or update declaration, or a non-version-selecting installer, keeps an adapter on its existing local fake route with the operator HOME, and the report names the exception.
 This preserves existing coverage: a route already measured still runs, while an existing local limitation such as agy remains `not measured`.
-The private Pi fixture trusts only the measured repository and its trusted-start worktree root in `.pi/agent/trust.json`; the sibling untrusted-start root is never pre-trusted.
+The private fake sandbox denies reads of the operator's `~/.agents`, including metadata reads.
+Pi 1.0.4 searches a project's ancestors for `.agents/skills`, excluding only the current HOME's skills; without this boundary, a changed HOME makes the operator's skills look like project resources and adds an unrelated trust question.
+Operator skills must neither enter a fake run nor alter its folder-trust measurement.
+The fixture seeds no Pi trust decision, and the untrusted-start path remains untrusted.
 The candidate's Hide AI is off in both fake modes, and native titles are what the title cell reads.
 `scripts/tests/test_agent_journey_private_home.py` exercises content, top-level entry and link changes on fake watch roots, concurrent SQLite copies, unchanged source bytes, missing proof, cache refusal and authenticated requests; no test watches or changes the operator's folders.
 The report is marked as a fake model run with what a fake model cannot show: it proves the CLI, Hide's kit and Herdr's integration, never a provider, a login or a quota, and its rows are kept apart from a signed-in run's.

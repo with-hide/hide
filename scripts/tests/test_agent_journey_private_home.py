@@ -107,16 +107,6 @@ class PrivateHome(unittest.TestCase):
         with self.assertRaisesRegex(ProtectionError, 'operator_watch_claude_configuration_unreadable'):
             fake_private.OperatorWatch(self.root)
 
-    def test_private_pi_trust_is_limited_to_the_trusted_start_fixture(self):
-        home = self.root / 'home'
-        (home / '.pi/agent').mkdir(parents=True)
-        measured, trusted = self.root / 'measured', self.root / 'worktrees'
-        fake_lane.pi_trust(home, [measured, trusted])
-        data = json.loads((home / '.pi/agent/trust.json').read_text())
-        self.assertEqual(data, {str(measured): True, str(trusted): True})
-        self.assertNotIn(str(self.root), data)
-        self.assertNotIn(str(self.root / 'worktrees-untrusted'), data)
-
     def test_a_missing_key_update_or_pin_proof_keeps_the_exception(self):
         row = {'fake_home': {'status': 'proven', 'key_env': 'KEY', 'evidence': 'vendor docs',
                             'auto_update': {'kind': 'environment', 'name': 'NO_UPDATE', 'value': '1'}}}
@@ -139,10 +129,22 @@ class PrivateHome(unittest.TestCase):
         run, outside = self.root / 'run', self.root / 'outside'
         run.mkdir()
         outside.mkdir()
+        skills = self.root / 'operator/.agents/skills'
+        skills.mkdir(parents=True)
+        private_skill = skills / 'private.txt'
+        private_skill.write_text('operator-only skill')
         sandbox = WriteSandbox(run, self.root / 'sockets', self.root / 'operator',
                                checkout=self.root / 'checkout', fake_private=True)
         with OwnedProcesses() as owner:
             sandbox.verify_private(owner, clean_env(), outside)
+            # Pi's ancestor existence probe must see no operator skills;
+            # direct reads must also fail, even when their name is known.
+            probe = ("import os,pathlib\n"
+                     f"assert not os.path.exists({str(skills)!r})\n"
+                     f"try: pathlib.Path({str(private_skill)!r}).read_bytes()\n"
+                     "except PermissionError: pass\n"
+                     "else: raise AssertionError('operator skill readable')\n")
+            owner.run(sandbox.command([sys.executable, '-c', probe]), env=clean_env())
         self.assertEqual((outside / 'forbidden').read_bytes(), b'unchanged')
 
     def test_a_cache_refuses_the_first_byte_past_its_cap(self):

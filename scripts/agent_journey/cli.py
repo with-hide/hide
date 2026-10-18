@@ -367,6 +367,9 @@ def prepare_fake_local(runtime, report, table, rows, measured, operator, root, u
     sandbox = WriteSandbox(runtime.run, runtime.short, operator, runtime.state, checkout=runtime.checkout,
                            routing=operator_routing(os.environ), fake_private=True)
     runtime.sandbox = sandbox
+    report["fake_model_limits"].append(
+        "The private fake sandbox denies reads, including metadata, of the operator's .agents folder: "
+        "ancestor skills must not enter the run or create Pi's project-trust question.")
     # A controlled PATH exposes the runtime, never an operator agent binary.
     with tempfile.TemporaryDirectory(prefix="ajc-fake-guard-", dir="/tmp") as outside:
         sandbox.verify_private(runtime.owner, clean_env(), Path(outside).resolve())
@@ -397,8 +400,6 @@ def prepare_fake_local(runtime, report, table, rows, measured, operator, root, u
         declaration = row["fake_home"]
         private_directory(runtime.home.joinpath(*row["home_folder"]))
         extra = fake_lane.configure(kind, runtime.home, urls[key], root, local=False)
-        if kind == "pi":
-            fake_lane.pi_trust(runtime.home, [root, runtime.probe / "worktrees"])
         if not extra.get(declaration["key_env"]):
             refuse("fake_api_key_environment_missing: " + kind)
         # Installation runs under its own private HOME and write sandbox too.

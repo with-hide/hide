@@ -98,15 +98,6 @@ def pi(home, url, root, local):
     return {"JOURNEY_FAKE_KEY": KEY}
 
 
-def pi_trust(home, roots):
-    """The trusted-start fixture; never include the untrusted-start sibling.
-
-    Pi 1.0.4 dist/core/trust-manager.js reads canonical folder -> boolean.
-    """
-    write_private(home / ".pi/agent/trust.json",
-                  json.dumps({str(path.resolve()): True for path in roots}).encode())
-
-
 def omp(home, url, root, local):
     """omp 18.7.0's custom provider (`models.yml`) and default model role
     (`config.yml`) in its agent folder; its key is read from the variable
