@@ -414,8 +414,12 @@ def hide_ai_requests(log):
 def budget_failures(agents):
     """A signed-in run's agents over their request budget, by name (PRD B29)."""
     return [f"request_budget_exceeded: {agent['id']} made {agent['requests']} model requests, "
-            f"budget {agent['request_budget']}" for agent in agents
-            if agent.get("request_budget") is not None and agent.get("requests", 0) > agent["request_budget"]]
+            f"budget {agent['request_budget']}"
+            + (f", and the fake model refused {agent['refused_past_budget']} past it"
+               if agent.get("refused_past_budget") else "")
+            for agent in agents
+            if agent.get("request_budget") is not None
+            and (agent.get("requests", 0) > agent["request_budget"] or agent.get("refused_past_budget"))]
 
 
 def main(argv=None):
@@ -520,7 +524,7 @@ def main(argv=None):
         report["package"] = str(package(runtime))
         if fake:
             for key in measured:
-                servers[key] = fake_model.serve(run / f"fake-model-{key}.jsonl")[0]
+                servers[key] = fake_model.serve(run / f"fake-model-{key}.jsonl", rows[key]["request_budget"])[0]
         urls = {key: f"http://127.0.0.1:{server.server_address[1]}" for key, server in servers.items()}
         # Codex's sessions belong in its private home, never the operator's, and
         # in CI mode or with the fake model Claude's do too: it writes them there.
@@ -609,6 +613,7 @@ def main(argv=None):
                     # What a provider would have been asked; the session files may not show each one.
                     agent["session_requests"] = agent["requests"]
                     agent["requests"] = fake_lane.requests(run / f"fake-model-{key}.jsonl")
+                    agent["refused_past_budget"] = servers[key].refused
                 agent["request_budget"] = rows[key].get("request_budget")
                 journey.close()
     except Exception as error:

@@ -16,6 +16,13 @@ Each answer carries usage in the provider's own shape, so the usage and
 title readers have something to read. It never calls a tool and never
 reaches the network; it proves nothing about a real provider.
 
+It answers at most `limit` model requests, the agent's request budget, and
+at most twice that of every request; past either it answers 429, counts the
+refusal in `refused` and logs only the first, so a CLI that overruns fails
+its run's budget at once instead of filling the log until the run's cap. A
+body it cannot read whole, chunked or past MAX_BODY, is refused and its
+connection closed, so no unread byte becomes the next request.
+
 Run as a program it serves on 127.0.0.1, writes its port to `--port-file` and
 logs each request (path, model, whether it was streamed, the token it
 answered) to `--log` as JSON lines.
@@ -138,6 +145,14 @@ def usage(request, text):
     return prompt, max(1, len(text) // 4)
 
 
+class Refused(Exception):
+    """A request body the server will not read, with the status it answers."""
+
+    def __init__(self, status, reason):
+        super().__init__(reason)
+        self.status, self.reason = status, reason
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "journey-fake-model"
@@ -153,11 +168,42 @@ class Handler(BaseHTTPRequestHandler):
                                          "path": self.path, **fields}) + "\n")
 
     def body(self):
-        size = int(self.headers.get("Content-Length") or 0)
-        if size > MAX_BODY:
-            raise ValueError("request_too_large")
+        """The request's JSON; a body it cannot read whole raises with the
+        status to answer, and the connection is closed after that answer."""
+        if self.headers.get("Transfer-Encoding"):
+            self.close_connection = True
+            raise Refused(411, "request_body_chunked")
+        try:
+            size = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self.close_connection = True
+            raise Refused(400, "request_length_unreadable") from None
+        if size < 0 or size > MAX_BODY:
+            self.close_connection = True
+            raise Refused(413, "request_too_large")
         data = self.rfile.read(size) if size else b""
-        return json.loads(data) if data else {}
+        try:
+            return json.loads(data) if data else {}
+        except ValueError:
+            raise Refused(400, "request_body_not_json") from None
+
+    def admitted(self, generation):
+        """Whether the request is within the server's caps; a refused one is
+        answered 429 here, and only the first refusal is logged."""
+        server = self.server
+        with server.counts:
+            server.requests += 1
+            server.generations += generation
+            refused = server.limit is not None and (server.generations > server.limit
+                                                    or server.requests > 2 * server.limit)
+            server.refused += refused
+            first = refused and server.refused == 1
+        if first:
+            self.record(kind="limited", generation=generation, limit=server.limit)
+        if refused:
+            self.send(429, {"error": {"message": "past the agent's request budget on the journey's fake model",
+                                      "type": "rate_limit_error"}})
+        return not refused
 
     def send(self, status, payload, content_type="application/json"):
         data = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
@@ -185,6 +231,8 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
 
     def do_GET(self):
+        if not self.admitted(False):
+            return
         path = self.path.split("?", 1)[0].rstrip("/")
         if path.endswith("/models"):
             self.record(kind="models")
@@ -201,15 +249,17 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             request = self.body()
-        except (ValueError, OSError) as error:
-            self.record(kind="refused", error=str(error))
-            self.send(400, {"error": {"message": str(error), "type": "invalid_request_error"}})
+        except Refused as error:
+            self.record(kind="refused", error=error.reason)
+            self.send(error.status, {"error": {"message": error.reason, "type": "invalid_request_error"}})
             return
         path = self.path.split("?", 1)[0]
-        text, token = reply(request)
-        streamed = bool(request.get("stream")) or "streamGenerateContent" in path or "alt=sse" in self.path
         generation = path.endswith(("/chat/completions", "/responses", "/messages")) or ":generateContent" in path \
             or ":streamGenerateContent" in path
+        if not self.admitted(generation):
+            return
+        text, token = reply(request)
+        streamed = bool(request.get("stream")) or "streamGenerateContent" in path or "alt=sse" in self.path
         self.record(kind=path.rsplit("/", 1)[-1], model=request.get("model"), stream=streamed, generation=generation,
                     answered=token if token != "OK" else None, schema=text != token)
         if path.endswith("/chat/completions"):
@@ -306,11 +356,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, reply)
 
 
-def serve(log=None):
-    """A started server on 127.0.0.1 and its thread; `server.server_address[1]` is the port."""
+def serve(log=None, limit=None):
+    """A started server on 127.0.0.1 and its thread; `server.server_address[1]`
+    is the port, and `limit` the most model requests it answers."""
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
     server.log, server.lock = log, threading.Lock()
+    server.limit, server.counts = limit, threading.Lock()
+    server.requests = server.generations = server.refused = 0
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread

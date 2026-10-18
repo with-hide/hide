@@ -212,6 +212,10 @@ class LeftoversAndReport(unittest.TestCase):
                                     {"id": "claude-code", "requests": 12, "request_budget": 12},
                                     {"id": "pi"}])
         self.assertEqual(failures, ["request_budget_exceeded: codex made 13 model requests, budget 12"])
+        # The fake model answers no more than the budget, so a refusal past it is the overrun.
+        self.assertEqual(budget_failures([{"id": "omp", "requests": 18, "request_budget": 18, "refused_past_budget": 3}]),
+                         ["request_budget_exceeded: omp made 18 model requests, budget 18, "
+                          "and the fake model refused 3 past it"])
 
     def test_an_agent_without_its_secret_is_not_configured_and_a_stand_in_needs_none(self):
         with mock.patch.dict(os.environ, {"HIDE_CODEX_API_KEY": ""}, clear=False):

@@ -1,9 +1,12 @@
 """Which token the keyless lane's fake model answers a turn with: a wrong
 pick lets one turn's token pass another turn's cell."""
 
+import http.client
 import json
 from pathlib import Path
+import socket
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -61,6 +64,53 @@ class Schema(unittest.TestCase):
 
     def test_a_plain_request_is_answered_with_the_token(self):
         self.assertEqual(fake_model.reply(messages(("user", "JOURNEY-7777AAAA"))), ("JOURNEY-7777AAAA", "JOURNEY-7777AAAA"))
+
+
+class Server(unittest.TestCase):
+    """The served fake, over a real socket, as a CLI reaches it."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.log = Path(folder.name) / "fake.jsonl"
+        self.server = fake_model.serve(self.log, limit=2)[0]
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.port = self.server.server_address[1]
+
+    def post(self, connection):
+        connection.request("POST", "/v1/chat/completions", json.dumps(messages(("user", "JOURNEY-1111AAAA"))),
+                           {"Content-Type": "application/json"})
+        answer = connection.getresponse()
+        answer.read()
+        return answer.status
+
+    def test_past_the_budget_every_request_is_refused_and_logged_once(self):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        self.addCleanup(connection.close)
+        self.assertEqual([self.post(connection) for _ in range(4)], [200, 200, 429, 429])
+        self.assertEqual(self.server.refused, 2)
+        kinds = [json.loads(line)["kind"] for line in self.log.read_text().splitlines()]
+        self.assertEqual(kinds, ["completions", "completions", "limited"])
+
+    def raw(self, request):
+        """The status line answering `request`, and whether the server then closed the connection."""
+        with socket.create_connection(("127.0.0.1", self.port), timeout=10) as stream:
+            stream.sendall(request)
+            received = b""
+            while chunk := stream.recv(65536):
+                received += chunk
+        return received.split(b"\r\n", 1)[0]
+
+    def test_a_body_it_cannot_read_whole_is_refused_and_its_connection_closed(self):
+        # The connection ending is what `raw` waits for: a kept-alive one would time out.
+        chunked = (b"POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"
+                   b"2\r\n{}\r\n0\r\n\r\n")
+        self.assertEqual(self.raw(chunked), b"HTTP/1.1 411 Length Required")
+        large = (b"POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nContent-Length: "
+                 + str(fake_model.MAX_BODY + 1).encode() + b"\r\n\r\n")
+        self.assertEqual(self.raw(large), b"HTTP/1.1 413 Request Entity Too Large")
+        self.assertEqual(self.server.refused, 0)
 
 
 if __name__ == "__main__":
