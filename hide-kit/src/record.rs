@@ -173,10 +173,7 @@ pub fn kit_state_dir(home: &Path) -> PathBuf {
 
 /// The kit's state folder, made private when it is missing, or why the kit
 /// keeps nothing there (`crate::private_dirs`).
-pub(crate) fn private_state_dir(
-    home: &Path,
-    create: bool,
-) -> Result<PathBuf, crate::KitRefusal> {
+pub(crate) fn private_state_dir(home: &Path, create: bool) -> Result<PathBuf, crate::KitRefusal> {
     crate::private_dirs(home, &STATE_PARTS, create)
 }
 

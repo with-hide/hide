@@ -358,9 +358,15 @@ fn state(report: &KitReport, id: ComponentId) -> ComponentState {
 /// The pass stopped before changing anything, for `cause`, and judged no
 /// part or agent.
 fn refusal(report: &KitReport, cause: RefusalCause) -> &KitRefusal {
-    let refusal = report.refused.as_ref().unwrap_or_else(|| panic!("{report:?}"));
+    let refusal = report
+        .refused
+        .as_ref()
+        .unwrap_or_else(|| panic!("{report:?}"));
     assert_eq!(refusal.cause, cause, "{refusal:?}");
-    assert!(report.components.is_empty() && report.agents.is_empty(), "{report:?}");
+    assert!(
+        report.components.is_empty() && report.agents.is_empty(),
+        "{report:?}"
+    );
     refusal
 }
 
@@ -2472,7 +2478,10 @@ fn assert_preflight_refusal_preserves_fixture(fixture: &Fixture, daemon: Option<
     let report = apply(&fixture.target, &Scope::automatic());
     // One refusal for the pass, with no part or agent judged.
     assert!(report.refused.is_some(), "{report:?}");
-    assert!(report.components.is_empty() && report.agents.is_empty(), "{report:?}");
+    assert!(
+        report.components.is_empty() && report.agents.is_empty(),
+        "{report:?}"
+    );
     assert_eq!(home_tree(&fixture.root), before, "preflight changed a file");
     assert!(fixture.herdr.calls.lock().unwrap().is_empty());
     assert!(!fixture.home().join("service-called").exists());
@@ -2652,7 +2661,11 @@ fn exercise_external_state_override(key: &str) {
             status(&fixture.target),
         ] {
             let refusal = report.refused.expect("refused");
-            assert_eq!((refusal.cause, refusal.variable), expected, "{case}: {refusal:?}");
+            assert_eq!(
+                (refusal.cause, refusal.variable),
+                expected,
+                "{case}: {refusal:?}"
+            );
             assert!(refusal.path.is_some(), "{case}: {refusal:?}");
             assert!(report.components.is_empty() && report.agents.is_empty());
         }

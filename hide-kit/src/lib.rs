@@ -524,7 +524,10 @@ pub(crate) fn lock_account(target: &KitTarget) -> Result<AccountLock, KitRefusal
     use hide_platform::fs::lock::{Mode, Waited, lock_file};
     let path = record::private_state_dir(&target.home, true)?.join(".lock");
     let file = hide_platform::fs::private::open_or_create_file(&path).map_err(|error| {
-        KitRefusal::unsafe_path(&path, format!("{} could not be opened: {error}", path.display()))
+        KitRefusal::unsafe_path(
+            &path,
+            format!("{} could not be opened: {error}", path.display()),
+        )
     })?;
     match lock_file(file, Mode::Exclusive, LOCK_DEADLINE, &|| {
         target.stop.load(Ordering::Relaxed)

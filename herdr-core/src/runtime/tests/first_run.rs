@@ -389,7 +389,10 @@ fn a_refused_first_pass_opens_the_wizard_with_why_and_try_again_runs_the_pass() 
             None,
             "finish {finish}: no choice recorded"
         );
-        assert!(local_kit(&runtime)["refused"].is_object(), "finish {finish}");
+        assert!(
+            local_kit(&runtime)["refused"].is_object(),
+            "finish {finish}"
+        );
         assert!(
             runtime.snapshot().status.last_error.is_none(),
             "finish {finish}"

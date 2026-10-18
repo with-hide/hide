@@ -198,7 +198,10 @@ fn inspect_state_override(state: &Path) -> Result<bool, KitRefusal> {
                     )
                 }))
         {
-            return Err(KitRefusal::unsafe_path(state, "the Hide state override has no absolute plain inspection path; choose a safe state directory and retry retirement"));
+            return Err(KitRefusal::unsafe_path(
+                state,
+                "the Hide state override has no absolute plain inspection path; choose a safe state directory and retry retirement",
+            ));
         }
         let root = selected.ancestors().last().ok_or_else(|| {
             KitRefusal::unsafe_path(state, "the Hide state override has no inspection root; choose a safe state directory and retry retirement")
@@ -208,7 +211,10 @@ fn inspect_state_override(state: &Path) -> Result<bool, KitRefusal> {
         loop {
             inspected += 1;
             if inspected > MAX_ENTRIES {
-                return Err(KitRefusal::unsafe_path(state, "the Hide state override exceeds the preflight component bound; inspect its path before retrying retirement"));
+                return Err(KitRefusal::unsafe_path(
+                    state,
+                    "the Hide state override exceeds the preflight component bound; inspect its path before retrying retirement",
+                ));
             }
             #[cfg(all(test, unix))]
             let entry = crate::tests::inspect_system_alias_fixture(&current)
@@ -243,7 +249,10 @@ fn inspect_state_override(state: &Path) -> Result<bool, KitRefusal> {
                 // unchecked directory or alias before its parent component.
                 Some(std::path::Component::ParentDir) if system_alias_target && current.pop() => {}
                 Some(_) => {
-                    return Err(KitRefusal::unsafe_path(state, "the Hide state override leaves its inspection root; choose a safe state directory and retry retirement"));
+                    return Err(KitRefusal::unsafe_path(
+                        state,
+                        "the Hide state override leaves its inspection root; choose a safe state directory and retry retirement",
+                    ));
                 }
                 None => return Ok(true),
             }
@@ -303,9 +312,8 @@ fn inspect_below(anchor: &Path, path: &Path) -> Result<bool, KitRefusal> {
                         ),
                     ));
                 }
-                let unchecked = |error: std::io::Error| {
-                    KitRefusal::unsafe_path(&current, error.to_string())
-                };
+                let unchecked =
+                    |error: std::io::Error| KitRefusal::unsafe_path(&current, error.to_string());
                 let owned = hide_platform::fs::private::owned_by_current_user(&current)
                     .map_err(unchecked)?;
                 let writable =
@@ -412,10 +420,13 @@ fn sasu_preflight(target: &KitTarget) -> Result<(), KitRefusal> {
         Ok(entries) => {
             for (count, entry) in entries.enumerate() {
                 if count >= MAX_ENTRIES {
-                    return Err(KitRefusal::record(&directory, "sasu supervisor folder exceeds the preflight entry bound; inspect it before retirement"));
+                    return Err(KitRefusal::record(
+                        &directory,
+                        "sasu supervisor folder exceeds the preflight entry bound; inspect it before retirement",
+                    ));
                 }
-                let entry =
-                    entry.map_err(|error| KitRefusal::unsafe_path(&directory, error.to_string()))?;
+                let entry = entry
+                    .map_err(|error| KitRefusal::unsafe_path(&directory, error.to_string()))?;
                 let name = entry.file_name();
                 let Some(name) = name.to_str() else {
                     continue;
@@ -446,7 +457,10 @@ fn sasu_preflight(target: &KitTarget) -> Result<(), KitRefusal> {
     crate::tests::before_supervisor_index_read(&latest);
     let Some(index) = read_json(&latest, MAX_STATE_BYTES)? else {
         return if revision.is_some() {
-            Err(KitRefusal::record(&latest, "the selected sasu registry revision disappeared; retry retirement against the current registry; nothing was changed"))
+            Err(KitRefusal::record(
+                &latest,
+                "the selected sasu registry revision disappeared; retry retirement against the current registry; nothing was changed",
+            ))
         } else {
             Ok(())
         };

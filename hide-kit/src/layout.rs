@@ -88,7 +88,10 @@ fn state_dir_choice(
         return (PathBuf::from(dir), Some(StateVariable::HideStateDir));
     }
     if let Some(xdg) = xdg_state_home.filter(|value| !value.is_empty()) {
-        return (Path::new(xdg).join("hide"), Some(StateVariable::XdgStateHome));
+        return (
+            Path::new(xdg).join("hide"),
+            Some(StateVariable::XdgStateHome),
+        );
     }
     (default_state_dir(home), None)
 }
