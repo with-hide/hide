@@ -921,6 +921,10 @@ pub struct CheckoutTabRequest {
     pub focus: bool,
     pub resume_scope: Option<hide_session::SessionReadScope>,
     pub(crate) resume_reference: Option<crate::sidebar::SessionAgentSessionPayload>,
+    /// The folder the tab's shell starts in: the checkout, or a folder inside
+    /// it where a resumed conversation ran, since a CLI may find its
+    /// conversations by folder; a folder that is gone refuses the start.
+    pub cwd: String,
 }
 
 /// What the task's worker starts once the creation is settled: the pane, the
@@ -1081,8 +1085,11 @@ fn launch_with_prompt_checked(
         shell,
         made_worktree,
     } = start;
+    // The trust is written by the machine that runs the pane: `agent_node`
+    // is none for a device, whose own Herdr answers for its PATH, and a
+    // device's worktree still needs its trust recorded there.
     if let Some(path) = made_worktree.as_deref()
-        && let Err(reason) = crate::agent_start::trust_worktree(agent_node, &kind, path)
+        && let Err(reason) = crate::agent_start::trust_worktree(pane_node, &kind, path)
     {
         return TaskAgentOutcome::Failed(reason);
     }
@@ -1316,6 +1323,9 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
         &format!("herdr-core:task:{}:tab", request.id),
     );
     let result = (|| {
+        if let Some(node) = node.as_deref() {
+            folder_present(node, request)?;
+        }
         if let Some(scope) = request.resume_scope.as_ref() {
             target.check_current(request.id)?;
             let runtime = target.runtime.upgrade().ok_or("runtime stopped")?;
@@ -1371,6 +1381,24 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
         request.id,
         &|| target.check_current(request.id),
     );
+}
+
+/// A tab asked for a folder inside its checkout opens there or not at all:
+/// a conversation whose folder was removed since is refused with that
+/// reason, as a wake is, and never started somewhere it was not. Asked of
+/// the node of the machine that runs the tab, off the lock.
+fn folder_present(
+    node: &dyn crate::node_access::NodeLink,
+    request: &CheckoutTabRequest,
+) -> Result<(), String> {
+    if request.cwd != request.checkout_path && !crate::node_access::is_directory(node, &request.cwd)
+    {
+        return Err(format!(
+            "The working folder {} no longer exists",
+            request.cwd
+        ));
+    }
+    Ok(())
 }
 
 fn task_session_node(
@@ -1508,7 +1536,7 @@ fn create_checkout_tab(
         crate::checkout_owner::TabHost::Workspace(workspace_id) => super::create_tab_in(
             connector,
             workspace_id,
-            &request.checkout_path,
+            &request.cwd,
             &request.label,
             request.focus,
             env,
@@ -1517,7 +1545,7 @@ fn create_checkout_tab(
         crate::checkout_owner::TabHost::Open(owner) => super::open_owner_tab(
             connector,
             owner,
-            &request.checkout_path,
+            &request.cwd,
             &request.label,
             request.focus,
             env,
@@ -2251,6 +2279,35 @@ mod tests {
     use std::collections::VecDeque;
     use std::io::{BufRead, BufReader, Write};
     use std::process::Command;
+
+    #[test]
+    fn a_tab_whose_saved_folder_is_gone_is_refused_with_that_reason() {
+        let checkout = tempfile::tempdir().unwrap();
+        let inside = checkout.path().join("sub");
+        std::fs::create_dir(&inside).unwrap();
+        let request = |cwd: &std::path::Path| CheckoutTabRequest {
+            id: 1,
+            agent_kind: Some("claude".into()),
+            checkout_path: checkout.path().display().to_string(),
+            label: "resume".into(),
+            host: crate::checkout_owner::TabHost::Workspace("w1".into()),
+            resume_scope: None,
+            resume_reference: None,
+            focus: false,
+            cwd: cwd.display().to_string(),
+        };
+        let node = hide_node::Local::of_process();
+        assert_eq!(folder_present(&node, &request(&inside)), Ok(()));
+        assert_eq!(folder_present(&node, &request(checkout.path())), Ok(()));
+        let gone = checkout.path().join("removed");
+        assert_eq!(
+            folder_present(&node, &request(&gone)),
+            Err(format!(
+                "The working folder {} no longer exists",
+                gone.display()
+            ))
+        );
+    }
 
     // The only fake is the external server's newline-delimited protocol.
     struct Server {
@@ -3446,6 +3503,7 @@ mod tests {
                     focus,
                     resume_scope: None,
                     resume_reference: None,
+                    cwd: "/repo".into(),
                 },
                 None,
             )
@@ -3800,6 +3858,52 @@ mod tests {
 
     /// PRD overview-request-view D-20: a Codex that has the shared daemon is
     /// started without it, ahead of its first prompt.
+    #[test]
+    fn a_device_worktree_start_records_trust_on_the_pane_node_or_refuses_without_one() {
+        let home = tempfile::tempdir().unwrap();
+        let tree = home.path().join("tree");
+        std::fs::create_dir_all(tree.join(".git")).unwrap();
+        let wire = hide_platform::path::to_wire(&tree).unwrap();
+        let resolved = hide_platform::fs::identity::canonical(&tree).unwrap();
+        let node = hide_node::Local::new(Some(home.path().to_path_buf()));
+        let make = || PendingAgentStart {
+            resume_reference: None,
+            resume_scope: None,
+            pane_id: "w1:p1".into(),
+            kind: "claude".into(),
+            prompt: None,
+            args: Vec::new(),
+            codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+            shell: crate::agent_start::ShellStart::Plain,
+            made_worktree: Some(wire.clone()),
+        };
+        // A device start: no agent node (its Herdr answers for its PATH), a
+        // pane node that is the device's.
+        let server = server(vec![
+            shell_ready(),
+            json!({"result":{"type":"agent_started","argv":[],"agent":agent("working")}}),
+        ]);
+        let outcome = launch_with_prompt_checked(&server, None, Some(&node), 7, make(), &|| Ok(()));
+        assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
+        let written: Value =
+            serde_json::from_slice(&std::fs::read(home.path().join(".claude.json")).unwrap())
+                .unwrap();
+        let key = resolved.to_str().unwrap().replace('\\', "/");
+        assert_eq!(
+            written["projects"][key.as_str()]["hasTrustDialogAccepted"],
+            true
+        );
+        // With no pane node the start refuses before Herdr is asked.
+        let server = self::server(vec![]);
+        let TaskAgentOutcome::Failed(reason) =
+            launch_with_prompt_checked(&server, None, None, 7, make(), &|| Ok(()))
+        else {
+            panic!("a start without the pane's machine went ahead")
+        };
+        assert!(reason.starts_with("agent_trust_unavailable"), "{reason}");
+        assert!(requests_of(&server).is_empty());
+    }
+
     #[test]
     fn an_unknown_codex_first_start_refuses_before_contacting_herdr() {
         let server = server(vec![]);

@@ -37,7 +37,7 @@ pub(crate) mod links;
 pub(crate) mod memory;
 pub(crate) mod memory_analysis;
 pub(crate) mod memory_evidence;
-mod memory_promotion;
+pub(crate) mod memory_promotion;
 mod memory_verify;
 mod op_timing;
 mod operations;
@@ -53,6 +53,7 @@ mod recent_panes;
 mod rename;
 mod request_view;
 mod session;
+mod session_archive;
 mod session_state;
 mod snapshot_delta;
 mod ssh_hosts;
@@ -1134,6 +1135,13 @@ pub struct Runtime {
     /// store to point at the woken pane; an entry leaves once the published
     /// ledger shows the registration moved.
     registration_rebinds: std::collections::BTreeMap<String, crate::coordination::Rebind>,
+    /// Archive deletes whose record lines the link worker is removing.
+    archive_deletes_sent: HashSet<crate::session_archive::ArchiveId>,
+    /// The archived sessions last handed to the link worker's retention.
+    archive_retention_sent: Arc<Vec<crate::links::store::ArchivedSession>>,
+    /// When each resumed archived member's registration began waiting for
+    /// the delivery store to see its new pane, by agent id.
+    archive_registration_waits: HashMap<String, u64>,
     /// The machine this core runs on. Device labels are mutable
     /// presentation, while lineage and every key naming this machine use
     /// this operating-system id.
@@ -1872,6 +1880,8 @@ impl Runtime {
         let local_issues_path = options.local_issues_path.as_ref().map(PathBuf::from);
         snapshot.ui_state = ui_state;
         snapshot.navigator.sleeping_sessions = snapshot.ui_state.agent_sleep.dormant_snapshots();
+        snapshot.navigator.archived_sessions =
+            snapshot.ui_state.session_archive.snapshots(&|_| None);
         let shortcuts_imported = options
             .shortcut_import_path
             .as_deref()
@@ -2057,6 +2067,9 @@ impl Runtime {
             delivery_panes: HashMap::new(),
             registrations_gone: std::collections::BTreeMap::new(),
             registration_rebinds: std::collections::BTreeMap::new(),
+            archive_deletes_sent: HashSet::new(),
+            archive_retention_sent: Arc::default(),
+            archive_registration_waits: HashMap::new(),
             node: options.node_id.clone(),
             machine_name: options.machine_name.clone(),
             device_machine_ids: HashMap::new(),

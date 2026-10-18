@@ -1438,9 +1438,26 @@ export type KitComponent = {
  * `offers_reinstall` is true only while a part needs it; `shares_account_with`
  * names another registered device that reaches the same account there.
  */
+/** What stopped a machine's kit pass before it changed anything (`contracts/snapshot-wire-enums.json`: `kit_refusal_cause`). */
+export type KitRefusalCause = "unsafe" | "record" | "busy" | "projects" | "other";
+
+/** The variable that chose Hide's state folder (`kit_state_variable`), named so the operator knows what to change or unset. */
+export type KitStateVariable = "HIDE_STATE_DIR" | "XDG_STATE_HOME";
+
+/** A pass that stopped before changing anything; the kit's own words stay in the log. */
+export type KitRefusal = {
+  cause: KitRefusalCause;
+  path: string | null;
+  variable: KitStateVariable | null;
+  /** With `variable`, on the machine whose app ran the pass: the command that stops its background service, which reads the variable only when it starts. */
+  stop?: string | null;
+};
+
 export type Kit = {
   unavailable: string | null;
   busy: boolean;
+  /** The machine's last pass or read stopped before changing anything; its parts and agents are then empty. */
+  refused?: KitRefusal | null;
   components: KitComponent[];
   /** Every agent Hide has an adapter for; empty until the machine was checked. */
   agents: KitAgent[];
@@ -1890,6 +1907,33 @@ export type SleepingSession = {
   checking: boolean;
 };
 
+/** One archived root and the descendants archived with it (`ArchivedSessionSnapshot`, PRD session-archive). */
+export type ArchivedSession = {
+  id: string;
+  device_id: string;
+  project_root: string;
+  project_label: string;
+  checkout_path: string;
+  phase: "archiving" | "close_failed" | "unknown" | "archived" | "deleting";
+  /** Whether the row stands in `보관됨`; otherwise its root is live and the members show in its record (B24). */
+  listed: boolean;
+  archived_at_unix_ms: number;
+  reason: string | null;
+  /** The root first. */
+  members: ArchivedMember[];
+};
+export type ArchivedMember = {
+  session: WorkSession;
+  agent_kind: string;
+  title: string;
+  depth: number;
+  parent_session_id: string | null;
+  last_line: string | null;
+  pulls: { url: string; number: number; title: string; state: PrState }[];
+  resume: "archived" | "queued" | "starting" | "failed" | "unknown" | "resumed";
+  reason: string | null;
+};
+
 export type SnapshotRest = {
   git_worktrees_loading?: boolean;
   navigator?: {
@@ -1907,6 +1951,10 @@ export type SnapshotRest = {
     agents?: AgentRow[];
     hide_ai_checkouts?: HideAiCheckout[];
     sleeping_sessions?: SleepingSession[];
+    /** Newest archived first (D-09). */
+    archived_sessions?: ArchivedSession[];
+    /** Panes a Factory runs its workers in, which offer no Archive session (D-25). */
+    factory_worker_panes?: string[];
     devices?: Device[];
     focused_device_id?: string | null;
   };

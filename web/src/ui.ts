@@ -12,6 +12,7 @@ import type { CycleItem } from "./recent";
 import type { NumberedFamily } from "./shortcuts";
 import type { ViewFocusRequest, ViewWorkspace } from "./viewLayout";
 import type { KeyboardOwner } from "./viewFocus";
+import type { BrowserDevice } from "./browserDevice";
 import { NO_CALLS_SEEN, type CallsSeen, type LaneMode, type LaneTool } from "./workspace";
 
 export type { ViewFocusRequest } from "./viewLayout";
@@ -244,6 +245,18 @@ type UiStore = {
   laneExpanded: boolean;
   /** What the page has read of the core's lane calls (`laneCalls.ts`). */
   laneCallsSeen: CallsSeen;
+  /**
+   * The Workspace (`workspaceKey`) whose lane call put a page in front, until
+   * the Workspace screen, which measures the body, widens its lane for it
+   * (PRD browser-width-zoom D-04, D-06). Never sent.
+   */
+  pageWiden: string | null;
+  /**
+   * The device size each browser display shows its page at, by host key
+   * (`hostKey`); a display missing here fits its area (PRD browser-width-zoom
+   * D-11). Page-local: never sent, and gone with a reload of the shell.
+   */
+  browserDevices: Record<string, BrowserDevice>;
   /** What the Workspace screen draws of the lane now. */
   drawnLane: DrawnLane;
   /** The Explorer's inline name field, or null. */
@@ -264,6 +277,10 @@ type UiStore = {
   /** Settings was opened from the window's strip to give up a move's wait: the Devices tab opens the move dialog at its confirm once and clears this. */
   moveGiveUpRequested: boolean;
   pendingClose: PendingClose | null;
+  /** The working session whose Archive session waits for Stop work and archive (PRD session-archive B6). */
+  pendingArchive: { paneId: string } | null;
+  /** The archived session whose delete waits for its confirmation (B28). */
+  pendingArchiveDelete: { id: string } | null;
   cycle: Cycle | null;
   /** A notice the operator can act on. */
   notice: Notice | null;
@@ -322,6 +339,10 @@ type UiStore = {
   setViewFocusRequest: (request: ViewFocusRequest | null) => void;
   /** The lane was called (an open, a tool, a reveal): an unpinned lane comes up. */
   showLane: () => void;
+  setPageWiden: (workspace: string | null) => void;
+  setBrowserDevice: (key: string, device: BrowserDevice) => void;
+  /** Drops the device sizes of displays the core no longer keeps (`keep` holds their host keys). */
+  keepBrowserDevices: (keep: ReadonlySet<string>) => void;
   /** A terminal click, Escape or an agent chosen: an unpinned lane is put away and an expanded one returns. */
   putLaneAway: () => void;
   setLaneExpanded: (expanded: boolean) => void;
@@ -343,6 +364,8 @@ type UiStore = {
   openMoveGiveUp: () => void;
   clearMoveGiveUpRequest: () => void;
   setPendingClose: (pending: PendingClose | null) => void;
+  setPendingArchive: (pending: { paneId: string } | null) => void;
+  setPendingArchiveDelete: (pending: { id: string } | null) => void;
   setCycle: (cycle: Cycle | null) => void;
   setNotice: (notice: Notice | null) => void;
   setWorkspaceDialog: (dialog: WorkspaceDialog | null) => void;
@@ -386,6 +409,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   laneShown: true,
   laneExpanded: false,
   laneCallsSeen: NO_CALLS_SEEN,
+  pageWiden: null,
+  browserDevices: {},
   drawnLane: { mode: "closed", tool: null },
   explorerDraft: null,
   pendingTrash: null,
@@ -398,6 +423,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   addDeviceRequested: false,
   moveGiveUpRequested: false,
   pendingClose: null,
+  pendingArchive: null,
+  pendingArchiveDelete: null,
   cycle: null,
   notice: null,
   workspaceDialog: null,
@@ -433,6 +460,25 @@ export const useUiStore = create<UiStore>((set, get) => ({
   showLane: () => {
     if (!get().laneShown) set({ laneShown: true });
   },
+  setPageWiden: (pageWiden) => {
+    if (get().pageWiden !== pageWiden) set({ pageWiden });
+  },
+  setBrowserDevice: (key, device) => {
+    const devices = get().browserDevices;
+    if ((devices[key] ?? "fit") === device) return;
+    const next = { ...devices };
+    if (device === "fit") delete next[key];
+    else next[key] = device;
+    set({ browserDevices: next });
+  },
+  keepBrowserDevices: (keep) => {
+    const devices = get().browserDevices;
+    const gone = Object.keys(devices).filter((key) => !keep.has(key));
+    if (gone.length === 0) return;
+    const next = { ...devices };
+    for (const key of gone) delete next[key];
+    set({ browserDevices: next });
+  },
   putLaneAway: () => {
     if (get().laneShown || get().laneExpanded) set({ laneShown: false, laneExpanded: false });
   },
@@ -459,6 +505,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   openMoveGiveUp: () => set({ overlay: "settings", settingsTab: "devices", moveGiveUpRequested: true }),
   clearMoveGiveUpRequest: () => set({ moveGiveUpRequested: false }),
   setPendingClose: (pendingClose) => set({ pendingClose }),
+  setPendingArchive: (pendingArchive) => set({ pendingArchive }),
+  setPendingArchiveDelete: (pendingArchiveDelete) => set({ pendingArchiveDelete }),
   setCycle: (cycle) => set({ cycle }),
   setNotice: (notice) => set({ notice }),
   setWorkspaceDialog: (workspaceDialog) => set({ workspaceDialog }),

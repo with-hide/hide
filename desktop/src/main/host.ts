@@ -11,7 +11,6 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, screen, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type NativeImage } from "electron";
 import { DebUpdater, MacUpdater, NsisUpdater, RpmUpdater } from "electron-updater";
 import { CHECK_UPDATES_COMMAND, SETUP_COMMAND } from "../../../web/src/host";
@@ -46,6 +45,7 @@ import type { HostLanguage } from "./language";
 import { chooseHerdr, ensureServer, parseServerStatus, serverEnvironment, type HerdrChoice } from "./herdr";
 import { loadFailureFields, type HostLog } from "./log";
 import { ChildRunner, executableFile, startDetached, type ChildResult } from "./spawn";
+import { fallbackScreen, fallbackScript, statusPageFile } from "./statusPage";
 import { MIN_SIZE, readWindowState, restoreBounds, windowStatePath, writeWindowState } from "./windowState";
 import { openRoute, probe, probeRequest } from "./localPath";
 import { revealTarget } from "./reveal";
@@ -72,8 +72,7 @@ const LOST_POLL_MS = 3_000;
 /** A started Herdr answered within 0.1 s in a 2026-09-29 run; restoring many panes can take longer. */
 const HERDR_START_WAIT_MS = 5_000;
 const HERDR_START_POLL_MS = 200;
-const STATUS_PAGE = path.join(__dirname, "static", "status.html");
-const STATUS_PAGE_URL = pathToFileURL(STATUS_PAGE).href;
+const STATUS_PAGE = statusPageFile(__dirname);
 const CLIPBOARD_PERMISSIONS = new Set(["clipboard-read", "clipboard-sanitized-write"]);
 const EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 
@@ -124,6 +123,14 @@ export class DesktopHost {
   private statusLoad: Promise<unknown> | null = null;
   /** Whether a render already waits for `statusLoad`; it renders whatever state is current then. */
   private renderWaits = false;
+  /**
+   * The status screen the window shows now, or null while it shows anything
+   * else. Electron answers `getURL()` with the address of a load that failed,
+   * so the address cannot say whether the page is there.
+   */
+  private statusScreen: { lang: string; plain: boolean } | null = null;
+  /** Set when the status page file would not load; every later status screen is the plain one (`statusPage.ts`). */
+  private statusPageBroken = false;
   private readonly runner = new ChildRunner();
   /** Every CLI child runs through this chain, so the runner's cap of one is never crossed. */
   private cliChain: Promise<unknown> = Promise.resolve();
@@ -1118,21 +1125,67 @@ export class DesktopHost {
       this.load(window.loadURL(state.url), state.kind);
       return;
     }
-    const hash = state.kind === "failed" ? this.failedHash(state) : "connecting";
     const words = this.statusWords();
-    const shown = window.webContents.getURL();
-    if (shown.startsWith(STATUS_PAGE_URL) && new URL(shown).searchParams.get("lang") === words.lang) {
+    if (this.statusPageBroken) {
+      this.showPlainStatus(window, words, state);
+      return;
+    }
+    const hash = state.kind === "failed" ? this.failedHash(state) : "connecting";
+    if (this.statusScreen?.lang === words.lang && !this.statusScreen.plain) {
       // Already on the status page in this language: only its hash moves, which it follows itself.
       this.load(window.webContents.executeJavaScript(`location.hash = ${JSON.stringify(hash)}`), state.kind);
       return;
     }
     const loading = window.loadFile(STATUS_PAGE, { hash, query: words.query });
     this.statusLoad = loading;
-    const settled = () => {
-      if (this.statusLoad === loading) this.statusLoad = null;
-    };
-    loading.then(settled, settled);
+    // A load settles for the window that started it: a closed window's answer says nothing of the one that replaced it.
+    const mine = () => this.window === window && !window.isDestroyed();
+    loading.then(
+      () => {
+        if (!mine()) return;
+        this.statusLoad = null;
+        this.statusScreen = { lang: words.lang, plain: false };
+      },
+      (error: unknown) => {
+        if (!mine()) return;
+        this.statusLoad = null;
+        // A load a newer one replaced is not a failure; one that failed will fail again, so the plain screen takes its place.
+        if ((error as { code?: string }).code === "ERR_ABORTED") return;
+        this.statusPageBroken = true;
+        this.statusScreen = null;
+        this.log.event("status_page.unavailable", { file_exists: fs.existsSync(STATUS_PAGE), ...loadFailureFields(error) });
+        this.render();
+      },
+    );
     this.load(loading, state.kind);
+  }
+
+  /**
+   * The status screen when the status page file will not load: the same
+   * sentences on a blank page (`statusPage.ts`), so a failure still shows its
+   * reason and Retry instead of a blank window. It takes the window's one
+   * navigation like the page does, and is loaded afresh each time so its
+   * Retry link, a fragment, is a new navigation every time.
+   */
+  private showPlainStatus(window: BrowserWindow, words: { query: Record<string, string>; lang: string }, state: Exclude<HostState, { kind: "attached" } | { kind: "lost" }>): void {
+    const screen = fallbackScreen(words.query, state.kind === "failed" ? { kind: "failed", reason: state.reason, file: state.file, ...this.failedSentences(state) } : state);
+    const showing = (async () => {
+      await window.loadURL("about:blank");
+      await window.webContents.executeJavaScript(fallbackScript(screen, __HIDE_BACKGROUND__));
+    })();
+    this.statusLoad = showing;
+    const mine = () => this.window === window && !window.isDestroyed();
+    showing.then(
+      () => {
+        if (!mine()) return;
+        this.statusLoad = null;
+        this.statusScreen = { lang: words.lang, plain: true };
+      },
+      () => {
+        if (mine()) this.statusLoad = null;
+      },
+    );
+    this.load(showing, state.kind);
   }
 
   /**
@@ -1144,19 +1197,26 @@ export class DesktopHost {
   private failedHash(state: Extract<HostState, { kind: "failed" }>): string {
     const shown = new URLSearchParams({ failed: state.reason });
     if (state.file !== undefined) shown.set("file", state.file);
-    if (state.builds !== undefined) {
-      const t = this.language.t;
-      const said = state.reason === "update_failed" ? "native.status.updateFailed" : "native.status.coreNewer";
-      shown.set("said", t(said, { machine: state.builds.machine }));
-      shown.set("builds", t("native.status.builds", { core: state.builds.core, app: state.builds.app }));
-    }
+    const { said, builds } = this.failedSentences(state);
+    if (said !== undefined) shown.set("said", said);
+    if (builds !== undefined) shown.set("builds", builds);
     return shown.toString();
+  }
+
+  /** The sentences a failure with both builds adds to its reason; none for the other failures. */
+  private failedSentences(state: Extract<HostState, { kind: "failed" }>): { said?: string; builds?: string } {
+    if (state.builds === undefined) return {};
+    const t = this.language.t;
+    const said = state.reason === "update_failed" ? "native.status.updateFailed" : "native.status.coreNewer";
+    return { said: t(said, { machine: state.builds.machine }), builds: t("native.status.builds", { core: state.builds.core, app: state.builds.app }) };
   }
 
   /**
    * The status page's sentences in the language in effect, passed in its
-   * address so the catalogs stay the one source of the words. The page has
-   * no bridge, so a language change reloads it (`render` compares `lang`).
+   * address so the catalogs stay the one source of the words. The page gets
+   * the window's preload but `fromShell` refuses every message from it, so
+   * words cannot reach it any other way and a language change reloads it
+   * (`render` compares `lang`).
    */
   private statusWords(): { query: Record<string, string>; lang: string } {
     const t = this.language.t;
@@ -1183,7 +1243,7 @@ export class DesktopHost {
   /**
    * The failed status page's Copy diagnostics (PRD first-run-onboarding B2):
    * the app build, the reason code and where the host log is, written to
-   * the clipboard here, since the page has no bridge. The page then says it
+   * the clipboard here, since the page cannot reach it. The page then says it
    * was copied or, when the clipboard refused it, shows the same text to
    * select by hand.
    */
@@ -1212,7 +1272,7 @@ export class DesktopHost {
 
   /** Draws the status page again in the language now in effect; the daemon's page follows the core itself and is left alone. */
   languageChanged(): void {
-    if (this.window?.webContents.getURL().startsWith(STATUS_PAGE_URL)) this.render();
+    if (this.statusScreen) this.render();
     // The taskbar overlay's words are the host's.
     if (process.platform === "win32" && this.badge > 0) this.showBadge(this.badge);
   }
@@ -1276,7 +1336,11 @@ export class DesktopHost {
       }
     });
     window.on("closed", () => {
-      if (this.window === window) this.window = null;
+      if (this.window !== window) return;
+      this.window = null;
+      // What this window showed and was loading is gone with it; the next window starts from nothing.
+      this.statusScreen = null;
+      this.statusLoad = null;
     });
     window.on("enter-full-screen", () => this.sendWindowChrome(window));
     window.on("leave-full-screen", () => this.sendWindowChrome(window));
@@ -1368,7 +1432,10 @@ export class DesktopHost {
     const contents = window.webContents;
     // A new page is not the shell that reported until it reports itself.
     contents.on("did-start-navigation", (details) => {
-      if (details.isMainFrame && !details.isSameDocument) this.clicks.shellGone();
+      if (details.isMainFrame && !details.isSameDocument) {
+        this.clicks.shellGone();
+        this.statusScreen = null;
+      }
     });
     contents.on("will-navigate", (event, url) => {
       if (this.isDaemonUrl(url)) return;
@@ -1386,9 +1453,10 @@ export class DesktopHost {
       return { action: "deny" };
     });
     // The status page asks for Retry and Copy diagnostics by moving its own
-    // hash; it has no bridge.
+    // hash; the host takes no IPC from it (`fromShell`).
     contents.on("did-navigate-in-page", (_event, url) => {
-      if (!url.startsWith("file:")) return;
+      // The status page is a file; its plain form is about:blank (`statusPage.ts`).
+      if (!url.startsWith("file:") && !url.startsWith("about:blank")) return;
       const hash = new URL(url).hash;
       if (hash === "#retry") void this.discover("retry");
       else if (new URLSearchParams(hash.slice(1)).has("copy")) this.copyDiagnostics(contents, new URLSearchParams(hash.slice(1)));

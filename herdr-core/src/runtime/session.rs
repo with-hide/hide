@@ -2120,6 +2120,7 @@ impl Runtime {
         }
         changed |= self.refresh_agent_lineage();
         changed |= self.advance_tree_closes();
+        changed |= self.advance_session_archive();
         if changed {
             self.sync_async_operations();
         }
@@ -3013,6 +3014,7 @@ impl Runtime {
         }
         changed |= self.refresh_agent_lineage();
         changed |= self.advance_tree_closes();
+        changed |= self.advance_session_archive();
         for (tab_id, reason) in &rejected_layouts {
             crate::diagnostic!(serde_json::json!({
                 "component": "session",
@@ -3890,7 +3892,8 @@ impl Runtime {
         let stays_behind = operation.stays_behind;
         // A device's Herdr focuses what it created, and the device's screen
         // follows its host; this machine's focus does not move for it. A
-        // task that stays behind (a phone start) takes the screen nowhere.
+        // task that stays behind (a phone start, or an archived descendant
+        // resumed after its root) takes the screen nowhere.
         let should_focus = operation_kind != "branch_migrate" && device.is_none() && !stays_behind;
         match result {
             Ok(outcome) => {

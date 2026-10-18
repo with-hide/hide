@@ -1284,8 +1284,8 @@ impl Runtime {
             .panes
             .iter()
             .all(|pane| pane.failed_terminal_id.is_some());
-        let retain_for_reopen =
-            !self
+        let retain_for_reopen = !self.archive_closes_pane(&target_id)
+            && !self
                 .snapshot
                 .ui_state
                 .agent_sleep

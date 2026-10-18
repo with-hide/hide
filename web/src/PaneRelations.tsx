@@ -15,6 +15,8 @@ import { isHtmlFile } from "./browserViews";
 import { revealHost } from "./host";
 import type { TerminalContextLink } from "./terminalLinkProvider";
 import type { RevealHost } from "./revealExternal";
+import { archiveOffer, type ArchiveOffer } from "./archive";
+import { agentsByPane, allAgents } from "./paneAgents";
 
 // The delegation tree where the operator works (PRD S6 D-07, B14-B16): a
 // child pane's header returns to its parent, a parent's badge lists every
@@ -112,6 +114,7 @@ export function RelationStatus({ actions, visiblePaneIds }: { actions: Actions; 
 type PaneMenuId =
   | `open:${string}`
   | "sleep_agent"
+  | "archive_session"
   | "fork_agent"
   | "fork_agent_side"
   | "copy_name"
@@ -135,7 +138,7 @@ type PaneMenuId =
  * each opened only by choosing it, its name and Herdr id to copy, and closing it. Opening
  * the menu moves no focus and marks nothing read.
  */
-export function paneMenuItems(pane: PaneRow, title: string): MenuEntry<PaneMenuId>[] {
+export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffer = { kind: "hidden" }): MenuEntry<PaneMenuId>[] {
   const relationLabel = { parent: "panes.relation.parent", sibling: "panes.relation.sibling" } as const;
   const items: MenuEntry<PaneMenuId>[] = relationEntries(pane).map((entry) => ({
     id: `open:${entry.paneId}` as const,
@@ -152,6 +155,11 @@ export function paneMenuItems(pane: PaneRow, title: string): MenuEntry<PaneMenuI
       unavailable: pane.sleep_action.available ? null : (pane.sleep_action.reason ?? translate("panes.menu.sleepUnavailable")),
     });
   }
+  // Archive session (PRD session-archive B1-B4, D-08): below Sleep agent on a
+  // root agent's pane, disabled with why on a child, an unknown conversation
+  // or a disconnected device; a shell, a Factory worker and Hide AI get none.
+  const archiveEntry: MenuEntry<PaneMenuId> | null = archive.kind === "offered" ? { id: "archive_session", label: translate("archive.menu.archive"), unavailable: archive.unavailable } : null;
+  if (archiveEntry && pane.sleep_action) agentActions.push(archiveEntry);
   // Fork agent and Fork agent to the side (PRD fork-operator-root B2, B3, D-03):
   // offered on an agent pane the core can fork, and both drawn disabled with the
   // core's reason on an agent that can fork but has not reported its conversation
@@ -163,6 +171,7 @@ export function paneMenuItems(pane: PaneRow, title: string): MenuEntry<PaneMenuI
       { id: "fork_agent_side", label: translate("panes.menu.forkSide"), unavailable },
     );
   }
+  if (archiveEntry && !pane.sleep_action) agentActions.push(archiveEntry);
   if (agentActions.length > 0) items.push(...agentActions.map((item, index) => (index === 0 ? { ...item, separated: items.length > 0 } : item)));
   items.push({ id: "copy_name", label: translate("panes.menu.copyName"), unavailable: null, separated: items.length > 0 && agentActions.length === 0 });
   items.push({ id: "copy_pane_id", label: translate("panes.menu.copyPaneId"), unavailable: null });
@@ -188,7 +197,7 @@ export type TerminalMenuContext = {
  * A right-click in the terminal: its link first, editing the text, then the tab's
  * layout around this pane, then everything the header menu offers.
  */
-export function terminalMenuItems(pane: PaneRow, title: string, context: TerminalMenuContext): MenuEntry<PaneMenuId>[] {
+export function terminalMenuItems(pane: PaneRow, title: string, context: TerminalMenuContext, archive: ArchiveOffer = { kind: "hidden" }): MenuEntry<PaneMenuId>[] {
   const { chords } = context;
   const items: MenuEntry<PaneMenuId>[] = [];
   const { target, found } = context.link ?? {};
@@ -223,7 +232,7 @@ export function terminalMenuItems(pane: PaneRow, title: string, context: Termina
     },
   );
   if (editingStart > 0) items[editingStart] = { ...items[editingStart]!, separated: true };
-  const paneItems = paneMenuItems(pane, title).map((item, index) => (index === 0 ? { ...item, separated: true } : item));
+  const paneItems = paneMenuItems(pane, title, archive).map((item, index) => (index === 0 ? { ...item, separated: true } : item));
   return [...items, ...paneItems];
 }
 
@@ -258,6 +267,8 @@ export function usePaneMenu(pane: PaneRow, title: string, actions: Actions) {
         return actions.closePane(pane.id);
       case "sleep_agent":
         return actions.sleepAgent(pane.id);
+      case "archive_session":
+        return actions.archiveSession(pane.id);
       case "fork_agent":
         return actions.forkPane(pane.id, "tab");
       case "fork_agent_side":
@@ -286,7 +297,8 @@ export function usePaneMenu(pane: PaneRow, title: string, actions: Actions) {
   // The name, the fork and sleep availability and the relatives change while a
   // menu is open (the session's label arrives after its first turn), and the
   // menu says what the header says now.
-  const items = open === null ? [] : open.terminal ? terminalMenuItems(pane, title, open.terminal) : paneMenuItems(pane, title);
+  const archive = useArchiveOffer(pane.id, open !== null);
+  const items = open === null ? [] : open.terminal ? terminalMenuItems(pane, title, open.terminal, archive) : paneMenuItems(pane, title, archive);
   const menu = <EntryPointMenu label={t("panes.menu.aria", { name: title })} items={items} onSelect={select} at={open} onClose={() => setOpen(null)} />;
   return {
     menu,
@@ -301,6 +313,21 @@ export function usePaneMenu(pane: PaneRow, title: string, actions: Actions) {
       }).catch((error: unknown) => useShellStore.getState().noteDiagnostic(`terminal menu: the link check failed: ${String(error)}`));
     },
   };
+}
+
+/** `세션 보관` for this pane's agent, read only while its menu is open. */
+function useArchiveOffer(paneId: string, open: boolean): ArchiveOffer {
+  const { t } = useInterfaceTranslation();
+  // A string, so a snapshot that moves nothing of the offer leaves the menu alone.
+  const offer = useShellStore((s) => {
+    if (!open) return "hidden";
+    const agent = agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).get(paneId);
+    const found = archiveOffer(s.rest, agent, t);
+    return found.kind === "hidden" ? "hidden" : `offered:${found.unavailable ?? ""}`;
+  });
+  if (offer === "hidden") return { kind: "hidden" };
+  const reason = offer.slice("offered:".length);
+  return { kind: "offered", unavailable: reason || null };
 }
 
 export function useRelationProgress(sourcePaneId: string, targetPaneId: string | null) {

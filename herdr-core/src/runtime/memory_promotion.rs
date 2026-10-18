@@ -2057,7 +2057,7 @@ fn spawn_agent(
     // Stable per Project, card and attempt start, so a start asked again
     // continues the same spawn (rule 11), and an attempt after the
     // Project's data was deleted and its numbers began again is a new one.
-    let digest = &stable_digest(project_id)[..12];
+    let prefix = intent_prefix(project_id);
     let view = crate::coordination::run(
         start.client.clone(),
         crate::delivery::worker::Authority {
@@ -2070,7 +2070,7 @@ fn spawn_agent(
             machine: start.machine.clone(),
             name: agent_name(number, started),
             intent: format!(
-                "memory-promote-{digest}-m{number}-a{}-{}",
+                "{prefix}m{number}-a{}-{}",
                 promotion.attempt,
                 base36(started)
             ),
@@ -2090,6 +2090,13 @@ fn spawn_agent(
         .as_str()
         .map(str::to_owned)
         .ok_or_else(|| "spawn_answer_unreadable".to_owned())
+}
+
+/// What every start of a Project's promotions begins its intent with: the
+/// digest of the Project's id, which tells whose card a task's number names
+/// (`node_migration::reown`).
+pub(crate) fn intent_prefix(project_id: &str) -> String {
+    format!("memory-promote-{}-", &stable_digest(project_id)[..12])
 }
 
 fn stable_digest(value: &str) -> String {

@@ -65,7 +65,10 @@ impl Runtime {
     /// The operator left the step `from` (Continue, Not now, Skip for now, a
     /// project added). Only the step on screen moves, so a second press or a
     /// window still showing an earlier step changes nothing (engineering rule
-    /// 11). The first step ends through its apply, never through this event.
+    /// 11). The first step ends through its apply, never through this event,
+    /// unless this Mac's pass stopped before changing anything: then there is
+    /// nothing to choose, and Not now closes the wizard with the question
+    /// unanswered, so the next pass that waits for it opens it again.
     /// Leaving the notification step may set the desktop switch with the same
     /// press: Continue on a Mac that already allows Hide turns it on (B16),
     /// Not now leaves it off even after Turn on was pressed while macOS asks
@@ -78,6 +81,19 @@ impl Runtime {
         let to = match from {
             FirstRunStep::Notifications => FirstRunStep::Project,
             FirstRunStep::Project => FirstRunStep::Done,
+            FirstRunStep::Agents
+                if self.first_run_step() == Some(FirstRunStep::Agents)
+                    && self.kit_view(self.node.as_str()).refused.is_some() =>
+            {
+                self.snapshot.ui_state.first_run = None;
+                self.first_run_apply = None;
+                self.persist_ui_state();
+                crate::diagnostic!(serde_json::json!({
+                    "component": "first_run",
+                    "kind": "first_run.closed_refused",
+                }));
+                return true;
+            }
             FirstRunStep::Agents | FirstRunStep::Done => {
                 crate::diagnostic!(serde_json::json!({
                     "component": "first_run",

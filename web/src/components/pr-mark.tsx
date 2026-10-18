@@ -64,7 +64,7 @@ function PrStateCounts({ counts, stale = false, className, ...rest }: { counts: 
 }
 
 /** A row's or a family's mark, one PR or several. */
-function PartsMark({ parts, stale, ...rest }: { parts: PrMarkParts; stale?: boolean } & HTMLAttributes<HTMLSpanElement>) {
+export function PartsMark({ parts, stale, ...rest }: { parts: PrMarkParts; stale?: boolean } & HTMLAttributes<HTMLSpanElement>) {
   return "counts" in parts ? <PrStateCounts counts={parts.counts} stale={stale} {...rest} /> : <PrMark state={parts.state} number={parts.number} stale={stale} {...rest} />;
 }
 

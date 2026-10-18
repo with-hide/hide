@@ -4,8 +4,9 @@
 // this app or its update failed) and asks for Retry by setting `#retry`, and
 // for Copy diagnostics by adding `&copy=1`, which the host sees as an in-page
 // navigation; the host answers a copy with `&copied=1`, or with
-// `&diagnostics=<text>` when the clipboard refused it. It has no bridge and
-// no Node API.
+// `&diagnostics=<text>` when the clipboard refused it. It takes
+// no part in the window's bridge: the preload is loaded, but the host
+// refuses every privileged message from this address (`fromShell`).
 // Its sentences arrive in its address, written by the host from the
 // interface catalogs in the language in effect; a missing one is a host bug
 // and fails loudly rather than showing a guess.

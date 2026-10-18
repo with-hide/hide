@@ -688,6 +688,189 @@ pub enum ReceiptRecord {
     Capped,
 }
 
+/// One Project a device conversion moved.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Conversion {
+    pub from: String,
+    pub to: String,
+    /// Set when the Project was folded into a copy of itself already stored
+    /// under `to`.
+    pub merged: Option<Folded>,
+}
+
+/// What folding a leftover copy of a Project into it did.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Folded {
+    /// Each table's rows then under the Project that the copy held (only
+    /// tables that held any).
+    pub rows: BTreeMap<String, u64>,
+    /// The number each of the copy's cards had and the one it has now: a
+    /// number the copy shared with the moving Project's cards moved, and
+    /// everything that names a card by number is read through this.
+    pub renumbered: BTreeMap<u64, u64>,
+    /// Cards the promotion batch of a branch could no longer hold once the
+    /// batches of both Projects were joined (at most five).
+    pub batch_dropped: Vec<u64>,
+}
+
+/// Folds the Project `leftover`, stored under the id `into` that `moving`
+/// would take, with `moving`'s rows and choices winning (`convert_device_merging`).
+fn fold_project(
+    transaction: &Transaction<'_>,
+    tables: &[String],
+    moving: &str,
+    into: &str,
+    device: &str,
+) -> Result<Folded, MemoryError> {
+    let count = |table: &str, id: &str| -> Result<u64, MemoryError> {
+        Ok(transaction.query_row(
+            &format!("SELECT COUNT(*) FROM \"{table}\" WHERE project_id=?1"),
+            [id],
+            |row| row.get(0),
+        )?)
+    };
+    let mut leftover = BTreeMap::new();
+    for table in tables {
+        leftover.insert(table.clone(), count(table, into)?);
+    }
+    // The leftover's cards are numbered after every number the moving
+    // Project has used, so a number is never shown for two cards.
+    let (highest, moving_next): (i64, i64) = transaction.query_row(
+        "SELECT COALESCE((SELECT MAX(number) FROM memory_items WHERE project_id=?1),0),
+                (SELECT next_number FROM projects WHERE id=?1)",
+        [moving],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let offset = highest.max(moving_next - 1);
+    let leftover_next: i64 = transaction.query_row(
+        "SELECT next_number FROM projects WHERE id=?1",
+        [into],
+        |row| row.get(0),
+    )?;
+    let renumbered: BTreeMap<u64, u64> = {
+        let mut statement =
+            transaction.prepare("SELECT number FROM memory_items WHERE project_id=?1")?;
+        statement
+            .query_map([into], |row| row.get::<_, i64>(0))?
+            .map(|number| number.map(|number| (number as u64, (number + offset) as u64)))
+            .collect::<Result<_, _>>()?
+    };
+    // Through negative numbers, since the index is checked row by row and a
+    // shift up could land on the next card's number.
+    transaction.execute(
+        "UPDATE memory_items SET number=-number WHERE project_id=?1",
+        [into],
+    )?;
+    transaction.execute(
+        "UPDATE memory_items SET number=?1-number WHERE project_id=?2",
+        params![offset, into],
+    )?;
+    let batch_dropped = fold_promotion_batches(transaction, moving, into, &renumbered)?;
+    for table in tables {
+        // The cards and the search index have no key of the Project's own
+        // to collide on, and the batches were joined above; every other row
+        // of the moving Project replaces a leftover row of the same key.
+        let verb = match table.as_str() {
+            "promotion_batches" => continue,
+            "memory_items" | "memory_fts" => "UPDATE",
+            _ => "UPDATE OR REPLACE",
+        };
+        transaction.execute(
+            &format!("{verb} \"{table}\" SET project_id=?1 WHERE project_id=?2"),
+            params![into, moving],
+        )?;
+    }
+    transaction.execute(
+        "UPDATE projects SET device_id=?1,
+            enabled=(SELECT enabled FROM projects WHERE id=?2),
+            disclosure_accepted_at_ms=(SELECT disclosure_accepted_at_ms FROM projects WHERE id=?2),
+            disclosure_version=(SELECT disclosure_version FROM projects WHERE id=?2),
+            created_at_ms=MIN(created_at_ms,(SELECT created_at_ms FROM projects WHERE id=?2)),
+            updated_at_ms=MAX(updated_at_ms,(SELECT updated_at_ms FROM projects WHERE id=?2)),
+            next_number=MAX((SELECT next_number FROM projects WHERE id=?2),?3)
+         WHERE id=?4",
+        params![device, moving, leftover_next + offset, into],
+    )?;
+    // Nothing names the moving id any more, so its row goes alone.
+    transaction.execute("DELETE FROM projects WHERE id=?1", [moving])?;
+    let mut rows = BTreeMap::new();
+    for (table, before) in leftover {
+        if before > 0 {
+            rows.insert(table.clone(), count(&table, into)?);
+        }
+    }
+    Ok(Folded {
+        rows,
+        renumbered,
+        batch_dropped,
+    })
+}
+
+/// A promotion batch lists its cards by number, so the batches of one branch
+/// in the two Projects are joined: the moving Project's cards, then the
+/// leftover's under their new numbers, at most [`crate::PROMOTION_BATCH_LIMIT`]
+/// of them, since a batch of more refuses every card added to it. Returns the
+/// numbers left out, whose cards keep their own promotion row.
+fn fold_promotion_batches(
+    transaction: &Transaction<'_>,
+    moving: &str,
+    into: &str,
+    renumbered: &BTreeMap<u64, u64>,
+) -> Result<Vec<u64>, MemoryError> {
+    let read = |id: &str| -> Result<Vec<(String, Vec<u64>)>, MemoryError> {
+        let mut statement = transaction
+            .prepare("SELECT branch, numbers FROM promotion_batches WHERE project_id=?1")?;
+        let rows = statement
+            .query_map([id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(branch, data)| {
+                serde_json::from_str(&data)
+                    .map(|numbers| (branch, numbers))
+                    .map_err(|error| MemoryError::InvalidState(error.to_string()))
+            })
+            .collect()
+    };
+    let mut joined: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+    for (branch, numbers) in read(moving)? {
+        joined.entry(branch).or_default().extend(numbers);
+    }
+    for (branch, numbers) in read(into)? {
+        joined.entry(branch).or_default().extend(
+            numbers
+                .into_iter()
+                .map(|number| renumbered.get(&number).copied().unwrap_or(number)),
+        );
+    }
+    transaction.execute(
+        "DELETE FROM promotion_batches WHERE project_id IN (?1,?2)",
+        params![moving, into],
+    )?;
+    let mut dropped = Vec::new();
+    for (branch, numbers) in joined {
+        let mut kept: Vec<u64> = Vec::new();
+        for number in numbers {
+            if kept.contains(&number) {
+                continue;
+            }
+            if kept.len() < crate::PROMOTION_BATCH_LIMIT {
+                kept.push(number);
+            } else {
+                dropped.push(number);
+            }
+        }
+        let data = serde_json::to_string(&kept)
+            .map_err(|error| MemoryError::InvalidState(error.to_string()))?;
+        transaction.execute(
+            "INSERT INTO promotion_batches(branch,project_id,numbers) VALUES(?1,?2,?3)",
+            params![branch, into, data],
+        )?;
+    }
+    Ok(dropped)
+}
+
 #[derive(Debug)]
 pub enum MemoryError {
     Sql(rusqlite::Error),
@@ -865,6 +1048,10 @@ impl MemoryStore {
     /// file is either converted or untouched (PRD core-host-node D-23). Returns
     /// the old and new id of each Project it moved.
     ///
+    /// A Project already stored under the id it would take stops the
+    /// conversion; [`MemoryStore::convert_device_merging`] folds a copy of
+    /// the same Project instead.
+    ///
     /// A receipt tag is an HMAC over the Project id, so a receipt printed
     /// into a conversation before the move no longer verifies; the receipt key
     /// itself moves with its Project.
@@ -873,6 +1060,37 @@ impl MemoryStore {
         from: &str,
         to: &str,
     ) -> Result<Vec<(String, String)>, MemoryError> {
+        Ok(self
+            .convert_device_inner(from, to, false)?
+            .into_iter()
+            .map(|moved| (moved.from, moved.to))
+            .collect())
+    }
+
+    /// As [`MemoryStore::convert_device`], except that a Project already
+    /// stored under the id it would take, with the same root, is the same
+    /// Project as another machine named it: a core that did not re-key
+    /// Memory when it moved started a fresh Project under its own machine's
+    /// id and carried it home. The two are folded into one under the new
+    /// id. The moving Project keeps its own choices (enabled, disclosure,
+    /// receipt key) and every row it holds; the other's cards take numbers
+    /// after the moving Project's, and each of its other rows stays unless
+    /// the moving Project holds a row of the same key. A different Project
+    /// at that id still stops the conversion.
+    pub fn convert_device_merging(
+        &self,
+        from: &str,
+        to: &str,
+    ) -> Result<Vec<Conversion>, MemoryError> {
+        self.convert_device_inner(from, to, true)
+    }
+
+    fn convert_device_inner(
+        &self,
+        from: &str,
+        to: &str,
+        merge: bool,
+    ) -> Result<Vec<Conversion>, MemoryError> {
         if self.mode != StoreMode::Writer {
             return Err(MemoryError::ReadOnly);
         }
@@ -904,27 +1122,39 @@ impl MemoryStore {
         let mut moved = Vec::with_capacity(projects.len());
         for (old, root) in projects {
             let new = hide_project::project_id(to, Path::new(&root));
-            let taken: bool = transaction.query_row(
-                "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
-                [&new],
-                |row| row.get(0),
-            )?;
-            if taken {
-                return Err(MemoryError::Integrity(format!(
-                    "node_conversion_conflict:{new}"
-                )));
+            let held: Option<String> = transaction
+                .query_row("SELECT root FROM projects WHERE id=?1", [&new], |row| {
+                    row.get(0)
+                })
+                .optional()?;
+            let mut merged = None;
+            match held {
+                None => {
+                    for table in &tables {
+                        transaction.execute(
+                            &format!("UPDATE \"{table}\" SET project_id=?1 WHERE project_id=?2"),
+                            params![new, old],
+                        )?;
+                    }
+                    transaction.execute(
+                        "UPDATE projects SET id=?1, device_id=?2 WHERE id=?3",
+                        params![new, to, old],
+                    )?;
+                }
+                Some(held_root) if merge && held_root == root => {
+                    merged = Some(fold_project(&transaction, &tables, &old, &new, to)?);
+                }
+                Some(_) => {
+                    return Err(MemoryError::Integrity(format!(
+                        "node_conversion_conflict:{new}"
+                    )));
+                }
             }
-            for table in &tables {
-                transaction.execute(
-                    &format!("UPDATE \"{table}\" SET project_id=?1 WHERE project_id=?2"),
-                    params![new, old],
-                )?;
-            }
-            transaction.execute(
-                "UPDATE projects SET id=?1, device_id=?2 WHERE id=?3",
-                params![new, to, old],
-            )?;
-            moved.push((old, new));
+            moved.push(Conversion {
+                from: old,
+                to: new,
+                merged,
+            });
         }
         transaction.commit()?;
         check_projection_integrity(&self.connection)?;
@@ -8974,6 +9204,272 @@ PRAGMA user_version=14;"#,
         assert_eq!(fts_rows(&project), 0);
         assert_eq!(fts_rows(&new), 1);
         assert_eq!(store.search(&new, "retry budget", 10).unwrap().len(), 1);
+    }
+
+    /// A copy of one Project under the id a conversion would give it: the
+    /// moving Project `local` (enabled, a card, a receipt cursor, its own
+    /// receipt key) and the leftover of a move made before Memory was
+    /// re-keyed, a fresh Project of the same root under the other machine's
+    /// own id, with a card of its own, a receipt cursor of the same key, one
+    /// of another, and its own receipt key.
+    fn leftover_store() -> (tempfile::TempDir, MemoryStore, String, String) {
+        let (temp, mut store, project) = store();
+        let leftover = hide_project::project_id("node-a", temp.path());
+        store
+            .apply_candidates(
+                &batch(&project, "b-moving", "h-moving"),
+                &[candidate(
+                    "Keep the retry budget small",
+                    CandidateRelation::New,
+                )],
+            )
+            .unwrap();
+        store
+            .ensure_project(&leftover, temp.path(), "node-a")
+            .unwrap();
+        store.set_enabled(&leftover, true, true).unwrap();
+        store
+            .apply_candidates(
+                &batch(&leftover, "b-leftover", "h-leftover"),
+                &[candidate("Run the formatter first", CandidateRelation::New)],
+            )
+            .unwrap();
+        store.set_enabled(&leftover, false, false).unwrap();
+        for (id, session, offset) in [
+            (&project, "s1", 10),
+            (&leftover, "s1", 99),
+            (&leftover, "s2", 7),
+        ] {
+            store
+                .connection
+                .execute(
+                    "INSERT INTO receipt_cursors VALUES(?1,'claude',?2,?3,x'',NULL,1,0)",
+                    params![id, session, offset],
+                )
+                .unwrap();
+        }
+        (temp, store, project, leftover)
+    }
+
+    fn card_numbers(store: &MemoryStore, project: &str) -> Vec<i64> {
+        let mut statement = store
+            .connection
+            .prepare("SELECT number FROM memory_items WHERE project_id=?1 ORDER BY number")
+            .unwrap();
+        statement
+            .query_map([project], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_leftover_copy_of_the_project_is_folded_into_it_and_a_second_run_changes_nothing() {
+        let (_temp, store, project, leftover) = leftover_store();
+        let key_before: Vec<u8> = store.receipt_auth_key(&project).unwrap();
+
+        let moved = store.convert_device_merging("local", "node-a").unwrap();
+        assert_eq!(moved.len(), 1);
+        assert_eq!(
+            (moved[0].from.as_str(), moved[0].to.as_str()),
+            (project.as_str(), leftover.as_str())
+        );
+        let folded = moved[0].merged.clone().expect("folded");
+        assert_eq!(folded.rows["memory_items"], 2);
+        assert_eq!(folded.rows["receipt_cursors"], 3 - 1);
+        // Both Projects had an m1; the leftover's is m2 now, and the map says so.
+        assert_eq!(folded.renumbered, BTreeMap::from([(1, 2)]));
+
+        // One Project remains, with the moving one's choices and key.
+        let rows: Vec<(String, String, bool)> = store
+            .connection
+            .prepare("SELECT id, device_id, enabled FROM projects")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(rows, vec![(leftover.clone(), "node-a".to_owned(), true)]);
+        assert_eq!(store.receipt_auth_key(&leftover).unwrap(), key_before);
+        // Both cards are under the one id, the leftover's numbered after the
+        // moving one's, each searchable.
+        assert_eq!(card_numbers(&store, &leftover), vec![1, 2]);
+        assert_eq!(
+            store.search(&leftover, "retry budget", 10).unwrap().len(),
+            1
+        );
+        assert_eq!(store.search(&leftover, "formatter", 10).unwrap().len(), 1);
+        // The moving cursor won its key; the leftover's other one stayed.
+        let cursors: Vec<(String, i64)> = store
+            .connection
+            .prepare("SELECT session_id, byte_offset FROM receipt_cursors WHERE project_id=?1 ORDER BY session_id")
+            .unwrap()
+            .query_map([&leftover], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(cursors, vec![("s1".to_owned(), 10), ("s2".to_owned(), 7)]);
+        let next: i64 = store
+            .connection
+            .query_row(
+                "SELECT next_number FROM projects WHERE id=?1",
+                [&leftover],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(next > 2, "the next card number is past both: {next}");
+
+        assert!(
+            store
+                .convert_device_merging("local", "node-a")
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(card_numbers(&store, &leftover), vec![1, 2]);
+    }
+
+    #[test]
+    fn a_leftover_promotion_batch_follows_its_cards_to_their_new_numbers() {
+        let (temp, mut store, project) = store();
+        let into = hide_project::project_id("node-a", temp.path());
+        store
+            .apply_candidates(
+                &batch(&project, "b-moving", "h-moving"),
+                &[candidate(
+                    "Keep the retry budget small",
+                    CandidateRelation::New,
+                )],
+            )
+            .unwrap();
+        store.ensure_project(&into, temp.path(), "node-a").unwrap();
+        store.set_enabled(&into, true, true).unwrap();
+        let texts = [
+            "alpha rule",
+            "bravo rule",
+            "charlie rule",
+            "delta rule",
+            "echo rule",
+        ];
+        store
+            .apply_candidates(
+                &batch(&into, "b-leftover", "h-leftover"),
+                &texts
+                    .iter()
+                    .map(|text| candidate(text, CandidateRelation::New))
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        let running = |attempt: u32| Promotion {
+            state: PromotionState::Running,
+            revision: 1,
+            attempt,
+            agent_id: Some("fixture-agent".into()),
+            branch: Some("shared".into()),
+            pr_number: None,
+            repository: None,
+            target_path: None,
+            started_at_unix_ms: 100,
+            updated_at_unix_ms: 100,
+            failure: None,
+            building_branch: None,
+        };
+        let all: Vec<(u64, Promotion)> = (1..=5).map(|number| (number, running(1))).collect();
+        store.set_promotion_batch(&into, "shared", &all).unwrap();
+        // The fifth card's attempt ended, so it can be tried again.
+        store
+            .set_promotion(
+                &into,
+                5,
+                &Promotion {
+                    state: PromotionState::Failed,
+                    ..running(1)
+                },
+            )
+            .unwrap();
+        store.set_enabled(&into, false, false).unwrap();
+
+        let moved = store.convert_device_merging("local", "node-a").unwrap();
+        let folded = moved[0].merged.clone().unwrap();
+        assert_eq!(
+            folded.renumbered,
+            BTreeMap::from([(1, 2), (2, 3), (3, 4), (4, 5), (5, 6)])
+        );
+        assert!(folded.batch_dropped.is_empty());
+        assert_eq!(
+            store.promotion_batch(&into, "shared").unwrap(),
+            Some(vec![2, 3, 4, 5, 6]),
+            "the batch names the cards by the numbers they have now"
+        );
+        let promoted: Vec<u64> = store
+            .promotions(&into)
+            .unwrap()
+            .into_iter()
+            .map(|(number, _)| number)
+            .collect();
+        assert_eq!(promoted, vec![2, 3, 4, 5, 6]);
+        // The failed card is tried again on its branch: the batch holds it
+        // already, so it is not a sixth.
+        store
+            .set_promotion_batch(&into, "shared", &[(6, running(2))])
+            .unwrap();
+        assert_eq!(
+            store.promotion_batch(&into, "shared").unwrap(),
+            Some(vec![2, 3, 4, 5, 6])
+        );
+    }
+
+    #[test]
+    fn an_empty_leftover_is_folded_and_a_different_project_at_the_id_still_stops_it() {
+        let (temp, store, project) = store();
+        let leftover = hide_project::project_id("node-a", temp.path());
+        // As the rig left it: the row and its receipt key, nothing else.
+        store
+            .ensure_project(&leftover, temp.path(), "node-a")
+            .unwrap();
+        let moved = store.convert_device_merging("local", "node-a").unwrap();
+        assert_eq!(moved[0].from, project);
+        assert!(moved[0].merged.is_some());
+        let enabled: bool = store
+            .connection
+            .query_row(
+                "SELECT enabled FROM projects WHERE id=?1",
+                [&leftover],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(enabled);
+
+        // The same id held by a project of another root is not the same
+        // project: the conversion stops and changes nothing.
+        let (temp, store, project) = store_pair();
+        let held = hide_project::project_id("node-a", temp.path());
+        store
+            .connection
+            .execute("UPDATE projects SET root='/elsewhere' WHERE id=?1", [&held])
+            .unwrap();
+        let error = store.convert_device_merging("local", "node-a").unwrap_err();
+        assert!(
+            error.to_string().contains("node_conversion_conflict"),
+            "{error}"
+        );
+        assert!(store.convert_device("local", "node-a").is_err());
+        let still: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM projects WHERE id=?1",
+                [&project],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(still, 1);
+    }
+
+    /// A moving Project and a Project of the same id under its target.
+    fn store_pair() -> (tempfile::TempDir, MemoryStore, String) {
+        let (temp, store, project) = store();
+        let held = hide_project::project_id("node-a", temp.path());
+        store.ensure_project(&held, temp.path(), "node-a").unwrap();
+        (temp, store, project)
     }
 
     #[test]

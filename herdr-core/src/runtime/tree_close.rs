@@ -60,6 +60,11 @@ pub(super) enum TreeFinal {
         workspace_id: String,
         device: Option<String>,
     },
+    /// `세션 보관`: the archive whose saved record named these panes
+    /// (PRD session-archive). The target is the root pane itself.
+    Archive {
+        id: crate::session_archive::ArchiveId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -176,6 +181,47 @@ impl Runtime {
             payload.pane_ids,
             payload.confirmed,
             TreeFinal::Close,
+        )
+    }
+
+    /// Whether a new tree close would be refused as busy.
+    pub(super) fn tree_closes_full(&self) -> bool {
+        self.tree_closes.len() >= TREE_CLOSE_ACTIVE_LIMIT
+    }
+
+    /// An archive's close: the root pane and the listed descendants, deepest
+    /// first, confirmed because the archive already asked (B6). A refusal
+    /// fails through the archive's own record.
+    pub(super) fn close_tree_for_archive(
+        &mut self,
+        id: crate::session_archive::ArchiveId,
+        root: String,
+        descendants: Vec<String>,
+    ) -> bool {
+        let then = TreeFinal::Archive { id };
+        let Some(place) = self.place_of_pane(&root) else {
+            return self.fail_tree_final(
+                &then,
+                "The session is no longer open; nothing was archived".into(),
+            );
+        };
+        let target = TreeNode {
+            device: match place {
+                Place::Local => None,
+                Place::Device(device) => Some(device.to_owned()),
+            },
+            id: root.clone(),
+            kind: NodeKind::Pane,
+            waits_on: Vec::new(),
+            state: NodeState::Waiting,
+            blocked_since: None,
+        };
+        self.admit_tree_close(
+            Some(target),
+            &HashSet::from([root]),
+            descendants,
+            true,
+            then,
         )
     }
 
@@ -672,6 +718,21 @@ impl Runtime {
             "duration_ms": unix_milliseconds().saturating_sub(tree.started_at_unix_ms),
         }));
         match &tree.then {
+            TreeFinal::Archive { id } => {
+                let closed = tree
+                    .nodes
+                    .iter()
+                    .filter(|node| node.state == NodeState::Closed)
+                    .map(|node| node.id.clone())
+                    .collect::<HashSet<_>>();
+                // The first node that failed on its own says why; an ancestor
+                // that never started only waited on it.
+                let cause = tree.nodes.iter().find_map(|node| match node.state {
+                    NodeState::Failed(reason) if reason != "descendant_open" => Some(reason),
+                    _ => None,
+                });
+                self.finish_archive_close(id, &closed, cause);
+            }
             TreeFinal::Close => {
                 if failed > 0 {
                     // The ordinary close's own notice already names a pane
@@ -724,6 +785,7 @@ impl Runtime {
             TreeFinal::Project { workspace_id, .. } => {
                 self.ingest_workspace_close_result(workspace_id, Err(message))
             }
+            TreeFinal::Archive { id } => self.fail_archive_close(id, message),
         }
     }
 
@@ -1017,5 +1079,6 @@ fn tree_target(tree: &TreeClose) -> serde_json::Value {
         TreeFinal::Project { workspace_id, .. } => {
             serde_json::json!({ "project_removal": workspace_id })
         }
+        TreeFinal::Archive { id } => serde_json::json!({ "archive": id.as_str() }),
     }
 }

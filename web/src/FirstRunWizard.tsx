@@ -29,6 +29,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import type { MessageKey } from "./i18n/catalogs";
 import { cn } from "./lib/utils";
 import { NotificationLine, useNotificationControl, usePermission } from "./NotificationControls";
+import { kitRefusalLine } from "./settings";
 import { NotOnSystem } from "./settings/AgentRow";
 import { installDocUrl, machineSystem, supportedAgents, type AgentPart } from "./settings/agentRows";
 import { useAgentsDemand } from "./settings/useAgentsDemand";
@@ -61,8 +62,8 @@ export function FirstRunWizard({ actions }: { actions: Actions }) {
   const step = firstRun ?? setup;
   if (step === null) return null;
   // The agent step draws this Mac's kit, which lists every supported agent once it has been read;
-  // a kit that could not run stays on screen to say why.
-  if (step === "agents" && !kit?.agents?.length && !kit?.unavailable) return null;
+  // a kit that could not run, or a pass that stopped before changing anything, stays on screen to say why.
+  if (step === "agents" && !kit?.agents?.length && !kit?.unavailable && !kit?.refused) return null;
   return <Wizard actions={actions} step={step} reopened={firstRun === null} desktop={desktop} />;
 }
 
@@ -169,6 +170,9 @@ function AgentsStep({ actions, reopened, desktop, primary }: StepProps & { deskt
   // The kit could not run here, whether or not Continue was pressed: the step says why, and Try again
   // only has the core read the agents again; the choice is sent once they are back.
   const unavailable = !applying ? (kit?.unavailable ?? null) : null;
+  // The pass stopped before changing anything: the step says what stopped it, and Try again runs the
+  // same pass again, which checks again; nothing is chosen until it runs and the tiles are back.
+  const refused = !applying ? (kit?.refused ?? null) : null;
   const toggle = (id: string) =>
     setFlipped((current) => {
       const next = new Set(current);
@@ -176,14 +180,14 @@ function AgentsStep({ actions, reopened, desktop, primary }: StepProps & { deskt
       return next;
     });
   const proceed = () => {
-    if (applying || (agents.length === 0 && !unavailable)) return;
+    if (applying || (agents.length === 0 && !unavailable && !refused)) return;
     const chosen = appliedAgents(agents, flipped, start);
     setSent(chosen);
     if (reopened) {
       // Help's walk switches only what changed, the way Settings > Agents does, and moves on at once;
       // while the kit cannot run here it stays with its reason and only has the agents read again (B12).
       actions.applyAgentOnboarding(chosen);
-      if (!unavailable) useSetupWalk.getState().go("notifications");
+      if (!unavailable && !refused) useSetupWalk.getState().go("notifications");
       return;
     }
     setPressedAt(revision);
@@ -191,7 +195,7 @@ function AgentsStep({ actions, reopened, desktop, primary }: StepProps & { deskt
     actions.applyAgentOnboarding(chosen, !desktop);
   };
   primary.current = proceed;
-  const label = applying ? t("firstRun.agents.applying") : failures.length > 0 || unavailable ? t("firstRun.agents.retry") : t("firstRun.agents.continue");
+  const label = applying ? t("firstRun.agents.applying") : failures.length > 0 || unavailable || refused ? t("firstRun.agents.retry") : t("firstRun.agents.continue");
   return (
     <>
       <DialogHeader>
@@ -243,6 +247,11 @@ function AgentsStep({ actions, reopened, desktop, primary }: StepProps & { deskt
             <Status tone="error">{t("firstRun.agents.unavailable", { reason: unavailable })}</Status>
           </Note>
         ) : null}
+        {refused ? (
+          <Note tone="error" data-first-run-refused={refused.cause}>
+            <Status tone="error">{kitRefusalLine(refused, t)}</Status>
+          </Note>
+        ) : null}
         {failures.map((failure) => (
           <Note key={failure.id} tone="error" data-first-run-failed={failure.id}>
             <Status tone="error">{failure.reason ? t("firstRun.agents.failed", { agent: failure.label, reason: failure.reason }) : t("firstRun.agents.failedNoReason", { agent: failure.label })}</Status>
@@ -254,8 +263,14 @@ function AgentsStep({ actions, reopened, desktop, primary }: StepProps & { deskt
         <span className="min-w-0 flex-1 text-caption text-muted-foreground">
           {hideAi ? <span data-onboarding-hide-ai={hideAi.id}>{t(hideAiFirstRunKey(hideAi.agent), { agent: hideAi.label })}</span> : null}
         </span>
+        {/* A refused pass may take a terminal and a restart to clear, so the step can be left; the question stays unanswered. */}
+        {refused && !reopened ? (
+          <Button variant="ghost" onClick={() => actions.advanceFirstRun("agents")} data-first-run-refused-close="true">
+            {t("firstRun.notifications.notNow")}
+          </Button>
+        ) : null}
         {/* With no agent read yet there is no choice to send; the next read brings the tiles back. */}
-        <MainButton onClick={proceed} disabled={applying || (agents.length === 0 && !unavailable)} aria-busy={applying} data-onboarding-apply="true">
+        <MainButton onClick={proceed} disabled={applying || (agents.length === 0 && !unavailable && !refused)} aria-busy={applying} data-onboarding-apply="true">
           {label}
         </MainButton>
       </DialogFooter>

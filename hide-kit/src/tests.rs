@@ -355,6 +355,21 @@ fn state(report: &KitReport, id: ComponentId) -> ComponentState {
     report.component(id).unwrap().state
 }
 
+/// The pass stopped before changing anything, for `cause`, and judged no
+/// part or agent.
+fn refusal(report: &KitReport, cause: RefusalCause) -> &KitRefusal {
+    let refusal = report
+        .refused
+        .as_deref()
+        .unwrap_or_else(|| panic!("{report:?}"));
+    assert_eq!(refusal.cause, cause, "{refusal:?}");
+    assert!(
+        report.components.is_empty() && report.agents.is_empty(),
+        "{report:?}"
+    );
+    refusal
+}
+
 fn other_tool_entry(settings: &str) -> Value {
     let document: Value = serde_json::from_str(settings).unwrap();
     document["hooks"]["SubagentStart"][0].clone()
@@ -839,15 +854,12 @@ fn the_kit_runs_nothing_from_a_folder_another_account_can_change() {
 
     std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o775)).unwrap();
     let report = status(&fixture.target);
-    let part = report
-        .component(ComponentId::CoordinationRetirement)
-        .unwrap();
-    assert_eq!(part.state, ComponentState::Failed);
+    let refused = refusal(&report, RefusalCause::Unsafe);
+    assert_eq!(refused.path.as_deref(), state.to_str());
+    assert_eq!(refused.variable, None, "the kit's folder is no variable's");
     assert!(
-        part.reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("can be changed by another account")),
-        "{part:?}"
+        refused.detail.contains("can be changed by another account"),
+        "{refused:?}"
     );
 }
 
@@ -895,20 +907,53 @@ fn an_apply_waits_for_another_kit_changing_the_same_account() {
     );
 }
 
+/// More registered checkouts than one pass inspects is its own cause: the
+/// operator acts on the list of projects, not on a path.
 #[test]
-fn an_unreadable_record_installs_nothing_missing_on_a_guess() {
-    let fixture = Fixture::new();
-    let record = fixture.home().join(".hide/kit/installed.json");
-    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
-    std::fs::write(&record, "not a record").unwrap();
-
+fn too_many_registered_checkouts_stop_the_pass_as_their_own_cause() {
+    let mut fixture = Fixture::new();
+    fixture.target.retirement_projects =
+        vec![fixture.home().join("project"); retirement_inspection::MAX_ENTRIES + 1];
     let report = apply(&fixture.target, &Scope::automatic());
+    assert_eq!(refusal(&report, RefusalCause::Projects).path, None);
+}
 
-    let cli = report.component(ComponentId::Cli).unwrap();
-    assert_eq!(cli.state, ComponentState::Failed);
-    assert!(cli.reason.as_deref().unwrap().contains("installed.json"));
-    assert!(!fixture.home().join(".local/bin/hide").exists());
-    assert_eq!(std::fs::read_to_string(&record).unwrap(), "not a record");
+/// A cause a newer helper names reads as an unnamed one, so an older core
+/// still takes the rest of its report.
+#[test]
+fn a_refusal_cause_this_build_does_not_know_reads_as_other() {
+    let report: KitReport = serde_json::from_value(json!({
+        "components": [],
+        "refused": {"cause": "a_cause_from_a_newer_build", "detail": "words"},
+    }))
+    .unwrap();
+    assert_eq!(report.refused.unwrap().cause, RefusalCause::Other);
+}
+
+/// Without its record the kit cannot tell which parts are Hide's, and one a
+/// newer build wrote is that build's: the pass stops before changing
+/// anything, and a read says the same, once for the whole machine.
+#[test]
+fn an_unreadable_record_stops_the_pass_before_changing_anything() {
+    for contents in ["not a record", r#"{"format": 99}"#] {
+        let fixture = Fixture::new();
+        let record = fixture.home().join(".hide/kit/installed.json");
+        std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+        std::fs::write(&record, contents).unwrap();
+
+        for report in [
+            apply(&fixture.target, &Scope::automatic()),
+            status(&fixture.target),
+        ] {
+            let refused = refusal(&report, RefusalCause::Record);
+            assert_eq!(
+                refused.path.as_deref(),
+                Some(record.display().to_string().as_str())
+            );
+        }
+        assert!(!fixture.home().join(".local/bin/hide").exists());
+        assert_eq!(std::fs::read_to_string(&record).unwrap(), contents);
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1604,10 +1649,7 @@ fn open_legacy_requests_and_active_watches_leave_the_entire_home_unchanged() {
         old_coordination(&fixture, requests, watches);
         let before = home_tree(fixture.home());
         let report = apply(&fixture.target, &Scope::automatic());
-        assert_eq!(
-            state(&report, ComponentId::CoordinationRetirement),
-            ComponentState::Failed
-        );
+        refusal(&report, RefusalCause::Record);
         assert_eq!(home_tree(fixture.home()), before);
         assert!(fixture.herdr.calls.lock().unwrap().is_empty());
     }
@@ -1628,10 +1670,7 @@ fn supervisor_revision_head_and_unreadable_referenced_runs_block_before_mutation
         std::fs::write(registry.join("index.json.revision-000000000002"), json!({"schema":"sasu.supervisor.index.v1","entries":[],"coordinated":[{"statePath":state_path,"runInstanceId":"run-1"}],"tickExecutor":null}).to_string()).unwrap();
         let before = home_tree(fixture.home());
         let report = apply(&fixture.target, &Scope::automatic());
-        assert_eq!(
-            state(&report, ComponentId::CoordinationRetirement),
-            ComponentState::Failed
-        );
+        refusal(&report, RefusalCause::Record);
         assert_eq!(home_tree(fixture.home()), before);
         assert!(fixture.herdr.calls.lock().unwrap().is_empty());
     }
@@ -1808,18 +1847,9 @@ fn a_selected_sasu_revision_disappearing_refuses_instead_of_using_the_empty_base
         *expected.lock().unwrap() = Some(home_tree(&root));
     });
     let report = apply(&fixture.target, &Scope::automatic());
-    assert_eq!(
-        state(&report, ComponentId::CoordinationRetirement),
-        ComponentState::Failed,
-        "{report:?}"
-    );
     assert!(
-        report
-            .component(ComponentId::CoordinationRetirement)
-            .unwrap()
-            .reason
-            .as_ref()
-            .unwrap()
+        refusal(&report, RefusalCause::Record)
+            .detail
             .contains("selected sasu registry revision disappeared")
     );
     assert_eq!(
@@ -1849,12 +1879,9 @@ fn hide_waiting_requests_and_watches_block_retirement() {
         )
         .unwrap();
         let before = home_tree(fixture.home());
-        assert_eq!(
-            state(
-                &apply(&fixture.target, &Scope::automatic()),
-                ComponentId::CoordinationRetirement
-            ),
-            ComponentState::Failed
+        refusal(
+            &apply(&fixture.target, &Scope::automatic()),
+            RefusalCause::Record,
         );
         assert_eq!(home_tree(fixture.home()), before);
     }
@@ -1925,14 +1952,15 @@ fn unconfirmed_or_invalid_hook_receipts_refuse_retirement_before_any_effect() {
         let daemon = UnixListener::bind(old.join("api.sock")).unwrap();
         daemon.set_nonblocking(true).unwrap();
         assert_preflight_refusal_preserves_fixture(&fixture, Some(&daemon));
-        let reason = retirement_preflight(&fixture.target).unwrap_err();
+        let refusal = retirement_preflight(&fixture.target).unwrap_err();
+        assert_eq!(refusal.cause, RefusalCause::Record, "{refusal:?}");
         assert!(
-            reason.contains(if invalid {
+            refusal.detail.contains(if invalid {
                 "request status cannot be inspected"
             } else {
                 "open requests"
             }),
-            "{reason}"
+            "{refusal:?}"
         );
     }
 }
@@ -2100,12 +2128,11 @@ fn a_registered_checkout_with_an_active_run_blocks_before_mutation() {
     std::fs::write(&state_path, json!({"status":"active"}).to_string()).unwrap();
     fixture.target.retirement_projects.push(project);
     let before = home_tree(fixture.home());
+    let report = apply(&fixture.target, &Scope::automatic());
     assert_eq!(
-        state(
-            &apply(&fixture.target, &Scope::automatic()),
-            ComponentId::CoordinationRetirement
-        ),
-        ComponentState::Failed
+        refusal(&report, RefusalCause::Record).path.as_deref(),
+        state_path.to_str(),
+        "the record that holds the open run"
     );
     assert_eq!(home_tree(fixture.home()), before);
 }
@@ -2170,17 +2197,10 @@ fn intermediate_kit_links_refuse_before_services_status_or_any_mutation() {
         daemon.set_nonblocking(true).unwrap();
         let before_home = home_tree(fixture.home());
         let before_outside = home_tree(&outside);
-        let observed = status(&fixture.target);
-        assert_eq!(
-            state(&observed, ComponentId::CoordinationRetirement),
-            ComponentState::Failed,
-            "{observed:?}"
-        );
-        let report = apply(&fixture.target, &Scope::automatic());
-        assert_eq!(
-            state(&report, ComponentId::CoordinationRetirement),
-            ComponentState::Failed,
-            "{report:?}"
+        refusal(&status(&fixture.target), RefusalCause::Unsafe);
+        refusal(
+            &apply(&fixture.target, &Scope::automatic()),
+            RefusalCause::Unsafe,
         );
         assert!(
             matches!(daemon.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
@@ -2253,9 +2273,9 @@ fn writable_retirement_records_refuse_before_services_status_or_any_mutation() {
             let before_parent = home_tree(parent);
             let report = apply(&fixture.target, &Scope::automatic());
             assert_eq!(
-                state(&report, ComponentId::CoordinationRetirement),
-                ComponentState::Failed,
-                "{record} {mode:o}: {report:?}"
+                refusal(&report, RefusalCause::Unsafe).path.as_deref(),
+                path.to_str(),
+                "{record} {mode:o}"
             );
             assert!(
                 matches!(daemon.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
@@ -2517,9 +2537,10 @@ fn record_preflight_commands(fixture: &mut Fixture) {
 fn assert_preflight_refusal_preserves_fixture(fixture: &Fixture, daemon: Option<&UnixListener>) {
     let before = home_tree(&fixture.root);
     let report = apply(&fixture.target, &Scope::automatic());
-    assert_eq!(
-        state(&report, ComponentId::CoordinationRetirement),
-        ComponentState::Failed,
+    // One refusal for the pass, with no part or agent judged.
+    assert!(report.refused.is_some(), "{report:?}");
+    assert!(
+        report.components.is_empty() && report.agents.is_empty(),
         "{report:?}"
     );
     assert_eq!(home_tree(&fixture.root), before, "preflight changed a file");
@@ -2682,6 +2703,33 @@ fn exercise_external_state_override(key: &str) {
         let daemon = UnixListener::bind(old.join("api.sock")).unwrap();
         daemon.set_nonblocking(true).unwrap();
         assert_preflight_refusal_preserves_fixture(&fixture, Some(&daemon));
+        // The refusal says what the operator changes: an unsafe folder names
+        // the variable that chose it, and an open record is the record's.
+        let variable = if key == "HIDE_STATE_DIR" {
+            layout::StateVariable::HideStateDir
+        } else {
+            layout::StateVariable::XdgStateHome
+        };
+        let expected = if case == "active ledger" {
+            (RefusalCause::Record, None)
+        } else {
+            (RefusalCause::Unsafe, Some(variable))
+        };
+        // A read answers as the pass does, so a re-read or Try again never
+        // lists parts a pass could not install.
+        for report in [
+            apply(&fixture.target, &Scope::automatic()),
+            status(&fixture.target),
+        ] {
+            let refusal = report.refused.expect("refused");
+            assert_eq!(
+                (refusal.cause, refusal.variable),
+                expected,
+                "{case}: {refusal:?}"
+            );
+            assert!(refusal.path.is_some(), "{case}: {refusal:?}");
+            assert!(report.components.is_empty() && report.agents.is_empty());
+        }
         assert_eq!(home_tree(&outside), before_outside);
     }
 }

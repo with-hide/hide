@@ -1447,6 +1447,10 @@ pub(super) enum Event {
     ForkPane(ForkPanePayload),
     AgentSleepSet(AgentSleepSetPayload),
     AgentSleep(PaneTargetPayload),
+    ArchiveSession(super::session_archive::ArchiveSessionPayload),
+    ArchiveResume(super::session_archive::ArchiveTargetPayload),
+    ArchiveDelete(super::session_archive::ArchiveTargetPayload),
+    ArchiveCheck(super::session_archive::ArchiveTargetPayload),
     PaneInputSubmitted(PaneTargetPayload),
     PaneInputSent(PaneTargetPayload),
     ResolveSession(PaneTargetPayload),
@@ -1697,6 +1701,13 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "fork_pane" => decode!(ForkPanePayload, ForkPane),
         "agent_sleep_set" => decode!(AgentSleepSetPayload, AgentSleepSet),
         "agent_sleep" => decode!(PaneTargetPayload, AgentSleep),
+        "archive_session" => decode!(
+            super::session_archive::ArchiveSessionPayload,
+            ArchiveSession
+        ),
+        "archive_resume" => decode!(super::session_archive::ArchiveTargetPayload, ArchiveResume),
+        "archive_delete" => decode!(super::session_archive::ArchiveTargetPayload, ArchiveDelete),
+        "archive_check" => decode!(super::session_archive::ArchiveTargetPayload, ArchiveCheck),
         "pane_input_submitted" => decode!(PaneTargetPayload, PaneInputSubmitted),
         "pane_input_sent" => decode!(PaneTargetPayload, PaneInputSent),
         "resolve_session" => decode!(PaneTargetPayload, ResolveSession),
@@ -2008,6 +2019,10 @@ impl Runtime {
             Event::SessionSnapshot(payload) => self.ingest_session(Ok(payload)),
             Event::AgentSleepSet(payload) => self.set_agent_sleep_after(payload),
             Event::AgentSleep(payload) => self.request_agent_sleep(&payload.pane_id),
+            Event::ArchiveSession(payload) => self.request_archive(payload),
+            Event::ArchiveResume(payload) => self.request_archive_resume(payload),
+            Event::ArchiveDelete(payload) => self.request_archive_delete(payload),
+            Event::ArchiveCheck(payload) => self.check_archive_status(payload),
             // The phone's reply reached the pane; nothing on screen moves.
             Event::PaneInputSubmitted(payload) => {
                 self.note_delivery_reply(&payload.pane_id);
@@ -4195,6 +4210,7 @@ impl Runtime {
                     // Every agent start owns this; a shared save carries it.
                     agent_start: current.agent_start,
                     agent_sleep: current.agent_sleep,
+                    session_archive: current.session_archive,
                     // The core records it on the front change; a shared save
                     // carries it through, or any save would empty the list.
                     recent_checkouts: current.recent_checkouts,

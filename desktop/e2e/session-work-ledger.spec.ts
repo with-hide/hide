@@ -127,7 +127,7 @@ test("@platform session work records, missed lines, ended work and search render
     // Resolve from the row's ⋯ menu puts the task under 쉬는 중 once it is saved (B18).
     await root.hover();
     await page.locator(`[data-task-more="${herdr.panes[0]}"]`).click();
-    await page.locator('[data-task-menu-item="resolve"]').click();
+    await page.locator(`[data-task-menu="${herdr.panes[0]}"] [data-menu-item="resolve"]`).click();
     await expect(tasks.locator('[data-task-fold="rest"]')).toBeVisible({ timeout: 30_000 });
     await openTaskFolds(page);
     await expect(root).toHaveAttribute("data-task-state", "resting");

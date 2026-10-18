@@ -309,7 +309,8 @@ The per-call cost is what an ordinary shell call pays: the payload is read withi
 ## Folder trust for the worktrees Hide makes
 
 Claude Code, Codex and agy each ask, the first time they start interactively in a folder they have not been told to trust, whether to trust it, and a delegated child stopped at that question waits for an answer nobody is there to give.
-So before Hide starts one of them in a worktree it made for that start (`hide agent spawn` into a new worktree, a task's agent), it records that agent's own trust of the worktree on the machine that will run it: the core sends `agent_trust` to that machine's node, this Mac's or a connected device's, and the node writes it there (`hide_agent_hooks::folder_trust`).
+So before Hide starts one of them in a worktree it made for that start (`hide agent spawn` into a new worktree, a task's agent), it records that agent's own trust of the worktree on the machine that will run it: the core sends `agent_trust` to the node of the machine that runs the worktree's pane, this Mac's or a connected device's, and the node writes it there (`hide_agent_hooks::folder_trust`).
+That node is the pane's, not the one the agent's PATH is checked on (none for a device, whose own Herdr answers for its PATH), so a worktree made on a device from the screen or the phone gets its trust like one made here; a pane whose machine cannot be reached refuses the start with `agent_trust_unavailable`.
 A start in a checkout that already existed, the operator's own or an earlier worktree, records nothing, and the agent asks there as it would outside Hide.
 
 | Agent | Where its trust is kept | What Hide adds |

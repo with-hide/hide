@@ -123,19 +123,11 @@ pub(crate) struct Outcome {
 /// Takes out what the record says Hide put down for each retired agent that
 /// is not marked retired yet. `live_reads_shared` says that an agent that is
 /// on and installed still reads the shared skills folder, whose stub then
-/// stays. Nothing is touched when the record could not be read: without it
-/// the kit cannot tell its own files from the operator's (engineering rule
-/// 4).
-pub(crate) fn retire(
-    target: &KitTarget,
-    record: &mut Record,
-    record_readable: bool,
-    live_reads_shared: bool,
-) -> Outcome {
+/// stays. A pass whose record could not be read stops before this
+/// (`record::load`): without it the kit cannot tell its own files from the
+/// operator's (engineering rule 4).
+pub(crate) fn retire(target: &KitTarget, record: &mut Record, live_reads_shared: bool) -> Outcome {
     let mut outcome = Outcome::default();
-    if !record_readable {
-        return outcome;
-    }
     for agent in &RETIRED {
         let hook_code = format!("hook:{}", agent.id);
         let own_skill = match agent.skills {

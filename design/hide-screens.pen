@@ -1798,6 +1798,10 @@
       "type": "number",
       "value": 520
     },
+    "--size-lane-page": {
+      "type": "number",
+      "value": 900
+    },
     "--size-tree-min": {
       "type": "number",
       "value": 180

@@ -69,6 +69,7 @@ import { requestLine } from "./editor/lineRequest";
 import { terminalPathOwner, type FoundPath } from "./terminalLinkProvider";
 import { homeOpening } from "./hideAiOrigin";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
+import { archiveWorking } from "./archive";
 import { useShellStore } from "./store";
 import { FACTORY_ENTRY, useUiStore, type FactoryPlace, type MainView, type OverviewPlace, type PendingClose } from "./ui";
 import type { FactoryCommand } from "./factory/commands";
@@ -1016,6 +1017,49 @@ export function createActions(send: DispatchFn) {
     },
 
     /**
+     * `세션 보관` (PRD session-archive B5-B7): a session that is not working,
+     * or waits on the operator, goes at once; one with work running asks
+     * first with what is working.
+     */
+    archiveSession(paneId: string) {
+      const byPane = agentsByPane(allPaneAgents(useShellStore.getState().agents, rest()?.status?.remote));
+      const root = byPane.get(paneId);
+      if (root && archiveWorking(root, byPane).length > 0) return ui().setPendingArchive({ paneId });
+      dispatch({ schema_version: 2, kind: "archive_session", payload: { pane_id: paneId, confirmed: false } });
+    },
+    /** 작업 멈추고 보관: the confirmation the working session asked for (B6). */
+    confirmArchive() {
+      const pending = ui().pendingArchive;
+      if (!pending) return;
+      ui().setPendingArchive(null);
+      dispatch({ schema_version: 2, kind: "archive_session", payload: { pane_id: pending.paneId, confirmed: true } });
+    },
+    cancelArchive() {
+      ui().setPendingArchive(null);
+    },
+    /** 이어가기: the archived root and its descendants, or the one member named (B21, B24). */
+    resumeArchived(archiveId: string, sessionId?: string) {
+      dispatch({ schema_version: 2, kind: "archive_resume", payload: { archive_id: archiveId, ...(sessionId ? { session_id: sessionId } : {}) } });
+    },
+    /** 상태 확인 after a restart left an archive or a resume unknown (B34). */
+    checkArchived(archiveId: string) {
+      dispatch({ schema_version: 2, kind: "archive_check", payload: { archive_id: archiveId } });
+    },
+    /** 보관함에서 지우기…: asks first (B28). */
+    deleteArchived(archiveId: string) {
+      ui().setPendingArchiveDelete({ id: archiveId });
+    },
+    confirmArchiveDelete() {
+      const pending = ui().pendingArchiveDelete;
+      if (!pending) return;
+      ui().setPendingArchiveDelete(null);
+      dispatch({ schema_version: 2, kind: "archive_delete", payload: { archive_id: pending.id } });
+    },
+    keepArchived() {
+      ui().setPendingArchiveDelete(null);
+    },
+
+    /**
      * Fork agent (`tab`) and Fork agent to the side (`side`) from the pane menu: a
      * new execution of this agent's conversation, the operator's own root, which
      * takes the keyboard. Keys typed before its agent starts wait for it.
@@ -1160,9 +1204,10 @@ export function createActions(send: DispatchFn) {
     /**
      * The operator left the wizard's step `from` (Continue, Not now, Skip for now, a project added); the core moves only the step on screen.
      * `notifications` is the desktop switch the notification step leaves with: on for Continue on a Mac that already allows Hide (B16),
-     * off for Not now (B21), absent to leave it as it is.
+     * off for Not now (B21), absent to leave it as it is. The agent step leaves this way only while this Mac's pass is refused: the
+     * wizard closes with the question unanswered.
      */
-    advanceFirstRun(from: "notifications" | "project", notifications?: boolean) {
+    advanceFirstRun(from: "agents" | "notifications" | "project", notifications?: boolean) {
       dispatch({ schema_version: 2, kind: "first_run_advance", payload: notifications === undefined ? { from } : { from, notifications } });
     },
 
