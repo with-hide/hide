@@ -465,6 +465,8 @@ class Journey:
             return
         self.record.setdefault("panes", []).append(old)
         self.pane = record["woken_pane"] = woke["pane_id"]
+        # A pane Wake opened is the journey's to close, as a spawn's is.
+        self.opened.append(self.pane)
         self.settle("sleep_wake", cells.sleep_verdict(record["asleep"], True), self.evidence("sleep-wake", record))
 
     def resume(self):
