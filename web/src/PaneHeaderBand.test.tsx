@@ -84,6 +84,7 @@ function childrenFixture(): AgentRow[] {
   const seed = legacyAgentRow({ id: "parent", pane_id: "parent", identity_label: "Parent", agent_kind: "claude", mark: "going", group: "working", status_code: "working", detail: null, changed_at_unix_ms: null, emphasized: false, unread: false, demand: "none", activity: "working" });
   const children = ["working", "result", "idle", "unknown", "question"].map((id, index) => ({
     ...seed, id, pane_id: id, identity_label: `Child ${id}`,
+    mark: id === "unknown" ? "unknown" as const : id === "idle" || id === "question" ? "quiet" as const : seed.mark,
     status_code: id === "unknown" ? "unknown" as const : id === "question" ? "question" as const : id === "result" ? "done" as const : id === "idle" ? "idle" as const : seed.status_code,
     activity: id === "unknown" ? "unknown" : id === "result" || id === "idle" ? "stopped" : seed.activity, demand: id === "question" ? "question" : "none",
     lineage_parent_pane_id: "parent", lineage_child_pane_ids: [],
@@ -98,6 +99,8 @@ it("shows direct child counts and the core-ranked child line without raising an 
     const trigger = container.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
     expect(trigger.getAttribute("aria-label")).toBe("Child agents 5 · Child requests: 1 · Working: 1 · Reported results: 1 · Unknown state: 1 · Resting: 1");
     expect(trigger.querySelector('[data-mark="turn"]')).toBeNull();
+    // Only counts with a mark are drawn on the button; resting, unknown and a child's own ask are named in the hint alone.
+    expect([...trigger.querySelectorAll("[data-pane-child-count]")].map((part) => part.getAttribute("data-pane-child-count"))).toEqual(["working", "result"]);
     expect(container.textContent).toContain("Should these changes share a PR?");
     expect(container.querySelector("[data-pane-working-line]")).not.toBeNull();
   } finally { await unmount(); }

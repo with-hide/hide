@@ -12,6 +12,7 @@ pub mod listeners;
 pub mod path;
 pub mod process;
 pub mod programs;
+pub mod stdio;
 pub mod time;
 pub mod user_agents;
 pub mod watch;

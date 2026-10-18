@@ -2989,6 +2989,7 @@ impl Runtime {
                 ReadRecordScope::Local,
                 live_pane_ids.as_ref(),
             );
+            self.apply_pane_launches(&agents, ReadRecordScope::Local, live_pane_ids.as_ref());
             // A pull request's checks are a wait the lineage decides and an
             // end the read axis compares, so they are laid before both.
             self.lay_checks(&mut agents);
@@ -4612,6 +4613,7 @@ impl Runtime {
         id: u64,
         prompt: Option<String>,
         args: Vec<String>,
+        launch: hide_agent_adapter::LaunchChoice,
     ) {
         self.task_agent_launch = Some(crate::runtime::TaskAgentLaunch {
             task: id,
@@ -4619,6 +4621,7 @@ impl Runtime {
                 .map(|prompt| prompt.trim().to_owned())
                 .filter(|prompt| !prompt.is_empty()),
             args,
+            launch,
             resume_reference: None,
         });
     }
@@ -4756,13 +4759,33 @@ impl Runtime {
         }
         // A definite failure keeps the prompt for Retry; any other answer
         // settles it, since the agent may be running.
-        if !matches!(outcome, live::TaskAgentOutcome::Failed(_))
+        let launch = if !matches!(outcome, live::TaskAgentOutcome::Failed(_))
             && self
                 .task_agent_launch
                 .as_ref()
                 .is_some_and(|launch| launch.task == id)
         {
-            self.task_agent_launch = None;
+            self.task_agent_launch.take().map(|launch| launch.launch)
+        } else {
+            None
+        };
+        // The pane keeps the choice its agent started with, for the restarts
+        // Hide makes of it, under the name the start gave the agent: the task
+        // worker names it from Herdr's own id for the pane.
+        if let (live::TaskAgentOutcome::Started, Some(launch)) = (&outcome, &launch)
+            && let Some((pane_id, kind, name)) =
+                self.snapshot.task_operation.as_ref().and_then(|operation| {
+                    let pane_id = operation.pane_id.clone()?;
+                    let kind = operation.agent_kind.clone()?;
+                    let herdr_pane_id = match operation.device_id.as_deref() {
+                        Some(device) => super::remote_pane_source_id(device, &pane_id)?,
+                        None => pane_id.as_str(),
+                    };
+                    let name = crate::fork::task_agent_name(&kind, herdr_pane_id);
+                    Some((pane_id, kind, name))
+                })
+        {
+            self.record_pane_launch(&pane_id, &kind, &name, launch, None);
         }
         let Some(operation) = self.snapshot.task_operation.as_mut() else {
             return false;

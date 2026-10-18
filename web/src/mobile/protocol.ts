@@ -130,6 +130,8 @@ export type ServerFrame =
   | ({ type: "start_catalog" } & StartCatalog)
   | { type: "start_result"; request_id?: string; ok: boolean; reason: string | null; device_id?: string; pane_id?: string }
   | { type: "push_state"; notifications: "on" | "refused" }
+  /** The answer to `ping`: hided is there. */
+  | { type: "pong"; id: number }
   | { type: "refused"; reason: string }
   | { type: "refused_request"; request: string; reason: string };
 
@@ -146,7 +148,9 @@ export type PhoneMessage =
   | { type: "start_sheet"; open: boolean }
   | { type: "start_agent"; request_id: string; text: string; target: string; kind: StartKind; model?: string }
   | { type: "push_subscription"; subscription: { endpoint: string; keys: { p256dh: string; auth: string } } }
-  | { type: "push_permission"; state: "denied" | "default" };
+  | { type: "push_permission"; state: "denied" | "default" }
+  /** Asks whether hided still answers; the phone gives up the socket when nothing comes back. */
+  | { type: "ping"; id: number };
 
 export type AgentKey = { device_id: string; pane_id: string };
 

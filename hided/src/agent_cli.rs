@@ -3,8 +3,12 @@
 use crate::env::{self, Env};
 use herdr_core::{coordination::Command, delivery::Command as Delivery};
 use std::collections::BTreeMap;
-pub const USAGE: &str = "hide agent register [--check] [--machine <device>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [-- <native args>]";
-pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [-- <native args>]
+pub const USAGE: &str = "hide agent register [--check] [--machine <device>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [-- <native args>]";
+pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [-- <native args>]
+
+Choose the model and effort with --model and --effort, not after --:
+  Hide starts the agent with them and starts it with them again whenever it wakes, forks or reopens the agent.
+  Native arguments after -- reach this start only; a restart resumes the conversation without them.
 
 Choose responsibility when spawning:
   With --parent here (or your own id): delegate work you will supervise.
@@ -60,6 +64,8 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Delivery,
                         "--repo",
                         "--branch",
                         "--path",
+                        "--model",
+                        "--effort",
                     ]
                     .as_slice(),
                     "end" => ["--actor"].as_slice(),
@@ -129,6 +135,10 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Delivery,
                 branch,
                 path: flags.remove("--path"),
                 args: native,
+                launch: hide_agent_adapter::LaunchChoice {
+                    model: flags.remove("--model"),
+                    effort: flags.remove("--effort"),
+                },
                 // Only Hide's own identity gives a task; no flag names one.
                 task: None,
             }
@@ -278,6 +288,38 @@ mod tests {
         );
         assert!(SPAWN_HELP.contains("`hide workspace info`"));
         assert!(SPAWN_HELP.contains("`hide agent list`"));
+    }
+
+    #[test]
+    fn spawn_takes_the_model_and_effort_as_its_launch_choice_apart_from_native_arguments() {
+        let spawn = |extra: &[&str]| {
+            let mut args = vec![
+                "spawn", "--name", "worker", "--intent", "one", "--kind", "claude", "--repo",
+                "/fixture", "--branch", "topic",
+            ];
+            args.extend_from_slice(extra);
+            line(&args)
+        };
+        let Delivery::Agents {
+            command: Command::Spawn { launch, args, .. },
+        } = spawn(&["--model", "sonnet", "--effort", "high", "--", "--verbose"]).unwrap()
+        else {
+            panic!("spawn")
+        };
+        assert_eq!(
+            (launch.model.as_deref(), launch.effort.as_deref()),
+            (Some("sonnet"), Some("high"))
+        );
+        assert_eq!(args, ["--verbose"]);
+        let Delivery::Agents {
+            command: Command::Spawn { launch, .. },
+        } = spawn(&[]).unwrap()
+        else {
+            panic!("spawn")
+        };
+        assert!(launch.is_default());
+        assert!(spawn(&["--effort", "high", "--effort", "low"]).is_err());
+        assert!(SPAWN_HELP.contains("[--model <model>] [--effort <effort>]"));
     }
 
     #[test]

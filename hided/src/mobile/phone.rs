@@ -6,8 +6,8 @@
 //! conversation or its terminal, ask for older messages or more rows, close
 //! it, send that pane a reply or one key, open the start sheet and start an
 //! agent from it, wake a sleeping agent in its pane, wake or inspect a listed
-//! sleeping conversation, and register
-//! or report its push subscription. Anything else is refused and recorded.
+//! sleeping conversation, register or report its push subscription, and ask
+//! whether hided still answers (`ping`). Anything else is refused and recorded.
 //! It never receives a file, a path, a setting or the core's snapshot; the one
 //! exception is the interface language, which rides each `agents` frame so the
 //! phone speaks the language the operator chose.
@@ -15,6 +15,7 @@
 //! Every frame to the phone goes through `encode`, the one place a relay
 //! transport would wrap in end-to-end encryption (PRD D-01).
 
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -134,8 +135,9 @@ struct Ask {
     lines: u32,
 }
 
-/// What a phone has open: at most one agent's detail, the start sheet, and
-/// at most one start waiting for the core's answer.
+/// What a phone has open: at most one agent's detail, the start sheet, at
+/// most one start waiting for the core's answer, and at most one input being
+/// written.
 #[derive(Default)]
 struct Open {
     detail: Option<Detail>,
@@ -145,6 +147,31 @@ struct Open {
     /// core, and settling its request id lets a reconnecting phone's repeat
     /// read the answer. `start::ANSWER_LIMIT` bounds it.
     start: Option<tokio::task::JoinHandle<()>>,
+    /// A reply or key being written, which can take a device pane's whole
+    /// connection time. Not aborted when the connection ends, for the same
+    /// reason as a start: the write may already be on its way and its request
+    /// id must be settled. The pane call's own limits bound it.
+    input: Option<tokio::task::JoinHandle<()>>,
+}
+
+/// Runs one slow piece of a phone's work beside the socket loop, so the loop
+/// keeps answering `ping`, evictions and revokes while it waits, and sends its
+/// answer as a frame. One piece per slot: while it runs, the next is answered
+/// with `busy` and does not start.
+fn spawn_beside_loop(
+    slot: &mut Option<tokio::task::JoinHandle<()>>,
+    frames: &mpsc::Sender<Value>,
+    busy: Value,
+    work: impl Future<Output = Value> + Send + 'static,
+) -> Option<Value> {
+    if slot.as_ref().is_some_and(|task| !task.is_finished()) {
+        return Some(busy);
+    }
+    let frames = frames.clone();
+    *slot = Some(tokio::spawn(async move {
+        let _ = frames.send(work.await).await;
+    }));
+    None
 }
 
 struct Detail {
@@ -549,7 +576,7 @@ async fn handle(
     message: &Value,
     open: &mut Open,
     frames: &mpsc::Sender<Value>,
-    projection: &Projection,
+    projection: &Arc<Projection>,
 ) -> Option<Value> {
     let kind = message.get("type").and_then(Value::as_str).unwrap_or("");
     match kind {
@@ -616,8 +643,21 @@ async fn handle(
             mobile.set_viewing(connection, None);
             None
         }
-        "input" => Some(input(mobile, phone_id, message, projection).await),
         "wake_agent" => Some(wake_agent(mobile, phone_id, message, projection).await),
+        "input" => {
+            let busy = json!({
+                "type": "input_result", "request_id": message.get("request_id"), "ok": false, "reason": "in_flight",
+            });
+            let (mobile, phone_id, message, projection) = (
+                Arc::clone(mobile),
+                phone_id.to_owned(),
+                message.clone(),
+                Arc::clone(projection),
+            );
+            spawn_beside_loop(&mut open.input, frames, busy, async move {
+                input(&mobile, &phone_id, &message, &projection).await
+            })
+        }
         "wake_sleeping_session" | "check_sleeping_session" => {
             Some(sleeping_session(mobile, phone_id, message, projection).await)
         }
@@ -631,25 +671,16 @@ async fn handle(
             shown.then(|| mobile.subscribe_catalog().borrow().frame())
         }
         "start_agent" => {
-            if open.start.as_ref().is_some_and(|task| !task.is_finished()) {
-                return Some(
-                    json!({"type": "start_result", "request_id": message.get("request_id"), "ok": false, "reason": "in_flight"}),
-                );
-            }
+            let busy = json!({"type": "start_result", "request_id": message.get("request_id"), "ok": false, "reason": "in_flight"});
             // The answer can take the core's whole creation time, so it is
             // awaited beside the socket loop and arrives as a frame.
-            let (mobile, phone_id, message, frames) = (
-                Arc::clone(mobile),
-                phone_id.to_owned(),
-                message.clone(),
-                frames.clone(),
-            );
-            open.start = Some(tokio::spawn(async move {
-                let answer = mobile.start_agent(&phone_id, &message).await;
-                let _ = frames.send(answer).await;
-            }));
-            None
+            let (mobile, phone_id, message) =
+                (Arc::clone(mobile), phone_id.to_owned(), message.clone());
+            spawn_beside_loop(&mut open.start, frames, busy, async move {
+                mobile.start_agent(&phone_id, &message).await
+            })
         }
+        "ping" => liveness(message, mobile.still_admitted(phone_id), phone_id),
         "push_subscription" => {
             let subscription = message.get("subscription");
             let field = |name: &str| {
@@ -694,6 +725,23 @@ async fn handle(
             )
         }
     }
+}
+
+/// The answer to a phone's `ping`: its own number back, so the phone knows
+/// hided is there. The page cannot see the protocol-level ping hided sends, so
+/// this is how a phone learns that a Mac gone to sleep stopped answering. It
+/// reads one in-memory record and nothing else: no core lock, no Herdr call.
+/// A phone no longer let in is told why instead, as it is when its socket is
+/// closed, and a ping without a number is refused and recorded.
+fn liveness(message: &Value, admitted: Result<(), &'static str>, phone_id: &str) -> Option<Value> {
+    if let Err(reason) = admitted {
+        return Some(json!({"type": "refused", "reason": reason}));
+    }
+    let Some(id) = message.get("id").and_then(Value::as_u64) else {
+        refusal_logged("scope.refused", Some(phone_id), "ping");
+        return None;
+    };
+    Some(json!({"type": "pong", "id": id}))
 }
 
 /// The phone supplies a stable intent, never a pane, path or arbitrary event.
@@ -1197,6 +1245,64 @@ mod tests {
             wake_action(&message(json!({"cwd": "/"})), &sleeping, &pane()),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn slow_work_runs_beside_the_loop_one_piece_at_a_time_and_answers_as_a_frame() {
+        let (frames, mut received) = mpsc::channel::<Value>(8);
+        let mut slot = None;
+        let busy = json!({"busy": true});
+        // Work that finishes only when the test lets it, so nothing here depends on a clock.
+        let gated = |answer: &'static str| {
+            let (release, wait) = tokio::sync::oneshot::channel::<()>();
+            (release, async move {
+                let _ = wait.await;
+                json!({"answer": answer})
+            })
+        };
+        let (release_first, first) = gated("first");
+        // The caller gets control back at once, with nothing to send yet.
+        assert_eq!(
+            spawn_beside_loop(&mut slot, &frames, busy.clone(), first),
+            None
+        );
+        assert!(received.try_recv().is_err(), "the work is still running");
+        // A second piece while the first waits is refused, not queued.
+        let (_unused, second) = gated("second");
+        assert_eq!(
+            spawn_beside_loop(&mut slot, &frames, busy.clone(), second),
+            Some(busy.clone())
+        );
+        release_first.send(()).unwrap();
+        assert_eq!(received.recv().await, Some(json!({"answer": "first"})));
+        // Once it answered, the slot takes the next one.
+        slot.take().unwrap().await.unwrap();
+        let (release_third, third) = gated("third");
+        assert_eq!(spawn_beside_loop(&mut slot, &frames, busy, third), None);
+        release_third.send(()).unwrap();
+        assert_eq!(received.recv().await, Some(json!({"answer": "third"})));
+    }
+
+    #[test]
+    fn a_ping_is_answered_with_its_number_only_while_the_phone_is_let_in() {
+        let ping = json!({"type": "ping", "id": 7});
+        assert_eq!(
+            liveness(&ping, Ok(()), "phone"),
+            Some(json!({"type": "pong", "id": 7}))
+        );
+        for reason in ["revoked", "mobile_off"] {
+            assert_eq!(
+                liveness(&ping, Err(reason), "phone"),
+                Some(json!({"type": "refused", "reason": reason}))
+            );
+        }
+        for bad in [
+            json!({"type": "ping"}),
+            json!({"type": "ping", "id": "7"}),
+            json!({"type": "ping", "id": -1}),
+        ] {
+            assert_eq!(liveness(&bad, Ok(()), "phone"), None, "{bad}");
+        }
     }
 
     #[test]

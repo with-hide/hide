@@ -322,6 +322,7 @@ fn a_reopened_tab_the_operator_named_is_named_again() {
             consumed: true,
             focused_pane_id: None,
             notices: Vec::new(),
+            agents: Vec::new(),
         })),
     );
     assert_eq!(

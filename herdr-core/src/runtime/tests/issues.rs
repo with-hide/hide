@@ -541,6 +541,10 @@ fn a_task_prompt_is_handed_to_its_agent_start_and_kept_for_a_retry() {
         id,
         Some("  Issue #192를 해결해줘  ".into()),
         vec!["--model".into(), "opus".into()],
+        hide_agent_adapter::LaunchChoice {
+            model: Some("opus".into()),
+            effort: None,
+        },
     );
     assert!(runtime.ingest_task_operation_result(
         id,

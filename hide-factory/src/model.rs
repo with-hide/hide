@@ -669,11 +669,10 @@ impl WorkerCandidate {
         }
     }
 
-    /// The launch arguments its model and effort add, refused with the reason
-    /// when the agent does not declare them.
-    pub fn launch_arguments(&self) -> Result<Vec<String>, String> {
+    /// Refuses, with the reason, a model or effort the agent does not declare.
+    pub fn check_launch_choice(&self) -> Result<(), String> {
         if self.model.is_none() && self.effort.is_none() {
-            return Ok(Vec::new());
+            return Ok(());
         }
         let options = self
             .agent
@@ -681,6 +680,7 @@ impl WorkerCandidate {
             .ok_or_else(|| format!("{} takes no model or effort", self.agent.label()))?;
         options
             .arguments(self.model.as_deref(), self.effort.as_deref())
+            .map(drop)
             .map_err(|detail| format!("{}: {detail}", self.agent.label()))
     }
 }

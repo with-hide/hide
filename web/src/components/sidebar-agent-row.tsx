@@ -195,7 +195,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
       {tree && tree.open !== null && depth > 0 ? <span className="absolute inset-y-0 flex w-(--size-agent-mark)" style={{ left: `calc(${inset} + var(--size-lineage-indent) * ${depth - 1})` }}><RowChevron agent={agent} tree={tree} returnFocus={() => main.current?.focus()} /></span> : null}
       <span className={cn("flex min-w-0 flex-1 items-start gap-xs", tree && "py-xs")}>
         <span className="pointer-events-none flex min-h-(--size-sidebar-line) shrink-0 items-center gap-xs">
-          <StatusMark mark={unreachable ? "quiet" : agent.mark} className={markTone(agent)} data-agent-status-mark={unreachable ? "quiet" : agent.mark} data-agent-status={agent.status_code} />
+          <StatusMark mark={unreachable ? null : agent.mark} className={markTone(agent)} data-agent-status-mark={unreachable ? "none" : agent.mark} data-agent-status={agent.status_code} />
           {/* A Hide AI row is never in a tree; the Hide owl stands beside the status mark (PRD agent-mark-quiet D-04). The provider's logo follows the view mode or an ⌥ hold, with the owl as its badge (PRD agent-logo-view-mode D-04, D-09). */}
           <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai && !tree ? "sidebar" : null} />
         </span>

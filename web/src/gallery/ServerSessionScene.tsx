@@ -23,7 +23,7 @@ export function ServerSessionScene({ scene: kind, theme, scale, content }: Scene
     scene.agents = scene.agents.filter((row) => row.pane_id === pane.id);
     scene.rest.navigator!.focused_workspace_id = workspace.id;
     scene.rest.navigator!.focused_checkout_id = checkout.id;
-    scene.rest.workspace_view = {device_id:"local",path:checkout.path,tool:null,last_tool:null,prs:{only_checkout:false},pinned:false,tree:false,lane_width:null,tree_width:null,lane_called:0,lane_calls:0};
+    scene.rest.workspace_view = {device_id:"local",path:checkout.path,tool:null,last_tool:null,prs:{only_checkout:false},pinned:false,tree:false,lane_width:null,panel_width:null,tree_width:null,lane_called:0,lane_calls:0};
     scene.rest.status = {...scene.rest.status,server_discovery:{loading:false,failure:null}};
     return {scene};
   }, [content]);

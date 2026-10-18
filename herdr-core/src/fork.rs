@@ -118,6 +118,9 @@ pub struct ForkRequest {
     pub tab_label: Option<String>,
     pub placement: ForkPlacement,
     pub(crate) codex_daemon: crate::codex_launch::CodexDaemon,
+    /// The model and effort the source was started with, which the fork
+    /// starts with after its resume arguments.
+    pub launch: hide_agent_adapter::LaunchChoice,
 }
 
 /// Herdr's own rule for an agent name, quoted from the error it answers with:
@@ -309,6 +312,7 @@ mod tests {
             name: "fork-w1-p2-abc".to_owned(),
             tab_label: Some("Tab 2".to_owned()),
             placement: ForkPlacement::Tab,
+            launch: Default::default(),
         }
     }
 
