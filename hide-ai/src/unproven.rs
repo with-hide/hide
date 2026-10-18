@@ -73,6 +73,7 @@ mod tests {
             pick: None,
             output_language: None,
             answer: crate::AnswerMode::default(),
+            provider_efforts: Vec::new(),
         };
         assert_eq!(
             backend.execute(&request, &CancelToken::new()).unwrap_err(),

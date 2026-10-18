@@ -46,7 +46,7 @@ export function LandingScene({ shot, theme, narrow }: LandingSceneParams) {
     const lead = scene.agents.find((row) => row.pane_id === "a1")!;
     const pane = { ...scene.rest.navigator!.workspaces!.find((row) => row.id === "hide")!.checkouts[0]!.tabs[0]!.panes.find((row) => row.id === "a1")!, identity_label: lead.identity_label };
     // The lead's header carries its child row; nothing else about the pane is staged.
-    const rest = { ...scene.rest, terminal: { headers: { a1: { working: true, band: null } } } };
+    const rest = { ...scene.rest, terminal: { headers: { a1: { working: true, notice: null, band: null } } } };
     return { ...scene, rest, pane, mobile: null };
   }, [shot, narrow]);
 

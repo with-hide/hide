@@ -161,6 +161,7 @@ impl HideNativeAnalyzer {
             pick: None,
             output_language: Some(language),
             answer: hide_ai::AnswerMode::Schema,
+            provider_efforts: Vec::new(),
         })
     }
 

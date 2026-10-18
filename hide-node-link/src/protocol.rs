@@ -173,12 +173,19 @@ use crate::error::HostError;
 /// interactive command has no `--fork` (docs/ARCHITECTURE.md, OpenCode). A
 /// helper on 42 would refuse the call, so no OpenCode session on that device
 /// could be forked; it is refused at Hello and upgraded.
-/// 44: `terminate_group` answers what it did (`GroupEnd`): ended, with each
+/// 44: a Hide AI request carries the effort it asks of each provider
+/// (`provider_efforts`), and the device's Codex backend honours a
+/// `PlainJson` request by naming the schema in its instructions instead of
+/// sending a strict `outputSchema` (PRD label-judgment-fixes D-01, D-12). A
+/// helper on 43 would drop the effort and still send the schema Codex
+/// refuses, so every agent label judged on that device's Codex would fail;
+/// it is refused at Hello and upgraded.
+/// 45: `terminate_group` answers what it did (`GroupEnd`): ended, with each
 /// process under a Windows leader that was left running and why, or gone
 /// already, where it answered nothing and refused a job that had ended. A
-/// helper on 43 answers `null`, which a sleep could not read; it is refused
+/// helper on 44 answers `null`, which a sleep could not read; it is refused
 /// at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 44;
+pub const PROTOCOL_VERSION: u32 = 45;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).

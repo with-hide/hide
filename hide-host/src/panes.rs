@@ -363,8 +363,9 @@ impl Panes {
             stream
                 .set_read_timeout(Some(CLIENT_TIMEOUT))
                 .map_err(|_| "bridge_unavailable")?;
-            // A Windows pipe has no write timeout; the answer is one short line.
-            let _ = stream.set_write_timeout(Some(CLIENT_TIMEOUT));
+            stream
+                .set_write_timeout(Some(CLIENT_TIMEOUT))
+                .map_err(|_| "bridge_unavailable")?;
             // A byte at a time: a stream's first bytes follow its line at
             // once, and a buffered reader would keep them from the stream.
             let mut line = Vec::new();
@@ -606,7 +607,12 @@ impl Panes {
         }
         // The caller's writes are paced by the core; a caller that stops
         // reading loses its stream rather than holding a node worker.
-        let _ = stream.set_write_timeout(Some(STREAM_WRITE_TIMEOUT));
+        if stream
+            .set_write_timeout(Some(STREAM_WRITE_TIMEOUT))
+            .is_err()
+        {
+            return;
+        }
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         {
             let mut streams = lock(&self.streams);
