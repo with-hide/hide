@@ -1232,7 +1232,12 @@ fn fork_methods(server: &FakeHerdr) -> Vec<String> {
 
 #[cfg(unix)]
 fn native_fork_current_journey(kind: &'static str) {
-    for case in ["current", "during-tab-connect", "during-start-connect"] {
+    for case in [
+        "current",
+        "during-tab-connect",
+        "during-start-connect",
+        "during-input-confirmation",
+    ] {
         let home = tempfile::tempdir().unwrap();
         let cwd = home.path().canonicalize().unwrap().display().to_string();
         let folder =
@@ -1288,6 +1293,8 @@ fn native_fork_current_journey(kind: &'static str) {
         let arm_connect = Arc::clone(&armed);
         let old_focus = std::sync::Mutex::new(String::new());
         let started_name = std::sync::Mutex::new(String::new());
+        let confirm_runtime = shared.weak();
+        let confirm_reads = std::sync::atomic::AtomicUsize::new(0);
         let old = FakeHerdr::start("pi-fork-retired", move |method, params| match method {
             "pane.focus" | "pane.layout" | "workspace.get" => {
                 focus_answer(method, params, &old_focus).unwrap()
@@ -1328,10 +1335,27 @@ fn native_fork_current_journey(kind: &'static str) {
                 "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w-order",
                 "tab_id":"w-order:t2","focused":false,"agent_status":"idle","revision":2}})
             }
-            "agent.get" => serde_json::json!({"type":"agent_info","agent":{
-                "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w-order",
-                "tab_id":"w-order:t2","name":*started_name.lock().unwrap(),"agent":kind,
-                "interactive_ready":true,"focused":false,"agent_status":"idle","revision":3}}),
+            "agent.get" => {
+                let read = confirm_reads.fetch_add(1, Ordering::SeqCst);
+                if case == "during-input-confirmation" {
+                    let runtime = confirm_runtime.upgrade().unwrap();
+                    let mut runtime = runtime.lock().unwrap();
+                    runtime
+                        .snapshot
+                        .navigator
+                        .agents
+                        .iter_mut()
+                        .find(|agent| agent.pane_id == parent)
+                        .unwrap()
+                        .state_change_seq = Some(5 + read as u64);
+                }
+                let ready = case != "during-input-confirmation" || read > 0;
+                serde_json::json!({"type":"agent_info","agent":{
+                    "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w-order",
+                    "tab_id":"w-order:t2","name":*started_name.lock().unwrap(),"agent":kind,
+                    "launch_pending":!ready,"interactive_ready":ready,
+                    "focused":false,"agent_status":"idle","revision":3}})
+            }
             "pane.close" => serde_json::json!({"type":"ok"}),
             other => panic!("unexpected original-server request: {other}"),
         });
@@ -1365,7 +1389,7 @@ fn native_fork_current_journey(kind: &'static str) {
             runtime.pending_pane_focus.is_none() && runtime.pane_focus_in_flight.is_none()
         });
         let runtime = shared.lock().unwrap();
-        if case == "current" {
+        if matches!(case, "current" | "during-input-confirmation") {
             assert!(runtime.snapshot.status.last_error.is_none());
         } else {
             let failure = runtime
@@ -1390,6 +1414,15 @@ fn native_fork_current_journey(kind: &'static str) {
                     "pane.process_info",
                     "pane.get",
                     "agent.start",
+                    "agent.get"
+                ],
+                "during-input-confirmation" => vec![
+                    "session.snapshot",
+                    "layout.apply",
+                    "pane.process_info",
+                    "pane.get",
+                    "agent.start",
+                    "agent.get",
                     "agent.get"
                 ],
                 "during-tab-connect" => vec!["session.snapshot"],

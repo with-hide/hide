@@ -980,7 +980,11 @@ impl Inner {
                 }
             }
             TerminalControl::RequestDiscard { request, reason } => {
-                self.requests.discard(&request, &reason, now)
+                let lost = self.requests.discard(&request, &reason, now);
+                if lost && reason == "unconfirmed" {
+                    self.reports
+                        .push(TerminalReport::RequestDiscarded { request, reason });
+                }
             }
             TerminalControl::AttachmentHold { pane, intent } => {
                 self.attachment = Some(Attachment {

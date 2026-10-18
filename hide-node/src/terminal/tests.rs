@@ -910,6 +910,48 @@ fn bare_pane_keys_wait_for_the_fork_and_reach_only_its_terminal() {
 }
 
 #[test]
+fn unconfirmed_fork_input_is_discarded_and_reported_only_when_keys_were_held() {
+    for typed in [true, false] {
+        let harness = harness(RetryPolicy::Automatic);
+        let fork = harness.controlling("w1:p2");
+        harness.service.control(TerminalControl::RequestOpen {
+            request: "fork-1".into(),
+            fork: true,
+        });
+        harness.service.control(TerminalControl::RequestHold {
+            request: "fork-1".into(),
+            pane: "w1:p2".into(),
+        });
+        if typed {
+            harness.key("w1:p2", b"lost");
+        }
+        harness.service.control(TerminalControl::RequestDiscard {
+            request: "fork-1".into(),
+            reason: "unconfirmed".into(),
+        });
+        fork.assert_no_input();
+        // The pane survives and accepts a fresh intent after the deadline.
+        harness.key("w1:p2", b"retry\r");
+        assert_eq!(fork.next_input(), b"retry\r");
+        let mut lost = 0;
+        loop {
+            match harness.reports.recv_timeout(WAIT).expect("input report") {
+                TerminalReport::RequestDiscarded { request, reason }
+                    if request == "fork-1" && reason == "unconfirmed" =>
+                {
+                    lost += 1
+                }
+                TerminalReport::Input {
+                    submitted: true, ..
+                } => break,
+                _ => {}
+            }
+        }
+        assert_eq!(lost, usize::from(typed));
+    }
+}
+
+#[test]
 fn fork_caps_report_failure_and_refuse_the_tail_until_completion() {
     for timed_out in [false, true] {
         let harness = harness(RetryPolicy::Automatic);

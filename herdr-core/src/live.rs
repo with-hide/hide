@@ -3384,8 +3384,12 @@ pub fn spawn_agent_fork(context: LiveContext, request: ForkRequest) -> Result<()
     thread::Builder::new()
         .name("herdr-core-agent-fork".to_owned())
         .spawn(move || {
+            // Includes pane creation and the start acknowledgment, so this
+            // input wait never extends Herdr's 120-second start reservation.
+            let input_deadline =
+                Instant::now() + crate::agent_start::AGENT_START_DEADLINE - Duration::from_secs(5);
             finish_fork_worker(&context, &request.parent_pane_id, || {
-                run_agent_fork_with_registration(
+                let pane = run_agent_fork_with_registration(
                     context.api_connector.as_ref(),
                     context.node.as_ref(),
                     &request,
@@ -3409,11 +3413,55 @@ pub fn spawn_agent_fork(context: LiveContext, request: ForkRequest) -> Result<()
                         fork_execution_current(&context, &request)?;
                         crate::coordination::link_fork(&context, parent, child, &request.name)
                     },
-                )
+                )?;
+                // The fork already succeeded. Readiness owns only its held
+                // input and must never close a slow but working pane.
+                wait_for_fork_input(&context, &request, &pane, input_deadline);
+                Ok(pane)
             });
         })
         .map(|_| ())
         .map_err(|error| format!("fork worker could not be started: {error}"))
+}
+
+fn wait_for_fork_input(
+    context: &LiveContext,
+    request: &ForkRequest,
+    pane: &str,
+    deadline: Instant,
+) {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::agent_start::confirm_fork_started(
+            context.api_connector.as_ref(),
+            pane,
+            &request.name,
+            request.agent.kind(),
+            &|| fork_input_owner_alive(&context.runtime),
+            deadline,
+        )
+    }))
+    .unwrap_or_else(|_| Err("fork input confirmation panicked".into()));
+    if let Err(reason) = outcome {
+        crate::diagnostic!(serde_json::json!({
+            "component": "terminal_input", "kind": "terminal.fork_input_unconfirmed",
+            "pane_id": pane, "reason": reason,
+        }));
+        if let Some(runtime) = context.runtime.upgrade() {
+            runtime
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .discard_fork_input(&request.parent_pane_id);
+            context.notifier.notify();
+        }
+    }
+}
+
+fn fork_input_owner_alive(owner: &Weak<Mutex<Runtime>>) -> Result<(), String> {
+    if owner.strong_count() == 0 {
+        Err("The fork's daemon stopped.".into())
+    } else {
+        Ok(())
+    }
 }
 
 /// Every worker exit settles its input holder, including an unwinding provider
@@ -3439,12 +3487,12 @@ pub(crate) fn finish_fork_worker(
 }
 
 fn fork_execution_current(context: &LiveContext, request: &ForkRequest) -> Result<(), String> {
+    let runtime = context.runtime.upgrade().ok_or("runtime stopped")?;
     if !hide_session::Agent::from_kind(request.agent.kind())
         .is_some_and(hide_session::Agent::requires_native_proof)
     {
         return Ok(());
     }
-    let runtime = context.runtime.upgrade().ok_or("runtime stopped")?;
     let runtime = runtime.lock().map_err(|_| "runtime unavailable")?;
     if !runtime.fork_request_is_current(request, &context.api_connector)
         || !Arc::ptr_eq(&runtime.own_node(), &context.node)
@@ -3584,13 +3632,6 @@ fn run_agent_fork_with_registration(
         )
         .map_err(start_error_message);
         let started = started.and_then(|pane_id| {
-            crate::agent_start::confirm_fork_started(
-                mutation_connector,
-                &pane_id,
-                &request.name,
-                request.agent.kind(),
-                current,
-            )?;
             if request.agent == crate::fork::ForkableAgent::Antigravity {
                 fork_antigravity(mutation_connector, node, request, &pane_id)?;
             }
@@ -4523,7 +4564,6 @@ mod tests {
         for case in [
             "success",
             "refused",
-            "not-started",
             "panic-created",
             "duplicate-before",
             "duplicate-after",
@@ -4625,13 +4665,6 @@ mod tests {
                         json!({"type":"agent_started","argv":[],"agent":{
                             "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"idle","revision":2}})
                     }
-                    "agent.get" if case == "not-started" => {
-                        return Err(("agent_not_found".into(), "start failed".into()));
-                    }
-                    "agent.get" => json!({"type":"agent_info","agent":{
-                        "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2",
-                        "name":"fork-pi-1","agent":kind,"interactive_ready":true,
-                        "focused":false,"agent_status":"idle","revision":3}}),
                     "pane.close" => {
                         assert_eq!(params["pane_id"], "child-pane");
                         json!({"type":"ok"})
@@ -4734,11 +4767,6 @@ mod tests {
                 expected = vec!["session.snapshot", "layout.apply", "pane.close"];
             } else if refused {
                 expected.push("pane.close");
-            } else {
-                expected.push("agent.get");
-                if case == "not-started" {
-                    expected.push("pane.close");
-                }
             }
             assert_eq!(herdr.methods(), expected, "{case}");
         }
@@ -4834,10 +4862,6 @@ mod tests {
                         json!({"type":"agent_started","argv":[],"agent":{
                             "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"idle","revision":2}})
                     }
-                    "agent.get" => json!({"type":"agent_info","agent":{
-                        "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2",
-                        "name":"fork-opencode-1","agent":"opencode","interactive_ready":true,
-                        "focused":false,"agent_status":"idle","revision":3}}),
                     "pane.close" => {
                         assert_eq!(params["pane_id"], "child-pane");
                         json!({"type":"ok"})
@@ -4884,7 +4908,6 @@ mod tests {
                     "pane.process_info",
                     "pane.get",
                     "agent.start",
-                    "agent.get",
                 ],
                 "refused" => &[
                     "session.snapshot",
@@ -5013,10 +5036,6 @@ mod tests {
                             json!({"type":"agent_started","argv":[],"agent":{
                             "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"idle","revision":2}})
                         }
-                        "agent.get" => json!({"type":"agent_info","agent":{
-                        "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2",
-                        "name":"fork-opencode-2","agent":"opencode","interactive_ready":true,
-                        "focused":false,"agent_status":"idle","revision":3}}),
                         "pane.close" => {
                             assert_eq!(params["pane_id"], "child-pane");
                             json!({"type":"ok"})
@@ -5062,10 +5081,7 @@ mod tests {
             match case {
                 "forked" => {
                     assert_eq!(result.unwrap(), "child-pane");
-                    assert_eq!(
-                        *log.lock().unwrap(),
-                        [opened.as_slice(), &["agent.get"]].concat()
-                    );
+                    assert_eq!(*log.lock().unwrap(), opened);
                 }
                 "refused" => {
                     let error = result.unwrap_err();
@@ -5159,10 +5175,6 @@ mod tests {
                         json!({"type":"agent_started","argv":[],"agent":{
                             "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"idle","revision":2}})
                     }
-                    "agent.get" => json!({"type":"agent_info","agent":{
-                        "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2",
-                        "name":"fork-grok-1","agent":"grok","interactive_ready":true,
-                        "focused":false,"agent_status":"idle","revision":3}}),
                     "pane.close" => json!({"type":"ok"}),
                     other => panic!("unexpected {other}"),
                 })
@@ -5208,7 +5220,6 @@ mod tests {
                     "pane.process_info",
                     "pane.get",
                     "agent.start",
-                    "agent.get",
                 ],
                 "refused" => &[
                     "session.snapshot",
@@ -5560,10 +5571,6 @@ mod tests {
                 "workspace_id": "w1", "tab_id": "w1:t1", "focused": true,
                 "agent_status": "idle", "revision": 2
             }}),
-            "agent.get" => json!({"type":"agent_info","agent":{
-                        "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2",
-                        "name":"fork-parent-pane-1","agent":"codex","interactive_ready":true,
-                        "focused":false,"agent_status":"idle","revision":3}}),
             other => panic!("unexpected {other}"),
         });
         let request = ForkRequest {
@@ -5593,12 +5600,7 @@ mod tests {
         assert_eq!(pane_id, "child-pane");
         assert_eq!(
             herdr.methods(),
-            [
-                "pane.split",
-                "pane.process_info",
-                "agent.start",
-                "agent.get"
-            ]
+            ["pane.split", "pane.process_info", "agent.start",]
         );
     }
 

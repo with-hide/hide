@@ -386,23 +386,25 @@ impl Requests {
         std::mem::take(&mut request.held)
     }
 
-    /// The creation made no pane the keys may follow.
-    pub(super) fn discard(&mut self, request_id: &str, reason: &str, now: Instant) {
+    /// These keys may not follow the pane. Returns whether any were held.
+    pub(super) fn discard(&mut self, request_id: &str, reason: &str, now: Instant) -> bool {
         if !valid_request_id(request_id) {
-            return;
+            return false;
         }
         if self.find(request_id).is_none() {
             if !self.make_room(true) {
-                return;
+                return false;
             }
             self.requests.push_back(Request::new(request_id, true, now));
         }
         let request = self.find(request_id).expect("just made");
+        let lost = request.held_bytes > 0;
         request.known = true;
         request.pane = None;
         if request.state != RequestState::Discarded {
             request.discard(reason);
         }
+        lost
     }
 
     /// Drops requests the core never named, once their keys are too old to
