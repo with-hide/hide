@@ -18,9 +18,11 @@ afterEach(() => {
   unmount?.();
   unmount = null;
   document.body.innerHTML = "";
+  vi.unstubAllGlobals();
 });
 
 function mount() {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const origin = document.createElement("div");
   Object.defineProperty(origin, "clientWidth", { value: 1600 });
   const host = document.createElement("div");
