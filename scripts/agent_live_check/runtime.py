@@ -1,8 +1,10 @@
 """Private Herdr/hided and short-lived probe workspaces, without a renderer."""
 
 import hashlib
+from dataclasses import dataclass
 import json
 import os
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -14,8 +16,49 @@ import zipfile
 from .processes import COMMAND_SECONDS, GUARDIAN_FAILURES, MAX_FAILURE_REASON, MAX_OUTPUT, OwnedProcesses, ProcessError
 from .authentication import require_no_login
 from .protection import ProtectionError, beneath, private_directory, validate_isolation, write_private
-from .system import READY, WINDOWS, PaneShell, exe, git, home_env, remove_tree, temp_env, tool_path
-from .timing import Deadline
+from .system import READY, WINDOWS, PaneShell, exe, git, home_env, remove_pane_files, remove_tree, temp_env, tool_path
+from .timing import Deadline, ObservationTimeout
+
+
+# One setup budget, including every shell transport, for a newly owned pane
+# to enter hided's projection. Never renew it on a refused bootstrap.
+BOOTSTRAP_SECONDS = 30
+# The checkout fallback can hide pane_not_connected behind caller_unavailable
+# (notably Windows, where the kernel cwd lookup can be unavailable). Only a
+# newly created owned pane retries these; no authority refusal is retried.
+BOOTSTRAP_PENDING = frozenset(("pane_not_connected", "caller_unavailable"))
+
+
+@dataclass(frozen=True)
+class PaneCommand:
+    code: int
+    stdout: str
+    stderr: str
+
+    def answer(self, *, allowed_refusals=()):
+        """Separate a CLI refusal from success before interpreting its payload.
+
+        Only reason identifiers enter a report, never raw output that may
+        contain a capability, environment value or private path.
+        """
+        try:
+            value = json.loads(self.stdout)
+        except ValueError:
+            value = None
+        reason = None
+        if isinstance(value, dict) and value.get("ok") is False:
+            reason = value.get("reason")
+        elif self.code:
+            reason = self.stderr.strip()
+        if isinstance(reason, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,127}", reason):
+            if self.code and isinstance(value, dict) and value.get("ok") is False and reason in allowed_refusals:
+                return value
+            raise ProcessError(reason)
+        if self.code:
+            raise ProcessError(f"pane_command_exit_{self.code}: unreadable_refusal")
+        if not isinstance(value, dict) or value.get("ok") is not True:
+            raise ProcessError("unreadable_answer")
+        return value
 
 
 # A provider's key in the operator's shell would reach every agent the run
@@ -268,23 +311,7 @@ class Runtime:
         # Exercise the real checkout/capability boundary in its actual shell;
         # no synthetic native-session declaration or copied operator capability.
         name = recipe["id"] + "-" + scene + "-bootstrap"
-        reference = None
-        for attempt in range(20):
-            attempt_name = name + f"-{attempt}"
-            code, output = self.pane_command(pane, [str(self.hide), "workspace", "bootstrap"], attempt_name)
-            answer = json.loads(output)
-            # A successful bootstrap contains a private reference, not run
-            # evidence. Keep it in memory and remove its transport output.
-            (self.run / (attempt_name + ".out")).unlink()
-            if code == 0 and answer.get("ok") is True:
-                reference = Path(answer.get("reference", ""))
-                if not beneath(reference, self.state / "pane-capabilities"):
-                    raise ProtectionError("private_pane_bootstrap_refused")
-                break
-            if self.owner.cancelled.wait(0.1):
-                raise ProcessError("run_cancelled")
-        if reference is None:
-            raise ProcessError("private_checkout_not_registered")
+        reference = self.bootstrap(pane, name)
         # Real candidate attestation of this owned pane, not a copied native
         # identity or an operator credential. Keep the reference in memory.
         self.pane_credentials[pane] = reference
@@ -296,24 +323,67 @@ class Runtime:
         ready = self.run / (name + ".reference-ready")
         # One line with no line break, which cmd.exe's `set /p` reads whole.
         write_private(reference_input, str(reference).encode())
-        self.send(pane, self.shell.read_variable("HIDE_CAP_REF", reference_input, ready))
-        self.wait(lambda: ready.exists(), 5)
-        reference_input.unlink()
-        ready.unlink()
+        try:
+            self.send(pane, self.shell.read_variable("HIDE_CAP_REF", reference_input, ready))
+            self.wait(lambda: ready.exists() and ready.read_text().strip() == "ready", 5)
+        finally:
+            remove_pane_files(reference_input, ready)
         # Claim this exact persistent reference while the attested shell still
         # owns the pane. Unclaimed references expire before a legal long scene.
-        code, output = self.pane_command(pane, [str(self.hide), "workspace", "info"], name + "-claim")
-        answer = json.loads(output)
         # hided validates the capability before its renderer gate, and the
         # CLI claims the reference even when Info has no renderer to answer.
         # That explicit refusal is expected in this headless measurement.
-        accepted = ((code == 0 and answer.get("ok") is True)
-                    or (code != 0 and answer.get("ok") is False
-                        and answer.get("reason") == "renderer_unavailable"))
-        if (not accepted
-                or not reference.with_suffix(".claimed").is_file()):
-            raise ProtectionError("private_pane_reference_not_claimed")
+        try:
+            self.pane_command(pane, [str(self.hide), "workspace", "info"], name + "-claim").answer(
+                allowed_refusals=("renderer_unavailable",))
+        except ProcessError as error:
+            raise ProtectionError(f"private_pane_reference_not_claimed: {error}") from error
+        if not reference.with_suffix(".claimed").is_file():
+            raise ProtectionError("private_pane_reference_not_claimed: claim_file_missing")
         return workspace, pane, cwd
+
+    def bootstrap(self, pane, name):
+        started = time.monotonic()
+        deadline = Deadline(self.owner, BOOTSTRAP_SECONDS)
+        last_reason = None
+        attempts, accepted = 0, False
+        try:
+            while True:
+                try:
+                    deadline.remaining()
+                    attempts += 1
+                    result = self.pane_command(pane, [str(self.hide), "workspace", "bootstrap"], name,
+                                               deadline=deadline)
+                    answer = result.answer()
+                    deadline.remaining()
+                except ProcessError as error:
+                    if self.owner.cancelled.is_set():
+                        raise ProcessError("run_cancelled") from error
+                    if not isinstance(error, ObservationTimeout) and str(error) != "command_timeout":
+                        last_reason = str(error)
+                    if isinstance(error, ObservationTimeout) or deadline.expired():
+                        reason = last_reason or "no_bootstrap_answer"
+                        raise ProcessError(f"private_checkout_not_registered: {reason} (bootstrap deadline)") from error
+                    if str(error) not in BOOTSTRAP_PENDING:
+                        raise ProcessError(f"private_checkout_not_registered: {error}") from error
+                    if self.owner.cancelled.wait(min(0.15, max(0, deadline.end - time.monotonic()))):
+                        raise ProcessError("run_cancelled")
+                    continue
+                raw_reference = answer.get("reference")
+                if not isinstance(raw_reference, str) or not raw_reference:
+                    raise ProcessError("private_checkout_not_registered: unreadable_answer")
+                reference = Path(raw_reference)
+                if not beneath(reference, self.state / "pane-capabilities"):
+                    raise ProtectionError("private_pane_bootstrap_refused")
+                accepted = True
+                return reference
+        finally:
+            # Bounded measurement, no output, reference, pane identity or
+            # environment values. CI retains this JSON beside the report.
+            write_private(self.run / (name + ".json"), json.dumps({
+                "accepted": accepted, "attempts": attempts, "elapsed_seconds": time.monotonic() - started,
+                "budget_seconds": BOOTSTRAP_SECONDS, "last_refusal": last_reason,
+            }).encode())
 
     def screen(self, pane, *, seconds=15, deadline=None):
         return self.command(["pane", "read", pane, "--source", "detection", "--lines", "120"],
@@ -432,14 +502,40 @@ class Runtime:
                 "credential_copies_removed": all(not root.exists() and not root.is_symlink()
                                                   for root in self.credential_roots)}
 
-    def pane_command(self, pane, argv, name):
+    def pane_command(self, pane, argv, name, *, deadline=None):
         """Only called while this owned pane is positively at its shell prompt."""
-        if READY not in self.screen(pane):
+        deadline = deadline or Deadline(self.owner, COMMAND_SECONDS)
+        if READY not in self.screen(pane, seconds=deadline.command_seconds(), deadline=deadline.end):
             raise ProcessError("pane_not_at_owned_shell")
-        output, status = self.run / (name + ".out"), self.run / (name + ".status")
-        self.send(pane, self.shell.program(argv, output, status))
-        # cmd.exe's echo ends the status with a line break.
-        self.wait(lambda: status.exists() and status.read_text().strip().removeprefix("-").isdigit(), 10)
-        if output.stat().st_size > MAX_OUTPUT:
-            raise ProcessError("pane_command_output_over_budget")
-        return int(status.read_text()), output.read_text()
+        output, error, status = (self.run / (name + suffix) for suffix in (".out", ".err", ".status"))
+        # Neither stream is evidence: a success can hold a private reference,
+        # and a refusal can hold personal content. Precreate private files.
+        try:
+            for path in (output, error):
+                write_private(path, b"")
+            remove_pane_files(status)
+            self.send(pane, self.shell.program(argv, output, error, status), deadline=deadline)
+            while True:
+                if self.owner.cancelled.is_set():
+                    raise ProcessError("run_cancelled")
+                deadline.remaining()
+                for path in (output, error):
+                    if path.stat().st_size > MAX_OUTPUT:
+                        raise ProcessError("pane_command_output_over_budget")
+                if status.exists():
+                    if status.stat().st_size > 32:
+                        raise ProcessError("pane_command_status_unreadable")
+                    code = status.read_text().strip()
+                    if code.removeprefix("-").isdigit():
+                        streams = []
+                        for path in (output, error):
+                            with path.open("rb") as source:
+                                data = source.read(MAX_OUTPUT + 1)
+                            if len(data) > MAX_OUTPUT:
+                                raise ProcessError("pane_command_output_over_budget")
+                            streams.append(data.decode("utf-8", errors="replace"))
+                        deadline.remaining()
+                        return PaneCommand(int(code), *streams)
+                self.owner.cancelled.wait(min(0.15, deadline.remaining()))
+        finally:
+            remove_pane_files(output, error, status)
