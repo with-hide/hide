@@ -1087,10 +1087,10 @@ async function bodyWidth(page: Page, width: number): Promise<number> {
   return zoom;
 }
 
-/** The lane's document width as the core stores it for the checkout, absent until it is first set. */
-function storedLaneWidth(): number | undefined {
-  const views = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "workspace-views.json"), "utf8")) as { workspaces: { path: string; lane_width?: number }[] };
-  return views.workspaces.find((entry) => entry.path.endsWith(`${path.sep}fixture`) || entry.path.endsWith("/fixture"))?.lane_width;
+/** A lane width as the core stores it for the checkout, absent until it is first set: Files' `lane_width` or the other tools' `panel_width`. */
+function storedLaneWidth(field: "lane_width" | "panel_width" = "lane_width"): number | undefined {
+  const views = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "workspace-views.json"), "utf8")) as { workspaces: ({ path: string } & Partial<Record<typeof field, number>>)[] };
+  return views.workspaces.find((entry) => entry.path.endsWith(`${path.sep}fixture`) || entry.path.endsWith("/fixture"))?.[field];
 }
 
 // @platform: the page view is placed in native window coordinates, which a
@@ -1114,7 +1114,9 @@ test("page width: a page opened into the lane widens it to 900 beside Agent View
   // widens to 900, so the site draws its desktop layout (B1).
   expect(await openFromCli(site, ["--wait"])).toMatchObject({ ok: true });
   await expect(divider).toHaveAttribute("aria-valuenow", "900");
-  await expect.poll(storedLaneWidth).toBe(900);
+  await expect.poll(() => storedLaneWidth()).toBe(900);
+  // Only Files widens; the width Memory and the other tools share is left as it was.
+  expect(storedLaneWidth("panel_width")).toBeUndefined();
   const displayId = await displayIdOf(page, "Site");
   // The page fills its slot, the lane's 900 less the area's edges; the shell
   // is zoomed to fit the window, so its CSS width is the slot's share of it.
@@ -1135,7 +1137,7 @@ test("page width: a page opened into the lane widens it to 900 beside Agent View
   await shownAndSelected(page, site, displayId);
   await quietFor(page, 300, "no widening follows a page tab chosen");
   await expect(divider).toHaveAttribute("aria-valuenow", "804");
-  await expect.poll(storedLaneWidth).toBe(804);
+  await expect.poll(() => storedLaneWidth()).toBe(804);
 });
 
 // @platform: the room left beside Agent Views comes from the body the host
@@ -1167,7 +1169,7 @@ test("page width: widening leaves Agent Views 480 pinned or not, never narrows, 
   expect(await openFromCli(`${origin}/site-2.html`, ["--wait"])).toMatchObject({ ok: true });
   await expect.poll(async () => Number(await divider.getAttribute("aria-valuenow"))).toBe(await room());
   const widened = await room();
-  await expect.poll(storedLaneWidth).toBe(widened);
+  await expect.poll(() => storedLaneWidth()).toBe(widened);
 
   // A wider window and an expanded lane: a page opened there changes no width.
   await page.locator("[data-lane-expand]").click();
@@ -1178,9 +1180,10 @@ test("page width: widening leaves Agent Views 480 pinned or not, never narrows, 
   expect(storedLaneWidth()).toBe(widened);
 });
 
-// @platform: the text-size menu items carry each system's accelerators, and
-// the page zoom is Chromium's per-host zoom in the host's session.
-test("page zoom: a zoomed page shows its zoom in the address field, steps in the popover and loses the badge at 100%", { tag: [NEEDS_FOCUS, "@platform"] }, async () => {
+// No `@platform`: the zoom arrives through the menu item, not a system key,
+// and a `@needs-focus` test under `--grep @platform` would run every
+// background test it depends on (playwright.config.ts).
+test("page zoom: a zoomed page shows its zoom in the address field, steps in the popover and loses the badge at 100%", { tag: NEEDS_FOCUS }, async () => {
   ({ app } = await launch(run.env));
   await fitWindow(app, WINDOW);
   const page = await shellPage(app);
