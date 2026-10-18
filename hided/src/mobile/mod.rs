@@ -149,6 +149,9 @@ pub struct Config {
     pub cli: CliSource,
     pub host_name: Option<String>,
     pub core: Arc<CoreHandle>,
+    /// Asked at every write to a pane, so a reply never lands in the shell
+    /// under an agent that is ending, asleep or waking.
+    pub input_gate: Arc<herdr_core::input_gate::PaneInputGate>,
     pub herdr_socket: Option<PathBuf>,
     /// Shell windows (desktop and web) on this daemon: "the app is open".
     pub renderers: Arc<AtomicUsize>,
@@ -1276,6 +1279,18 @@ impl Mobile {
 
     /// Why a registered connection must close at once: the phone was revoked
     /// or Mobile switched off between its handshake and its registration.
+    /// Admits one write to a pane's terminal, or refuses it while the pane's
+    /// agent is ending, asleep or waking. Hold it across the write.
+    pub fn admit_input(
+        &self,
+        pane_id: &str,
+    ) -> Result<herdr_core::input_gate::Admission, pane::PaneError> {
+        self.config
+            .input_gate
+            .admit(pane_id)
+            .map_err(|_| pane::PaneError::Asleep)
+    }
+
     pub fn still_admitted(&self, phone_id: &str) -> Result<(), &'static str> {
         let inner = self.lock();
         if inner.phones.get(phone_id).is_none() {

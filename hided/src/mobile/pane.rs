@@ -31,6 +31,8 @@ pub enum PaneError {
     DeviceUnreachable,
     /// This Mac's Herdr did not answer.
     Unavailable(String),
+    /// The agent is ending, asleep or waking, and what is under it is its shell.
+    Asleep,
 }
 
 impl PaneError {
@@ -39,6 +41,7 @@ impl PaneError {
             Self::Gone => "gone",
             Self::DeviceUnreachable => "device_unreachable",
             Self::Unavailable(_) => "unavailable",
+            Self::Asleep => "asleep",
         }
     }
 }

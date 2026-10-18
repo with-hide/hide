@@ -857,15 +857,6 @@ async fn input(
         refusal_logged("scope.refused", Some(phone_id), "input_not_an_agent");
         return answer(false, Some("gone"));
     };
-    // The shell under a sleeping agent is not who the phone talks to: nothing
-    // reaches the pane until the agent is back, whatever the phone drew.
-    if projection
-        .find(&key)
-        .is_some_and(|agent| agent.sleep.is_some())
-    {
-        refusal_logged("scope.refused", Some(phone_id), "input_to_sleeping_agent");
-        return answer(false, Some("asleep"));
-    }
     let text = message.get("text").and_then(Value::as_str);
     let herdr_key = message.get("key").and_then(Value::as_str);
     let problem = match (text, herdr_key) {
@@ -893,6 +884,14 @@ async fn input(
     let herdr_key = herdr_key.and_then(pane::herdr_key);
     // `attempted` is whether the write reached Herdr at all.
     let (attempted, result) = tokio::task::spawn_blocking(move || {
+        // Asked here, at the write, and held until it returns: a reply queued
+        // while the agent was awake is refused if its pane has closed since,
+        // and a sleep that starts now waits for this write to land first. The
+        // phone's own list may be a second behind either way.
+        let _admission = match writer.admit_input(&core_pane_id) {
+            Ok(admission) => admission,
+            Err(error) => return (false, Err(error)),
+        };
         let connector = match writer.herdr_api(&device_id) {
             Ok(connector) => connector,
             Err(error) => return (false, Err(error)),
@@ -999,72 +998,145 @@ mod tests {
         }
     }
 
-    /// A reply meant for the agent must never reach the shell under a sleeping
-    /// one. This Mac has no Herdr socket here, so an input that gets as far as
-    /// writing answers `unavailable`; `asleep` is the refusal before that.
-    #[tokio::test]
-    async fn input_to_a_pane_whose_agent_is_not_running_is_refused_before_anything_is_written() {
-        let directory = tempfile::tempdir().unwrap();
-        let mobile = Mobile::start(super::super::Config {
-            state_dir: directory.path().join("state"),
-            home: directory.path().to_path_buf(),
+    fn mobile_with(
+        directory: &std::path::Path,
+        gate: &Arc<herdr_core::input_gate::PaneInputGate>,
+    ) -> Arc<Mobile> {
+        Mobile::start(super::super::Config {
+            state_dir: directory.join("state"),
+            home: directory.to_path_buf(),
             port: 0,
             cli: super::super::tailscale::CliSource {
                 pinned: None,
                 search_path: None,
             },
             host_name: None,
-            core: Arc::new(crate::core::CoreHandle::bare(directory.path())),
+            core: Arc::new(crate::core::CoreHandle::bare(directory)),
+            input_gate: Arc::clone(gate),
             herdr_socket: None,
             renderers: Arc::default(),
             start_demand: Arc::default(),
             open: tokio::sync::watch::channel(true).1,
             desktop: Arc::default(),
+        })
+    }
+
+    fn input_message(request_id: &str, body: Value) -> Value {
+        let mut message = json!({
+            "type": "input", "request_id": request_id, "device_id": "test-node", "pane_id": "w1:p1",
         });
-        let message = |request_id: &str, body: Value| {
-            let mut message = json!({
-                "type": "input", "request_id": request_id, "device_id": "test-node", "pane_id": "w1:p1",
-            });
-            message
-                .as_object_mut()
-                .unwrap()
-                .extend(body.as_object().unwrap().clone());
-            message
-        };
-        let reason = |answer: Value| answer["reason"].as_str().map(str::to_owned);
+        message
+            .as_object_mut()
+            .unwrap()
+            .extend(body.as_object().unwrap().clone());
+        message
+    }
 
-        for state in ["sleeping", "waking", "failed"] {
-            let projection = sleeping_projection(Some(state));
-            for (id, body) in [
-                ("reply", json!({"text": "echo R11-PHONE-SHELL"})),
-                ("key", json!({"key": "enter"})),
-            ] {
-                let request_id = format!("{state}-{id}");
-                let answer =
-                    input(&mobile, "phone-a", &message(&request_id, body), &projection).await;
-                assert_eq!(answer["ok"], false, "{state} {id}");
-                assert_eq!(reason(answer), Some("asleep".to_owned()), "{state} {id}");
-                assert!(
-                    matches!(
-                        mobile.reserve_input("phone-a", &request_id),
-                        Reservation::Write
-                    ),
-                    "a refused input claims nothing, so the phone may send it once the agent is back"
-                );
-            }
-        }
+    fn reason(answer: &Value) -> Option<&str> {
+        answer["reason"].as_str()
+    }
 
-        // The agent is back (no sleep on its row): the same input now reaches
-        // the write step, which has no Herdr to write to.
-        let awake = sleeping_projection(None);
+    /// A reply meant for the agent must never reach the shell under it. The
+    /// refusal is the core's gate at the write, not the phone's list, which
+    /// is a moment behind: every projection here still says the agent is
+    /// awake. This Mac has no Herdr socket here, so an input that gets as far
+    /// as writing answers `unavailable`; `asleep` is the refusal before that.
+    #[tokio::test]
+    async fn input_to_a_pane_whose_agent_is_ending_asleep_or_waking_is_refused_at_the_write() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        let listed_awake = sleeping_projection(None);
+
+        // The agent is awake: the write is attempted.
         let answer = input(
             &mobile,
             "phone-a",
-            &message("awake", json!({"text": "yes"})),
-            &awake,
+            &input_message("awake", json!({"text": "yes"})),
+            &listed_awake,
         )
         .await;
-        assert_eq!(reason(answer), Some("unavailable".to_owned()));
+        assert_eq!(reason(&answer), Some("unavailable"));
+
+        // Its pane closes (the end begins) after the phone listed it awake.
+        gate.close("w1:p1");
+        for (id, body) in [
+            ("reply", json!({"text": "echo R11-PHONE-SHELL"})),
+            ("key", json!({"key": "enter"})),
+        ] {
+            let answer = input(&mobile, "phone-a", &input_message(id, body), &listed_awake).await;
+            assert_eq!(answer["ok"], false, "{id}");
+            assert_eq!(reason(&answer), Some("asleep"), "{id}");
+            assert!(
+                matches!(mobile.reserve_input("phone-a", id), Reservation::Write),
+                "a refused input claims nothing, so the phone may send it once the agent is back"
+            );
+        }
+
+        // The agent is back: the same input reaches the write step again.
+        gate.set_closed(&std::collections::HashSet::new());
+        let answer = input(
+            &mobile,
+            "phone-a",
+            &input_message("back", json!({"text": "yes"})),
+            &listed_awake,
+        )
+        .await;
+        assert_eq!(reason(&answer), Some("unavailable"));
+    }
+
+    /// A reply that landed before the agent slept is answered from its claim
+    /// when the phone repeats it after a lost answer: the sleep must not turn
+    /// the recorded success, or the recorded doubt, into a refusal that
+    /// invites a second manual send.
+    #[tokio::test]
+    async fn a_repeated_request_keeps_its_recorded_answer_across_a_sleep() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        let listed = sleeping_projection(None);
+        for (id, state) in [
+            ("written", InputState::Written),
+            ("uncertain", InputState::Uncertain),
+        ] {
+            assert!(matches!(
+                mobile.reserve_input("phone-a", id),
+                Reservation::Write
+            ));
+            mobile.settle_input("phone-a", id, Some(state));
+        }
+        gate.close("w1:p1");
+        let written = input(
+            &mobile,
+            "phone-a",
+            &input_message("written", json!({"text": "yes"})),
+            &listed,
+        )
+        .await;
+        assert_eq!(
+            (written["ok"].as_bool(), reason(&written)),
+            (Some(true), None)
+        );
+        let uncertain = input(
+            &mobile,
+            "phone-a",
+            &input_message("uncertain", json!({"text": "yes"})),
+            &listed,
+        )
+        .await;
+        assert_eq!(
+            (uncertain["ok"].as_bool(), reason(&uncertain)),
+            (Some(false), Some("uncertain"))
+        );
+        // Only a new request is refused.
+        let fresh = input(
+            &mobile,
+            "phone-a",
+            &input_message("fresh", json!({"text": "yes"})),
+            &listed,
+        )
+        .await;
+        assert_eq!(reason(&fresh), Some("asleep"));
     }
 
     #[test]

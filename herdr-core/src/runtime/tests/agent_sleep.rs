@@ -1945,12 +1945,52 @@ fn input_to_a_sleeping_pane_goes_nowhere() {
         pane: SLEEPER.into(),
         asleep: true,
     };
-    assert!(
-        !terminals.take().contains(&asleep),
-        "the agent takes keys until its end lands (B8)"
-    );
-    assert!(runtime.ingest_agent_sleep_end(SLEEPER, Ok(4)));
+    // The end has begun, so no key can land behind it: a key typed now would
+    // run in the shell the agent leaves, however the pane is still drawn.
     assert!(terminals.take().contains(&asleep));
+    assert!(runtime.ingest_agent_sleep_end(SLEEPER, Ok(4)));
+    assert!(!terminals.take().contains(&TerminalControl::Asleep {
+        pane: SLEEPER.into(),
+        asleep: false,
+    }));
+}
+
+/// Every writer that asks the gate (a phone's reply, an agent's find keys)
+/// is refused from the moment the end begins, through asleep, until the
+/// agent is back; an end the agent refuses opens the pane again.
+#[test]
+fn the_input_gate_follows_the_sleep_records_from_the_first_moment_of_the_end() {
+    let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
+    let gate = runtime.input_gate();
+    runtime.ingest_session(Ok(session(Some(4))));
+    assert!(gate.admit(SLEEPER).is_ok(), "an awake agent takes input");
+
+    runtime.dispatch_json(&event(
+        "agent_sleep",
+        serde_json::json!({"pane_id": SLEEPER}),
+    ));
+    assert!(
+        row(&runtime).get("sleep").is_none(),
+        "the row still draws the agent awake while the end runs"
+    );
+    assert!(gate.admit(SLEEPER).is_err(), "ending refuses input");
+    assert!(gate.admit("w1:other").is_ok(), "another pane is not closed");
+    assert!(runtime.ingest_agent_sleep_end(SLEEPER, Ok(4)));
+    assert!(gate.admit(SLEEPER).is_err(), "asleep refuses input");
+
+    let (mut refused, _) = live_tab_order_runtime(CHECKOUT);
+    let gate = refused.input_gate();
+    refused.ingest_session(Ok(session(Some(4))));
+    refused.dispatch_json(&event(
+        "agent_sleep",
+        serde_json::json!({"pane_id": SLEEPER}),
+    ));
+    assert!(gate.admit(SLEEPER).is_err());
+    refused.ingest_agent_sleep_end(SLEEPER, Err("did not hand the terminal back".into()));
+    assert!(
+        gate.admit(SLEEPER).is_ok(),
+        "an agent that stayed awake takes input again"
+    );
 }
 
 /// B12, D-12: a committed visit to the tab wakes the agent; another event

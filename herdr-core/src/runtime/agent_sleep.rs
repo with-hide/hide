@@ -441,6 +441,9 @@ impl Runtime {
             }
             Err(reason) => {
                 store.records.remove(pane_id);
+                // The agent is awake still, so its pane takes input again.
+                self.sync_terminal_intents();
+                let store = &mut self.snapshot.ui_state.agent_sleep;
                 let changed_at_unix_ms = store
                     .stamps
                     .get(pane_id)
@@ -548,6 +551,9 @@ impl Runtime {
             .agent_sleep
             .records
             .insert(pane_id.to_owned(), record);
+        // Closed before the worker starts: from here no writer's input can
+        // land behind the end, and the worker waits for those already writing.
+        self.sync_terminal_intents();
         if let Err(message) = agent_sleep_herdr::spawn_end(context, pane_id.to_owned(), kind) {
             return self.ingest_agent_sleep_end(pane_id, Err(message));
         }
@@ -804,6 +810,7 @@ impl Runtime {
                 runtime: live.runtime.clone(),
                 notifier: live.notifier.clone(),
                 herdr_pane_id: pane_id.to_owned(),
+                input_gate: Arc::clone(&self.input_gate),
             });
         };
         if self.sleep_machine(device) != SleepMachine::Node {
@@ -816,6 +823,7 @@ impl Runtime {
             runtime: worker.runtime.clone(),
             notifier: worker.notifier.clone(),
             herdr_pane_id: remote_pane_source_id(device, pane_id)?.to_owned(),
+            input_gate: Arc::clone(&self.input_gate),
         })
     }
 
@@ -827,6 +835,8 @@ impl Runtime {
         store
             .records
             .retain(|pane_id, _| !pane_id.starts_with(&prefix));
+        self.sync_input_gate();
+        let store = &mut self.snapshot.ui_state.agent_sleep;
         store
             .stamps
             .retain(|pane_id, _| !pane_id.starts_with(&prefix));
