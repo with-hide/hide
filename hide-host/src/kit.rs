@@ -847,13 +847,9 @@ mod tests {
         )
         .unwrap();
         let report: hide_kit::KitReport = serde_json::from_value(report).unwrap();
-        assert_eq!(
-            report
-                .component(hide_kit::ComponentId::CoordinationRetirement)
-                .unwrap()
-                .state,
-            hide_kit::ComponentState::Failed
-        );
+        let refusal = report.refused.expect("the pass stops before anything");
+        assert_eq!(refusal.cause, hide_kit::RefusalCause::Record);
+        assert_eq!(refusal.path.as_deref(), ledger.to_str());
         assert!(hide_platform::fs::link::is_link_to(
             &placement.root.join("current"),
             Path::new(&older.version)
