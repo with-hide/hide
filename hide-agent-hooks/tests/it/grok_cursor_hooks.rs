@@ -46,33 +46,37 @@ fn grok_observes_a_prompt_without_printing_or_confirming_its_answer() {
 }
 
 #[test]
-fn grok_stop_hands_over_letters_and_the_next_stop_has_nothing_to_block_on() {
-    let machine = Machine::new("letters-once");
-    for active in [false, true] {
-        let run = machine.run_event(
-            "grok",
-            "Stop",
-            &json!({"sessionId":"grok-session", "stopHookActive":active, "backgroundTasks":[]})
-                .to_string(),
-            Some(PANE),
-            GROK,
-        );
-        assert!(run.status_ok, "{run:?}");
-        if active {
-            assert!(run.stdout.is_empty(), "{run:?}");
-        } else {
-            let answer: Value = serde_json::from_str(&run.stdout).unwrap();
-            assert_eq!(answer, json!({"decision":"block", "reason":"BODY-ONCE"}));
+fn grok_stop_cannot_loop_even_when_confirmation_fails() {
+    for mode in ["letters-once", "letters-confirm-fails"] {
+        let machine = Machine::new(mode);
+        for active in [false, true] {
+            let run = machine.run_event(
+                "grok",
+                "Stop",
+                &json!({"sessionId":"grok-session", "stopHookActive":active, "backgroundTasks":[]})
+                    .to_string(),
+                Some(PANE),
+                GROK,
+            );
+            assert!(run.status_ok, "{run:?}");
+            if active {
+                assert!(run.stdout.is_empty(), "{run:?}");
+            } else {
+                let answer: Value = serde_json::from_str(&run.stdout).unwrap();
+                assert_eq!(answer, json!({"decision":"block", "reason":"BODY-ONCE"}));
+                if mode == "letters-confirm-fails" {
+                    assert!(run.stderr.contains("\"code\":\"confirm\""), "{run:?}");
+                }
+            }
         }
+        assert_eq!(
+            machine.calls(),
+            [
+                "inbox --hook --session grok-session --turn-end",
+                "inbox --confirm letter-1",
+            ]
+        );
     }
-    assert_eq!(
-        machine.calls(),
-        [
-            "inbox --hook --session grok-session --turn-end",
-            "inbox --confirm letter-1",
-            "inbox --hook --session grok-session --turn-end",
-        ]
-    );
     // Neither a child stop nor a missing native identity may take the
     // parent's letters, even when the mailbox has something to return.
     let machine = Machine::new("letters");
@@ -85,6 +89,32 @@ fn grok_stop_hands_over_letters_and_the_next_stop_has_nothing_to_block_on() {
         assert!(run.stdout.is_empty(), "{run:?}");
     }
     assert!(machine.calls().is_empty());
+}
+
+#[test]
+fn grok_diagnoses_conflicting_session_ids_at_every_intake_point() {
+    for event in ["UserPromptSubmit", "PreToolUse", "Stop"] {
+        let machine = Machine::new("letters");
+        let payload = json!({
+            "sessionId":"private-session-a", "session_id":"private-session-b",
+            "prompt":"private-prompt", "toolName":"read_file", "toolInput":{},
+        });
+        let run = machine.run_event("grok", event, &payload.to_string(), Some(PANE), GROK);
+        assert!(run.status_ok && run.stdout.is_empty(), "{event}: {run:?}");
+        assert!(machine.calls().is_empty(), "{event}: {:?}", machine.calls());
+        let diagnostic = std::fs::read_to_string(
+            machine
+                .home
+                .join(".hide/agent-hooks/delivery-diagnostics.json"),
+        )
+        .unwrap_or_default();
+        assert!(
+            diagnostic.contains("session_conflict"),
+            "{event}: {diagnostic:?} {run:?}"
+        );
+        assert!(!diagnostic.contains("private-"));
+        assert!(!run.stderr.contains("private-"));
+    }
 }
 
 fn grok_shell(machine: &Machine, command: &str) -> String {
@@ -578,11 +608,11 @@ fn grok_counts_its_subagents_and_keeps_background_ones_past_the_turn() {
         "subagent_start",
         r#"{"sessionId":"grok-session","subagentType":"general"}"#,
     );
-    // The turn ends with one subagent still running in the background.
+    // Even a repeated Stop still settles the background subagent count.
     grok(
         "Stop",
         "stop",
-        r#"{"sessionId":"grok-session","reason":"end_turn","backgroundTasks":[
+        r#"{"sessionId":"grok-session","stopHookActive":true,"reason":"end_turn","backgroundTasks":[
             {"id":"a","type":"subagent","status":"running","agentType":"general"},
             {"id":"b","type":"shell","status":"running","command":"npm run dev"}]}"#,
     );

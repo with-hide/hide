@@ -71,6 +71,8 @@ pub struct Opt {
     pub required: bool,
     /// Options this one is refused without.
     pub requires: &'static [&'static str],
+    /// Options this one cannot be combined with.
+    pub conflicts: &'static [&'static str],
 }
 
 pub struct Spec {
@@ -97,6 +99,7 @@ const fn required(name: &'static str, value: Input) -> Opt {
         value: Some(value),
         required: true,
         requires: &[],
+        conflicts: &[],
     }
 }
 
@@ -106,6 +109,7 @@ const fn optional(name: &'static str, value: Input) -> Opt {
         value: Some(value),
         required: false,
         requires: &[],
+        conflicts: &[],
     }
 }
 
@@ -115,6 +119,7 @@ const fn switch(name: &'static str) -> Opt {
         value: None,
         required: false,
         requires: &[],
+        conflicts: &[],
     }
 }
 
@@ -274,12 +279,14 @@ pub const COMMANDS: &[Spec] = &[
                 value: None,
                 required: false,
                 requires: &["--session"],
+                conflicts: &["--turn-end"],
             },
             Opt {
                 name: "--turn-end",
                 value: None,
                 required: false,
                 requires: &["--session"],
+                conflicts: &["--tool"],
             },
         ],
         &["intake"],
@@ -311,6 +318,7 @@ pub const COMMANDS: &[Spec] = &[
                 value: Some(Approval),
                 required: false,
                 requires: &["--expected-generation"],
+                conflicts: &[],
             },
         ],
         &["watch"],
@@ -378,12 +386,18 @@ fn command_json(spec: &Spec) -> Value {
             "value": value_json(argument.value),
         })).collect::<Vec<_>>(),
         "repeats_at_most": spec.repeats,
-        "options": spec.options.iter().map(|option| json!({
+        "options": spec.options.iter().map(|option| {
+            let mut value = json!({
             "name": option.name,
             "value": option.value.map(value_json),
             "required": option.required,
             "requires": option.requires,
-        })).collect::<Vec<_>>(),
+            });
+            if !option.conflicts.is_empty() {
+                value["conflicts"] = json!(option.conflicts);
+            }
+            value
+        }).collect::<Vec<_>>(),
         "rest": spec.rest,
         "answers": spec.answers,
     });
@@ -512,11 +526,16 @@ mod tests {
                 ));
             }
         }
+        let mut selected = Vec::new();
         for option in spec.options {
             // Help exits before delivery and has its own standalone argv.
-            if option.name == "--help" || leave_out.contains(&option.name) {
+            if option.name == "--help"
+                || leave_out.contains(&option.name)
+                || option.conflicts.iter().any(|name| selected.contains(name))
+            {
                 continue;
             }
+            selected.push(option.name);
             argv.push(option.name.to_owned());
             if let Some(value) = option.value {
                 let (taken, refused) = sample(value);
@@ -561,6 +580,32 @@ mod tests {
                 );
             }
             for option in spec.options {
+                // Exercise each side of an exclusive choice, not just the
+                // first one the full sample selected.
+                let allowed = argv(spec, option.conflicts, None, most);
+                assert!(
+                    takes(&allowed),
+                    "hide {command} {}: {:?}",
+                    option.name,
+                    parse_args(&allowed)
+                );
+                for conflict in option.conflicts {
+                    let other = spec
+                        .options
+                        .iter()
+                        .find(|other| other.name == *conflict)
+                        .unwrap();
+                    let mut both = allowed.clone();
+                    both.push(other.name.to_owned());
+                    if let Some(value) = other.value {
+                        both.push(sample(value).0);
+                    }
+                    assert!(
+                        !takes(&both),
+                        "hide {command} {} with {conflict}",
+                        option.name
+                    );
+                }
                 if option.required {
                     assert!(
                         !takes(&argv(spec, &[option.name], None, most)),
@@ -569,15 +614,17 @@ mod tests {
                     );
                 }
                 if !option.requires.is_empty() {
+                    let mut omitted = option.conflicts.to_vec();
+                    omitted.extend_from_slice(option.requires);
                     assert!(
-                        !takes(&argv(spec, option.requires, None, most)),
+                        !takes(&argv(spec, &omitted, None, most)),
                         "hide {command} {} alone",
                         option.name
                     );
                 }
                 if option.value.is_some() {
                     assert!(
-                        !takes(&argv(spec, &[], Some(option.name), most)),
+                        !takes(&argv(spec, option.conflicts, Some(option.name), most)),
                         "hide {command} {} refused value",
                         option.name
                     );

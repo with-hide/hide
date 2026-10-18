@@ -124,6 +124,7 @@ fn the_snapshot_row_carries_the_chip_and_the_table_in_order() {
             .collect::<Vec<_>>(),
         [
             Feature::Skill,
+            Feature::Bell,
             Feature::SpawnGuard,
             Feature::HerdrIntegration,
             Feature::Sleep,
@@ -131,7 +132,7 @@ fn the_snapshot_row_carries_the_chip_and_the_table_in_order() {
             Feature::Start,
             Feature::Titles
         ],
-        "grok guards and counts through its own hook, and its session reader adds titles and the exact lifecycle"
+        "grok takes resting letters, guards and counts through its own hook, and its reader adds titles and the exact lifecycle"
     );
     assert_eq!(
         grok.features

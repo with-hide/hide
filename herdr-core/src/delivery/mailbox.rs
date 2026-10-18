@@ -1304,9 +1304,9 @@ mod tests {
     /// first, the pending letters whose wait is over, counted from the later
     /// of arrival and the start of its work, and a `--now` letter at once; a
     /// resting agent, a letter still waiting, a letter past its deadline and
-    /// a kind a bell rings for get nothing.
+    /// a kind without a tool-letter hook get nothing.
     #[test]
-    fn a_tool_event_hands_a_working_agent_the_letters_due_and_a_bell_target_none() {
+    fn a_tool_event_hands_a_working_agent_letters_only_when_its_adapter_takes_them() {
         let wait = super::super::doorbell::MID_TURN_WAIT_MS;
         for kind in ["opencode", "pi", "omp", "grok", "cursor", "antigravity"] {
             assert!(tool_letters(kind), "{kind}");

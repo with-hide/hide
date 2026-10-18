@@ -1829,6 +1829,9 @@
                     }
                 },
                 {
+                    "conflicts": [
+                        "--turn-end"
+                    ],
                     "name": "--tool",
                     "required": false,
                     "requires": [
@@ -1837,6 +1840,9 @@
                     "value": null
                 },
                 {
+                    "conflicts": [
+                        "--tool"
+                    ],
                     "name": "--turn-end",
                     "required": false,
                     "requires": [
@@ -1979,7 +1985,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:b584de08ad436239ecc7ffb6617ecb96810c7391e25a298e40c876a751caf541",
+    "digest": "sha256:de88b1601258e61ed276ebbae1e6bd7797ef29d783786e0ce578b8818e3dcbe5",
     "envelopes": {
         "agent": {
             "answer": "value",

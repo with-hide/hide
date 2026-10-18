@@ -317,7 +317,7 @@ impl Ledger {
                 || letter.body.trim().is_empty()
                 || letter.bell_errors > 3
                 || letter.bell_turn.as_ref().is_some_and(|turn| {
-                    !hide_agent_hooks::delivery::valid_prompt_digest(&turn.session)
+                    !hide_agent_hooks::delivery::valid_sha256_digest(&turn.session)
                         || !hide_agent_hooks::delivery::valid_prompt_digest(&turn.digest)
                         || letter.recipient.session.as_ref() != Some(&turn.session)
                 })

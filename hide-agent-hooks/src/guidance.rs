@@ -93,7 +93,15 @@ impl GuidanceAgent {
     pub const fn version(self) -> u32 {
         match self {
             Self::Grok => 7,
-            _ => 6,
+            Self::Gemini
+            | Self::Qwen
+            | Self::Droid
+            | Self::Copilot
+            | Self::Kiro
+            | Self::Cursor
+            | Self::Augment
+            | Self::Junie
+            | Self::Antigravity => 6,
         }
     }
 

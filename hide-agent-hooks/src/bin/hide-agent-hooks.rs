@@ -272,16 +272,16 @@ fn basic_turn_event(
     if !std::env::var("HERDR_PANE_ID").is_ok_and(|pane| !pane.is_empty()) {
         return (None, None);
     }
-    let result = match event {
+    let result = (|| match event {
         HookEvent::UserPromptSubmit
             if dialect
                 .adapter()
                 .prompt_hook
                 .is_some_and(|hook| !hook.context) =>
         {
-            let prompt = delivery::read_prompt(payload, *truncated);
+            let prompt = delivery::read_prompt(payload, *truncated)?;
             if prompt.session.is_none() {
-                return (None, None);
+                return Ok(None);
             }
             // Observe-only hooks never print or confirm, even if an older
             // peer accidentally answers with context.
@@ -289,15 +289,21 @@ fn basic_turn_event(
         }
         HookEvent::Stop
             if dialect.adapter().turn_end_letters.is_some()
-                && basic::grok_stop(payload, *truncated) != basic::GrokStop::Ignore =>
+                && matches!(
+                    basic::grok_stop(payload, *truncated),
+                    basic::GrokStop::Running {
+                        hook_active: false,
+                        ..
+                    }
+                ) =>
         {
-            let Some(session) = basic::session(payload, *truncated, dialect) else {
-                return (None, None);
+            let Some(session) = basic::session(payload, *truncated, dialect)? else {
+                return Ok(None);
             };
             delivery::pull_at_turn_end(started + GUARD_BUDGET, &session)
         }
-        _ => return (None, None),
-    };
+        _ => Ok(None),
+    })();
     match result {
         Ok(Some(intake)) => (
             Some(serde_json::json!({"decision":"block", "reason":intake.context}).to_string()),
@@ -340,11 +346,18 @@ fn basic_tool_call(
         return (Some(answer), None);
     }
     let in_pane = std::env::var("HERDR_PANE_ID").is_ok_and(|value| !value.is_empty());
-    let Some(session) = (in_pane && dialect.adapter().tool_letters.is_some())
-        .then(|| basic::session(&payload, truncated, dialect))
-        .flatten()
-    else {
+    if !in_pane || dialect.adapter().tool_letters.is_none() {
         return (None, None);
+    }
+    let session = match basic::session(&payload, truncated, dialect) {
+        Ok(Some(session)) => session,
+        Ok(None) => return (None, None),
+        Err(failure) => {
+            if let Some(home) = home_directory() {
+                hide_agent_hooks::delivery::diagnose_failure(&home, &failure);
+            }
+            return (None, None);
+        }
     };
     match hide_agent_hooks::delivery::pull_at_tool(started + GUARD_BUDGET, &session) {
         Ok(Some(intake)) => (
@@ -652,7 +665,7 @@ fn count_basic(dialect: HookDialect, event: HookEvent, payload: Option<&(Vec<u8>
             };
             match basic::grok_stop(payload, *truncated) {
                 basic::GrokStop::Ignore => return,
-                basic::GrokStop::Running(running) => Change::Settled { running },
+                basic::GrokStop::Running { running, .. } => Change::Settled { running },
             }
         }
         (_, HookEvent::Stop) => Change::Settled { running: 0 },
@@ -874,7 +887,13 @@ fn run_hook(arguments: &[String], started: Instant) {
     };
     let prompt = match (&payload, event) {
         (Some((bytes, truncated)), HookEvent::UserPromptSubmit) => {
-            hide_agent_hooks::delivery::read_prompt(bytes, *truncated)
+            match hide_agent_hooks::delivery::read_prompt(bytes, *truncated) {
+                Ok(prompt) => prompt,
+                Err(failure) => {
+                    hide_agent_hooks::delivery::diagnose_failure(&home, &failure);
+                    return;
+                }
+            }
         }
         _ => hide_agent_hooks::delivery::Prompt::default(),
     };

@@ -153,11 +153,13 @@ How it reaches the agent follows the kind, and one letter takes one path and is 
   Every tool call reaches the hook, since neither entry carries a matcher (Grok `hide-guidance@7`, Cursor `hide-guidance@6`; an omitted matcher matches everything in Grok's guide, and Cursor's is optional), so a `--now` letter goes at the next call whatever its tool; a refused call carries none.
 - Antigravity takes them through its `PreInvocation` hook, which agy runs before every model call of a turn: a call after the prompt's first is the gap after a tool, and Hide answers it with the letters due as an injected system message (`injectSteps`, as the prompt's letters go), confirmed once printed; agy has no bell, so this and the next prompt are its two paths.
 
-The ask (`Command::Pull { point: Tool }`, node protocol 45) names the pane's own native session and is refused with `session_mismatch` for any other, since it hands letters over; it submits nothing, so a draft in the composer stays a draft (D-09).
+The ask (`Command::Pull { point: Tool }`, node protocol 47) names the pane's own native session and is refused with `session_mismatch` for any other, since it hands letters over; it submits nothing, so a draft in the composer stays a draft (D-09).
 Grok also asks at its root session's `Stop` with `hide inbox --hook --session <id> --turn-end`.
 A nonempty answer becomes `{"decision":"block","reason":<letters>}`, followed by confirmation after stdout flush; Grok feeds the reason to the model and continues the turn.
-A second Stop has no confirmed letter to carry and ends normally.
+A second Stop with `stopHookActive: true` makes no letter pull and ends normally even if confirmation of the first handover failed.
 Tool and turn-end intake share the three-handover limit and the five-letter, 8 KiB cap.
+Parallel tool hooks in one batch may pull the same claimed letter before either confirms it: the claim binds the bell turn, not an exclusive tool invocation.
+The worker serializes pulls and durably counts each handover, so this at-least-once path remains bounded at three; confirmation makes later pulls empty.
 An operator turn's new letter still waits five minutes unless sent with `--now`; ending that turn does not skip the wait, and its rest bell brings the letter instead.
 The core answers from the caller's own observation: the letters whose wait is over for an agent Herdr reports `working`, oldest first, under the prompt pull's caps (five letters, 8 KiB), and nothing for a resting agent without a bell-turn claim, a letter still waiting, a letter past its deadline or a kind whose adapter declares no `tool_letters`; a letter it hands over is confirmed by the script, not received, so one lost in the host stays pending for the next ask (D-11).
 The plugin and the extension ask at every tool result of the pane's root session, so a `--now` letter goes at the next result (B6), and skip only the results that come while letters they handed over wait for their receipt; Grok's and Cursor's hook runs per tool call and adds one CLI call there, and agy's per model call after the first.

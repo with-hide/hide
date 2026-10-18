@@ -117,11 +117,11 @@ impl Hold {
     }
 }
 
-/// The agent kinds a bell may be typed into: those whose permission and
-/// selection menus Herdr was observed to report as `blocked` in an isolated
-/// run (`docs/delivery.md`, Verification). A menu Herdr reads as a stop
-/// (Codex's plan approval) is guarded by the session read instead
-/// ([`Turn`]), so a kind that was not observed is not in this list.
+/// The adapter declares whether a kind accepts a bell. The verdict still
+/// requires a resting or eligible working state, no Hide-routed draft and
+/// no native wait; a kind with tool letters is rung only at rest.
+/// `docs/delivery.md` records the observed menu states and the residual
+/// for input that bypasses Hide.
 pub(crate) fn bell_target(kind: &str) -> bool {
     hide_agent_adapter::adapter(kind).is_some_and(|row| row.bell)
 }
