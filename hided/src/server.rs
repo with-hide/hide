@@ -1278,6 +1278,12 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "shell_starting" => {
             "The new pane's shell had not finished starting; answer what its startup files ask in that pane, then spawn with a new intent"
         }
+        "native_identity_unavailable" => {
+            "The agent started and has not reported its session yet (Codex and OpenCode 2 report theirs at their first turn); Hide registers it with its parent and watch when it does, and the same command with the same intent then answers it"
+        }
+        "identity_waits_full" => {
+            "Too many agents Hide started are waiting to report their session; give one of them a first prompt or close its pane, then run the same command again"
+        }
         "session_too_long" => {
             "The agent names its session by a file path longer than 4096 bytes; spawn it with a new intent in a checkout with a shorter path"
         }
@@ -4466,6 +4472,8 @@ mod tests {
             "agent_not_started",
             "worktree_unconfirmed",
             "shell_starting",
+            "native_identity_unavailable",
+            "identity_waits_full",
             "session_too_long",
         ] {
             let (reason, next) = refusal_answer(code.to_owned(), delivery_next_action(code));

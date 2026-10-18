@@ -248,9 +248,11 @@ fn run_coordinator(
                         && let Some((state, marks)) = lineage_inputs(&context)
                     {
                         writer.reconnected();
+                        let current = &replica.as_ref().unwrap().state;
                         writer.observe(
                             &state,
-                            &replica.as_ref().unwrap().state.agents,
+                            &current.agents,
+                            &|pane| current.panes.iter().any(|known| known.pane_id == pane),
                             &marks,
                             true,
                             snapshot_started_at,
@@ -800,7 +802,15 @@ fn run_coordinator(
                             if let Some(writer) = lineage_writer.as_mut()
                                 && let Some((state, marks)) = lineage_inputs(&context)
                             {
-                                writer.observe(&state, &agents, &marks, native_changed, started_at);
+                                let panes = &current.state.panes;
+                                writer.observe(
+                                    &state,
+                                    &agents,
+                                    &|pane| panes.iter().any(|known| known.pane_id == pane),
+                                    &marks,
+                                    native_changed,
+                                    started_at,
+                                );
                             }
                             if let Some(restorer) = hook_token_restorer.as_mut() {
                                 restorer.observe(&agents, false);
