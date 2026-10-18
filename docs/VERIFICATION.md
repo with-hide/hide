@@ -430,22 +430,24 @@ The journey reads what hide, Herdr and the agents write as UTF-8 and refuses to 
 `scripts/agent-journey-lane.py` turns a report into the lane's verdict and its annotations, and the lane keeps the report as an artifact.
 The journey alone runs by hand with the repository's secrets: `gh workflow run agent-journey.yml --ref <branch> -f systems='["linux","macos","windows"]' -f fake=true -f live=true -f agy=rotation`; a hand run's agy requests come out of the same 20 a day as the nightly's.
 
-Each agent on the fake model lane on Linux and macOS on 2026-10-18 (both systems read the same), with where its `title` cell's native title comes from, its model requests (each prompt's, a CLI's own title and helper requests included) against the budget `contracts/agent-journey.json` gives a signed-in run, and each cell that did not pass with its cause:
+Each agent on the fake model lane on Linux and macOS on 2026-10-18 (run 39097395133, both systems the same but where a row says), with where its `title` cell's native title comes from, its model requests (each prompt's, a CLI's own title and helper requests included) against the budget `contracts/agent-journey.json` gives a signed-in run, and each cell that did not pass with its cause:
 
 | Agent | CLI | Title source | Requests | Cells not passing, and why |
 | --- | --- | --- | --- | --- |
 | Claude Code | 2.1.302 | automatic: its own title request, which the fake model answers | 8 of 18: 1 per prompt and 1 title request per new session | none |
 | Codex | 0.163.0 | automatic, as Claude Code | 8 of 18 | none |
-| Grok | 1.0.52 | automatic: its title request to `grok-4.6` | 16 of 20: 4 for every prompt, 3 chat requests and 1 more | `letter` not measured: Grok takes a letter only at a tool call its model chooses |
-| OpenCode | 2.0.29 | automatic: its own title request | 7 of 18 | `fork`: OpenCode 2's TUI takes no `--fork`, which Hide starts the fork with; a product fix is pending |
-| Pi | 1.0.4 | named: `/name <name>`, typed as the operator names a session | 2 of 18 | `guidance_memory`, `letter`, `resume`, `fork`, `title`: Herdr's `launch_pending` never clears for a Pi pane (fix/launch-pending-panes); on that fix, locally, every cell passes with 6 requests |
-| omp | 18.7.0 | automatic: its own title request | 6 of 18 | `resume`, `fork`: Herdr's `launch_pending`, as Pi |
-| agy | 1.4.2 | automatic: its own title request | 4 of 18 | `guidance_memory`, `letter`, `resume`, `fork`: its first-run onboarding (a color scheme, then its terms) took the keys typed into the pane; the lanes now write the onboarding status a set-up agy keeps |
+| Grok | 1.0.52 | automatic: its title request to `grok-4.6` | 16 of 20: 4 for every prompt, 3 chat requests and 1 more (12 on macOS, whose fork turn never started) | `letter` not measured: Grok takes a letter only at a tool call its model chooses; on macOS `fork` failed once: Hide focused the fork's pane before its checkout held it and kept its terminal waiting (`pane.projection_unavailable`) past the 30 s the journey waits to type, while on Linux the same wait cleared in time |
+| OpenCode | 2.0.29 | automatic: its own title request | 8 of 18 | none, `fork` included since its fork goes through the OpenCode server (#1356) |
+| Pi | 1.0.4 | named: `/name <name>`, typed as the operator names a session | 6 of 18 | none, since Herdr's `launch_pending` settles (#1354) |
+| omp | 18.7.0 | automatic: its own title request | 8 of 18 | none, as Pi |
+| agy | 1.4.2 | automatic: its own title request | 8 of 18 | none, once the lanes write the onboarding status a set-up agy keeps |
 
 Hide AI's goal title is a separate path this table does not measure: Hide AI is off in the journey (D-54).
 Product follow-up: agy's first-run onboarding holds the first prompt of an agy that was never set up, as Hide's spawn of it on a new machine would meet it.
 
-A release day's agy requests are the night's leg, `agy-contract.yml`'s 4 and the release's Linux leg, which stay within the 20 only while one journey leg spends at most 8; each signed-in leg's count is in its report, and agy's signed-in legs on 2026-10-18 spent 1 request each while its first-run onboarding held a start, so they do not decide yet whether a release can afford its one system.
+A full agy journey makes 8 model requests on the fake model lane (run 39097395133), so a night spends 12 of the key's 20 (`agy-contract.yml`'s 4 and the rotation's one leg) and a release day 20, the night's 12 and the release's Linux leg's 8; a hand run with agy, or a second release run, that day goes past it.
+The key's day ends at 00:00 UTC (both refusals on 2026-10-18 asked to retry then), the day the rotation is counted by, so every leg of one run picks the same system and a run that crosses midnight starts a new quota day with the new system.
+On 2026-10-18 hand runs spent the day: the signed-in legs after them read `not measured: provider quota exhausted`, as the rule says.
 
 ## A device check
 
