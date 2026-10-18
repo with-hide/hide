@@ -78,17 +78,16 @@ export type FactoryPlace = {
 export const FACTORY_ENTRY: FactoryPlace = { tab: "line", factory: null, column: null, cancelled: false, task: null, focus: null, create: false };
 
 /**
- * The Overview's tabs, left to right (PRD overview-device-tasks D-03, D-29;
- * PRD sidebar-task-lens D-20): the device's backlog, its projects, and Usage
- * at the end. The tasks are the sidebar's 태스크 list.
+ * The Overview's five tabs share the selected device and project, except
+ * account usage. Work is the first visit; reopening remembers the last tab.
  */
-export type MainView = "backlog" | "projects" | "usage";
+export type MainView = "work" | "projects" | "backlog" | "history" | "usage";
 
-export const MAIN_VIEWS: readonly MainView[] = ["backlog", "projects", "usage"];
+export const MAIN_VIEWS: readonly MainView[] = ["work", "projects", "backlog", "history", "usage"];
 
 /** The panel open beside an Overview tab: a session's record at Home (B16; PRD sidebar-task-lens B17), a backlog item (B31) or a project (B57). */
 export type OverviewPanel =
-  | { kind: "record"; session: import("./snapshot").WorkSession }
+  | { kind: "record"; session: import("./snapshot").WorkSession; locator?: { request_offset: number; query?: string }; returnTo?: MainView }
   | { kind: "item"; workspaceId: string; taskKey: string }
   | { kind: "project"; workspaceId: string };
 
@@ -395,7 +394,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
     const moved = patch.deviceId !== undefined && patch.deviceId !== current.deviceId;
     set({ overview: { ...current, ...(moved ? { projectId: null, panel: null, open: [] } : {}), ...patch } });
   },
-  mainView: "backlog",
+  mainView: "work",
   relation: null,
   sidebarFocus: 0,
   raisedOpen: [],

@@ -100,7 +100,7 @@ export function WorkspaceDialogs({ actions }: { actions: Actions }) {
   if (dialog.kind === "new_worktree") return <NewWorktreeDialog actions={actions} workspace={target.workspace} onClose={close} />;
   if (dialog.kind === "start_issue") {
     const task = target.workspace.tasks?.tasks.find((row) => row.key === dialog.taskKey);
-    if (task) return <StartIssueDialog key={task.key} actions={actions} workspace={target.workspace} task={task} onClose={close} />;
+    if (task) return <StartIssueDialog key={JSON.stringify([target.workspace.device_id, target.workspace.id, task.key])} actions={actions} workspace={target.workspace} task={task} onClose={close} />;
     return (
       <Dialog open onOpenChange={(next) => { if (!next) close(); }}>
         <DialogContent aria-label={t("common.unavailable")}>

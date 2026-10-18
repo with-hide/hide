@@ -135,6 +135,79 @@ pub struct Surface {
 pub struct Projection {
     pub popover: Surface,
     pub year: Surface,
+    pub models: Vec<ModelDay>,
+    pub models_limited: bool,
+}
+
+/// A recorded model's contribution, never inferred from an agent's total.
+/// Hide AI uses per-model reports here, not the headline's backend attempts.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ModelDay {
+    pub date: String,
+    pub agent: String,
+    pub model: Option<String>,
+    pub hide_ai: bool,
+    pub amount: Amount,
+}
+
+/// One shared model list rather than a copy for every agent/calendar.
+const MODEL_ROW_LIMIT: usize = 4096;
+type ModelKey = (Date, bool, String, String);
+
+struct Models {
+    start: Date,
+    rows: BTreeMap<ModelKey, Sum>,
+    limited: bool,
+}
+
+impl Models {
+    fn new(start: Date) -> Self {
+        Self {
+            start,
+            rows: BTreeMap::new(),
+            limited: false,
+        }
+    }
+
+    fn add(
+        &mut self,
+        date: Date,
+        agent: &str,
+        model: &str,
+        hide_ai: bool,
+        amount: &Sum,
+    ) -> Result<(), &'static str> {
+        if date < self.start {
+            return Ok(());
+        }
+        self.rows
+            .entry((date, hide_ai, agent.into(), model.into()))
+            .or_default()
+            .merge(amount)?;
+        if self.rows.len() > MODEL_ROW_LIMIT {
+            // Stable newest-first coverage; an omitted row is reported, not
+            // attributed to a fabricated model or added to a model subtotal.
+            self.rows.pop_first();
+            self.limited = true;
+        }
+        Ok(())
+    }
+
+    fn view(self) -> Result<Vec<ModelDay>, &'static str> {
+        self.rows
+            .into_iter()
+            .rev()
+            .map(|((date, hide_ai, agent, model), sum)| {
+                Ok(ModelDay {
+                    date: date.to_string(),
+                    agent,
+                    model: (model != hide_session::usage::UNNAMED_MODEL).then_some(model),
+                    hide_ai,
+                    amount: sum.amount()?,
+                })
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Default)]
@@ -273,8 +346,14 @@ pub fn prepare(
         .parse()
         .map_err(|_| "usage_day_invalid")?;
     let cutoff = shift(today, -(DAILY_DAYS - 1))?;
+    let reading = progress.iter().any(|p| p.reading);
     let mut days = Days::new();
     let mut lifetime = BTreeMap::<String, Sum>::new();
+    let mut models = Models::new(if reading {
+        sunday(shift(today, -45)?)?
+    } else {
+        shift(sunday(today)?, -52 * 7)?
+    });
     for row in rows.iter().filter(|row| row.device == device) {
         if !Agent::supported().any(|agent| agent != Agent::Cursor && agent.as_str() == row.agent) {
             return Err("usage_agent_invalid");
@@ -303,6 +382,7 @@ pub fn prepare(
         if resolved.unpriced && row.model != hide_session::usage::UNNAMED_MODEL {
             sum.unpriced.insert(row.model.clone());
         }
+        models.add(date, &row.agent, &row.model, false, &sum)?;
         days.entry(date)
             .or_default()
             .entry(row.agent.clone())
@@ -310,8 +390,7 @@ pub fn prepare(
             .merge(&sum)?;
         lifetime.entry(row.agent.clone()).or_default().merge(&sum)?;
     }
-    let hide = hide_view(hide, table, device, today, cutoff, now)?;
-    let reading = progress.iter().any(|p| p.reading);
+    let hide = hide_view(hide, table, device, (today, cutoff), now, &mut models)?;
     let first = days
         .keys()
         .chain(hide.days.keys())
@@ -323,9 +402,12 @@ pub fn prepare(
     };
     // One stable calendar during backfill and across agent selections.
     let start = if reading { shift(today, -45)? } else { first };
+    let models_limited = models.limited;
     Ok(Some(Projection {
         popover: surface(&days, &hide, &lifetime, progress, today, start, 20)?,
         year: surface(&days, &hide, &lifetime, progress, today, start, 53)?,
+        models: models.view()?,
+        models_limited,
     }))
 }
 
@@ -335,10 +417,11 @@ fn hide_view(
     hide: &Hide<'_>,
     table: Option<&prices::Table>,
     device: &str,
-    today: Date,
-    cutoff: Date,
+    bounds: (Date, Date),
     now: u64,
+    models: &mut Models,
 ) -> Result<HideView, &'static str> {
+    let (today, cutoff) = bounds;
     let mut view = HideView {
         limited: hide.limited,
         ..HideView::default()
@@ -383,6 +466,16 @@ fn hide_view(
         if resolved.unpriced {
             sum.unpriced.insert(row.model.clone());
         }
+        models.add(
+            date,
+            &row.provider,
+            &row.model,
+            true,
+            &Sum {
+                calls: row.totals.calls,
+                ..sum.clone()
+            },
+        )?;
         day.features.entry(feature).or_default().merge(&sum)?;
     }
     Ok(view)

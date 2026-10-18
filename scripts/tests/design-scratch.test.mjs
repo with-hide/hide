@@ -29,7 +29,9 @@ if (mode === 'missing') process.exit();
 if (mode === 'empty') { fs.writeFileSync(output, ''); process.exit(); }
 if (mode === 'hang') {
   const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {stdio: 'ignore'});
-  fs.writeFileSync('.pen-child', JSON.stringify({cli: process.pid, child: child.pid}));
+  // Publish readiness only after the complete receipt is visible to the reader.
+  fs.writeFileSync('.pen-child.pending', JSON.stringify({cli: process.pid, child: child.pid}));
+  fs.renameSync('.pen-child.pending', '.pen-child');
   setInterval(() => {}, 1000);
 } else {
   fs.writeFileSync(output, 'linked: ' + library + '\\n' + fs.readFileSync(library, 'utf8'));

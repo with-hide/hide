@@ -9,22 +9,28 @@ import { requireInterfaceLanguage } from "./i18n/locale";
 import { useShellStore } from "./store";
 import { hasLimits } from "./usage";
 import { compactTokens, usageProvider } from "./usageHistory";
+import { machineName } from "./screenMachine";
 
 export const UsageOverview = memo(function UsageOverview({ actions }: { actions: Actions }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   const node = useShellStore((s) => s.usage?.nodes[0]);
+  const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     actions.observeUsage({ usage_popover_open: true });
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
     return () => { window.clearInterval(timer); actions.observeUsage({ usage_popover_open: false }); };
   }, [actions]);
-  if (!node) return null;
+  if (!node) return <p className="p-lg text-caption text-muted-foreground" role="status">{t("overview.usage.loading")}</p>;
+  const loading = node.agents.some((row) => row.consumption.state === "loading");
+  const stale = node.agents.some((row) => row.consumption.state === "reading" && row.consumption.freshness === "stale");
+  const unavailable = node.agents.some((row) => row.consumption.state === "unavailable" && row.consumption.cause !== "no_records");
   return <div className="usage-overview" data-usage-overview="true">
-    {node.history ? <div className="usage-overview-history"><UsageHistory node={node} surface="year" outline={null} /></div> : <p className="text-caption text-muted-foreground">{t("usage.history.noData")}</p>}
+    <div className="flex flex-wrap items-center gap-sm text-caption text-muted-foreground" data-usage-global-scope="true"><span className="font-medium text-foreground" title={t("overview.usage.scope")}>{t("overview.usage.global", { device: machineName(devices, node.node, t) })}</span>{stale || unavailable ? <span role="status">{t(stale ? "overview.usage.stale" : "overview.usage.unavailable")}</span> : null}</div>
+    {node.history ? <div className="usage-overview-history"><UsageHistory node={node} surface="year" outline={null} /></div> : <p className="text-caption text-muted-foreground" role="status">{t(loading ? "overview.usage.loading" : "overview.usage.noHistory")}</p>}
     <details className="usage-account-details"><summary className="cursor-pointer text-caption text-muted-foreground">{t("usage.history.accountLimits")}</summary><div className="usage-overview-limits flex flex-col gap-md">
-      {AGENT_ADAPTERS.filter(hasLimits).map((adapter) => <div key={adapter.id} className="flex flex-col gap-md rounded-md border border-border p-md" data-usage-row={adapter.herdr_kind}>
+      {AGENT_ADAPTERS.filter(hasLimits).map((adapter) => <div key={adapter.id} className="flex flex-col gap-sm py-sm" data-usage-row={adapter.herdr_kind}>
         <div className="flex items-center gap-sm text-subhead font-semibold"><AgentMark kind={adapter.herdr_kind} />{adapter.label}</div>
         {node.agents.some((row) => row.agent === adapter.herdr_kind && row.consumption.state === "reading" && row.consumption.value.year.limited) ? <span className="text-micro text-muted-foreground">{t("usage.history.limited")}</span> : null}
         <UsageWindows agent={adapter.herdr_kind} cell={node.agents.find((row) => row.agent === adapter.herdr_kind)?.limits} now={now} />

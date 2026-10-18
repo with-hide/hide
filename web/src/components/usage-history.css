@@ -28,7 +28,9 @@
 .usage-bar[data-outline="true"] .usage-bar-plot, .usage-bar:focus-visible .usage-bar-plot { outline: var(--size-hairline) solid var(--foreground); outline-offset: var(--spacing-xxs); border-radius: var(--spacing-xxs); }
 .usage-legend { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-xxs); font-size: var(--text-micro); color: var(--muted-foreground); }
 .usage-limits { padding-bottom: var(--spacing-sm); border-bottom: var(--size-hairline) solid var(--border); }
-.usage-overview { display: flex; flex-direction: column; gap: var(--spacing-lg); padding: var(--spacing-lg); min-width: 0; }
+.usage-overview { display: flex; flex-direction: column; gap: var(--spacing-xl); padding: var(--spacing-xl); min-width: 0; width: 100%; max-width: var(--size-overview-usage-content); margin-inline: auto; }
+.usage-overview .usage-summary-value { font-size: var(--text-display); }
+.usage-overview .usage-comparison-plot { height: var(--size-overview-usage-plot); }
 .usage-overview-limits { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--size-usage-popover)), 1fr)); gap: var(--spacing-md); padding-top: var(--spacing-md); }
 .usage-overview-history { min-width: 0; width: 100%; }
 .usage-records .usage-summary { max-width: var(--size-usage-year); }
@@ -51,3 +53,21 @@
 .usage-table tbody tr:hover { background: var(--secondary); }
 .usage-table-cost, .usage-table tfoot { font-weight: 600; }
 .usage-table .usage-empty { text-align: center; padding: var(--spacing-xl); color: var(--muted-foreground); }
+.usage-comparison-summary { display: flex; flex-wrap: wrap; gap: var(--spacing-lg); }
+.usage-comparison-summary .usage-summary { flex: 2; min-width: min(100%, var(--size-usage-popover)); max-width: none; }
+.usage-comparison-cache { flex: 1; min-width: min(100%, var(--size-control-lg)); }
+.usage-comparison-plot { display: grid; grid-template-columns: repeat(var(--usage-day-count), minmax(var(--spacing-sm), 1fr)); gap: var(--spacing-xxs); height: var(--size-usage-bar-plot); overflow-x: auto; padding: var(--spacing-xxs); align-items: stretch; }
+.usage-comparison-bar { display: flex; flex-direction: column-reverse; justify-content: flex-start; min-width: 0; outline: none; border-radius: var(--radius-xs); opacity: var(--opacity-usage-level-3); }
+.usage-comparison-bar[data-selected="true"], .usage-comparison-bar:hover, .usage-comparison-bar:focus-visible { opacity: 1; box-shadow: 0 0 0 var(--size-hairline) var(--foreground); }
+.usage-comparison-bar[data-pending="true"] { border: var(--size-hairline) dashed var(--border); }
+.usage-series { display: block; flex-shrink: 0; width: 100%; background: var(--primary); }
+.usage-series[data-series="1"] { background: var(--accent-choice-sky); }
+.usage-series[data-series="2"] { background: var(--accent-choice-violet); }
+.usage-series[data-series="3"] { background: var(--accent-choice-amber); }
+.usage-series[data-series="4"] { background: var(--agent-working); }
+.usage-series[data-series="5"] { background: var(--muted-foreground); }
+.usage-series[data-series="6"] { background: var(--device-remote); }
+.usage-series[data-series="7"], .usage-series[data-series="8"] { background: var(--swatch-hide); }
+.usage-series-key { width: var(--size-icon-sm); height: var(--size-icon-sm); border-radius: var(--radius-xs); }
+.usage-model-name { max-width: var(--size-usage-popover); white-space: normal; overflow-wrap: anywhere; }
+.usage-table .usage-total-row { background: var(--secondary); font-weight: 600; }

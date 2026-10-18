@@ -105,6 +105,10 @@ pub struct IssueSnapshot {
     /// shows them before the first read; an older saved answer has none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<crate::tasks::TaskLabel>,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub assignees: Vec<String>,
 }
 
 /// An issue's sub-issues as GitHub counts them (`Issue.subIssuesSummary`) and
@@ -157,9 +161,17 @@ struct ListedIssue {
     project_items: Vec<ProjectItem>,
     #[serde(default)]
     labels: Vec<ListedLabel>,
+    #[serde(default)]
+    author: Option<ListedPerson>,
+    #[serde(default)]
+    assignees: Vec<ListedPerson>,
     updated_at: Option<String>,
     created_at: Option<String>,
     closed_at: Option<String>,
+}
+#[derive(Deserialize)]
+struct ListedPerson {
+    login: String,
 }
 #[derive(Deserialize)]
 struct ListedLabel {
@@ -189,6 +201,12 @@ pub fn parse_issues(output: &str) -> Result<Vec<IssueSnapshot>, String> {
                 return Err("GitHub returned an inconsistent issue identity or state".into());
             }
             Ok(IssueSnapshot {
+                author: issue.author.map(|person| person.login),
+                assignees: issue
+                    .assignees
+                    .into_iter()
+                    .map(|person| person.login)
+                    .collect(),
                 reference,
                 title: issue.title,
                 url: issue.url,

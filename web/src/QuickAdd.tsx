@@ -1,12 +1,13 @@
 import { LoaderCircleIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { Actions } from "./actions";
+import { BacklogDestinationPicker } from "./BacklogDestinationPicker";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./components/ui/dialog";
 import { frontDeviceId } from "./devices";
 import { useInterfaceTranslation } from "./i18n/client";
 import { boardProjects } from "./navigation";
-import { backlogTitle, destinationOf } from "./overviewBacklog";
+import { backlogTitle, destinationOf, githubSource, type BacklogDestination } from "./overviewBacklog";
 import { cardOfPane, everyAgent, isMemoKey, itemToken, overviewDeviceOf } from "./overviewTasks";
 import { cycleIndex, quickAddChoice } from "./quickAddChoice";
 import { catalogWorkspaces, frontCheckout } from "./snapshot";
@@ -43,7 +44,9 @@ function QuickAddDialog({ actions }: { actions: Actions }) {
   const [index, setIndex] = useState(initial.index);
   const [title, setTitle] = useState("");
   const [intent, setIntent] = useState<string | null>(null);
+  const [chosen, setChosen] = useState<BacklogDestination>({ kind: "local" });
   const viewed = useRef(false);
+  const input = useRef<HTMLInputElement>(null);
   const returnFocus = useRef(useUiStore.getState().quickAdd?.returnFocus ?? null);
   // The project as the snapshot has it now, so a source read meanwhile changes the destination line.
   const project = useMemo(() => {
@@ -58,15 +61,21 @@ function QuickAddDialog({ actions }: { actions: Actions }) {
     return () => window.clearTimeout(timer);
   }, [made, actions]);
   const close = () => actions.closeQuickAdd();
-  const destination = destinationOf(project?.tasks?.source ?? null);
+  const source = githubSource(project);
+  const target: BacklogDestination = chosen.kind === "github" && chosen.repository === source?.name ? chosen : { kind: "local" };
+  const destination = target.kind === "local" ? "local" : destinationOf(source);
   const sending = intent !== null && item?.phase !== "failed";
   // A failure no retry can change (a refusal, a repository that moved) hands the input back for a new add.
   const final = item?.phase === "failed" && !item.retry;
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Tab") {
+    if (event.key === "Tab" && !event.shiftKey) {
       event.preventDefault();
-      if (intent === null || final) setIndex((current) => cycleIndex(current, initial.projects.length, event.shiftKey));
+      if (intent === null || final) {
+        setIndex((current) => cycleIndex(current, initial.projects.length, false));
+        setChosen({ kind: "local" });
+        setTitle("");
+      }
       return;
     }
     if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
@@ -77,7 +86,7 @@ function QuickAddDialog({ actions }: { actions: Actions }) {
     const text = title.trim();
     if (!text) return;
     if (intent !== null) actions.dismissBacklog(intent);
-    setIntent(actions.addBacklog(project.id, text));
+    setIntent(actions.addBacklog(project.id, text, undefined, target));
   };
 
   const view = () => {
@@ -93,6 +102,7 @@ function QuickAddDialog({ actions }: { actions: Actions }) {
       <DialogContent
         className="top-(--size-settings-sheet-window-inset) w-(--size-search-sheet-w) translate-y-0 gap-xs p-md"
         returnFocusTo={() => (viewed.current ? null : returnFocus.current)}
+        onOpenAutoFocus={(event) => { event.preventDefault(); input.current?.focus(); }}
         data-quick-add={made ? "made" : sending ? "creating" : item?.phase === "failed" ? "failed" : "open"}
       >
         <DialogTitle className="sr-only">{t("quickAdd.title")}</DialogTitle>
@@ -112,7 +122,9 @@ function QuickAddDialog({ actions }: { actions: Actions }) {
               <span className="flex-1" />
               {initial.projects.length > 1 && (intent === null || final) ? <span className="shrink-0 text-micro">{t("quickAdd.cycle")}</span> : null}
             </div>
+            <BacklogDestinationPicker project={project} value={target} disabled={intent !== null && !final} onChange={(value) => { setChosen(value); setTitle(""); }} />
             <input
+              ref={input}
               autoFocus
               value={title}
               readOnly={intent !== null && !final}

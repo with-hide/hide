@@ -1503,10 +1503,10 @@ export function createActions(send: DispatchFn) {
      * Opens the start panel. Over Settings the panel takes Settings' place,
      * because Settings holds the keyboard, and Settings is what was in front (B25).
      */
-    openStartPanel() {
+    openStartPanel(projectId?: string) {
       const overSettings = ui().overlay === "settings";
       if (overSettings) ui().closeOverlay("settings");
-      useStartPanel.getState().open(overSettings);
+      useStartPanel.getState().open(overSettings, projectId ? { projectId } : null);
     },
 
     /**
@@ -1519,8 +1519,8 @@ export function createActions(send: DispatchFn) {
     },
 
     /** An issue's body, labels, author, assignees and comments for its panel and the Start dialog, answered in `issue_work.detail`. */
-    requestIssueDetail(workspaceId: string, taskKey: string) {
-      dispatch({ schema_version: 2, kind: "issue_detail_request", payload: { workspace_id: workspaceId, task_key: taskKey } });
+    requestIssueDetail(workspaceId: string, taskKey: string, commentsAfter?: string) {
+      dispatch({ schema_version: 2, kind: "issue_detail_request", payload: { workspace_id: workspaceId, task_key: taskKey, ...(commentsAfter ? { comments_after: commentsAfter } : {}) } });
     },
 
     /** Asks the background AI to name a worktree; `prefix` stays at the front. Answered in `issue_work.name`. */
@@ -1710,7 +1710,7 @@ export function createActions(send: DispatchFn) {
 
     /** A project's panel on the Overview's Projects (PRD sidebar-task-lens B41): a breadcrumb's project, a cross-project chip, a Recent Panels project. */
     openProjectPanel(deviceId: string, projectId: string) {
-      this.openOverview(deviceId, { view: "projects", panel: { kind: "project", workspaceId: projectId } });
+      this.openOverview(deviceId, { view: "projects", projectId });
     },
 
     /**
@@ -2468,8 +2468,8 @@ export function createActions(send: DispatchFn) {
       if (top?.kind === "record" && workKey(top.session) === workKey(session) && laneUpWith("detail")) return this.toggleDetail();
       this.openSessionRecord(session);
     },
-    searchSessionWork(query: string) {
-      dispatch({ schema_version: 2, kind: "session_work_search", payload: { query } });
+    searchSessionWork(query: string, options?: import("./snapshot").SessionSearchOptions) {
+      dispatch({ schema_version: 2, kind: "session_work_search", payload: { query, ...(options ? { options } : {}) } });
     },
     setMissedStatus(session: import("./snapshot").WorkSession, id: string, status: "open" | "dismissed") {
       dispatch({ schema_version: 2, kind: "session_missed_status", payload: { session, id, status } });
@@ -2480,9 +2480,9 @@ export function createActions(send: DispatchFn) {
      * `백로그로` names the line. The returned intent names the item in
      * `issue_work.backlog` and is what a retry sends again.
      */
-    addBacklog(workspaceId: string, title: string, missed?: { session: import("./snapshot").WorkSession; id: string }): string {
+    addBacklog(workspaceId: string, title: string, missed?: { session: import("./snapshot").WorkSession; id: string }, destination?: { kind: "local" } | { kind: "github"; repository: string }): string {
       const intent = backlogIntent();
-      dispatch({ schema_version: 2, kind: "backlog_add", payload: { intent, workspace_id: workspaceId, title, ...(missed ? { missed } : {}) } });
+      dispatch({ schema_version: 2, kind: "backlog_add", payload: { intent, workspace_id: workspaceId, title, destination: destination?.kind ?? "local", ...(destination?.kind === "github" ? { repository: destination.repository } : {}), ...(missed ? { missed } : {}) } });
       return intent;
     },
     /** `다시 시도` on a failed item: the same intent, so a create GitHub already made is joined, not repeated (B30, B45). */
@@ -2498,12 +2498,12 @@ export function createActions(send: DispatchFn) {
       dispatch({ schema_version: 2, kind: "backlog_undo", payload: { workspace_id: workspaceId, task_key: taskKey } });
     },
     /** Where an item came from, for its panel (B31). */
-    readBacklogOrigin(workspaceId: string, taskKey: string) {
-      dispatch({ schema_version: 2, kind: "backlog_origin", payload: { workspace_id: workspaceId, task_key: taskKey } });
+    readBacklogOrigin(workspaceId: string, deviceId: string, taskKey: string) {
+      dispatch({ schema_version: 2, kind: "backlog_origin", payload: { workspace_id: workspaceId, device_id: deviceId, task_key: taskKey } });
     },
     /** No screen shows that item's origin any more: the core drops the session text it held for it. */
-    closeBacklogOrigin(taskKey: string) {
-      dispatch({ schema_version: 2, kind: "backlog_origin_close", payload: { task_key: taskKey } });
+    closeBacklogOrigin(workspaceId: string, deviceId: string, taskKey: string) {
+      dispatch({ schema_version: 2, kind: "backlog_origin_close", payload: { workspace_id: workspaceId, device_id: deviceId, task_key: taskKey } });
     },
     /** The projects the Projects tab shows, in its order, for the disk sweep; none when it is hidden (D-15, B53). */
     watchDisk(workspaceIds: readonly string[]) {

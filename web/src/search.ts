@@ -94,7 +94,7 @@ export type SearchEntry = {
 
 /** Local work-record results have their own group and never replace Agents. */
 export function sessionEntries(answer: SessionWorkSearch | null, query: string): SearchEntry[] {
-  if (!answer || answer.query !== query || answer.loading || answer.failure) return [];
+  if (!answer || answer.options?.request_id || answer.query !== query || answer.loading || answer.failure) return [];
   return answer.results.map((hit) => ({ id:`session:${workKey(hit.session)}`,title:hit.title,subtitle:hit.matched,place:hit.cwd ?? undefined,kind:"session",group:SESSIONS_GROUP,agentKind:hit.session.agent,deviceId:hit.session.device_id,session:hit.session }));
 }
 

@@ -443,6 +443,381 @@ fn request(store: &mut LinkStore, offset: u64, text: &str) {
         .unwrap();
 }
 
+fn history_request(
+    store: &mut LinkStore,
+    identity: &SessionIdentity,
+    offset: u64,
+    at: u64,
+    text: &str,
+    author: WorkAuthor,
+) {
+    store
+        .apply_ledger_update(&LedgerUpdate::Requests {
+            session: identity.clone(),
+            cwd: "/repo".into(),
+            path: None,
+            requests: vec![RecordedRequest {
+                offset,
+                at_unix_ms: at,
+                text: text.into(),
+                author,
+                task_ids: vec![],
+                chapter_id: None,
+                judged: false,
+            }],
+        })
+        .unwrap();
+}
+
+#[test]
+fn history_searches_retained_operator_excerpts_and_opt_in_titles_and_tasks() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    history_request(
+        &mut store,
+        &session(),
+        11,
+        1_000,
+        "내 needle 요청",
+        WorkAuthor::Operator,
+    );
+    history_request(
+        &mut store,
+        &session(),
+        12,
+        2_000,
+        "needle 부모 편지",
+        WorkAuthor::Parent,
+    );
+    history_request(
+        &mut store,
+        &session(),
+        13,
+        3_000,
+        "두 번째 needle 요청",
+        WorkAuthor::Operator,
+    );
+    store
+        .apply_ledger_update(&LedgerUpdate::Title {
+            session: session(),
+            native_title: Some("title-only".into()),
+            manual_title: None,
+            state: "working".into(),
+        })
+        .unwrap();
+    chapter(&mut store);
+    let options = SessionSearchOptions::default();
+    let page = store
+        .ledger_search_page("needle", &options, true, &[])
+        .unwrap();
+    assert_eq!(page.results.len(), 1);
+    let hit = &page.results[0];
+    assert_eq!((hit.match_count, hit.request_count), (2, 2));
+    assert_eq!(
+        hit.matches
+            .iter()
+            .map(|m| m.request_offset)
+            .collect::<Vec<_>>(),
+        [Some(13), Some(11)]
+    );
+    assert!(hit.matches.iter().all(|m| m.kind == "request"));
+    assert_eq!(
+        hit.status, "retained",
+        "a historical title state is not current activity"
+    );
+    assert!(
+        hit.project_root.is_none(),
+        "today's cwd cannot invent historical project ownership"
+    );
+    assert!(
+        store
+            .ledger_search_page("부모 편지", &options, true, &[])
+            .unwrap()
+            .results
+            .is_empty()
+    );
+    assert!(
+        store
+            .ledger_search_page("title-only", &options, true, &[])
+            .unwrap()
+            .results
+            .is_empty()
+    );
+    let extra = SessionSearchOptions {
+        include_titles: true,
+        include_tasks: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        store
+            .ledger_search_page("title-only", &extra, true, &[])
+            .unwrap()
+            .results[0]
+            .matches[0]
+            .kind,
+        "title"
+    );
+    assert_eq!(
+        store
+            .ledger_search_page("세션 작업 기록", &extra, true, &[])
+            .unwrap()
+            .results[0]
+            .matches[0]
+            .kind,
+        "task"
+    );
+    assert!(
+        store
+            .ledger_search_page("세션 작업 기록", &extra, false, &[])
+            .unwrap()
+            .results
+            .is_empty()
+    );
+    let long = format!("{}not-retained", "가".repeat(500));
+    history_request(
+        &mut store,
+        &session(),
+        14,
+        4_000,
+        &long,
+        WorkAuthor::Operator,
+    );
+    assert!(
+        store
+            .ledger_search_page("not-retained", &options, true, &[])
+            .unwrap()
+            .results
+            .is_empty()
+    );
+    let blank = store.ledger_search_page("", &options, false, &[]).unwrap();
+    assert_eq!(blank.results[0].matches[0].text.chars().count(), 500);
+    assert_eq!(blank.results[0].matches[0].request_offset, Some(14));
+}
+
+#[test]
+fn history_filters_device_original_project_agent_time_and_status_before_the_page_limit() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    store
+        .apply_project(&origin_project("device-a", "owner/repo", 1), 500)
+        .unwrap();
+    let target = session();
+    origin_native(&mut store, &target, "/repo", 1_000);
+    history_request(
+        &mut store,
+        &target,
+        71,
+        1_200,
+        "same query",
+        WorkAuthor::Operator,
+    );
+    // More than a page of newer matches would hide this older session if
+    // any filter were applied after a global limit or a global ranking.
+    for n in 0..60 {
+        let identity = SessionIdentity {
+            device_id: "device-b".into(),
+            agent: "claude".into(),
+            session_id: format!("other-{n:02}"),
+        };
+        history_request(
+            &mut store,
+            &identity,
+            1,
+            5_000 + n,
+            "same query",
+            WorkAuthor::Operator,
+        );
+    }
+    let presence = [SessionSearchPresence {
+        session: target.clone(),
+        status: "working".into(),
+    }];
+    for options in [
+        SessionSearchOptions {
+            device_id: Some("device-a".into()),
+            ..Default::default()
+        },
+        SessionSearchOptions {
+            project_root: Some("/repo".into()),
+            ..Default::default()
+        },
+        SessionSearchOptions {
+            agent: Some("codex".into()),
+            ..Default::default()
+        },
+        SessionSearchOptions {
+            until_unix_ms: Some(2_000),
+            ..Default::default()
+        },
+        SessionSearchOptions {
+            status: Some(SessionSearchStatus::Working),
+            ..Default::default()
+        },
+        SessionSearchOptions {
+            status: Some(SessionSearchStatus::Current),
+            ..Default::default()
+        },
+    ] {
+        let hits = store
+            .ledger_search_page("same query", &options, false, &presence)
+            .unwrap();
+        assert_eq!(hits.results.len(), 1, "{options:?}");
+        assert_eq!(hits.results[0].session, target);
+        assert_eq!(hits.results[0].project_root.as_deref(), Some("/repo"));
+        assert!(hits.next_cursor.is_none());
+    }
+    let options = SessionSearchOptions {
+        since_unix_ms: Some(1_300),
+        until_unix_ms: Some(2_000),
+        ..Default::default()
+    };
+    assert!(
+        store
+            .ledger_search_page("same query", &options, true, &presence)
+            .unwrap()
+            .results
+            .is_empty()
+    );
+    let archived = [SessionSearchPresence {
+        session: target.clone(),
+        status: "archived".into(),
+    }];
+    let options = SessionSearchOptions {
+        status: Some(SessionSearchStatus::Archived),
+        ..Default::default()
+    };
+    assert_eq!(
+        store
+            .ledger_search_page("", &options, false, &archived)
+            .unwrap()
+            .results[0]
+            .session,
+        target
+    );
+}
+
+#[test]
+fn history_tuple_cursor_pages_equal_times_and_reused_ids_without_duplicates_or_missing_sessions() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    let mut expected = Vec::new();
+    for n in 0..26 {
+        for (device, agent) in [("a", "codex"), ("a", "claude"), ("b", "codex")] {
+            let identity = SessionIdentity {
+                device_id: device.into(),
+                agent: agent.into(),
+                session_id: format!("shared-{n:02}"),
+            };
+            history_request(
+                &mut store,
+                &identity,
+                1,
+                10_000,
+                "literal %_\\ needle",
+                WorkAuthor::Operator,
+            );
+            expected.push(identity);
+        }
+    }
+    expected.sort();
+    for query in ["", "%_\\"] {
+        let first = store
+            .ledger_search_page(query, &SessionSearchOptions::default(), false, &[])
+            .unwrap();
+        assert_eq!(first.results.len(), 50);
+        let options = SessionSearchOptions {
+            cursor: first.next_cursor.clone(),
+            ..Default::default()
+        };
+        let second = store
+            .ledger_search_page(query, &options, false, &[])
+            .unwrap();
+        assert_eq!(second.results.len(), 28);
+        assert!(second.next_cursor.is_none());
+        let identities = first
+            .results
+            .into_iter()
+            .chain(second.results)
+            .map(|hit| hit.session)
+            .collect::<Vec<_>>();
+        assert_eq!(identities, expected);
+    }
+}
+
+#[test]
+fn history_current_state_uses_the_native_readers_name_on_the_same_device_and_provider() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    let identity = SessionIdentity {
+        device_id: "device-a".into(),
+        agent: "pi".into(),
+        session_id: "native-id".into(),
+    };
+    history_request(
+        &mut store,
+        &identity,
+        1,
+        100,
+        "find this request",
+        WorkAuthor::Operator,
+    );
+    let path = "/fixture/pi.jsonl";
+    store
+        .connection
+        .execute(
+            "INSERT INTO cursors(device,path,agent,stamp,session) VALUES(?1,?2,?3,'witness',?4)",
+            params![
+                identity.device_id,
+                path,
+                identity.agent,
+                identity.session_id
+            ],
+        )
+        .unwrap();
+    let presence = [
+        SessionSearchPresence {
+            session: SessionIdentity {
+                session_id: path.into(),
+                ..identity.clone()
+            },
+            status: "working".into(),
+        },
+        SessionSearchPresence {
+            session: identity.clone(),
+            status: "archived".into(),
+        },
+        SessionSearchPresence {
+            session: SessionIdentity {
+                device_id: "device-b".into(),
+                session_id: path.into(),
+                ..identity.clone()
+            },
+            status: "needs_you".into(),
+        },
+    ];
+    let options = SessionSearchOptions {
+        status: Some(SessionSearchStatus::Working),
+        ..Default::default()
+    };
+    let found = store
+        .ledger_search_page("find", &options, false, &presence)
+        .unwrap();
+    assert_eq!(found.results.len(), 1);
+    assert_eq!(found.results[0].session, identity);
+    assert_eq!(found.results[0].status, "working");
+    let other = SessionSearchOptions {
+        status: Some(SessionSearchStatus::NeedsYou),
+        ..Default::default()
+    };
+    assert!(
+        store
+            .ledger_search_page("find", &other, false, &presence)
+            .unwrap()
+            .results
+            .is_empty()
+    );
+}
+
 fn chapter(store: &mut LinkStore) {
     store
         .apply_ledger_update(&LedgerUpdate::Chapter {
@@ -1714,7 +2089,10 @@ fn a_memo_from_missed_work_marks_its_line_and_undo_opens_it_again() {
     };
     assert_eq!(
         keys,
-        std::slice::from_ref(&key),
+        [BacklogMissedKey {
+            task_key: key.clone(),
+            device_id: Some(session().device_id)
+        }],
         "the backlog row's flag names the memo"
     );
     assert!(
@@ -1728,7 +2106,7 @@ fn a_memo_from_missed_work_marks_its_line_and_undo_opens_it_again() {
     );
     let LedgerAnswer::Origin(Some(origin)) = store
         .ledger_call(LedgerCall::BacklogOrigin {
-            backlog_key: key.clone(),
+            target: BacklogTarget::for_project(&session().device_id, "/repo", &key).unwrap(),
         })
         .unwrap()
     else {
@@ -1738,7 +2116,9 @@ fn a_memo_from_missed_work_marks_its_line_and_undo_opens_it_again() {
     assert_eq!(origin.missed.text, "문서 갱신");
 
     store
-        .ledger_call(LedgerCall::ReleaseBacklog { backlog_key: key })
+        .ledger_call(LedgerCall::ReleaseBacklog {
+            target: BacklogTarget::for_project(&session().device_id, "/repo", &key).unwrap(),
+        })
         .unwrap();
     let missed = &store.ledger_record(&session()).unwrap().missed[0];
     assert_eq!(missed.status, MissedStatus::Open);
@@ -1863,7 +2243,7 @@ fn only_an_issue_hide_made_is_named_as_made_after_a_restart_until_it_is_undone()
 
     store
         .ledger_call(LedgerCall::ReleaseBacklog {
-            backlog_key: "github:owner/repo#5".into(),
+            target: BacklogTarget::for_project("device-a", "/repo", "github:owner/repo#5").unwrap(),
         })
         .unwrap();
     assert!(
@@ -1904,7 +2284,12 @@ fn undone_typed_items_are_pruned_and_never_fill_the_backlog_ledger() {
             .unwrap();
         store
             .ledger_call(LedgerCall::ReleaseBacklog {
-                backlog_key: format!("github:owner/repo#{number}"),
+                target: BacklogTarget::for_project(
+                    "device-a",
+                    "/repo",
+                    &format!("github:owner/repo#{number}"),
+                )
+                .unwrap(),
             })
             .unwrap();
     }

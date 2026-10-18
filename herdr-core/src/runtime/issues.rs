@@ -1,4 +1,20 @@
 use super::*;
+
+#[derive(Default)]
+pub(super) struct IssueDetailWork {
+    running: bool,
+    generation: u64,
+    pending: Option<(u64, IssueDetailRead)>,
+}
+
+/// Core-resolved identity retained while a detail read waits or runs.
+#[derive(Clone)]
+struct IssueDetailRead {
+    workspace_id: String,
+    device_id: String,
+    task_key: String,
+    after: Option<String>,
+}
 use crate::issues::{ISSUE_LIMIT, IssueCandidate, IssueLinkSnapshot, IssueReference};
 
 pub(super) struct UnconfirmedIssueToken {
@@ -78,8 +94,8 @@ impl Runtime {
             &self.snapshot.navigator.agents,
             &self.invalid_links,
         );
-        let sources = self.snapshot.ui_state.project_issue_sources.clone();
         let settings = self.snapshot.ui_state.project_settings.clone();
+        let sources = self.snapshot.ui_state.project_issue_sources.clone();
         let mut local_links = BTreeMap::new();
         for workspace in &mut self.snapshot.navigator.workspaces {
             if workspace.remote_target_id.is_some() || !workspace.is_git {
@@ -90,13 +106,16 @@ impl Runtime {
                 .first()
                 .map(|checkout| checkout.github.clone())
                 .unwrap_or_default();
+            let choice = crate::project_settings::issue_choice(
+                &settings,
+                &sources,
+                self.node.as_str(),
+                &workspace.path,
+            );
+            // The old preference only disambiguates old bare-number links.
+            // It never suppresses either source's rows.
             let local_source = crate::tasks::source_kind(
-                crate::project_settings::issue_choice(
-                    &settings,
-                    &sources,
-                    self.node.as_str(),
-                    &workspace.path,
-                ),
+                choice,
                 workspace.is_git,
                 &workspace.home_issues,
                 &status,
@@ -128,13 +147,6 @@ impl Runtime {
                         Some(ChainLink::Github(candidate)) => Some(candidate),
                         None => None,
                     };
-                if local_source {
-                    if checkout.issue.is_some() {
-                        checkout.issue = None;
-                        changed = true;
-                    }
-                    continue;
-                }
                 let issue = candidate.as_ref().and_then(|candidate| {
                     linked.insert(candidate.reference.clone());
                     if linked.len() > ISSUE_LIMIT {
@@ -272,7 +284,10 @@ impl Runtime {
                 "Issue target checkout is unavailable".to_owned(),
             ));
         };
-        let local_source = self.project_source_kind(&workspace) == crate::tasks::SourceKind::Local;
+        let local_source = text.trim().starts_with("L-")
+            || text.trim().starts_with("l-")
+            || (self.project_source_kind(&workspace) == crate::tasks::SourceKind::Local
+                && IssueReference::parse(text, None).is_err());
         let text = if text.trim().is_empty() {
             String::new()
         } else if local_source {
@@ -925,76 +940,237 @@ impl Runtime {
     }
 
     /// `issue_detail_request`: an issue's body, labels, author, assignees and
-    /// latest comments, for its panel and the Start dialog (PRD
-    /// overview-lenses-issues D-40). A Local issue is read from the store at
-    /// once; a GitHub one is one `gh issue view` on a worker, off the lock.
+    /// a bounded comment page, for its panel and the Start dialog. A memo
+    /// is read from the store at once; GitHub reads run off the lock.
     pub(super) fn request_issue_detail(&mut self, payload: IssueDetailRequestPayload) -> bool {
         let Some((node, workspace)) = self.issue_project(&payload.workspace_id) else {
             return false;
         };
-        let key = payload.task_key;
+        let key = &payload.task_key;
+        // A key only has authority within the selected project's projection.
+        if !workspace.tasks.tasks.iter().any(|task| task.key == *key) {
+            return false;
+        }
+        if payload.comments_after.is_none()
+            && self
+                .snapshot
+                .issue_work
+                .detail
+                .as_ref()
+                .is_some_and(|slot| {
+                    slot.matches(&workspace.id, &workspace.device_id, key)
+                        && slot.phase == "reading"
+                })
+        {
+            return false;
+        }
+        if let Some(after) = &payload.comments_after {
+            let valid = self
+                .snapshot
+                .issue_work
+                .detail
+                .as_ref()
+                .is_some_and(|slot| {
+                    slot.matches(&workspace.id, &workspace.device_id, key)
+                        && slot.phase == "ready"
+                        && !slot.comments_loading
+                        && slot.comments_has_more
+                        && slot.comments_cursor.as_ref() == Some(after)
+                        && slot.comments.len() < crate::tasks::DETAIL_COMMENT_LIMIT
+                });
+            if !valid {
+                return false;
+            }
+        }
+        self.issue_detail_work.generation = self.issue_detail_work.generation.wrapping_add(1);
+        let generation = self.issue_detail_work.generation;
+        self.issue_detail_work.pending = None;
         if key.starts_with("local:") {
-            let answer = local_issue_detail(&self.local_issues, node.as_deref(), &key);
-            self.snapshot.issue_work.detail =
-                Some(crate::model::IssueDetailSnapshot::answered(key, answer));
+            let answer = local_issue_detail(&self.local_issues, node.as_deref(), key);
+            self.snapshot.issue_work.detail = Some(crate::model::IssueDetailSnapshot::answered(
+                workspace.id,
+                workspace.device_id,
+                key.clone(),
+                answer,
+            ));
             return true;
         }
-        let Some(reference) = crate::tasks::parse_github_key(&key) else {
-            let answer = Err(format!("{key} is not an issue"));
-            self.snapshot.issue_work.detail =
-                Some(crate::model::IssueDetailSnapshot::answered(key, answer));
-            return true;
-        };
-        crate::diagnostic!(serde_json::json!({
-            "component": "issues", "kind": "issue_detail.requested", "task": key,
-        }));
-        let place = match self.github_place(node.as_deref(), &workspace.path) {
-            Ok(place) => place,
-            Err(message) => {
-                self.snapshot.issue_work.detail = Some(
-                    crate::model::IssueDetailSnapshot::answered(key, Err(message)),
-                );
-                return true;
+        if payload.comments_after.is_some() {
+            if let Some(slot) = self.snapshot.issue_work.detail.as_mut() {
+                slot.comments_loading = true;
+                slot.message = None;
             }
-        };
-        self.snapshot.issue_work.detail =
-            Some(crate::model::IssueDetailSnapshot::reading(key.clone()));
-        let worker_key = key.clone();
-        let own = self.own_node();
-        if let Err(message) = self.spawn_issue_worker(
-            "issue-detail",
-            move || crate::github::issue_detail(own.as_ref(), &place, &reference),
-            move |runtime, result| runtime.ingest_issue_detail(&worker_key, result),
-        ) {
-            self.snapshot.issue_work.detail = Some(crate::model::IssueDetailSnapshot::answered(
-                key,
-                Err(message),
+        } else {
+            self.snapshot.issue_work.detail = Some(crate::model::IssueDetailSnapshot::reading(
+                workspace.id.clone(),
+                workspace.device_id.clone(),
+                key.clone(),
             ));
+        }
+        // One worker and one latest pending request across windows; switching
+        // items never accumulates subprocesses or applies an old response.
+        let read = IssueDetailRead {
+            workspace_id: workspace.id,
+            device_id: workspace.device_id,
+            task_key: payload.task_key,
+            after: payload.comments_after,
+        };
+        if self.issue_detail_work.running {
+            self.issue_detail_work.pending = Some((generation, read));
+        } else {
+            self.start_issue_detail_read(generation, read);
         }
         true
     }
 
+    fn start_issue_detail_read(&mut self, generation: u64, read: IssueDetailRead) -> bool {
+        self.issue_detail_work.running = true;
+        let place = self
+            .issue_project(&read.workspace_id)
+            .filter(|(_, workspace)| {
+                workspace.device_id == read.device_id
+                    && workspace
+                        .tasks
+                        .tasks
+                        .iter()
+                        .any(|task| task.key == read.task_key)
+            })
+            .ok_or_else(|| "The project is no longer available".to_owned())
+            .and_then(|(node, workspace)| self.github_place(node.as_deref(), &workspace.path));
+        let reference = crate::tasks::parse_github_key(&read.task_key)
+            .ok_or_else(|| "The item is not a GitHub issue".to_owned());
+        let (place, reference) =
+            match place.and_then(|place| reference.map(|reference| (place, reference))) {
+                Ok(value) => value,
+                Err(message) => {
+                    return self.finish_issue_detail(generation, read, Err(message));
+                }
+            };
+        let own = self.own_node();
+        let worker_after = read.after.clone();
+        let failed_read = read.clone();
+        if let Err(message) = self.spawn_issue_worker(
+            "issue-detail",
+            move || {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    crate::github::issue_detail(
+                        own.as_ref(),
+                        &place,
+                        &reference,
+                        worker_after.as_deref(),
+                    )
+                }))
+                .unwrap_or_else(|_| Err("The issue detail reader stopped".to_owned()))
+            },
+            move |runtime, result| runtime.finish_issue_detail(generation, read, result),
+        ) {
+            return self.finish_issue_detail(generation, failed_read, Err(message));
+        }
+        false
+    }
+
+    fn finish_issue_detail(
+        &mut self,
+        generation: u64,
+        read: IssueDetailRead,
+        result: Result<crate::tasks::TaskDetail, String>,
+    ) -> bool {
+        self.issue_detail_work.running = false;
+        let mut changed = if generation == self.issue_detail_work.generation {
+            self.ingest_issue_detail_page(
+                &read.workspace_id,
+                &read.device_id,
+                &read.task_key,
+                read.after.as_deref(),
+                result,
+            )
+        } else {
+            false
+        };
+        if let Some((next, payload)) = self.issue_detail_work.pending.take() {
+            changed |= self.start_issue_detail_read(next, payload);
+        }
+        changed
+    }
+
+    #[cfg(test)]
     pub(crate) fn ingest_issue_detail(
         &mut self,
+        workspace_id: &str,
+        device_id: &str,
         key: &str,
         result: Result<crate::tasks::TaskDetail, String>,
     ) -> bool {
-        let Some(slot) = self
-            .snapshot
-            .issue_work
-            .detail
-            .as_mut()
-            .filter(|slot| slot.task_key == key && slot.phase == "reading")
-        else {
+        self.ingest_issue_detail_page(workspace_id, device_id, key, None, result)
+    }
+
+    pub(super) fn ingest_issue_detail_page(
+        &mut self,
+        workspace_id: &str,
+        device_id: &str,
+        key: &str,
+        after: Option<&str>,
+        result: Result<crate::tasks::TaskDetail, String>,
+    ) -> bool {
+        if !self
+            .issue_project(workspace_id)
+            .is_some_and(|(_, workspace)| {
+                workspace.device_id == device_id
+                    && workspace.tasks.tasks.iter().any(|task| task.key == key)
+            })
+        {
+            return false;
+        }
+        let Some(slot) = self.snapshot.issue_work.detail.as_mut().filter(|slot| {
+            slot.matches(workspace_id, device_id, key)
+                && match after {
+                    Some(cursor) => {
+                        slot.phase == "ready"
+                            && slot.comments_loading
+                            && slot.comments_cursor.as_deref() == Some(cursor)
+                    }
+                    None => slot.phase == "reading",
+                }
+        }) else {
             return false;
         };
         if let Err(reason) = &result {
-            crate::diagnostic!(serde_json::json!({
-                "component": "issues", "kind": "issue_detail.failed",
-                "task": key, "reason": reason,
-            }));
+            crate::diagnostic!(
+                serde_json::json!({"component":"issues", "kind":"issue_detail.failed", "task":key, "reason":reason})
+            );
         }
-        *slot = crate::model::IssueDetailSnapshot::answered(key.to_owned(), result);
+        if after.is_some() {
+            slot.comments_loading = false;
+            match result {
+                Ok(detail) => {
+                    let room =
+                        crate::tasks::DETAIL_COMMENT_LIMIT.saturating_sub(slot.comments.len());
+                    slot.comments_limited |=
+                        detail.comments_limited || detail.comments.len() > room;
+                    slot.comments.extend(detail.comments.into_iter().take(room));
+                    slot.comment_count = detail.comment_count;
+                    slot.comments_cursor = detail.comments_cursor;
+                    slot.comments_has_more = detail.comments_has_more;
+                    if slot.comments.len() >= crate::tasks::DETAIL_COMMENT_LIMIT
+                        && slot.comments_has_more
+                    {
+                        slot.comments_limited = true;
+                        slot.comments_has_more = false;
+                    }
+                    slot.message = None;
+                }
+                Err(message) => {
+                    slot.message = Some(message);
+                }
+            }
+        } else {
+            *slot = crate::model::IssueDetailSnapshot::answered(
+                workspace_id.to_owned(),
+                device_id.to_owned(),
+                key.to_owned(),
+                result,
+            );
+        }
         true
     }
 
@@ -1023,7 +1199,16 @@ impl Runtime {
             .map(|workspace| (false, workspace));
         for (on_node, workspace) in own.chain(nodes) {
             if !workspace.is_git
-                || self.project_source_kind(workspace) != crate::tasks::SourceKind::Github
+                || crate::tasks::source_kind(
+                    None,
+                    workspace.is_git,
+                    &workspace.home_issues,
+                    &workspace
+                        .checkouts
+                        .first()
+                        .map(|checkout| checkout.github.clone())
+                        .unwrap_or_default(),
+                ) != crate::tasks::SourceKind::Github
             {
                 continue;
             }
@@ -1816,6 +2001,32 @@ fn chain_link(
     repository: Option<&str>,
     invalid: &InvalidLinks,
 ) -> Option<ChainLink> {
+    // An explicit memo id is authoritative even in a GitHub project. Bare
+    // numbers retain their historical local meaning only without GitHub.
+    if let Some(value) = manual.or(pane).or(checkout.branch_issue.as_ref())
+        && (value.starts_with("L-") || value.starts_with("l-"))
+    {
+        return crate::local_issues::parse_id(value).map(ChainLink::Local);
+    }
+    if local {
+        let explicit = manual
+            .map(|value| (value, "직접 연결"))
+            .or_else(|| pane.map(|value| (value, "pane 토큰")))
+            .or_else(|| {
+                checkout
+                    .branch_issue
+                    .as_ref()
+                    .map(|value| (value, "브랜치 설정"))
+            });
+        if let Some((value, source)) = explicit
+            && let Ok(reference) = IssueReference::parse(value, None)
+        {
+            return Some(ChainLink::Github(IssueCandidate {
+                reference,
+                source: source.into(),
+            }));
+        }
+    }
     if local {
         return manual
             .or(pane)
@@ -1886,25 +2097,44 @@ fn project_tasks(
         .map(|checkout| checkout.github.clone())
         .unwrap_or_default();
     let issues = issues.unwrap_or(&workspace.home_issues);
-    let kind = crate::tasks::source_kind(choice, workspace.is_git, issues, &status);
-    let local = kind == crate::tasks::SourceKind::Local;
-    let tasks = if local {
-        let read = match store {
-            Err(reason) => crate::tasks::LocalRead::Failed(reason),
-            Ok(store) => crate::tasks::LocalRead::Ready(store.project(node, &workspace.path)),
-        };
-        crate::tasks::local_tasks(&workspace.path, read, choice.is_some())
-    } else {
-        crate::tasks::github_tasks(issues, &status, choice.is_some())
+    let read = match store {
+        Err(reason) => crate::tasks::LocalRead::Failed(reason),
+        Ok(store) => crate::tasks::LocalRead::Ready(store.project(node, &workspace.path)),
     };
+    let mut tasks =
+        crate::tasks::local_tasks(&workspace.path, read, choice == Some(crate::tasks::LOCAL));
+    if store.is_err() {
+        tasks.tasks.extend(
+            workspace
+                .tasks
+                .tasks
+                .iter()
+                .filter(|task| task.source == crate::tasks::LOCAL)
+                .cloned(),
+        );
+    }
+    if workspace.is_git
+        && (issues.repository.is_some()
+            || crate::tasks::source_kind(None, true, issues, &status)
+                == crate::tasks::SourceKind::Github)
+    {
+        let github =
+            crate::tasks::github_tasks(issues, &status, choice == Some(crate::tasks::GITHUB));
+        tasks.sources.extend(github.sources);
+        if choice != Some(crate::tasks::LOCAL) {
+            tasks.source = github.source;
+        }
+        tasks.tasks.extend(github.tasks);
+        tasks.overflow = github.overflow;
+    }
     if workspace.tasks != tasks {
         workspace.tasks = tasks;
         changed = true;
     }
     for checkout in &mut workspace.checkouts {
-        let (key, closes) = if local {
-            let key = local_links
-                .get(&checkout.id)
+        let memo = local_links.get(&checkout.id);
+        let (key, closes) = if let Some(number) = memo {
+            let key = Some(number)
                 .map(|number| crate::tasks::local_key(&workspace.path, *number))
                 .filter(|key| workspace.tasks.tasks.iter().any(|task| &task.key == key));
             (key, Vec::new())
