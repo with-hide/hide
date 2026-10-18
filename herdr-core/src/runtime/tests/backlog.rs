@@ -1363,6 +1363,7 @@ fn origin_runtime() -> (SharedRuntime, crate::links::worker::LinkWorker) {
                 assignees: vec![],
             })
             .collect();
+        runtime.snapshot.navigator.workspaces[0].home_issues = runtime.github.projects[0].issues.clone();
         runtime.sync_tasks();
     })
 }
