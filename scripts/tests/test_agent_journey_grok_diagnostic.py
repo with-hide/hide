@@ -26,20 +26,22 @@ class AuthenticationDiagnostic(unittest.TestCase):
             (home / ".grok/config.toml").write_text('[models]\ndefault="journey"\n')
             runtime = SimpleNamespace(run=run, probe=probe, bin=binaries,
                                       owner=SimpleNamespace(cancelled=threading.Event()))
-            program = run / "native"
-            program.write_text(f"#!{sys.executable}\n"
-                               "import os,sys\n"
-                               "with open(os.environ['GROK_DEBUG_LOG'],'w') as stream:\n"
-                               " stream.write('private log: '+os.environ['JOURNEY_FAKE_KEY']+'\\n')\n"
-                               " stream.write('config model override applied model_key=journey base_url=private\\n')\n"
-                               " stream.write('auth: authenticate request method=xai.api_key\\n')\n"
-                               "sys.exit(7)\n")
-            program.chmod(0o700)
+            # Existing interpreters read the fixture as data: no freshly
+            # written executable waits in macOS's first-execution queue.
+            native = ("import os,sys\n"
+                      "with open(os.environ['GROK_DEBUG_LOG'],'w') as stream:\n"
+                      " stream.write('private log: '+os.environ['JOURNEY_FAKE_KEY']+'\\n')\n"
+                      " stream.write('config model override applied model_key=journey base_url=private\\n')\n"
+                      " stream.write('auth: authenticate request method=xai.api_key\\n')\n"
+                      "sys.exit(7)\n")
             diagnostic = Diagnostic(runtime)
             try:
-                command = diagnostic.launcher(runtime, program)
-                answer = subprocess.run([str(command)], env={"PATH": os.environ["PATH"], "HOME": str(home),
-                    "JOURNEY_FAKE_KEY": "must-never-appear"}, capture_output=True, timeout=5)
+                command = diagnostic.launcher(runtime, Path(sys.executable))
+                # Process exit is the completion event. This test asserts
+                # no latency; the suite/job owns its overall hang guard.
+                answer = subprocess.run(["/bin/sh", str(command), "-c", native],
+                    env={"PATH": os.environ["PATH"], "HOME": str(home),
+                         "JOURNEY_FAKE_KEY": "must-never-appear"}, capture_output=True)
                 self.assertEqual(answer.returncode, 7, answer.stderr)
             finally:
                 result = diagnostic.close()
@@ -59,7 +61,10 @@ class AuthenticationDiagnostic(unittest.TestCase):
                 try:
                     with open(diagnostic.path, "wb") as stream:
                         stream.write(b"a private diagnostic line\n")
-                    self.assertTrue(runtime.owner.cancelled.wait(2))
+                    # Crossing the byte cap ends the reader. Wait for that
+                    # event, not an assumption about scheduler latency.
+                    diagnostic.thread.join()
+                    self.assertTrue(runtime.owner.cancelled.is_set())
                 finally:
                     result = diagnostic.close()
             self.assertEqual(result["failure"], "grok_diagnostic_unreadable_or_over_budget")
