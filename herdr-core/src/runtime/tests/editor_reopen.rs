@@ -1856,6 +1856,7 @@ fn reopen_completion_preserves_a_newer_close() {
             consumed: true,
             focused_pane_id: None,
             notices: vec![],
+            agents: Vec::new(),
         },)),
     ));
 
@@ -1902,6 +1903,7 @@ fn every_consuming_reopen_result_removes_only_its_request_key() {
             consumed: true,
             focused_pane_id: None,
             notices: vec![],
+            agents: Vec::new(),
         }),
         "/repo/pane-placeholder.rs",
     );
@@ -1948,6 +1950,7 @@ fn completion_is_safe_after_the_in_flight_item_was_evicted() {
             consumed: true,
             focused_pane_id: None,
             notices: vec![],
+            agents: Vec::new(),
         },)),
     ));
 

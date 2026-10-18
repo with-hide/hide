@@ -1171,6 +1171,7 @@ mod tests {
                     json!({"demand": "none", "activity": "idle", "descendant_signals": [{"pane_id": panes[index]}]}),
                 )).collect()),
                 "pane_completions": keyed("pane", json!({"session": "s", "server": "m", "state_change_seq": 4})),
+                "pane_launches": keyed("pane", json!({"kind": "claude", "choice": {"effort": "high"}, "session": "s"})),
                 "request_verbs": keyed("pane", json!({"verb": "review"})),
                 "pane_terminal_sizes": keyed("pane", json!([80, 24])),
                 "resolved_sessions": keyed("pane", json!({"at_unix_ms": 1})),

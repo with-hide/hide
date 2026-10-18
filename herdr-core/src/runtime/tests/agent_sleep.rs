@@ -141,6 +141,7 @@ fn dormant_intent(runtime: &mut Runtime) -> crate::agent_sleep::SleepId {
             transition_started_unix_ms: 1,
             reason: None,
             registration: None,
+            launch: Default::default(),
             owner: Some(owner),
         })
         .unwrap()
@@ -528,6 +529,25 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
     });
     runtime.ingest_session(Ok(initial));
     let id = dormant_intent(&mut runtime);
+    // The choice the agent was started with, and the words each CLI takes it
+    // by after its resume arguments; OpenCode takes no model.
+    let (launch, launch_words): (hide_agent_adapter::LaunchChoice, &[&str]) = match kind {
+        "claude" => (
+            hide_agent_adapter::LaunchChoice {
+                model: Some("sonnet".into()),
+                effort: Some("high".into()),
+            },
+            &["--model", "sonnet", "--effort", "high"],
+        ),
+        "opencode" => (Default::default(), &[]),
+        _ => (
+            hide_agent_adapter::LaunchChoice {
+                model: Some("fixture-model".into()),
+                effort: None,
+            },
+            &["--model", "fixture-model"],
+        ),
+    };
     {
         let record = runtime
             .snapshot
@@ -538,6 +558,10 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
             .unwrap();
         record.kind = kind.into();
         record.label_owner = hide_session::label_reference_token(kind, "id", native_id).unwrap();
+        record.launch = launch.clone();
+        // The wake opens its tab from the owner this record kept, and starts
+        // the agent with the choice the record kept.
+        assert!(record.owner.is_some());
     }
     let bound = crate::agent_sleep::FactoryWorker {
         factory: "f-1".into(),
@@ -683,16 +707,17 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
             assert_eq!(saved["wake_pane_id"], "w-order:t3:p");
             assert_eq!(params["pane_id"], "w-order:t3:p");
             assert_eq!(params["kind"], kind);
+            let resume = [
+                match kind {
+                    "pi" => "--session",
+                    "opencode" => "-s",
+                    _ => "--resume",
+                },
+                "11111111-2222-3333-4444-555555555555",
+            ];
             assert_eq!(
                 params["args"],
-                serde_json::json!([
-                    match kind {
-                        "pi" => "--session",
-                        "opencode" => "-s",
-                        _ => "--resume",
-                    },
-                    "11111111-2222-3333-4444-555555555555"
-                ])
+                serde_json::json!([resume.as_slice(), launch_words].concat())
             );
             effects.send("start").unwrap();
             serde_json::json!({"type":"agent_started","argv":[],"agent":{
@@ -900,6 +925,8 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
             "w-order:t1",
         );
         let mut agent = session(Some(5)).agents.remove(0);
+        let wake_name = crate::agent_sleep_herdr::dormant_wake_name(&work);
+        agent.name = Some(wake_name.clone());
         agent.agent = Some(kind.into());
         agent.pane_id = Some("w-order:t3:p".into());
         agent.cwd = Some(cwd.clone());
@@ -910,6 +937,17 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
         confirmed.agents.push(agent);
         runtime.ingest_session(Ok(confirmed));
         assert!(runtime.snapshot.navigator.sleeping_sessions.is_empty());
+        // The woken pane keeps the choice for the agent's next restart.
+        assert_eq!(
+            runtime
+                .snapshot
+                .ui_state
+                .pane_launches
+                .get("w-order:t3:p")
+                .map(|record| (record.name.as_str(), &record.choice)),
+            (!launch.is_default()).then_some((wake_name.as_str(), &launch)),
+            "{kind}"
+        );
         if factory_port.is_some() {
             // The conversation runs in its wake pane; the record stays, with
             // its worker, until the Factory has bound that pane.
@@ -986,7 +1024,8 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
 /// The wake opens the checkout from the owner its record kept, so it works
 /// while no list shows the checkout: Wake from a phone, with no window
 /// attached since hided restarted, or in an unregistered project whose last
-/// workspace was the sleeping session's.
+/// workspace was the sleeping session's. It starts the agent with the model
+/// and effort the record kept, as every journey asserts at `agent.start`.
 #[test]
 #[cfg(unix)]
 fn a_sleeping_session_wakes_in_its_checkout_while_no_list_shows_it() {
@@ -1070,6 +1109,41 @@ fn factory_sleep_saves_a_close_pane_agents_intent_bound_to_its_worker() {
             assert_eq!(runtime.snapshot.ui_state.agent_sleep.dormant.len(), 1);
             assert!(runtime.factory_worker_probe(SLEEPER).asleep);
         }
+    }
+}
+
+/// A sleep that closes the pane keeps the choice Hide started the agent with
+/// in its saved intent, which its wake starts the agent with again.
+#[test]
+fn a_dormant_sleep_keeps_the_choice_the_agent_was_started_with() {
+    let launch = hide_agent_adapter::LaunchChoice {
+        model: Some("fixture-model".into()),
+        effort: None,
+    };
+    for (recorded, saved) in [(Some(&launch), launch.clone()), (None, Default::default())] {
+        let mut runtime = close_pane_runtime("pi");
+        // The name Hide started it under, which Herdr reports it by.
+        runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter_mut()
+            .find(|agent| agent.pane_id == SLEEPER)
+            .unwrap()
+            .started_name = Some("reviewer".into());
+        if let Some(recorded) = recorded {
+            runtime.record_pane_launch(SLEEPER, "pi", "reviewer", recorded, None);
+        }
+        assert_eq!(runtime.factory_sleep(SLEEPER), Ok(true));
+        let record = runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .dormant
+            .values()
+            .next()
+            .expect("the saved intent");
+        assert_eq!(record.launch, saved);
     }
 }
 

@@ -38,9 +38,14 @@ pub enum RowMark {
     /// To read, with no finished verdict: work left, a wait nothing proves,
     /// or a stop nobody judged. A plain dot.
     Unread,
-    /// Nothing to do: no mark, its slot kept.
+    /// Nothing to do: the agent rests, ready for new work. A faint grey
+    /// hollow ring, smaller and thinner than the in-progress one.
     #[default]
     Quiet,
+    /// Hide cannot say where the agent stands: no demand and no activity it
+    /// can read. No mark, its slot kept, and the row drawn dimmed whole, so
+    /// it never reads as an agent at rest.
+    Unknown,
     /// Hide put the agent to sleep; opening it wakes it. A grey moon, the
     /// one shape outside the four, counted on no badge (status-marks D-21).
     Asleep,
@@ -86,6 +91,9 @@ impl RowMark {
                 Self::Unread
             };
         }
+        if demand == AgentDemand::None && activity == AgentActivity::Unknown {
+            return Self::Unknown;
+        }
         Self::Quiet
     }
 
@@ -95,7 +103,7 @@ impl RowMark {
             Self::Going | Self::Waiting => counts.going += 1,
             Self::Done => counts.done += 1,
             Self::Unread => counts.unread += 1,
-            Self::Quiet | Self::Asleep => {}
+            Self::Quiet | Self::Unknown | Self::Asleep => {}
         }
     }
 }

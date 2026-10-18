@@ -213,7 +213,7 @@ describe("native browser attachment facts", () => {
       { ...other, area_id: "a1", incarnation: 6 },
       { ...remote, area_id: "a1", incarnation: 7 },
     ];
-    const rest = { workspace_view: { ...local, tool: "files", pinned: true, tree: false, lane_width: null, tree_width: null, lane_called: 0, lane_calls: 0, layout }, browser_views: inventory, browser_scopes: scopes } as SnapshotRest;
+    const rest = { workspace_view: { ...local, tool: "files", pinned: true, tree: false, lane_width: null, panel_width: null, tree_width: null, lane_called: 0, lane_calls: 0, layout }, browser_views: inventory, browser_scopes: scopes } as SnapshotRest;
     act(() => useShellStore.getState().applyFrame({ type: "snapshot", payload: { revision: 1, rest } }));
     flush();
     expect(sent.at(-1)?.authorized_scopes).toEqual([
@@ -248,7 +248,7 @@ describe("native browser attachment facts", () => {
   });
 
   it("grants no area authority when core scopes are missing or removed while manual placement remains", () => {
-    const manual: SnapshotRest = { workspace_view: { ...local, tool: "files", pinned: true, tree: false, lane_width: null, tree_width: null, lane_called: 0, lane_calls: 0, layout } as SnapshotRest["workspace_view"], browser_views: inventory };
+    const manual: SnapshotRest = { workspace_view: { ...local, tool: "files", pinned: true, tree: false, lane_width: null, panel_width: null, tree_width: null, lane_called: 0, lane_calls: 0, layout } as SnapshotRest["workspace_view"], browser_views: inventory };
     const scopes = [{ ...local, area_id: "empty-area", incarnation: 5 }];
     act(() => useShellStore.getState().applyFrame({ type: "snapshot", payload: { revision: 1, rest: { ...manual, browser_scopes: scopes } } }));
     flush();

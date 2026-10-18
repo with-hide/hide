@@ -1814,6 +1814,22 @@ pub struct ReopenOutcome {
     pub consumed: bool,
     pub focused_pane_id: Option<String>,
     pub notices: Vec<ReopenNotice>,
+    /// The agents the reopen started, so the core keeps each one's launch
+    /// choice with its new pane.
+    pub agents: Vec<ReopenedAgent>,
+}
+
+/// An agent a reopen started in a restored pane: the pane, its kind, the
+/// choice it was started with, and the conversation it resumed (none for a
+/// new one, when the resume did not take).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReopenedAgent {
+    pub pane_id: String,
+    pub kind: String,
+    /// The name the reopen started it under.
+    pub name: String,
+    pub launch: hide_agent_adapter::LaunchChoice,
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -2287,17 +2303,22 @@ fn reopen_pane(
         )?;
         (layout.focused_pane_id, layout.tab_id)
     };
-    if let Some(agent) = &pane.agent {
-        start_or_degrade_agent(
-            connector,
-            key,
-            0,
-            &restored_pane_id,
-            agent,
-            request.codex_daemon,
-            &mut notices,
-        );
-    }
+    let agents = pane
+        .agent
+        .as_ref()
+        .and_then(|agent| {
+            start_or_degrade_agent(
+                connector,
+                key,
+                0,
+                &restored_pane_id,
+                agent,
+                request.codex_daemon,
+                &mut notices,
+            )
+        })
+        .into_iter()
+        .collect();
     Ok(ReopenOutcome {
         tab_id: Some(restored_tab_id),
         consumed: true,
@@ -2309,6 +2330,7 @@ fn reopen_pane(
                 message,
             })
             .collect(),
+        agents,
     })
 }
 
@@ -2424,6 +2446,7 @@ fn reopen_tab(
         .collect::<Vec<_>>();
     ensure_complete_tab_restore(terminal_panes.len(), new_ids.len())?;
     let mut notices = Vec::new();
+    let mut agents = Vec::new();
     for (index, (pane, new_id)) in terminal_panes.iter().zip(new_ids.iter()).enumerate() {
         let mut pane_notices = Vec::new();
         if !folders(&pane.cwd) {
@@ -2433,7 +2456,7 @@ fn reopen_tab(
             ));
         }
         if let Some(agent) = &pane.agent {
-            start_or_degrade_agent(
+            agents.extend(start_or_degrade_agent(
                 connector,
                 key,
                 index,
@@ -2441,7 +2464,7 @@ fn reopen_tab(
                 agent,
                 codex_daemon,
                 &mut pane_notices,
-            );
+            ));
         }
         notices.extend(pane_notices.into_iter().map(|message| ReopenNotice {
             pane_id: Some(new_id.clone()),
@@ -2458,6 +2481,7 @@ fn reopen_tab(
         consumed: true,
         focused_pane_id: first,
         notices,
+        agents,
     })
 }
 
@@ -2487,6 +2511,9 @@ fn restored_cwd(
     }
 }
 
+/// Starts `agent` in a restored pane with its conversation, or a new one when
+/// the resume does not take, each with the launch choice it was started
+/// with; answers what started, or none when only the shell was kept.
 fn start_or_degrade_agent(
     connector: &dyn ApiConnector,
     key: &str,
@@ -2495,12 +2522,29 @@ fn start_or_degrade_agent(
     agent: &ClosedAgent,
     codex_daemon: crate::codex_launch::CodexDaemon,
     notices: &mut Vec<String>,
-) {
+) -> Option<ReopenedAgent> {
     let name = format!("reopen-{key}-{index}");
+    let launch = match crate::runtime::agent_choice::launch_arguments(&agent.kind, &agent.launch) {
+        Ok(launch) => launch,
+        Err(message) => {
+            notices.push(format!(
+                "Agent could not be started; the shell was kept: {message}"
+            ));
+            return None;
+        }
+    };
+    let started = |session_id: Option<&String>| ReopenedAgent {
+        pane_id: pane_id.to_owned(),
+        kind: agent.kind.clone(),
+        name: name.clone(),
+        launch: agent.launch.clone(),
+        session_id: session_id.cloned(),
+    };
     let interrupted_reused_agent = interrupt_reused_agent(connector, key, index, pane_id);
     let pane_was_clear = matches!(&interrupted_reused_agent, Ok(false));
     let resume = resume_arguments(agent);
-    if let Some(args) = resume {
+    if let Some(mut args) = resume {
+        args.extend(launch.iter().cloned());
         // A resume line is a session id, far under every terminal's line
         // limit, so the restore asks no node.
         let result = start_agent(
@@ -2515,7 +2559,7 @@ fn start_or_degrade_agent(
             codex_daemon,
         );
         if result.is_ok() || (pane_was_clear && agent_is_running(connector, pane_id, &agent.kind)) {
-            return;
+            return Some(started(agent.session_id.as_ref()));
         }
         let preparation = interrupted_reused_agent
             .as_ref()
@@ -2538,14 +2582,16 @@ fn start_or_degrade_agent(
         crate::agent_start::ShellStart::Plain,
         &name,
         &agent.kind,
-        Vec::new(),
+        launch,
         codex_daemon,
     ) && !(pane_was_clear && agent_is_running(connector, pane_id, &agent.kind))
     {
         notices.push(format!(
             "Agent could not be started; the shell was kept: {message}"
         ));
+        return None;
     }
+    Some(started(None))
 }
 
 /// Herdr can reuse the just-closed pane id while its old PTY is still alive.
@@ -3406,7 +3452,14 @@ fn run_agent_fork_with_registration(
         current()
     };
     check()?;
-    let arguments = fork_arguments(node, request)?;
+    // The arguments are settled before any pane exists, so a choice the agent
+    // does not take never leaves a pane to close. The choice is checked before
+    // the fork is made, so a refused one never leaves a session an OpenCode 2
+    // server made either.
+    let choice =
+        crate::runtime::agent_choice::launch_arguments(request.agent.kind(), &request.launch)?;
+    let mut args = fork_arguments(node, request)?;
+    args.extend(choice);
     // A split takes no command, so only a fork in its own tab runs the
     // integration's launch.
     let launch = matches!(request.placement, ForkPlacement::Tab)
@@ -3486,7 +3539,7 @@ fn run_agent_fork_with_registration(
         shell,
         &request.name,
         request.agent.kind(),
-        arguments,
+        args,
         request.codex_daemon,
         &check,
     )
@@ -4216,6 +4269,79 @@ mod tests {
     use super::*;
     use crate::fake_herdr::FakeHerdr;
 
+    /// A restored agent resumes with the model and effort it was started
+    /// with, and the new conversation that replaces a refused resume keeps
+    /// them too.
+    #[test]
+    fn a_restored_agent_starts_with_its_launch_choice_resumed_or_new() {
+        let starts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = Arc::clone(&starts);
+        let herdr =
+            FakeHerdr::start_with_errors("reopen-choice", move |method, params| match method {
+                "session.snapshot" => Ok(json!({"type": "session_snapshot", "snapshot": {
+                    "version": "fixture", "protocol": HERDR_PROTOCOL_REVISION,
+                    "workspaces": [], "tabs": [], "panes": [], "layouts": [], "agents": []
+                }})),
+                "pane.process_info" => Ok(json!({"type": "pane_process_info", "process_info": {
+                    "pane_id": "pane", "shell_pid": 42, "foreground_process_group_id": 42,
+                    "foreground_processes": []
+                }})),
+                "agent.start" => {
+                    let mut seen = seen.lock().unwrap();
+                    seen.push(params["args"].clone());
+                    if seen.len() == 1 {
+                        return Err(("agent_start_failed".into(), "resume refused".into()));
+                    }
+                    Ok(json!({"type": "agent_started", "argv": [], "agent": {
+                        "pane_id": "pane", "terminal_id": "term", "workspace_id": "w1",
+                        "tab_id": "w1:t1", "focused": false, "agent_status": "idle", "revision": 1
+                    }}))
+                }
+                other => panic!("unexpected {other}"),
+            });
+        let launch = hide_agent_adapter::LaunchChoice {
+            model: Some("gpt-6-luna".into()),
+            effort: Some("low".into()),
+        };
+        let mut notices = Vec::new();
+        let started = start_or_degrade_agent(
+            &herdr.connector(),
+            "key",
+            0,
+            "pane",
+            &ClosedAgent {
+                kind: "codex".into(),
+                session_id: Some("session".into()),
+                launch: launch.clone(),
+            },
+            crate::codex_launch::CodexDaemon::Unsupported,
+            &mut notices,
+        );
+        let choice = ["--model", "gpt-6-luna", "-c", "model_reasoning_effort=low"];
+        assert_eq!(
+            *starts.lock().unwrap(),
+            [
+                json!([["resume", "session"].as_slice(), &choice].concat()),
+                json!(choice)
+            ]
+        );
+        assert_eq!(
+            started,
+            Some(ReopenedAgent {
+                pane_id: "pane".into(),
+                kind: "codex".into(),
+                name: "reopen-key-0".into(),
+                launch,
+                session_id: None,
+            })
+        );
+        assert_eq!(
+            notices.len(),
+            1,
+            "the lost conversation is said: {notices:?}"
+        );
+    }
+
     #[test]
     fn reopen_canonicalizes_alias_starts_and_confirms_only_the_same_pane_agent() {
         for (kind, canonical, args) in [
@@ -4252,6 +4378,7 @@ mod tests {
                 &ClosedAgent {
                     kind: kind.into(),
                     session_id: Some("session".into()),
+                    ..Default::default()
                 },
                 crate::codex_launch::CodexDaemon::Unsupported,
                 &mut notices,
@@ -4427,6 +4554,7 @@ mod tests {
                 name: "fork-pi-1".into(),
                 tab_label: Some("Tab 2".into()),
                 placement: ForkPlacement::Tab,
+                launch: Default::default(),
             };
             let created = std::cell::RefCell::new(Vec::new());
             let result = run_agent_fork_with_registration(
@@ -4620,6 +4748,7 @@ mod tests {
                 name: "fork-opencode-1".into(),
                 tab_label: Some("Tab 2".into()),
                 placement: ForkPlacement::Tab,
+                launch: Default::default(),
             };
             let result = run_agent_fork_with_registration(
                 &herdr.connector(),
@@ -4783,6 +4912,7 @@ mod tests {
                 name: "fork-opencode-2".into(),
                 tab_label: Some("Tab 2".into()),
                 placement: ForkPlacement::Tab,
+                launch: Default::default(),
             };
             let result = run_agent_fork_with_registration(
                 &herdr.connector(),
@@ -4905,6 +5035,7 @@ mod tests {
                 name: "fork-grok-1".into(),
                 tab_label: Some("Tab 2".into()),
                 placement: ForkPlacement::Tab,
+                launch: Default::default(),
             };
             let result = run_agent_fork_with_registration(
                 &herdr.connector(),
@@ -5066,6 +5197,7 @@ mod tests {
                 name: "fork-agy-1".into(),
                 tab_label: Some("Tab 2".into()),
                 placement: ForkPlacement::Tab,
+                launch: Default::default(),
             };
             let result = fork_antigravity(&herdr.connector(), &node, &request, "child-pane");
             let expected: &[&str] = match case {
@@ -5184,6 +5316,7 @@ mod tests {
             name: "fork-parent-pane-1".to_owned(),
             tab_label: None,
             placement: ForkPlacement::Side,
+            launch: Default::default(),
         };
 
         let pane_id = run_agent_fork_with_registration(

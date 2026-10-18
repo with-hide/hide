@@ -883,3 +883,110 @@ fn a_reopen_through_the_worker_waits_for_herdr_to_release_the_name() {
     let first_start = methods.iter().position(|m| m == "agent.start").unwrap();
     assert!(methods[..first_start].iter().all(|m| m != "agent.start"));
 }
+
+/// A reopen in the pane resumes the conversation with the model and effort
+/// Hide started the agent with, which a bare resume would leave to the CLI's
+/// configured default (`launch_choice.rs` holds the other restarts).
+#[test]
+fn a_reopen_in_its_pane_resumes_with_the_choice_the_agent_was_started_with() {
+    use crate::fake_herdr::FakeHerdr;
+    use hide_platform::process;
+    use serde_json::json;
+
+    const SESSION_ID: &str = "11111111-1111-4111-8111-111111111111";
+    let mut child = process::OwnedChild::spawn(std::process::Command::new("/bin/sleep").arg("60"))
+        .expect("sleep starts");
+    let pid = child.id();
+    let (sent, starts) = std::sync::mpsc::channel();
+    let herdr = FakeHerdr::start(
+        "runtime-reopen-choice",
+        move |method, params| match method {
+            "agent.get" => json!({"type": "agent_info", "agent": {
+                "pane_id": "w1:p2", "tab_id": "w1:t1", "workspace_id": "w1",
+                "terminal_id": "term_1", "agent": "claude", "agent_status": "idle",
+                "state_change_seq": 2, "focused": false, "interactive_ready": true, "revision": 0
+            }}),
+            "pane.process_info" => {
+                let shell = std::process::id();
+                let foreground = if process::is_alive(pid) { pid } else { shell };
+                json!({"type": "pane_process_info", "process_info": {
+                    "pane_id": "w1:p2", "shell_pid": shell, "foreground_process_group_id": foreground,
+                    "foreground_processes": [{"pid": shell, "name": "zsh"}]
+                }})
+            }
+            "agent.start" => {
+                sent.send(params["args"].clone()).unwrap();
+                json!({"type": "agent_started", "argv": [], "agent": {
+                    "pane_id": "w1:p2", "tab_id": "w1:t1", "workspace_id": "w1",
+                    "terminal_id": "term_1", "agent_status": "idle", "focused": false, "revision": 1
+                }})
+            }
+            other => panic!("unexpected {other}"),
+        },
+    );
+    let reaper = std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+
+    let mut runtime = runtime();
+    kit_rows(&mut runtime, None);
+    runtime.ingest_hook_diagnosis(diagnosis(installed(), installed()));
+    let launch = hide_agent_adapter::LaunchChoice {
+        model: Some("sonnet".into()),
+        effort: Some("high".into()),
+    };
+    runtime.record_pane_launch("w1:p2", "claude", "agent-w1:p2", &launch, None);
+    let mut payload = session(&[("w1:p1", "claude", true), ("w1:p2", "claude", false)]);
+    payload["agents"][1]["agent_session"]["value"] = json!(SESSION_ID);
+    payload["agents"][1]["name"] = json!("agent-w1:p2");
+    runtime.ingest_session(Ok(
+        crate::sidebar::owned_label_fixture(payload).expect("native session fixture")
+    ));
+    for pane in runtime
+        .snapshot
+        .navigator
+        .workspaces
+        .iter_mut()
+        .flat_map(|workspace| workspace.checkouts.iter_mut())
+        .flat_map(|checkout| checkout.tabs.iter_mut())
+        .flat_map(|tab| tab.panes.iter_mut())
+    {
+        pane.cwd = std::env::temp_dir().to_string_lossy().into_owned();
+    }
+    let shared = SharedRuntime::new(runtime);
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime.live = Some(crate::live::LiveContext {
+            socket_path: herdr.socket_path().to_path_buf(),
+            runtime: shared.weak(),
+            notifier: crate::handle::ChangeNotifier::noop(),
+            api_connector: Arc::new(herdr.connector()),
+            node: Arc::new(hide_node::Local::of_process()),
+        });
+        assert!(reopen(&mut runtime, "w1:p2"));
+    }
+    assert_eq!(
+        starts
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the reopen started the agent"),
+        json!([
+            "--resume", SESSION_ID, "--model", "sonnet", "--effort", "high"
+        ])
+    );
+    wait(&shared, "the reopen to settle", |runtime| {
+        runtime.pane_reopens.is_empty()
+    });
+    reaper.join().expect("reaped");
+    assert_eq!(
+        shared
+            .lock()
+            .unwrap()
+            .snapshot()
+            .ui_state
+            .pane_launches
+            .get("w1:p2")
+            .map(|record| &record.choice),
+        Some(&launch),
+        "the same conversation keeps its choice for the next restart"
+    );
+}

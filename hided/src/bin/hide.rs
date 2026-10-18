@@ -1,4 +1,6 @@
 fn main() {
+    // `hide ... | head` closes our stdout early; end quietly, not with a panic.
+    hide_platform::stdio::exit_quietly_when_stdout_closes();
     let args: Vec<String> = std::env::args().collect();
     let parsed = hided::cli::parse_args(&args);
     if let Err(error) = &parsed
