@@ -879,7 +879,8 @@ fn copied_history_off_removes_a_session_whose_file_is_gone() {
                 &mut |_| panic!("only Off asks about files"),
                 T0 + MIN
             )
-            .unwrap(),
+            .unwrap()
+            .len(),
         0
     );
     assert_eq!(panel(&store, 7)[0].file, FileState::Present);
@@ -889,7 +890,8 @@ fn copied_history_off_removes_a_session_whose_file_is_gone() {
     assert_eq!(
         store
             .prune(&|_| Some(0), DEVICE, &mut present, T0 + MIN)
-            .unwrap(),
+            .unwrap()
+            .len(),
         1
     );
     assert!(panel(&store, 7).is_empty());
@@ -1153,4 +1155,87 @@ fn here() -> LocalFiles<'static> {
         device: DEVICE,
         present: &present,
     }
+}
+
+fn one_turn(home: &Path, id: &str, at: u64) -> String {
+    claude_file(
+        home,
+        id,
+        ROOT,
+        "cli",
+        &[Turn {
+            at,
+            branch: "feat/x",
+            text: "요청",
+        }],
+        None,
+    )
+}
+
+/// Deleting archived sessions removes Hide's lines of exactly those sessions
+/// and leaves the agent's own conversation file (PRD session-archive D-15).
+#[test]
+fn deleting_named_sessions_removes_only_their_lines_and_keeps_the_files() {
+    let home = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let mut store = open(state.path());
+    store.apply_project(&project(Vec::new()), T0).unwrap();
+    let kept = one_turn(home.path(), "s-kept", T0);
+    let gone = one_turn(home.path(), "s-gone", T0);
+    ingest(&mut store, home.path(), &kept);
+    ingest(&mut store, home.path(), &gone);
+    let named = store
+        .all_sessions()
+        .unwrap()
+        .into_iter()
+        .find(|session| session.key.id == "s-gone")
+        .unwrap()
+        .key
+        .identity();
+    store.delete_sessions(&[named]).unwrap();
+    let left = store
+        .all_sessions()
+        .unwrap()
+        .into_iter()
+        .map(|session| session.key.id)
+        .collect::<Vec<_>>();
+    assert_eq!(left, ["s-kept"]);
+    assert!(Path::new(&gone).is_file(), "the conversation file stays");
+}
+
+/// An archived session the record holds no line for leaves once its
+/// project's Copied history has run out since it was archived; Off keeps it
+/// (D-14, B31).
+#[test]
+fn an_archived_session_without_a_line_expires_by_its_projects_history_from_its_archive_time() {
+    let state = tempfile::tempdir().unwrap();
+    let mut store = open(state.path());
+    store.apply_project(&project(Vec::new()), T0).unwrap();
+    let held = |id: &str, at: u64| ArchivedSession {
+        session: SessionIdentity {
+            device_id: DEVICE.into(),
+            agent: "claude".into(),
+            session_id: id.into(),
+        },
+        project_root: ROOT.into(),
+        archived_at_unix_ms: at,
+    };
+    let now = T0 + 100 * DAY_MS;
+    let archived = [held("old", T0), held("new", now - DAY_MS)];
+    let expired = store
+        .expired_archived(&archived, &|_| Some(30), now)
+        .unwrap();
+    assert_eq!(
+        expired
+            .iter()
+            .map(|session| session.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["old"]
+    );
+    assert!(
+        store
+            .expired_archived(&archived, &|_| Some(0), now)
+            .unwrap()
+            .is_empty()
+    );
 }

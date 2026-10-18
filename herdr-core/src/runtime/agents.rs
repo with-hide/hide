@@ -2295,6 +2295,7 @@ impl Runtime {
             );
             self.acknowledge_session_save(&state, result.is_ok());
             self.ingest_dormant_saved(&state.agent_sleep, result.is_ok());
+            self.ingest_archive_saved(&state.session_archive, result.is_ok());
             self.acknowledge_project_settings_save(&state, result.is_ok());
             return result;
         };
@@ -2337,8 +2338,9 @@ impl Runtime {
                         });
                         let resolved_changed =
                             guard.acknowledge_session_save(&state, result.is_ok());
-                        let dormant_changed =
-                            guard.ingest_dormant_saved(&state.agent_sleep, result.is_ok());
+                        let dormant_changed = guard
+                            .ingest_dormant_saved(&state.agent_sleep, result.is_ok())
+                            | guard.ingest_archive_saved(&state.session_archive, result.is_ok());
                         let settings_changed =
                             guard.acknowledge_project_settings_save(&state, result.is_ok());
                         if let Err(message) = &result {

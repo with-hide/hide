@@ -194,6 +194,9 @@ struct StoredUiState {
     /// The stamps and the sleeping agents; absent loads as none.
     #[serde(default)]
     agent_sleep: crate::agent_sleep::AgentSleepStore,
+    /// The archived sessions; absent loads as none.
+    #[serde(default)]
+    session_archive: crate::session_archive::SessionArchive,
     /// Absent in a store written before the recent list existed, which loads
     /// empty. More entries than the limit (a hand edit) are cut to it.
     #[serde(default)]
@@ -510,6 +513,11 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
                 store.after_load();
                 store
             },
+            session_archive: {
+                let mut archive = stored.session_archive;
+                archive.after_load();
+                archive
+            },
             recent_checkouts: {
                 let mut recent = stored.recent_checkouts;
                 recent.truncate(crate::model::RECENT_CHECKOUT_LIMIT);
@@ -582,7 +590,7 @@ pub fn save(
     // Existence alone cannot authorize a destructive close. Reuse the
     // platform's checked ancestor barriers, outside the runtime lock.
     // An untrusted directory refuses the receipt.
-    if !state.agent_sleep.dormant.is_empty() {
+    if !state.agent_sleep.dormant.is_empty() || !state.session_archive.is_empty() {
         establish_folder_once(parent).map_err(|_| {
             "UI state directory persistence could not be confirmed; no new close or start was sent"
                 .to_owned()
@@ -659,6 +667,7 @@ pub fn save(
         },
         agent_start: Some(state.agent_start.clone()),
         agent_sleep: state.agent_sleep.clone(),
+        session_archive: state.session_archive.clone(),
         recent_checkouts: state.recent_checkouts.clone(),
         recent_pane_ids: state.recent_pane_ids.clone(),
         factory_secretary_pane: state.factory_secretary_pane.clone(),
@@ -733,6 +742,38 @@ mod tests {
         assert_eq!(chains_established(&folder), 1);
         assert_eq!(chains_established(&earlier), 1);
         assert_eq!(load(&path).0.agent_sleep.dormant.len(), 1);
+    }
+
+    /// An archived session saves through the state folder's barrier and
+    /// loads back, on every system (PRD session-archive B33, D-24).
+    #[test]
+    fn an_archived_session_saves_through_the_folders_barrier_and_loads_back() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("state");
+        hide_platform::fs::private::create_dir(&folder).unwrap();
+        let path = folder.join("core-state.json");
+        let mut state = UiStateSnapshot::default();
+        let id = crate::session_archive::ArchiveId::new().unwrap();
+        state
+            .session_archive
+            .admit(
+                id.clone(),
+                crate::session_archive::fixture_record(
+                    vec![
+                        crate::session_archive::fixture_member("root", None),
+                        crate::session_archive::fixture_member("child", Some("root")),
+                    ],
+                    7,
+                ),
+            )
+            .unwrap();
+
+        save(&path, &state, &BTreeMap::new()).unwrap();
+        assert_eq!(chains_established(&folder), 1);
+        let loaded = load(&path).0.session_archive;
+        assert_eq!(loaded.records.len(), 1);
+        assert_eq!(loaded.records[&id].members.len(), 2);
+        assert_eq!(loaded.records[&id].archived_at_unix_ms, 7);
     }
 
     #[test]

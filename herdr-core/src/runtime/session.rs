@@ -2120,6 +2120,7 @@ impl Runtime {
         }
         changed |= self.refresh_agent_lineage();
         changed |= self.advance_tree_closes();
+        changed |= self.advance_session_archive();
         if changed {
             self.sync_async_operations();
         }
@@ -3012,6 +3013,7 @@ impl Runtime {
         }
         changed |= self.refresh_agent_lineage();
         changed |= self.advance_tree_closes();
+        changed |= self.advance_session_archive();
         for (tab_id, reason) in &rejected_layouts {
             crate::diagnostic!(serde_json::json!({
                 "component": "session",
@@ -3864,7 +3866,11 @@ impl Runtime {
         let device = operation.device_id.clone();
         // A device's Herdr focuses what it created, and the device's screen
         // follows its host; this machine's focus does not move for it.
-        let should_focus = operation_kind != "branch_migrate" && device.is_none();
+        // An archived descendant resumed after its root opens behind it
+        // (PRD session-archive B21, B23).
+        let should_focus = operation_kind != "branch_migrate"
+            && device.is_none()
+            && !self.task_stays_behind.remove(&id);
         match result {
             Ok(outcome) => {
                 let live::WorktreeTaskOutcome {

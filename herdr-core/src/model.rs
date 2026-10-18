@@ -705,6 +705,10 @@ pub struct NavigatorSnapshot {
     pub hide_ai_checkouts: Vec<HideAiCheckoutSnapshot>,
     /// Durable absent-pane sessions are not live agents or pane addresses.
     pub sleeping_sessions: Vec<crate::agent_sleep::SleepingSessionSnapshot>,
+    /// The archived sessions, newest archived first (PRD session-archive
+    /// D-09); a row whose root is live again only feeds that root's record.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub archived_sessions: Vec<crate::session_archive::ArchivedSessionSnapshot>,
 }
 
 /// Hide AI started this agent, read from the coordination ledger's record of
@@ -3700,6 +3704,11 @@ pub struct UiStateSnapshot {
     /// field that did would resend the navigator to every client.
     #[serde(default, skip_serializing)]
     pub agent_sleep: crate::agent_sleep::AgentSleepStore,
+    /// The sessions the operator archived (PRD session-archive). Persisted
+    /// with this store and never on the wire: the navigator carries the
+    /// rows the shell draws (`archived_sessions`).
+    #[serde(default, skip_serializing)]
+    pub session_archive: crate::session_archive::SessionArchive,
     /// The checkouts last brought to the front, newest first, at most
     /// `RECENT_CHECKOUT_LIMIT` (PRD cmdk-recent D-05, D-08, D-09). ⌘K reads
     /// the first five it can show; the rest are there so the exclusions of
@@ -4367,6 +4376,7 @@ impl Default for UiStateSnapshot {
             issue_settings: IssueSettingsSnapshot::default(),
             agent_start: AgentStartChoice::default(),
             agent_sleep: crate::agent_sleep::AgentSleepStore::default(),
+            session_archive: crate::session_archive::SessionArchive::default(),
             recent_checkouts: Vec::new(),
             recent_pane_ids: Vec::new(),
             factory_secretary_pane: None,
@@ -4752,7 +4762,7 @@ pub enum PullRequestChecks {
 /// The one state every PR mark draws (docs/status-model.md, Pull request
 /// visual states), worst first: a checkout's pull request and an agent row's
 /// own pull requests take it from [`PrState::of`] and nothing else decides it.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrState {
     /// Checks failed, or a reviewer asked for changes.
@@ -5921,6 +5931,7 @@ impl Snapshot {
                 agents: Vec::new(),
                 hide_ai_checkouts: Vec::new(),
                 sleeping_sessions: Vec::new(),
+                archived_sessions: Vec::new(),
             },
             overlay: OverlaySnapshot {
                 kind: None,

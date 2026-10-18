@@ -353,6 +353,7 @@ impl Runtime {
         changed |= self.expire_remote_operations(now_unix_ms);
         changed |= self.expire_pending_choice(now_unix_ms);
         changed |= self.advance_tree_closes();
+        changed |= self.advance_session_archive();
         changed |= self.expire_attachment_wait(now_unix_ms);
         changed |= self.reconcile_attachment_target();
         changed |= self.tick_attachment();

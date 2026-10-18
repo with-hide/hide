@@ -1256,7 +1256,7 @@ impl Runtime {
     /// store to move the registration, and says the record must stay.
     /// A registration that cannot be continued is let go, so it ends with
     /// the pane that held it as any other would.
-    fn continue_dormant_registration(
+    pub(in crate::runtime) fn continue_dormant_registration(
         &mut self,
         registration: &crate::agent_sleep::DormantRegistration,
         pane: &str,
