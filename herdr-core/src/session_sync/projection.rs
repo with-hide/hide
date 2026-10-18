@@ -152,6 +152,11 @@ impl ProjectionState {
             .panes
             .iter()
             .map(|pane| SessionPanePayload {
+                start_claim: pane
+                    .label
+                    .as_deref()
+                    .filter(|label| crate::start_claim::is_reserved(label))
+                    .map(str::to_owned),
                 terminal_id: Some(pane.terminal_id.clone()),
                 failed_terminal_id: pane
                     .restore_error
@@ -161,8 +166,8 @@ impl ProjectionState {
                 pane_id: pane.pane_id.clone(),
                 tokens: pane.tokens.clone(),
                 cwd: pane.cwd.clone(),
-                label: non_blank(pane.label.as_deref()),
-                terminal_title: non_blank(
+                label: crate::start_claim::public_label(pane.label.as_deref()),
+                terminal_title: crate::start_claim::public_label(
                     pane.terminal_title_stripped
                         .as_deref()
                         .or(pane.terminal_title.as_deref()),

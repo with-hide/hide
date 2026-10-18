@@ -222,6 +222,7 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
     await expect(menu.locator("[data-menu-label]")).toHaveText([
       "Open",
       "New tab here",
+      "New group…",
       "Open pull request #180",
       "Set purpose…",
       "Set as default checkout",
@@ -229,7 +230,7 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
       "Copy path",
       "Delete worktree…",
     ]);
-    // The pull request comes after Open and New tab here; arrow down to it.
+    // The pull request follows Open, New tab here and New group; arrow down to it.
     // The menu moves focus to the next item on a timer after each key, so
     // each press waits for the move before the next.
     const focusedItem = () => page.evaluate(() => document.activeElement?.getAttribute("data-menu-item") ?? null);

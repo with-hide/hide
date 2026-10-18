@@ -7,7 +7,7 @@ import { Button } from "./components/ui/button";
 import { useEscapeLayer } from "./components/ui/layer";
 import { Kbd } from "./components/ui/kbd";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "./components/ui/select";
-import { startAnswer, startRequestId } from "./startAnswer";
+import { START_ANSWER_TIMEOUT_MS, startAnswer, startRequestId } from "./startAnswer";
 import { useStartPanel, startFailure } from "./startDraft";
 import { resolveTarget, startTargets, type StartTarget } from "./startTargets";
 import { windowDeviceId } from "./screenMachine";
@@ -26,13 +26,6 @@ import { branchProblem } from "./workspaceManage";
 // and width, no backdrop, the keyboard in the text box. What is written is the
 // new agent's first prompt; Enter or Start sends one `agent_start_in_checkout`
 // and the panel then follows only the answer that carries its request id.
-
-/**
- * How long a start may go unanswered before the panel says so, so it never
- * waits for ever: longer than a device's Home sync (30 s) plus opening its
- * tab, so a slow start is not reported as lost while it still runs.
- */
-const ANSWER_TIMEOUT_MS = 90_000;
 
 /**
  * Follows the answer to the request the panel sent, whether or not the panel
@@ -55,8 +48,10 @@ function useStartAnswer() {
       const ui = useUiStore.getState();
       // A watched task reports the agent's own start after the panel is gone (the notice bar).
       if (answer.agentPhase) ui.setWatchedTask(answer.taskId);
-      // The pane is opened as an agent row opens it, so a device's pane moves rail, sidebar and center together.
-      if (answer.paneId) ui.setFocusWhenListed(answer.paneId);
+      // An agent start's core result owns selection and ordered Herdr focus.
+      // Opening it again here would undo a newer visit made while it waited.
+      // Worktree creation retains its separate open-when-listed flow.
+      if (answer.paneId && requestKind === "worktree_create") ui.setFocusWhenListed(answer.paneId);
       if (answer.agentPhase === "failed") panel.fail(startFailure(answer.agentMessage));
       else panel.finish(answer.agentPhase === "starting" ? answer.taskId : null);
       return true;
@@ -68,7 +63,7 @@ function useStartAnswer() {
     const timer = window.setTimeout(() => {
       unsubscribe();
       useStartPanel.getState().fail({ key: "shell.startTimeout" });
-    }, ANSWER_TIMEOUT_MS);
+    }, START_ANSWER_TIMEOUT_MS);
     return () => {
       unsubscribe();
       window.clearTimeout(timer);

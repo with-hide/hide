@@ -1,5 +1,6 @@
 import type { BoardRow } from "./projectBoard";
 import type { AgentRow, Checkout, Tab } from "./snapshot";
+import type { AgentGroup } from "./agentLayout";
 
 /** One tab's segment of a checkout's agent list; `glyph` is set when its tab holds two or more recognized agents or the operator named it. */
 export type SidebarTabGroup = { tab: Tab | null; rows: BoardRow[]; count: number; glyph: boolean };
@@ -30,13 +31,31 @@ export function sidebarTabGroups(checkout: Checkout, device: string, rows: reado
   });
 }
 
+/** Keep each lineage subtree in its root tab's collection, including hidden delegated tabs. */
+export function sidebarNamedGroups(checkout: Checkout, segments: readonly SidebarTabGroup[]): { group: AgentGroup; segments: SidebarTabGroup[]; drafts: string[] }[] {
+  const collections = checkout.agent_groups;
+  if (!collections) return [];
+  return collections.groups.map((group) => {
+    const owned = new Set(group.tabs);
+    const selected = group.tabs.flatMap((id) => {
+      if (collections.drafts.includes(id)) return [];
+      const existing = segments.find((segment) => segment.tab?.id === id);
+      if (existing) return [{ ...existing, glyph: true }];
+      const tab = checkout.tabs.find((tab) => tab.id === id && !tab.delegated);
+      return tab ? [{ tab, rows: [], count: 0, glyph: true }] : [];
+    });
+    if (group.id === null) selected.push(...segments.filter((segment) => segment.tab === null || (!collections.groups.some((candidate) => candidate.tabs.includes(segment.tab!.id!)) && !owned.has(segment.tab!.id!))));
+    return { group, segments: selected, drafts: group.tabs.filter((id) => collections.drafts.includes(id)) };
+  });
+}
+
 /** Up/Down/Home/End traverse only the visible main row controls. */
 export function moveSidebarKey(event: import("react").KeyboardEvent<HTMLElement>): void {
   if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
   if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
   const target = event.target;
-  if (!(target instanceof HTMLElement) || !target.matches("[data-agent-open], [data-sidebar-tab]")) return;
-  const rows = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("[data-agent-open]:not(:disabled), [data-sidebar-tab]:not(:disabled)")];
+  if (!(target instanceof HTMLElement) || !target.matches("[data-agent-open], [data-sidebar-tab], [data-sidebar-group-select]")) return;
+  const rows = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("[data-agent-open]:not(:disabled), [data-sidebar-tab]:not(:disabled), [data-sidebar-group-select]:not(:disabled)")];
   const index = rows.indexOf(target as HTMLButtonElement);
   if (index < 0) return;
   const next = event.key === "Home" ? 0 : event.key === "End" ? rows.length - 1 : Math.max(0, Math.min(rows.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)));

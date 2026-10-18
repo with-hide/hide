@@ -50,11 +50,13 @@ impl NodeLink for Node {
                 json!(self.installed.load(Ordering::SeqCst))
             }
             Call::ShellIntegration if self.integrated.load(Ordering::SeqCst) => {
-                json!({"command": ["/bin/zsh", "-l"], "env": {"ZDOTDIR": "/hide/zsh"}})
+                json!({"command": ["/bin/zsh", "-l"], "readiness": "integrated", "env": {"ZDOTDIR": "/hide/zsh"}})
             }
             // A device whose node writes no shell integration: its panes
             // start plain, and a start is confirmed after typing.
-            Call::ShellIntegration => json!({}),
+            Call::ShellIntegration => {
+                json!({"command": ["/bin/sh"], "readiness": "plain", "env": {}})
+            }
             Call::AgentTrust { .. } if self.trust_fails.swap(false, Ordering::SeqCst) => {
                 return Err(LinkError::Refused(hide_node_link::HostError::new(
                     hide_node_link::ErrorCode::Io,

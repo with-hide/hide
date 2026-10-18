@@ -49,6 +49,10 @@ mod first_run;
 mod fork_registration;
 #[path = "tests/github_reads.rs"]
 mod github_reads;
+#[path = "../worktree_control/group_start_tests.rs"]
+mod group_start_admission;
+mod group_tabs;
+mod group_tabs_remote;
 mod guardrails;
 #[path = "tests/home.rs"]
 mod home;
@@ -104,6 +108,7 @@ mod snapshot_delta;
 #[cfg(unix)]
 #[path = "tests/ssh_hosts.rs"]
 mod ssh_hosts_list;
+mod start_geometry;
 #[path = "tests/terminal.rs"]
 mod terminal;
 #[path = "tests/tree_close.rs"]
@@ -589,6 +594,9 @@ fn finished_tab_payload(panes: &[(&str, u64)], focused: &str) -> SessionSnapshot
         .collect::<Vec<_>>();
     crate::sidebar::owned_label_fixture(serde_json::json!({
         "agents": agents,
+        "focused_workspace_id": "w1",
+        "focused_pane_id": focused,
+        "workspaces": [{"workspace_id": "w1", "label": "fixture", "active_tab_id": "t1"}],
         "tabs": [{"workspace_id": "w1", "tab_id": "t1", "label": ""}],
         "layouts": [{
             "workspace_id": "w1", "tab_id": "t1", "zoomed": false,
@@ -630,6 +638,7 @@ fn working_payload() -> SessionSnapshotPayload {
 
 fn pane(id: &str, cwd: &str) -> PaneSnapshot {
     PaneSnapshot {
+        start_claim: None,
         terminal_id: None,
         failed_terminal_id: None,
         id: id.to_owned(),
@@ -1530,6 +1539,7 @@ fn close_capture_request(key: &str) -> live::CloseCaptureRequest {
             tab_label: key.to_owned(),
             tab_index: 0,
             agent_area: None,
+            agent_group: None,
             replacement_shell: false,
             replacement_in_tab: false,
             tab_name: Default::default(),
@@ -1546,4 +1556,37 @@ fn a_device_that_is_not_connected_lends_no_herdr_api_to_a_phone() {
     // The phone's detail reads this as "the device is not connected" (mobile-companion B28).
     let runtime = runtime();
     assert!(runtime.remote_herdr_api("ssh-mini").is_none());
+}
+
+#[test]
+fn start_claims_survive_local_projection_without_becoming_public_titles() {
+    let claim = crate::start_claim::label(&"a".repeat(64));
+    let mut payload = context_payload();
+    assert!(
+        payload.panes[0].start_claim.is_none(),
+        "older payloads still decode"
+    );
+    for carried_separately in [false, true] {
+        payload.panes[0].start_claim = carried_separately.then(|| claim.clone());
+        payload.panes[0].label = (!carried_separately).then(|| claim.clone());
+        payload.panes[0].terminal_title = Some(claim.clone());
+        let panes = project_layout_panes(&payload.layouts[0], &payload, &[], &[], "/repo");
+        let pane = &panes[0];
+        assert_eq!(pane.start_claim.as_deref(), Some(claim.as_str()));
+        assert_eq!(pane.herdr_label, None);
+        assert_eq!(pane.terminal_title, None);
+        let public = serde_json::to_string(pane).unwrap();
+        assert!(!public.contains(&claim));
+        assert!(!public.contains("start_claim"));
+    }
+
+    payload.panes[0].label = Some(" 작업 메모 ".into());
+    payload.panes[0].terminal_title = Some("hide-start:v1:human notes".into());
+    let panes = project_layout_panes(&payload.layouts[0], &payload, &[], &[], "/repo");
+    assert_eq!(panes[0].herdr_label.as_deref(), Some(" 작업 메모 "));
+    assert_eq!(
+        panes[0].terminal_title.as_deref(),
+        Some("hide-start:v1:human notes")
+    );
+    assert_eq!(panes[0].start_claim.as_deref(), Some(claim.as_str()));
 }

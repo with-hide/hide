@@ -719,6 +719,9 @@ impl Runtime {
                 ),
             );
         }
+        // A pending creation already owns its draft's logical slot. Keep its
+        // physical staging tab out of focus/admission and the published list.
+        self.project_catalog_agent_groups(&mut workspaces);
         let mut unresolved_active_tabs = BTreeSet::new();
         let herdr_tabs = HerdrTabView::from_payload(payload);
         for session_workspace in &payload.workspaces {
@@ -1353,6 +1356,7 @@ impl Runtime {
     ) {
         let mut followed: Vec<(String, String, String)> = Vec::new();
         let mut follow_pane: Option<String> = None;
+        let mut clear_group_pane = false;
         // A changed value or a new focus event is an action to follow. Repeated
         // projections of the same event are only state; a later explicit focus
         // on the same Herdr tab still carries a fresh intent after creation.
@@ -1406,7 +1410,7 @@ impl Runtime {
                 .retain(|key, pending| keys.contains(key) && !pending.is_empty());
             store
                 .agent_placements
-                .retain(|_, (key, _, _)| keys.contains(key));
+                .retain(|_, (key, _, _, _)| keys.contains(key));
         }
         for workspace in workspaces.iter_mut() {
             for checkout in workspace.checkouts.iter_mut() {
@@ -1421,6 +1425,7 @@ impl Runtime {
                 }
                 let key = (workspace.device_id.clone(), checkout.path.clone());
                 let mut restored_agent_tab = None;
+                let mut unlisted_agent_selection = false;
                 let mut placed_tabs: Option<HashSet<String>> = None;
                 if workspace.device_id == self.node.as_str() && self.workspace_views.is_some() {
                     let topology = checkout
@@ -1436,29 +1441,30 @@ impl Runtime {
                     }
                     let store = self.workspace_views.as_mut().expect("checked above");
                     let first = store.agent_live.insert(key.clone());
-                    let layout = &mut store.views.entry(&key.0, &key.1).agent_layout;
-                    placed_tabs = Some(
-                        layout
-                            .tree
-                            .displays()
-                            .map(|tab| tab.id.clone())
-                            .chain(
-                                topology
-                                    .iter()
-                                    .filter(|(_, delegated)| *delegated)
-                                    .map(|(id, _)| id.clone()),
-                            )
-                            .collect(),
-                    );
+                    let view = store.views.entry(&key.0, &key.1);
                     let placements = store
                         .agent_placements
                         .iter()
-                        .filter(|(id, (scope, _, _))| {
-                            scope == &key && layout.tree.display(id).is_some()
+                        .filter(|(id, (scope, _, _, _))| {
+                            scope == &key && view.agent_tab_group(id).is_some()
                         })
-                        .map(|(id, (_, area, index))| (id.clone(), area.clone(), *index))
+                        .map(|(id, (_, group, area, index))| {
+                            (id.clone(), group.clone(), area.clone(), *index)
+                        })
                         .collect::<Vec<_>>();
-                    for (id, area, index) in placements {
+                    for (id, group, area, index) in placements {
+                        let group = group.filter(|id| view.group_layout(Some(id)).is_some());
+                        let selected = view.agent_groups.selected.clone();
+                        if let Err(error) =
+                            view.move_agent_to_group(&id, group.as_deref(), unix_milliseconds())
+                        {
+                            agent_layout_errors.push(format!("Created tab {id}: {error:?}"));
+                            continue;
+                        }
+                        view.agent_groups.selected = selected;
+                        let layout = view
+                            .group_layout_mut(group.as_deref())
+                            .expect("placement group checked");
                         let target = layout
                             .tree
                             .area(&area)
@@ -1480,7 +1486,37 @@ impl Runtime {
                             }
                         }
                     }
+                    let layout = view.selected_agent_layout();
+                    placed_tabs = Some(
+                        layout
+                            .tree
+                            .displays()
+                            .map(|t| t.id.clone())
+                            .chain(
+                                topology
+                                    .iter()
+                                    .filter(|(_, delegated)| *delegated)
+                                    .map(|(id, _)| id.clone()),
+                            )
+                            .collect(),
+                    );
+                    // A promoted draft may name a newly opened owner before
+                    // its catalog arrives. With no visible tab, the selected
+                    // slot still owns the screen; Herdr's old tab cannot
+                    // replace it while that creation becomes visible.
+                    let missing_visible_tab =
+                        self.visible_tab_ids.get(&checkout.id).is_none_or(|id| {
+                            !checkout.tabs.iter().any(|tab| tab.id.as_ref() == Some(id))
+                        });
+                    unlisted_agent_selection = !first
+                        && layout.active().is_some_and(|id| {
+                            !checkout
+                                .tabs
+                                .iter()
+                                .any(|tab| tab.id.as_deref() == Some(id))
+                        });
                     if first
+                        || missing_visible_tab
                         || self.visible_tab_ids.get(&checkout.id).is_some_and(|id| {
                             placed_tabs
                                 .as_ref()
@@ -1522,7 +1558,11 @@ impl Runtime {
                     .focused_tab_id
                     .as_deref()
                     .filter(|tab_id| {
-                        restored_agent_tab.is_none()
+                        (restored_agent_tab.is_none()
+                            // An explicit external selection can supersede a
+                            // started slot even in its first catalog gap.
+                            || (unlisted_agent_selection
+                                && herdr.focus_event.as_ref().is_some_and(|event| !event.creation)))
                             && herdr_focus_moved
                             && has_tab(tab_id)
                             // Creation provenance keeps external admissions from
@@ -1582,49 +1622,84 @@ impl Runtime {
                         "tab_id": tab_id,
                     }));
                 }
-                let visible = match (hide_tab, herdr_tab) {
-                    (Some(hide_tab), Some(herdr_tab)) if hide_tab == herdr_tab => Some(hide_tab),
-                    // Hide's own answer, or Herdr about to be moved again by
-                    // a request still outstanding: neither is followed.
-                    (Some(hide_tab), Some(_)) if focus_answered || outstanding => Some(hide_tab),
-                    (Some(hide_tab), Some(herdr_tab)) => {
-                        // Following the tab has to bring the keyboard with
-                        // it. Leaving the projection on the tab that just
-                        // stopped being visible parks the focus ring and
-                        // the first responder on a pane nobody can see.
-                        if self.snapshot.navigator.focused_checkout_id.as_deref()
-                            == Some(checkout.id.as_str())
-                        {
-                            let first_pane_id = checkout
-                                .tabs
-                                .iter()
-                                .find(|tab| tab.id.as_deref() == Some(herdr_tab.as_str()))
-                                .and_then(|tab| tab.panes.first())
-                                .map(|pane| pane.id.clone());
-                            follow_pane = self.tab_focus_pane_id(&herdr_tab, first_pane_id);
-                        }
-                        followed.push((checkout.id.clone(), hide_tab, herdr_tab.clone()));
-                        Some(herdr_tab)
+                let empty_group = self
+                    .workspace_views
+                    .as_ref()
+                    .and_then(|s| s.views.get(&key.0, &key.1))
+                    .is_some_and(|v| {
+                        v.selected_agent_layout()
+                            .active()
+                            .is_none_or(|id| v.agent_groups.drafts.contains(id))
+                    });
+                let visible = if empty_group {
+                    if self.snapshot.navigator.focused_checkout_id.as_deref()
+                        == Some(checkout.id.as_str())
+                    {
+                        // A group's last tab can close while other groups
+                        // still have panes. Its now-empty canvas also owns
+                        // keyboard focus; a stale pane must not reveal another
+                        // group during the selection-alignment pass.
+                        clear_group_pane = selected_pane_id.is_some();
                     }
-                    (Some(hide_tab), None) => Some(hide_tab),
-                    // With no value of its own yet, Hide takes the first of:
-                    // the tab it asked for, the tab holding the keyboard,
-                    // the tab Herdr has focused, a tab Herdr shows in any of
-                    // the checkout's workspaces, the first tab.
-                    (None, herdr_tab) => pending_tab
-                        .clone()
-                        .filter(|tab_id| has_tab(tab_id))
-                        .or(selected_tab)
-                        .or(herdr_tab)
-                        .or_else(|| {
-                            checkout
-                                .tabs
-                                .iter()
-                                .filter_map(|tab| tab.id.as_deref())
-                                .find(|tab_id| herdr.is_active_in_its_workspace(tab_id))
-                                .map(str::to_owned)
-                        })
-                        .or_else(|| checkout.tabs.first().and_then(|tab| tab.id.clone())),
+                    None
+                } else {
+                    match (hide_tab, herdr_tab) {
+                        (Some(hide_tab), Some(herdr_tab)) if hide_tab == herdr_tab => {
+                            Some(hide_tab)
+                        }
+                        // Hide's own answer, or Herdr about to be moved again by
+                        // a request still outstanding: neither is followed.
+                        (Some(hide_tab), Some(_)) if focus_answered || outstanding => {
+                            Some(hide_tab)
+                        }
+                        (Some(hide_tab), Some(herdr_tab)) => {
+                            // Following the tab has to bring the keyboard with
+                            // it. Leaving the projection on the tab that just
+                            // stopped being visible parks the focus ring and
+                            // the first responder on a pane nobody can see.
+                            if self.snapshot.navigator.focused_checkout_id.as_deref()
+                                == Some(checkout.id.as_str())
+                            {
+                                let first_pane_id = checkout
+                                    .tabs
+                                    .iter()
+                                    .find(|tab| tab.id.as_deref() == Some(herdr_tab.as_str()))
+                                    .and_then(|tab| tab.panes.first())
+                                    .map(|pane| pane.id.clone());
+                                follow_pane = self.tab_focus_pane_id(&herdr_tab, first_pane_id);
+                            }
+                            followed.push((checkout.id.clone(), hide_tab, herdr_tab.clone()));
+                            Some(herdr_tab)
+                        }
+                        (Some(hide_tab), None) => Some(hide_tab),
+                        // With no value of its own yet, Hide takes the first of:
+                        // the tab it asked for, the tab holding the keyboard,
+                        // the tab Herdr has focused, a tab Herdr shows in any of
+                        // the checkout's workspaces, the first tab.
+                        (None, herdr_tab) => pending_tab
+                            .clone()
+                            .filter(|tab_id| has_tab(tab_id))
+                            .or(selected_tab)
+                            .or(herdr_tab)
+                            .or_else(|| {
+                                checkout
+                                    .tabs
+                                    .iter()
+                                    .filter_map(|tab| tab.id.as_deref())
+                                    .find(|tab_id| {
+                                        has_tab(tab_id) && herdr.is_active_in_its_workspace(tab_id)
+                                    })
+                                    .map(str::to_owned)
+                            })
+                            .or_else(|| {
+                                checkout
+                                    .tabs
+                                    .iter()
+                                    .filter_map(|tab| tab.id.as_deref())
+                                    .find(|tab_id| has_tab(tab_id))
+                                    .map(str::to_owned)
+                            }),
+                    }
                 };
                 match visible {
                     Some(tab_id) => {
@@ -1634,9 +1709,19 @@ impl Runtime {
                                     && tab.id.as_deref().is_some_and(|id| !has_tab(id))
                             })
                         });
+                        // On startup a coordinator's first catalog can be
+                        // empty. Its later first checkout restores the saved
+                        // group before navigator focus has a checkout yet.
+                        // Only that unchosen, request-free start may replace
+                        // the temporary Herdr keyboard here.
+                        let restoring_without_focus = restored_agent_tab.is_some()
+                            && self.snapshot.navigator.focused_checkout_id.is_none()
+                            && self.snapshot.ui_state.focused_checkout_id.is_none()
+                            && !outstanding;
                         if selected_waiting
-                            && self.snapshot.navigator.focused_checkout_id.as_deref()
+                            && (self.snapshot.navigator.focused_checkout_id.as_deref()
                                 == Some(&checkout.id)
+                                || restoring_without_focus)
                         {
                             follow_pane = checkout
                                 .tabs
@@ -1666,13 +1751,17 @@ impl Runtime {
         for error in agent_layout_errors {
             self.push_diagnostic("agent_layout.reconcile_refused", error);
         }
-        if let Some(pane_id) = follow_pane {
+        if clear_group_pane {
+            self.select_terminal_pane(None);
+            self.operator_focused_pane_id = None;
+        } else if let Some(pane_id) = follow_pane {
             self.select_terminal_pane(Some(pane_id));
             // Herdr moved the keyboard, not the operator. The read record
             // follows only a focus the operator made in Hide.
             self.operator_focused_pane_id = None;
         }
         for (checkout_id, hide_tab, herdr_tab) in followed {
+            self.supersede_start_navigation();
             crate::diagnostic!(serde_json::json!({
                 "component": "view_state",
                 "kind": "tab.focus.followed",
@@ -1924,14 +2013,6 @@ impl Runtime {
                 }
             }
         }
-        let shown_tabs = self.node_shown_agent_tabs(target_id);
-        let pane_sets = fetched.as_ref().ok().map(|session| {
-            remote_terminal_pane_sets(
-                session,
-                self.snapshot.navigator.focused_device_id.as_deref() == Some(target_id),
-                &shown_tabs,
-            )
-        });
         // The session is kept as Herdr sent it except for the cwds of tabs Hide
         // created (`clamp_device_created_tabs`); the published one groups its
         // workspaces into the device's projects (`device_catalog`).
@@ -2105,8 +2186,14 @@ impl Runtime {
         changed |= self.refresh_device_snapshots();
         if observed_session.is_some() {
             self.reconcile_node_agent_topology(target_id);
+            changed |= self.follow_start(Some(target_id));
         }
-        if let Some((live_pane_ids, active_pane_ids)) = pane_sets {
+        if let Some(session) = observed_session.as_ref() {
+            let (live_pane_ids, active_pane_ids) = remote_terminal_pane_sets(
+                session,
+                self.device_in_front(target_id),
+                self.node_shown_agent_tabs(target_id).as_deref(),
+            );
             changed |=
                 self.reconcile_remote_terminal_panes(target_id, &live_pane_ids, &active_pane_ids);
         }
@@ -2498,9 +2585,6 @@ impl Runtime {
                     && herdr_tabs.is_active_in_its_workspace(&layout.tab_id)
             })
         });
-        if let Ok(payload) = &fetched {
-            self.herdr_active_tab_ids = HerdrTabView::from_payload(payload).active_tab_ids();
-        }
         // What Hide draws ahead of Herdr is laid over the session only now,
         // after every confirmation above has read Herdr's own layout, so
         // every reader below sees one layout and nothing Hide drew confirms
@@ -2759,7 +2843,35 @@ impl Runtime {
                 // Once the user or persisted state chooses a pane, a session
                 // snapshot that omits that workspace must not silently retarget
                 // commands to Herdr's unrelated globally focused workspace.
-                let target_pane_id = if selected_pane_retired {
+                let draft_surface = self
+                    .front_workspace_key()
+                    .and_then(|key| {
+                        let view = self.workspace_views.as_ref()?.views.get(&key.0, &key.1)?;
+                        let reconciled_tab = focused_checkout
+                            .filter(|checkout| key.0 == self.node.as_str() && checkout.path == key.1)
+                            .and_then(|checkout| checkout.active_tab_id.as_deref());
+                        Some((view, reconciled_tab))
+                    })
+                    .is_some_and(|(view, reconciled_tab)| {
+                        // Reconciliation may already have followed an explicit
+                        // external choice while the layout's selection still
+                        // awaits the ordinary snapshot alignment pass.
+                        reconciled_tab
+                            .or_else(|| view.selected_agent_layout().active())
+                            .is_none_or(|id| {
+                                view.agent_groups.drafts.contains(id)
+                                    // An acknowledged start owns its slot
+                                    // before the stream supplies its pane.
+                                    // Its temporary absence is not permission
+                                    // to select another group's first pane.
+                                    || !focused_checkout.is_some_and(|checkout| {
+                                        checkout.tabs.iter().any(|tab| tab.id.as_deref() == Some(id))
+                                    })
+                            })
+                    });
+                let target_pane_id = if draft_surface {
+                    None
+                } else if selected_pane_retired {
                     replacement_pane_id.as_deref()
                 } else if selected_pane_missing
                     || explicit_checkout_missing
@@ -2817,13 +2929,26 @@ impl Runtime {
                                 .map(|layout| layout.focused_pane_id.as_str())
                         })
                 };
-                let selected_pane_invalid_for_context = selected_pane_id.is_some()
+                let selected_pane_invalid_for_context = !draft_surface
+                    && selected_pane_id.is_some()
                     && !self.restore_hint_pending
                     && ((focused_checkout.is_some() && target_pane_id.is_none())
                         || (focused_checkout.is_none()
                             && self.snapshot.ui_state.focused_checkout_id.is_some()));
                 let mut selection_changed = false;
-                if selected_pane_retired {
+                if draft_surface {
+                    // The first session can have Herdr's keyboard before
+                    // path facts discover its checkout. A restored draft or
+                    // empty group clears that fallback too, or alignment
+                    // below would reveal the old pane's group again.
+                    if self.snapshot.terminal.pane_id.is_some()
+                        || self.snapshot.ui_state.selected_pane_id.is_some()
+                    {
+                        self.select_terminal_pane(None);
+                        self.operator_focused_pane_id = None;
+                        selection_changed = true;
+                    }
+                } else if selected_pane_retired {
                     let retired_pane_id = selected_pane_id.as_deref().unwrap_or("<missing>");
                     self.fail_pending_pane_focus_for_target(
                         retired_pane_id,
@@ -3047,6 +3172,7 @@ impl Runtime {
             );
         }
         changed |= self.settle_selection_projection();
+        changed |= self.follow_start(None);
         changed |= self.refresh_sessions_after_catalog_change(catalog_changed);
         changed |= self.refresh_browser_inventory_scope();
         changed | self.refresh_pet()
@@ -3298,8 +3424,11 @@ impl Runtime {
         // Settled means Herdr's own layout agrees too. A checkout coming
         // forward selects a pane locally without telling Herdr, and skipping
         // the notification then let Herdr's next layout take the focus back.
+        // A tab active only in a background workspace is not global focus.
         let herdr_agrees = self.layout_holding_pane(&pane_id).is_none_or(|layout| {
-            layout.focused_pane_id == pane_id && self.herdr_active_tab_ids.contains(&layout.tab_id)
+            layout.focused_pane_id == pane_id
+                && (self.herdr_focused_tab_seen.as_deref() == Some(layout.tab_id.as_str())
+                    || self.pane_focus_tab_confirmed(&layout.tab_id))
         });
         let notify = !already_focused
             || !herdr_agrees
@@ -3790,6 +3919,7 @@ impl Runtime {
     /// Rule 9: the record names the panes and where the change came from, and
     /// carries nothing about what is in them.
     pub(super) fn report_followed_pane_focus(&mut self, previous: Option<&str>, arriving: &str) {
+        self.supersede_start_navigation();
         let from = previous.unwrap_or("<none>").to_owned();
         crate::diagnostic!(serde_json::json!({
             "component": "view_state",
@@ -3849,6 +3979,7 @@ impl Runtime {
         }
         self.next_task_operation_id = self.next_task_operation_id.wrapping_add(1).max(1);
         let id = self.next_task_operation_id;
+        self.capture_task_start_focus(id, kind);
         self.begin_op_timing(
             &super::op_timing::task_create_op_id(id),
             "tab.create",
@@ -3890,11 +4021,15 @@ impl Runtime {
         let repository_root = operation.repository_root.clone();
         let device = operation.device_id.clone();
         let stays_behind = operation.stays_behind;
-        // A device's Herdr focuses what it created, and the device's screen
-        // follows its host; this machine's focus does not move for it. A
-        // task that stays behind (a phone start, or an archived descendant
-        // resumed after its root) takes the screen nowhere.
-        let should_focus = operation_kind != "branch_migrate" && device.is_none() && !stays_behind;
+        // A task that stays behind (a phone start, or an archived descendant
+        // resumed after its root) takes the screen nowhere. Remote agent
+        // starts follow through their existing remote-control boundary once
+        // the exact pane is listed; other device tasks retain their own flow.
+        let should_focus = operation_kind != "branch_migrate"
+            && (device.is_none() || operation_kind == "agent_start")
+            && !stays_behind
+            && self.group_start_should_focus(id);
+        let adds_pane = self.group_start_adds_pane(id);
         match result {
             Ok(outcome) => {
                 let live::WorktreeTaskOutcome {
@@ -3907,7 +4042,7 @@ impl Runtime {
                     shell,
                 } = outcome;
                 self.task_pane_shell = Some((id, shell));
-                if let Some(tab_id) = created_tab_id.as_deref() {
+                if let Some(tab_id) = created_tab_id.as_deref().filter(|_| !adds_pane) {
                     match device.as_deref() {
                         None => self.record_created_tab_checkout(tab_id, &path),
                         Some(device) => self.record_created_device_tab(device, tab_id, &path),
@@ -3933,7 +4068,8 @@ impl Runtime {
                 // A tab made in a checkout this machine's Herdr already holds
                 // is drawn from this answer (D-04, D-05); a new worktree's
                 // workspace is Herdr's to report first.
-                if device.is_none()
+                if !adds_pane
+                    && device.is_none()
                     && let Some(tab_id) = created_tab_id.as_deref()
                     && let Some(workspace_id) = self.owner_workspace_of_path(&path)
                 {
@@ -3957,6 +4093,7 @@ impl Runtime {
                         recorded_at_unix_ms: unix_milliseconds(),
                     });
                 }
+                self.complete_group_start(id, created_tab_id.as_deref(), &pane_id, should_focus);
                 if let Some(detail) = issue_error {
                     self.push_diagnostic(
                         "checkout_issue.create_failed",
@@ -3984,17 +4121,56 @@ impl Runtime {
                 // reads them; for an agent they wait for its start
                 // (`ingest_task_agent_result`).
                 let input_ready = operation.agent_phase.is_none().then(|| pane_id.clone());
-                if should_focus {
-                    self.snapshot.terminal.pane_id = Some(pane_id.clone());
-                    self.snapshot.focused.surface = Surface::Terminal;
-                    self.snapshot.focused.pane_id = Some(pane_id.clone());
-                    self.snapshot.ui_state.selected_pane_id = Some(pane_id);
+                let waits_for_local_catalog = operation.kind == "agent_start"
+                    && device.is_none()
+                    && self.created_pane_place(&pane_id).is_none()
+                    && !self.catalog_workspaces().any(|workspace| {
+                        workspace.device_id == self.node.as_str()
+                            && workspace.checkouts.iter().any(|checkout| {
+                                checkout.path == path
+                                    && checkout
+                                        .tabs
+                                        .iter()
+                                        .any(|tab| tab.panes.iter().any(|pane| pane.id == pane_id))
+                            })
+                    });
+                crate::diagnostic!(serde_json::json!({
+                    "component": "agent_start",
+                    "kind": "start.focus_disposition",
+                    "task_id": id,
+                    "pane_id": pane_id,
+                    "connection_generation": self.live_generation,
+                    "should_focus": should_focus,
+                    "waiting_for_catalog": waits_for_local_catalog,
+                    "local_checkout_owner": device.is_none().then(|| self.owner_workspace_of_path(&path)).flatten(),
+                    "focused_checkout_id": self.snapshot.navigator.focused_checkout_id,
+                    "selected_pane_id": self.snapshot.focused.pane_id,
+                }));
+                if should_focus && let Some(device) = device.as_deref() {
+                    self.queue_start_focus(id, pane_id.clone());
+                    self.follow_start(Some(device));
+                } else if should_focus && waits_for_local_catalog {
+                    // A first Home's catalog may still contain only the
+                    // owner's seed pane. Wait for this returned pane, or the
+                    // next session stays scoped to the previous checkout.
+                    self.queue_start_focus(id, pane_id.clone());
+                } else if should_focus {
+                    // Targeted creation intentionally did not focus Herdr.
+                    // Use the same ordered, acknowledged focus as a pane press.
+                    self.focus_pane(pane_id, PaneFocusOrigin::Restore, None);
+                    if self.snapshot.status.last_error.is_none()
+                        && !self.device_in_front(self.node.as_str())
+                    {
+                        self.bring_device_forward(self.node.as_str().to_owned());
+                    }
                 }
                 // A tab that does not take the screen is not where the
                 // operator's keys were going, agent or not.
                 let origin = super::terminal_input::InputOrigin::Task(id);
                 match input_ready {
-                    _ if !should_focus => self.discard_input_request(&origin, "not_shown"),
+                    _ if !should_focus || device.is_some() => {
+                        self.discard_input_request(&origin, "not_shown")
+                    }
                     Some(pane_id) => self.resolve_input_request_at_shell(&origin, &pane_id),
                     None => {}
                 }
@@ -4842,6 +5018,7 @@ impl Runtime {
             Some(pane_id) => self.resolve_input_request(&origin, &pane_id),
             None => self.discard_input_request(&origin, phase),
         }
+        self.save_group_agent_result(id, phase);
         true
     }
 
@@ -5111,7 +5288,15 @@ impl Runtime {
                         if store.agent_placements.len() < 64 {
                             store.agent_placements.insert(
                                 tab_id.clone(),
-                                ((self.node.as_str().to_owned(), path), area, None),
+                                (
+                                    (self.node.as_str().to_owned(), path.clone()),
+                                    store
+                                        .views
+                                        .get(self.node.as_str(), &path)
+                                        .and_then(|v| v.agent_groups.selected.clone()),
+                                    area,
+                                    None,
+                                ),
                             );
                         } else {
                             self.push_diagnostic(
@@ -5752,7 +5937,36 @@ impl Runtime {
         // The checkout comes forward on the tab it was showing, with the
         // keyboard on the pane the operator last had there. Its first pane
         // is only for a checkout Hide has never shown.
-        let visible_tab_id = self.visible_tab_ids.get(checkout_id).cloned();
+        let selected_layout = self
+            .snapshot
+            .navigator
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id == workspace_id)
+            .and_then(|workspace| {
+                workspace
+                    .checkouts
+                    .iter()
+                    .find(|checkout| checkout.id == checkout_id)
+            })
+            .and_then(|checkout| {
+                self.workspace_views
+                    .as_ref()?
+                    .views
+                    .get(self.node.as_str(), &checkout.path)
+            })
+            .map(|view| view.selected_agent_layout());
+        // An explicit empty collection or draft owns the surface as much as
+        // a live tab does. Only a checkout without stored placement falls
+        // back to the first topology pane.
+        let layout_owned = selected_layout.is_some();
+        let visible_tab_id = selected_layout
+            .and_then(|layout| layout.active().map(str::to_owned))
+            .or_else(|| {
+                (!layout_owned)
+                    .then(|| self.visible_tab_ids.get(checkout_id).cloned())
+                    .flatten()
+            });
         let Some((checkout_path, first_pane_id, has_herdr_tab)) = self
             .snapshot
             .navigator
@@ -5774,7 +5988,11 @@ impl Runtime {
                         let first_pane_id = visible_tab
                             .and_then(|tab| tab.panes.first())
                             .or_else(|| {
-                                checkout.tabs.iter().flat_map(|tab| tab.panes.iter()).next()
+                                (!layout_owned)
+                                    .then(|| {
+                                        checkout.tabs.iter().flat_map(|tab| tab.panes.iter()).next()
+                                    })
+                                    .flatten()
                             })
                             .map(|pane| pane.id.clone());
                         (

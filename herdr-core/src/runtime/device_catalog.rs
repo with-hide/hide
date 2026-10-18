@@ -130,6 +130,7 @@ impl Runtime {
                 now,
             );
         }
+        self.project_catalog_agent_groups(&mut session.workspaces);
         session
     }
 

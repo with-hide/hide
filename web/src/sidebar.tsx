@@ -2,7 +2,7 @@ import { deviceScope } from "./agentScope";
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
 import { useInterfaceTranslation } from "./i18n/client";
-import { ChevronDownIcon, ChevronRightIcon, CornerUpLeftIcon, EllipsisIcon, FolderIcon, Loader2Icon, PanelsTopLeftIcon, PinIcon, PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon } from "lucide-react";
+import { BriefcaseBusinessIcon, ChevronDownIcon, ChevronRightIcon, CornerUpLeftIcon, EllipsisIcon, FolderIcon, Loader2Icon, PanelsTopLeftIcon, PinIcon, PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { StatusMark } from "./components/status-mark";
 import { markTone } from "./agentRow";
@@ -32,7 +32,8 @@ import { checkoutAgentRows, type BoardRow } from "./projectBoard";
 import { FoldLane, SidebarAgentRow, type AgentRowMenu, type SidebarTreeSlot } from "./components/sidebar-agent-row";
 import { TreeRails } from "./components/agent-tree";
 import { sidebarTreeLines } from "./sidebarTree";
-import { moveSidebarKey, sidebarTabGroups, type SidebarTabGroup } from "./sidebarTabs";
+import { moveSidebarKey, sidebarNamedGroups, sidebarTabGroups, type SidebarTabGroup } from "./sidebarTabs";
+import { groupFoldKey, useGroupFolds, useGroupName } from "./groupTabs";
 import { tabSurface } from "./recent";
 import { SleepingSessionRow } from "./components/sleeping-session-row";
 import { StatusBadge } from "./components/status-badge";
@@ -500,7 +501,7 @@ function ProjectList({ actions }: { actions: Actions }) {
   const inactiveFold = useShellStore((s) => (remote ? undefined : s.rest?.navigator?.inactive_projects));
   const noAgentsFold = useShellStore((s) => (remote ? undefined : s.rest?.navigator?.no_agent_projects));
   const focusedCheckoutId = useShellStore((s) =>
-    remote ? (remoteView(remoteContext(s.rest)?.session ?? null)?.checkout.id ?? null) : (s.rest?.navigator?.focused_checkout_id ?? null),
+    remote ? (remoteView(remoteContext(s.rest)?.session ?? null, s.rest?.workspace_view)?.checkout.id ?? null) : (s.rest?.navigator?.focused_checkout_id ?? null),
   );
   const localWorkspaces = useShellStore((s) => s.rest?.navigator?.workspaces);
   const remoteStatuses = useShellStore((s) => s.rest?.status?.remote);
@@ -556,9 +557,10 @@ function ProjectList({ actions }: { actions: Actions }) {
   // An ⌥ hold shows each agent's number once, on its raised row or else its
   // own checkout's row; ⌥n selects by the Agents list, so the number is that list's.
   const numbered = useUiStore((s) => s.hint === "agents");
+  const groupClosed = useGroupFolds((state) => state.closed);
   const numberOfPane = useMemo(
-    () => (numbered ? sidebarAgentNumbers(useShellStore.getState(), raisedOpen) : null),
-    [numbered, frontScope, rows, openCheckouts, workspaces, raisedOpen],
+    () => (numbered ? sidebarAgentNumbers(useShellStore.getState(), raisedOpen, groupClosed) : null),
+    [numbered, frontScope, rows, openCheckouts, workspaces, raisedOpen, groupClosed],
   );
   // The folds are this machine's choices, like the inactive groups, so a
   // selected SSH device's tree is drawn open with every checkout's line two.
@@ -1197,7 +1199,7 @@ function CleanupRows({ workspaces, context, deviceId }: { workspaces: Workspace[
  */
 /** `otherLines` counts what the opened list draws besides agent rows: sleeping conversations and named tabs with no agent. */
 function checkoutDisclosure(checkout: Checkout, agentRows: BoardRow[], view: CheckoutPresentation, context: ListContext, t: TFunction<"translation">, otherLines: number, hideAi: HideAiCheckout | null) {
-  const hasRows = agentRows.length + otherLines > 0;
+  const hasRows = agentRows.length + otherLines > 0 || (checkout.agent_groups?.groups.length ?? 0) > 0;
   const foldable = context.disclosure && hasRows;
   const open = hasRows && !context.openCheckouts.includes(checkout.id);
   // A checkout Hide AI made names its task where the purpose stands, ahead of the purpose (D-03).
@@ -1313,7 +1315,7 @@ const CheckoutRowView = memo(function CheckoutRowView({
           {secondLine ? <PurposeLine purpose={purpose} origin={checkout.purpose?.origin} age={view.age} raisedFrom={raisedFrom} /> : null}
         </div>
       </EntryContextMenu>
-      {visibleRows.length > 0 || (open && sleeping.length + emptyTabs > 0) ? <OpenAgentRows checkout={checkout} groupTabs={open} deviceId={workspace.device_id} agentRows={visibleRows} sleeping={open ? sleeping : NO_SLEEPERS} inset={CHECKOUT_NAME_COLUMN} glyphColumn={PROJECT_COLUMN} context={context} /> : null}
+      {visibleRows.length > 0 || (open && (sleeping.length + emptyTabs > 0 || !!checkout.agent_groups)) ? <OpenAgentRows checkout={checkout} groupTabs={open} deviceId={workspace.device_id} agentRows={visibleRows} sleeping={open ? sleeping : NO_SLEEPERS} inset={CHECKOUT_NAME_COLUMN} glyphColumn={PROJECT_COLUMN} context={context} /> : null}
     </li>
   );
 });
@@ -1408,7 +1410,7 @@ const FolderRowView = memo(function FolderRowView({
           {secondLine ? <PurposeLine purpose={purpose} origin={checkout.purpose?.origin} age={null} raisedFrom={raisedFrom} /> : null}
         </div>
       </EntryContextMenu>
-      {visibleRows.length > 0 || (open && sleeping.length + emptyTabs > 0) ? <OpenAgentRows checkout={checkout} groupTabs={open} deviceId={workspace.device_id} agentRows={visibleRows} sleeping={open ? sleeping : NO_SLEEPERS} inset={PROJECT_NAME_COLUMN} glyphColumn={PROJECT_COLUMN} context={context} /> : null}
+      {visibleRows.length > 0 || (open && (sleeping.length + emptyTabs > 0 || !!checkout.agent_groups)) ? <OpenAgentRows checkout={checkout} groupTabs={open} deviceId={workspace.device_id} agentRows={visibleRows} sleeping={open ? sleeping : NO_SLEEPERS} inset={PROJECT_NAME_COLUMN} glyphColumn={PROJECT_COLUMN} context={context} /> : null}
     </li>
   );
 });
@@ -1586,7 +1588,31 @@ function PurposeLine({ purpose, origin, age, raisedFrom }: { purpose: string | n
  * rooted on it. A dormant conversation has no pane or numbered shortcut.
  */
 function OpenAgentRows({ checkout, groupTabs, deviceId, agentRows, sleeping, inset, glyphColumn, context }: { checkout: Checkout; groupTabs: boolean; deviceId: string; agentRows: BoardRow[]; sleeping: SleepingSession[]; inset: string; glyphColumn: string; context: TreeContext }) {
+  const { t } = useInterfaceTranslation();
+  const closed = useGroupFolds((state) => state.closed);
   const groups = useMemo(() => sidebarTabGroups(checkout, deviceId, agentRows, context.agents), [checkout, deviceId, agentRows, context.agents]);
+  const named = useMemo(() => sidebarNamedGroups(checkout, groups), [checkout, groups]);
+  if (groupTabs && checkout.agent_groups) return <ul className="isolate mt-xxs mb-sm" data-checkout-agents-open={checkout.id}>
+    {named.map(({ group, segments, drafts }) => {
+      const foldKey = groupFoldKey(deviceId, checkout.id, group.id);
+      const open = !closed.has(foldKey);
+      const name = group.name ?? t("groups.ungrouped");
+      const selected = group.id === checkout.agent_groups!.selected;
+      const childInset = `calc(${inset} + var(--spacing-md))`;
+      return <li key={group.id ?? "ungrouped"} data-sidebar-named-group={group.id ?? "ungrouped"}>
+        <div className="flex h-(--size-sidebar-line) min-w-0 items-center gap-xs rounded-sm pr-xs text-caption hover:bg-accent" style={{ paddingLeft: inset }}>
+          <button type="button" aria-label={t(open ? "groups.fold" : "groups.unfold", { name })} aria-expanded={open} onClick={() => useGroupFolds.getState().toggle(foldKey)} className="shrink-0 rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring">{open ? <ChevronDownIcon className="size-(--size-icon-sm)" /> : <ChevronRightIcon className="size-(--size-icon-sm)" />}</button>
+          <Hint label={name} reveals><button type="button" data-sidebar-group-select={group.id ?? "ungrouped"} aria-current={selected ? "true" : undefined} className={cn("flex min-w-0 flex-1 items-center gap-xs rounded-sm text-left outline-none focus-visible:ring-1 focus-visible:ring-ring", selected ? "font-medium text-foreground" : "text-muted-foreground")} onClick={() => context.actions.agentGroup({ device_id: deviceId, path: checkout.path }, group.id, { action: "select" })}><BriefcaseBusinessIcon className={cn("size-(--size-icon-sm) shrink-0", selected ? "text-foreground" : "text-muted-foreground")} /><span className="truncate">{name}</span></button></Hint>
+        </div>
+        {open ? <ul>{group.tabs.map((id) => {
+          if (drafts.includes(id)) return <li key={id}><button type="button" data-sidebar-tab={id} className="flex h-(--size-sidebar-line) w-full min-w-0 items-center gap-xs rounded-sm pr-xs text-left text-caption text-subtle-foreground outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" style={{ paddingLeft: childInset }} onClick={() => context.actions.agentGroup({ device_id: deviceId, path: checkout.path }, group.id, { action: "select", tab_id: id })}><PanelsTopLeftIcon className="size-(--size-icon-sm) shrink-0" /><span className="truncate">{t("groups.newTab")}</span></button></li>;
+          const segment = segments.find((segment) => segment.tab?.id === id);
+          return segment ? <li key={id} className="relative" data-sidebar-tab-group={id}><TabSegmentHead group={segment} checkout={checkout} deviceId={deviceId} inset={childInset} glyphColumn={inset} glyphSize="var(--size-icon-sm)" context={context} /><AgentTreeRows checkoutId={checkout.id} deviceId={deviceId} agentRows={segment.rows} inset={childInset} context={context} /></li> : null;
+        })}{segments.filter((segment) => segment.tab === null || !group.tabs.includes(segment.tab.id!)).map((segment) => <li key={segment.tab?.id ?? "unplaced"}><AgentTreeRows checkoutId={checkout.id} deviceId={deviceId} agentRows={segment.rows} inset={childInset} context={context} /></li>)}</ul> : null}
+      </li>;
+    })}
+    {sleeping.map((session) => <SleepingSessionRow key={session.sleep_id} session={session} actions={context.actions} inset={inset} />)}
+  </ul>;
   // An opened checkout's agents hang just under it, apart only so its fill and a selected row's never merge, and the
   // group's end carries the tab gap, so a row stands nearer its own checkout than the next one.
   return <ul className={cn("isolate", groupTabs && "mt-xxs mb-sm")} data-checkout-agents-open={checkout.id}>
@@ -1610,15 +1636,15 @@ const TAB_LINE = "calc(var(--size-sidebar-line) + var(--spacing-xxs))";
  * the checkout rather than beside it. The line opens the real tab, and the hint says its name and agent count, or only its name with no agent. An unnamed single-agent
  * tab draws nothing: its row alone is the segment, and the gap between segments is the tab boundary.
  */
-function TabSegmentHead({ group, checkout, deviceId, inset, glyphColumn, context }: { group: SidebarTabGroup; checkout: Checkout; deviceId: string; inset: string; glyphColumn: string; context: TreeContext }) {
+function TabSegmentHead({ group, checkout, deviceId, inset, glyphColumn, glyphSize = "var(--size-checkout-icon)", context }: { group: SidebarTabGroup; checkout: Checkout; deviceId: string; inset: string; glyphColumn: string; glyphSize?: string; context: TreeContext }) {
   const { t } = useInterfaceTranslation();
   const removing = useShellStore((s) => checkoutRemoving(s.rest?.worktree_removal, deviceId, checkout.path, localDeviceId(s.rest)));
   const tab = group.tab;
   const naming = tab?.sidebar;
-  const name = naming ? naming.manual_name ?? t("sidebar.tabNumber", { number: naming.number }) : "";
+  const name = naming ? naming.manual_name ?? t("sidebar.tabNumber", { number: naming.number }) : checkout.strip.find((entry) => entry.source_id === tab?.id)?.label ?? t("groups.newTab");
   // A tab the operator kept with no agent left says its name alone, never a count of none.
   const label = group.count === 0 ? name : t("sidebar.tabAgents", { name, count: group.count });
-  const center = `calc(${glyphColumn} + var(--size-checkout-icon) / 2)`;
+  const center = `calc(${glyphColumn} + ${glyphSize} / 2)`;
   const open = () => context.actions.openSurface(tabSurface(checkout, tab!.id!, deviceId));
   if (!group.glyph) return null;
   return (
@@ -1741,6 +1767,8 @@ function runCheckoutItem(actions: Actions, workspace: Workspace, checkout: Check
       return actions.openWorkspace(workspace.device_id, checkout.workspace_id, checkout.id);
     case "new_tab_here":
       return actions.newTabIn(workspace.device_id, checkout);
+    case "new_group":
+      return useGroupName.getState().open({ workspace: { device_id: workspace.device_id, path: checkout.path }, groupId: null, name: "" });
     case "open_pull_request": {
       const pr = shownPullRequest(checkout);
       return pr ? actions.openPullRequest(pr.url, workspace.device_id, false) : undefined;

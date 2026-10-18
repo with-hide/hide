@@ -10,6 +10,11 @@ pub struct Tab {
     #[serde(default)]
     focused: u64,
 }
+impl Tab {
+    pub fn new(id: String) -> Self {
+        Self { id, focused: 0 }
+    }
+}
 impl AreaItem for Tab {
     const LIMITS: TreeLimits = TreeLimits {
         areas: 6,
@@ -83,6 +88,11 @@ impl Layout {
         admitted: &HashSet<String>,
     ) -> Result<bool, crate::split_tree::LayoutError> {
         let before = self.clone();
+        let resolved_canvas = self.active().and_then(|active| {
+            tabs.iter()
+                .any(|(id, delegated)| id == active && *delegated)
+                .then(|| active.to_owned())
+        });
         let members: HashSet<_> = tabs
             .iter()
             .filter(|(_, delegated)| !delegated)
@@ -131,6 +141,11 @@ impl Layout {
                     return Err(error);
                 }
             }
+        }
+        if let Some(tab) = resolved_canvas {
+            // Lineage can arrive after the first topology. The same selected
+            // tab loses its strip slot, not its visible canvas.
+            self.select(&tab, true, 0)?;
         }
         Ok(*self != before)
     }
@@ -221,5 +236,17 @@ mod tests {
         assert_eq!(restored.shown(), ["w1:t1", "w1:t3"]);
         restored.select("w1:t2", false, 3).unwrap();
         assert_eq!(restored.shown(), ["w1:t1", "w1:t2"]);
+    }
+
+    #[test]
+    fn resolving_the_selected_tabs_delegation_keeps_its_canvas() {
+        let mut layout = Layout::default();
+        layout.reconcile(&tabs(&["w1:t1"])).unwrap();
+        assert_eq!(layout.active(), Some("w1:t1"));
+        layout.reconcile(&[("w1:t1".into(), true)]).unwrap();
+        assert_eq!(layout.active(), Some("w1:t1"));
+        assert_eq!(layout.tree.displays().count(), 0);
+        layout.reconcile(&[("w1:t1".into(), true)]).unwrap();
+        assert_eq!(layout.active(), Some("w1:t1"));
     }
 }

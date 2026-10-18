@@ -41,12 +41,15 @@ use hide_node_link::protocol::Call;
 #[path = "worktree_cleanup.rs"]
 pub(crate) mod cleanup;
 
+#[path = "checkout_start.rs"]
+mod checkout_start;
 #[path = "worktree_control.rs"]
 mod worktree_control;
 pub(crate) use worktree_control::{
     CONFIRM_TIMEOUT, ProcessWait, close_checkout_panes, close_checkout_panes_checked,
     prompt_argument,
 };
+pub(crate) use worktree_control::{CheckoutStart, spawn_targeted_checkout_start};
 pub use worktree_control::{
     CheckoutTabRequest, HomeStartRequest, IssueWriteFailure, PendingAgentStart, PurposeMirror,
     PurposeTaskOutcome, PurposeTaskRequest, TabTarget, TaskAgentOutcome, WorktreeTarget,
@@ -1305,6 +1308,9 @@ fn prepare_close_replacement(
             return Err("replacement inspection timed out".into());
         }
         let layout = export_reopen_layout(connector, key, &tab.tab_id)?;
+        if layout.tab_id != tab.tab_id || layout.workspace_id != tab.workspace_id {
+            return Err("The tab changed during start confirmation. Retry confirmation.".into());
+        }
         if layout_has_reopen_marker(&layout, &marker) {
             if owned.is_some() {
                 return Err("multiple shells carry the same close intent".into());
@@ -1707,7 +1713,7 @@ fn tag_reopen_layout(
             );
             ClosedLayoutNode::Pane {
                 pane_id: pane_id.clone(),
-                label: label.clone(),
+                label: crate::start_claim::public_label(label.as_deref()),
                 cwd: cwd.clone(),
                 command: command.clone(),
                 env,
@@ -1941,6 +1947,7 @@ fn run_herdr_reopen(
             request.codex_daemon,
         ),
         ClosedItem::File { .. } => unreachable!("file reopen uses the filesystem worker"),
+        ClosedItem::Draft { .. } => unreachable!("draft reopen is local"),
     }
 }
 
@@ -2230,7 +2237,7 @@ fn reopen_pane(
             let pane_root = tag_reopen_layout(
                 &ClosedLayoutNode::Pane {
                     pane_id: None,
-                    label: pane.label.clone(),
+                    label: crate::start_claim::public_label(pane.label.as_deref()),
                     cwd: Some(cwd.clone()),
                     command: None,
                     env: Default::default(),
@@ -2287,7 +2294,7 @@ fn reopen_pane(
     } else {
         let root = ClosedLayoutNode::Pane {
             pane_id: None,
-            label: pane.label.clone(),
+            label: crate::start_claim::public_label(pane.label.as_deref()),
             cwd: Some(cwd.clone()),
             command: None,
             env: Default::default(),
@@ -3356,7 +3363,8 @@ fn read_pane_text(
 
 /// Topology reads and opening an SSH stream can wait. Recheck the same
 /// control, file node and admitted intent on both sides of every connection.
-/// The callback reads only current runtime facts, never files or sockets.
+/// The callback checks current runtime facts and, for a saved group start,
+/// its owning node's terminal incarnation outside Runtime's mutex.
 pub(crate) struct CurrentSessionConnector<'a> {
     pub(crate) connector: &'a dyn ApiConnector,
     pub(crate) current: &'a (dyn Fn() -> Result<(), String> + Sync),
@@ -4596,14 +4604,11 @@ mod tests {
             }
             let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let observed_changed = Arc::clone(&changed);
-            // An account whose panes start zsh: the fork's tab gets the
-            // shell integration and its start waits for the prompt's mark.
-            let node = hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(
-                hide_host::shell_integration::UserShell {
-                    shell: Some("/bin/zsh".into()),
-                    ..Default::default()
-                },
-            );
+            // The fork's tab runs this account's integrated shell and
+            // waits for its prompt token, independently of installed shells.
+            let shell = crate::fixture::integrated_shell(home.path());
+            let expected_shell = shell.shell.clone().unwrap();
+            let node = hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(shell);
             let expected_cwd = cwd.display().to_string();
             let tab_source = source.clone();
             let tab_other = other_before.clone();
@@ -4641,7 +4646,7 @@ mod tests {
                         // it runs the node's shell with the integration's
                         // launch.
                         assert_eq!(params["tab_label"], "Tab 2");
-                        assert_eq!(params["root"]["command"][0], "/bin/zsh");
+                        assert_eq!(params["root"]["command"][0], expected_shell);
                         json!({"type":"layout_apply","layout":{"workspace_id":"w1","tab_id":"w1:t2",
                             "zoomed":false,"focused_pane_id":"child-pane",
                             "root":{"type":"pane","pane_id":"child-pane"}}})
@@ -4804,14 +4809,11 @@ mod tests {
             let database = home.path().join(".local/share/opencode/opencode.db");
             let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let observed_changed = Arc::clone(&changed);
-            // An account whose panes start zsh: the fork's tab gets the
-            // shell integration and its start waits for the prompt's mark.
-            let node = hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(
-                hide_host::shell_integration::UserShell {
-                    shell: Some("/bin/zsh".into()),
-                    ..Default::default()
-                },
-            );
+            // The fork's tab runs this account's integrated shell and
+            // waits for its prompt token, independently of installed shells.
+            let shell = crate::fixture::integrated_shell(home.path());
+            let expected_shell = shell.shell.clone().unwrap();
+            let node = hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(shell);
             let expected_cwd = checkout.clone();
             let herdr = FakeHerdr::start_with_errors("opencode-fork-tab", move |method, params| {
                 Ok(match method {
@@ -4838,7 +4840,7 @@ mod tests {
                         assert_eq!(params["focus"], false);
                         // The fork's tab runs the node's shell with the
                         // integration's launch.
-                        assert_eq!(params["root"]["command"][0], "/bin/zsh");
+                        assert_eq!(params["root"]["command"][0], expected_shell);
                         json!({"type":"layout_apply","layout":{"workspace_id":"w1","tab_id":"w1:t2",
                             "zoomed":false,"focused_pane_id":"child-pane",
                             "root":{"type":"pane","pane_id":"child-pane"}}})
@@ -4984,12 +4986,8 @@ mod tests {
             );
             let log = Arc::new(Mutex::new(Vec::new()));
             let node = OpenCodeForking {
-                inner: hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(
-                    hide_host::shell_integration::UserShell {
-                        shell: Some("/bin/zsh".into()),
-                        ..Default::default()
-                    },
-                ),
+                inner: hide_node::Local::new(Some(home.path().to_path_buf()))
+                    .with_shell(crate::fixture::integrated_shell(home.path())),
                 answer: if case == "refused" {
                     Err("opencode_fork_timed_out")
                 } else {
@@ -5123,14 +5121,11 @@ mod tests {
             let before = std::fs::read(&summary).unwrap();
             let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let observed_changed = Arc::clone(&changed);
-            // An account whose panes start zsh: the fork's tab gets the
-            // shell integration and its start waits for the prompt's mark.
-            let node = hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(
-                hide_host::shell_integration::UserShell {
-                    shell: Some("/bin/zsh".into()),
-                    ..Default::default()
-                },
-            );
+            // The fork's tab runs this account's integrated shell and
+            // waits for its prompt token, independently of installed shells.
+            let shell = crate::fixture::integrated_shell(home.path());
+            let expected_shell = shell.shell.clone().unwrap();
+            let node = hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(shell);
             let herdr = FakeHerdr::start_with_errors("grok-fork-tab", move |method, params| {
                 Ok(match method {
                     "session.snapshot" => json!({"type": "session_snapshot", "snapshot": {
@@ -5149,7 +5144,7 @@ mod tests {
                         assert_eq!(params["focus"], false);
                         // The fork's tab runs the node's shell with the
                         // integration's launch.
-                        assert_eq!(params["root"]["command"][0], "/bin/zsh");
+                        assert_eq!(params["root"]["command"][0], expected_shell);
                         json!({"type":"layout_apply","layout":{"workspace_id":"w1","tab_id":"w1:t2",
                             "zoomed":false,"focused_pane_id":"child-pane",
                             "root":{"type":"pane","pane_id":"child-pane"}}})
@@ -5687,6 +5682,7 @@ mod tests {
             tab_label: "Agent one".into(),
             tab_index: 0,
             agent_area: None,
+            agent_group: None,
             replacement_shell: false,
             replacement_in_tab: false,
             tab_name: crate::recent_closed::ClosedTabName::Unnamed,
@@ -5766,6 +5762,7 @@ mod tests {
             tab_label: "Tab".into(),
             tab_index: 0,
             agent_area: None,
+            agent_group: None,
             replacement_shell: false,
             replacement_in_tab: false,
             tab_name: Default::default(),
@@ -5876,6 +5873,7 @@ mod tests {
             tab_label: "tab".into(),
             tab_index: 0,
             agent_area: None,
+            agent_group: None,
             replacement_shell: false,
             replacement_in_tab: false,
             tab_name: Default::default(),
@@ -6009,6 +6007,7 @@ mod tests {
             tab_label: "Tab".into(),
             tab_index: 0,
             agent_area: None,
+            agent_group: None,
             replacement_shell: false,
             replacement_in_tab: false,
             tab_name: Default::default(),
@@ -6126,6 +6125,7 @@ mod tests {
             tab_label: "Tab".into(),
             tab_index: 0,
             agent_area: None,
+            agent_group: None,
             replacement_shell: false,
             replacement_in_tab: false,
             tab_name: Default::default(),

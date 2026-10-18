@@ -261,6 +261,8 @@ pub struct SessionAgentSessionPayload {
 #[derive(Clone, Debug, Deserialize)]
 pub struct SessionPanePayload {
     #[serde(default)]
+    pub start_claim: Option<String>,
+    #[serde(default)]
     pub terminal_id: Option<String>,
     /// Authoritative failed terminal incarnation, independent of agent activity.
     #[serde(default)]
@@ -1030,6 +1032,7 @@ mod tests {
                 panes: panes
                     .iter()
                     .map(|id| PaneSnapshot {
+                        start_claim: None,
                         terminal_id: None,
                         failed_terminal_id: None,
                         id: (*id).to_owned(),

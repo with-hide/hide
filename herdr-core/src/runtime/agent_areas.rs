@@ -10,6 +10,8 @@ use std::borrow::Cow;
 #[derive(Debug, Deserialize)]
 pub(super) struct AgentLayoutPayload {
     workspace: ViewWorkspace,
+    #[serde(default)]
+    group_id: Option<String>,
     #[serde(flatten)]
     action: AgentLayoutAction,
 }
@@ -53,20 +55,28 @@ impl Runtime {
         } else {
             0
         };
+        // Drawn-ahead tabs may already be in this catalog. They occupy their
+        // reserved slot but cannot confirm their own first real appearance.
+        let unconfirmed = self
+            .provisional_tabs
+            .iter()
+            .map(|tab| tab.tab_id.as_str())
+            .collect();
         let Some(store) = self.workspace_views.as_mut() else {
             return Ok(false);
         };
         let admitted = store
             .agent_placements
             .iter()
-            .filter(|(_, (scope, _, _))| scope == key)
+            .filter(|(_, (scope, _, _, _))| scope == key)
             .map(|(id, _)| id.clone())
             .collect();
-        let changed = store
-            .views
-            .entry(&key.0, &key.1)
-            .agent_layout
-            .reconcile_admissions(topology, reserved, &admitted)?;
+        let changed = store.views.entry(&key.0, &key.1).reconcile_agent_groups(
+            topology,
+            reserved,
+            &admitted,
+            &unconfirmed,
+        )?;
         // A tab that left Herdr takes its View bookmark with it (D-11).
         let listed: Vec<&str> = topology.iter().map(|(id, _)| id.as_str()).collect();
         // Not `||`: the prune must run whether or not the layout changed.
@@ -124,7 +134,7 @@ impl Runtime {
                         && tab
                             .id
                             .as_deref()
-                            .is_some_and(|id| layout.tree.display(id).is_none())
+                            .is_some_and(|id| self.agent_tab_waiting_in(&key, id))
                 };
                 let selected_waiting = checkout.tabs.iter().any(|tab| {
                     waiting(tab)
@@ -197,12 +207,11 @@ impl Runtime {
 
     pub(super) fn agent_layout_of(&self, key: &WorkspaceKey) -> Option<&Layout> {
         Some(
-            &self
-                .workspace_views
+            self.workspace_views
                 .as_ref()?
                 .views
                 .get(&key.0, &key.1)?
-                .agent_layout,
+                .selected_agent_layout(),
         )
     }
 
@@ -210,19 +219,24 @@ impl Runtime {
     /// items. The existing worker/close/reopen owners release these claims.
     pub(super) fn admit_agent_tab(&mut self, path: &str) -> bool {
         let key = (self.node.as_str().to_owned(), path.to_owned());
+        self.admit_agent_tab_for_workspace(&key)
+    }
+
+    pub(super) fn admit_agent_tab_for_workspace(&mut self, key: &WorkspaceKey) -> bool {
         let Some(store) = self.workspace_views.as_mut() else {
             return true;
         };
         store.views.entry(&key.0, &key.1);
-        let layout = self.agent_layout_of(&key).expect("entry exists");
-        let placed = layout.tree.display_count();
         let store = self.workspace_views.as_ref().expect("layout exists");
+        let view = store.views.get(&key.0, &key.1).expect("entry exists");
+        let placed = view.agent_tab_count();
         let arriving = store
             .agent_placements
             .iter()
-            .filter(|(id, (scope, _, _))| scope == &key && layout.tree.display(id).is_none())
+            .filter(|(id, (scope, _, _, _))| scope == key && view.agent_tab_group(id).is_none())
             .count();
-        if placed + arriving + self.pending_agent_admissions(path) < Tab::LIMITS.items {
+        let pending = store.agent_admissions.get(key).map_or(0, HashSet::len);
+        if placed + arriving + pending < Tab::LIMITS.items {
             return true;
         }
         self.set_error(
@@ -276,9 +290,11 @@ impl Runtime {
     }
 
     pub(super) fn agent_can_show_created(&self, path: &str, id: &str) -> bool {
-        self.agent_layout_of(&(self.node.as_str().to_owned(), path.to_owned()))
-            .is_none_or(|layout| {
-                layout.tree.display(id).is_some() || layout.tree.display_count() < Tab::LIMITS.items
+        self.workspace_views
+            .as_ref()
+            .and_then(|s| s.views.get(self.node.as_str(), path))
+            .is_none_or(|view| {
+                view.agent_tab_group(id).is_some() || view.agent_tab_count() < Tab::LIMITS.items
             })
     }
 
@@ -315,8 +331,10 @@ impl Runtime {
                     .any(|tab| tab.id.as_deref() == Some(tab_id) && !tab.delegated)
             })
             && self
-                .agent_layout_of(key)
-                .is_some_and(|layout| layout.tree.display(tab_id).is_none())
+                .workspace_views
+                .as_ref()
+                .and_then(|s| s.views.get(&key.0, &key.1))
+                .is_some_and(|view| view.agent_tab_group(tab_id).is_none())
     }
 
     pub(super) fn finish_agent_admission(&mut self, path: &str, id: u64) {
@@ -340,10 +358,20 @@ impl Runtime {
         if !self.area_workspace_is_current(&key, "agent") {
             return true;
         }
-        if !self.arranges_agent_areas(&key.0) || self.workspace_views.is_none() {
+        if self.workspace_views.is_none() {
             self.set_error(
                 "agent_layout.unsupported",
-                "Agent groups are not available on SSH devices",
+                "Agent layouts are not available in this shell",
+                false,
+            );
+            return true;
+        }
+        if matches!(payload.action, AgentLayoutAction::Split { .. })
+            && !self.supports_multiple_agent_areas(&key.0)
+        {
+            self.set_error(
+                "agent_layout.unsupported",
+                "SSH devices support one Agent area per group",
                 false,
             );
             return true;
@@ -358,13 +386,36 @@ impl Runtime {
         {
             return false;
         }
-        let layout = &mut self
+        let view = self
             .workspace_views
             .as_mut()
             .expect("checked")
             .views
-            .entry(&key.0, &key.1)
-            .agent_layout;
+            .entry(&key.0, &key.1);
+        if view.agent_groups.selected != payload.group_id {
+            self.set_error(
+                "agent_layout.stale_group",
+                "The selected group changed. Try again in its current area.",
+                false,
+            );
+            return true;
+        }
+        if let AgentLayoutAction::Move { tab_id, .. } | AgentLayoutAction::Split { tab_id, .. } =
+            &payload.action
+            && view.agent_starts.values().any(|start| {
+                start.is_pending()
+                    && (start.draft_tab_id.as_ref() == Some(tab_id)
+                        || start.live_tab_id.as_ref() == Some(tab_id))
+            })
+        {
+            self.set_error(
+                "agent_layout.start_pending",
+                "This tab is still starting. Check its result before moving it.",
+                false,
+            );
+            return true;
+        }
+        let layout = view.selected_agent_layout_mut();
         let before = layout.clone();
         let stamp = layout.tree.next_stamp(unix_milliseconds());
         let resize = matches!(payload.action, AgentLayoutAction::Resize { .. });
@@ -418,46 +469,122 @@ impl Runtime {
             .retain(|area, _| layout.tree.area(area).is_some());
         let changed = before != *layout;
         let tab = layout.active().map(str::to_owned);
+        let tab = tab.filter(|id| !view.agent_groups.drafts.contains(id));
         if let Some(request) = request {
             self.remember_split_request(&key, request);
         }
         if changed {
             self.persist_workspace_views();
         }
+        if !resize {
+            let prior = self.focused_visible_tab_id();
+            self.supersede_start_navigation();
+            self.show_agent_workspace_tab(&key, tab);
+            if key.0 == self.node.as_str() {
+                self.agent_sleep_visit(prior.as_deref());
+            }
+        }
+        changed
+    }
+
+    /// Every connected device has groups; outbound SSH retains one area.
+    pub(super) fn arranges_agent_areas(&self, device: &str) -> bool {
+        device == self.node.as_str()
+            || self
+                .snapshot
+                .status
+                .remote
+                .iter()
+                .any(|remote| remote.target_id == device)
+    }
+
+    fn supports_multiple_agent_areas(&self, device: &str) -> bool {
+        device == self.node.as_str() || self.link_origin(device) == Some(&LinkOrigin::Inbound)
+    }
+
+    /// Applies the selected group's active canvas without creating a pane.
+    pub(super) fn show_agent_workspace_tab(&mut self, key: &WorkspaceKey, live: Option<String>) {
+        if !self.choose_agent_workspace(key) {
+            return;
+        }
         if key.0 != self.node.as_str() {
-            // A node's Herdr shows the tab its keyboard is on, so the active
-            // area's tab is asked of it; the areas beside it attach now.
-            if !resize && let Some(tab_id) = tab {
-                self.focus_node_tab(&key.0, tab_id, stamp);
+            if let Some(tab) = live {
+                self.focus_node_tab(&key.0, tab, unix_milliseconds());
             }
             self.reconcile_remote_terminal_selection();
-            return changed;
+            return;
         }
-        if !resize
-            && let Some(tab_id) = tab
-            && let Some((workspace_id, checkout_id)) = self
-                .front_checkout()
-                .map(|(w, c)| (w.to_owned(), c.to_owned()))
-        {
-            let prior = self.focused_visible_tab_id();
+        let Some((workspace_id, checkout_id)) = self.agent_workspace_ids(key) else {
+            return;
+        };
+        if let Some(tab_id) = live {
             self.apply(Event::FocusTab(FocusTabPayload {
                 workspace_id,
                 checkout_id,
                 tab_id,
                 focus_device: false,
             }));
-            self.agent_sleep_visit(prior.as_deref());
+        } else {
+            self.clear_agent_workspace_pane(&checkout_id);
         }
-        changed
     }
 
-    /// Whether `device`'s Workspaces arrange their tabs in Agent areas: this
-    /// machine's, and a node that dialed in, whose Workspaces the core
-    /// arranged as its own before the core moved off that machine (PRD
-    /// core-host-node-move D-29). A device this core dials shows the one tab
-    /// its Herdr has in front.
-    pub(super) fn arranges_agent_areas(&self, device: &str) -> bool {
-        device == self.node.as_str() || self.link_origin(device) == Some(&LinkOrigin::Inbound)
+    /// Clears a local checkout's previous canvas without forwarding devices
+    /// or issuing Herdr focus; a result follows with its ordered pane focus.
+    pub(super) fn clear_agent_workspace_pane(&mut self, checkout_id: &str) {
+        self.visible_tab_ids.remove(checkout_id);
+        if let Some(checkout) = self
+            .snapshot
+            .navigator
+            .workspaces
+            .iter_mut()
+            .flat_map(|workspace| &mut workspace.checkouts)
+            .find(|checkout| checkout.id == checkout_id)
+        {
+            checkout.active_tab_id = None;
+        }
+        self.select_terminal_pane(None);
+        self.operator_focused_pane_id = None;
+    }
+
+    /// An explicit real-agent navigation reveals its owning group. Session
+    /// topology never calls this, so it cannot overwrite a draft selection.
+    pub(super) fn reveal_remote_agent_tab(
+        &mut self,
+        key: &WorkspaceKey,
+        tab_id: &str,
+        delegated: bool,
+    ) {
+        let group = if delegated {
+            let Some(group) = self.delegated_group_owner(key, tab_id) else {
+                return;
+            };
+            group
+        } else {
+            self.workspace_views
+                .as_ref()
+                .and_then(|store| store.views.get(&key.0, &key.1))
+                .and_then(|view| view.agent_tab_group(tab_id).flatten().map(str::to_owned))
+        };
+        if let Some(store) = self.workspace_views.as_mut() {
+            let view = store.views.entry(&key.0, &key.1);
+            let previous_group = view.agent_groups.selected.clone();
+            view.agent_groups.selected = group;
+            let layout = view.selected_agent_layout_mut();
+            let stamp = layout.tree.next_stamp(unix_milliseconds());
+            if let Err(error) = layout.select(tab_id, delegated, stamp) {
+                view.agent_groups.selected = previous_group;
+                self.push_diagnostic(
+                    "agent_layout.selection_unavailable",
+                    format!("Could not select remote tab {tab_id}: {error:?}"),
+                );
+                return;
+            }
+            store.remote_front.insert(key.0.clone(), key.1.clone());
+            self.mark_workspace_chosen(key);
+            self.persist_workspace_views();
+            self.reconcile_remote_terminal_selection();
+        }
     }
 
     /// Asks a node's Herdr to bring `tab_id` forward, unless it already has.
@@ -528,9 +655,9 @@ impl Runtime {
     /// The tabs a node's front Workspace shows in its Agent areas, whose
     /// panes attach as the tab its Herdr has in front does; none while
     /// another machine is in front.
-    pub(super) fn node_shown_agent_tabs(&self, device: &str) -> Vec<String> {
+    pub(super) fn node_shown_agent_tabs(&self, device: &str) -> Option<Vec<String>> {
         if device == self.node.as_str() || !self.arranges_agent_areas(device) {
-            return Vec::new();
+            return None;
         }
         self.front_workspace_key()
             .filter(|key| key.0 == device)
@@ -538,7 +665,6 @@ impl Runtime {
                 self.agent_layout_of(&key)
                     .map(|layout| self.shown_agent_layout(&key, layout).shown())
             })
-            .unwrap_or_default()
     }
 
     /// Takes a node's tabs as they stand into its Workspaces' Agent areas,
@@ -603,22 +729,45 @@ impl Runtime {
         else {
             return;
         };
+        if key.0 != self.node.as_str()
+            && self
+                .workspace_views
+                .as_ref()
+                .is_some_and(|store| store.remote_front.contains_key(&key.0))
+        {
+            return;
+        }
         let Some((tab_id, delegated)) = self.front_visible_tab(&key) else {
             return;
         };
-        let Some(layout) = self.agent_layout_of(&key) else {
+        let Some(view) = self
+            .workspace_views
+            .as_ref()
+            .and_then(|s| s.views.get(&key.0, &key.1))
+        else {
             return;
         };
-        if layout.active() == Some(&tab_id) {
+        let group = if delegated {
+            let Some(group) = self.delegated_group_owner(&key, &tab_id) else {
+                return;
+            };
+            group
+        } else {
+            view.agent_tab_group(&tab_id).flatten().map(str::to_owned)
+        };
+        if view.selected_agent_layout().active() == Some(&tab_id)
+            && view.agent_groups.selected == group
+        {
             return;
         }
-        let layout = &mut self
+        let view = self
             .workspace_views
             .as_mut()
             .expect("layout exists")
             .views
-            .entry(&key.0, &key.1)
-            .agent_layout;
+            .entry(&key.0, &key.1);
+        view.agent_groups.selected = group;
+        let layout = view.selected_agent_layout_mut();
         if let Err(error) = layout.select(
             &tab_id,
             delegated,
@@ -636,6 +785,116 @@ impl Runtime {
         }
     }
 
+    // An unresolved lineage is different from a root placed in Ungrouped.
+    // A partial catalog cannot invalidate a durable delegated canvas.
+    fn delegated_group_owner(&self, key: &WorkspaceKey, id: &str) -> Option<Option<String>> {
+        let checkout = self
+            .catalog_workspaces()
+            .filter(|w| w.device_id == key.0)
+            .flat_map(|w| &w.checkouts)
+            .find(|c| c.path == key.1)?;
+        let tab = checkout.tabs.iter().find(|t| t.id.as_deref() == Some(id))?;
+        let agents = if key.0 == self.node.as_str() {
+            &self.snapshot.navigator.agents
+        } else {
+            &self
+                .snapshot
+                .status
+                .remote
+                .iter()
+                .find(|r| r.target_id == key.0)?
+                .session
+                .as_ref()?
+                .agents
+        };
+        let root = agents
+            .iter()
+            .filter(|a| tab.panes.iter().any(|p| p.id == a.pane_id))
+            .find_map(|a| a.lineage_path_pane_ids.first())?;
+        let Some(root_tab) = checkout
+            .tabs
+            .iter()
+            .find(|t| t.panes.iter().any(|p| &p.id == root))
+        else {
+            // A known root outside this checkout cannot own one of its groups.
+            // Missing same-device topology still leaves ownership unresolved.
+            let outside = self.catalog_workspaces().any(|workspace| {
+                workspace.checkouts.iter().any(|checkout| {
+                    checkout
+                        .tabs
+                        .iter()
+                        .any(|tab| tab.panes.iter().any(|pane| &pane.id == root))
+                })
+            }) || (key.0 != self.node.as_str()
+                && self
+                    .snapshot
+                    .navigator
+                    .agents
+                    .iter()
+                    .any(|agent| &agent.pane_id == root))
+                || self.snapshot.status.remote.iter().any(|remote| {
+                    remote.target_id != key.0
+                        && remote.session.as_ref().is_some_and(|session| {
+                            session.agents.iter().any(|agent| &agent.pane_id == root)
+                        })
+                });
+            return outside.then_some(None);
+        };
+        let root_tab = root_tab.id.as_deref()?;
+        self.workspace_views
+            .as_ref()?
+            .views
+            .get(&key.0, &key.1)?
+            .agent_tab_group(root_tab)
+            .map(|group| group.map(str::to_owned))
+    }
+
+    /// Root membership changes invalidate only canvases belonging to that
+    /// root. The delegated tab stays alive and explicit navigation reveals it
+    /// in its root's new group; the move itself keeps showing the moved root.
+    pub(super) fn prune_agent_group_canvases(&mut self, key: &WorkspaceKey) -> bool {
+        let Some(view) = self
+            .workspace_views
+            .as_ref()
+            .and_then(|store| store.views.get(&key.0, &key.1))
+        else {
+            return false;
+        };
+        let misplaced: Vec<_> = std::iter::once((None, &view.agent_layout))
+            .chain(
+                view.agent_groups
+                    .items
+                    .iter()
+                    .map(|group| (Some(group.id.as_str()), &group.layout)),
+            )
+            .flat_map(|(group, layout)| {
+                layout
+                    .canvases
+                    .iter()
+                    .map(move |(area, tab)| (group, area, tab))
+            })
+            .filter(|(group, _, tab)| {
+                self.delegated_group_owner(key, tab)
+                    .is_some_and(|owner| owner.as_deref() != *group)
+            })
+            .map(|(group, area, _)| (group.map(str::to_owned), area.clone()))
+            .collect();
+        let changed = !misplaced.is_empty();
+        let view = self
+            .workspace_views
+            .as_mut()
+            .expect("view exists")
+            .views
+            .get_mut(&key.0, &key.1)
+            .expect("view exists");
+        for (group, area) in misplaced {
+            if let Some(layout) = view.group_layout_mut(group.as_deref()) {
+                layout.canvases.remove(&area);
+            }
+        }
+        changed
+    }
+
     pub(super) fn shown_agent_tabs(&self) -> Vec<String> {
         if let Some(key) = self
             .front_workspace_key()
@@ -643,9 +902,14 @@ impl Runtime {
             && let Some(layout) = self.agent_layout_of(&key)
         {
             let shown = self.shown_agent_layout(&key, layout).shown();
-            if !shown.is_empty() {
-                return shown;
-            }
+            let view = self
+                .workspace_views
+                .as_ref()
+                .and_then(|s| s.views.get(&key.0, &key.1));
+            return shown
+                .into_iter()
+                .filter(|id| view.is_none_or(|v| !v.agent_groups.drafts.contains(id)))
+                .collect();
         }
         self.focused_visible_tab_id().into_iter().collect()
     }
@@ -693,14 +957,58 @@ impl Runtime {
         layout: &Layout,
     ) -> crate::model::AgentLayoutSnapshot {
         let layout = self.shown_agent_layout(key, layout);
+        let view = self
+            .workspace_views
+            .as_ref()
+            .and_then(|s| s.views.get(&key.0, &key.1));
+        let groups = view
+            .map(|view| {
+                std::iter::once(crate::model::AgentGroupSnapshot {
+                    id: None,
+                    name: None,
+                    tabs: view
+                        .agent_layout
+                        .tree
+                        .displays()
+                        .map(|t| t.id.clone())
+                        .collect(),
+                })
+                .chain(
+                    view.agent_groups
+                        .items
+                        .iter()
+                        .map(|g| crate::model::AgentGroupSnapshot {
+                            id: Some(g.id.clone()),
+                            name: Some(g.name.clone()),
+                            tabs: g.layout.tree.displays().map(|t| t.id.clone()).collect(),
+                        }),
+                )
+                .collect()
+            })
+            .unwrap_or_default();
         crate::model::AgentLayoutSnapshot {
+            group_id: view.and_then(|v| v.agent_groups.selected.clone()),
+            groups,
+            drafts: view
+                .map(|v| v.agent_groups.drafts.iter().cloned().collect())
+                .unwrap_or_default(),
+            start_receipts: view.map(super::group_starts::receipts).unwrap_or_default(),
+            can_undo_group: view.is_some_and(|v| v.can_undo_agent_group()),
             waiting: layout.waiting,
             root: layout.tree.root.clone(),
             active_area: layout.tree.active_area.clone(),
             canvases: layout.canvases.clone(),
             limits: crate::model::ViewLimitsSnapshot {
-                areas: Tab::LIMITS.areas,
-                depth: Tab::LIMITS.depth,
+                areas: if self.supports_multiple_agent_areas(&key.0) {
+                    Tab::LIMITS.areas
+                } else {
+                    1
+                },
+                depth: if self.supports_multiple_agent_areas(&key.0) {
+                    Tab::LIMITS.depth
+                } else {
+                    1
+                },
                 displays: Tab::LIMITS.items,
             },
             display_count: layout.tree.display_count(),

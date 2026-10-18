@@ -7,6 +7,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 mod agent_areas;
 pub(crate) mod agent_choice;
 mod agent_close;
+mod agent_groups;
 mod agent_sleep;
 mod agents;
 mod attachments;
@@ -27,6 +28,7 @@ mod events;
 mod factory;
 mod first_run;
 mod github_poll;
+pub(crate) mod group_starts;
 mod guardrails;
 mod home;
 mod hosts;
@@ -79,6 +81,7 @@ pub(crate) use kit::{DeviceKitAnswer, DeviceKitCall, DeviceKitWork, KitJob};
 pub use snapshot_delta::serialize_snapshot_delta;
 
 use agent_areas::AgentLayoutPayload;
+use agent_groups::AgentGroupPayload;
 use agent_sleep::{AgentSleepSetPayload, AgentWakePayload, SleepingSessionPayload};
 use control_lane::ControlLane;
 pub(crate) use control_lane::LaneStart;
@@ -994,12 +997,12 @@ fn remote_pane_source_id<'a>(target_id: &str, projected_id: &'a str) -> Option<&
 }
 
 /// Every pane `session` lists, and the panes on screen: while its machine
-/// is in front, the tab its Herdr has in front and `shown_tabs`, the tabs the
-/// Workspace's other Agent areas show.
+/// is in front, exactly the tabs its selected group shows. Without a core
+/// layout, the legacy Herdr-focused tab supplies the initial canvas.
 fn remote_terminal_pane_sets(
     session: &RemoteSessionSnapshot,
     target_is_active: bool,
-    shown_tabs: &[String],
+    shown_tabs: Option<&[String]>,
 ) -> (HashSet<String>, HashSet<String>) {
     let live_pane_ids = session
         .workspaces
@@ -1026,7 +1029,9 @@ fn remote_terminal_pane_sets(
         .flat_map(|checkout| checkout.tabs.iter())
         .filter(|tab| {
             tab.id.as_deref().is_some_and(|id| {
-                Some(id) == active_tab_id || shown_tabs.iter().any(|shown| shown == id)
+                shown_tabs.map_or(Some(id) == active_tab_id, |shown| {
+                    shown.iter().any(|tab| tab == id)
+                })
             })
         })
         .flat_map(|tab| tab.panes.iter())
@@ -1574,7 +1579,6 @@ pub struct Runtime {
     /// The tabs Herdr most recently reported active in their own workspaces.
     /// A pane layout remembers a focused pane even while its tab is hidden,
     /// so the layout alone cannot confirm a pane-focus request.
-    herdr_active_tab_ids: BTreeSet<String>,
     /// First moment each currently-unseen pane became unseen. Memory only by
     /// decision (D-21): after a restart snapshot order decides instead.
     pet_unseen_observed: std::collections::BTreeMap<String, u64>,
@@ -1645,6 +1649,9 @@ pub struct Runtime {
     /// id. Kept off the snapshot: an issue body or a request has no business
     /// on the wire after the surface that sent it.
     task_agent_launch: Option<TaskAgentLaunch>,
+    group_start: Option<group_starts::ActiveStart>,
+    task_start_focus: Option<group_starts::TaskStartFocus>,
+    group_start_saves: Vec<group_starts::SaveWaiter>,
     /// How the pane a task created says its shell has finished starting,
     /// by task id, for that task's agent start.
     task_pane_shell: Option<(u64, crate::agent_start::ShellStart)>,
@@ -2244,7 +2251,6 @@ impl Runtime {
             control_lane: ControlLane::default(),
             last_view_intent_serial: 0,
             next_pane_focus_serial: 0,
-            herdr_active_tab_ids: BTreeSet::new(),
             pet_unseen_observed: std::collections::BTreeMap::new(),
             restore_hint_pending: true,
             last_session_spaces: Vec::new(),
@@ -2273,6 +2279,9 @@ impl Runtime {
             github_search: issues::GithubSearchWork::default(),
             pr_link_checkout: None,
             task_agent_launch: None,
+            group_start: None,
+            task_start_focus: None,
+            group_start_saves: Vec::new(),
             task_pane_shell: None,
             home_links: HashMap::new(),
             last_accepted_catalog: None,
@@ -2435,6 +2444,9 @@ impl Runtime {
 
     pub fn set_live(&mut self, context: LiveContext) {
         self.live_generation = self.live_generation.saturating_add(1);
+        for request in &mut self.tab_focus_requests {
+            request.pane_focus_confirmed = false;
+        }
         self.live = Some(context);
         // A sleeping session can wake only over a connection.
         self.refresh_dormant_rows();
@@ -2634,6 +2646,9 @@ impl Runtime {
         if supersedes_memory && self.snapshot.status.last_error.is_none() {
             self.supersede_memory_navigation();
         }
+        if (chooses_workspace || supersedes_memory) && self.snapshot.status.last_error.is_none() {
+            self.supersede_start_navigation();
+        }
         // A committed visit to another tab wakes what sleeps there (PRD
         // agent-sleep B12); a refused one moved nothing.
         if chooses_workspace && self.snapshot.status.last_error.is_none() {
@@ -2708,11 +2723,27 @@ fn project_layout_panes(
                 .unwrap_or_else(|| fallback_cwd.to_owned());
             let ports = crate::ports::attributed_ports(&cwd, listening_ports);
             PaneSnapshot {
+                start_claim: source.and_then(|source| {
+                    source
+                        .start_claim
+                        .as_deref()
+                        .filter(|label| crate::start_claim::is_reserved(label))
+                        .or_else(|| {
+                            source
+                                .label
+                                .as_deref()
+                                .filter(|label| crate::start_claim::is_reserved(label))
+                        })
+                        .map(str::to_owned)
+                }),
                 terminal_id: source.and_then(|source| source.terminal_id.clone()),
                 failed_terminal_id: source.and_then(|source| source.failed_terminal_id.clone()),
                 id: pane.pane_id.clone(),
-                herdr_label: source.and_then(|source| source.label.clone()),
-                terminal_title: source.and_then(|source| source.terminal_title.clone()),
+                herdr_label: source
+                    .and_then(|source| crate::start_claim::public_label(source.label.as_deref())),
+                terminal_title: source.and_then(|source| {
+                    crate::start_claim::public_label(source.terminal_title.as_deref())
+                }),
                 cwd: cwd.clone(),
                 // This projection cannot see the read record ledger, so both
                 // read-dependent values are refilled from the navigator's

@@ -5,6 +5,9 @@
 
 import type { SnapshotRest } from "./snapshot";
 
+/** The core's bound for a start, including the first catalog of its checkout. */
+export const START_ANSWER_TIMEOUT_MS = 90_000;
+
 export type StartAnswer =
   | { phase: "pending" }
   /** The core refused the request before any work: the reason is the operator's to act on. */

@@ -133,6 +133,7 @@ fn with_second_pane(mut payload: SessionSnapshotPayload, tab_id: &str) -> Sessio
         .expect("the tab's pane")
         .clone();
     payload.panes.push(crate::sidebar::SessionPanePayload {
+        start_claim: None,
         terminal_id: None,
         failed_terminal_id: None,
         pane_id: second.clone(),

@@ -3,7 +3,11 @@ import { adjacentInOrder, areaSentence, locateDisplay, moveLabel, neighbourArea,
 import type { MenuEntry } from "./components/entry-menu";
 
 export type AgentItem = { id: string };
-export type AgentLayout = AreaLayout<AgentItem> & { waiting?: number; canvases: Record<string, string> };
+export type AgentGroup = { id: string | null; name: string | null; tabs: string[] };
+export type AgentStartReceipt = { request_id: string; group_id: string | null; area_id: string; draft_tab_id: string | null; live_tab_id: string | null; pane_id: string | null; add_pane: boolean; state: "pending" | "failed" | "ready"; agent_kind: string | null; agent_phase: string | null };
+export type CheckoutAgentGroups = { selected: string | null; groups: AgentGroup[]; drafts: string[]; start_receipts?: AgentStartReceipt[] };
+export type AgentStartTarget = { group_id: string | null; area_id: string; tab_id: string | null; add_pane: boolean };
+export type AgentLayout = AreaLayout<AgentItem> & { waiting?: number; canvases: Record<string, string>; group_id?: string | null; groups?: AgentGroup[]; drafts?: string[]; can_undo_group?: boolean; start_receipts?: AgentStartReceipt[] };
 export const AGENT_WORDS: AreaWords = { kind: "agent" };
 export const remoteGroupReason = () => translate("panes.agent.remoteGroupReason");
 const EDGES: Edge[] = ["right", "left", "up", "down"];

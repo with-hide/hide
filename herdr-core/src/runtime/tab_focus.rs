@@ -52,6 +52,9 @@ pub(super) struct TabFocusRequest {
     /// The pane focus that moves Herdr to this tab; `None` for a tab focus
     /// or a creation.
     pub(super) pane_control_serial: Option<u64>,
+    /// A successful pane control on this connection, while its stream move
+    /// is still outstanding. Unknown answers never confirm a retry.
+    pub(super) pane_focus_confirmed: bool,
     /// When it left, or for a pane focus when Herdr answered it.
     pub(super) requested_at_unix_ms: u64,
 }
@@ -126,6 +129,7 @@ impl Runtime {
             tab_id,
             herdr_before,
             pane_control_serial: serial,
+            pane_focus_confirmed: false,
             requested_at_unix_ms: unix_milliseconds(),
         });
         if self.tab_focus_requests.len() > TAB_FOCUS_LIMIT {
@@ -188,8 +192,19 @@ impl Runtime {
             return;
         };
         if !self.settle_where_herdr_already_was(index) {
+            self.tab_focus_requests[index].pane_focus_confirmed = true;
             self.tab_focus_requests[index].requested_at_unix_ms = unix_milliseconds();
         }
+    }
+
+    /// An answered pane focus need not be resent while its tab move is still
+    /// on the stream. This is control evidence, not the stream's baseline.
+    pub(super) fn pane_focus_tab_confirmed(&self, tab_id: &str) -> bool {
+        self.queued_tab_ask().is_none()
+            && self
+                .tab_focus_requests
+                .last()
+                .is_some_and(|request| request.pane_focus_confirmed && request.tab_id == tab_id)
     }
 
     /// Herdr refused the tab focus for `tab_id`, or its answer was lost.

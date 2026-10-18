@@ -7,7 +7,7 @@
 
 import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
-import { startHerdr } from "./herdr-fixture";
+import { herdrHasFocus, startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot } from "./wire";
 import { chord } from "./chords";
@@ -85,9 +85,13 @@ test("⌘K Start an agent… starts an agent in the checkout in front with the c
     expect(String(last.get("agent_start_in_checkout")?.request_id)).toMatch(/^start-[A-Za-z0-9_-]+$/);
 
     // B24: the center went to the new pane, which runs the agent with the model and got the prompt.
-    await expect.poll(() => String(last.get("focus_pane")?.pane_id ?? ""), { timeout: 30_000 }).not.toBe("");
-    const pane = String(last.get("focus_pane")?.pane_id);
+    let pane = "";
+    await expect.poll(async () => {
+      pane = await page.locator('[data-pane-view][data-focused="true"]').getAttribute("data-pane-view") ?? "";
+      return pane !== "" && !known.has(pane);
+    }, { timeout: 30_000 }).toBe(true);
     expect(known.has(pane)).toBe(false);
+    await expect.poll(() => herdrHasFocus(herdr, pane)).toBe(true);
     await expect
       .poll(
         () => {

@@ -241,8 +241,8 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     await rest(page);
     expect(await rowGeometry(primaryRow, feature, primaryParts)).toEqual(atRest);
 
-    // An agentless checkout uses the same single-line height as Overview;
-    // opening it sends no disclosure intent and leaves the fold slot empty.
+    // An unvisited agentless checkout uses the same single-line row height.
+    // Opening it exposes its empty Ungrouped collection (group-tabs B12).
     await project.locator("[data-empty-worktrees]").click();
     const emptyRow = project.locator("[data-checkout-row]").filter({ has: page.locator('[data-checkout][aria-label^="empty"]') });
     const emptyButton = emptyRow.locator("[data-checkout]");
@@ -250,7 +250,11 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     expect((await emptyButton.boundingBox())!.height).toBe(await emptyButton.evaluate((node) => parseFloat(getComputedStyle(node).getPropertyValue("--size-checkout-row"))));
     await emptyButton.click();
     await expect(emptyButton).toHaveAttribute("aria-current", "true");
-    expect(last.get("focus_checkout")?.expanded).toBeUndefined();
+    const emptyId = await emptyButton.getAttribute("data-checkout");
+    await expect.poll(() => last.get("focus_checkout")?.checkout_id).toBe(emptyId);
+    await expect(emptyRow.locator("[data-checkout-toggle]")).toHaveAttribute("aria-expanded", "true");
+    await expect(emptyRow.locator("[data-checkout-agents-open]").getByRole("button", { name: "Ungrouped", exact: true })).toBeVisible();
+    await expect(emptyRow.locator("[data-pane]")).toHaveCount(0);
 
     // The chevron opens the agent rows below the row: their own marks stand
     // for the checkout's badge, which goes, and the row becomes one line with
@@ -264,8 +268,10 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     await expect(feature.locator("[data-checkout-age]")).toBeVisible();
     // Indent D (sidebar-quiet-mark-indent B10-B12): a project with checkouts
     // draws no glyph, so its name and its checkouts' glyphs share one column;
-    // a checkout's name and its agents' marks share the next, and a title
-    // follows its mark by the mark and one gap.
+    // a checkout's name starts the next. Group tabs B12/D-02 adds a visible
+    // collection level: its tab/agent rows use the approved 12px group inset.
+    // A title still follows its mark by the mark and one gap.
+    await expect(feature.locator('[data-sidebar-named-group="ungrouped"]')).toBeVisible();
     await expect(project.locator("[data-project-row] svg")).toHaveCount(0);
     const left = async (part: Locator) => (await part.boundingBox())!.x;
     const projectName = await left(project.locator("[data-project-row] [data-row-name]"));
@@ -273,7 +279,7 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     const checkoutName = await left(feature.locator("[data-checkout-menu] [data-row-name]"));
     const agentMark = await left(feature.locator(`[data-pane="${rowsPane}"] [data-agent-status-mark]`));
     const agentTitle = await left(feature.locator(`[data-pane="${rowsPane}"] [data-agent-title]`));
-    expect([checkoutGlyph - projectName, checkoutName - checkoutGlyph, agentMark - checkoutName, agentTitle - agentMark]).toEqual([0, 18, 0, 16]);
+    expect([checkoutGlyph - projectName, checkoutName - checkoutGlyph, agentMark - checkoutName, agentTitle - agentMark]).toEqual([0, 18, 12, 16]);
     expect((await featureButton.boundingBox())!.height).toBe(await featureButton.evaluate((node) => parseFloat(getComputedStyle(node).getPropertyValue("--size-checkout-row"))));
     await screenshot(page, "projects-sidebar-open");
 

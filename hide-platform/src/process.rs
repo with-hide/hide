@@ -52,6 +52,69 @@ const MAX_DEPTH: usize = 32;
 /// A caller's smaller limit remains binding (hooks use 64 KiB).
 pub const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
 
+/// Replaces this process with exactly `shell`, passing `-<basename>` as its
+/// sole argument (`argv[0]`), the Unix login-shell convention. The caller
+/// invokes this at its entry point, before starting threads or daemon roles.
+/// Stdio, environment, working directory, PID and kernel start time survive;
+/// no child, waiter or owner service is created. Success never returns.
+///
+/// Use `execv`, not `CommandExt::exec`: Rust's latter calls `execvp`, whose
+/// ENOEXEC handling can interpret invalid executable text through `/bin/sh`.
+/// Here only the kernel interprets the exact absolute executable supplied;
+/// an invalid format, missing file or permission error is returned unchanged,
+/// with no PATH search or fallback. Non-Unix systems return Unsupported.
+pub fn exec_login_shell(shell: &Path) -> io::Result<std::convert::Infallible> {
+    #[cfg(unix)]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        if !shell.is_absolute() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "shell path must be absolute",
+            ));
+        }
+        let basename = shell.file_name().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "shell path must name an executable",
+            )
+        })?;
+        let executable = CString::new(shell.as_os_str().as_bytes()).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "shell path contains a NUL byte",
+            )
+        })?;
+        let mut login_name = Vec::with_capacity(basename.len() + 1);
+        login_name.push(b'-');
+        login_name.extend_from_slice(basename.as_bytes());
+        let login_name = CString::new(login_name).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "shell name contains a NUL byte",
+            )
+        })?;
+        let arguments = [login_name.as_ptr(), std::ptr::null()];
+        // SAFETY: both C strings live through this call, argv is terminated
+        // by a null pointer, and no environment or inherited descriptor is
+        // modified. execv returns only on failure, with errno describing it.
+        unsafe {
+            libc::execv(executable.as_ptr(), arguments.as_ptr());
+        }
+        Err(io::Error::last_os_error())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = shell;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "login-shell process replacement requires Unix",
+        ))
+    }
+}
+
 /// Runtime-injected launch metadata, never an operator setting: optional for
 /// standalone commands, required by a guarded Unix launch. The value names
 /// one inherited stream-socket descriptor >= 3; malformed values fail before

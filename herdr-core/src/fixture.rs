@@ -2,6 +2,31 @@ use serde::{Deserialize, Serialize};
 
 pub const FIXTURE_PREFIX: &str = "hide-verify-";
 
+/// An account shell for FakeHerdr journeys. Unix owns an executable file;
+/// Windows uses Herdr's PowerShell recipe. The peer never runs the shell.
+#[cfg(test)]
+pub(crate) fn integrated_shell(home: &std::path::Path) -> hide_host::shell_integration::UserShell {
+    #[cfg(unix)]
+    let shell = {
+        use std::os::unix::fs::PermissionsExt;
+
+        let shell = home.join("bin/zsh");
+        std::fs::create_dir_all(shell.parent().unwrap()).unwrap();
+        std::fs::write(&shell, "#!/bin/sh\nexit 97\n").unwrap();
+        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o700)).unwrap();
+        shell.to_str().unwrap().to_owned()
+    };
+    #[cfg(windows)]
+    let shell = {
+        let _ = home;
+        "powershell.exe".to_owned()
+    };
+    hide_host::shell_integration::UserShell {
+        shell: Some(shell),
+        ..Default::default()
+    }
+}
+
 /// Synthetic fixtures live below the canonical OS temp directory. These
 /// bucket spellings come from Pi 1.0.4 and omp 18.7.0, independently of the
 /// product's locator, so a wrong locator cannot move the expected fixture.

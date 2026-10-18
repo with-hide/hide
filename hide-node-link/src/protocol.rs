@@ -194,7 +194,10 @@ use crate::error::HostError;
 /// 48: side-channel pane input waits for the node's creation holder and
 /// gets a permission result before writing through Herdr, without attaching.
 /// Older terminal helpers cannot grant this permission and are replaced.
-pub const PROTOCOL_VERSION: u32 = 48;
+/// 49: the owning node's shell recipe declares Integrated or Plain readiness.
+/// Older helpers cannot preserve ordinary shell starts and their readiness;
+/// Hello refuses them until the existing helper replacement upgrades them.
+pub const PROTOCOL_VERSION: u32 = 49;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -228,12 +231,23 @@ pub const OPENCODE_FORK_TIME: std::time::Duration = std::time::Duration::from_se
 
 const _: () = assert!(OPENCODE_FORK_TIME.as_secs() + 10 <= OPENCODE_FORK_TIMEOUT.as_secs());
 
-/// How a pane's shell is started so that it marks its first prompt
-/// ([`Call::ShellIntegration`]): the command the pane runs, the shell and
-/// its integration arguments, and the environment it is given.
+/// What confirms readiness of the owning node's shell recipe.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShellReadiness {
+    /// The recipe reports Hide's first-prompt token.
+    #[default]
+    Integrated,
+    /// No prompt token is coming; use the existing foreground-shell policy.
+    Plain,
+}
+
+/// The owning node's exact shell command, environment and readiness policy
+/// ([`Call::ShellIntegration`]), independent of the core machine's shell.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShellLaunch {
     pub command: Vec<String>,
+    pub readiness: ShellReadiness,
     #[serde(default)]
     pub env: std::collections::BTreeMap<String, String>,
 }
@@ -640,11 +654,10 @@ pub enum Call {
         path: String,
         trusted: bool,
     },
-    /// Writes Hide's shell integration under the node's home once and
-    /// answers how a pane Hide makes for an agent starts the account's
-    /// shell so it marks its first prompt (`hide_host::shell_integration`),
-    /// a [`ShellLaunch`], or `null` for a shell the integration does not
-    /// reach.
+    /// Answers the account's exact normal shell recipe and readiness policy.
+    /// Tries Hide's first-prompt integration, otherwise preserves the same
+    /// account shell with Plain readiness. Missing authoritative launch facts
+    /// are an error, never a substitute shell (`hide_host::shell_integration`).
     ShellIntegration,
     /// The start time and program of each pid, in order
     /// (`process::ProcessStart`).

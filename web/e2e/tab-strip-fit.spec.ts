@@ -148,8 +148,13 @@ test("Selecting an Agent tab moves the title width to it, and the selected tab s
   const { tabs, stop } = await startStrip(page, 16);
   try {
     // Selecting another tab moves the title width to it in the same frame.
-    // The tool rail takes its width from the strip's room (PRD right-lane B1).
-    expect((await check(page, 1500 + 48)).stage).toBe("others-compact");
+    // Reserve room for the visible group and area controls, then place the
+    // others halfway through the independent compact-width interval.
+    const initial = await strip(page);
+    const compactOther = (ICON + CONTROL + TITLE_MIN) / 2;
+    const room = TITLE_MIN + (initial.tabs.length - 1) * compactOther;
+    const width = page.viewportSize()!.width + room - initial.room;
+    expect((await check(page, width)).stage).toBe("others-compact");
     const before = await strip(page);
     expect(before.tabs.filter((tab) => !tab.selected).every((tab) => tab.width < TITLE_MIN)).toBe(true);
     const target = before.tabs.findIndex((tab) => !tab.selected);
@@ -216,13 +221,15 @@ test("File View tabs use the same shrinking strip and transfer the longest title
       await expect(page.locator("[data-view-tab-bar]")).toBeVisible();
       expect((await page.locator("[data-sidebar-box]").boundingBox())!.width).toBe(sidebarWidth);
       // A divider release commits once through the core; observe that final
-      // geometry rather than sampling the optimistic drag's guide frame.
+      // geometry and its reveal together, rather than mixing resize frames.
+      let drawn = await strip(page, "view");
       await expect.poll(async () => {
-        const drawn = await strip(page, "view");
+        drawn = await strip(page, "view");
         const want = expected(drawn.room, names.length);
-        return drawn.tabs.every((tab) => Math.abs(tab.width - (tab.selected ? want.selected[0] : want.others[0])) < 0.5);
+        return drawn.tabs.every((tab) => Math.abs(tab.width - (tab.selected ? want.selected[0] : want.others[0])) < 0.5)
+          && drawn.scrolls === (want.selected[0] + (names.length - 1) * want.others[0] > drawn.room + 0.01)
+          && drawn.selectedInView;
       }).toBe(true);
-      const drawn = await strip(page, "view");
       const want = expected(drawn.room, names.length);
       for (const tab of drawn.tabs) {
         const fit = tab.selected ? want.selected : want.others;

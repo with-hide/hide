@@ -80,6 +80,7 @@ export type MenuItem = {
     | "remove_project"
     | "open_checkout"
     | "new_tab_here"
+    | "new_group"
     | "open_pull_request"
     | "set_purpose"
     | "set_primary"
@@ -208,7 +209,7 @@ export function projectRemovalFacts(workspace: Workspace, t: TFunction<"translat
 }
 
 /** The checkout items a plain folder's row adds after its project's; its row routes these to the checkout. */
-export const FOLDER_CHECKOUT_ITEMS: ReadonlySet<MenuItem["id"]> = new Set<MenuItem["id"]>(["open_checkout", "open_pull_request", "set_purpose"]);
+export const FOLDER_CHECKOUT_ITEMS: ReadonlySet<MenuItem["id"]> = new Set<MenuItem["id"]>(["open_checkout", "open_pull_request", "set_purpose", "new_group"]);
 
 /**
  * A plain folder's one row (`folderCheckout`): the project's items, then its
@@ -267,6 +268,7 @@ export function checkoutMenu(workspace: Workspace, checkout: Checkout, host: Men
   const items: MenuItem[] = [
     { id: "open_checkout", label: t("common.open"), unavailable: null },
     { id: "new_tab_here", label: t("workspace.menu.newTabHere"), unavailable: checkout.exists ? null : t("workspace.unavailable.folderMissing"), shortcut: host.newTabChord },
+    { id: "new_group", label: t("groups.create"), unavailable: checkout.exists ? null : t("workspace.unavailable.folderMissing") },
   ];
   if (pr) items.push({ id: "open_pull_request", label: t("workspace.menu.openPr", { number: pr.number }), unavailable: null });
   items.push(

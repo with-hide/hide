@@ -53,6 +53,27 @@ fn serial() -> MutexGuard<'static, ()> {
 }
 
 #[test]
+fn login_shell_exec_refuses_invalid_paths_without_replacing_the_caller() {
+    let original_pid = std::process::id();
+    let original_start = start_time(original_pid).unwrap();
+    #[cfg(unix)]
+    {
+        let relative = hide_platform::process::exec_login_shell(std::path::Path::new("sh"));
+        assert_eq!(relative.unwrap_err().kind(), ErrorKind::InvalidInput);
+        let folder = tempfile::tempdir().unwrap();
+        let missing = hide_platform::process::exec_login_shell(&folder.path().join("absent-shell"));
+        assert_eq!(missing.unwrap_err().kind(), ErrorKind::NotFound);
+    }
+    #[cfg(not(unix))]
+    {
+        let error = hide_platform::process::exec_login_shell(std::path::Path::new("C:\\shell.exe"));
+        assert_eq!(error.unwrap_err().kind(), ErrorKind::Unsupported);
+    }
+    assert_eq!(std::process::id(), original_pid);
+    assert_eq!(start_time(original_pid).unwrap(), original_start);
+}
+
+#[test]
 #[allow(clippy::disallowed_methods)] // a child process the test kills later: it sleeps to stay alive
 fn child_role() {
     let Ok(role) = std::env::var(ROLE) else {

@@ -1,6 +1,7 @@
 import { projectCheckout } from "./projects";
 import { deviceConnected, readsHere } from "./devices";
 import { sameGithubPullRequest } from "./pullRequestIdentity";
+import { useGroupFeedback } from "./groupTabs";
 import { areaFrame } from "./areaFrames";
 import { AGENT_WORDS, agentAreaStepUnavailable, agentMenu, type AgentAreaStep, type AgentCommand } from "./agentLayout";
 import { findArea as findAgentArea, activeDisplay as activeAgentDisplay, adjacentInOrder as adjacentAgentArea, locateDisplay as locateAgentTab, neighbourArea as neighbourAgentArea, resizeTarget as resizeAgentTarget, type Edge as AgentEdge } from "./areaLayout";
@@ -38,7 +39,7 @@ import { cardOfItem } from "./overviewTasks";
 import { backlogIntent } from "./overviewBacklog";
 import { paneProgress, sessionOfAgent, workKey } from "./sessionWork";
 import { expectSurface, type Surface } from "./recent";
-import { useStartPanel } from "./startDraft";
+import { useStartPanel, useInlineStarts } from "./startDraft";
 import { contextAgents, remoteConnected, remoteContext, remoteControl, remoteRequestId, remoteTargetOfPane, remoteView, withDeviceForward, type RemoteAction, type RemoteView } from "./remote";
 import { armKeyTarget } from "./keyTarget";
 import {
@@ -251,7 +252,7 @@ export function createActions(send: DispatchFn) {
       ui().setNotice({ text: translate("shell.deviceNotConnected", { device: machineName(rest()?.navigator?.devices, context.device.id, translate), command: translate(command) }), refreshable: false });
       return null;
     }
-    return { targetId: context.device.id, view: remoteView(context.session), agents: context.session?.agents ?? [] };
+    return { targetId: context.device.id, view: remoteView(context.session, rest()?.workspace_view), agents: context.session?.agents ?? [] };
   };
 
   const sendRemote = (targetId: string, request: RemoteAction) => dispatch(remoteControl(targetId, request));
@@ -955,6 +956,11 @@ export function createActions(send: DispatchFn) {
   };
 
   const createTab = (areaId?: string) => {
+      const view = workspaceViewOf(rest());
+      if (view?.agent_layout?.groups) {
+        agentGroup({ device_id: view.device_id, path: view.path }, view.agent_layout.group_id ?? null, { action: "new_tab", ...(areaId ? { area_id: areaId } : {}) });
+        return;
+      }
       if (remoteContext(rest())) {
         const host = remoteHost("shell.command.newTab");
         if (!host) return;
@@ -975,6 +981,12 @@ export function createActions(send: DispatchFn) {
     };
 
   const closeTab = (tabId: string) => {
+      const frame = areaFrame("agent");
+      if (frame?.layout.drafts?.includes(tabId)) {
+        const request = agentGroup(frame.workspace, frame.layout.group_id ?? null, { action: "close_draft", tab_id: tabId });
+        useInlineStarts.getState().noteClose(request, frame.workspace.device_id, frame.workspace.path, tabId);
+        return;
+      }
       if (remoteContext(rest())) {
         const host = remoteHost("shell.command.closeTab");
         if (!host) return;
@@ -990,10 +1002,19 @@ export function createActions(send: DispatchFn) {
       requestClose("tab", id, tab?.panes ?? [], null);
     };
 
+  const agentGroup = (workspace: ViewWorkspace, groupId: string | null, action: { action: string } & Record<string, unknown>, requestId = remoteRequestId()) => {
+    if (["select", "create", "new_tab", "move", "dissolve", "undo"].includes(action.action)) {
+      const checkout = catalogWorkspaces(rest()).filter((project) => project.device_id === workspace.device_id).flatMap((project) => project.checkouts).find((checkout) => checkout.path === workspace.path);
+      if (checkout) beginOpening({ checkoutId: checkout.id, deviceId: workspace.device_id, path: checkout.path, workspaceId: checkout.workspace_id });
+    }
+    useGroupFeedback.setState({ request: { workspace, id: requestId } });
+    dispatch({ schema_version: 2, kind: "agent_group", payload: { workspace, group_id: groupId, request_id: requestId, ...action } });
+    return requestId;
+  };
   const agentLayout = (action: { action: string } & Record<string, unknown>) => {
     const frame = areaFrame("agent");
     if (!frame) return diagnostic("agent_layout: no Agent areas are drawn");
-    dispatch({ schema_version: 2, kind: "agent_layout", payload: { workspace: frame.workspace, ...action } });
+    dispatch({ schema_version: 2, kind: "agent_layout", payload: { workspace: frame.workspace, group_id: frame.layout.group_id ?? null, ...action } });
   };
   const runAgentCommand = (command: AgentCommand, tabId?: string) => {
     const frame = areaFrame("agent");
@@ -1027,7 +1048,7 @@ export function createActions(send: DispatchFn) {
       if (area) agentLayout({ action: "move", tab_id: id, area_id: area, index: findAgentArea(frame.layout.root, area)?.displays.length ?? 0 });
     }
     if (command === "copy_name") {
-      const checkout = remoteContext(rest()) ? remoteView(remoteContext(rest())!.session)?.checkout : current()?.checkout;
+      const checkout = remoteContext(rest()) ? remoteView(remoteContext(rest())!.session, rest()?.workspace_view)?.checkout : current()?.checkout;
       const label = checkout?.strip.find((row) => row.source_id === id)?.label;
       if (label) void navigator.clipboard?.writeText(label);
     }
@@ -1472,10 +1493,13 @@ export function createActions(send: DispatchFn) {
       model?: string | null;
       prompt?: string | null;
       requestId?: string;
+      tabTarget?: import("./agentLayout").AgentStartTarget;
+      confirmOnly?: boolean;
       /** The session to resume instead of a new conversation (PRD link-graph B12); never with a prompt. */
       resumeSessionId?: string;
       resumeSessionPath?: string;
     }) {
+      if (!request.tabTarget && request.requestId) beginOpening({ startRequestId: request.requestId });
       dispatch({
         schema_version: 2,
         kind: "agent_start_in_checkout",
@@ -1486,13 +1510,15 @@ export function createActions(send: DispatchFn) {
           ...(request.model ? { model: request.model } : {}),
           ...(request.prompt ? { prompt: request.prompt } : {}),
           ...(request.requestId ? { request_id: request.requestId } : {}),
+          ...(request.tabTarget ? { target: request.tabTarget } : {}),
+          ...(request.confirmOnly ? { confirm_only: true } : {}),
           ...(request.resumeSessionId ? { resume_session_id: request.resumeSessionId } : {}),
           ...(request.resumeSessionPath ? { resume_session_path: request.resumeSessionPath } : {}),
         },
       });
       // Keys typed before the new tab holds the keyboard reach its agent once
       // it has started, never the pane that had the keyboard.
-      if (request.requestId && (!request.deviceId || request.deviceId === localDeviceId(rest()))) armKeyTarget(request.requestId);
+      if (!request.confirmOnly && request.requestId && (!request.deviceId || request.deviceId === localDeviceId(rest()))) armKeyTarget(request.requestId);
     },
 
     /**
@@ -1705,7 +1731,7 @@ export function createActions(send: DispatchFn) {
       const target = state.overlay === "search" ? state.searchReturnFocus : document.activeElement instanceof HTMLElement ? document.activeElement : null;
       if (view) state.setMainView(view);
       state.setOverview({ deviceId, projectId: null, panel: null, ...patch });
-      useUiStore.setState({ overviewOpen: modal || state.overviewOpen, overviewReturnFocus: state.overviewOpen ? state.overviewReturnFocus : target, overlay: "none", ...(!modal && !state.overviewOpen ? { screen: { kind: "main" as const, deviceId } } : {}) });
+      useUiStore.setState({ opening: null, overviewOpen: modal || state.overviewOpen, overviewReturnFocus: state.overviewOpen ? state.overviewReturnFocus : target, overlay: "none", ...(!modal && !state.overviewOpen ? { screen: { kind: "main" as const, deviceId } } : {}) });
     },
 
     /** A project's panel on the Overview's Projects (PRD sidebar-task-lens B41): a breadcrumb's project, a cross-project chip, a Recent Panels project. */
@@ -1868,6 +1894,10 @@ export function createActions(send: DispatchFn) {
      */
     newTabIn(deviceId: string, checkout: Checkout) {
       beginOpening({ checkoutId: checkout.id, deviceId, path: checkout.path, workspaceId: checkout.workspace_id });
+      if (checkout.agent_groups) {
+        agentGroup({ device_id: deviceId, path: checkout.path }, checkout.agent_groups.selected, { action: "new_tab" });
+        return;
+      }
       if (deviceId !== localDeviceId(rest())) {
         const host = remoteHost("shell.command.newTab");
         if (!host) return ui().setOpening(null);
@@ -1988,10 +2018,13 @@ export function createActions(send: DispatchFn) {
     focusPane,
 
     createTab,
+    agentGroup,
     agentLayout,
     runAgentCommand,
 
     focusTab(tabId: string) {
+      const frame = areaFrame("agent");
+      if (frame?.layout.drafts?.includes(tabId)) return agentLayout({ action: "focus", tab_id: tabId });
       if (remoteContext(rest())) {
         const host = remoteHost("shell.command.switchTab");
         if (!host) return;
@@ -2052,7 +2085,7 @@ export function createActions(send: DispatchFn) {
       // Herdr move while the device is not connected.
       const context = remoteContext(rest());
       if (context) {
-        const checkout = remoteView(context.session)?.checkout;
+        const checkout = remoteView(context.session, rest()?.workspace_view)?.checkout;
         if (!checkout) return diagnostic("reorder_tab: no device checkout in front");
         dispatch({
           schema_version: 2,
@@ -2066,10 +2099,13 @@ export function createActions(send: DispatchFn) {
 
     closeFocused() {
       const owner = keyboardCommandOwner();
+      const agents = areaFrame("agent");
+      const active = agents ? activeAgentDisplay(agents.layout)?.display.id : null;
+      if (owner.kind !== "view" && active && agents?.layout.drafts?.includes(active)) return closeTab(active);
       const frame = frameNow();
       const area = owner.kind === "view" && frame ? findArea(frame.layout.root, owner.areaId) : null;
       const checkout = frontCheckout(rest());
-      const tab = remoteContext(rest()) ? remoteView(remoteContext(rest())?.session ?? null)?.tab : current()?.tab;
+      const tab = remoteContext(rest()) ? remoteView(remoteContext(rest())?.session ?? null, rest()?.workspace_view)?.tab : current()?.tab;
       const target = closeShortcutPolicy({
         owner,
         workspace: ui().screen?.kind === "workspace" ? checkout?.id ?? null : null,

@@ -16,18 +16,14 @@ pub(super) struct Kept {
 
 impl Runtime {
     fn agent_view_of(&self, key: &WorkspaceKey) -> (Vec<&str>, Option<&str>) {
-        if self.arranges_agent_areas(&key.0)
-            && let Some(layout) = self.agent_layout_of(key)
-        {
+        if let Some(layout) = self.agent_layout_of(key) {
             let shown: Vec<&str> = layout
                 .tree
                 .areas()
                 .into_iter()
                 .filter_map(|area| layout.shown_in(&area.id))
                 .collect();
-            if !shown.is_empty() {
-                return (shown, layout.active());
-            }
+            return (shown, layout.active());
         }
         let active = self
             .catalog_workspaces()

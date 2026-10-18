@@ -803,10 +803,7 @@ impl Runtime {
         if let Some(key) = self.front_workspace_key().filter(|key| key.0 == device)
             && let Some(layout) = self.agent_layout_of(&key)
         {
-            let shown = self.shown_agent_layout(&key, layout).shown();
-            if !shown.is_empty() {
-                return shown;
-            }
+            return self.shown_agent_layout(&key, layout).shown();
         }
         let Some(session) = self.node_session(device) else {
             return Vec::new();

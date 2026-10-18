@@ -699,6 +699,8 @@ impl Runtime {
         }));
         match checkout {
             Some(checkout) => self.agent_start_in_checkout(AgentStartInCheckoutPayload {
+                target: None,
+                confirm_only: false,
                 checkout_path: Some(checkout.path.clone()),
                 device_id: machine,
                 home: false,

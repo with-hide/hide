@@ -1138,6 +1138,7 @@ impl Runtime {
             .flat_map(|record| &record.members)
             .any(|member| matches!(member.resume, Resume::Starting { .. }));
         if starting
+            || self.pending_start_focus()
             || self
                 .snapshot
                 .task_operation
@@ -1226,6 +1227,8 @@ impl Runtime {
             .map(|reference| reference.value.clone());
         self.start_in_checkout(
             super::events::AgentStartInCheckoutPayload {
+                target: None,
+                confirm_only: false,
                 checkout_path: Some(member.checkout_path.clone()),
                 device_id: (!local).then(|| member.machine.clone()),
                 home: false,

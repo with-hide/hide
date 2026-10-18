@@ -282,6 +282,7 @@ fn context() -> ClosedContext {
         tab_label: "old".into(),
         tab_index: 0,
         agent_area: Some(("a1".into(), 0)),
+        agent_group: None,
         replacement_shell: true,
         replacement_in_tab: false,
         tab_name: Default::default(),

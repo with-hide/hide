@@ -1065,6 +1065,64 @@ pub(crate) fn pane_move_to_new_tab_params(
     })
 }
 
+/// Joins an existing tab without changing focus. The caller verifies that
+/// both panes belong to the expected workspace; this destination carries
+/// only the tab and pane identifiers in the pinned protocol.
+pub(crate) fn pane_join_params(
+    pane_id: &str,
+    target_tab_id: &str,
+    target_pane_id: &str,
+) -> Result<Value, String> {
+    params(req::PaneMoveParams {
+        pane_id: pane_id.into(),
+        destination: req::PaneMoveDestination::Tab {
+            tab_id: target_tab_id.into(),
+            target_pane_id: Some(target_pane_id.into()),
+            split: req::SplitDirection::Right,
+            ratio: Some(0.5),
+        },
+        focus: false,
+    })
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct PaneJoinResult {
+    pub(crate) changed: bool,
+    pub(crate) reason: Option<String>,
+    pub(crate) workspace_id: String,
+    pub(crate) tab_id: String,
+    pub(crate) pane_id: String,
+    pub(crate) terminal_id: String,
+    pub(crate) previous_workspace_id: String,
+    pub(crate) previous_tab_id: String,
+    pub(crate) previous_pane_id: String,
+    pub(crate) closed_tab_id: Option<String>,
+    pub(crate) closed_workspace_id: Option<String>,
+}
+
+/// Keeps the actual resulting identity even for an unchanged move. A
+/// `same_tab` answer is not proof of ownership or of an earlier successful
+/// join; the caller compares it with its durable claim and observed binding.
+pub(crate) fn joined_pane(value: Value) -> Result<PaneJoinResult, String> {
+    let missing = "pane.move response is missing joined pane identity";
+    match response(value, missing)? {
+        res::ResponseResult::PaneMove { move_result } => Ok(PaneJoinResult {
+            changed: move_result.changed,
+            reason: move_result.reason.map(|reason| reason.to_string()),
+            workspace_id: nonempty_id(move_result.pane.workspace_id, missing)?,
+            tab_id: nonempty_id(move_result.pane.tab_id, missing)?,
+            pane_id: nonempty_id(move_result.pane.pane_id, missing)?,
+            terminal_id: nonempty_id(move_result.pane.terminal_id, missing)?,
+            previous_workspace_id: nonempty_id(move_result.previous_workspace_id, missing)?,
+            previous_tab_id: nonempty_id(move_result.previous_tab_id, missing)?,
+            previous_pane_id: nonempty_id(move_result.previous_pane_id, missing)?,
+            closed_tab_id: move_result.closed_tab_id,
+            closed_workspace_id: move_result.closed_workspace_id,
+        }),
+        _ => Err(missing.into()),
+    }
+}
+
 /// The tab `pane.move` created, when it created one.
 ///
 /// Herdr answers a move it declined with `changed: false` and a reason
@@ -1287,8 +1345,35 @@ pub(crate) fn launched_tab_params(
     })
 }
 
+/// Creates a start's staging tab with a reserved creation claim on its pane.
+/// The claim survives layout export; launch environment echo is not required.
+/// `seed_tab` may replace only the caller's newly created workspace seed.
+pub(crate) fn checkout_start_tab_params(
+    workspace: &str,
+    seed_tab: Option<&str>,
+    cwd: &str,
+    label: &str,
+    env: std::collections::BTreeMap<String, String>,
+    command: Option<&[String]>,
+    claim: &str,
+) -> Result<Value, String> {
+    params(req::LayoutApplyParams {
+        focus: false,
+        root: req::LayoutNode::Pane {
+            pane_id: None,
+            label: Some(claim.into()),
+            cwd: Some(herdr_param(cwd)),
+            command: command.map(<[String]>::to_vec),
+            env: env.into_iter().collect(),
+        },
+        tab_id: seed_tab.map(str::to_owned),
+        tab_label: Some(label.into()),
+        workspace_id: seed_tab.is_none().then(|| workspace.into()),
+    })
+}
+
 /// The tab and the one pane `layout.apply` made for
-/// [`launched_tab_params`].
+/// [`launched_tab_params`] or [`checkout_start_tab_params`].
 pub(crate) fn launched_tab(value: Value) -> Result<(String, String), String> {
     let layout = applied_layout(value)?;
     match layout.root {
@@ -1764,6 +1849,12 @@ pub(crate) fn pane_zoom_params(pane: &str) -> Result<Value, String> {
     params(req::PaneZoomParams {
         pane_id: Some(pane.into()),
         mode: req::PaneZoomMode::Toggle,
+    })
+}
+pub(crate) fn pane_unzoom_params(pane: &str) -> Result<Value, String> {
+    params(req::PaneZoomParams {
+        pane_id: Some(pane.into()),
+        mode: req::PaneZoomMode::Off,
     })
 }
 pub(crate) fn pane_read_params(pane: &str, source: &str, lines: u32) -> Result<Value, String> {
@@ -2355,6 +2446,159 @@ mod tests {
             fork_split_params("w1:p1", Some("  "), Default::default()).unwrap()["cwd"],
             Value::Null
         );
+    }
+
+    #[test]
+    fn checkout_start_claim_is_created_on_the_pane_without_focus_or_replacement() {
+        let claim = "hide-start:0123456789abcdef";
+        let env = std::collections::BTreeMap::from([("SHELL_INTEGRATION".into(), "1".into())]);
+        let command = vec!["/bin/zsh".into(), "-l".into()];
+        let request = checkout_start_tab_params(
+            "w1",
+            None,
+            "/fixture",
+            "Terminal",
+            env.clone(),
+            Some(&command),
+            claim,
+        )
+        .unwrap();
+        assert_eq!(
+            request,
+            json!({
+                "workspace_id":"w1", "tab_label":"Terminal", "focus":false,
+                "root":{"type":"pane", "label":claim, "cwd":"/fixture",
+                    "command":["/bin/zsh", "-l"], "env":{"SHELL_INTEGRATION":"1"}}
+            })
+        );
+        let default_shell =
+            checkout_start_tab_params("w1", None, "/fixture", "Terminal", env, None, claim)
+                .unwrap();
+        assert!(default_shell["root"].get("command").is_none());
+        assert_eq!(default_shell["root"]["label"], claim);
+        let seed = checkout_start_tab_params(
+            "w1",
+            Some("w1:t1"),
+            "/fixture",
+            "Terminal",
+            Default::default(),
+            None,
+            claim,
+        )
+        .unwrap();
+        assert_eq!(seed["tab_id"], "w1:t1");
+        assert!(seed.get("workspace_id").is_none());
+        assert_eq!(seed["root"]["label"], claim);
+
+        // The pinned server exports the label but does not echo launch env.
+        assert_eq!(launched_tab(json!({
+            "type":"layout_apply", "layout":{
+                "workspace_id":"w1", "tab_id":"w1:t2", "zoomed":false, "focused_pane_id":"w1:p3",
+                "root":{"type":"pane", "pane_id":"w1:p3", "label":claim,
+                    "cwd":"/fixture", "command":["/bin/zsh", "-l"]}
+            }
+        })).unwrap(), ("w1:t2".into(), "w1:p3".into()));
+    }
+
+    #[test]
+    fn pane_join_targets_the_existing_tab_and_unzoom_is_explicit() {
+        assert_eq!(
+            pane_join_params("w1:p3", "w1:t1", "w1:p1").unwrap(),
+            json!({
+                "pane_id":"w1:p3", "focus":false,
+                "destination":{"type":"tab", "tab_id":"w1:t1",
+                    "target_pane_id":"w1:p1", "split":"right", "ratio":0.5}
+            })
+        );
+        assert_eq!(
+            pane_unzoom_params("w1:p1").unwrap(),
+            json!({"pane_id":"w1:p1", "mode":"off"})
+        );
+    }
+
+    // Shape captured from the isolated pinned server's successful move.
+    // Workstation paths, the opaque claim and terminal identity are replaced.
+    fn joined_pane_answer() -> Value {
+        json!({"type":"pane_move", "move_result":{
+            "changed":true, "previous_pane_id":"w1:p3",
+            "previous_workspace_id":"w1", "previous_tab_id":"w1:t2",
+            "pane":{"pane_id":"w1:p3", "terminal_id":"term_fixture",
+                "workspace_id":"w1", "tab_id":"w1:t1", "focused":false,
+                "cwd":"/fixture", "foreground_cwd":"/fixture", "label":"hide-start:fixture",
+                "agent_status":"unknown", "tokens":{"hide_prompt":"1"},
+                "scroll":{"offset_from_bottom":0, "max_offset_from_bottom":0, "viewport_rows":40},
+                "revision":1},
+            "target_layout":{"workspace_id":"w1", "tab_id":"w1:t1", "zoomed":false,
+                "area":{"x":0,"y":0,"width":120,"height":40}, "focused_pane_id":"w1:p1",
+                "panes":[
+                    {"pane_id":"w1:p1","focused":true,"rect":{"x":0,"y":0,"width":30,"height":40}},
+                    {"pane_id":"w1:p3","focused":false,"rect":{"x":30,"y":0,"width":30,"height":40}},
+                    {"pane_id":"w1:p2","focused":false,"rect":{"x":60,"y":0,"width":60,"height":40}}
+                ], "splits":[
+                    {"id":"split_0_root","direction":"right","ratio":0.5,"rect":{"x":0,"y":0,"width":120,"height":40}},
+                    {"id":"split_1_0","direction":"right","ratio":0.5,"rect":{"x":0,"y":0,"width":60,"height":40}}
+                ]},
+            "closed_tab_id":"w1:t2", "focused_pane_id":"w1:p1"
+        }})
+    }
+
+    #[test]
+    fn pane_join_decodes_actual_identity_and_source_tab_closure() {
+        assert_eq!(
+            joined_pane(joined_pane_answer()).unwrap(),
+            PaneJoinResult {
+                changed: true,
+                reason: None,
+                workspace_id: "w1".into(),
+                tab_id: "w1:t1".into(),
+                pane_id: "w1:p3".into(),
+                terminal_id: "term_fixture".into(),
+                previous_workspace_id: "w1".into(),
+                previous_tab_id: "w1:t2".into(),
+                previous_pane_id: "w1:p3".into(),
+                closed_tab_id: Some("w1:t2".into()),
+                closed_workspace_id: None,
+            }
+        );
+        let mut missing_identity = joined_pane_answer();
+        missing_identity["move_result"]["pane"]["terminal_id"] = json!("");
+        assert!(joined_pane(missing_identity).is_err());
+        assert!(joined_pane(json!({"type":"ok"})).is_err());
+    }
+
+    #[test]
+    fn pane_join_preserves_refusal_without_claiming_the_requested_destination() {
+        let mut answer = joined_pane_answer();
+        let result = &mut answer["move_result"];
+        result["changed"] = json!(false);
+        result["reason"] = json!("zoomed_tab");
+        result["pane"]["tab_id"] = json!("w1:t2");
+        result.as_object_mut().unwrap().remove("closed_tab_id");
+        // The real refusal supplies both layouts and leaves the pane in its source.
+        result["source_layout"] = json!({"workspace_id":"w1", "tab_id":"w1:t2", "zoomed":false,
+            "area":{"x":0,"y":0,"width":120,"height":40}, "focused_pane_id":"w1:p3",
+            "panes":[{"pane_id":"w1:p3","focused":true,"rect":{"x":0,"y":0,"width":120,"height":40}}],
+            "splits":[]});
+        result["target_layout"]["zoomed"] = json!(true);
+        result["target_layout"]["panes"] = json!([
+            {"pane_id":"w1:p1","focused":true,"rect":{"x":0,"y":0,"width":60,"height":40}},
+            {"pane_id":"w1:p2","focused":false,"rect":{"x":60,"y":0,"width":60,"height":40}}
+        ]);
+        result["target_layout"]["splits"]
+            .as_array_mut()
+            .unwrap()
+            .truncate(1);
+        let refused = joined_pane(answer.clone()).unwrap();
+        assert!(!refused.changed);
+        assert_eq!(refused.reason.as_deref(), Some("zoomed_tab"));
+        assert_eq!(refused.tab_id, "w1:t2");
+        assert_eq!(refused.closed_tab_id, None);
+
+        // Schema-valid altered data proves same_tab remains a distinct unchanged result.
+        answer["move_result"]["reason"] = json!("same_tab");
+        let unchanged = joined_pane(answer).unwrap();
+        assert!(!unchanged.changed);
+        assert_eq!(unchanged.reason.as_deref(), Some("same_tab"));
     }
 
     #[test]

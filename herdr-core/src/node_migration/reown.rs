@@ -13,7 +13,7 @@
 //! file and place (engineering principle 4). The source folder is never
 //! written. A move back is the same change with the two machines swapped.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -425,8 +425,39 @@ impl Mapper<'_> {
             }
             WORKSPACE_VIEWS => {
                 for view in each(value, "workspaces") {
+                    let drafts: BTreeSet<String> = view
+                        .pointer("/agent_groups/drafts")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect();
                     if let Some(layout) = view.get_mut("agent_layout") {
-                        self.agent_layout(layout);
+                        self.agent_layout(layout, &drafts);
+                    }
+                    if let Some(groups) = view.get_mut("agent_groups") {
+                        for group in each(groups, "items") {
+                            if let Some(layout) = group.get_mut("layout") {
+                                self.agent_layout(layout, &drafts);
+                            }
+                        }
+                    }
+                    if let Some(starts) =
+                        view.get_mut("agent_starts").and_then(Value::as_object_mut)
+                    {
+                        for start in starts.values_mut() {
+                            for (field, kind) in
+                                [("live_tab_id", Moves::Tab), ("pane_id", Moves::Pane)]
+                            {
+                                if let Some(value) = start.get_mut(field)
+                                    && let Some(Mapped::To(id)) =
+                                        value.as_str().map(|text| self.map(kind, text))
+                                {
+                                    *value = Value::String(id);
+                                }
+                            }
+                        }
                     }
                     super::each_opener(view, &mut |device| match device
                         .as_str()
@@ -645,37 +676,40 @@ impl Mapper<'_> {
 
     /// Every tab an Agent layout names: each area's front display and its
     /// displays, and each canvas's tab.
-    fn agent_layout(&mut self, layout: &mut Value) {
-        fn node(mapper: &Mapper<'_>, value: &mut Value) {
+    fn agent_layout(&mut self, layout: &mut Value, drafts: &BTreeSet<String>) {
+        fn node(mapper: &Mapper<'_>, value: &mut Value, drafts: &BTreeSet<String>) {
             if let Some(area) = value.get_mut("area") {
                 if let Some(active) = area.get_mut("active") {
-                    tab(mapper, active);
+                    tab(mapper, active, drafts);
                 }
                 for display in each(area, "displays") {
                     if let Some(id) = display.get_mut("id") {
-                        tab(mapper, id);
+                        tab(mapper, id, drafts);
                     }
                 }
             }
             if let Some(split) = value.get_mut("split") {
                 for side in ["first", "second"] {
                     if let Some(child) = split.get_mut(side) {
-                        node(mapper, child);
+                        node(mapper, child, drafts);
                     }
                 }
             }
         }
-        fn tab(mapper: &Mapper<'_>, value: &mut Value) {
+        fn tab(mapper: &Mapper<'_>, value: &mut Value, drafts: &BTreeSet<String>) {
+            if value.as_str().is_some_and(|id| drafts.contains(id)) {
+                return;
+            }
             if let Some(Mapped::To(id)) = value.as_str().map(|text| mapper.map(Moves::Tab, text)) {
                 *value = Value::String(id);
             }
         }
         if let Some(root) = layout.get_mut("root") {
-            node(self, root);
+            node(self, root, drafts);
         }
         if let Some(canvases) = layout.get_mut("canvases").and_then(Value::as_object_mut) {
             for canvas in canvases.values_mut() {
-                tab(self, canvas);
+                tab(self, canvas, drafts);
             }
         }
     }
@@ -2025,6 +2059,68 @@ mod tests {
         reown(dir.path(), &forward(), &IdTable::default()).unwrap();
         let (_, _, disposition) = crate::persistence::load(&path);
         assert_eq!(disposition, crate::persistence::LoadDisposition::Loaded);
+    }
+
+    #[test]
+    fn a_core_move_rekeys_named_group_tabs_and_start_receipts_but_keeps_draft_identity() {
+        let dir = macbook_folder();
+        let path = dir.path().join(WORKSPACE_VIEWS);
+        let mut views = read(&path);
+        views["workspaces"][0]["agent_groups"] = json!({
+            "next_id": 6, "selected": "g5", "drafts": ["draft:6"],
+            "items": [{"id": "g5", "name": "Review", "layout": {
+                "root": {"area": {"id": "a1", "active": "draft:6", "displays": [{"id": "w1:t9"}, {"id": "draft:6"}]}},
+                "active_area": "a1", "next_id": 2, "canvases": {"a1": "w1:tD"}
+            }}]
+        });
+        views["workspaces"][0]["agent_starts"] = json!({"same-intent": {
+            "group_id": "g5", "area_id": "a1", "draft_tab_id": "draft:6",
+            "live_tab_id": "w1:t9", "pane_id": "w1:p9", "add_pane": false,
+            "marker": "original-claim", "state": "pending", "agent_kind": null,
+            "agent_phase": null, "recorded_at": 1, "seen_in_topology": false,
+            "effect": {
+                "workspace_id": "w1", "seed_tab_id": "w1:t8",
+                "target": {"tab_id":"w1:t9", "pane_id":"w1:p9",
+                    "identity":{"terminal_id":"original-target","shell_pid":41,"shell_started":400}},
+                "expected_command": ["/bin/sh", "-l"],
+                "binding": {"tab_id":"w1:t10", "pane_id":"w1:p10",
+                    "identity":{"terminal_id":"created-terminal","shell_pid":42,"shell_started":500}}
+            }
+        }});
+        std::fs::write(&path, serde_json::to_vec(&views).unwrap()).unwrap();
+        let original = views["workspaces"][0].clone();
+        reown(dir.path(), &forward(), &forward_ids()).unwrap();
+        let moved = read(&path);
+        let group = &moved["workspaces"][0]["agent_groups"];
+        let layout = &group["items"][0]["layout"];
+        assert_eq!(group["selected"], "g5");
+        assert_eq!(group["drafts"], json!(["draft:6"]));
+        assert_eq!(layout["root"]["area"]["active"], "draft:6");
+        assert_eq!(
+            layout["root"]["area"]["displays"][0]["id"],
+            format!("remote:{M}:tab:w1:t9")
+        );
+        assert_eq!(layout["canvases"]["a1"], format!("remote:{M}:tab:w1:tD"));
+        let start = &moved["workspaces"][0]["agent_starts"]["same-intent"];
+        assert_eq!(start["live_tab_id"], format!("remote:{M}:tab:w1:t9"));
+        assert_eq!(start["pane_id"], format!("remote:{M}:pane:w1:p9"));
+        assert_eq!(start["marker"], "original-claim");
+        // Effect proofs name native identities at the owning node, unlike
+        // UI references. Moving the core must never scope or rebind them.
+        assert_eq!(
+            start["effect"],
+            original["agent_starts"]["same-intent"]["effect"]
+        );
+        reown(dir.path(), &back(), &back_ids()).unwrap();
+        let restored = read(&path);
+        assert_eq!(
+            restored["workspaces"][0]["agent_groups"],
+            original["agent_groups"]
+        );
+        assert_eq!(
+            restored["workspaces"][0]["agent_starts"],
+            original["agent_starts"]
+        );
     }
 
     #[test]

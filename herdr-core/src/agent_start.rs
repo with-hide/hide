@@ -171,9 +171,16 @@ impl ShellStart {
     /// when the tab runs `launch`, else by holding the terminal.
     pub(crate) fn of_tab(launched: bool, launch: Option<&ShellLaunch>) -> Self {
         match launch.and_then(|launch| launch.command.first()) {
-            Some(shell) if launched => Self::Integrated {
-                program: program_name(shell),
-            },
+            Some(shell)
+                if launched
+                    && launch.is_some_and(|launch| {
+                        launch.readiness == hide_node_link::protocol::ShellReadiness::Integrated
+                    }) =>
+            {
+                Self::Integrated {
+                    program: program_name(shell),
+                }
+            }
             _ => Self::Plain,
         }
     }
@@ -274,9 +281,9 @@ pub(crate) fn trust_worktree(
 
 /// How a pane Hide makes for a start runs the account's shell so that it
 /// marks its first prompt, written by `node`, the node of the machine that
-/// will run the pane. `None` for a shell the integration does not reach,
-/// and, logged, for a node that cannot be reached or cannot write it: the
-/// pane then starts as any other and the start is confirmed after typing.
+/// will run the pane. The node supplies an explicit Plain recipe when it
+/// cannot install prompt integration. `None`, logged, means the node or its
+/// normal shell cannot be confirmed; group starts refuse before creation.
 pub(crate) fn shell_launch(
     node: Option<&dyn NodeLink>,
     correlation_id: &str,
@@ -1491,6 +1498,7 @@ mod tests {
     fn a_launched_shell_is_named_as_its_pane_lists_it() {
         let launch = |shell: &str| ShellLaunch {
             command: vec![shell.into(), "-l".into()],
+            readiness: hide_node_link::protocol::ShellReadiness::Integrated,
             env: Default::default(),
         };
         for (shell, program) in [

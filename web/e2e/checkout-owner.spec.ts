@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startDraftTerminal } from "./group-start-helper";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 import { chord } from "./chords";
@@ -10,7 +11,8 @@ import { dumpOnFailure, tabsBothSides } from "./failure-dump";
 
 // PRD checkout-workspace-binding B1, B2, B13: a tab Hide creates goes to the
 // checkout's owner Herdr workspace, never to the workspace its other tabs sit
-// in, and two quick requests converge on one owner.
+// in. Two quick draft requests start nothing; their explicit terminal starts
+// reuse one owner. These sequential starts do not exercise concurrent owner creation.
 
 type Workspace = {
   workspace_id: string;
@@ -36,11 +38,21 @@ async function expectTabs(page: Page, herdr: HerdrFixture, count: number, timeou
   );
 }
 
-/** Two new-tab chords in the fixture's agent pane, the second before the first lands. */
-async function twoQuickNewTabs(page: Page): Promise<void> {
+/** Two quick chords create drafts; explicitly starting each keeps the checkout's owner. */
+async function twoDraftTerminals(page: Page, herdr: HerdrFixture): Promise<void> {
+  const topology = () => workspaces(herdr).map((workspace) => ({ id: workspace.workspace_id, tabs: tabCount(herdr, workspace.workspace_id) })).sort((a, b) => a.id.localeCompare(b.id));
+  const before = topology();
   await page.locator("[data-terminal-host]").first().click();
   await page.keyboard.press(chord("new_tab"));
   await page.keyboard.press(chord("new_tab"));
+  const drafts = page.locator('[data-agent-tab-bar] [role="tab"][data-tab^="draft:"]');
+  await expect(drafts).toHaveCount(2);
+  expect(topology()).toEqual(before);
+  const ids = await drafts.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-tab")!));
+  for (const id of ids) {
+    await page.locator(`[data-agent-tab-bar] [data-tab="${id}"]`).click();
+    await startDraftTerminal(page, id);
+  }
 }
 
 test("A new tab in a Git checkout goes to the workspace Herdr binds to it, not the unbound one it was asked from", async ({ page }) => {
@@ -71,7 +83,7 @@ test("A new tab in a Git checkout goes to the workspace Herdr binds to it, not t
     await expectTabs(page, herdr, 2);
     // Asked from the unbound workspace's own pane.
     await page.locator(`[data-agent-tab-bar] [data-tab="${created.result.tab.tab_id}"]`).click();
-    await twoQuickNewTabs(page);
+    await twoDraftTerminals(page, herdr);
     await expectTabs(page, herdr, 4, 20_000);
     expect(workspaces(herdr)).toHaveLength(2);
     expect(tabCount(herdr, ownerId)).toBe(3);
@@ -102,7 +114,7 @@ test("With no workspace bound, Herdr binds the unbound one already at the checko
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await expectTabs(page, herdr, 1);
-    await twoQuickNewTabs(page);
+    await twoDraftTerminals(page, herdr);
     await expectTabs(page, herdr, 3, 20_000);
     // worktree.open answered already_open with the fixture's own workspace.
     const after = workspaces(herdr);
@@ -151,19 +163,22 @@ test("A new tab in a linked worktree with no workspace opens one bound to it, na
     };
 
     await newTabHere();
+    await expect(page.locator("[data-agent-tab-start]")).toHaveAttribute("data-agent-tab-start", /^draft:/);
+    expect(boundTo(linked)).toHaveLength(0);
+    await startDraftTerminal(page);
     await expect.poll(() => boundTo(linked).length, { timeout: 20_000 }).toBe(1);
     const [owner] = boundTo(linked);
     expect(before).not.toContain(owner.workspace_id);
     // D-14: the workspace Hide opened is named as the sidebar names the checkout.
     await expect.poll(() => boundTo(linked)[0].label, { timeout: 10_000 }).toBe("feature");
     expect(tabCount(herdr, owner.workspace_id)).toBe(1);
-    // Herdr has the tab before the page draws it: the page then makes the
-    // checkout current and moves its row out of the empty fold, which closes
-    // a menu open on the old row. The next menu is opened on the moved row.
+    // Starting the terminal moves the checkout out of the empty fold.
+    // The next menu is opened on the current row after that transition.
     await expect(feature.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
     await expect(project.getByRole("button", { name: /^No agents/ })).toHaveCount(0);
 
     await newTabHere();
+    await startDraftTerminal(page);
     await expect.poll(() => tabCount(herdr, owner.workspace_id), { timeout: 20_000 }).toBe(2);
     expect(boundTo(linked)).toHaveLength(1);
     await screenshot(page, "checkout-owner-linked");
@@ -184,7 +199,7 @@ test("A new tab in a plain folder opens one marked workspace and the next tab re
     await enterWorkspace(page, "fixture");
     await expectTabs(page, herdr, 1);
 
-    await twoQuickNewTabs(page);
+    await twoDraftTerminals(page, herdr);
     await expectTabs(page, herdr, 3, 20_000);
     const after = workspaces(herdr);
     expect(after).toHaveLength(2);
