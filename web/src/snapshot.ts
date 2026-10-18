@@ -56,6 +56,8 @@ export type RaisedAsk = {
   what: string | null;
   /** The raised descendant itself, where a tree draws the ask. */
   raised_pane_id: string;
+  /** The raised descendant's title; drafts may name its parent as the holder. */
+  origin_title?: string;
   /** The agent the band names: the raised descendant, or for a draft the parent holding it. */
   pane_id: string;
   title: string;

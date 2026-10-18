@@ -433,9 +433,8 @@ impl LabelWorker {
                 record.agent_status = Some(status.clone());
                 self.dirty = true;
             }
-            // A running agent is not waiting on anyone: how the last turn
-            // ended (and a question's reply or a block's cause) is over, and
-            // the turn's end writes anew. A
+            // A running agent is not waiting on anyone: the last turn's end
+            // and sentence are over, and the new turn's analysis writes anew. A
             // stopped agent whose state moved and is stopped again (or at a
             // permission prompt) ran in between, even when its working state
             // came and went inside one burst of Herdr events and was never
@@ -444,10 +443,8 @@ impl LabelWorker {
                 || (seq_moved
                     && was_stopped
                     && matches!(status.as_str(), "idle" | "done" | "blocked"));
-            if ran && let Some(end) = record.end.filter(|end| *end != LabelEnd::Working) {
-                if matches!(end, LabelEnd::Question | LabelEnd::Blocked) {
-                    record.line.clear();
-                }
+            if ran && record.end.is_some_and(|end| end != LabelEnd::Working) {
+                record.line.clear();
                 record.end = None;
                 self.dirty = true;
                 changed = true;
@@ -1278,6 +1275,20 @@ impl LabelWorker {
             // Finish the backlog before naming a task from part of it.
             pane.needs_read = true;
             return changed;
+        }
+        // A working line belongs to the Human turn whose start was analyzed.
+        // A new turn can begin while Herdr still reports Working, so the
+        // status transition alone cannot retire the old line.
+        if pane.status == "working"
+            && let Some(turn) = turn_key(pane.events.make_contiguous())
+            && let Some(record) = self.records.get_mut(pane_id)
+            && record.end == Some(LabelEnd::Working)
+            && record.analysis_turn_start != Some(turn)
+        {
+            record.line.clear();
+            record.end = None;
+            self.dirty = true;
+            changed = true;
         }
         let armed = std::mem::take(&mut pane.follow_up_armed);
         let submitted_before = self.analysis_in_flight.clone();

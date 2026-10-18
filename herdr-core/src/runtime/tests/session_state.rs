@@ -141,6 +141,7 @@ fn pane_bands_prioritize_connection_then_own_demand_then_raised_descendants() {
             verb: Verb::Approval,
             what: Some("e2e 테스트 돌리던 중".into()),
             raised_pane_id: id.into(),
+            origin_title: format!("Task {id}"),
             pane_id: id.into(),
             title: format!("Task {id}"),
             agent_kind: "claude".into(),
@@ -236,18 +237,30 @@ fn pane_header_keeps_only_own_live_working_progress() {
     agent.progress = Some("  현재 검증 중  ".into());
     agent.state.verb = RequestVerb::Working;
     assert_eq!(
-        header::of(&pane, Some(&agent), None, None).progress.as_deref(),
+        header::of(&pane, Some(&agent), None, None)
+            .progress
+            .as_deref(),
         Some("현재 검증 중")
     );
     agent.progress = Some("  ".into());
-    assert!(header::of(&pane, Some(&agent), None, None).progress.is_none());
+    assert!(
+        header::of(&pane, Some(&agent), None, None)
+            .progress
+            .is_none()
+    );
     agent.progress = Some("지난 검증".into());
     agent.state.verb = RequestVerb::Stopped;
-    assert!(header::of(&pane, Some(&agent), None, None).progress.is_none());
+    assert!(
+        header::of(&pane, Some(&agent), None, None)
+            .progress
+            .is_none()
+    );
     agent.state.verb = RequestVerb::Working;
-    assert!(header::of(&pane, Some(&agent), None, Some("mini"))
-        .progress
-        .is_none());
+    assert!(
+        header::of(&pane, Some(&agent), None, Some("mini"))
+            .progress
+            .is_none()
+    );
 }
 
 /// B25, D-07, D-23: a blocked pane names its block in its own band, a stopped

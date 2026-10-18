@@ -180,6 +180,8 @@ pub struct RaisedAsk {
     pub what: Option<String>,
     /// The raised descendant itself, where a tree draws the ask.
     pub raised_pane_id: String,
+    /// The raised descendant's title, even when a draft names its parent as the holder.
+    pub origin_title: String,
     /// The agent the band names: the raised descendant, or for a draft the
     /// parent whose input holds it.
     pub pane_id: String,
@@ -298,6 +300,7 @@ pub(crate) fn lift(
             verb,
             what,
             raised_pane_id: row.pane_id.clone(),
+            origin_title: row.identity_label.clone(),
             pane_id: named.pane_id.clone(),
             title: named.identity_label.clone(),
             agent_kind: named.agent_kind.clone(),
@@ -511,6 +514,7 @@ mod tests {
             ("raised", "middle", "middle")
         );
         assert_eq!(ask.path, ["Root", "Middle"]);
+        assert_eq!(ask.origin_title, "Raised");
     }
 
     fn actor(pane: &str) -> Actor {

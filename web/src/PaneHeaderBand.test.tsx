@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 const header: PaneHeader = { working: false, notice: null, band: { kind: "raised", reason: null, since_unix_ms: null, read: false, action: {pane_id: "child", label: "자식 검증"}, more: 0,
-  raised: { verb: "approval", what: "하위 검증 권한이 필요합니다", raised_pane_id: "child", pane_id: "child", title: "자식 검증", agent_kind: "codex", open_pane_id: "child", since_unix_ms: null, path: ["부모", "자식 검증"], checkout: "feature", human_notice: true } } };
+  raised: { verb: "approval", what: "하위 검증 권한이 필요합니다", raised_pane_id: "child", origin_title: "자식 검증", pane_id: "child", title: "자식 검증", agent_kind: "codex", open_pane_id: "child", since_unix_ms: null, path: ["부모", "자식 검증"], checkout: "feature", human_notice: true } } };
 
 async function mount(value = header, agents: AgentRow[] = [], options: { rest?: SnapshotRest; paneId?: string } = {}) {
   vi.useFakeTimers();
@@ -311,6 +311,27 @@ it("leads a raised ask with its verb, then the child name and request", async ()
     expect(verb.compareDocumentPosition(who) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(band.textContent).toContain("하위 검증 권한이 필요합니다");
     expect(band.querySelector("[data-pane-band-more]")).toBeNull();
+  } finally { await unmount(); }
+});
+
+it("names the raised descendant while a draft opens its holder", async () => {
+  const raised = { ...header.band!.raised!, verb: "draft" as const, what: null, raised_pane_id: "leaf", origin_title: "Leaf", pane_id: "middle", title: "Middle", open_pane_id: "middle", path: ["Root", "Middle"] };
+  const {container, unmount} = await mount({ ...header, band: { ...header.band!, action: { pane_id: "middle", label: "Middle" }, raised } }, [], {paneId: "root"});
+  try {
+    const band = container.querySelector("[data-pane-header-band=raised]")!;
+    expect(band.querySelector("[data-verb=draft]")?.textContent).toBe("Draft");
+    expect(band.querySelector("[data-pane-band-who=leaf]")?.textContent).toBe("Leaf(descendant)");
+    expect(band.textContent).toContain("My draft keeps the question from going through");
+    await act(async () => container.querySelector<HTMLButtonElement>("[data-pane-band-open]")!.click());
+    expect(useUiStore.getState().relation).toMatchObject({ sourcePaneId: "root", targetPaneId: "middle" });
+  } finally { await unmount(); }
+});
+
+it("marks a nested raised agent as a descendant", async () => {
+  const raised = { ...header.band!.raised!, raised_pane_id: "leaf", origin_title: "Leaf", pane_id: "leaf", title: "Leaf", open_pane_id: "leaf", path: ["Root", "Middle", "Leaf"] };
+  const {container, unmount} = await mount({ ...header, band: { ...header.band!, action: { pane_id: "leaf", label: "Leaf" }, raised } }, [], {paneId: "root"});
+  try {
+    expect(container.querySelector("[data-pane-band-who=leaf]")?.textContent).toBe("Leaf(descendant)");
   } finally { await unmount(); }
 });
 

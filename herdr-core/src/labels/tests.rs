@@ -1696,6 +1696,87 @@ fn harness_with_named_pane(harness: &Harness) -> (LabelWorker, Receiver<()>, Pat
 }
 
 #[test]
+fn a_new_working_turn_hides_the_previous_turns_sentence_until_its_own_analysis() {
+    let mut harness = Harness::new();
+    harness.start_delay = Duration::from_secs(15);
+    let (mut worker, woken, path) = harness_with_named_pane(&harness);
+    let first_line = "첫 요청에 붙은 작업 이름 진행";
+    assert_eq!(
+        shown(&worker, &agent(&path, "idle", 6))
+            .unwrap()
+            .progress
+            .as_deref(),
+        Some(first_line)
+    );
+
+    harness.session(
+        "a",
+        "native-a",
+        &[
+            ("user", "첫 요청"),
+            ("assistant", "완료"),
+            ("user", "다음 요청"),
+            ("assistant", "하는 중"),
+        ],
+    );
+    harness.backend.begin("다음 요청의 작업 이름");
+    let working = agent(&path, "working", 7);
+    observe(&mut worker, &working);
+    settle(&mut worker, &woken);
+    assert_eq!(shown(&worker, &working).unwrap().progress, None);
+
+    worker.tick(Instant::now() + Duration::from_secs(20));
+    settle(&mut worker, &woken);
+    assert_eq!(
+        shown(&worker, &working).unwrap().progress.as_deref(),
+        Some("다음 요청의 작업 이름 진행")
+    );
+}
+
+#[test]
+fn a_second_working_turn_retires_the_first_turns_line_before_analysis() {
+    let mut harness = Harness::new();
+    harness.start_delay = Duration::from_secs(15);
+    let path = harness.session(
+        "a",
+        "native-a",
+        &[("user", "첫 요청"), ("assistant", "첫 작업 중")],
+    );
+    harness.backend.begin("첫 요청의 실제 작업");
+    let (mut worker, woken, _) = harness.worker(harness.store());
+    let first = agent(&path, "working", 5);
+    observe(&mut worker, &first);
+    settle(&mut worker, &woken);
+    assert_eq!(
+        shown(&worker, &first).unwrap().progress.as_deref(),
+        Some("첫 요청의 실제 작업 진행")
+    );
+
+    harness.session(
+        "a",
+        "native-a",
+        &[
+            ("user", "첫 요청"),
+            ("assistant", "첫 작업 중"),
+            ("user", "둘째 요청"),
+            ("assistant", "둘째 작업 중"),
+        ],
+    );
+    harness.backend.begin("둘째 요청의 실제 작업");
+    let second = agent(&path, "working", 6);
+    observe(&mut worker, &second);
+    settle(&mut worker, &woken);
+    assert_eq!(shown(&worker, &second).unwrap().progress, None);
+
+    worker.tick(Instant::now() + Duration::from_secs(20));
+    settle(&mut worker, &woken);
+    assert_eq!(
+        shown(&worker, &second).unwrap().progress.as_deref(),
+        Some("둘째 요청의 실제 작업 진행")
+    );
+}
+
+#[test]
 fn an_imported_label_shows_only_for_the_session_it_was_proven_for() {
     let harness = Harness::new();
     let owner = hide_session::label_reference_token("claude", "id", "native-a").unwrap();

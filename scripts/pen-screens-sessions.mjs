@@ -57,7 +57,7 @@ export function sessionScreens(tokens, {frame, text, icon, themedXref, screenBut
       ...(band.unreceived ? [caption(`${id}-band-unreceived`, band.unreceived, '$--muted-foreground')] : [caption(`${id}-band-age`, band.age ?? '12m', '$--muted-foreground', {mono:true})]),
       ...(!children && band.more ? [caption(`${id}-band-more`, `외 ${band.more}건`, '$--muted-foreground')] : []),
       frame(`${id}-band-sp`, 'Spacer', {width:'fill_container',height:1}, []),
-      screenButton(`${id}-band-open`, '열기', {variant:'outline', height:20}),
+      ...(band.open ? [screenButton(`${id}-band-open`, '열기', {variant:'outline', height:20})] : []),
     ])] : children || line ? [frame(`${id}-children`, 'Progress overlay', {width:'fill_container',height:28,layout:'horizontal',gap:'$--spacing-xs',alignItems:'center',padding:[0,'$--spacing-sm'],fill:'$--secondary'},[
       ...tree,...(line ? [caption(`${id}-progress`,line,'$--muted-foreground',{width:'fill_container'})] : []),
     ])] : [];
@@ -74,7 +74,7 @@ export function sessionScreens(tokens, {frame, text, icon, themedXref, screenBut
       labeled('question','02 · 답변이 필요함',[pane(`${id}-question`,{title:'Group tab 기능 설계',children:3,band:{verb:'질문',what:'그룹 이름은 직접 정하게 할까요?',age:'2분'}})]),
       labeled('approval','03 · 승인이 필요함',[pane(`${id}-approval`,{title:'Group tab 기능 설계',children:3,band:{verb:'승인',what:'권한 승인을 기다리고 있어요',age:'1분'}})]),
       labeled('blocked','04 · 막힘',[pane(`${id}-blocked`,{title:'Group tab 기능 설계',children:3,band:{verb:'막힘',what:'접근 권한을 확인해 주세요',age:'4분'}})]),
-      labeled('raised','05 · 자식에게 사용자 승인이 필요함',[pane(`${id}-raised`,{title:'Group tab 기능 설계',children:3,band:{verb:'승인',what:'권한 승인을 기다리고 있어요',who:['codex','UI 검증'],age:'3분'}})]),
+      labeled('raised','05 · 자식에게 사용자 승인이 필요함',[pane(`${id}-raised`,{title:'Group tab 기능 설계',children:3,band:{verb:'승인',what:'권한 승인을 기다리고 있어요',who:['codex','UI 검증'],age:'3분',open:true}})]),
       labeled('stopped','06 · 현재 세션이 멈춤',[pane(`${id}-stopped`,{title:'Group tab 기능 설계',children:3,band:{verb:'멈춤',what:'응답이 중단됐어요',age:'1분'}})]),
     ]);
   }

@@ -2284,6 +2284,10 @@
       "type": "number",
       "value": 144
     },
+    "--size-pane-narrow-example": {
+      "type": "number",
+      "value": 440
+    },
     "--size-usage-cell": {
       "type": "number",
       "value": 12
@@ -25029,27 +25033,6 @@
                               "children": [],
                               "width": "fill_container",
                               "height": 1
-                            },
-                            {
-                              "id": "sfu-ph-board-l-question-band-open",
-                              "type": "ref",
-                              "ref": "hideui:btn-m",
-                              "name": "열기",
-                              "fill": "$--background",
-                              "stroke": "$--border",
-                              "strokeWidth": "$--size-hairline",
-                              "strokeAlignment": "inner",
-                              "height": 20,
-                              "descendants": {
-                                "hideui:btn-ic": {
-                                  "fill": "$--primary-foreground",
-                                  "enabled": false
-                                },
-                                "hideui:btn-lb": {
-                                  "fill": "$--foreground",
-                                  "content": "열기"
-                                }
-                              }
                             }
                           ],
                           "width": "fill_container",
@@ -25297,27 +25280,6 @@
                               "children": [],
                               "width": "fill_container",
                               "height": 1
-                            },
-                            {
-                              "id": "sfu-ph-board-l-approval-band-open",
-                              "type": "ref",
-                              "ref": "hideui:btn-m",
-                              "name": "열기",
-                              "fill": "$--background",
-                              "stroke": "$--border",
-                              "strokeWidth": "$--size-hairline",
-                              "strokeAlignment": "inner",
-                              "height": 20,
-                              "descendants": {
-                                "hideui:btn-ic": {
-                                  "fill": "$--primary-foreground",
-                                  "enabled": false
-                                },
-                                "hideui:btn-lb": {
-                                  "fill": "$--foreground",
-                                  "content": "열기"
-                                }
-                              }
                             }
                           ],
                           "width": "fill_container",
@@ -25565,27 +25527,6 @@
                               "children": [],
                               "width": "fill_container",
                               "height": 1
-                            },
-                            {
-                              "id": "sfu-ph-board-l-blocked-band-open",
-                              "type": "ref",
-                              "ref": "hideui:btn-m",
-                              "name": "열기",
-                              "fill": "$--background",
-                              "stroke": "$--border",
-                              "strokeWidth": "$--size-hairline",
-                              "strokeAlignment": "inner",
-                              "height": 20,
-                              "descendants": {
-                                "hideui:btn-ic": {
-                                  "fill": "$--primary-foreground",
-                                  "enabled": false
-                                },
-                                "hideui:btn-lb": {
-                                  "fill": "$--foreground",
-                                  "content": "열기"
-                                }
-                              }
                             }
                           ],
                           "width": "fill_container",
@@ -26111,27 +26052,6 @@
                               "children": [],
                               "width": "fill_container",
                               "height": 1
-                            },
-                            {
-                              "id": "sfu-ph-board-l-stopped-band-open",
-                              "type": "ref",
-                              "ref": "hideui:btn-m",
-                              "name": "열기",
-                              "fill": "$--background",
-                              "stroke": "$--border",
-                              "strokeWidth": "$--size-hairline",
-                              "strokeAlignment": "inner",
-                              "height": 20,
-                              "descendants": {
-                                "hideui:btn-ic": {
-                                  "fill": "$--primary-foreground",
-                                  "enabled": false
-                                },
-                                "hideui:btn-lb": {
-                                  "fill": "$--foreground",
-                                  "content": "열기"
-                                }
-                              }
                             }
                           ],
                           "width": "fill_container",
@@ -49015,27 +48935,6 @@
                               "children": [],
                               "width": "fill_container",
                               "height": 1
-                            },
-                            {
-                              "id": "sfu-ph-board-d-question-band-open",
-                              "type": "ref",
-                              "ref": "hideui:btn-m",
-                              "name": "열기",
-                              "fill": "$--background",
-                              "stroke": "$--border",
-                              "strokeWidth": "$--size-hairline",
-                              "strokeAlignment": "inner",
-                              "height": 20,
-                              "descendants": {
-                                "hideui:btn-ic": {
-                                  "fill": "$--primary-foreground",
-                                  "enabled": false
-                                },
-                                "hideui:btn-lb": {
-                                  "fill": "$--foreground",
-                                  "content": "열기"
-                                }
-                              }
                             }
                           ],
                           "width": "fill_container",
@@ -49283,27 +49182,6 @@
                               "children": [],
                               "width": "fill_container",
                               "height": 1
-                            },
-                            {
-                              "id": "sfu-ph-board-d-approval-band-open",
-                              "type": "ref",
-                              "ref": "hideui:btn-m",
-                              "name": "열기",
-                              "fill": "$--background",
-                              "stroke": "$--border",
-                              "strokeWidth": "$--size-hairline",
-                              "strokeAlignment": "inner",
-                              "height": 20,
-                              "descendants": {
-                                "hideui:btn-ic": {
-                                  "fill": "$--primary-foreground",
-                                  "enabled": false
-                                },
-                                "hideui:btn-lb": {
-                                  "fill": "$--foreground",
-                                  "content": "열기"
-                                }
-                              }
                             }
                           ],
                           "width": "fill_container",
@@ -49551,27 +49429,6 @@
                               "children": [],
                               "width": "fill_container",
                               "height": 1
-                            },
-                            {
-                              "id": "sfu-ph-board-d-blocked-band-open",
-                              "type": "ref",
-                              "ref": "hideui:btn-m",
-                              "name": "열기",
-                              "fill": "$--background",
-                              "stroke": "$--border",
-                              "strokeWidth": "$--size-hairline",
-                              "strokeAlignment": "inner",
-                              "height": 20,
-                              "descendants": {
-                                "hideui:btn-ic": {
-                                  "fill": "$--primary-foreground",
-                                  "enabled": false
-                                },
-                                "hideui:btn-lb": {
-                                  "fill": "$--foreground",
-                                  "content": "열기"
-                                }
-                              }
                             }
                           ],
                           "width": "fill_container",
@@ -50097,27 +49954,6 @@
                               "children": [],
                               "width": "fill_container",
                               "height": 1
-                            },
-                            {
-                              "id": "sfu-ph-board-d-stopped-band-open",
-                              "type": "ref",
-                              "ref": "hideui:btn-m",
-                              "name": "열기",
-                              "fill": "$--background",
-                              "stroke": "$--border",
-                              "strokeWidth": "$--size-hairline",
-                              "strokeAlignment": "inner",
-                              "height": 20,
-                              "descendants": {
-                                "hideui:btn-ic": {
-                                  "fill": "$--primary-foreground",
-                                  "enabled": false
-                                },
-                                "hideui:btn-lb": {
-                                  "fill": "$--foreground",
-                                  "content": "열기"
-                                }
-                              }
                             }
                           ],
                           "width": "fill_container",
