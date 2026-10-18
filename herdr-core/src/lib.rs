@@ -65,6 +65,7 @@ mod session_archive;
 mod session_sync;
 mod sidebar;
 mod split_tree;
+mod start_claim;
 pub mod tasks;
 mod terminal_attachments;
 pub mod terminal_reports;
