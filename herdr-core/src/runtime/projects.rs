@@ -4297,12 +4297,15 @@ impl Runtime {
             Ok(target) => target,
             Err(message) => return self.ingest_task_operation_result(id, Err(message.into())),
         };
+        let recovery_only = prepared
+            .as_ref()
+            .is_some_and(|prepared| prepared.request.recovery_only);
         let spawned = match prepared {
             Some(prepared) => live::spawn_targeted_checkout_start(target, request, prepared.saved),
             None => live::spawn_checkout_tab_create(target, request),
         };
         if let Err(message) = spawned {
-            self.group_start_failed(id, false);
+            self.group_start_failed(id, recovery_only);
             return self.ingest_task_operation_result(id, Err(message));
         }
         true

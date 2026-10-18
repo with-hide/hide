@@ -48,6 +48,8 @@ struct State {
     inspections: Vec<String>,
     wrong_export_owner: bool,
     refuse_binding_save: bool,
+    respawn_at_inspection: Option<usize>,
+    refuse_unzoom: bool,
 }
 
 impl State {
@@ -66,6 +68,8 @@ impl State {
             inspections: vec![],
             wrong_export_owner: false,
             refuse_binding_save: false,
+            respawn_at_inspection: None,
+            refuse_unzoom: false,
         }
     }
 
@@ -176,6 +180,27 @@ impl NodeLink for IdentityNode {
         };
         let mut state = self.0.lock().unwrap();
         state.inspections.push(pane_id.clone());
+        if pane_id == "w1:p3"
+            && state.respawn_at_inspection
+                == Some(
+                    state
+                        .inspections
+                        .iter()
+                        .filter(|id| *id == &pane_id)
+                        .count(),
+                )
+        {
+            state.respawn_at_inspection = None;
+            let identity = state.identities.get_mut(&pane_id).unwrap();
+            identity.shell_pid += 1000;
+            identity.shell_started += 1000;
+            // A same-server respawn retains pane/terminal ids and manual
+            // label, but clears launch argv in the pinned Herdr.
+            state.layouts.get_mut("w1:t2").unwrap()["root"]
+                .as_object_mut()
+                .unwrap()
+                .remove("command");
+        }
         Ok(serde_json::to_value(&state.identities[&pane_id])
             .unwrap()
             .into())
@@ -282,8 +307,13 @@ impl Fixture {
         let state = Arc::new(Mutex::new(State::new()));
         let answer = state.clone();
         Self {
-            server: FakeHerdr::start("checkout-start", move |method, params| {
-                answer.lock().unwrap().answer(method, params)
+            server: FakeHerdr::start_with_errors("checkout-start", move |method, params| {
+                let mut state = answer.lock().unwrap();
+                if method == "pane.zoom" && state.refuse_unzoom {
+                    state.calls.push(method.into());
+                    return Err(("invalid_operation".into(), "unzoom refused".into()));
+                }
+                Ok(state.answer(method, params))
             }),
             state,
             stopped: Arc::new(AtomicBool::new(false)),
@@ -383,6 +413,52 @@ fn launch() -> ShellLaunch {
         command: vec!["/bin/zsh".into(), "-l".into()],
         env: BTreeMap::from([("SHELL_INTEGRATION".into(), "1".into())]),
     }
+}
+
+#[test]
+fn respawn_after_discovery_cannot_become_the_first_binding_with_or_without_an_ack() {
+    for lost_ack in [false, true] {
+        for inspection in [1, 2] {
+            let fixture = Fixture::new();
+            fixture.state.lock().unwrap().respawn_at_inspection = Some(inspection);
+            let request = fixture.request(false);
+            let result = if lost_ack {
+                assert!(
+                    fixture
+                        .run(&request, Some(&launch()), Some("layout.apply"))
+                        .is_err()
+                );
+                fixture.run(&fixture.recover(&request), None, None)
+            } else {
+                fixture.run(&request, Some(&launch()), None)
+            };
+            assert!(result.unwrap_err().is_ambiguous());
+            assert!(fixture.state.lock().unwrap().last_saved().binding.is_none());
+            assert_eq!(fixture.mutations(), ["layout.apply"]);
+        }
+    }
+}
+
+#[test]
+fn refused_unzoom_retains_the_created_terminal_for_confirmation() {
+    let fixture = Fixture::new();
+    {
+        let mut state = fixture.state.lock().unwrap();
+        state.layouts.get_mut("w1:t1").unwrap()["zoomed"] = json!(true);
+        state.refuse_unzoom = true;
+    }
+    let request = fixture.request(true);
+    let error = fixture.run(&request, Some(&launch()), None).unwrap_err();
+    assert!(error.is_ambiguous(), "creation already succeeded");
+    assert!(fixture.state.lock().unwrap().last_saved().binding.is_some());
+    assert_eq!(fixture.mutations(), ["layout.apply", "pane.zoom"]);
+    fixture.state.lock().unwrap().refuse_unzoom = false;
+    let recovered = fixture.run(&fixture.recover(&request), None, None).unwrap();
+    assert_eq!(recovered.created_tab_id.as_deref(), Some("w1:t1"));
+    assert_eq!(
+        fixture.mutations(),
+        ["layout.apply", "pane.zoom", "pane.zoom", "pane.move"]
+    );
 }
 
 #[test]

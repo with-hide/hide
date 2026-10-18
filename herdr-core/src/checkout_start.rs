@@ -250,7 +250,7 @@ pub(super) fn run(
             Err(_) => {}
         }
     }
-    let (mut layout, pane, command) = discover(control, &start.marker, &effect)?;
+    let (mut layout, pane, _) = discover(control, &start.marker, &effect)?;
     let identity = inspect(control, &pane)?;
     if let Some(bound) = &effect.binding {
         if bound.pane_id != pane
@@ -274,15 +274,22 @@ pub(super) fn run(
                 "The creation answer and terminal claim disagree. Inspect its tab before continuing.",
             ));
         }
-        // Cold restore and respawn clear the active launch argv in the pinned
-        // Herdr. An unobserved default-shell claim has no such proof.
-        if acknowledged.is_none()
-            && (effect.expected_command.is_none() || command != effect.expected_command)
+        // Bracket a fresh authoritative claim/command read with incarnation
+        // reads. The ACK identifies a pane, not the shell still occupying it.
+        let (confirmed_layout, confirmed_pane, command) =
+            discover(control, &start.marker, &effect)?;
+        let confirmed_identity = inspect(control, &confirmed_pane)?;
+        if confirmed_pane != pane
+            || confirmed_layout.tab_id != layout.tab_id
+            || confirmed_identity != identity
+            || effect.expected_command.as_ref().is_none_or(Vec::is_empty)
+            || command != effect.expected_command
         {
             return Err(uncertain(
                 "The original shell's continuity is not confirmed. Inspect its tab; no second process was started.",
             ));
         }
+        layout = confirmed_layout;
         effect.binding = Some(BoundPane {
             tab_id: layout.tab_id.clone(),
             pane_id: pane.clone(),
@@ -310,7 +317,12 @@ pub(super) fn run(
                     control.connector,
                     "pane.zoom",
                     wire::pane_unzoom_params(&target.pane_id)?,
-                )?;
+                )
+                .map_err(|_| {
+                    uncertain(
+                        "The terminal was created, but its tab could not be prepared. Check this start's status before continuing.",
+                    )
+                })?;
                 let unzoomed =
                     validate_target(control, &start.marker, &effect)?.expect("target exists");
                 if unzoomed.zoomed || unzoomed.root != before.root {
