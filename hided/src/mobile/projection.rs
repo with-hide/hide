@@ -221,7 +221,7 @@ mod tests {
                 "state": {"line": line("deploy left", "news", "news")}})),
             agent("kept", "seen", json!({"mark": "quiet",
                 "state": {"line": line("tests left", "kept", "subtle")}})),
-            agent("unknown", "seen", json!({"mark": "quiet",
+            agent("unknown", "seen", json!({"mark": "unknown",
                 "state": {"line": line("quiet", "quiet", "subtle")}})),
         ]}});
         let projection = project(&input, "local");
@@ -266,7 +266,7 @@ mod tests {
                     "quiet",
                     Some(("tests left", "kept", "subtle"))
                 ),
-                ("unknown", "unknown", "quiet", None),
+                ("unknown", "unknown", "unknown", None),
             ]
         );
         let root = projection

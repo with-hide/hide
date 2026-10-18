@@ -185,6 +185,12 @@ pub struct KitReport {
     /// only; the screen reads it as no answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_daemon_unreadable: Option<String>,
+    /// Why the machine's Codex gave no answer for [`Self::codex_daemon`], for
+    /// the core's log only: every Codex start the core makes is refused until
+    /// it reads. `None` when it answered, there is no Codex, or Hide was
+    /// quitting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_capability_unread: Option<CodexReadFailure>,
     /// How the operator's request to turn the shared server off ended; present
     /// only in the report of the pass that carried it ([`Scope::codex_daemon_off`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -599,6 +605,7 @@ pub fn status(target: &KitTarget) -> KitReport {
         codex_daemon_on: daemon.on,
         codex_daemon_running: daemon.running,
         codex_daemon_unreadable: daemon.unreadable,
+        codex_capability_unread: daemon.unread,
         codex_daemon_off: None,
         held_for_onboarding: held,
         labels_retirement: Retirement::default(),
@@ -606,6 +613,24 @@ pub fn status(target: &KitTarget) -> KitReport {
         herdr: None,
         refused: None,
     }
+}
+
+/// Why the machine's Codex gave no answer to `codex features list`: the
+/// cause and Codex's exit code, never its path or what it printed, which can
+/// name the account (engineering rule 9).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "cause", rename_all = "snake_case")]
+pub enum CodexReadFailure {
+    CouldNotStart,
+    TimedOut,
+    /// Codex exited unsuccessfully with `code`.
+    Exited {
+        code: i32,
+    },
+    /// A signal ended Codex.
+    Signaled,
+    /// Codex printed a `daemon_auto_start` row Hide cannot read.
+    Unreadable,
 }
 
 /// How a request to turn Codex's shared server off ended.
@@ -687,7 +712,7 @@ fn turn_codex_daemon_off(target: &KitTarget) -> CodexDaemonOff {
                 format!("codex still reports the shared server as {setting:?}"),
             );
         }
-        Err(message) => return failed(CodexDaemonOffFailure::CodexRefused, message),
+        Err(error) => return failed(CodexDaemonOffFailure::CodexRefused, error.message),
     }
     match stop(codex, &target.home, &target.stop) {
         Ok(Stopped::Stopped) => CodexDaemonOff::Done { no_daemon: None },
@@ -902,6 +927,7 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
         codex_daemon_on: daemon.on,
         codex_daemon_running: daemon.running,
         codex_daemon_unreadable: daemon.unreadable,
+        codex_capability_unread: daemon.unread,
         codex_daemon_off: None,
         held_for_onboarding,
         labels_retirement,
@@ -923,6 +949,28 @@ struct DaemonRead {
     running: Option<bool>,
     /// The daemon's answer Hide could not read.
     unreadable: Option<String>,
+    /// Why the setting was not read (`KitReport::codex_capability_unread`).
+    unread: Option<CodexReadFailure>,
+}
+
+/// Why a capability read had no answer, as the core logs it: the cause and
+/// the exit code, never the path or what Codex printed. A read Hide stopped
+/// because it is quitting says nothing about the machine.
+fn codex_read_failure(
+    failure: hide_agent_hooks::codex_daemon::ReadFailure,
+) -> Option<CodexReadFailure> {
+    use hide_agent_hooks::codex_daemon::{ReadFailure, SwitchFailure};
+    match failure {
+        ReadFailure::Run(SwitchFailure::Stopped) => None,
+        ReadFailure::Run(SwitchFailure::TimedOut) => Some(CodexReadFailure::TimedOut),
+        // A run that ended before Codex answered: it never says Refused.
+        ReadFailure::Run(SwitchFailure::CouldNotStart | SwitchFailure::Refused) => {
+            Some(CodexReadFailure::CouldNotStart)
+        }
+        ReadFailure::Exited { code: Some(code) } => Some(CodexReadFailure::Exited { code }),
+        ReadFailure::Exited { code: None } => Some(CodexReadFailure::Signaled),
+        ReadFailure::Unreadable => Some(CodexReadFailure::Unreadable),
+    }
 }
 
 fn codex_daemon(target: &KitTarget) -> DaemonRead {
@@ -930,17 +978,20 @@ fn codex_daemon(target: &KitTarget) -> DaemonRead {
     let Some(codex) = target.codex.as_deref() else {
         return DaemonRead::default();
     };
-    let (feature, on) = match read_setting(codex, &target.home, &target.stop) {
-        Ok(DaemonSetting::Unsupported) => (Some(false), None),
-        Ok(DaemonSetting::On) => (Some(true), Some(true)),
-        Ok(DaemonSetting::Off) => (Some(true), Some(false)),
-        Err(_) => (None, None),
+    let (feature, on, unread) = match read_setting(codex, &target.home, &target.stop) {
+        Ok(DaemonSetting::Unsupported) => (Some(false), None, None),
+        Ok(DaemonSetting::On) => (Some(true), Some(true), None),
+        Ok(DaemonSetting::Off) => (Some(true), Some(false), None),
+        // Every Codex start the core makes is refused until this reads, so
+        // why it did not reaches the core's log.
+        Err(error) => (None, None, codex_read_failure(error.failure)),
     };
     // A Codex older than the setting starts no shared daemon to ask about.
     if feature != Some(true) {
         return DaemonRead {
             feature,
             on,
+            unread,
             ..DaemonRead::default()
         };
     }
@@ -953,6 +1004,7 @@ fn codex_daemon(target: &KitTarget) -> DaemonRead {
         on,
         running,
         unreadable,
+        unread,
     }
 }
 

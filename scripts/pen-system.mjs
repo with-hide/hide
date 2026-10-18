@@ -85,11 +85,13 @@ export function frame(id, name, props, children) {
 // The status mark (web/src/components/status-mark.tsx, docs/status-model.md,
 // The mark): one 12 px slot that draws one of four shapes, the operator's turn
 // as a `!` in a warning badge, in progress as a static three-quarter ring,
-// to read as a 7 px dot (green only for a finished verdict), and quiet as
-// nothing. A row in progress that waits on proven work draws the same ring
-// dashed (status-marks D-25). A master holds the shapes as siblings, all off;
-// an instance turns on the one its mark draws (`markSwitch`).
-export const MARKS = ['turn', 'going', 'waiting', 'done', 'unread', 'quiet'];
+// to read as a 7 px dot (green only for a finished verdict), and quiet, an
+// agent at rest, as a faint hollow ring smaller and thinner than the
+// in-progress one (sidebar-quiet-mark-indent D-02). A row in progress that
+// waits on proven work draws the same ring dashed (status-marks D-25), and a
+// row of unknown state draws nothing (D-04). A master holds the shapes as
+// siblings, all off; an instance turns on the one its mark draws (`markSwitch`).
+export const MARKS = ['turn', 'going', 'waiting', 'done', 'unread', 'quiet', 'unknown'];
 
 // The waiting ring: the in-progress ring's centre line (r 4.05 in its 10 px
 // box, 1.9 thick) cut into five dashes and four gaps along its three quarters,
@@ -116,6 +118,8 @@ export function markShapes(p) {
     {type: 'ellipse', id: `${p}-arc`, name: 'In progress', enabled: false, width: 10, height: 10, fill: '$--agent-working', innerRadius: 0.62, startAngle: 90, sweepAngle: -270},
     {type: 'path', id: `${p}-arc-wait`, name: 'Waiting', enabled: false, width: 10, height: 10, viewBox: [0, 0, 10, 10], geometry: dashedArc(), stroke: '$--agent-working', strokeWidth: 1.9},
     {type: 'ellipse', id: `${p}-dot`, name: 'Unread', enabled: false, width: 7, height: 7, fill: '$--success'},
+    // r 3.4 of 12 with a 1.3 stroke at the read-status opacity, as status-mark.tsx draws it.
+    {type: 'ellipse', id: `${p}-quiet`, name: 'Quiet', enabled: false, width: 6.8, height: 6.8, fill: [], stroke: '$--muted-foreground', strokeWidth: 1.3, strokeAlignment: 'center', opacity: 0.55},
   ];
 }
 
@@ -133,6 +137,7 @@ export function markSwitch(p, mark, alias = '', {moon = false} = {}) {
     [`${alias}${p}-arc`]: {enabled: mark === 'going', fill: '$--agent-working'},
     [`${alias}${p}-arc-wait`]: {enabled: mark === 'waiting', stroke: '$--agent-working'},
     [`${alias}${p}-dot`]: {enabled: mark === 'done' || mark === 'unread', fill: mark === 'unread' ? '$--foreground' : '$--success'},
+    [`${alias}${p}-quiet`]: {enabled: mark === 'quiet', stroke: '$--muted-foreground'},
   };
 }
 
@@ -150,7 +155,7 @@ export function legacyMark(symbol, fill) {
 
 // A mark slot drawn in place, with only its own shape.
 export function markSlot(id, mark, {height = 12} = {}) {
-  const on = {turn: `${id}-turn`, going: `${id}-arc`, waiting: `${id}-arc-wait`, done: `${id}-dot`, unread: `${id}-dot`}[mark];
+  const on = {turn: `${id}-turn`, going: `${id}-arc`, waiting: `${id}-arc-wait`, done: `${id}-dot`, unread: `${id}-dot`, quiet: `${id}-quiet`}[mark];
   return frame(id, 'Status mark', {width: 12, height, layout: 'horizontal', justifyContent: 'center', alignItems: 'center'},
     markShapes(id).filter(shape => shape.id === on).map(shape => ({...shape, enabled: true, ...(mark === 'unread' ? {fill: '$--foreground'} : {})})));
 }

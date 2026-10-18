@@ -3750,6 +3750,10 @@ impl Runtime {
             id,
             prompt,
             agent_choice::agent_arguments(payload.agent_kind.as_deref(), model.as_deref(), &[]),
+            hide_agent_adapter::LaunchChoice {
+                model,
+                effort: None,
+            },
         );
         if let Some(operation) = self.snapshot.task_operation.as_mut() {
             operation.device_id = device.clone();
@@ -4056,7 +4060,14 @@ impl Runtime {
         // A start names one place: a device's Home, or one of its checkouts.
         let checkout_path = match (payload.home, payload.checkout_path.clone()) {
             (true, None) => {
-                return self.start_in_home(&device, agent_kind, model, prompt, request_id);
+                return self.start_in_home(
+                    &device,
+                    agent_kind,
+                    model,
+                    prompt,
+                    request_id,
+                    payload.stay_behind,
+                );
             }
             (false, Some(path)) if !path.is_empty() => path,
             _ => {
@@ -4126,6 +4137,7 @@ impl Runtime {
         if let Some(operation) = self.snapshot.task_operation.as_mut() {
             operation.request_id = request_id;
             operation.device_id = (!local).then(|| device.clone());
+            operation.stays_behind = payload.stay_behind;
         }
         self.remember_agent_choice(agent_kind.as_deref(), model.as_deref());
         let mut arguments = resume.unwrap_or_default();
@@ -4134,7 +4146,15 @@ impl Runtime {
             model.as_deref(),
             &[],
         ));
-        self.set_task_agent_launch(id, prompt, arguments);
+        self.set_task_agent_launch(
+            id,
+            prompt,
+            arguments,
+            hide_agent_adapter::LaunchChoice {
+                model,
+                effort: None,
+            },
+        );
         if let Some(launch) = self.task_agent_launch.as_mut() {
             launch.resume_reference = resume_reference.clone();
         }
@@ -4153,6 +4173,7 @@ impl Runtime {
             checkout_path,
             label,
             host,
+            focus: !payload.stay_behind,
         };
         let target = if local {
             self.live
@@ -4612,6 +4633,7 @@ pub(super) fn resume_session_arguments(kind: &str, session_id: &str) -> Option<V
     crate::recent_closed::resume_arguments(&crate::recent_closed::ClosedAgent {
         kind: kind.to_owned(),
         session_id: Some(session_id.to_owned()),
+        ..Default::default()
     })
 }
 

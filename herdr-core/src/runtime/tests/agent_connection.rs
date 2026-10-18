@@ -505,6 +505,7 @@ fn report_with(on: bool, off: Option<hide_kit::CodexDaemonOff>) -> hide_kit::Kit
         codex_daemon_on: Some(on),
         codex_daemon_running: None,
         codex_daemon_unreadable: None,
+        codex_capability_unread: None,
         codex_daemon_off: off,
         ..hide_kit::KitReport::default()
     }
@@ -739,6 +740,35 @@ fn an_unreadable_daemon_answer_is_no_answer_and_is_logged_once() {
     assert!(!runtime.kit_state(local).shares_codex_server());
 }
 
+/// A Codex the kit could not read goes to the log once per cause, with the
+/// machine it was on and the cause and exit code alone (engineering rule 9).
+#[test]
+fn an_unread_codex_is_logged_once_with_its_machine_cause_and_exit_code() {
+    let local = crate::node::TEST_NODE;
+    let mut runtime = runtime();
+    let unread = hide_kit::KitReport {
+        codex_daemon: None,
+        codex_capability_unread: Some(hide_kit::CodexReadFailure::Exited { code: 134 }),
+        ..report_with(false, None)
+    };
+    let ((), records) = crate::diagnostics::capture(|| {
+        for _ in 0..3 {
+            runtime.ingest_kit_report(local, &unread);
+        }
+    });
+    let logged: Vec<_> = records
+        .iter()
+        .filter(|record| record["kind"] == "codex_capability_unread")
+        .collect();
+    assert_eq!(logged.len(), 1, "{records:?}");
+    assert_eq!(logged[0]["device_id"], local);
+    assert_eq!(logged[0]["agent"], "codex");
+    assert_eq!(
+        logged[0]["failure"],
+        serde_json::json!({"cause": "exited", "code": 134})
+    );
+}
+
 #[test]
 fn a_machine_with_no_kit_or_no_such_device_refuses_the_request_with_an_error() {
     let mut runtime = runtime();
@@ -882,4 +912,111 @@ fn a_reopen_through_the_worker_waits_for_herdr_to_release_the_name() {
     );
     let first_start = methods.iter().position(|m| m == "agent.start").unwrap();
     assert!(methods[..first_start].iter().all(|m| m != "agent.start"));
+}
+
+/// A reopen in the pane resumes the conversation with the model and effort
+/// Hide started the agent with, which a bare resume would leave to the CLI's
+/// configured default (`launch_choice.rs` holds the other restarts).
+#[test]
+fn a_reopen_in_its_pane_resumes_with_the_choice_the_agent_was_started_with() {
+    use crate::fake_herdr::FakeHerdr;
+    use hide_platform::process;
+    use serde_json::json;
+
+    const SESSION_ID: &str = "11111111-1111-4111-8111-111111111111";
+    let mut child = process::OwnedChild::spawn(std::process::Command::new("/bin/sleep").arg("60"))
+        .expect("sleep starts");
+    let pid = child.id();
+    let (sent, starts) = std::sync::mpsc::channel();
+    let herdr = FakeHerdr::start(
+        "runtime-reopen-choice",
+        move |method, params| match method {
+            "agent.get" => json!({"type": "agent_info", "agent": {
+                "pane_id": "w1:p2", "tab_id": "w1:t1", "workspace_id": "w1",
+                "terminal_id": "term_1", "agent": "claude", "agent_status": "idle",
+                "state_change_seq": 2, "focused": false, "interactive_ready": true, "revision": 0
+            }}),
+            "pane.process_info" => {
+                let shell = std::process::id();
+                let foreground = if process::is_alive(pid) { pid } else { shell };
+                json!({"type": "pane_process_info", "process_info": {
+                    "pane_id": "w1:p2", "shell_pid": shell, "foreground_process_group_id": foreground,
+                    "foreground_processes": [{"pid": shell, "name": "zsh"}]
+                }})
+            }
+            "agent.start" => {
+                sent.send(params["args"].clone()).unwrap();
+                json!({"type": "agent_started", "argv": [], "agent": {
+                    "pane_id": "w1:p2", "tab_id": "w1:t1", "workspace_id": "w1",
+                    "terminal_id": "term_1", "agent_status": "idle", "focused": false, "revision": 1
+                }})
+            }
+            other => panic!("unexpected {other}"),
+        },
+    );
+    let reaper = std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+
+    let mut runtime = runtime();
+    kit_rows(&mut runtime, None);
+    runtime.ingest_hook_diagnosis(diagnosis(installed(), installed()));
+    let launch = hide_agent_adapter::LaunchChoice {
+        model: Some("sonnet".into()),
+        effort: Some("high".into()),
+    };
+    runtime.record_pane_launch("w1:p2", "claude", "agent-w1:p2", &launch, None);
+    let mut payload = session(&[("w1:p1", "claude", true), ("w1:p2", "claude", false)]);
+    payload["agents"][1]["agent_session"]["value"] = json!(SESSION_ID);
+    payload["agents"][1]["name"] = json!("agent-w1:p2");
+    runtime.ingest_session(Ok(
+        crate::sidebar::owned_label_fixture(payload).expect("native session fixture")
+    ));
+    for pane in runtime
+        .snapshot
+        .navigator
+        .workspaces
+        .iter_mut()
+        .flat_map(|workspace| workspace.checkouts.iter_mut())
+        .flat_map(|checkout| checkout.tabs.iter_mut())
+        .flat_map(|tab| tab.panes.iter_mut())
+    {
+        pane.cwd = std::env::temp_dir().to_string_lossy().into_owned();
+    }
+    let shared = SharedRuntime::new(runtime);
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime.live = Some(crate::live::LiveContext {
+            socket_path: herdr.socket_path().to_path_buf(),
+            runtime: shared.weak(),
+            notifier: crate::handle::ChangeNotifier::noop(),
+            api_connector: Arc::new(herdr.connector()),
+            node: Arc::new(hide_node::Local::of_process()),
+        });
+        assert!(reopen(&mut runtime, "w1:p2"));
+    }
+    assert_eq!(
+        starts
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the reopen started the agent"),
+        json!([
+            "--resume", SESSION_ID, "--model", "sonnet", "--effort", "high"
+        ])
+    );
+    wait(&shared, "the reopen to settle", |runtime| {
+        runtime.pane_reopens.is_empty()
+    });
+    reaper.join().expect("reaped");
+    assert_eq!(
+        shared
+            .lock()
+            .unwrap()
+            .snapshot()
+            .ui_state
+            .pane_launches
+            .get("w1:p2")
+            .map(|record| &record.choice),
+        Some(&launch),
+        "the same conversation keeps its choice for the next restart"
+    );
 }

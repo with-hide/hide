@@ -17,6 +17,11 @@ Each queued command revalidates the caller's pane against the prepared Workspace
 Mailbox callers and new recipients require a positive native-session binding; a missing binding returns `native_identity_required`.
 Two missing native references in the same pane never authorize retained mail.
 Target names and pane IDs resolve against the daemon's current observations.
+Herdr numbers panes per machine, and an agent learns the numbers from its own machine's Herdr, so a bare pane ID (`w1:p2`) names the pane on the caller's own machine: a device agent's `w1:p2` is that device's pane, and the core's own agent's `w1:p2` is the core's.
+A bare pane ID never reaches a pane on another machine, even when only that machine has the number: the command is refused `target_unavailable`.
+A pane on another machine is reached by the agent's name or registration ID, or by the full address of a device's pane, `remote:<device>:pane:<id>`.
+The same reading applies to the pane IDs of `--actor` and `--observer`.
+A name that two machines share, such as the default `hide-claude-w1-p2`, is refused `target_ambiguous`.
 A connected device recipient uses its node's pane service over that device's existing SSH link; the credential fixes its device, link, pane, sender and kind, and losing the link revokes that credential immediately.
 The only ledger remains on the controlling daemon.
 A disconnected device hook finishes within its two-second budget with no letters, leaving them pending in that ledger.
@@ -66,6 +71,7 @@ A tool that runs these commands from a program (sasu, a Factory engine) checks t
 
 A caller compares the digest it was written against, or the commands and options it uses, and refuses a mismatch before running anything.
 The CLI admits only the commands and flags the contract names (`hided/src/cli_contract.rs`), its tests hold each parser to the table, and the answer schemas come from the core's answer types (`herdr-core/src/delivery/answer.rs`), so a changed command name, option or answer field changes the exported contract.
+A command whose standard output is closed by its reader (`hide agent list | head`) ends quietly with status 141 and prints nothing to standard error; `docs/ARCHITECTURE.md`, The platform layer, owns the rule.
 `contracts/hide-cli.json` is the committed copy, and a test fails until it is regenerated with `target/debug/hide contract --json | python3 -m json.tool > contracts/hide-cli.json`.
 
 ## Safe intake and manual fallback
@@ -86,6 +92,10 @@ It is typed when every one of these hide-owned facts holds, and the verdict read
   Herdr reports readiness only for an agent it launched itself (`herdr agent start`, which `hide agent spawn` uses): `launch_pending: true` while that start settles or is blocked, then `interactive_ready: true`.
   An agent the operator started by typing its program in a Herdr shell, the usual way a lead is started, carries neither flag; its readiness is unreported, not refused, and the facts above decide it.
   Only `launch_pending: true` or an explicit `interactive_ready: false` holds the letter.
+  The pinned Herdr settles a start only when the agent's state moves again or it is read with `agent.get` (herdrdev/herdr#3853), so the core reads every start Hide made whose agent rests with it pending, from 3 s to 90 s after Herdr took it and a bounded number of times, and a pane that is not a bell target settles too ([ARCHITECTURE.md](ARCHITECTURE.md#the-core-the-shell-and-herdr)).
+  A start Hide did not make, such as an operator's own `herdr agent start`, or one Hide made before its daemon restarted, is never read, since a read past that start's deadline would make Herdr clear the agent's name; it is logged once as `launch_settle.cold`, and its letter waits until the agent's state moves.
+  A start Herdr reads as blocked (a trust or login prompt at launch) stays pending until the agent goes idle, by Herdr's contract, and its letter waits until then.
+  A read after the start's deadline (120 s) is where Herdr applies the deadline and clears the agent's name, as the agent's next state change would; the read does not hold that off.
 
 Herdr's `blocked` status guards every permission and selection menu Herdr reads as `blocked`, so only kinds whose menus were observed to read `blocked` are bell targets.
 Today those are Claude Code and Codex.
@@ -415,7 +425,9 @@ A longer session is refused `session_too_long` when the record is made, never as
 An empty session or one holding a control character is refused `invalid_registration` by the same rule (`coordination::kept_session`).
 A build before this one reads a session past 256 bytes as a damaged ledger, so going back to it after such a registration answers every delivery and agent command `ledger_unavailable` until this build or a later one runs again.
 A caller with no such record is refused `participant_ended` when its record ended, `participant_session_changed` when its pane's live record belongs to another session (the pane's agent session changed), `ambiguous_participant` when two live records match, and `participant_unavailable` otherwise; a remote participant on a pane of the same name is never the local caller.
-`hide agent spawn` requires `--name`, `--intent`, `--kind`, `--repo` and `--branch`, with optional `--parent`, `--machine`, `--path` and native arguments after `--`.
+`hide agent spawn` requires `--name`, `--intent`, `--kind`, `--repo` and `--branch`, with optional `--parent`, `--machine`, `--path`, `--model`, `--effort` and native arguments after `--`.
+`--model` and `--effort` are the agent's launch choice: the start passes them in the kind's own spelling, and every wake, fork and reopen Hide makes of the agent starts it with them again (`docs/ARCHITECTURE.md`, Agent start), while native arguments after `--` apply to this start only.
+A choice the kind does not take is refused `invalid_launch_choice` before anything is created, and the choice is part of the intent, so the same intent with another choice is an `intent_conflict`.
 Choose responsibility when creating the agent; it cannot be transferred afterwards.
 With `--parent here` or the caller's own id, the agent is delegated: its parent owns the work, lineage is written immediately and an automatic watch starts.
 Without `--parent`, the work is handed off to the operator: the agent is an independent root, has no lineage edge to the spawner and starts no automatic watch.
@@ -450,6 +462,9 @@ Completed intent replay returns the durable receipt without contacting Herdr, in
 `--machine <device id>` starts the child on a connected device instead of the caller's own; it works with delegation and handoff alike.
 The id is the `device_id` that `hide workspace info` shows and the `machine` that `hide agent list` shows for agents there; a device label is not accepted, and the caller's own id is the same as leaving the flag out, so a spawn without `--machine` is exactly the spawn above.
 `--repo` and `--path` are then paths on that device.
+A spawn records the machine of its child only when that is not the caller's own, and the ledger refuses a child whose machine is not the spawn's.
+A core move therefore reads the field against the caller's machine after the move (`node_migration::reown`): a spawn that names none stays so, a machine the move renames takes its new id, and one that is now the caller's own is dropped.
+The copy is loaded with the ledger's own reader before it leaves the machine giving the core and again before it is placed on the machine taking it, so a move that would leave the new core without its letters, watches and registrations is rolled back instead of reported done.
 The caller keeps the parent registration, the authority and the watch; the child's checkout (a worktree when the branch has none), tab, agent start, identity wait and lineage tokens are the device's, made through its Herdr API channel, and the tokens name this machine as `parent_machine`.
 The agent is registered under the device, so the sidebar and the Overview's tasks show it under its parent with the device's mark, its reports and inactivity warnings reach the parent as letters over the existing device paths, and a handed-off agent records the caller as `origin`.
 Before the intent is reserved or anything is made, the spawn is refused with a stable code and a next action when the id is not a device (`machine_unknown`, naming the connected device ids the caller could have used), the device is not connected or its helper cannot answer (`machine_unavailable`), `--repo` holds no repository there (`repository_unavailable`) or the agent CLI is not on the device's `PATH` (`agent_not_installed`); the checks are the node link's `repository` and `agent_installed` calls, taken off the runtime lock.
@@ -487,6 +502,7 @@ A spawn whose child shows no session within 5 seconds (Codex before its first tu
 A spawn's tab runs the account's shell with Hide's shell integration where that shell is zsh, bash or fish (Windows PowerShell on Windows), and its start is typed only after the shell marked its first prompt ([ARCHITECTURE.md](ARCHITECTURE.md)); a shell stopped at a startup question within the 30 s wait is refused as `shell_starting` with that question's line, nothing typed, and the next action is to answer it in that pane and spawn again.
 A start Herdr typed whose agent never showed (a startup question took its first letter in a bash pane, or the program exited before Herdr saw it) leaves Herdr holding the agent's name in that pane until its 120 s deadline, and Herdr gives that name to any agent that appears there meanwhile.
 A spawn waits up to 30 seconds for Herdr to create the worktree, which runs `git worktree add` and can be slow on a large repository under load; when no answer comes in that time the spawn is refused `worktree_unconfirmed`, because Herdr may still finish the worktree, and the next action is to run the same command again with the same intent, which finds that worktree and continues in it; a Factory asks it again after five seconds.
+A Codex start on a machine whose install kit has not read its Codex is refused `codex_capability_unknown` with nothing typed, because every Codex Hide starts takes `--no-daemon` only when that Codex has the shared server ([agent-hooks.md](agent-hooks.md)); the next action is to have the operator press Check again in Settings > Agents for that machine and run the same command with the same intent, which continues in the pane the spawn made, and the screen words the code in the operator's language wherever it shows a start refusal; why the read failed is logged once by the core as `kit` / `codex_capability_unread` with the machine's device id, the cause, and the exit code or a signal, never a path or Codex's own output, and not at all when the read stopped because Hide was quitting.
 Running the same intent again while the name is held answers `native_identity_unavailable` and types nothing; once Herdr let it go and the shell alone holds the terminal it types the start once more (`start.resent`), and a second start that never showed, or anything else in the foreground, answers `agent_not_started`, whose next action is to look at that pane and spawn with a new intent.
 A spawn about to start its agent closes the pane of every earlier spawn of the same parent, name and device that made a pane and never bound a child, where no agent shows and the shell alone holds the terminal, so a new attempt leaves no extra tab and Herdr no longer holds the name for it; each close is logged as `spawn` / `unstarted_attempt.close`, and a pane that cannot be read or closed is left to Herdr's refusal.
 A spawn records the Herdr terminal its pane runs (`terminal_id` from `pane.get`) together with the pane, because Herdr hands a pane id out again once its server is replaced, so an earlier spawn's pane id can name an unrelated shell the operator opened.

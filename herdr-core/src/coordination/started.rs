@@ -167,6 +167,7 @@ pub(crate) mod tests {
             branch: branch.into(),
             path: None,
             args: Vec::new(),
+            launch: Default::default(),
             task,
         };
         let reserved = apply(
@@ -432,6 +433,7 @@ pub(crate) mod tests {
                 branch: "hide-memory-m72".into(),
                 path: None,
                 args: Vec::new(),
+                launch: Default::default(),
                 task,
             },
         };

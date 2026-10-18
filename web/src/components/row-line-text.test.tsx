@@ -76,3 +76,26 @@ it("draws a waiting ring dashed and names it by its whole line, and draws a slee
     await unmount();
   }
 });
+
+it("draws a resting row's faint hollow ring, undimmed, and an unknown row with no shape, dimmed whole (sidebar-quiet-mark-indent B1, B2, B5)", async () => {
+  await clientI18n.changeLanguage("ko");
+  const menu: AgentRowMenu = { items: () => [], onSelect: () => {} };
+  const quiet: AgentRow = legacyAgentRow({ id: "q", pane_id: "q", identity_label: "에이전트 포크 기능 기획안", agent_kind: "claude", mark: "quiet", group: "seen", status_code: "idle", activity: "stopped", changed_at_unix_ms: null, emphasized: false, unread: false });
+  const unknown: AgentRow = legacyAgentRow({ id: "u", pane_id: "u", identity_label: "상태 확인 중", agent_kind: "claude", mark: "unknown", group: "seen", status_code: "unknown", activity: "unknown", changed_at_unix_ms: null, emphasized: false, unread: false });
+  const row = (agent: AgentRow) => <SidebarAgentRow agent={agent} device={null} place={null} depth={0} selected={false} onOpen={() => {}} onOpenPullRequest={() => {}} inset="0" menu={menu} />;
+  const { container, unmount } = await render(<ul>{row(quiet)}{row(unknown)}</ul>);
+  try {
+    const item = (pane: string) => container.querySelector(`[data-pane="${pane}"]`)!;
+    // The ring is an outline inside the 12 px slot: a circle with no fill, thinner than the in-progress ring's 1.9.
+    const ring = item("q").querySelector('[data-mark="quiet"] circle')!;
+    expect([ring.getAttribute("fill"), ring.getAttribute("r"), ring.getAttribute("stroke-width")]).toEqual(["none", "3.4", "1.3"]);
+    expect(item("q").className).not.toContain("opacity-(--opacity-dimmed)");
+    expect(item("q").querySelector("[data-agent-open]")!.getAttribute("aria-label")).toContain("조용함");
+    // The unknown row keeps the slot but draws nothing in it, and says why.
+    expect(item("u").querySelector('[data-mark="unknown"]')!.childElementCount).toBe(0);
+    expect(item("u").className).toContain("opacity-(--opacity-dimmed)");
+    expect(item("u").querySelector("[data-agent-open]")!.getAttribute("aria-label")).toContain("상태 모름");
+  } finally {
+    await unmount();
+  }
+});

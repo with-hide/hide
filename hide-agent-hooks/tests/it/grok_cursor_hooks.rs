@@ -181,6 +181,7 @@ fn a_cursor_guard_that_cannot_decide_still_answers_allow_within_its_budget() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)] // env_clear: the hook sees only the launch metadata the test names
 fn a_cursor_permission_hook_whose_owner_handshake_fails_still_answers_allow() {
     let machine = Machine::new("registered");
     for event in ["PreToolUse", "SubagentStart"] {

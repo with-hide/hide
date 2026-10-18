@@ -770,6 +770,7 @@ fn reopen_unknown_claim_survives_error_and_retry_launch_failure_then_transfers_t
             consumed: true,
             focused_pane_id: None,
             notices: vec![],
+            agents: Vec::new(),
         })),
     );
     assert_eq!(runtime.pending_agent_admissions("/agent-groups"), 0);
@@ -1554,6 +1555,7 @@ fn a_followed_reopen_seed_that_goes_leaves_the_operator_on_the_restored_tab() {
             consumed: true,
             focused_pane_id: Some("w-order:t4:p".into()),
             notices: vec![],
+            agents: Vec::new(),
         })),
     );
 
@@ -1619,6 +1621,9 @@ fn pending_fork(runtime: &mut Runtime, source: &str, request_id: Option<&str>) {
             issued_serial: runtime.control_lane.issued_serial(),
             tab_id: None,
             focused: None,
+            kind: "claude".into(),
+            name: "fork-fixture".into(),
+            launch: Default::default(),
         },
     );
     if let Some(request_id) = request_id {

@@ -38,9 +38,14 @@ pub enum RowMark {
     /// To read, with no finished verdict: work left, a wait nothing proves,
     /// or a stop nobody judged. A plain dot.
     Unread,
-    /// Nothing to do: no mark, its slot kept.
+    /// Nothing to do: the agent rests, ready for new work. A faint grey
+    /// hollow ring, smaller and thinner than the in-progress one.
     #[default]
     Quiet,
+    /// Hide cannot say where the agent stands: no demand and no activity it
+    /// can read. No mark, its slot kept, and the row drawn dimmed whole, so
+    /// it never reads as an agent at rest.
+    Unknown,
     /// Hide put the agent to sleep; opening it wakes it. A grey moon, the
     /// one shape outside the four, counted on no badge (status-marks D-21).
     Asleep,
@@ -86,6 +91,9 @@ impl RowMark {
                 Self::Unread
             };
         }
+        if demand == AgentDemand::None && activity == AgentActivity::Unknown {
+            return Self::Unknown;
+        }
         Self::Quiet
     }
 
@@ -95,7 +103,7 @@ impl RowMark {
             Self::Going | Self::Waiting => counts.going += 1,
             Self::Done => counts.done += 1,
             Self::Unread => counts.unread += 1,
-            Self::Quiet | Self::Asleep => {}
+            Self::Quiet | Self::Unknown | Self::Asleep => {}
         }
     }
 }
@@ -357,6 +365,17 @@ pub mod phone {
         pub pull_request: Option<u64>,
     }
 
+    /// What a sleeping agent's pane says about it (`AgentSleepSnapshot`): the
+    /// phone words it as the desktop does and refuses input while it is set.
+    #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+    pub struct PhoneSleep {
+        /// `sleeping`, `waking` or `failed`.
+        pub state: String,
+        pub reason: Option<String>,
+        pub since_unix_ms: u64,
+        pub progress: Option<String>,
+    }
+
     #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
     pub struct PhoneAgent {
         pub device_id: String,
@@ -392,6 +411,10 @@ pub mod phone {
         pub detail: Option<String>,
         pub status_code: String,
         pub demand: String,
+        /// Present while the agent's process is ended and its pane holds a
+        /// bare shell; nothing may be typed into the pane then.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub sleep: Option<PhoneSleep>,
         /// Whether the compact title is emphasized, independent of the detail view.
         pub emphasized: bool,
         /// Whether opening the phone keeps this root notification. A read root
@@ -713,6 +736,9 @@ pub mod phone {
                     .and_then(Value::as_str)
                     .unwrap_or("none")
                     .to_owned(),
+                sleep: agent
+                    .get("sleep")
+                    .and_then(|sleep| serde_json::from_value(sleep.clone()).ok()),
             });
         }
     }

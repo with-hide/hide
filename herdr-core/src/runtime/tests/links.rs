@@ -890,6 +890,7 @@ impl hide_herdr_client::ApiConnector for HerdrConnectTransition {
 /// file node's proof to create or launch a queued archived conversation.
 #[test]
 #[cfg(unix)]
+#[allow(clippy::disallowed_methods)] // env_clear: the child test process gets only the home and the stand-in agents' PATH (Unix only)
 fn a_native_archive_worker_refuses_retired_control_before_creation_or_start() {
     const CHILD: &str = "HIDE_TEST_NATIVE_ARCHIVE_CHILD";
     if std::env::var_os(CHILD).is_none() {
@@ -979,7 +980,12 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
                 Some(kind.into()),
             )
             .unwrap();
-        runtime.set_task_agent_launch(id, None, vec![flag.into(), "native-pi".into()]);
+        runtime.set_task_agent_launch(
+            id,
+            None,
+            vec![flag.into(), "native-pi".into()],
+            Default::default(),
+        );
         let reference = crate::sidebar::SessionAgentSessionPayload {
             kind: "path".into(),
             value: native.display().to_string(),
@@ -1094,6 +1100,7 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
                 checkout_path: cwd.clone(),
                 label: "resume".into(),
                 host: crate::checkout_owner::TabHost::Workspace("w-order".into()),
+                focus: true,
                 resume_scope: Some(hide_session::SessionReadScope {
                     id: "native-pi".into(),
                     cwd,

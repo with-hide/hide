@@ -611,7 +611,7 @@ function SendButton({ group, display, workspace, actions, again = false }: { gro
           <>
             <DropdownMenuLabel>{t("feedback.menu.openedBy")}</DropdownMenuLabel>
             <DropdownMenuItem disabled data-view-feedback-to="closed">
-              <StatusMark mark="quiet" />
+              <StatusMark mark={null} />
               <span className="min-w-0 flex-1 truncate text-muted-foreground">{t("feedback.mark.closed", { name: recipient.name })}</span>
             </DropdownMenuItem>
             {recipient.resumable ? (

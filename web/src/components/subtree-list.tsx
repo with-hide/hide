@@ -26,7 +26,7 @@ const SUMMARY: { state: Exclude<SubtreeState, "quiet">; mark: RowMarkValue; word
   { state: "waiting", mark: "turn", word: "agents.subtree.waiting" },
   { state: "working", mark: "going", word: "agents.subtree.working" },
   { state: "unread", mark: "unread", word: "agents.subtree.unread" },
-  { state: "unknown", mark: "quiet", word: "agents.subtree.unknown" },
+  { state: "unknown", mark: "unknown", word: "agents.subtree.unknown" },
 ];
 
 /** What the list is for: the agents that close with the one closed, or the agents outside a project that a removal stops. */

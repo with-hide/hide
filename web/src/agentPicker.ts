@@ -5,7 +5,7 @@
 // their own; `components/agent-picker.tsx` draws them.
 
 import type { AgentStartChoice, AiProvider, BackgroundAi } from "./snapshot";
-import { AGENT_ADAPTERS } from "./agentAdapters";
+import { AGENT_ADAPTERS, agentAdapter } from "./agentAdapters";
 
 /** The kinds hide starts with a model choice; `terminal` is a tab alone and has no model. */
 export type ProviderKind = NonNullable<AgentStartChoice["kind"]>;
@@ -74,14 +74,21 @@ export function forgetCatalogs() {
   lastLists.clear();
 }
 
+/** Whether a start of `kind` takes a model: its adapter declares one (`can_pick_model`); a terminal never does. */
+export function takesModel(kind: AgentKind): boolean {
+  return agentAdapter(kind)?.can_pick_model === true;
+}
+
 /**
  * The model a start sends: the selection's own, listed or not. The catalog is
  * this Mac's reading and the target may be another device, so hide never
  * swaps a model it does not list for another; the CLI decides, and its
- * refusal is what the pane then shows (PRD home-device-rail B32).
+ * refusal is what the pane then shows (PRD home-device-rail B32). A kind
+ * whose start takes no model sends none, even one remembered for it before
+ * the core refused it.
  */
 export function modelToSend(selection: AgentSelection): string | null {
-  if (selection.kind === "terminal") return null;
+  if (!takesModel(selection.kind)) return null;
   return selection.model;
 }
 

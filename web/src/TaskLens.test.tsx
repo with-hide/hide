@@ -134,7 +134,7 @@ it("in 프로젝트별 puts a project whose only turn is a block first, as a blo
 it("opens a task's pane on a press, its record on Space, and resolves it from the ⋯ menu (B12, B15, B18)", async () => {
   const agents = [row("a", {}, { line: "일하는 중" })];
   const rest = snapshot(agents, [card("a", "working", "hide-main")]);
-  (rest as { workspace_view?: unknown }).workspace_view = { device_id: "local", path: "/hide", tool: null, last_tool: null, prs: { only_checkout: false }, pinned: false, tree: false, lane_width: null, tree_width: null, lane_called: 0, lane_calls: 0 };
+  (rest as { workspace_view?: unknown }).workspace_view = { device_id: "local", path: "/hide", tool: null, last_tool: null, prs: { only_checkout: false }, pinned: false, tree: false, lane_width: null, panel_width: null, tree_width: null, lane_called: 0, lane_calls: 0 };
   const { container, sent } = await render(rest, agents);
   const button = container.querySelector<HTMLElement>('[data-task-row="a"] [data-task-focus="row"]')!;
   await act(async () => button.click());
@@ -193,7 +193,7 @@ it("draws each task's row mark and line as the sidebar does, counts no folded ch
     row("left", { mark: "unread", status_code: "unfinished", activity: "stopped", unread: true }, { group: "done", line: "테스트 환경 연결 남음", unfinished: true }),
     row("read", { mark: "quiet", status_code: "unfinished", activity: "stopped" }, { group: "idle", line: "문서 정리 남음", unfinished: true }),
     row("sleep", { mark: "asleep", status_code: "sleeping", activity: "stopped" }, { line: "파서를 나눴어요" }),
-    row("lost", { mark: "quiet", status_code: "unknown", activity: "unknown" }),
+    row("lost", { mark: "unknown", status_code: "unknown", activity: "unknown" }),
     row("parent", { lineage_child_pane_ids: ["k1", "k2"], descendant_mark: { kind: "raised", count: 1 } }),
     row("k1", { lineage_parent_pane_id: "parent", delegated: true, mark: "quiet", status_code: "question", demand: "question" }),
     row("k2", { lineage_parent_pane_id: "parent", delegated: true, mark: "done", status_code: "done", activity: "stopped" }),

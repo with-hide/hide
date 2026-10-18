@@ -31,6 +31,9 @@ pub(crate) struct ReopenRequest {
     pub(crate) name: String,
     pub(crate) cwd: Option<String>,
     pub(crate) codex_daemon: crate::codex_launch::CodexDaemon,
+    /// The model and effort the agent was started with, which the start
+    /// after the end carries again.
+    pub(crate) launch: hide_agent_adapter::LaunchChoice,
 }
 
 /// A reopen that did not happen: `code` is what the pane says, `detail` what
@@ -71,15 +74,20 @@ pub(crate) fn reopen(
             "the machine's Codex has not been read",
         ));
     }
-    let Some(args) = crate::recent_closed::resume_arguments(&ClosedAgent {
+    let Some(mut args) = crate::recent_closed::resume_arguments(&ClosedAgent {
         kind: request.kind.clone(),
         session_id: Some(request.session_id.clone()),
+        ..Default::default()
     }) else {
         return Err(failure(
             PaneReopenFailure::SessionGone,
             format!("{} has no resume arguments", request.kind),
         ));
     };
+    args.extend(
+        crate::runtime::agent_choice::launch_arguments(&request.kind, &request.launch)
+            .map_err(|detail| failure(PaneReopenFailure::StartRefused, detail))?,
+    );
     if let Some(cwd) = request.cwd.as_deref()
         && !crate::node_access::is_directory(node, cwd)
     {
@@ -167,6 +175,7 @@ mod tests {
             name: "reviewer".into(),
             cwd: None,
             codex_daemon: daemon,
+            launch: Default::default(),
         }
     }
 

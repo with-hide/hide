@@ -166,6 +166,29 @@ pub(crate) fn fetch_pane_cwd(
     Ok(cwd)
 }
 
+/// Reads a pane's agent with `agent.get`, which is the read on which Herdr
+/// settles a start it still holds open (`launch_settle.rs`); what it settles
+/// to reaches the core with the next agent list. A pane closed, or whose
+/// agent left, before the read answers nothing to settle.
+pub(crate) fn fetch_agent_launch(
+    context: &SessionSyncContext,
+    pane_id: &str,
+) -> Result<(), SessionFetchError> {
+    let result = match hide_herdr_client::request_with_connector(
+        context.api_connector.as_ref(),
+        "agent.get",
+        wire::agent_target_params(pane_id).map_err(SessionFetchError::Malformed)?,
+        SYNC_REQUEST_TIMEOUT,
+    ) {
+        Ok(result) => result,
+        Err(error) if error.code() == Some("agent_not_found") => return Ok(()),
+        Err(error) => return Err(session_error_from_api(error)),
+    };
+    wire::agent_state(result)
+        .map(drop)
+        .map_err(SessionFetchError::Malformed)
+}
+
 fn session_error_from_api(error: ApiError) -> SessionFetchError {
     match error {
         ApiError::NotRunning(message) => SessionFetchError::SocketMissing(message),

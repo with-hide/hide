@@ -441,6 +441,9 @@ impl Runtime {
             }
             Err(reason) => {
                 store.records.remove(pane_id);
+                // The agent is awake still, so its pane takes input again.
+                self.sync_terminal_intents();
+                let store = &mut self.snapshot.ui_state.agent_sleep;
                 let changed_at_unix_ms = store
                     .stamps
                     .get(pane_id)
@@ -532,9 +535,10 @@ impl Runtime {
             return self.begin_dormant_sleep(pane_id, now_unix_ms);
         }
         let cwd = self.agent_sleep_pane_cwd(pane_id);
-        let Some(record) = SleepRecord::ending(agent, cwd, now_unix_ms) else {
+        let Some(mut record) = SleepRecord::ending(agent, cwd, now_unix_ms) else {
             return false;
         };
+        record.launch = self.launch_choice_of(agent);
         let kind = record.kind.clone();
         crate::diagnostic!(serde_json::json!({
             "component": "agent_sleep",
@@ -548,6 +552,9 @@ impl Runtime {
             .agent_sleep
             .records
             .insert(pane_id.to_owned(), record);
+        // Closed before the worker starts: from here no writer's input can
+        // land behind the end, and the worker waits for those already writing.
+        self.sync_terminal_intents();
         if let Err(message) = agent_sleep_herdr::spawn_end(context, pane_id.to_owned(), kind) {
             return self.ingest_agent_sleep_end(pane_id, Err(message));
         }
@@ -577,11 +584,29 @@ impl Runtime {
         } else {
             mode
         };
-        let args = match mode {
+        let launch =
+            match crate::runtime::agent_choice::launch_arguments(&record.kind, &record.launch) {
+                Ok(launch) => launch,
+                Err(detail) => {
+                    return self.ingest_agent_wake(
+                    pane_id,
+                    mode,
+                    WakeOutcome::Failed {
+                        reason:
+                            "The model or effort it was started with is not one this agent takes."
+                                .to_owned(),
+                        detail,
+                    },
+                );
+                }
+            };
+        let choice = record.launch.clone();
+        let mut args = match mode {
             WakeMode::Resume => {
                 let Some(args) = crate::recent_closed::resume_arguments(&ClosedAgent {
                     kind: record.kind.clone(),
                     session_id: record.session_id.clone(),
+                    ..Default::default()
                 }) else {
                     // Only Claude and Codex sleep, so this is a record this
                     // build cannot resume; starting it bare would lose the
@@ -600,6 +625,7 @@ impl Runtime {
             }
             WakeMode::Fresh => Vec::new(),
         };
+        args.extend(launch);
         let request = WakeRequest {
             pane_id: pane_id.to_owned(),
             kind: record.kind.clone(),
@@ -621,6 +647,13 @@ impl Runtime {
             "mode": mode,
             "trigger": trigger,
         }));
+        // The pane's record follows the agent the wake starts: the resumed
+        // conversation, or the new one it reports.
+        let (kind, name, session) = (
+            request.kind.clone(),
+            request.name.clone(),
+            request.session_id.clone(),
+        );
         if let Err(message) = agent_sleep_herdr::spawn_wake(context, request) {
             return self.ingest_agent_wake(
                 pane_id,
@@ -631,6 +664,8 @@ impl Runtime {
                 },
             );
         }
+        let session = (mode == WakeMode::Resume).then_some(session).flatten();
+        self.record_pane_launch(pane_id, &kind, &name, &choice, session.as_deref());
         self.persist_ui_state();
         self.refresh_sleep_rows_of(pane_id);
         true
@@ -804,6 +839,7 @@ impl Runtime {
                 runtime: live.runtime.clone(),
                 notifier: live.notifier.clone(),
                 herdr_pane_id: pane_id.to_owned(),
+                input_gate: Arc::clone(&self.input_gate),
             });
         };
         if self.sleep_machine(device) != SleepMachine::Node {
@@ -816,6 +852,7 @@ impl Runtime {
             runtime: worker.runtime.clone(),
             notifier: worker.notifier.clone(),
             herdr_pane_id: remote_pane_source_id(device, pane_id)?.to_owned(),
+            input_gate: Arc::clone(&self.input_gate),
         })
     }
 
@@ -827,6 +864,8 @@ impl Runtime {
         store
             .records
             .retain(|pane_id, _| !pane_id.starts_with(&prefix));
+        self.sync_input_gate();
+        let store = &mut self.snapshot.ui_state.agent_sleep;
         store
             .stamps
             .retain(|pane_id, _| !pane_id.starts_with(&prefix));

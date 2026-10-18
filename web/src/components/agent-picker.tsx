@@ -2,7 +2,7 @@ import type { TFunction } from "i18next";
 import { useEffect, type ReactNode } from "react";
 import type { Actions } from "../actions";
 import { AgentMark } from "../AgentMark";
-import { catalogFor, modelToSend, selectKind, providerLabel, PROVIDER_KINDS, type AgentKind, type AgentSelection, type ModelCatalog, type ProviderKind } from "../agentPicker";
+import { catalogFor, modelToSend, selectKind, providerLabel, takesModel, PROVIDER_KINDS, type AgentKind, type AgentSelection, type ModelCatalog, type ProviderKind } from "../agentPicker";
 import { useInterfaceTranslation } from "../i18n/client";
 import { useShellStore } from "../store";
 import { cn } from "../lib/utils";
@@ -40,7 +40,6 @@ export function AgentPicker({
   value,
   onChange,
   withTerminal = false,
-  withModel = true,
   disabled = false,
   kindNote,
   className,
@@ -50,8 +49,6 @@ export function AgentPicker({
   onChange: (next: AgentSelection) => void;
   /** New worktree offers a tab with no agent as the kind menu's first item; it is never remembered. */
   withTerminal?: boolean;
-  /** False where the chosen agent's start takes no model, so no model menu is drawn. */
-  withModel?: boolean;
   disabled?: boolean;
   /** A word about the chosen agent, drawn right after its menu (the start panel's sign-in mark). */
   kindNote?: ReactNode;
@@ -63,7 +60,7 @@ export function AgentPicker({
   return (
     <AgentPickerView
       value={value}
-      catalog={value.kind === "terminal" || !withModel ? null : catalogFor(ai, value.kind)}
+      catalog={value.kind === "terminal" || !takesModel(value.kind) ? null : catalogFor(ai, value.kind)}
       onKind={(kind) => onChange(selectKind(kind, start))}
       onModel={(model) => onChange({ kind: value.kind, model })}
       withTerminal={withTerminal}

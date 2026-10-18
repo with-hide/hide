@@ -8,6 +8,7 @@
 import { create } from "zustand";
 import type { ProviderKind } from "./agentPicker";
 import type { MessageKey } from "./i18n/catalogs";
+import { startReason } from "./startReason";
 
 /**
  * What an open names instead of what is in front: the project to aim at, as
@@ -20,9 +21,9 @@ export type StartPreset = { projectId: string; kind?: ProviderKind };
 /** Why a start did not go: the core's own sentence, shown as sent, or a catalog key the panel words in the operator's language. */
 export type StartFailure = { message: string } | { key: MessageKey };
 
-/** The core's reason when it sent one, else the plain "did not start". */
+/** The core's reason when it sent one (`startReason`), else the plain "did not start". */
 export function startFailure(message: string | null | undefined): StartFailure {
-  return message ? { message } : { key: "workspace.agentNotStarted" };
+  return message ? startReason(message) : { key: "workspace.agentNotStarted" };
 }
 
 type StartPanelState = {

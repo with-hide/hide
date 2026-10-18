@@ -2049,6 +2049,7 @@ fn a_reinstall_queues_only_the_parts_that_need_it() {
             codex_daemon_on: None,
             codex_daemon_running: None,
             codex_daemon_unreadable: None,
+            codex_capability_unread: None,
             codex_daemon_off: None,
             herdr: None,
             refused: None,
@@ -2095,6 +2096,7 @@ fn a_reinstall_queues_only_the_parts_that_need_it() {
             codex_daemon_on: None,
             codex_daemon_running: None,
             codex_daemon_unreadable: None,
+            codex_capability_unread: None,
             codex_daemon_off: None,
             herdr: None,
             refused: None,
@@ -2698,6 +2700,7 @@ fn codex_starts_follow_the_capability_the_machines_kit_read() {
         codex_daemon_on: None,
         codex_daemon_running: None,
         codex_daemon_unreadable: None,
+        codex_capability_unread: None,
         codex_daemon_off: None,
         ..Default::default()
     };

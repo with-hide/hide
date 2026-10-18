@@ -84,6 +84,9 @@ enum Command {
         device_id: String,
         reply: Sender<Option<Arc<dyn hide_herdr_client::ApiConnector>>>,
     },
+    InputGate {
+        reply: Sender<Arc<herdr_core::input_gate::PaneInputGate>>,
+    },
     InboundRefusal {
         node: String,
         reply: Sender<Option<String>>,
@@ -375,6 +378,17 @@ impl CoreHandle {
             outputs,
             running: Mutex::new(Some(Running { thread, local })),
         })
+    }
+
+    /// The core's input gate (`herdr_core::input_gate`), which a writer that
+    /// does not go through a node's terminal asks at the write.
+    pub fn input_gate(&self) -> Result<Arc<herdr_core::input_gate::PaneInputGate>, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::InputGate { reply })
+            .map_err(|_| "core owner thread is gone".to_owned())?;
+        rx.recv()
+            .map_err(|_| "core owner thread dropped the input gate reply".to_owned())
     }
 
     pub fn dispatch(&self, event: Vec<u8>) -> Result<(), String> {
@@ -897,6 +911,9 @@ fn owner_loop(
             }
             Command::RemoteHerdrApi { device_id, reply } => {
                 let _ = reply.send(core.remote_herdr_api(&device_id));
+            }
+            Command::InputGate { reply } => {
+                let _ = reply.send(core.input_gate());
             }
             Command::InboundRefusal { node, reply } => {
                 let _ = reply.send(core.inbound_refusal(&node));
