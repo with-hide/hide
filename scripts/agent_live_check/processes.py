@@ -210,7 +210,9 @@ class OwnedProcesses:
     final containment boundary, not a substitute for stopping a server.
     """
 
-    def __init__(self, cancelled: threading.Event | None = None, diagnostics: Path | None = None):
+    def __init__(self, cancelled: threading.Event | None = None, diagnostics: Path | None = None,
+                 run_seconds: float = RUN_SECONDS):
+        """`run_seconds` caps the whole run, every child's guardian included."""
         self.children = {}
         self.diagnostics = diagnostics
         self.receipts = {}
@@ -221,7 +223,7 @@ class OwnedProcesses:
         if diagnostics is not None:
             diagnostics.mkdir(mode=0o700)
         self.cancelled = cancelled or threading.Event()
-        self.deadline = time.monotonic() + RUN_SECONDS
+        self.deadline = time.monotonic() + run_seconds
         # Windows: the port every child's job reports a refused limit to, and
         # each end that was not confirmed, which no later close erases.
         self.port = None
@@ -275,7 +277,8 @@ class OwnedProcesses:
                 self.sequence += 1
                 diagnostic = str(self.diagnostics / (str(self.sequence) + ".json"))
             command = [sys.executable, str(Path(__file__).resolve()),
-                       "--guard", str(reader), diagnostic, self.family, str(launch_deadline), "--", *map(str, argv)]
+                       "--guard", str(reader), diagnostic, self.family, str(launch_deadline), str(self.deadline),
+                       "--", *map(str, argv)]
         try:
             # The only raw spawn. Only the guardian uses the unguarded branch.
             launch_env = {key: value for key, value in env.items() if key != "HIDE_LIVE_CHECK_OWNER"} if _guarded else env
@@ -649,7 +652,10 @@ class ExitWatch:
 
 
 def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
-          launch_deadline: float | None = None) -> int:
+          launch_deadline: float | None = None, run_deadline: float | None = None) -> int:
+    """`run_deadline` the owner's, on the monotonic clock every process of
+    the machine shares, so a child started first ends with the run, not
+    `RUN_SECONDS` after its own start."""
     cancelled = threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(signum, lambda *_: cancelled.set())
@@ -689,7 +695,7 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
     if not issued_family(family):
         raise ProcessError("owner_family_not_issued")
     marker = f"{family}:{identity.pid}:{identity.birth}:{secrets.token_hex(32)}"
-    deadline = time.monotonic() + RUN_SECONDS
+    deadline = time.monotonic() + RUN_SECONDS if run_deadline is None else run_deadline
 
     def unknown(process):
         nonlocal omitted
@@ -930,10 +936,11 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 8 or sys.argv[1] != "--guard" or sys.argv[6] != "--":
+    if len(sys.argv) < 9 or sys.argv[1] != "--guard" or sys.argv[7] != "--":
         raise SystemExit(2)
     try:
-        code = guard(int(sys.argv[2]), sys.argv[7:], sys.argv[3], sys.argv[4], float(sys.argv[5]))
+        code = guard(int(sys.argv[2]), sys.argv[8:], sys.argv[3], sys.argv[4], float(sys.argv[5]),
+                     float(sys.argv[6]))
     except BaseException as error:
         sys.stderr.write("guardian_failure:" + type(error).__name__ + "\n")
         code = 125

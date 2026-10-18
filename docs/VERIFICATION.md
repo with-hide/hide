@@ -372,6 +372,7 @@ Every cell reads `pass`, `fail`, `not measured`, `N/A` or `excluded`, with a rea
 
 Exit 0 means every measurable selected cell passed, 1 a failed cell or a request budget overrun, 2 an isolation, setup or cleanup failure (no agent starts when isolation cannot be proven), and 3 no failure but a `not measured` cell.
 Ctrl-C, SIGTERM and SIGHUP stop at the next step, settle the open cells as stopped, write the report and clean up.
+The whole run, every process under it included, is capped at 5 minutes plus 8 for each measured agent (seven agents: 61 minutes, inside a CI step's 75); past it the open cell fails with `run_cancelled_or_timed_out` and the run cleans up. Each child's guardian ends it at that cap, not 30 minutes after the child's own start, the live check's cap, which on 2026-10-18 ended Herdr and `hided` under the seventh agent.
 The table is printed and written as `report.md` and `report.json` in a new `agents/runs/agent-journey-<time>-<id>/`, with each agent's spawn arguments, the arguments and environment names its mode added, its model requests and its budget.
 
 ### Local mode (macOS)

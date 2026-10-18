@@ -145,7 +145,8 @@ jobs:
           cp "$RUNNER_TEMP/journey-shims/claude" "$RUNNER_TEMP/journey-shims/codex"
       - name: The journey on the stand-ins
         id: journey
-        timeout-minutes: 20
+        # Above the journey's own cap for two agents (21 minutes, cli.py).
+        timeout-minutes: 25
         run: |
           set +e
           python3 scripts/agent-journey-check.py --mode ci \
@@ -275,7 +276,8 @@ jobs:
     name: agent journey signed in (${{ matrix.system }})
     if: ${{ inputs.live }}
     runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
-    timeout-minutes: 60
+    # As the fake model lane: every agent whose key is set may run.
+    timeout-minutes: 95
     strategy:
       fail-fast: false
       matrix:
@@ -389,7 +391,7 @@ jobs:
         # The keys reach only this step; the journey keeps each one under the
         # run's probe, which its cleanup removes, and the report names them only.
         if: ${{ steps.agents.outputs.kinds != '' }}
-        timeout-minutes: 40
+        timeout-minutes: 75
         env:
           HIDE_CLAUDE_API_KEY: ${{ secrets.HIDE_CLAUDE_API_KEY }}
           HIDE_CODEX_API_KEY: ${{ secrets.HIDE_CODEX_API_KEY }}

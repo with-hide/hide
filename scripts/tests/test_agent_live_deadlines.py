@@ -8,9 +8,11 @@ substituted boundaries; the real screen, identity and input adapters run.
 
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -240,6 +242,21 @@ class ObservationDeadlines(unittest.TestCase):
                                      {"session_root": root})
                 self.assertEqual(result["outcome"], "unknown" if late else "verified")
                 self.assertEqual(runtime.inputs, [])
+
+
+
+@unittest.skipIf(sys.platform == "win32", "a Windows run's children end with its job, not a guardian")
+class RunDeadline(unittest.TestCase):
+    def test_a_child_started_first_ends_with_the_owners_run_not_its_own_clock(self):
+        with self.assertRaisesRegex(ProcessError, "cleanup_unconfirmed"):
+            with OwnedProcesses(run_seconds=3) as owner:
+                child = owner.spawn([sys.executable, "-c", "import time; time.sleep(60)"],
+                                    env={"PATH": "/usr/bin:/bin"}, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL)
+                started = time.monotonic()
+                # The guardian ends its child at the owner's deadline and says so.
+                child.wait(timeout=20)
+                self.assertLess(time.monotonic() - started, 15)
 
 
 if __name__ == "__main__":

@@ -39,6 +39,12 @@ from .local import (ROUTES, TRUST, allow_one_shot_references, claude_session_fol
 from .report import save, table_lines
 
 KIT_SECONDS = 90
+# The whole run's cap, every process under it included: the candidate's start
+# and kit, then each measured agent's cells, 4 to 7 minutes an agent on macOS
+# (2026-10-18). Seven agents make 61 minutes, inside the CI step's 75, so the
+# journey ends itself, writes its report and cleans up before the step would.
+SETUP_SECONDS = 5 * 60
+AGENT_SECONDS = 8 * 60
 SYSTEM_NAMES = {"darwin": "macOS", "linux": "Linux", "win32": "Windows"}
 
 
@@ -484,7 +490,8 @@ def main(argv=None):
     for key, reason in unmeasured.items():
         report["agents"].append({"id": key, "unmeasured": reason})
         cells.settle_agent(table, key, reason)
-    owner = OwnedProcesses(diagnostics=run / "process-diagnostics")
+    owner = OwnedProcesses(diagnostics=run / "process-diagnostics",
+                           run_seconds=SETUP_SECONDS + AGENT_SECONDS * max(1, len(measured)))
     previous = {signum: signal.signal(signum, lambda *_: owner.cancelled.set())
                 for signum in STOP_SIGNALS}
     runtime = guard = daemon = None
