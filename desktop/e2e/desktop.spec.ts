@@ -132,10 +132,11 @@ test("New tab: the native chord and menu each select one draft without starting 
   await expect(page.locator("[data-pane-view]").first()).toBeVisible();
   const before = await tabs.count();
   const topology = herdrTabs(herdr);
-  const area = await page.locator("[data-agent-area-id]").getAttribute("data-agent-area-id");
+  const area = page.locator("[data-agent-area-id]");
+  const areaId = await area.getAttribute("data-agent-area-id");
   const request = {
     workspace: { device_id: expect.any(String), path: toPage(path.join(herdr.root, "fixture")) },
-    group_id: null, action: "new_tab", area_id: area, request_id: expect.any(String),
+    group_id: null, action: "new_tab", request_id: expect.any(String),
   };
 
   // Group-tabs B5/B6: creating a tab selects a durable draft and offers an explicit terminal start.
@@ -147,7 +148,7 @@ test("New tab: the native chord and menu each select one draft without starting 
   await expect(page.locator('[data-agent-tab-bar] [role=tab][aria-selected="true"]')).toHaveAttribute("data-tab", first!);
   await expect(page.locator("[data-group-start-terminal=true]")).toBeEnabled();
   await expect.poll(() => sent.get("agent_group.new_tab")).toBe(1);
-  expect(last.get("agent_group.new_tab")).toMatchObject(request);
+  expect(last.get("agent_group.new_tab")).toMatchObject({ ...request, area_id: areaId });
   const firstRequest = last.get("agent_group.new_tab")!.request_id;
   expect(herdrTabs(herdr)).toEqual(topology);
 
@@ -156,9 +157,10 @@ test("New tab: the native chord and menu each select one draft without starting 
   await app.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById("new_tab")?.click());
   await expect(tabs).toHaveCount(before + 2);
   await expect(start).toHaveAttribute("data-agent-tab-start", /^draft:/);
+  await expect(start).not.toHaveAttribute("data-agent-tab-start", first!);
   const second = await start.getAttribute("data-agent-tab-start");
-  expect(second).not.toBe(first);
-  await expect(page.locator('[data-agent-tab-bar] [role=tab][aria-selected="true"]')).toHaveAttribute("data-tab", second!);
+  // From the draft's controls the menu uses the active Agent area (UI behavior, Area commands).
+  await expect(area.locator('[data-agent-tab-bar] [role=tab][aria-selected="true"]')).toHaveAttribute("data-tab", second!);
   await expect.poll(() => sent.get("agent_group.new_tab")).toBe(2);
   expect(last.get("agent_group.new_tab")).toMatchObject(request);
   expect(last.get("agent_group.new_tab")!.request_id).not.toBe(firstRequest);
