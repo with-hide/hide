@@ -41,7 +41,10 @@ pub(super) struct ProvisionalTab {
 #[derive(Clone, Debug)]
 pub(super) struct MadePane {
     pub(super) pane_id: String,
+    /// The checkout it was made in, by path, and its tab: the fork's own, or
+    /// the source's for a split.
     pub(super) checkout: String,
+    pub(super) tab_id: String,
     pub(super) recorded_at_unix_ms: u64,
 }
 
@@ -49,27 +52,31 @@ impl Runtime {
     /// Lays everything drawn ahead of Herdr over a session about to be
     /// ingested.
     pub(super) fn overlay_drawn_ahead(&mut self, payload: &mut SessionSnapshotPayload) {
-        let laid_out = payload
-            .layouts
-            .iter()
-            .flat_map(|layout| &layout.panes)
-            .map(|pane| pane.pane_id.as_str())
-            .collect::<HashSet<_>>();
-        self.settle_made_panes(|pane_id| laid_out.contains(pane_id), unix_milliseconds());
+        Self::settle_made_panes(
+            &mut self.forks_in_flight,
+            |pane_id| {
+                payload
+                    .layouts
+                    .iter()
+                    .any(|layout| layout.panes.iter().any(|pane| pane.pane_id == pane_id))
+            },
+            unix_milliseconds(),
+        );
         self.overlay_created_tabs(payload);
         self.overlay_geometry(payload);
     }
 
     /// Ends each fork pane's hold once Herdr's layout lists it, or at its
     /// bound, logged, after which a pane still missing is one the projection
-    /// waits on and says so. Says whether one lapsed.
+    /// waits on and says so. Says whether one lapsed. With no fork starting,
+    /// which is nearly always, it reads nothing.
     pub(super) fn settle_made_panes(
-        &mut self,
+        forks: &mut HashMap<String, super::agents::PendingFork>,
         laid_out: impl Fn(&str) -> bool,
         now_unix_ms: u64,
     ) -> bool {
         let mut lapsed = false;
-        for fork in self.forks_in_flight.values_mut() {
+        for fork in forks.values_mut() {
             let Some(made) = fork.made.as_ref() else {
                 continue;
             };
@@ -119,23 +126,25 @@ impl Runtime {
     }
 
     pub(super) fn created_pane_awaits_layout(&self, pane_id: &str, checkout: &str) -> bool {
-        self.created_pane_checkout(pane_id) == Some(checkout)
+        self.created_pane_place(pane_id)
+            .is_some_and(|(made_in, _)| made_in == checkout)
     }
 
-    /// The checkout a pane Hide made was made in, which holds it before
-    /// Herdr's layout lists it: a created tab's, or a starting fork's, which
-    /// is its source's whether the fork has a tab of its own or a split.
-    pub(super) fn created_pane_checkout(&self, pane_id: &str) -> Option<&str> {
+    /// Where a pane Hide made sits before Herdr's layout lists it, as the
+    /// checkout it was made in, by path, and its tab: a created tab's, or a
+    /// starting fork's, which is its source's checkout whether the fork has
+    /// a tab of its own or a split of the source's.
+    pub(super) fn created_pane_place(&self, pane_id: &str) -> Option<(&str, &str)> {
         self.provisional_tabs
             .iter()
             .find(|tab| tab.pane_id == pane_id)
-            .map(|tab| tab.cwd.as_str())
+            .map(|tab| (tab.cwd.as_str(), tab.tab_id.as_str()))
             .or_else(|| {
                 self.forks_in_flight
                     .values()
                     .filter_map(|fork| fork.made.as_ref())
                     .find(|made| made.pane_id == pane_id)
-                    .map(|made| made.checkout.as_str())
+                    .map(|made| (made.checkout.as_str(), made.tab_id.as_str()))
             })
     }
 

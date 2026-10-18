@@ -2468,9 +2468,10 @@ impl Runtime {
             Some(focus) => focus.press > press || focus.prior_intent_serial > issued_serial,
             None => self.last_view_intent_serial > issued_serial,
         };
-        let source_workspace_id = self
+        let (source_workspace_id, source_tab_id) = self
             .layout_holding_pane(source_pane_id)
-            .map(|layout| layout.workspace_id.clone());
+            .map(|layout| (layout.workspace_id.clone(), layout.tab_id.clone()))
+            .unzip();
         let checkout_path = match tab_id {
             Some(tab_id) => self.place_fork_tab(source_pane_id, tab_id),
             None => self.checkout_path_holding_pane(source_pane_id),
@@ -2479,13 +2480,15 @@ impl Runtime {
         // own tab is drawn as a created tab is, until Herdr lays it out, and
         // a split waits in the source's tab for Herdr's layout as a creation,
         // not a missing pane. Either way the keyboard can bring that checkout
-        // forward before the catalog lists the pane (`created_pane_checkout`).
+        // forward before the catalog lists the pane (`created_pane_place`).
         if let Some(path) = checkout_path.as_deref()
+            && let Some(made_tab_id) = tab_id.map(str::to_owned).or(source_tab_id)
             && let Some(pending) = self.forks_in_flight.get_mut(source_pane_id)
         {
             pending.made = Some(super::drawn_ahead::MadePane {
                 pane_id: pane_id.to_owned(),
                 checkout: path.to_owned(),
+                tab_id: made_tab_id,
                 recorded_at_unix_ms: unix_milliseconds(),
             });
         }

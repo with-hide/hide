@@ -1898,9 +1898,15 @@ fn a_fork_pane_from_a_replaced_herdr_is_not_placed_or_focused() {
 }
 
 /// /agent-groups holding `tabs` with Herdr's keyboard on `focused`'s tab,
-/// beside /elsewhere's one tab; `split` puts a second pane right of t1's.
+/// beside /elsewhere's one tab, `w-else:t1`, which can hold it too; `split`
+/// puts a second pane right of t1's.
 fn fork_session(tabs: &[&str], focused: &str, split: Option<&str>) -> SessionSnapshotPayload {
-    let mut payload = tab_order_payload("/agent-groups", tabs, tabs, focused);
+    let active = if focused == "w-else:t1" {
+        tabs[0]
+    } else {
+        focused
+    };
+    let mut payload = tab_order_payload("/agent-groups", tabs, tabs, active);
     if let Some(split) = split {
         let layout = payload
             .layouts
@@ -1930,6 +1936,10 @@ fn fork_session(tabs: &[&str], focused: &str, split: Option<&str>) -> SessionSna
         );
     }
     add_elsewhere_tab(&mut payload);
+    if focused == "w-else:t1" {
+        payload.focused_workspace_id = Some("w-else".to_owned());
+        payload.focused_pane_id = Some("w-else:t1:p".to_owned());
+    }
     payload
 }
 
@@ -1958,6 +1968,11 @@ fn forked(from_elsewhere: bool, tab: bool) -> (Runtime, String, &'static str) {
     let (mut runtime, checkout, elsewhere) = entered_from_elsewhere(&["w-order:t1", "w-order:t2"]);
     if from_elsewhere {
         choose_checkout(&mut runtime, "workspace:elsewhere", &elsewhere);
+        runtime.ingest_session(Ok(fork_session(
+            &["w-order:t1", "w-order:t2"],
+            "w-else:t1",
+            None,
+        )));
     }
     pending_fork(&mut runtime, "w-order:t1:p", Some("fork-keys"));
     let pane = if tab {
@@ -2080,16 +2095,34 @@ fn herdrs_layout_of_a_fork_is_not_read_as_herdr_moving_the_keyboard() {
         } else {
             (&["w-order:t1", "w-order:t2"], "w-order:t1", Some(pane))
         };
-        runtime.ingest_session(Ok(fork_session(tabs, focused, split)));
+        // A session read before Herdr moved still has it on /elsewhere; Herdr
+        // then reaches the fork's tab through its workspace's active tab, the
+        // source's, and a session can carry that step. Both are on the way to
+        // Hide's own request, not a tab Herdr chose: a local journey run
+        // showed the step taking the keyboard to the source for one frame.
+        let steps: [(&[&str], &str); 3] = [
+            (&["w-order:t1", "w-order:t2"], "w-else:t1"),
+            (tabs, "w-order:t1"),
+            (tabs, focused),
+        ];
+        for (tabs, focused) in steps {
+            let split = split.filter(|_| focused != "w-else:t1");
+            runtime.ingest_session(Ok(fork_session(tabs, focused, split)));
+            let (front, selected, _, waiting) = fork_on_screen(&runtime);
+            assert_eq!(
+                (front, selected, waiting),
+                (Some(checkout.clone()), Some(pane.to_owned()), false),
+                "tab: {tab}, Herdr on {focused}"
+            );
+        }
         assert_eq!(
             diagnostic_count(&runtime, "pane.focus.followed"),
             0,
             "tab: {tab}"
         );
-        let (front, selected, _, waiting) = fork_on_screen(&runtime);
         assert_eq!(
-            (front, selected, waiting),
-            (Some(checkout), Some(pane.to_owned()), false),
+            diagnostic_count(&runtime, "tab.focus.followed"),
+            0,
             "tab: {tab}"
         );
     }

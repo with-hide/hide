@@ -3059,7 +3059,7 @@ impl Runtime {
     /// the single external effect.
     ///
     /// A pane Hide made that Herdr has not laid out yet is its checkout's
-    /// already (`created_pane_checkout`): reading only the catalog left a
+    /// already (`created_pane_place`): reading only the catalog left a
     /// fork's keyboard in a pane of a checkout not in front, where the
     /// projection waited on it or followed that checkout's own pane instead.
     fn focus_context_for_pane(&mut self, pane_id: &str) -> bool {
@@ -3089,7 +3089,7 @@ impl Runtime {
                 .any(|tab| tab.panes.iter().any(|pane| pane.id == pane_id))
         })
         .or_else(|| {
-            let made_in = self.created_pane_checkout(pane_id)?;
+            let (made_in, _) = self.created_pane_place(pane_id)?;
             checkout_where(&|checkout| checkout.path == made_in)
         }) else {
             return false;
@@ -3739,12 +3739,19 @@ impl Runtime {
             ),
         );
     }
+    /// The checkout and tab holding `pane_id`, or, for a pane Hide made that
+    /// Herdr has not laid out yet, the ones it was made in: a focus on a
+    /// fork's pane is a tab move Herdr then answers, and without it Herdr's
+    /// step through the source's tab on the way read as a tab Herdr chose.
     pub(super) fn checkout_tab_holding_pane(&self, pane_id: &str) -> Option<(String, String)> {
-        self.snapshot
-            .navigator
-            .workspaces
-            .iter()
-            .flat_map(|workspace| &workspace.checkouts)
+        let checkouts = || {
+            self.snapshot
+                .navigator
+                .workspaces
+                .iter()
+                .flat_map(|workspace| &workspace.checkouts)
+        };
+        checkouts()
             .find_map(|checkout| {
                 checkout
                     .tabs
@@ -3752,6 +3759,12 @@ impl Runtime {
                     .find(|tab| tab.panes.iter().any(|pane| pane.id == pane_id))
                     .and_then(|tab| tab.id.clone())
                     .map(|tab_id| (checkout.id.clone(), tab_id))
+            })
+            .or_else(|| {
+                let (made_in, tab_id) = self.created_pane_place(pane_id)?;
+                checkouts()
+                    .find(|checkout| checkout.path == made_in)
+                    .map(|checkout| (checkout.id.clone(), tab_id.to_owned()))
             })
     }
     /// Rule 11: whether repeating this view-state change would converge on
