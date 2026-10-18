@@ -1093,7 +1093,7 @@ function storedLaneWidth(): number | undefined {
   return views.workspaces.find((entry) => entry.path.endsWith(`${path.sep}fixture`) || entry.path.endsWith("/fixture"))?.lane_width;
 }
 
-test("page width: a page opened into the lane widens it to 900 beside Agent Views' 480, and a width the operator narrows it to stays", async () => {
+test("page width: a page opened into the lane widens it to 900 beside Agent Views' 480, and a width the operator narrows it to stays", { tag: "@platform" }, async () => {
   ({ app } = await launch(run.env));
   const page = await shellPage(app);
   await enterWorkspace(page, "fixture");
@@ -1109,9 +1109,12 @@ test("page width: a page opened into the lane widens it to 900 beside Agent View
   await expect(divider).toHaveAttribute("aria-valuenow", "900");
   await expect.poll(storedLaneWidth).toBe(900);
   const displayId = await displayIdOf(page, "Site");
-  // The shell is zoomed to fit the window, so the page's CSS width is the lane's share of it.
+  // The page fills its slot, the lane's 900 less the area's edges; the shell
+  // is zoomed to fit the window, so its CSS width is the slot's share of it.
   await expect.poll(async () => (await viewOf(site)).visible).toBe(true);
-  await expect.poll(async () => Math.abs((await inPage<number>(site, "innerWidth")) - 900 * zoom)).toBeLessThanOrEqual(1);
+  const slot = (await slotBounds(page, displayId)).width;
+  expect(slot).toBeGreaterThan(880);
+  await expect.poll(async () => Math.abs((await inPage<number>(site, "innerWidth")) - slot * zoom)).toBeLessThanOrEqual(1);
   await windowShot("page-width-widened");
 
   // The operator narrows it; a file in front and the page tab chosen again
@@ -1128,7 +1131,7 @@ test("page width: a page opened into the lane widens it to 900 beside Agent View
   await expect.poll(storedLaneWidth).toBe(804);
 });
 
-test("page width: widening leaves Agent Views 480 pinned or not, never narrows, and leaves an expanded lane alone", async () => {
+test("page width: widening leaves Agent Views 480 pinned or not, never narrows, and leaves an expanded lane alone", { tag: "@platform" }, async () => {
   ({ app } = await launch(run.env));
   const page = await shellPage(app);
   await enterWorkspace(page, "fixture");
@@ -1166,7 +1169,7 @@ test("page width: widening leaves Agent Views 480 pinned or not, never narrows, 
   expect(storedLaneWidth()).toBe(widened);
 });
 
-test("page zoom: a zoomed page shows its zoom in the address field, steps in the popover and loses the badge at 100%", { tag: NEEDS_FOCUS }, async () => {
+test("page zoom: a zoomed page shows its zoom in the address field, steps in the popover and loses the badge at 100%", { tag: [NEEDS_FOCUS, "@platform"] }, async () => {
   ({ app } = await launch(run.env));
   await fitWindow(app, WINDOW);
   const page = await shellPage(app);
