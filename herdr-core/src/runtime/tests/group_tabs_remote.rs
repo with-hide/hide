@@ -350,90 +350,95 @@ fn an_archived_remote_root_keeps_its_pending_follow_before_automatic_descendants
 
 #[test]
 fn a_first_local_home_result_waits_for_its_catalog_and_respects_a_newer_visit() {
-    for boundary in ["catalog", "newer-visit", "reconnect"] {
-        let t = tree();
-        let home = Path::new(&t.main).parent().unwrap().join("home");
-        std::fs::create_dir(&home).unwrap();
-        let home = home.to_str().unwrap();
-        let (mut runtime, _) = live_tab_order_runtime(&t.main);
-        let old = tab_order_payload(&t.main, &["w-order:t1"], &["w-order:t1"], "w-order:t1");
-        runtime.ingest_session_with_catalog(Ok(old.clone()), None);
-        let task = runtime
-            .begin_task_operation("agent_start", None, None, None, None)
-            .unwrap();
-        // HomeSync records Home before its first session catalog arrives.
-        let mut registration = runtime.snapshot.ui_state.workspace_registrations[0].clone();
-        registration.id = "workspace:home".into();
-        registration.path = home.into();
-        registration.label = "Home".into();
-        registration.home = true;
-        runtime
-            .snapshot
-            .ui_state
-            .workspace_registrations
-            .push(registration);
-        runtime.ingest_task_operation_result(
-            task,
-            Ok(live::WorktreeTaskOutcome {
-                path: home.into(),
-                pane_id: "w-home:t1:p".into(),
-                created_tab_id: Some("w-home:t1".into()),
-                purpose_error: None,
-                unconfirmed_purpose_token: None,
-                issue_error: None,
-                shell: crate::agent_start::ShellStart::Plain,
-            }),
-        );
-        assert_eq!(
-            runtime.snapshot.navigator.root_path.as_deref(),
-            Some(t.main.as_str())
-        );
-        assert_eq!(
-            runtime.snapshot.focused.pane_id.as_deref(),
-            Some("w-order:t1:p")
-        );
-        match boundary {
-            "newer-visit" => dispatch(
-                &mut runtime,
-                "focus_device",
-                json!({"device_id":crate::node::TEST_NODE}),
-            ),
-            "reconnect" => runtime.live_generation += 1,
-            _ => {}
+    for registration_listed in [false, true] {
+        for boundary in ["catalog", "newer-visit", "reconnect"] {
+            let t = tree();
+            let home = Path::new(&t.main).parent().unwrap().join("home");
+            std::fs::create_dir(&home).unwrap();
+            let home = home.to_str().unwrap();
+            let (mut runtime, _) = live_tab_order_runtime(&t.main);
+            let old = tab_order_payload(&t.main, &["w-order:t1"], &["w-order:t1"], "w-order:t1");
+            runtime.ingest_session_with_catalog(Ok(old.clone()), None);
+            let task = runtime
+                .begin_task_operation("agent_start", None, None, None, None)
+                .unwrap();
+            // HomeSync records Home before its first session catalog arrives.
+            let mut registration = runtime.snapshot.ui_state.workspace_registrations[0].clone();
+            registration.id = "workspace:home".into();
+            registration.path = home.into();
+            registration.label = "Home".into();
+            registration.home = true;
+            runtime
+                .snapshot
+                .ui_state
+                .workspace_registrations
+                .push(registration);
+            if registration_listed {
+                runtime.ingest_session_with_catalog(Ok(old.clone()), None);
+            }
+            runtime.ingest_task_operation_result(
+                task,
+                Ok(live::WorktreeTaskOutcome {
+                    path: home.into(),
+                    pane_id: "w-home:t1:p".into(),
+                    created_tab_id: Some("w-home:t1".into()),
+                    purpose_error: None,
+                    unconfirmed_purpose_token: None,
+                    issue_error: None,
+                    shell: crate::agent_start::ShellStart::Plain,
+                }),
+            );
+            assert_eq!(
+                runtime.snapshot.navigator.root_path.as_deref(),
+                Some(t.main.as_str())
+            );
+            assert_eq!(
+                runtime.snapshot.focused.pane_id.as_deref(),
+                Some("w-order:t1:p")
+            );
+            match boundary {
+                "newer-visit" => dispatch(
+                    &mut runtime,
+                    "focus_device",
+                    json!({"device_id":crate::node::TEST_NODE}),
+                ),
+                "reconnect" => runtime.live_generation += 1,
+                _ => {}
+            }
+            let mut landed = tab_order_payload(home, &["w-home:t1"], &["w-home:t1"], "w-home:t1");
+            landed.workspaces[0].workspace_id = "w-home".into();
+            landed.tabs[0].workspace_id = "w-home".into();
+            landed.layouts[0].workspace_id = "w-home".into();
+            landed.workspaces.extend(old.workspaces.clone());
+            landed.tabs.extend(old.tabs.clone());
+            landed.layouts.extend(old.layouts.clone());
+            landed.panes.extend(old.panes.clone());
+            // An unrelated keyboard report cannot choose Home for the start.
+            landed.focused_workspace_id = old.focused_workspace_id.clone();
+            landed.focused_pane_id = old.focused_pane_id.clone();
+            runtime.ingest_session_with_catalog(Ok(landed.clone()), None);
+            assert_eq!(
+                runtime.snapshot.navigator.root_path.as_deref(),
+                Some(if boundary == "catalog" { home } else { &t.main }),
+                "{boundary}"
+            );
+            assert_eq!(
+                runtime.snapshot.focused.pane_id.as_deref(),
+                Some(if boundary == "catalog" {
+                    "w-home:t1:p"
+                } else {
+                    "w-order:t1:p"
+                }),
+                "{boundary}"
+            );
+            runtime.ingest_session_with_catalog(Ok(landed), None);
+            assert_eq!(runtime.snapshot.status.last_error, None, "{boundary}");
+            assert_eq!(
+                runtime.snapshot.navigator.root_path.as_deref(),
+                Some(if boundary == "catalog" { home } else { &t.main }),
+                "{boundary} keeps its selection on the next session"
+            );
         }
-        let mut landed = tab_order_payload(home, &["w-home:t1"], &["w-home:t1"], "w-home:t1");
-        landed.workspaces[0].workspace_id = "w-home".into();
-        landed.tabs[0].workspace_id = "w-home".into();
-        landed.layouts[0].workspace_id = "w-home".into();
-        landed.workspaces.extend(old.workspaces.clone());
-        landed.tabs.extend(old.tabs.clone());
-        landed.layouts.extend(old.layouts.clone());
-        landed.panes.extend(old.panes.clone());
-        // An unrelated keyboard report cannot choose Home for the start.
-        landed.focused_workspace_id = old.focused_workspace_id.clone();
-        landed.focused_pane_id = old.focused_pane_id.clone();
-        runtime.ingest_session_with_catalog(Ok(landed.clone()), None);
-        assert_eq!(
-            runtime.snapshot.navigator.root_path.as_deref(),
-            Some(if boundary == "catalog" { home } else { &t.main }),
-            "{boundary}"
-        );
-        assert_eq!(
-            runtime.snapshot.focused.pane_id.as_deref(),
-            Some(if boundary == "catalog" {
-                "w-home:t1:p"
-            } else {
-                "w-order:t1:p"
-            }),
-            "{boundary}"
-        );
-        runtime.ingest_session_with_catalog(Ok(landed), None);
-        assert_eq!(runtime.snapshot.status.last_error, None, "{boundary}");
-        assert_eq!(
-            runtime.snapshot.navigator.root_path.as_deref(),
-            Some(if boundary == "catalog" { home } else { &t.main }),
-            "{boundary} keeps its selection on the next session"
-        );
     }
 }
 
@@ -501,6 +506,14 @@ fn a_global_local_start_brings_its_device_forward_from_a_remote_screen() {
         .workspace_registrations
         .extend(local.snapshot.ui_state.workspace_registrations.clone());
     runtime.rebuild_catalog();
+    // A registration alone has no Herdr owner. Publish the local checkout
+    // before asking an immediate result to bring it in front of the device.
+    runtime.ingest_session(Ok(tab_order_payload(
+        &t.main,
+        &["w-order:t1"],
+        &["w-order:t1"],
+        "w-order:t1",
+    )));
     assert_eq!(
         runtime.snapshot.navigator.focused_device_id.as_deref(),
         Some(DEVICE)

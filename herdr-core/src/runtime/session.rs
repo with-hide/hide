@@ -4121,12 +4121,13 @@ impl Runtime {
                 let input_ready = operation.agent_phase.is_none().then(|| pane_id.clone());
                 let waits_for_local_catalog = operation.kind == "agent_start"
                     && device.is_none()
+                    && self.created_pane_place(&pane_id).is_none()
                     && !self.catalog_workspaces().any(|workspace| {
                         workspace.device_id == self.node.as_str()
                             && workspace
                                 .checkouts
                                 .iter()
-                                .any(|checkout| checkout.path == path)
+                                .any(|checkout| checkout.path == path && checkout.has_panes)
                     });
                 crate::diagnostic!(serde_json::json!({
                     "component": "agent_start",

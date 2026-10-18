@@ -419,6 +419,11 @@ fn home_links_follow_registrations_once_home_exists() {
         .ui_state
         .workspace_registrations
         .push(registration(&machine.projects[0], crate::node::TEST_NODE));
+    let old = tab_order_payload(&machine.projects[0], &["w1:t1"], &["w1:t1"], "w1:t1");
+    shared
+        .lock()
+        .unwrap()
+        .ingest_session_with_catalog(Ok(old.clone()), None);
 
     dispatch(
         &shared,
@@ -432,6 +437,27 @@ fn home_links_follow_registrations_once_home_exists() {
             .is_some_and(|operation| operation.phase == "ready")
     });
     let home = machine.user_home.join("hide");
+    // The worker fixture has no session-sync thread. Publish the accepted
+    // Home pane as Herdr does before waiting for its ordered focus.
+    let mut session = tab_order_payload(home.to_str().unwrap(), &["w4:t1"], &["w4:t1"], "w4:t1");
+    session.focused_workspace_id = Some("w4".into());
+    session.focused_pane_id = Some("w4:p1".into());
+    session.workspaces[0].workspace_id = "w4".into();
+    session.tabs[0].workspace_id = "w4".into();
+    session.panes[0].pane_id = "w4:p1".into();
+    session.layouts[0].workspace_id = "w4".into();
+    session.layouts[0].focused_pane_id = "w4:p1".into();
+    session.layouts[0].panes[0].pane_id = "w4:p1".into();
+    session.focused_workspace_id = old.focused_workspace_id.clone();
+    session.focused_pane_id = old.focused_pane_id.clone();
+    session.workspaces.extend(old.workspaces);
+    session.tabs.extend(old.tabs);
+    session.panes.extend(old.panes);
+    session.layouts.extend(old.layouts);
+    shared
+        .lock()
+        .unwrap()
+        .ingest_session_with_catalog(Ok(session), None);
     assert!(home.join("app").is_symlink());
     wait(
         &shared,

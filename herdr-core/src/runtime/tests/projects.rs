@@ -2143,6 +2143,19 @@ fn a_task_that_stays_behind_leaves_the_desktop_focus_where_it_was() {
     };
     for (stays_behind, shown) in [(false, "new:pane"), (true, "existing:pane")] {
         let mut runtime = runtime();
+        // This test compares desktop and phone navigation after a pane is
+        // published; waiting for a new checkout's catalog is tested separately.
+        runtime.snapshot.navigator.workspaces = vec![workspace(
+            "project",
+            "Project",
+            "/fixture/repo",
+            vec![checkout(
+                "project",
+                "checkout",
+                "/fixture/repo",
+                Some(pane("new:pane", "/fixture/repo")),
+            )],
+        )];
         runtime.snapshot.terminal.pane_id = Some("existing:pane".into());
         runtime.snapshot.focused.surface = Surface::Terminal;
         runtime.snapshot.focused.pane_id = Some("existing:pane".into());
