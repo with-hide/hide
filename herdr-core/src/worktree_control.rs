@@ -1023,10 +1023,10 @@ fn start_task_agent(
                     return Err("session_resume_intent_changed".into());
                 }
                 drop(guard);
-                if let Some(reader) = reader.as_ref() {
-                    if !Arc::ptr_eq(&task_session_node(&runtime, id, &expected.kind)?, reader) {
-                        return Err("session_resume_intent_changed".into());
-                    }
+                if let Some(reader) = reader.as_ref()
+                    && !Arc::ptr_eq(&task_session_node(&runtime, id, &expected.kind)?, reader)
+                {
+                    return Err("session_resume_intent_changed".into());
                 }
                 Ok(())
             };

@@ -389,7 +389,10 @@ fn drafts_and_empty_groups_survive_authoritative_topology_and_restart() {
     );
     let draft = tabs(&runtime, Some(&draft_group))[0].clone();
     ingest(&mut runtime, &TABS);
-    assert_eq!(tabs(&runtime, Some(&draft_group)), [draft.clone()]);
+    assert_eq!(
+        tabs(&runtime, Some(&draft_group)),
+        std::slice::from_ref(&draft)
+    );
     assert!(tabs(&runtime, Some(&empty)).is_empty());
     assert_eq!(
         published(&runtime).group_id.as_deref(),
@@ -413,7 +416,10 @@ fn drafts_and_empty_groups_survive_authoritative_topology_and_restart() {
         published(&runtime).group_id.as_deref(),
         Some(draft_group.as_str())
     );
-    assert_eq!(tabs(&runtime, Some(&draft_group)), [draft.clone()]);
+    assert_eq!(
+        tabs(&runtime, Some(&draft_group)),
+        std::slice::from_ref(&draft)
+    );
     assert!(published(&runtime).drafts.contains(&draft));
     assert!(
         runtime.snapshot().terminal.pane_id.is_none(),
@@ -724,8 +730,7 @@ fn a_start_awaiting_confirmation_refuses_move_dissolve_and_draft_close() {
     let prepared = runtime
         .prepare_group_start(
             71,
-            crate::node::TEST_NODE,
-            PATH,
+            (crate::node::TEST_NODE, PATH),
             Some(super::super::group_starts::StartTarget {
                 group_id: Some(target.clone()),
                 area_id: "a1".into(),
@@ -757,7 +762,7 @@ fn a_start_awaiting_confirmation_refuses_move_dissolve_and_draft_close() {
         ),
     ] {
         group(&mut runtime, request, payload);
-        assert_eq!(tabs(&runtime, Some(&target)), [draft.clone()]);
+        assert_eq!(tabs(&runtime, Some(&target)), std::slice::from_ref(&draft));
         assert_eq!(
             published(&runtime).group_id.as_deref(),
             Some(target.as_str())
@@ -787,8 +792,7 @@ fn a_late_start_fills_its_original_draft_once_without_changing_the_visible_group
     let initial = runtime
         .prepare_group_start(
             81,
-            crate::node::TEST_NODE,
-            PATH,
+            (crate::node::TEST_NODE, PATH),
             Some(destination.clone()),
             Some("late-start"),
             None,
@@ -801,8 +805,7 @@ fn a_late_start_fills_its_original_draft_once_without_changing_the_visible_group
     let repeated = runtime
         .prepare_group_start(
             82,
-            crate::node::TEST_NODE,
-            PATH,
+            (crate::node::TEST_NODE, PATH),
             Some(destination.clone()),
             Some("late-start"),
             None,
@@ -814,7 +817,7 @@ fn a_late_start_fills_its_original_draft_once_without_changing_the_visible_group
         "an uncertain effect is confirmed before another create"
     );
     assert_eq!(repeated.request.marker, initial.request.marker);
-    assert_eq!(tabs(&runtime, Some(&target)), [draft.clone()]);
+    assert_eq!(tabs(&runtime, Some(&target)), std::slice::from_ref(&draft));
     let elsewhere = create(&mut runtime, "elsewhere", "Elsewhere");
     assert!(!runtime.group_start_should_focus(82));
     // Herdr's authoritative topology may precede the effect's own answer.
@@ -834,8 +837,7 @@ fn a_late_start_fills_its_original_draft_once_without_changing_the_visible_group
     let settled = runtime
         .prepare_group_start(
             83,
-            crate::node::TEST_NODE,
-            PATH,
+            (crate::node::TEST_NODE, PATH),
             Some(destination),
             Some("late-start"),
             None,
@@ -863,8 +865,7 @@ fn an_acknowledged_start_survives_stale_topology_then_closes_after_being_observe
     let prepared = runtime
         .prepare_group_start(
             91,
-            crate::node::TEST_NODE,
-            PATH,
+            (crate::node::TEST_NODE, PATH),
             Some(super::super::group_starts::StartTarget {
                 group_id: Some(target.clone()),
                 area_id: "a1".into(),
@@ -1061,8 +1062,7 @@ fn add_pane_accepts_the_shown_delegated_tab_and_refuses_a_stale_canvas_target() 
         runtime
             .prepare_group_start(
                 101,
-                crate::node::TEST_NODE,
-                PATH,
+                (crate::node::TEST_NODE, PATH),
                 Some(destination(CHILDREN[1])),
                 Some("stale-child"),
                 Some("claude"),
@@ -1073,8 +1073,7 @@ fn add_pane_accepts_the_shown_delegated_tab_and_refuses_a_stale_canvas_target() 
     let prepared = runtime
         .prepare_group_start(
             102,
-            crate::node::TEST_NODE,
-            PATH,
+            (crate::node::TEST_NODE, PATH),
             Some(destination(CHILDREN[0])),
             Some("shown-child"),
             Some("claude"),

@@ -4245,8 +4245,7 @@ impl Runtime {
         let prepared = if self.workspace_views.is_some() || payload.target.is_some() {
             match self.prepare_group_start(
                 id,
-                &device,
-                &checkout_path,
+                (&device, &checkout_path),
                 payload.target,
                 request_id.as_deref(),
                 agent_kind.as_deref(),

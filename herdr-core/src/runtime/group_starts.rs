@@ -134,13 +134,13 @@ impl Runtime {
     pub(super) fn prepare_group_start(
         &mut self,
         task: u64,
-        device: &str,
-        path: &str,
+        workspace: (&str, &str),
         requested: Option<StartTarget>,
         request_id: Option<&str>,
         agent_kind: Option<&str>,
         mut confirm_only: bool,
     ) -> Result<PreparedStart, String> {
+        let (device, path) = workspace;
         let workspace = (device.to_owned(), path.to_owned());
         let local = device == self.node.as_str();
         let delegated_tabs: HashSet<String> = self
@@ -590,14 +590,13 @@ impl Runtime {
                     .get_mut(&active.workspace.0, &active.workspace.1)
             })
             .and_then(|view| view.agent_starts.get_mut(&active.key))
+            && start.state != StartState::Ready
         {
-            if start.state != StartState::Ready {
-                start.state = if uncertain {
-                    StartState::Pending
-                } else {
-                    StartState::Failed
-                };
-            }
+            start.state = if uncertain {
+                StartState::Pending
+            } else {
+                StartState::Failed
+            };
         }
         self.group_start_saves
             .retain(|waiter| waiter.workspace != active.workspace || waiter.key != active.key);
@@ -663,14 +662,13 @@ impl Runtime {
                     .remove(&tab);
             }
             if let Some(draft) = start.draft_tab_id.as_deref() {
-                if let Some(layout) = view.group_layout_mut(start.group_id.as_deref()) {
-                    if let Some(area) = layout.tree.area_mut(&start.area_id) {
-                        if let Some(item) = area.displays.iter_mut().find(|item| item.id == draft) {
-                            item.id = tab.to_owned();
-                            if area.active.as_deref() == Some(draft) {
-                                area.active = Some(tab.to_owned());
-                            }
-                        }
+                if let Some(layout) = view.group_layout_mut(start.group_id.as_deref())
+                    && let Some(area) = layout.tree.area_mut(&start.area_id)
+                    && let Some(item) = area.displays.iter_mut().find(|item| item.id == draft)
+                {
+                    item.id = tab.to_owned();
+                    if area.active.as_deref() == Some(draft) {
+                        area.active = Some(tab.to_owned());
                     }
                 }
                 view.agent_groups.drafts.remove(draft);
