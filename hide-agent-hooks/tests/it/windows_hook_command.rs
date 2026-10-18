@@ -563,14 +563,22 @@ fn agys_windows_guard_preserves_korean_and_non_bmp_hook_answers() {
     guidance::install(agent, &home, &helper).unwrap();
     let document: Value =
         serde_json::from_str(&std::fs::read_to_string(agent.config_path(&home)).unwrap()).unwrap();
-    let output = agy_shell(
+    let mut shell = agy_shell(
         document["hide"]["SessionStart"][0]["command"]
             .as_str()
             .unwrap(),
-    )
-    .stdin(Stdio::null())
-    .output()
-    .unwrap();
+    );
+    shell
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = hide_platform::process::OwnedChild::spawn(&mut shell)
+        .unwrap()
+        .capture_until(
+            std::time::Instant::now() + std::time::Duration::from_secs(15),
+            64 * 1024,
+        )
+        .unwrap();
     assert!(output.status.success(), "{output:?}");
     let received: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
