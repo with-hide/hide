@@ -133,7 +133,8 @@ export function sessionPulls(root: AgentRow, byPane: ReadonlyMap<string, AgentRo
 /**
  * What a row's PR mark gathers: a parent's family, itself and every
  * descendant, or undefined for a row with no child in the list, which shows
- * its own PRs. The 태스크 row, the 프로젝트 root row and the pane header agree.
+ * its own PRs. The 태스크 row and the pane header ask it of any parent, the
+ * 프로젝트 tree only of a root, whose child rows keep their own.
  */
 export function familyPulls(agent: AgentRow, byPane: ReadonlyMap<string, AgentRow>): SessionPull[] | undefined {
   return (agent.lineage_child_pane_ids ?? []).some((pane) => byPane.has(pane)) ? sessionPulls(agent, byPane) : undefined;

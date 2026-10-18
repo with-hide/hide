@@ -8,7 +8,7 @@ import tokensText from "../../design/tokens.json?raw";
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { Sidebar } from "./sidebar";
-import type { AgentPullRequest, AgentRow, PrState, SnapshotRest, Workspace } from "./snapshot";
+import type { AgentPullRequest, AgentRow, GithubStatus, PrState, PullRequest, SnapshotRest, Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -42,15 +42,20 @@ function agent(pane: string, label: string, pulls: Pull[], lineage: Partial<Agen
   } as AgentRow;
 }
 
+/** What the project's GitHub read answered: the PRs it lists and how the read stands. */
+type Github = { pulls: PullRequest[]; status: GithubStatus };
+
 /** One project whose main checkout runs `agents` in one tab; `drawn` is the core's opened tree, root first with depths, else roots only. */
-function catalog(agents: AgentRow[], drawn?: [string, number][]): SnapshotRest {
+function catalog(agents: AgentRow[], drawn?: [string, number][], github?: Github): SnapshotRest {
   const project = { agent_scope: emptyScope(),
     id: "workspace:alpha", label: "alpha", path: "/fixture/alpha", device_id: "local", is_git: true, registered: true, temporary: false, pinned: false,
+    pull_requests: github?.pulls,
     inactive_checkouts: { expanded: false, checkout_ids: [] },
     checkouts: [{ agent_scope: emptyScope(),
       id: "checkout:alpha-main", workspace_id: "workspace:alpha", label: "main", path: "/fixture/alpha", branch: "main",
       is_primary: true, is_worktree: false, exists: true, active_tab_id: "tab:alpha", strip: [],
       worktree: { branch: "main", head_sha: null, last_commit_unix_seconds: null },
+      github: github?.status,
       tabs: [{ id: "tab:alpha", label: "main", panes: agents.map((row) => ({ id: row.pane_id })) }],
     }],
   } as unknown as Workspace;
@@ -69,7 +74,7 @@ afterEach(async () => {
   cleanup = null;
 });
 
-async function render(agents: AgentRow[], drawn?: [string, number][]) {
+async function render(agents: AgentRow[], drawn?: [string, number][], github?: Github) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   // jsdom loads no stylesheet, and the sidebar reads its width tokens from the document: take them from the token source.
@@ -79,7 +84,7 @@ async function render(agents: AgentRow[], drawn?: [string, number][]) {
   const shell = useShellStore.getState();
   const ui = useUiStore.getState();
   useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false });
-  useShellStore.setState({ rest: catalog(agents, drawn), agents, connection: "live" });
+  useShellStore.setState({ rest: catalog(agents, drawn, github), agents, connection: "live" });
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -144,4 +149,34 @@ it("draws the ask instead of a PR mark on a raised root row, whatever its descen
   const raised = container.querySelector('[data-raised-list] [data-pane="pane:root"]');
   expect(raised).not.toBeNull();
   expect(raised?.querySelector("[data-agent-pr]")).toBeNull();
+});
+
+/** A root that made no PR and the child that made #1073, as the operator's example has it. */
+const delegated = () => [
+  agent("pane:root", "릴리스 스킬과 로컬 검증 체계", [], { lineage_child_pane_ids: ["pane:child"] }),
+  agent("pane:child", "검증 스크립트", [{ repo: "app", number: 1073, state: "pending" }], { delegated: true, lineage_parent_pane_id: "pane:root" }),
+];
+const PULL: PullRequest = { number: 1073, title: "릴리스 검증 스크립트", url: "https://github.com/acme/app/pull/1073", badge: "open", review: null, is_draft: false, checks: "pending", state: "pending", head_branch: "feat/verify" };
+const READ: GithubStatus = { failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: Date.UTC(2026, 9, 18, 9, 0), unavailable_reason: null };
+const hover = async (container: HTMLElement, pane: string) => {
+  const trigger = container.querySelector<HTMLElement>(`[data-pr-hover="${pane}"]`)!;
+  await act(async () => { trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true })); });
+};
+
+it("shows the PR card under the pointer when a root's one PR is its child's", async () => {
+  const container = await render(delegated(), undefined, { pulls: [PULL], status: READ });
+  expect(mark(container, "pane:root")?.getAttribute("data-stale")).toBeNull();
+  await hover(container, "pane:root");
+  const card = document.querySelector<HTMLElement>('[data-checkout-card="pull_request"]');
+  expect(card?.textContent).toContain("릴리스 검증 스크립트");
+  expect(document.querySelector('[data-pr-list="pane:root"]')).toBeNull();
+});
+
+it("dims a root's gathered mark while GitHub cannot be read and says when it last read", async () => {
+  const container = await render(delegated(), undefined, { pulls: [PULL], status: { ...READ, available: false, stale: true } });
+  const root = mark(container, "pane:root");
+  expect(root?.getAttribute("data-stale")).toBe("true");
+  expect(root?.getAttribute("aria-label")).toMatch(/^#1073 CI running or review pending · GitHub last read .+ · cannot read now$/);
+  await hover(container, "pane:root");
+  expect(document.querySelector('[data-pr-list="pane:root"]')?.textContent).toMatch(/GitHub last read .+ · cannot read now/);
 });
