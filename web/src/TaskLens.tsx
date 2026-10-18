@@ -27,7 +27,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { numberedPanes, numberOf } from "./numbering";
 import { allAgents as everyPaneAgent, agentsByPane } from "./paneAgents";
-import { sessionPulls, type SessionPull } from "./prMark";
+import { familyPulls, type SessionPull } from "./prMark";
 import { remoteTargetOfPane } from "./remote";
 import { machineName } from "./screenMachine";
 import { checkoutPathOfPane, sessionTreeLines } from "./sessionTree";
@@ -306,7 +306,7 @@ function Folds({ group, resting, cleanup, archived, open, onToggle, rows, archiv
 /** A task's row and, through every opened row, its descendants (B10). */
 function TaskTree({ entry, lines, byPane, opened, selected, number, showProject, disabled, actions, onShowAll }: { entry: TaskEntry; lines: SidebarTreeLine[]; byPane: ReadonlyMap<string, AgentRow>; opened: ReadonlySet<string>; selected: string | null; number: number | null; showProject: boolean; disabled: boolean; actions: Actions; onShowAll: (parent: string) => void }) {
   const { agent } = entry;
-  const family = useMemo(() => (childrenOf(agent, byPane).length > 0 ? sessionPulls(agent, byPane) : undefined), [agent, byPane]);
+  const family = useMemo(() => familyPulls(agent, byPane), [agent, byPane]);
   const openOf = (of: AgentRow) => (childrenOf(of, byPane).length > 0 ? opened.has(of.pane_id) : null);
   return <>
     <TaskRow entry={entry} family={family} open={openOf(agent)} selected={selected === agent.pane_id} number={number} showProject={showProject} disabled={disabled} actions={actions} />

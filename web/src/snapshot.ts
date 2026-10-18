@@ -11,8 +11,8 @@ import type { AgentLogoMode, UsagePreferences } from "./generated/hided-ws";
 /** The status codes the core sends in `status_code`; the catalogs name one word for each (agents.status.*). */
 export type AgentStatusCode = "error" | "question" | "approval" | "working" | "done" | "idle" | "unknown" | "waiting" | "unfinished" | "stopped" | "attached" | "sleeping" | "waking" | "sleep_failed";
 
-/** Whose move is next (`RowMark`): the operator's, in progress (the agent works, or `waiting` on proven work, D-25), unread as finished, unread otherwise, nothing, or asleep (status-marks D-21). */
-export type RowMark = "turn" | "going" | "waiting" | "done" | "unread" | "quiet" | "asleep";
+/** Whose move is next (`RowMark`): the operator's, in progress (the agent works, or `waiting` on proven work, D-25), unread as finished, unread otherwise, nothing (resting), a state Hide cannot read, or asleep (status-marks D-21). */
+export type RowMark = "turn" | "going" | "waiting" | "done" | "unread" | "quiet" | "unknown" | "asleep";
 
 /** What a quiet row waits on (`AgentWait`): its descendants, a background job its session proves is running, the reply to a Hide request it sent, or its pull request's checks. */
 export type AgentWait = "children" | "background" | "reply" | "checks";
@@ -2069,6 +2069,31 @@ export type SnapshotRest = {
  */
 export function localDeviceId(rest: SnapshotRest | null): string {
   return rest?.navigator?.devices?.find((device) => device.kind !== "remote")?.id ?? "";
+}
+
+/**
+ * Every device row named by the device it runs on. The core publishes a
+ * device's agents inside that device's status, where the row does not say
+ * whose it is, but a session's ledger row is kept under the device id, so
+ * every reader that names a row's session (a pane head, a task row, a reveal)
+ * has to find the id on the row. This is the one place that sets it; rows
+ * already carrying it, and statuses with no agents, are returned as they are
+ * so `share` keeps their identity.
+ */
+export function stampDeviceAgents(rest: SnapshotRest): SnapshotRest {
+  const remote = rest.status?.remote;
+  if (!remote?.some((status) => status.session?.agents?.some((agent) => agent.device_id !== status.target_id))) return rest;
+  return {
+    ...rest,
+    status: {
+      ...rest.status!,
+      remote: remote.map((status) => {
+        const session = status.session;
+        if (!session?.agents?.some((agent) => agent.device_id !== status.target_id)) return status;
+        return { ...status, session: { ...session, agents: session.agents.map((agent) => (agent.device_id === status.target_id ? agent : { ...agent, device_id: status.target_id })) } };
+      }),
+    },
+  };
 }
 
 export function focusedRemoteDevice(rest: SnapshotRest | null): Device | null {

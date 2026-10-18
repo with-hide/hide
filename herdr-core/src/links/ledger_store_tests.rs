@@ -1628,6 +1628,28 @@ fn nested_repository_ownership_uses_the_deepest_path_on_the_sessions_device() {
     );
 }
 
+/// The record keeps every worktree a project has had after its folder is
+/// gone, so a machine that makes a worktree per task holds hundreds; a new
+/// session in one of them is still recorded under its project.
+#[test]
+fn a_new_session_is_recorded_however_many_worktrees_its_project_has_had() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    let mut project = origin_project("device-a", "acme/original", 0);
+    project.worktrees = (0..600)
+        .map(|task| crate::links::WorktreeFact {
+            path: format!("/repo.worktrees/task-{task}"),
+            branch: Some(format!("task-{task}")),
+            created_at_unix_ms: None,
+        })
+        .collect();
+    store.apply_project(&project, 1_000).unwrap();
+    origin_native(&mut store, &session(), "/repo.worktrees/task-7/web", 2_000);
+    let record = store.ledger_record(&session()).unwrap();
+    assert_eq!(record.project.as_deref(), Some("/repo"));
+    assert_eq!(record.repository.as_deref(), Some("acme/original"));
+}
+
 /// `백로그로` on a Local project marks the line with the memo it made, the
 /// memo's origin reads the line back, and `되돌리기` opens the line again.
 #[test]

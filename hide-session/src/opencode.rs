@@ -322,6 +322,33 @@ pub fn holds(
     Ok(confirmed)
 }
 
+/// How OpenCode forks a session it holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForkRoute {
+    /// OpenCode 1.x: its interactive command forks the session `-s` names
+    /// when given `--fork` (1.18.30, `cli/cmd/tui.ts`).
+    Flag,
+    /// OpenCode 2.x: its interactive command has no `--fork` (2.0.29,
+    /// `packages/cli/src/commands/commands.ts`, the root command's options;
+    /// only `mini` and `run` take one), so its server's `session.fork`
+    /// makes the new session, which the pane then opens as any other.
+    Server,
+}
+
+/// How OpenCode forks the root session `id` in `cwd`, decided as every read
+/// is, by the schema the database holds, in the read that proves the session.
+/// A 2.x database that migrated a 1.x one holds both schemas, and its 2.x
+/// tables, the ones 2.x keeps writing, decide.
+pub fn fork_route(home: &Path, id: &str, cwd: &str) -> Result<ForkRoute, String> {
+    with_read(home, |connection, schema| {
+        prove(connection, schema, id, Owner::Root { cwd: Some(cwd) })?;
+        Ok(match schema {
+            Schema::V1 => ForkRoute::Flag,
+            Schema::V2 => ForkRoute::Server,
+        })
+    })?
+}
+
 /// A session's activity: its newest write (the session row or any of its
 /// messages) and its message count, between the same proof as every read.
 /// The id is the exact route `opencode -s <id>` takes, so a proven id is

@@ -7,7 +7,7 @@ import type { AgentRow, RowMark, SnapshotRest } from "./snapshot";
 
 export type ChildCountPart = {
   kind: "raised" | "working" | "result" | "waiting" | "unknown" | "idle";
-  /** The mark the count is drawn with; a quiet count (unknown, idle) draws none and is named only in the hint. */
+  /** The mark the count is drawn with; a count with none (unknown, idle, a child's own ask) is not drawn on the button and is named only in the hint. */
   mark: RowMark | null;
   count: number;
   label: Extract<MessageKey, `panes.children.${string}`>;
@@ -32,15 +32,15 @@ export function paneChildren(paneId: string, agents: AgentRow[], rest: SnapshotR
   const counts = parent.direct_child_counts;
   // The four marks mean here what they mean on a row (B21, B24): a request a
   // child raised to the operator is `!`; a child's own question is its
-  // parent's to answer, so it draws no mark and is named only in the hint.
+  // parent's to answer, so it is named only in the hint.
   const asking = counts ? counts.error + counts.approval + counts.question : 0;
   if (unavailableDevice === null) {
     parts.push({ kind: "raised", mark: "turn", count: raised, label: "panes.children.raised" }, { kind: "waiting", mark: null, count: asking, label: "panes.children.waiting" });
   }
   if (counts && unavailableDevice === null) {
-    // The core omits its unknown count from the wire; its final row status
-    // already applies demand precedence and identifies these children.
-    const unknown = children.filter((child) => child.status_code === "unknown").length;
+    // The core omits its unknown count from the wire; its row mark already
+    // applies demand precedence and names these children (D-04).
+    const unknown = children.filter((child) => child.mark === "unknown").length;
     const idle = children.length - asking - counts.working - counts.done - unknown;
     parts.push(
       { kind: "working", mark: "going", count: counts.working, label: "panes.children.working" },

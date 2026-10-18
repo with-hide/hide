@@ -408,10 +408,10 @@ pub struct WorkerSpawn {
     pub project: String,
     pub branch: String,
     pub prompt: String,
-    /// The runtime's extra arguments from the Factory's configuration,
-    /// then the candidate's model and effort arguments.
+    /// The runtime's extra arguments from the Factory's configuration.
     pub args: Vec<String>,
-    /// The candidate's model and effort, kept on the worker it starts.
+    /// The candidate's model and effort: the spawn's launch choice, which its
+    /// start and every restart of the worker carry, and kept on the worker.
     pub model: Option<String>,
     pub effort: Option<String>,
     /// Reuse the worktree and session (retry, wake, relanding).

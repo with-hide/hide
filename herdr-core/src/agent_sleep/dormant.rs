@@ -175,6 +175,13 @@ pub struct DormantRecord {
     /// The registration the wake continues; none for a session that held none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registration: Option<DormantRegistration>,
+    /// The model and effort the agent was started with, which its wake
+    /// starts it with again; none in a record from before it was kept.
+    #[serde(
+        default,
+        skip_serializing_if = "hide_agent_adapter::LaunchChoice::is_default"
+    )]
+    pub launch: hide_agent_adapter::LaunchChoice,
     /// None in a record an older build saved, whose wake finds the checkout
     /// in the project list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -511,6 +518,7 @@ pub(crate) fn fixture_record(pane: &str) -> DormantRecord {
         reason: None,
         factory: None,
         registration: None,
+        launch: Default::default(),
         owner: None,
     }
 }

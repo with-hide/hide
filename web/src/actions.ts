@@ -383,7 +383,7 @@ export function createActions(send: DispatchFn) {
    * should end at, so the same event sent twice lands where it did once. The
    * core keeps the lane per Workspace, so another Workspace is never touched.
    */
-  const setWorkspaceView = (patch: { tool?: Tool | null; pinned?: boolean; tree?: boolean; prs_only_checkout?: boolean; lane_width?: number; tree_width?: number; width_request_id?: string; reveal?: string }) => {
+  const setWorkspaceView = (patch: { tool?: Tool | null; pinned?: boolean; tree?: boolean; prs_only_checkout?: boolean; lane_width?: number; panel_width?: number; tree_width?: number; width_request_id?: string; reveal?: string }) => {
     if (!workspaceViewOf(rest())) return diagnostic("workspace_view: no Workspace in front");
     return dispatch({ schema_version: 2, kind: "workspace_view", payload: patch });
   };

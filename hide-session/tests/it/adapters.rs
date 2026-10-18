@@ -39,7 +39,7 @@ fn copy_tree(from: &Path, to: &Path) {
 }
 
 /// A home holding one agent's fixture where that agent keeps its sessions.
-fn home(agent: Agent) -> tempfile::TempDir {
+pub(crate) fn home(agent: Agent) -> tempfile::TempDir {
     let home = tempfile::tempdir().unwrap();
     match agent {
         Agent::Claude => copy_tree(

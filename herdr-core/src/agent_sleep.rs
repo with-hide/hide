@@ -198,6 +198,15 @@ pub struct SleepRecord {
     /// as the end lands, because a wake wins over a sleep (B13).
     #[serde(default)]
     pub pending_wake: Option<WakeMode>,
+    /// The model and effort the agent was started with, which its wake
+    /// starts it with again, a new session as much as a resumed one. A
+    /// record from before it was kept has none and wakes on the CLI's
+    /// defaults, as it did.
+    #[serde(
+        default,
+        skip_serializing_if = "hide_agent_adapter::LaunchChoice::is_default"
+    )]
+    pub launch: hide_agent_adapter::LaunchChoice,
 }
 
 impl SleepRecord {
@@ -240,6 +249,7 @@ impl SleepRecord {
             since_unix_ms,
             reason: None,
             pending_wake: None,
+            launch: Default::default(),
         })
     }
 
@@ -665,6 +675,7 @@ mod tests {
             descendant_line: None,
             id: pane_id.to_owned(),
             herdr_name: None,
+            started_name: None,
             declared_fork: None,
             forked_from: None,
             pane_id: pane_id.to_owned(),

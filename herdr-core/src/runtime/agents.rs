@@ -1282,6 +1282,11 @@ impl Runtime {
             ReadRecordScope::Remote(&prefix),
             Some(&live_pane_ids),
         );
+        self.apply_pane_launches(
+            &session.agents,
+            ReadRecordScope::Remote(&prefix),
+            Some(&live_pane_ids),
+        );
         crate::agent_state::apply_lineage(
             &mut session.agents,
             &session.workspaces,
@@ -2581,6 +2586,15 @@ impl Runtime {
         // appeared and nothing else happened.
         match result {
             Ok(forked_pane_id) => {
+                if let Some(pending) = &pending {
+                    self.record_pane_launch(
+                        &forked_pane_id,
+                        &pending.kind,
+                        &pending.name,
+                        &pending.launch,
+                        None,
+                    );
+                }
                 self.push_diagnostic(
                     "pane.fork.created",
                     format!("Forked pane {parent_pane_id} into {forked_pane_id} in {elapsed_ms}ms"),
@@ -3313,4 +3327,9 @@ pub(super) struct PendingFork {
     pub(super) tab_id: Option<String>,
     /// The fork's pane, once Herdr made it and it took the keyboard.
     pub(super) focused: Option<String>,
+    /// The source's agent kind and launch choice, and the name the fork
+    /// starts under, which the fork's pane keeps once the fork started.
+    pub(super) kind: String,
+    pub(super) name: String,
+    pub(super) launch: hide_agent_adapter::LaunchChoice,
 }

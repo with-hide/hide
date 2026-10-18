@@ -288,9 +288,9 @@ While a member is archived, its delivery registration and the watches on it are 
 
 ## The mark
 
-Every row draws one of seven marks, decided once in the core (`RowMark::of` in `agent_state/tally.rs`) and carried on the wire as `mark` (`turn`, `going`, `waiting`, `done`, `unread`, `quiet`, `asleep`); no surface derives a mark of its own (status-marks D-01, D-12).
+Every row draws one of eight marks, decided once in the core (`RowMark::of` in `agent_state/tally.rs`) and carried on the wire as `mark` (`turn`, `going`, `waiting`, `done`, `unread`, `quiet`, `unknown`, `asleep`); no surface derives a mark of its own (status-marks D-01, D-12), the dimming of an unknown row included (`rowDimmed` reads `mark`, never `status_code`; sidebar-quiet-mark-indent D-04).
 `going` and `waiting` are the one in-progress mark in two shapes (D-25): every count and precedence takes them as one, and only the ring is drawn apart.
-Four say whose move is next, and their shapes alone tell them apart; `asleep` is the one exception, an agent Hide stopped that wakes when opened (D-21):
+Four say whose move is next, and their shapes alone tell them apart; `unknown` says Hide cannot tell, and `asleep` is an agent Hide stopped that wakes when opened (D-21):
 
 | Mark | Shape | When |
 | --- | --- | --- |
@@ -299,12 +299,13 @@ Four say whose move is next, and their shapes alone tell them apart; `asleep` is
 | `waiting` | The same ring dashed, also static (`2.2 2` over a path length of 19) | In progress while the agent waits (`wait`) on children, a background task, its pull request's checks or a reply; its hover and name read `진행 중 · 대기` |
 | `done` | A 7 px green dot | Unread, and the label read the turn as finished |
 | `unread` | A 7 px dot in the foreground colour | Unread, with work left (a wait nothing proves is work left), or no verdict |
-| `quiet` | Nothing; the slot is kept so titles line up | Everything else: read, idle, unknown, a disconnected device's row, a delegated child's own request |
+| `quiet` | A faint hollow ring in the 12 px slot: radius 3.4 of 12, a 1.3 stroke in the muted foreground at `--opacity-read-status`, smaller and thinner than the in-progress ring (sidebar-quiet-mark-indent D-01, D-02) | At rest: read, idle, a delegated child's own request |
+| `unknown` | Nothing; the slot is kept so titles line up, and the row is dimmed whole | No demand and an activity Hide cannot read (`status_code: unknown`, unless a block, a raise or an escalation makes it `turn`); counted on no badge (sidebar-quiet-mark-indent D-04) |
 | `asleep` | A grey moon (`☾`), not dimmed | An agent Hide put to sleep, waking, or one that could not be reopened; counted on no badge |
 
 The ring does not turn (D-02): its dashes, not motion, tell waiting from work, on every surface, the ones with no second line (tabs, pane headers, the ⌃Tab switcher, ⌘K, the child tree popover) included (D-25, B36).
 When the agent starts working again the dashes close, and when a turn ends with a wait left they open.
-A delegated row draws only `going`, `waiting` or `quiet` (B24): its question is its parent's to answer; one of the six escalation causes still makes it `turn`.
+A delegated row draws only `going`, `waiting`, `quiet` or `unknown` (B24): its question is its parent's to answer; one of the six escalation causes still makes it `turn`.
 Colour never carries the distinction alone: the mark's name and the word that leads its line are its hover text and part of the row's accessible name (`markWords` in `web/src/agentRow.ts`), as in `내 차례 · 질문` or `읽을 것 · 일 남음`.
 
 How a stop ended is the label's verdict (`axes.rs::stop_verdict`): finished, or unfinished (work left); a label `waiting` that nothing proves is running is work left too, since nothing will wake the agent (status-marks D-17).
@@ -316,6 +317,7 @@ A working row says its sentence alone or has no line; a waiting row's line is `�
 The web splits a line into its lead word, sentence and background tail (`lineParts`), and a narrow row cuts only the sentence, so the lead and the tail always show.
 A Needs You line's ask verb says the same word: an Answer reads `질문` (Question) and an Approval `승인` (Approval), followed by ` · ` and what to do.
 A row of unknown state, or on an unreachable device, has no mark and is drawn dimmed whole, and its line says why (B16).
+A slot with no live agent behind it, an ended session in a record or a link's timeline, a closed feedback recipient, draws no mark either (sidebar-quiet-mark-indent D-05): the ring says an agent is there and resting.
 A row on a device that is not connected still carries the last state Hide knew of it, which may be long over; while `status.remote` says the device is not connected, the shell draws that row and a tree popover's child with no mark, dimmed, with the line `<device> 연결 끊김` (`agents.line.disconnected`), and its hover and accessible name say the same instead of the stale mark words.
 A sleeping, waking or failed agent's row, and a saved sleeping conversation's row (`SleepingSessionRow`, the phone's sleeping row), draw the grey moon and are not dimmed (B31): a sleeping one has no line, and its hover and accessible name say `재움 · 열면 깨어남`; a waking one says `깨우는 중` and a failed one `재움 · 다시 열지 못함` on its line.
 The operator's turn outranks the moon: a sleeping row with a raised ask draws `!`. These lines and the moon are the same in the Agents tab, the child tree popover, the pane header's child summary, the close list (where the moon is not dimmed) and the phone (`agentRow.ts::stateLine`, `phone::line`); a sleeping row keeps the place and close-list class its awake mark gives it (`RowMark::awake`).
@@ -407,7 +409,7 @@ The shell shows five siblings per parent and folds the rest behind `N개 더` (`
 A grandchild's own children open in the tree popover instead of a third level.
 A delegated row whose checkout differs from its parent's carries `row.state.branch_badge` (`agent_state/axes.rs::apply_lineage`): that checkout's branch, or its label when it has none, the name the sidebar gives the checkout; a device checkout's label is its folder name, so the label alone would name a folder there.
 The tree popover (`web/src/components/agent-tree-popover.tsx`) opens from the pane header's second-row tree button, a grandchild's chevron and an ask band's fallback `외 N건` when that tree button is unavailable.
-The second-row button shows `direct_child_counts` in the marks a row uses (raised asks as the turn mark, working children as the ring, finished ones as the dot) and the subtree's operator-raised `descendant_mark.count`, with the live direct child total only in its tooltip and accessible name; ordinary child requests draw no mark and are named only there, because they are the parent's to answer (status-marks B21).
+The second-row button shows `direct_child_counts` in the marks a row uses (raised asks as the turn mark, working children as the ring, finished ones as the dot) and the subtree's operator-raised `descendant_mark.count`, with the live direct child total only in its tooltip and accessible name; resting and unknown children, and ordinary child requests, which are the parent's to answer (status-marks B21), are not drawn on the button and are named only there.
 Its compact ask-band form keeps only the raised count, or a tree icon when none is raised, while its tooltip names every count; unknown children are excluded from the resting remainder.
 Its head names the parent with its direct child count, and its body draws the same rows two levels deep with five siblings each, the children that finished and were read, with nothing below them raised or working, folded below them behind `끝난 자식 N`; choosing a grandchild that has children re-roots the popover on it.
 Arrows move, Right and Left open and fold a branch, Enter opens the agent's pane, and Escape closes it and returns focus to what opened it.
@@ -436,7 +438,7 @@ They remain separate badges or Git indicators and never select the agent status 
 
 ### One meaning across surfaces
 
-Agent rows, focused-agent tab marks, pane headers, the tree popover, the ⌃Tab switcher, the close sheet, ⌘K results, the Sessions tool, the Overview and its task cards, the pull request lens, Factory cards, the View comment menu, the Hide AI home row and the phone draw the same mark and the same words for the same row (status-marks B20), from the core's `mark` and `status_code` (`web/src/components/status-mark.tsx` draws the five shapes in one box of one size).
+Agent rows, focused-agent tab marks, pane headers, the tree popover, the ⌃Tab switcher, the close sheet, ⌘K results, the Sessions tool, the Overview and its task cards, the pull request lens, Factory cards, the View comment menu, the Hide AI home row and the phone draw the same mark and the same words for the same row (status-marks B20), from the core's `mark` and `status_code` (`web/src/components/status-mark.tsx` draws the six shapes in one box of one size, and an empty box for `unknown` and for a slot with no live agent).
 Working uses a fixed blue status token, independent of the user's accent color; the finished dot uses green, so running and completed work remain distinct.
 
 A read question, approval or block keeps the turn mark and its request line at `--opacity-read-status`, so an unread one stands apart from one already looked at.

@@ -47,6 +47,10 @@ pub(crate) struct ProjectedPane {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ProjectedAgent {
     pub(crate) pane_id: String,
+    /// The terminal the agent runs in, which no other Herdr server names; the
+    /// start settle keys Hide's own starts by it (`launch_settle.rs`,
+    /// herdrdev/herdr#3853) and goes with that workaround.
+    pub(crate) terminal_id: String,
     pub(crate) name: Option<String>,
     pub(crate) workspace_id: String,
     pub(crate) tab_id: String,
@@ -63,6 +67,11 @@ pub(crate) struct ProjectedAgent {
     /// looked at it since: Herdr's `done` turning `idle` when it marks the
     /// tab seen leaves it in place.
     pub(crate) completion_seq: Option<u64>,
+    /// Herdr still holds open the start it made of this agent
+    /// (`agent.start`). The core reads it while it is also at rest
+    /// (`launch_settle.rs`); it never reaches the shell. A workaround for
+    /// herdrdev/herdr#3853, deleted with it.
+    pub(crate) launch_pending: bool,
     pub(crate) tokens: BTreeMap<String, Value>,
 }
 

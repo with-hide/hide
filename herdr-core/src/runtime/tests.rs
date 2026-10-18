@@ -60,6 +60,8 @@ mod issues;
 mod key_routing;
 #[path = "tests/labels.rs"]
 mod labels;
+#[path = "tests/launch_choice.rs"]
+mod launch_choice;
 #[path = "tests/lineage.rs"]
 mod lineage;
 #[path = "tests/links.rs"]

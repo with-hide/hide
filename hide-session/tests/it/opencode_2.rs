@@ -1213,3 +1213,31 @@ mod listings {
         assert_eq!(child.facts.session_id.as_deref(), Some(ROOT));
     }
 }
+
+/// OpenCode 2.0.29's interactive command has no `--fork`, so a session in
+/// its tables is forked through its server; a session in 1.18.30's tables
+/// keeps the flag. Either way the session is proven first: a child session
+/// or another checkout's is no fork.
+#[test]
+fn a_session_in_opencode_2_tables_forks_through_its_server_and_a_1x_one_by_its_flag() {
+    use hide_session::opencode::{ForkRoute, fork_route};
+
+    let two = home();
+    assert_eq!(
+        fork_route(two.path(), ROOT, "/work/app"),
+        Ok(ForkRoute::Server)
+    );
+    let one = crate::adapters::home(Agent::OpenCode);
+    assert_eq!(
+        fork_route(one.path(), ROOT, "/work/app"),
+        Ok(ForkRoute::Flag)
+    );
+    assert_eq!(
+        fork_route(two.path(), "ses_0a1b2c3d4e5f60718293child", "/work/app"),
+        Err("label_session_not_root".to_owned())
+    );
+    assert_eq!(
+        fork_route(two.path(), ROOT, "/elsewhere/app"),
+        Err("label_session_cwd_mismatch".to_owned())
+    );
+}

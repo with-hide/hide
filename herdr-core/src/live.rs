@@ -1814,6 +1814,22 @@ pub struct ReopenOutcome {
     pub consumed: bool,
     pub focused_pane_id: Option<String>,
     pub notices: Vec<ReopenNotice>,
+    /// The agents the reopen started, so the core keeps each one's launch
+    /// choice with its new pane.
+    pub agents: Vec<ReopenedAgent>,
+}
+
+/// An agent a reopen started in a restored pane: the pane, its kind, the
+/// choice it was started with, and the conversation it resumed (none for a
+/// new one, when the resume did not take).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReopenedAgent {
+    pub pane_id: String,
+    pub kind: String,
+    /// The name the reopen started it under.
+    pub name: String,
+    pub launch: hide_agent_adapter::LaunchChoice,
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -2287,17 +2303,22 @@ fn reopen_pane(
         )?;
         (layout.focused_pane_id, layout.tab_id)
     };
-    if let Some(agent) = &pane.agent {
-        start_or_degrade_agent(
-            connector,
-            key,
-            0,
-            &restored_pane_id,
-            agent,
-            request.codex_daemon,
-            &mut notices,
-        );
-    }
+    let agents = pane
+        .agent
+        .as_ref()
+        .and_then(|agent| {
+            start_or_degrade_agent(
+                connector,
+                key,
+                0,
+                &restored_pane_id,
+                agent,
+                request.codex_daemon,
+                &mut notices,
+            )
+        })
+        .into_iter()
+        .collect();
     Ok(ReopenOutcome {
         tab_id: Some(restored_tab_id),
         consumed: true,
@@ -2309,6 +2330,7 @@ fn reopen_pane(
                 message,
             })
             .collect(),
+        agents,
     })
 }
 
@@ -2424,6 +2446,7 @@ fn reopen_tab(
         .collect::<Vec<_>>();
     ensure_complete_tab_restore(terminal_panes.len(), new_ids.len())?;
     let mut notices = Vec::new();
+    let mut agents = Vec::new();
     for (index, (pane, new_id)) in terminal_panes.iter().zip(new_ids.iter()).enumerate() {
         let mut pane_notices = Vec::new();
         if !folders(&pane.cwd) {
@@ -2433,7 +2456,7 @@ fn reopen_tab(
             ));
         }
         if let Some(agent) = &pane.agent {
-            start_or_degrade_agent(
+            agents.extend(start_or_degrade_agent(
                 connector,
                 key,
                 index,
@@ -2441,7 +2464,7 @@ fn reopen_tab(
                 agent,
                 codex_daemon,
                 &mut pane_notices,
-            );
+            ));
         }
         notices.extend(pane_notices.into_iter().map(|message| ReopenNotice {
             pane_id: Some(new_id.clone()),
@@ -2458,6 +2481,7 @@ fn reopen_tab(
         consumed: true,
         focused_pane_id: first,
         notices,
+        agents,
     })
 }
 
@@ -2487,6 +2511,9 @@ fn restored_cwd(
     }
 }
 
+/// Starts `agent` in a restored pane with its conversation, or a new one when
+/// the resume does not take, each with the launch choice it was started
+/// with; answers what started, or none when only the shell was kept.
 fn start_or_degrade_agent(
     connector: &dyn ApiConnector,
     key: &str,
@@ -2495,12 +2522,29 @@ fn start_or_degrade_agent(
     agent: &ClosedAgent,
     codex_daemon: crate::codex_launch::CodexDaemon,
     notices: &mut Vec<String>,
-) {
+) -> Option<ReopenedAgent> {
     let name = format!("reopen-{key}-{index}");
+    let launch = match crate::runtime::agent_choice::launch_arguments(&agent.kind, &agent.launch) {
+        Ok(launch) => launch,
+        Err(message) => {
+            notices.push(format!(
+                "Agent could not be started; the shell was kept: {message}"
+            ));
+            return None;
+        }
+    };
+    let started = |session_id: Option<&String>| ReopenedAgent {
+        pane_id: pane_id.to_owned(),
+        kind: agent.kind.clone(),
+        name: name.clone(),
+        launch: agent.launch.clone(),
+        session_id: session_id.cloned(),
+    };
     let interrupted_reused_agent = interrupt_reused_agent(connector, key, index, pane_id);
     let pane_was_clear = matches!(&interrupted_reused_agent, Ok(false));
     let resume = resume_arguments(agent);
-    if let Some(args) = resume {
+    if let Some(mut args) = resume {
+        args.extend(launch.iter().cloned());
         // A resume line is a session id, far under every terminal's line
         // limit, so the restore asks no node.
         let result = start_agent(
@@ -2515,7 +2559,7 @@ fn start_or_degrade_agent(
             codex_daemon,
         );
         if result.is_ok() || (pane_was_clear && agent_is_running(connector, pane_id, &agent.kind)) {
-            return;
+            return Some(started(agent.session_id.as_ref()));
         }
         let preparation = interrupted_reused_agent
             .as_ref()
@@ -2538,14 +2582,16 @@ fn start_or_degrade_agent(
         crate::agent_start::ShellStart::Plain,
         &name,
         &agent.kind,
-        Vec::new(),
+        launch,
         codex_daemon,
     ) && !(pane_was_clear && agent_is_running(connector, pane_id, &agent.kind))
     {
         notices.push(format!(
             "Agent could not be started; the shell was kept: {message}"
         ));
+        return None;
     }
+    Some(started(None))
 }
 
 /// Herdr can reuse the just-closed pane id while its old PTY is still alive.
@@ -3112,10 +3158,14 @@ pub(crate) fn spawn_agent_find(
     route: PaneApiRoute,
     request_id: String,
     find: AgentFind,
+    gate: Arc<crate::input_gate::PaneInputGate>,
 ) -> Result<(), String> {
+    let core_pane_id = route.pane_id.clone();
     route.spawn(
         "herdr-core-agent-find",
-        move |connector, herdr_pane_id| open_agent_find(connector, herdr_pane_id, find),
+        move |connector, herdr_pane_id| {
+            open_agent_find(connector, herdr_pane_id, find, &gate, &core_pane_id)
+        },
         move |runtime, pane_id, result| runtime.ingest_agent_find(pane_id, request_id, result),
     )
 }
@@ -3124,6 +3174,8 @@ fn open_agent_find(
     connector: &dyn ApiConnector,
     pane_id: &str,
     find: AgentFind,
+    gate: &Arc<crate::input_gate::PaneInputGate>,
+    core_pane_id: &str,
 ) -> Result<PaneFindRoute, String> {
     // An agent that draws inline leaves its conversation in Herdr's history,
     // where the find bar reaches all of it; its own search may not exist in
@@ -3136,6 +3188,11 @@ fn open_agent_find(
         Some(_) => Some(read_pane_text(connector, pane_id, "visible")?.text),
         None => None,
     };
+    // The keys go into the agent's own search box; into the shell under a
+    // sleeping agent they would be typed as a command.
+    let _admission = gate
+        .admit(core_pane_id)
+        .map_err(|_| "The agent is asleep, so its own search is closed".to_owned())?;
     control_request(
         connector,
         "pane.send_keys",
@@ -3406,123 +3463,200 @@ fn run_agent_fork_with_registration(
         current()
     };
     check()?;
-    // A split takes no command, so only a fork in its own tab runs the
-    // integration's launch.
-    let launch = matches!(request.placement, ForkPlacement::Tab)
-        .then(|| {
-            crate::agent_start::shell_launch(
-                Some(node),
-                &format!("herdr-core:fork:{}:start", request.name),
-            )
-        })
-        .flatten();
-    let shell = crate::agent_start::ShellStart::of_tab(true, launch.as_ref());
-    let child_pane_id = match request.placement {
-        // `Fork agent`: the fork's own tab, which the core puts right of the
-        // source's tab once Herdr has named it (`created`).
-        ForkPlacement::Tab => {
-            let cwd = request
-                .cwd
-                .as_deref()
-                .filter(|cwd| !cwd.trim().is_empty())
-                .ok_or("Session fork has no confirmed checkout")?;
-            let snapshot = fetch_session_with_connector(mutation_connector)
+    // The arguments are settled before any pane exists, so a choice the agent
+    // does not take never leaves a pane to close. The choice is checked before
+    // the fork is made, so a refused one never leaves a session an OpenCode 2
+    // server made either.
+    let choice =
+        crate::runtime::agent_choice::launch_arguments(request.agent.kind(), &request.launch)?;
+    let (mut args, made) = fork_arguments(node, request)?;
+    args.extend(choice);
+    // Everything after an OpenCode 2 fork can still fail (the parent's tab,
+    // the new tab, the agent's start, or the parent closed meanwhile), and the
+    // session OpenCode's server made stays in OpenCode's list: it is named in
+    // the reason and a diagnostic for the operator to find, never deleted.
+    let opened = (|| -> Result<String, String> {
+        // A split takes no command, so only a fork in its own tab runs the
+        // integration's launch.
+        let launch = matches!(request.placement, ForkPlacement::Tab)
+            .then(|| {
+                crate::agent_start::shell_launch(
+                    Some(node),
+                    &format!("herdr-core:fork:{}:start", request.name),
+                )
+            })
+            .flatten();
+        let shell = crate::agent_start::ShellStart::of_tab(true, launch.as_ref());
+        let child_pane_id = match request.placement {
+            // `Fork agent`: the fork's own tab, which the core puts right of the
+            // source's tab once Herdr has named it (`created`).
+            ForkPlacement::Tab => {
+                let cwd = request
+                    .cwd
+                    .as_deref()
+                    .filter(|cwd| !cwd.trim().is_empty())
+                    .ok_or("Session fork has no confirmed checkout")?;
+                let snapshot = fetch_session_with_connector(mutation_connector)
+                    .map_err(|error| error.message().to_owned())?;
+                let mut parents = snapshot.layouts.iter().filter(|layout| {
+                    layout
+                        .panes
+                        .iter()
+                        .any(|pane| pane.pane_id == request.parent_pane_id)
+                });
+                let parent = parents
+                    .next()
+                    .ok_or("Session fork parent is no longer in its workspace")?;
+                if parents.next().is_some() {
+                    return Err("Session fork parent has ambiguous workspace ownership".into());
+                }
+                let label = request
+                    .tab_label
+                    .as_deref()
+                    .ok_or("Session fork has no checkout to name its tab in")?;
+                check()?;
+                let tab = create_tab_in(
+                    mutation_connector,
+                    &parent.workspace_id,
+                    cwd,
+                    label,
+                    false,
+                    launch
+                        .as_ref()
+                        .map(|launch| launch.env.clone())
+                        .unwrap_or_default(),
+                    launch.as_ref().map(|launch| launch.command.as_slice()),
+                )
                 .map_err(|error| error.message().to_owned())?;
-            let mut parents = snapshot.layouts.iter().filter(|layout| {
-                layout
-                    .panes
-                    .iter()
-                    .any(|pane| pane.pane_id == request.parent_pane_id)
-            });
-            let parent = parents
-                .next()
-                .ok_or("Session fork parent is no longer in its workspace")?;
-            if parents.next().is_some() {
-                return Err("Session fork parent has ambiguous workspace ownership".into());
+                created(Some(&tab.tab_id), &tab.pane_id);
+                tab.pane_id
             }
-            let label = request
-                .tab_label
-                .as_deref()
-                .ok_or("Session fork has no checkout to name its tab in")?;
-            check()?;
-            let tab = create_tab_in(
-                mutation_connector,
-                &parent.workspace_id,
-                cwd,
-                label,
-                false,
-                launch
-                    .as_ref()
-                    .map(|launch| launch.env.clone())
-                    .unwrap_or_default(),
-                launch.as_ref().map(|launch| launch.command.as_slice()),
-            )
-            .map_err(|error| error.message().to_owned())?;
-            created(Some(&tab.tab_id), &tab.pane_id);
-            tab.pane_id
-        }
-        // `Fork agent to the side`: a split right of the source, in its tab.
-        ForkPlacement::Side => {
-            let pane_id = control_request(
-                mutation_connector,
-                "pane.split",
-                wire::fork_split_params(
-                    &request.parent_pane_id,
-                    request.cwd.as_deref(),
-                    Default::default(),
-                )?,
-            )
-            .and_then(wire::split_pane)?;
-            created(None, &pane_id);
-            pane_id
-        }
-    };
-    let started = start_agent_checked(
-        mutation_connector,
-        Some(node),
-        &format!("herdr-core:fork:{}:start", request.name),
-        &child_pane_id,
-        shell,
-        &request.name,
-        request.agent.kind(),
-        request.agent.resume_arguments(&request.session_id),
-        request.codex_daemon,
-        &check,
-    )
-    .map_err(start_error_message);
-    let started = started.and_then(|pane_id| {
-        if request.agent == crate::fork::ForkableAgent::Antigravity {
-            fork_antigravity(mutation_connector, node, request, &pane_id)?;
-        }
-        Ok(pane_id)
-    });
-    match started {
-        Ok(pane_id) => {
-            if let Err(message) = register(&request.parent_pane_id, &pane_id) {
-                crate::diagnostic!(serde_json::json!({
-                    "component": "fork",
-                    "kind": "registration_failed",
-                    "parent_pane_id": request.parent_pane_id,
-                    "child_pane_id": pane_id,
-                    "message": message,
-                }));
+            // `Fork agent to the side`: a split right of the source, in its tab.
+            ForkPlacement::Side => {
+                let pane_id = control_request(
+                    mutation_connector,
+                    "pane.split",
+                    wire::fork_split_params(
+                        &request.parent_pane_id,
+                        request.cwd.as_deref(),
+                        Default::default(),
+                    )?,
+                )
+                .and_then(wire::split_pane)?;
+                created(None, &pane_id);
+                pane_id
+            }
+        };
+        let started = start_agent_checked(
+            mutation_connector,
+            Some(node),
+            &format!("herdr-core:fork:{}:start", request.name),
+            &child_pane_id,
+            shell,
+            &request.name,
+            request.agent.kind(),
+            args,
+            request.codex_daemon,
+            &check,
+        )
+        .map_err(start_error_message);
+        let started = started.and_then(|pane_id| {
+            if request.agent == crate::fork::ForkableAgent::Antigravity {
+                fork_antigravity(mutation_connector, node, request, &pane_id)?;
             }
             Ok(pane_id)
+        });
+        match started {
+            Ok(pane_id) => {
+                if let Err(message) = register(&request.parent_pane_id, &pane_id) {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "fork",
+                        "kind": "registration_failed",
+                        "parent_pane_id": request.parent_pane_id,
+                        "child_pane_id": pane_id,
+                        "message": message,
+                    }));
+                }
+                Ok(pane_id)
+            }
+            Err(error) => {
+                // This child is already ours on the original server. Cleanup is
+                // not a new fork effect and must not target its replacement.
+                let closed = control_request(
+                    connector,
+                    "pane.close",
+                    wire::pane_target_params(&child_pane_id)?,
+                );
+                Err(match closed {
+                    Ok(_) => error,
+                    Err(close_error) => format!(
+                        "{error}; the created pane {child_pane_id} could not be closed: {close_error}"
+                    ),
+                })
+            }
         }
-        Err(error) => {
-            // This child is already ours on the original server. Cleanup is
-            // not a new fork effect and must not target its replacement.
-            let closed = control_request(
-                connector,
-                "pane.close",
-                wire::pane_target_params(&child_pane_id)?,
-            );
-            Err(match closed {
-                Ok(_) => error,
-                Err(close_error) => format!(
-                    "{error}; the created pane {child_pane_id} could not be closed: {close_error}"
-                ),
-            })
+    })();
+    opened.map_err(|error| match made {
+        Some(session) => opencode_fork_left(request, &session, error),
+        None => error,
+    })
+}
+
+/// The reason a fork whose OpenCode 2 session was made did not open, naming
+/// that session, and its diagnostic.
+fn opencode_fork_left(request: &ForkRequest, session: &str, error: String) -> String {
+    crate::diagnostic!(serde_json::json!({
+        "component": "fork",
+        "kind": "opencode_fork_left",
+        "parent_pane_id": request.parent_pane_id,
+        "session_id": session,
+        "message": error,
+    }));
+    format!(
+        "{error}; OpenCode made the fork's session {session}, which stays in OpenCode's session list"
+    )
+}
+
+/// The agent's arguments that open the fork. Every agent but OpenCode spells
+/// its own fork ([`crate::fork::ForkableAgent::resume_arguments`]). OpenCode's
+/// depends on the version holding the session, which its node reads from the
+/// database (`hide_session::opencode::fork_route`): 1.x forks with its own
+/// flag, and 2.x's server makes the fork here, once, before the fork's pane
+/// exists, so every later step of this fork, a retried start included, opens
+/// that one session; the session it made comes back beside the arguments. A
+/// node that cannot fork it ends the fork with its reason before any pane is
+/// made, and one whose answer never came says a fork may exist.
+fn fork_arguments(
+    node: &dyn crate::node_access::NodeLink,
+    request: &ForkRequest,
+) -> Result<(Vec<String>, Option<String>), String> {
+    if request.agent != crate::fork::ForkableAgent::OpenCode {
+        return Ok((request.agent.resume_arguments(&request.session_id), None));
+    }
+    let cwd = request
+        .cwd
+        .as_deref()
+        .ok_or("Session fork has no confirmed checkout")?;
+    let fork: hide_node_link::protocol::OpenCodeFork = crate::node_access::call_as(
+        node,
+        hide_node_link::protocol::Call::OpenCodeFork {
+            source: request.session_id.clone(),
+            cwd: cwd.to_owned(),
+        },
+        hide_node_link::protocol::OPENCODE_FORK_TIMEOUT,
+    )
+    .map_err(|error| match error {
+        crate::node_access::LinkError::Unknown(_) => format!(
+            "OpenCode could not confirm the fork: {error}; a fork may exist in OpenCode's session list"
+        ),
+        error => format!("OpenCode could not fork the session: {error}"),
+    })?;
+    match fork {
+        hide_node_link::protocol::OpenCodeFork::Flag => {
+            Ok((request.agent.resume_arguments(&request.session_id), None))
+        }
+        hide_node_link::protocol::OpenCodeFork::Forked { id } => {
+            Ok((crate::fork::opencode_forked_arguments(&id)?, Some(id)))
         }
     }
 }
@@ -4177,6 +4311,79 @@ mod tests {
     use super::*;
     use crate::fake_herdr::FakeHerdr;
 
+    /// A restored agent resumes with the model and effort it was started
+    /// with, and the new conversation that replaces a refused resume keeps
+    /// them too.
+    #[test]
+    fn a_restored_agent_starts_with_its_launch_choice_resumed_or_new() {
+        let starts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = Arc::clone(&starts);
+        let herdr =
+            FakeHerdr::start_with_errors("reopen-choice", move |method, params| match method {
+                "session.snapshot" => Ok(json!({"type": "session_snapshot", "snapshot": {
+                    "version": "fixture", "protocol": HERDR_PROTOCOL_REVISION,
+                    "workspaces": [], "tabs": [], "panes": [], "layouts": [], "agents": []
+                }})),
+                "pane.process_info" => Ok(json!({"type": "pane_process_info", "process_info": {
+                    "pane_id": "pane", "shell_pid": 42, "foreground_process_group_id": 42,
+                    "foreground_processes": []
+                }})),
+                "agent.start" => {
+                    let mut seen = seen.lock().unwrap();
+                    seen.push(params["args"].clone());
+                    if seen.len() == 1 {
+                        return Err(("agent_start_failed".into(), "resume refused".into()));
+                    }
+                    Ok(json!({"type": "agent_started", "argv": [], "agent": {
+                        "pane_id": "pane", "terminal_id": "term", "workspace_id": "w1",
+                        "tab_id": "w1:t1", "focused": false, "agent_status": "idle", "revision": 1
+                    }}))
+                }
+                other => panic!("unexpected {other}"),
+            });
+        let launch = hide_agent_adapter::LaunchChoice {
+            model: Some("gpt-6-luna".into()),
+            effort: Some("low".into()),
+        };
+        let mut notices = Vec::new();
+        let started = start_or_degrade_agent(
+            &herdr.connector(),
+            "key",
+            0,
+            "pane",
+            &ClosedAgent {
+                kind: "codex".into(),
+                session_id: Some("session".into()),
+                launch: launch.clone(),
+            },
+            crate::codex_launch::CodexDaemon::Unsupported,
+            &mut notices,
+        );
+        let choice = ["--model", "gpt-6-luna", "-c", "model_reasoning_effort=low"];
+        assert_eq!(
+            *starts.lock().unwrap(),
+            [
+                json!([["resume", "session"].as_slice(), &choice].concat()),
+                json!(choice)
+            ]
+        );
+        assert_eq!(
+            started,
+            Some(ReopenedAgent {
+                pane_id: "pane".into(),
+                kind: "codex".into(),
+                name: "reopen-key-0".into(),
+                launch,
+                session_id: None,
+            })
+        );
+        assert_eq!(
+            notices.len(),
+            1,
+            "the lost conversation is said: {notices:?}"
+        );
+    }
+
     #[test]
     fn reopen_canonicalizes_alias_starts_and_confirms_only_the_same_pane_agent() {
         for (kind, canonical, args) in [
@@ -4213,6 +4420,7 @@ mod tests {
                 &ClosedAgent {
                     kind: kind.into(),
                     session_id: Some("session".into()),
+                    ..Default::default()
                 },
                 crate::codex_launch::CodexDaemon::Unsupported,
                 &mut notices,
@@ -4388,6 +4596,7 @@ mod tests {
                 name: "fork-pi-1".into(),
                 tab_label: Some("Tab 2".into()),
                 placement: ForkPlacement::Tab,
+                launch: Default::default(),
             };
             let created = std::cell::RefCell::new(Vec::new());
             let result = run_agent_fork_with_registration(
@@ -4581,6 +4790,7 @@ mod tests {
                 name: "fork-opencode-1".into(),
                 tab_label: Some("Tab 2".into()),
                 placement: ForkPlacement::Tab,
+                launch: Default::default(),
             };
             let result = run_agent_fork_with_registration(
                 &herdr.connector(),
@@ -4624,6 +4834,179 @@ mod tests {
                 _ => &["session.snapshot", "layout.apply", "pane.close"],
             };
             assert_eq!(herdr.methods(), expected, "{case}");
+        }
+    }
+
+    /// A node that forks OpenCode sessions as `answer` says and records each
+    /// ask in `log`, beside the Herdr requests the test records there.
+    struct OpenCodeForking {
+        inner: hide_node::Local,
+        answer: Result<hide_node_link::protocol::OpenCodeFork, &'static str>,
+        log: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl crate::node_access::NodeLink for OpenCodeForking {
+        fn call(
+            &self,
+            call: hide_node_link::protocol::Call,
+            timeout: Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            let hide_node_link::protocol::Call::OpenCodeFork { source, cwd } = &call else {
+                return self.inner.call(call, timeout);
+            };
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("opencode_fork {source} {cwd}"));
+            match &self.answer {
+                Ok(fork) => Ok(serde_json::to_value(fork).unwrap().into()),
+                Err(reason) => Err(crate::node_access::LinkError::Refused(
+                    hide_node_link::HostError::new(hide_node_link::ErrorCode::Io, *reason),
+                )),
+            }
+        }
+
+        fn reader_features(&self) -> Option<&hide_node_link::sessions::ReaderFeatures> {
+            self.inner.reader_features()
+        }
+
+        fn in_process(&self) -> bool {
+            self.inner.in_process()
+        }
+    }
+
+    /// OpenCode 2.0.29's interactive command has no `--fork`: the node's
+    /// server forks the session once, before the fork's tab exists, and the
+    /// tab opens the session it made; a node that cannot fork it ends the fork
+    /// with its reason and no tab, and a fork whose start then fails names the
+    /// session OpenCode made, which stays in OpenCode's list.
+    #[test]
+    fn an_opencode_2_fork_is_made_by_its_server_before_its_tab_and_the_tab_opens_it() {
+        for case in ["forked", "refused", "start_failed"] {
+            let home = tempfile::tempdir().unwrap();
+            let cwd = hide_platform::fs::identity::canonical(home.path()).unwrap();
+            let checkout = cwd.display().to_string();
+            crate::fixture::opencode_2_database(
+                home.path(),
+                &[("ses_root", None, checkout.as_str())],
+            );
+            let log = Arc::new(Mutex::new(Vec::new()));
+            let node = OpenCodeForking {
+                inner: hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(
+                    hide_host::shell_integration::UserShell {
+                        shell: Some("/bin/zsh".into()),
+                        ..Default::default()
+                    },
+                ),
+                answer: if case == "refused" {
+                    Err("opencode_fork_timed_out")
+                } else {
+                    Ok(hide_node_link::protocol::OpenCodeFork::Forked {
+                        id: "ses_fork".into(),
+                    })
+                },
+                log: Arc::clone(&log),
+            };
+            let herdr_log = Arc::clone(&log);
+            let herdr = FakeHerdr::start_with_errors(
+                "opencode-2-fork-tab",
+                move |method, params| {
+                    herdr_log.lock().unwrap().push(method.to_owned());
+                    Ok(match method {
+                        "session.snapshot" => json!({"type": "session_snapshot", "snapshot": {
+                            "version": "fixture", "protocol": HERDR_PROTOCOL_REVISION,
+                            "workspaces": [], "tabs": [], "panes": [], "agents": [],
+                            "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
+                                "area": {"x":0,"y":0,"width":80,"height":24},
+                                "focused_pane_id": "parent-pane",
+                                "panes": [{"pane_id":"parent-pane", "focused":true,
+                                    "rect":{"x":0,"y":0,"width":80,"height":24}}], "splits": []}]
+                        }}),
+                        "layout.apply" => {
+                            json!({"type":"layout_apply","layout":{"workspace_id":"w1","tab_id":"w1:t2",
+                        "zoomed":false,"focused_pane_id":"child-pane",
+                        "root":{"type":"pane","pane_id":"child-pane"}}})
+                        }
+                        "pane.process_info" => json!({"type":"pane_process_info","process_info":{
+                        "pane_id":"child-pane","shell_pid":42,"foreground_process_group_id":42,
+                        "foreground_processes":[{"pid":42,"name":"zsh"}]}}),
+                        "pane.get" => json!({"type":"pane_info","pane":{
+                        "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"unknown","revision":1,
+                        "tokens":{"hide_prompt":"1"}}}),
+                        "agent.start" => {
+                            assert_eq!(params["kind"], "opencode");
+                            assert_eq!(params["args"], json!(["-s", "ses_fork"]));
+                            if case == "start_failed" {
+                                return Err(("start_refused".into(), "fixture refused".into()));
+                            }
+                            json!({"type":"agent_started","argv":[],"agent":{
+                            "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"idle","revision":2}})
+                        }
+                        "pane.close" => {
+                            assert_eq!(params["pane_id"], "child-pane");
+                            json!({"type":"ok"})
+                        }
+                        other => panic!("unexpected {other}"),
+                    })
+                },
+            );
+            let request = ForkRequest {
+                source_reference: Some(crate::sidebar::SessionAgentSessionPayload {
+                    kind: "id".into(),
+                    value: "ses_root".into(),
+                }),
+                parent_state_change_seq: None,
+                connection_generation: 0,
+                codex_daemon: Default::default(),
+                parent_pane_id: "parent-pane".into(),
+                agent: crate::fork::ForkableAgent::OpenCode,
+                session_id: "ses_root".into(),
+                cwd: Some(checkout.clone()),
+                name: "fork-opencode-2".into(),
+                tab_label: Some("Tab 2".into()),
+                placement: ForkPlacement::Tab,
+                launch: Default::default(),
+            };
+            let result = run_agent_fork_with_registration(
+                &herdr.connector(),
+                &node,
+                &request,
+                &|| Ok(()),
+                |_, _| {},
+                |_, _| Ok(()),
+            );
+            let fork = format!("opencode_fork ses_root {checkout}");
+            let opened = [
+                fork.as_str(),
+                "session.snapshot",
+                "layout.apply",
+                "pane.process_info",
+                "pane.get",
+                "agent.start",
+            ];
+            match case {
+                "forked" => {
+                    assert_eq!(result.unwrap(), "child-pane");
+                    assert_eq!(*log.lock().unwrap(), opened);
+                }
+                "refused" => {
+                    let error = result.unwrap_err();
+                    assert!(error.contains("opencode_fork_timed_out"), "{error}");
+                    assert_eq!(*log.lock().unwrap(), [fork.as_str()]);
+                }
+                _ => {
+                    let error = result.unwrap_err();
+                    assert!(
+                        error.ends_with(
+                            "OpenCode made the fork's session ses_fork, which stays in OpenCode's session list"
+                        ),
+                        "{error}"
+                    );
+                    let mut closed = opened.to_vec();
+                    closed.push("pane.close");
+                    assert_eq!(*log.lock().unwrap(), closed);
+                }
+            }
         }
     }
 
@@ -4718,6 +5101,7 @@ mod tests {
                 name: "fork-grok-1".into(),
                 tab_label: Some("Tab 2".into()),
                 placement: ForkPlacement::Tab,
+                launch: Default::default(),
             };
             let result = run_agent_fork_with_registration(
                 &herdr.connector(),
@@ -4879,6 +5263,7 @@ mod tests {
                 name: "fork-agy-1".into(),
                 tab_label: Some("Tab 2".into()),
                 placement: ForkPlacement::Tab,
+                launch: Default::default(),
             };
             let result = fork_antigravity(&herdr.connector(), &node, &request, "child-pane");
             let expected: &[&str] = match case {
@@ -4997,6 +5382,7 @@ mod tests {
             name: "fork-parent-pane-1".to_owned(),
             tab_label: None,
             placement: ForkPlacement::Side,
+            launch: Default::default(),
         };
 
         let pane_id = run_agent_fork_with_registration(

@@ -126,9 +126,10 @@ STORES = {
         "settings (PRD overview-device-tasks D-20)",
     ),
     "herdr-core/src/node_migration/reown.rs": (
-        4,
-        "converts a moved copy of the core's own link and Factory stores to "
-        "the receiving node's ids, before a core starts on it, and carries "
+        5,
+        "converts a moved copy of the core's own link, Factory and Project "
+        "Memory stores to the receiving node's ids, before a core starts on "
+        "it, and carries "
         "the retired session-search store's retention to them (PRD "
         "overview-device-tasks D-20)",
     ),

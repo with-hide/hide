@@ -164,6 +164,11 @@ struct StoredUiState {
     /// so a completion a restored server no longer reports is lost once.
     #[serde(default)]
     pane_completions: BTreeMap<String, PaneCompletion>,
+    /// Absent in a store written before Hide kept each pane's launch choice;
+    /// loads empty, so an agent started before then restarts on its CLI's
+    /// defaults, as it did.
+    #[serde(default)]
+    pane_launches: BTreeMap<String, crate::model::PaneLaunch>,
     /// Absent in a store written before the request view; loads empty, and
     /// each row's wait starts over once.
     #[serde(default)]
@@ -491,6 +496,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             conversation_pane_ids: Default::default(),
             pane_read_records: stored.pane_read_records,
             pane_completions: stored.pane_completions,
+            pane_launches: stored.pane_launches,
             request_verbs: stored.request_verbs,
             agent_sleep_after_hours: stored
                 .agent_sleep_after_hours
@@ -657,6 +663,7 @@ pub fn save(
         editor_text_scale: state.editor_text_scale,
         pane_read_records: state.pane_read_records.clone(),
         pane_completions: state.pane_completions.clone(),
+        pane_launches: state.pane_launches.clone(),
         request_verbs: state.request_verbs.clone(),
         pane_terminal_sizes: pane_terminal_sizes.clone(),
         agent_sleep_after_hours: state.agent_sleep_after_hours,
