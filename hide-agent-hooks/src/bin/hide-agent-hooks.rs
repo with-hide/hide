@@ -221,6 +221,16 @@ fn run_basic_hook(agent: GuidanceAgent, arguments: &[String], started: Instant) 
     let payload = matches!(event, HookEvent::Stop | HookEvent::UserPromptSubmit)
         .then(|| read_stdin_before_deadline(started + GUARD_PAYLOAD_BUDGET))
         .flatten();
+    if dialect == HookDialect::Grok {
+        let value = payload.as_ref().and_then(|(bytes, _)| serde_json::from_slice::<serde_json::Value>(bytes).ok());
+        probe(serde_json::json!({"stage":"input", "event":event.name(), "read":payload.is_some(),
+            "bytes":payload.as_ref().map(|(bytes,_)|bytes.len()),
+            "session":value.as_ref().and_then(|v|v.get("sessionId")),
+            "snake_session":value.as_ref().and_then(|v|v.get("session_id")),
+            "active":value.as_ref().and_then(|v|v.get("stopHookActive")),
+            "child":value.as_ref().and_then(|v|v.get("subagentType")),
+            "digest":value.as_ref().and_then(|v|v.get("prompt")).and_then(|v|v.as_str()).map(hide_agent_hooks::delivery::prompt_digest)}));
+    }
     let (answer, intake) = std::panic::catch_unwind(|| match event {
         HookEvent::PreToolUse => basic_tool_call(dialect, agent.id(), started),
         HookEvent::Stop | HookEvent::UserPromptSubmit => {
@@ -241,6 +251,9 @@ fn run_basic_hook(agent: GuidanceAgent, arguments: &[String], started: Instant) 
         }
         (None, None)
     });
+    if dialect == HookDialect::Grok {
+        probe(serde_json::json!({"stage":"answer", "event":event.name(), "answer":answer.is_some(), "intake":intake.is_some()}));
+    }
     let answer = match answer {
         None if dialect == HookDialect::Cursor && basic::cursor_permission_event(event) => {
             Some(basic::CURSOR_ALLOW.to_owned())
@@ -257,6 +270,15 @@ fn run_basic_hook(agent: GuidanceAgent, arguments: &[String], started: Instant) 
         hide_agent_hooks::delivery::diagnose_failure(&home, &failure);
     }
     let _ = std::panic::catch_unwind(|| count_basic(dialect, event, payload.as_ref()));
+}
+
+fn probe(mut value: serde_json::Value) {
+    if let Some(home) = home_directory() {
+        value["at"] = serde_json::json!(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis());
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(home.join(".hide/agent-hooks/probe.jsonl")) {
+            let _ = writeln!(file, "{value}");
+        }
+    }
 }
 
 fn basic_turn_event(

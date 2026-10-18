@@ -663,6 +663,9 @@ def main(argv=None):
             except Exception as error:
                 agent["opencode_service"] = {"port": port, "left": [f"stop failed: {error}"]}
         if runtime:
+            probe = runtime.home / ".hide/agent-hooks/probe.jsonl"
+            if not local and probe.is_file():
+                write_private(run / "hook-probe.jsonl", probe.read_bytes()[:1024 * 1024])
             # Herdr's own log lives in the private home the cleanup removes.
             log = runtime.home / "config/herdr/herdr-server.log"
             if log.is_file() and not log.is_symlink():
