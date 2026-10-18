@@ -5,44 +5,74 @@ import os
 from pathlib import Path
 import stat
 
-from agent_live_check.protection import ProtectionError, write_private
+from agent_live_check.protection import MAX_CONFIG_FILES, ProtectionError, stamp, write_private
+from . import database_watch
 
-WATCH = (".claude", ".codex", ".gemini", ".grok", ".omp", ".pi")
+WATCH = (".claude", ".codex", ".gemini", ".grok", ".omp", ".pi", ".local/share/opencode")
 LINK = ".local/bin/claude"
+# Configuration and login bytes, never session/history append records.
+# Sources and the exact list are kept in docs/VERIFICATION.md.
+CONFIGURATION = (
+    ".claude.json", ".claude/settings.json", ".claude/settings.local.json", ".claude/.credentials.json",
+    ".codex/config.toml", ".codex/auth.json", ".codex/hooks.json", ".codex/.credentials.json",
+    ".grok/config.toml", ".grok/auth.json", ".grok/trusted_folders.toml", ".grok/mcp_credentials.json",
+    ".pi/agent/settings.json", ".pi/agent/models.json", ".pi/agent/auth.json",
+    ".pi/agent/oauth.json", ".pi/agent/mcp-auth.json", ".pi/agent/keybindings.json", ".pi/agent/trust.json", ".pi/agent/mcp.json",
+    ".omp/agent/config.yml", ".omp/agent/config.yaml", ".omp/agent/models.yml",
+    ".omp/agent/settings.json", ".omp/agent/secrets.yml", ".omp/agent/secret-placeholder.key",
+    ".config/opencode/opencode.json", ".config/opencode/opencode.jsonc",
+    ".config/opencode/tui.json", ".config/opencode/cli.json", ".config/opencode/service.json",
+)
 
 
 class OperatorWatch:
-    """Only metadata, never configuration content; the root is supplied by the caller."""
+    """Read bounded hashes and names; retain no configuration or login bytes."""
 
-    def __init__(self, root):
-        self.root = root
+    def __init__(self, root, scratch=None):
+        self.root, self.scratch = root, scratch
+        self.copies = []
         self.before = self.snapshot()
 
     def snapshot(self):
         result = {}
+        entries = 0
         for name in (*WATCH, LINK):
             path = self.root / name
             try:
                 info = path.lstat()
-                value = {"mtime_ns": info.st_mtime_ns, "type": stat.S_IFMT(info.st_mode)}
+                value = {"type": stat.S_IFMT(info.st_mode)}
                 if path.is_symlink():
                     value["target"] = os.readlink(path)
-                    try:
-                        value["target_mtime_ns"] = path.stat().st_mtime_ns
-                    except FileNotFoundError:
-                        value["target_missing"] = True
+                if name in WATCH and path.is_dir():
+                    names = []
+                    with os.scandir(path) as children:
+                        for child in children:
+                            entries += 1
+                            if entries > MAX_CONFIG_FILES:
+                                raise ProtectionError("operator_watch_entry_budget_exceeded")
+                            names.append(child.name)
+                    value["entries"] = sorted(names)
                 result[name] = value
             except FileNotFoundError:
                 result[name] = None
+        for name in CONFIGURATION:
+            path = self.root / name
+            # A user may keep settings through a symlink; compare its target
+            # and the bounded ordinary file it names, without retaining bytes.
+            target = os.readlink(path) if path.is_symlink() else None
+            value = stamp(path.resolve())
+            result[name] = {"sha256": value.digest, "target": target} if value else None
+        for name in database_watch.DATABASES:
+            result[name] = database_watch.digest(self.root, self.scratch, name, self.copies)
         return result
 
     def compare(self):
         after = self.snapshot()
-        return {"before": self.before, "after": after,
+        return {"before": self.before, "after": after, "database_copies": self.copies,
                 "changed": [name for name in self.before if self.before[name] != after[name]]}
 
-    def check(self):
-        result = self.compare()
+    def check(self, result=None):
+        result = self.compare() if result is None else result
         if result["changed"]:
             raise ProtectionError("operator_watch_changed: " + ", ".join(result["changed"]))
         return result

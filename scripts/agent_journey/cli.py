@@ -354,7 +354,7 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
     return sandbox, guard, ready
 
 
-def prepare_fake_local(runtime, report, table, rows, measured, operator, root, urls, services, watch):
+def prepare_fake_local(runtime, report, table, rows, measured, operator, root, urls, services):
     """Only pinned, declared key-only CLIs may enter a private local HOME."""
     helper = runtime.checkout / "target/debug/examples/journey_cache"
     if not helper.is_file():
@@ -389,7 +389,6 @@ def prepare_fake_local(runtime, report, table, rows, measured, operator, root, u
     for key in measured:
         if key in fallback:
             continue
-        watch.check()
         row = rows[key]
         kind = row["herdr_kind"]
         pin = clis.table().get(kind)
@@ -404,7 +403,6 @@ def prepare_fake_local(runtime, report, table, rows, measured, operator, root, u
         update = declaration["auto_update"]
         update_env = {update["name"]: update["value"]} if update["kind"] == "environment" else {}
         program = cache.install(runtime, kind, pin, update_env)
-        watch.check()
         launch = ci.wrapper(runtime, program, kind, tool_path(None), fake_env=extra, sandbox=sandbox)
         environment = {**clean_env(), "HOME": str(runtime.home), "TMPDIR": runtime.env["TMPDIR"]}
         if kind == "opencode":
@@ -581,7 +579,7 @@ def main(argv=None):
     previous = {signum: signal.signal(signum, lambda *_: owner.cancelled.set())
                 for signum in STOP_SIGNALS}
     runtime = guard = daemon = user_path = None
-    watch = fake_private.OperatorWatch(operator) if local and fake else None
+    watch = None
     # One fake model per agent, so each one's log counts that agent's requests alone.
     servers = {}
     # Each OpenCode agent's program, environment and private server port, whose server the run ends.
@@ -595,6 +593,11 @@ def main(argv=None):
         # account change its entries.
         runtime = Runtime(checkout, run, operator, owner, herdr_bin=herdr, home=home,
                           state=None if local else home / ".hide/state")
+        if local and fake:
+            # Registered before the first copy, so even unconfirmed process
+            # cleanup removes any private login bytes left by a failed read.
+            runtime.credential_roots.add(run / "watch-private")
+            watch = fake_private.OperatorWatch(operator, run / "watch-private")
         report["package"] = str(package(runtime))
         if fake:
             for key in measured:
@@ -614,7 +617,7 @@ def main(argv=None):
             # Before hided starts, which reads the file once.
             disable_hide_ai(runtime.home)
         if local and fake:
-            sandbox, guard, ready = prepare_fake_local(runtime, report, table, rows, measured, operator, root, urls, services, watch)
+            sandbox, guard, ready = prepare_fake_local(runtime, report, table, rows, measured, operator, root, urls, services)
         elif local:
             sandbox, guard, ready = prepare_local(runtime, report, table, rows, measured, operator, root, urls, services)
         else:
@@ -672,8 +675,6 @@ def main(argv=None):
                                   model=rows[key]["model_flag"] and models.get(key),
                                   quota=quota_rows)
                 for step in STEPS:
-                    if watch:
-                        watch.check()
                     journey.step(step, *((card,) if step == memory.CELL else ()))
                     if watch and agent.get("private_home", {}).get("enabled") and step == "start":
                         agent["private_home"]["authenticated_requests"] = servers[key].authenticated
@@ -809,16 +810,28 @@ def main(argv=None):
         if watch:
             try:
                 report["operator_watch"] = watch.compare()
-                watch.check()
+                watch.check(report["operator_watch"])
             except Exception as error:
                 report["failures"].append({"type": "ProtectionError", "reason": str(error)})
+            finally:
+                # The final comparison follows Runtime.close, which already
+                # removed the start copy; remove its new empty scratch too.
+                try:
+                    shutil.rmtree(run / "watch-private", ignore_errors=False)
+                except FileNotFoundError:
+                    pass
+                except OSError as error:
+                    report["failures"].append({"type": "CleanupError", "reason": str(error)})
         if runtime and getattr(runtime, "journey_cache", None):
             try:
                 report["cli_cache"]["bytes_after"] = runtime.journey_cache.check()
             except Exception as error:
                 report["failures"].append({"type": "ProtectionError", "reason": str(error)})
             finally:
-                runtime.journey_cache.close()
+                try:
+                    runtime.journey_cache.close(confirmed=report["cleanup"].get("processes_confirmed", False))
+                except Exception as error:
+                    report["failures"].append({"type": "ProtectionError", "reason": str(error)})
         for signum, handler in previous.items():
             signal.signal(signum, handler)
     interrupted = owner.cancelled.is_set()

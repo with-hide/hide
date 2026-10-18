@@ -50,11 +50,18 @@ class Cache:
         except OSError:
             self.close()
             raise ProtectionError("journey_cli_cache_busy: another local fake run holds the cache") from None
+        if (root / ".cleanup-unconfirmed").exists():
+            self.close()
+            raise ProtectionError("journey_cli_cache_cleanup_unconfirmed: inspect the previous run before clearing the marker")
 
-    def close(self):
+    def close(self, *, confirmed=True):
         if self.lock:
-            self.lock.close()
-            self.lock = None
+            try:
+                if not confirmed:
+                    write_private(self.root / ".cleanup-unconfirmed", b"Previous run did not confirm child cleanup.\n")
+            finally:
+                self.lock.close()
+                self.lock = None
 
     def check(self):
         return size(self.root, self.cap)

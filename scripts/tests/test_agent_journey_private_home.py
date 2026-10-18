@@ -1,4 +1,4 @@
-"""Metadata changes stop; unproven routes keep the existing HOME exception.
+"""Configuration and entry changes stop; live session appends do not.
 
 Every filesystem case owns a fake operator root. None reads Path.home().
 """
@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from agent_journey import cli_cache, clis, fake_lane, fake_private, fake_model
+from agent_journey import cli_cache, clis, fake_lane, fake_private, fake_model, database_watch
 from agent_live_check.protection import ProtectionError
 
 
@@ -21,16 +21,41 @@ class PrivateHome(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
 
-    def test_directory_mtime_change_stops_even_when_its_contents_are_the_same(self):
-        folder = self.root / '.pi'
+    def test_directory_mtime_and_existing_session_appends_are_not_configuration_changes(self):
+        folder = self.root / '.claude'
         folder.mkdir()
+        history = folder / 'history.jsonl'
+        history.write_text('first record\n')
         watch = fake_private.OperatorWatch(self.root)
         self.assertEqual(watch.check()['changed'], [])
         info = folder.stat()
+        with history.open('a') as stream:
+            stream.write('next record\n')
         os.utime(folder, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000))
-        with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: .pi'):
+        self.assertEqual(watch.check()['changed'], [])
+
+    def test_configuration_bytes_change_stops_even_with_the_same_size_and_mtime(self):
+        config = self.root / '.codex/config.toml'
+        config.parent.mkdir()
+        config.write_text('model="first"\n')
+        info = config.stat()
+        watch = fake_private.OperatorWatch(self.root)
+        config.write_text('model="other"\n')
+        os.utime(config, ns=(info.st_atime_ns, info.st_mtime_ns))
+        with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: .codex/config.toml'):
             watch.check()
-        self.assertEqual(watch.compare()['changed'], ['.pi'])
+        self.assertEqual(watch.compare()['changed'], ['.codex/config.toml'])
+
+    def test_a_new_top_level_name_stops_without_any_pattern_exception(self):
+        folder = self.root / '.claude'
+        folder.mkdir()
+        watch = fake_private.OperatorWatch(self.root)
+        temporary = folder / 'settings.json.tmp.123'
+        temporary.write_text('fixture')
+        with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: .claude'):
+            watch.check()
+        temporary.unlink()
+        self.assertEqual(watch.check()['changed'], [])
 
     @unittest.skipIf(os.name == 'nt', 'local fake mode and its symlink watch run on macOS')
     def test_changed_cli_link_target_stops_with_the_same_mtime(self):
@@ -111,6 +136,13 @@ class PrivateHome(unittest.TestCase):
         with self.assertRaisesRegex(ProtectionError, 'cache_receipt_mismatch'):
             cache.program('example', pin)
 
+    @unittest.skipIf(os.name == 'nt', 'local cache lease uses the macOS lock boundary')
+    def test_unconfirmed_children_prevent_the_next_run_from_reusing_the_cache(self):
+        cache = cli_cache.Cache(self.root, 65536)
+        cache.close(confirmed=False)
+        with self.assertRaisesRegex(ProtectionError, 'cache_cleanup_unconfirmed'):
+            cli_cache.Cache(self.root, 65536)
+
     def test_provider_configs_use_environment_keys_and_apply_adapter_update_policy(self):
         contract = json.loads((Path(__file__).resolve().parents[2] / 'contracts/agent-journey.json').read_text())
         for row in contract:
@@ -150,6 +182,134 @@ class ApiKey(unittest.TestCase):
             self.assertEqual(answer.status, status)
         self.assertEqual(server.authenticated, 2)
         self.assertEqual(server.auth_failures, 2)
+
+
+class OmpWatch(unittest.TestCase):
+    def setUp(self):
+        import sqlite3
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.path = self.root / ".omp/agent/agent.db"
+        self.path.parent.mkdir(parents=True)
+        self.connection = sqlite3.connect(self.path)
+        self.addCleanup(self.connection.close)
+        self.connection.executescript('''
+            PRAGMA journal_mode=WAL;
+            CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER);
+            CREATE TABLE auth_credentials (id INTEGER PRIMARY KEY, provider TEXT, credential_type TEXT,
+                data TEXT, disabled_cause TEXT, identity_key TEXT, created_at INTEGER, updated_at INTEGER);
+            CREATE TABLE command_usage (name TEXT PRIMARY KEY, count INTEGER);
+            INSERT INTO settings VALUES ('theme', 'dark', 1);
+            INSERT INTO auth_credentials VALUES (1, 'fixture', 'api_key', 'fixture-secret', NULL, NULL, 1, 1);
+            INSERT INTO command_usage VALUES ('help', 1);
+        ''')
+        self.scratch = self.root / 'private-copy'
+
+    def test_wal_credentials_are_watched_but_usage_is_not_and_original_bytes_stay_untouched(self):
+        originals = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in self.path.parent.iterdir()}
+        watch = fake_private.OperatorWatch(self.root, self.scratch)
+        self.assertEqual({path: (path.read_bytes(), path.stat().st_mtime_ns)
+                          for path in self.path.parent.iterdir()}, originals)
+        self.assertNotIn('fixture-secret', json.dumps(watch.before))
+        self.assertEqual(list(self.scratch.iterdir()), [])
+        self.connection.execute('UPDATE command_usage SET count = 2')
+        self.connection.commit()
+        self.assertEqual(watch.check()['changed'], [])
+        self.connection.execute("UPDATE auth_credentials SET data = 'changed-secret'")
+        self.connection.commit()
+        with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: .omp/agent/agent.db'):
+            watch.check()
+        self.assertEqual(list(self.scratch.iterdir()), [])
+
+    def test_settings_change_is_not_hidden_with_the_usage_rows(self):
+        watch = fake_private.OperatorWatch(self.root, self.scratch)
+        self.connection.execute("UPDATE settings SET value = 'light'")
+        self.connection.commit()
+        with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: .omp/agent/agent.db'):
+            watch.check()
+
+    def test_unreadable_schema_is_a_failure_not_missing_configuration(self):
+        self.connection.execute('DROP TABLE auth_credentials')
+        self.connection.commit()
+        with self.assertRaisesRegex(ProtectionError, 'operator_watch_database_snapshot_unreadable'):
+            database_watch.digest(self.root, self.scratch, ".omp/agent/agent.db")
+        self.assertEqual(list(self.scratch.iterdir()), [])
+
+    def test_a_concurrent_wal_write_refuses_the_copy(self):
+        from unittest.mock import patch
+        original = database_watch.read_file
+        changed = False
+
+        def concurrent(path, expected, destination=None):
+            nonlocal changed
+            value = original(path, expected, destination)
+            if not changed:
+                changed = True
+                self.connection.execute("UPDATE settings SET value = 'changed-during-copy'")
+                self.connection.commit()
+            return value
+
+        with patch.object(database_watch, 'read_file', concurrent):
+            with self.assertRaisesRegex(ProtectionError, 'operator_watch_database_copy_changed'):
+                database_watch.digest(self.root, self.scratch, ".omp/agent/agent.db")
+
+    def test_streaming_fallback_is_reported_and_a_copy_budget_failure_is_not_a_pass(self):
+        from unittest.mock import patch
+        copies = []
+        with patch.object(database_watch, 'clone', return_value=False):
+            database_watch.digest(self.root, self.scratch, ".omp/agent/agent.db", copies)
+        self.assertTrue(copies)
+        self.assertEqual({row['method'] for row in copies}, {'chunked_copy'})
+        self.assertEqual(list(self.scratch.iterdir()), [])
+        with patch.object(database_watch, 'MAX_DATABASE_BYTES', 1):
+            with self.assertRaisesRegex(ProtectionError, 'credential_copy_total_over_budget'):
+                database_watch.digest(self.root, self.scratch, ".omp/agent/agent.db")
+
+    def test_space_failure_has_its_errno_and_removes_the_copy(self):
+        import errno
+        from unittest.mock import patch
+        with patch.object(database_watch, 'clone', side_effect=OSError(errno.ENOSPC, 'fixture')):
+            with self.assertRaisesRegex(ProtectionError, f'copy_failed: errno={errno.ENOSPC}'):
+                database_watch.digest(self.root, self.scratch, ".omp/agent/agent.db")
+        self.assertEqual(list(self.scratch.iterdir()), [])
+
+
+class OpenCodeWatch(unittest.TestCase):
+    def test_credentials_change_stops_but_sessions_do_not_and_the_original_is_untouched(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            path = root / '.local/share/opencode/opencode.db'
+            path.parent.mkdir(parents=True)
+            connection = sqlite3.connect(path)
+            try:
+                connection.executescript('''
+                    PRAGMA journal_mode=WAL;
+                    CREATE TABLE credential (id TEXT PRIMARY KEY, integration_id TEXT, label TEXT,
+                        value TEXT, connector_id TEXT, method_id TEXT, active INTEGER,
+                        time_created INTEGER, time_updated INTEGER);
+                    CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT);
+                    INSERT INTO credential VALUES ('id', 'fixture', 'key', 'private-fixture', NULL, NULL, 1, 1, 1);
+                    INSERT INTO session VALUES ('session', 'first');
+                ''')
+                before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in path.parent.iterdir()}
+                scratch = root / 'private-copy'
+                watch = fake_private.OperatorWatch(root, scratch)
+                self.assertEqual(before, {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in path.parent.iterdir()})
+                self.assertNotIn('private-fixture', json.dumps(watch.before))
+                connection.execute("UPDATE session SET title = 'second'")
+                connection.commit()
+                self.assertEqual(watch.check()['changed'], [])
+                connection.execute("UPDATE credential SET value = 'changed'")
+                connection.commit()
+                with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: .local/share/opencode/opencode.db'):
+                    watch.check()
+                self.assertEqual(list(scratch.iterdir()), [])
+                if sys.platform == 'darwin':
+                    self.assertEqual({row['method'] for row in watch.copies}, {'apfs_clone'})
+            finally:
+                connection.close()
 
 
 if __name__ == '__main__':
