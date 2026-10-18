@@ -2,12 +2,10 @@ import { ArrowLeftRightIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { holdShellDrag } from "./shellDrag";
-import { laneLanding, treeLanding, type LaneFrame, type LaneSizes } from "./workspace";
+import { laneLanding, treeLanding, type LaneFrame, type LaneLanding, type LaneSizes } from "./workspace";
 
 /** One arrow key on a focused divider moves it this many pixels. */
 const DIVIDER_STEP = 32;
-
-type Landing = { lane_width?: number; tree_width?: number };
 
 /**
  * A divider of the lane (PRD right-lane B6, B10; `Component / Side panel
@@ -32,7 +30,7 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
     const pending = keyIntent.current;
     if (pending && (acknowledged === pending.request ||
       ((acknowledged !== pending.observed || frame.width !== pending.published.width || frame.tree !== pending.published.tree) && !acknowledged?.startsWith(`${keySession}:`)) ||
-      pending.extent !== origin?.clientWidth || pending.frame.mode !== frame.mode || (pending.frame.tree === null) !== (frame.tree === null))) {
+      pending.extent !== origin?.clientWidth || pending.frame.mode !== frame.mode || pending.frame.field !== frame.field || (pending.frame.tree === null) !== (frame.tree === null))) {
       keyIntent.current = null;
     }
   }, [acknowledged, keySession, origin, frame]);
@@ -40,11 +38,11 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
   // A captured pointer belongs to the Workspace and geometry it started on.
   // Switching either, or unmounting, retires the guide and its page still.
   useLayoutEffect(() => () => cancelDrag.current?.(), [workspace, origin, frame.mode, frame.width, frame.tree]);
-  const landingAt = (x: number, basis: LaneFrame): Landing =>
+  const landingAt = (x: number, basis: LaneFrame): LaneLanding =>
     kind === "lane" ? laneLanding({ x, body: extent(), frame: basis, sizes }) : treeLanding({ x, frame: basis, sizes });
   // The frame a landing leaves, so the next arrow key steps from it.
-  const landed = (basis: LaneFrame, patch: Landing): LaneFrame => {
-    const document = patch.lane_width ?? basis.document;
+  const landed = (basis: LaneFrame, patch: LaneLanding): LaneFrame => {
+    const document = patch[basis.field] ?? basis.document;
     const tree = patch.tree_width ?? basis.tree;
     return { ...basis, document, tree, width: kind === "lane" ? document + (tree === null ? 0 : tree + sizes.divider) : basis.width };
   };
@@ -53,7 +51,7 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
   const land = (x: number, basis = frame, request?: string) => {
     if (extent() <= 0) return;
     const patch = landingAt(x, basis);
-    const changed = (patch.lane_width !== undefined && patch.lane_width !== basis.document) || (patch.tree_width !== undefined && patch.tree_width !== basis.tree);
+    const changed = (patch[basis.field] !== undefined && patch[basis.field] !== basis.document) || (patch.tree_width !== undefined && patch.tree_width !== basis.tree);
     if (!changed) return;
     if (request) keyIntent.current = { frame: landed(basis, patch), published: frame, extent: extent(), request, observed: acknowledged };
     if (actions.setWorkspaceView({ ...patch, ...(request ? { width_request_id: request } : {}) }) === false) keyIntent.current = null;

@@ -107,12 +107,13 @@ Choosing an agent or a tab from the sidebar, the palette, a tab cycle or the tab
 The lane has a divider at its left edge, docked or over the agents, and the tree a divider between it and the documents.
 A divider shows its grip on hover, keyboard focus and while dragging; a drag moves a guide with the pointer and lands once on release, and a focused divider moves one 32px step per arrow key, each a separator that reports its width.
 Fast arrow presses retain every step before the preceding width has been confirmed, and reloading restores the final width.
-The tree's divider trades width between the tree and the documents, so the lane and Agent Views keep theirs; the lane's divider changes the documents' width, against Agent Views when docked, and over them otherwise, where it may reach the body's left edge.
-The documents are never narrower than 360px and start at 520px, the tree never narrower than 180px and starts at 240px, and Agent Views keep 480px beside a docked lane; both widths are the Workspace's and the same over the agents and docked, so a width dragged over the agents is the width the pin docks at.
-The pin turning on or off, a docked lane opening or closing, a docked divider landing, and the tree turning on or off beside a docked lane resize the agents' terminals once.
+The tree's divider trades width between the tree and the documents, so the lane and Agent Views keep theirs; the lane's divider changes the width of what the lane shows, against Agent Views when docked, and over them otherwise, where it may reach the body's left edge.
+The lane keeps two widths: Files draws its documents at one, and Memory, PRs, Changes and the 보기 slot share the other, so documents widened to read a page leave Memory as it was, and Files comes back at its own width after another tool.
+Each width is never narrower than 360px and starts at 520px, the tree never narrower than 180px and starts at 240px, and Agent Views keep 480px beside a docked lane; the widths are the Workspace's and the same over the agents and docked, so a width dragged over the agents is the width the pin docks at.
+The pin turning on or off, a docked lane opening or closing, a docked divider landing, the tree turning on or off beside a docked lane, and a docked lane turning between Files and another tool whose width differs resize the agents' terminals once.
 A lane over the agents opening, going away, coming back, expanding or closing, its divider landing, a drag in progress, and anything inside the lane, an open, a close, a tab change, a split or a drag of a view, resize nothing.
 Changing Workspace or lane geometry during a divider drag cancels its guide without saving a width, and releasing the old pointer cannot change the new Workspace.
-The lane's tool, pin, tree, and both widths are stored per Workspace and survive a restart: a pinned lane comes back docked, an unpinned one over the agents, and neither expanded.
+The lane's tool, pin, tree, its two widths and the tree's are stored per Workspace and survive a restart: a pinned lane comes back docked, an unpinned one over the agents, and neither expanded.
 A Workspace stored with the earlier File Views and Tools columns comes back once on Files where File Views was on, else on the tool Tools showed, unpinned (see View states).
 
 Agent Views is always live: clicking a pane or a tab focuses it and typing goes to it, and chords such as ⌘F, ⌘T and ⌥W act where the keyboard is, a View area, the lane's tool or a pane.
@@ -354,13 +355,13 @@ A view whose file is being read shows `Opening…`.
 A restored view whose device or root is not ready says what it waits for (such as `Waiting for <device> to connect`) and reads its file by itself once that is ready.
 A view whose file cannot be read shows why, with Close view and Retry, and its tab title reads as struck through; either action acts on that view alone and leaves the active area where it was.
 Each state belongs to its view alone, so one missing file never blanks another view or area.
-After a restart the app reopens the last Workspace as it was left: its areas and their sizes, each area's tabs in order with its preview, pinned views, and active view, the active area, the lane's tool, pin, tree and both widths, a pinned lane docked and an unpinned one over the agents; unsaved text returns from the browser's drafts, and Herdr's current tabs and panes are used as they are.
+After a restart the app reopens the last Workspace as it was left: its areas and their sizes, each area's tabs in order with its preview, pinned views, and active view, the active area, the lane's tool, pin, tree and its widths, a pinned lane docked and an unpinned one over the agents; unsaved text returns from the browser's drafts, and Herdr's current tabs and panes are used as they are.
 A first run, or a last Workspace that no longer exists, starts on the Overview.
 Herdr connecting before the initial path catalog and saved View arrive does not mean the last Workspace is gone; the existing starting screen waits for that saved choice to settle.
 The unanswered-connection fallback does not settle a connected session's pending saved Workspace; a settled connection failure still opens the Overview.
 A layout file that cannot be read is kept aside and the app starts on the Overview, where the operator picks a Workspace and continues with a new layout.
 A Workspace stored with the File Views and Tools columns, or with the side panel or layout before them, restarts once on Files where File Views was on (a panel open or expanded, a layout that did not show the agents alone), else on the tool Tools showed, the Explorer becoming Files with its tree, unpinned, its views, tabs and areas as they were.
-File Views' stored width becomes the lane's; a Workspace stored before the columns, and the tree, start at the default widths.
+File Views' stored width becomes Files' width; a Workspace stored before the columns, the tree, and the width the other tools share start at the default widths.
 
 ### Browser displays
 
