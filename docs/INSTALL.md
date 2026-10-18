@@ -304,6 +304,20 @@ A failed retirement step stays visible while the ordinary kit parts continue the
 A completed stage does no more work, and the operator decides when a later release removes this stage after every device has passed it.
 Retirement is tested only with private homes, fixture ledgers and injected service control.
 
+### When a kit pass stops before changing anything
+
+A preflight refusal, like the kit's own folder or lock being unavailable, leaves nothing installed by that pass, so on a new install the `hide` command, the agents' hooks and letters are all missing until it passes.
+It reaches the operator once, as what stopped it and what to change, never as a reason copied onto every part (`hide_kit::KitRefusal`): a folder or file another account can change or a link in the way (`unsafe`), an earlier Hide's open work or a record Hide cannot read (`record`), or another Hide changing the same account (`busy`), with the folder or file at fault.
+On a Mac no pass has answered for, the first-run wizard opens on its agents step with that line and `Try again`; on an install set up before, and on a device, the line sits under the machine in Settings > Devices with `Retry` (UI_BEHAVIOR.md, First run and Settings: each machine's install kit).
+Both run the same pass again, and a read while Settings is open runs the same check, so the line goes only once nothing stops the pass; the kit's own words go to the diagnostic log (`kit.refused`, and `refused` on `apply.completed`).
+To recover:
+
+- A state folder chosen by `HIDE_STATE_DIR` or `XDG_STATE_HOME`, refused on any system (on Windows a folder below a drive root such as `D:\` whose permissions let every signed-in account change it; on macOS and Linux one that is group- or world-writable, another account's, or reached through an account's link): the line names the variable; set it to a folder only your account can change, or unset it so the state returns to `~/.hide/state`, then restart Hide, since the variable is read when Hide starts.
+- Any other folder or file it names: make it a real folder of your account that no other account can change, then press `Try again` or `Retry`.
+- Open work of an earlier Hide: finish or close it, then try again.
+
+`hide connect` and `hide open` do not print the refusal: the pass runs after the connection, on its own worker and for up to three minutes, so waiting for it would delay every window, and each way to use Hide after them, the desktop window or a browser tab, which shows the wizard's agents step alone, shows the line.
+
 ### Where Hide keeps its files
 
 Everything Hide owns on a machine is under `~/.hide`:
