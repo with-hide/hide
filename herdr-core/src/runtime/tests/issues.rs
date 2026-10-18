@@ -17,6 +17,8 @@ fn issue(number: u32) -> IssueSnapshot {
         blocked_by: Vec::new(),
         sub_issues: Default::default(),
         labels: Vec::new(),
+        author: None,
+        assignees: Vec::new(),
     }
 }
 fn issue_runtime() -> Runtime {
@@ -36,6 +38,21 @@ fn issue_runtime() -> Runtime {
         repository_id: None,
     };
     runtime.snapshot.navigator.workspaces = vec![workspace];
+    runtime
+}
+
+/// A completed GitHub read, so re-projecting keeps the issues in the
+/// accepted source instead of replacing a manually populated UI list.
+fn issue_runtime_with_github_read() -> Runtime {
+    let mut runtime = issue_runtime();
+    runtime
+        .github
+        .projects
+        .push(crate::model::GithubProjectSnapshot {
+            root_path: "/repo".into(),
+            issues: runtime.snapshot.navigator.workspaces[0].home_issues.clone(),
+            ..Default::default()
+        });
     runtime
 }
 #[test]
@@ -437,8 +454,8 @@ fn a_project_without_github_reads_local_issues_and_links_by_branch_number() {
 /// Settings › Issues chooses a project's source and `auto` gives it back;
 /// the choice is part of the saved UI state.
 #[test]
-fn a_chosen_source_wins_over_the_default_and_auto_returns_it() {
-    let mut runtime = issue_runtime();
+fn a_saved_source_preference_keeps_both_sources_and_auto_returns_the_primary() {
+    let mut runtime = issue_runtime_with_github_read();
     runtime.apply_pull_requests();
     assert_eq!(
         runtime.snapshot.navigator.workspaces[0]
@@ -456,9 +473,14 @@ fn a_chosen_source_wins_over_the_default_and_auto_returns_it() {
     let workspace = &runtime.snapshot().navigator.workspaces[0];
     let source = workspace.tasks.source.as_ref().unwrap();
     assert_eq!((source.kind.as_str(), source.chosen), ("local", true));
-    // A GitHub link is not a local one: `acme/project#2` names no local issue.
-    assert_eq!(workspace.checkouts[0].task_key, None);
-    assert!(workspace.checkouts[0].issue.is_none());
+    // The legacy preference remains saved, while both sources and an
+    // existing repository-qualified checkout link remain visible (B11).
+    assert_eq!(workspace.tasks.sources.len(), 2);
+    assert_eq!(
+        workspace.checkouts[0].task_key.as_deref(),
+        Some("github:acme/project#2")
+    );
+    assert!(workspace.checkouts[0].issue.is_some());
     assert_eq!(
         runtime
             .snapshot()
@@ -487,6 +509,112 @@ fn a_chosen_source_wins_over_the_default_and_auto_returns_it() {
         serde_json::json!({"project_path": "/repo", "source": "jira"}),
     )));
     assert!(runtime.snapshot().ui_state.project_issue_sources.is_empty());
+}
+
+/// B11/B18: choosing Local keeps GitHub's cached rows beside old closed
+/// memos; one adapter failing never erases the other's data.
+#[test]
+fn mixed_sources_keep_old_closed_memos_and_cached_github_rows() {
+    let mut runtime = issue_runtime();
+    let cached = runtime.snapshot.navigator.workspaces[0].home_issues.clone();
+    runtime
+        .github
+        .projects
+        .push(crate::model::GithubProjectSnapshot {
+            root_path: "/repo".into(),
+            issues: cached,
+            status: crate::model::GithubStatusSnapshot {
+                stale: true,
+                unavailable_reason: Some("GitHub offline".into()),
+                failure_category: Some(crate::model::GithubFailureCategory::NetworkOrRateLimit),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+    runtime.local_issues = Ok(serde_json::from_str(r#"{"version":1,"projects":{"/repo":{"next_number":2,"issues":[{"number":1,"title":"Old closed memo","open":false,"created_at_unix_ms":1,"updated_at_unix_ms":2}]}}}"#).unwrap());
+    assert!(runtime.dispatch_json(&event(
+        "issue_source_set",
+        serde_json::json!({"project_path":"/repo","source":"local"})
+    )));
+    runtime.apply_pull_requests();
+    let tasks = &runtime.snapshot().navigator.workspaces[0].tasks;
+    assert_eq!(tasks.tasks.len(), 5);
+    assert_eq!(tasks.sources.len(), 2);
+    assert!(
+        !tasks
+            .tasks
+            .iter()
+            .find(|task| task.key == "local:/repo#1")
+            .unwrap()
+            .open
+    );
+    assert!(
+        tasks
+            .sources
+            .iter()
+            .find(|source| source.kind == "github")
+            .unwrap()
+            .failure
+            .is_some()
+    );
+    assert!(
+        tasks
+            .sources
+            .iter()
+            .find(|source| source.kind == "local")
+            .unwrap()
+            .failure
+            .is_none()
+    );
+    runtime.local_issues = Err("memo store unavailable".into());
+    runtime.apply_pull_requests();
+    let tasks = &runtime.snapshot().navigator.workspaces[0].tasks;
+    assert_eq!(
+        tasks.tasks.len(),
+        5,
+        "both failed sources retain their cached rows"
+    );
+    assert!(
+        tasks
+            .sources
+            .iter()
+            .find(|source| source.kind == "local")
+            .unwrap()
+            .failure
+            .is_some()
+    );
+}
+
+/// B16: an explicit L-N link keeps its memo identity even when a project
+/// also has a GitHub issue with that number and GitHub is the primary source.
+#[test]
+fn explicit_memo_links_do_not_become_same_number_github_links() {
+    let mut runtime = issue_runtime_with_github_read();
+    runtime
+        .create_local_issue(None, "/repo", "Local issue one", "")
+        .unwrap();
+    runtime.snapshot.navigator.workspaces[0].checkouts[0].branch_issue = Some("L-1".into());
+    runtime.apply_pull_requests();
+    let project = &runtime.snapshot().navigator.workspaces[0];
+    assert_eq!(project.tasks.source.as_ref().unwrap().kind, "github");
+    assert_eq!(
+        project.checkouts[0].task_key.as_deref(),
+        Some("local:/repo#1")
+    );
+    assert!(
+        project
+            .tasks
+            .tasks
+            .iter()
+            .any(|task| task.key == "github:acme/project#1")
+    );
+    assert!(
+        project
+            .tasks
+            .tasks
+            .iter()
+            .any(|task| task.key == "local:/repo#1")
+    );
 }
 
 /// Issue settings change only the fields sent; the agent a start picks is
@@ -613,7 +741,7 @@ fn a_local_issue_panel_reads_the_body_and_creation_time_with_no_github_fields() 
 /// issue read before is dropped.
 #[test]
 fn a_github_issue_panel_read_settles_only_the_issue_it_asked_for() {
-    let mut runtime = issue_runtime();
+    let mut runtime = issue_runtime_with_github_read();
     runtime.apply_pull_requests();
     assert!(runtime.dispatch_json(&event(
         "issue_detail_request",
@@ -644,6 +772,79 @@ fn a_github_issue_panel_read_settles_only_the_issue_it_asked_for() {
         ("ready", Some("본문"), Some("example"))
     );
     assert!(!runtime.ingest_issue_detail("github:acme/project#2", Err("late".into())));
+}
+
+/// B14: a failed later page retains the body and comments already read,
+/// retries the same cursor, and never retains more than 200 comments.
+#[test]
+fn detail_paging_keeps_cached_content_on_failure_and_reports_the_cap() {
+    let mut runtime = issue_runtime_with_github_read();
+    runtime.apply_pull_requests();
+    let key = "github:acme/project#2";
+    let comment = |n| crate::tasks::TaskComment {
+        author: Some("reviewer".into()),
+        created_at_unix_ms: Some(n),
+        body: format!("Comment {n}"),
+    };
+    runtime.snapshot.issue_work.detail = Some(crate::model::IssueDetailSnapshot::answered(
+        key.into(),
+        Ok(crate::tasks::TaskDetail {
+            body: "Full original body".into(),
+            comments: (0..50).map(comment).collect(),
+            comment_count: Some(251),
+            comments_cursor: Some("page-1".into()),
+            comments_has_more: true,
+            ..Default::default()
+        }),
+    ));
+    // The worker is absent in this runtime: a valid page request answers
+    // failed, while the ready cache and retry cursor stay intact.
+    assert!(runtime.dispatch_json(&event(
+        "issue_detail_request",
+        serde_json::json!({
+            "workspace_id": "w", "task_key": key, "comments_after": "page-1"
+        })
+    )));
+    let cached = runtime.snapshot().issue_work.detail.as_ref().unwrap();
+    assert_eq!(
+        (
+            cached.phase.as_str(),
+            cached.body.as_deref(),
+            cached.comments.len()
+        ),
+        ("ready", Some("Full original body"), 50)
+    );
+    assert_eq!(cached.comments_cursor.as_deref(), Some("page-1"));
+    assert!(cached.message.is_some() && !cached.comments_loading && cached.comments_has_more);
+    assert!(!runtime.dispatch_json(&event(
+        "issue_detail_request",
+        serde_json::json!({
+            "workspace_id": "w", "task_key": key, "comments_after": "wrong-cursor"
+        })
+    )));
+    runtime
+        .snapshot
+        .issue_work
+        .detail
+        .as_mut()
+        .unwrap()
+        .comments_loading = true;
+    assert!(runtime.ingest_issue_detail_page(
+        key,
+        Some("page-1"),
+        Ok(crate::tasks::TaskDetail {
+            comments: (50..251).map(comment).collect(),
+            comment_count: Some(251),
+            comments_cursor: Some("page-2".into()),
+            comments_has_more: true,
+            ..Default::default()
+        })
+    ));
+    let ready = runtime.snapshot().issue_work.detail.as_ref().unwrap();
+    assert_eq!(ready.comments.len(), 200);
+    assert_eq!(ready.comments[199].body, "Comment 199");
+    assert!(ready.comments_limited && !ready.comments_has_more && ready.message.is_none());
+    assert_eq!(ready.body.as_deref(), Some("Full original body"));
 }
 
 /// A Local issue's title and body are edited in its panel: the task shows the
@@ -784,12 +985,17 @@ fn a_search_with_no_github_project_answers_ready_with_no_results() {
     assert!(slot.results.is_empty() && slot.message.is_none());
     assert!(runtime.github_search.active.is_none());
 
-    // A project that reads Local issues is not a GitHub project.
+    // The old Local preference no longer suppresses a GitHub repository.
     let mut local = issue_runtime();
     assert!(local.dispatch_json(&event(
         "issue_source_set",
         serde_json::json!({"project_path": "/repo", "source": "local"}),
     )));
+    assert_eq!(local.github_search_targets().0.len(), 1);
+    local.snapshot.navigator.workspaces[0].is_git = false;
+    local.snapshot.navigator.workspaces[0]
+        .home_issues
+        .repository = None;
     assert!(local.dispatch_json(&search_event("s2", "reader")));
     assert_eq!(search_slot(&local).2, "ready");
 }

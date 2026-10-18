@@ -74,11 +74,11 @@ test("one confirmed choice follows every window, persists, and resets to each sy
       await left.locator("[data-open-overview]").click();
       const modal = left.getByRole("dialog", { name: overview!, exact: true });
       await expect(modal).toBeVisible();
-      // One device has no switch: the Overview is that device's.
+      // The single-device switch still identifies the scope and connection state.
       await expect(modal.getByRole("heading", { level: 1, name: overview!, exact: true })).toBeVisible();
-      await expect(modal.locator("[data-overview-devices]")).toHaveCount(0);
-      // The Overview opens on its backlog (PRD sidebar-task-lens B38).
-      await expect(modal.locator('[data-main-tab="backlog"]')).toHaveAttribute("aria-selected", "true");
+      await expect(modal.locator("[data-overview-devices]")).toBeVisible();
+      // A fresh Overview opens on Work; the existing backlog label also translates.
+      await expect(modal.locator('[data-main-tab="work"]')).toHaveAttribute("aria-selected", "true");
       await expect(modal.locator('[data-main-tab="backlog"]')).toContainText(backlog!);
       await expect(modal.getByRole("button", { name: close!, exact: true })).toHaveText("Esc");
       await screenshot(left, `interface-${language}`);

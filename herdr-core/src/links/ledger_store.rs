@@ -1919,17 +1919,52 @@ impl LinkStore {
         Ok(summaries)
     }
 
+    #[cfg(test)]
     pub fn ledger_search(
         &self,
         query: &str,
         summaries: bool,
     ) -> Result<Vec<SessionSearchHit>, String> {
+        self.ledger_search_page(
+            query,
+            &SessionSearchOptions {
+                include_tasks: summaries,
+                ..Default::default()
+            },
+            summaries,
+            &[],
+        )
+        .map(|page| page.results)
+    }
+
+    /// The retained ledger only. Every scope predicate precedes ranking and
+    /// the page limit; the cursor includes the whole native session identity.
+    pub fn ledger_search_page(
+        &self,
+        query: &str,
+        options: &SessionSearchOptions,
+        summaries: bool,
+        presence: &[SessionSearchPresence],
+    ) -> Result<SessionSearchPage, String> {
         let query = query.trim();
-        if query.is_empty() {
-            return Ok(Vec::new());
-        }
-        if query.chars().count() > 200 {
+        if query.chars().count() > 200 || !options.bounded() {
             return Err("ledger_query_capacity".to_owned());
+        }
+        if presence.len() > SUMMARY_SESSION_LIMIT {
+            return Err("ledger_search_presence_capacity".into());
+        }
+        if options
+            .since_unix_ms
+            .zip(options.until_unix_ms)
+            .is_some_and(|(since, until)| since > until)
+            || options.since_unix_ms.is_some_and(|at| at > i64::MAX as u64)
+            || options.until_unix_ms.is_some_and(|at| at > i64::MAX as u64)
+            || options
+                .cursor
+                .as_ref()
+                .is_some_and(|cursor| cursor.at_unix_ms > i64::MAX as u64)
+        {
+            return Err("ledger_search_range_invalid".into());
         }
         let pattern = format!(
             "%{}%",
@@ -1938,44 +1973,143 @@ impl LinkStore {
                 .replace('%', "\\%")
                 .replace('_', "\\_")
         );
-        let values = if summaries {
-            "SELECT device,agent,id,text,at FROM ledger_requests UNION ALL SELECT device,agent,id,name,at FROM ledger_tasks UNION ALL SELECT device,agent,id,goal,at FROM ledger_chapters"
-        } else {
-            "SELECT device,agent,id,text,at FROM ledger_requests"
-        };
+        let mut values = "SELECT r.device,r.agent,r.id,r.text,r.at,'request' AS kind,r.offset FROM ledger_requests r JOIN scoped s USING(device,agent,id) WHERE r.author='\"operator\"'".to_owned();
+        if options.include_tasks && summaries {
+            values.push_str(" UNION ALL SELECT r.device,r.agent,r.id,r.name,r.at,'task',NULL FROM ledger_tasks r JOIN scoped s USING(device,agent,id) UNION ALL SELECT r.device,r.agent,r.id,r.goal,r.at,'task',NULL FROM ledger_chapters r JOIN scoped s USING(device,agent,id)");
+        }
+        if options.include_titles {
+            values.push_str(" UNION ALL SELECT t.device,t.agent,t.id,t.manual_title,COALESCE(s.last_request_at,s.ended_at,s.started_at,0),'title',NULL FROM ledger_titles t JOIN scoped s USING(device,agent,id) WHERE t.manual_title IS NOT NULL UNION ALL SELECT t.device,t.agent,t.id,t.native_title,COALESCE(s.last_request_at,s.ended_at,s.started_at,0),'title',NULL FROM ledger_titles t JOIN scoped s USING(device,agent,id) WHERE t.native_title IS NOT NULL AND t.native_title IS NOT t.manual_title");
+        }
         let goal = if summaries {
             "(SELECT goal FROM ledger_chapters c WHERE c.device=s.device AND c.agent=s.agent AND c.id=s.id ORDER BY at DESC LIMIT 1)"
         } else {
             "NULL"
         };
         let sql = format!(
-            "WITH matched AS (SELECT *,row_number() OVER(PARTITION BY device,agent,id ORDER BY at DESC,text) AS rank FROM ({values}) WHERE text LIKE ?1 ESCAPE '\\') \
-            SELECT s.device,s.agent,s.id,COALESCE(t.manual_title,{goal},t.native_title),r.text,r.at,s.cwd \
-            FROM sessions s JOIN matched r ON s.device=r.device AND s.agent=r.agent AND s.id=r.id \
-            LEFT JOIN ledger_titles t ON t.device=s.device AND t.agent=s.agent AND t.id=s.id WHERE r.rank=1 ORDER BY r.at DESC,s.id LIMIT ?2"
+            r#"
+            WITH raw_presence AS (
+                SELECT json_extract(value,'$.session.device_id') device,json_extract(value,'$.session.agent') agent,
+                       json_extract(value,'$.session.session_id') id,json_extract(value,'$.status') status,CAST(key AS INTEGER) priority FROM json_each(?9)
+            ), named_presence AS (
+                SELECT p.device,p.agent,COALESCE((SELECT session FROM cursors c WHERE c.device=p.device AND c.agent=p.agent AND c.path=p.id AND c.session IS NOT NULL),p.id) id,p.status,p.priority FROM raw_presence p
+            ), presence AS (
+                SELECT device,agent,id,status FROM (SELECT *,row_number() OVER(PARTITION BY device,agent,id ORDER BY CASE WHEN status='archived' THEN 0 ELSE 1 END DESC,priority DESC) rank FROM named_presence) WHERE rank=1
+            ), scoped AS MATERIALIZED (
+                SELECT s.*,o.project,COALESCE(p.status,'retained') status FROM sessions s
+                LEFT JOIN ledger_session_origins o USING(device,agent,id)
+                LEFT JOIN presence p USING(device,agent,id)
+                WHERE (?3 IS NULL OR s.device=?3) AND (?4 IS NULL OR o.project=?4)
+                  AND (?5 IS NULL OR s.agent=?5)
+                  AND (?8 IS NULL OR COALESCE(p.status,'retained')=?8
+                    OR (?8='current' AND p.status IS NOT NULL AND p.status!='archived'))
+            ), matched AS MATERIALIZED (
+                SELECT * FROM ({values}) WHERE (?2 OR text LIKE ?1 ESCAPE '\')
+                  AND (?2 OR ((?6 IS NULL OR at>=?6) AND (?7 IS NULL OR at<=?7)))
+            ), ranked AS MATERIALIZED (
+                SELECT *,row_number() OVER(PARTITION BY device,agent,id ORDER BY at DESC,kind,offset DESC,text) rank FROM matched
+            ), totals AS (
+                SELECT device,agent,id,MAX(at) at,COUNT(*) count FROM matched GROUP BY device,agent,id
+            ), candidates AS (
+                SELECT s.device,s.agent,s.id,COALESCE(t.manual_title,{goal},t.native_title) title,
+                    s.cwd,s.project,s.status,
+                    CASE WHEN ?2 THEN MAX(COALESCE(s.last_request_at,0),COALESCE(s.ended_at,0),COALESCE(s.started_at,0),COALESCE(m.at,0)) ELSE m.at END activity,
+                    CASE WHEN ?2 THEN 0 ELSE COALESCE(m.count,0) END match_count,
+                    (SELECT COUNT(*) FROM ledger_requests r WHERE r.device=s.device AND r.agent=s.agent AND r.id=s.id AND r.author='"operator"') request_count
+                FROM scoped s LEFT JOIN totals m USING(device,agent,id) LEFT JOIN ledger_titles t USING(device,agent,id)
+                WHERE ?2 OR m.count>0
+            ) SELECT c.*,
+                (SELECT json_group_array(json_object('kind',kind,'text',text,'at_unix_ms',at,'request_offset',offset))
+                 FROM (SELECT kind,text,at,offset FROM ranked r WHERE r.device=c.device AND r.agent=c.agent AND r.id=c.id AND rank<=2 ORDER BY rank)) matches
+            FROM candidates c WHERE (?6 IS NULL OR activity>=?6) AND (?7 IS NULL OR activity<=?7)
+                AND (?10 IS NULL OR activity<?10 OR (activity=?10 AND (device,agent,id)>(?11,?12,?13)))
+            ORDER BY activity DESC,device,agent,id LIMIT ?14
+        "#
         );
+        let status = options.status.map(|status| match status {
+            SessionSearchStatus::Current => "current",
+            SessionSearchStatus::Working => "working",
+            SessionSearchStatus::Done => "done",
+            SessionSearchStatus::NeedsYou => "needs_you",
+            SessionSearchStatus::Archived => "archived",
+            SessionSearchStatus::Retained => "retained",
+        });
+        let cursor = options.cursor.as_ref();
         let mut statement = self.connection.prepare(&sql).map_err(failed)?;
-        statement
-            .query_map(params![pattern, SEARCH_LIMIT as i64], |r| {
-                let agent: String = r.get(1)?;
-                let title = r
-                    .get::<_, Option<String>>(3)?
-                    .unwrap_or_else(|| crate::sidebar::provider_name(Some(&agent)));
-                Ok(SessionSearchHit {
-                    session: SessionIdentity {
-                        device_id: r.get(0)?,
-                        agent,
-                        session_id: r.get(2)?,
-                    },
-                    title,
-                    matched: r.get(4)?,
-                    at_unix_ms: r.get(5)?,
-                    cwd: r.get(6)?,
-                })
-            })
+        let rows = statement
+            .query_map(
+                params![
+                    pattern,
+                    query.is_empty(),
+                    options.device_id,
+                    options.project_root,
+                    options.agent,
+                    options.since_unix_ms.map(|n| n as i64),
+                    options.until_unix_ms.map(|n| n as i64),
+                    status,
+                    encoded(&presence)?,
+                    cursor.map(|c| c.at_unix_ms as i64),
+                    cursor.map(|c| &c.device_id),
+                    cursor.map(|c| &c.agent),
+                    cursor.map(|c| &c.session_id),
+                    SEARCH_LIMIT as i64 + 1
+                ],
+                |r| {
+                    let agent: String = r.get(1)?;
+                    let title = r
+                        .get::<_, Option<String>>(3)?
+                        .unwrap_or_else(|| crate::sidebar::provider_name(Some(&agent)));
+                    Ok((
+                        SessionSearchHit {
+                            session: SessionIdentity {
+                                device_id: r.get(0)?,
+                                agent,
+                                session_id: r.get(2)?,
+                            },
+                            title,
+                            matched: String::new(),
+                            at_unix_ms: r.get(7)?,
+                            cwd: r.get(4)?,
+                            project_root: r.get(5)?,
+                            status: r.get(6)?,
+                            matches: Vec::new(),
+                            match_count: r.get(8)?,
+                            request_count: r.get(9)?,
+                        },
+                        r.get::<_, String>(10)?,
+                    ))
+                },
+            )
             .map_err(failed)?
-            .collect::<Result<_, _>>()
-            .map_err(failed)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(failed)?;
+        let mut results = rows
+            .into_iter()
+            .map(|(mut hit, matches)| {
+                hit.matches = serde_json::from_str(&matches)
+                    .map_err(|_| "ledger_search_result_invalid".to_owned())?;
+                hit.matched = hit
+                    .matches
+                    .first()
+                    .map(|m| m.text.clone())
+                    .unwrap_or_default();
+                Ok(hit)
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let has_more = results.len() > SEARCH_LIMIT;
+        results.truncate(SEARCH_LIMIT);
+        let next_cursor = results
+            .last()
+            .filter(|_| has_more)
+            .map(|hit| SessionSearchCursor {
+                at_unix_ms: hit.at_unix_ms,
+                device_id: hit.session.device_id.clone(),
+                agent: hit.session.agent.clone(),
+                session_id: hit.session.session_id.clone(),
+            });
+        Ok(SessionSearchPage {
+            results,
+            next_cursor,
+        })
     }
 
     pub fn ledger_creators(

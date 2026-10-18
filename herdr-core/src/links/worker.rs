@@ -11,7 +11,8 @@
 
 use super::ledger::{
     LEDGER_DEPTH_LIMIT, LEDGER_QUEUE_LIMIT, LEDGER_RPC_LIMIT, LedgerAnswer, LedgerCall,
-    LedgerContext, LedgerUpdate, SessionIdentity, SessionRecord, SessionSearchHit, WorkProgress,
+    LedgerContext, LedgerUpdate, SessionIdentity, SessionRecord, SessionSearchOptions,
+    SessionSearchPage, SessionSearchPresence, WorkProgress,
 };
 use super::store::{ArchivedSession, IssueLinks, LinkStore, LocalFiles, Opened, PrLinks};
 use super::{
@@ -60,7 +61,7 @@ pub(crate) const LISTED_AT: &str = "listed_at";
 /// What the worker hands back to the runtime.
 pub trait Sink: Send + 'static {
     fn record(&self, _generation: u64, _answer: Result<SessionRecord, String>) {}
-    fn session_search(&self, _generation: u64, _answer: Result<Vec<SessionSearchHit>, String>) {}
+    fn session_search(&self, _generation: u64, _answer: Result<SessionSearchPage, String>) {}
     /// Each project's counts and chips, by workspace id, when one changed.
     fn summaries(&self, summaries: BTreeMap<String, ProjectLinkSummary>);
     /// Each live pane session's tasks and children, when one changed.
@@ -112,7 +113,7 @@ struct Mailbox {
     contexts: VecDeque<SessionIdentity>,
     record: Option<(u64, SessionIdentity)>,
     record_closed: bool,
-    search: Option<(u64, String, bool)>,
+    search: Option<SearchRequest>,
     calls: VecDeque<(
         LedgerCall,
         std::sync::mpsc::SyncSender<Result<LedgerAnswer, String>>,
@@ -121,6 +122,14 @@ struct Mailbox {
     /// The sessions the archive holds, newest set only.
     archived: Option<Arc<Vec<ArchivedSession>>>,
     deletes: VecDeque<(String, Vec<SessionIdentity>)>,
+}
+
+struct SearchRequest {
+    generation: u64,
+    query: String,
+    options: SessionSearchOptions,
+    summaries: bool,
+    presence: Vec<SessionSearchPresence>,
 }
 
 /// Deletes waiting at once; the archive's own delete is one per row.
@@ -267,8 +276,23 @@ impl LinkClient {
         });
     }
 
-    pub fn search_sessions(&self, generation: u64, query: String, summaries: bool) {
-        self.post(|mailbox| mailbox.search = Some((generation, query, summaries)));
+    pub fn search_sessions(
+        &self,
+        generation: u64,
+        query: String,
+        options: SessionSearchOptions,
+        summaries: bool,
+        presence: Vec<SessionSearchPresence>,
+    ) {
+        self.post(|mailbox| {
+            mailbox.search = Some(SearchRequest {
+                generation,
+                query,
+                options,
+                summaries,
+                presence,
+            })
+        });
     }
     fn post(&self, put: impl FnOnce(&mut Mailbox)) {
         let (lock, wake) = &*self.0;
@@ -388,7 +412,7 @@ struct State {
     ledger_retry_at: Option<Instant>,
     record: Option<(u64, SessionIdentity)>,
     record_answer: Option<Result<SessionRecord, String>>,
-    search: Option<(u64, String, bool)>,
+    search: Option<SearchRequest>,
     projects: Arc<Vec<ProjectFacts>>,
     /// Projects posted but not yet written, kept while the store is closed.
     projects_due: bool,
@@ -673,8 +697,8 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
                 if let Some((generation, _)) = state.record.as_ref() {
                     sink.record(*generation, Err(code.clone()));
                 }
-                if let Some((generation, _, _)) = state.search.take() {
-                    sink.session_search(generation, Err(code.clone()));
+                if let Some(request) = state.search.take() {
+                    sink.session_search(request.generation, Err(code.clone()));
                 }
                 if let Some(request) = state.panel.as_ref()
                     && state.panel_answer.is_none()
@@ -826,8 +850,17 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
         if state.record.is_some() && state.record_answer.is_none() {
             answer_record(store, &mut state, sink);
         }
-        if let Some((generation, query, summaries)) = state.search.take() {
-            sink.session_search(generation, store.ledger_search(&query, summaries));
+        if let Some(request) = state.search.take() {
+            let answer = match &state.write_failure {
+                Some(code) => Err(code.clone()),
+                None => store.ledger_search_page(
+                    &request.query,
+                    &request.options,
+                    request.summaries,
+                    &request.presence,
+                ),
+            };
+            sink.session_search(request.generation, answer);
         }
         if state.queue.is_empty() {
             let next_page = state.listing.as_ref().and_then(|listing| listing.next);

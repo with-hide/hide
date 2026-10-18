@@ -447,6 +447,8 @@ export type Task = {
   sub_issues?: TaskSubIssues | null;
   /** The source's labels in its order, read with the list; absent when it has none, as every Local issue (`TaskLabel`). */
   labels?: IssueLabel[];
+  author?: string | null;
+  assignees?: string[];
 };
 
 /** GitHub's `completed` of `total` sub-issues, and the sub-issues themselves. */
@@ -477,6 +479,7 @@ export type TaskSource = {
 /** A project's tasks (`ProjectTasksSnapshot`); `source` is null only for a device's project. */
 export type ProjectTasks = {
   source: TaskSource | null;
+  sources?: TaskSource[];
   tasks: Task[];
   overflow: boolean;
 };
@@ -519,6 +522,10 @@ export type IssueDetail = {
   /** Absent for a source with no comments (Local). */
   comment_count: number | null;
   comments: IssueComment[];
+  comments_cursor?: string | null;
+  comments_has_more?: boolean;
+  comments_limited?: boolean;
+  comments_loading?: boolean;
 };
 
 /** The Overview's issue work in flight (`IssueWorkSnapshot`), one slot each. */
@@ -1903,7 +1910,12 @@ export type ChildProgress = { children: ChildWork[]; done: number | null };
 export type WorkProgress = { session: WorkSession; done: number; total: number; tasks: WorkTask[]; outputs: WorkOutput[]; children: ChildProgress | null };
 export type SessionWorkSummary = { session: WorkSession; title: string; fallback_title: string; native_title: string | null; manual_title: string | null; cwd: string | null; ended_at_unix_ms: number | null; open_missed: number; subtree_open_missed: number; missed: MissedWork[] };
 export type SessionRecordSection = { session: WorkSession | null; loading: boolean; failure: string | null; record: SessionRecord | null };
-export type SessionWorkSearch = { query: string; loading: boolean; failure: string | null; results: { session: WorkSession; title: string; matched: string; at_unix_ms: number; cwd: string | null }[] };
+export type SessionSearchStatus = "current" | "working" | "done" | "needs_you" | "archived" | "retained";
+export type SessionSearchCursor = { at_unix_ms: number; device_id: string; agent: string; session_id: string };
+export type SessionSearchOptions = { request_id?: string | null; device_id?: string | null; project_root?: string | null; agent?: string | null; since_unix_ms?: number | null; until_unix_ms?: number | null; status?: SessionSearchStatus | null; include_titles?: boolean; include_tasks?: boolean; cursor?: SessionSearchCursor | null };
+export type SessionSearchMatch = { kind: "request" | "title" | "task"; text: string; at_unix_ms: number; request_offset: number | null };
+export type SessionSearchHit = { session: WorkSession; title: string; matched: string; at_unix_ms: number; cwd: string | null; project_root?: string | null; status?: SessionSearchStatus; matches?: SessionSearchMatch[]; match_count?: number; request_count?: number };
+export type SessionWorkSearch = { query: string; options?: SessionSearchOptions; loading: boolean; failure: string | null; results: SessionSearchHit[]; next_cursor?: SessionSearchCursor | null };
 
 /** A durable conversation intent, never a current pane or delivery target. */
 export type SleepingSession = {
@@ -1947,7 +1959,21 @@ export type ArchivedMember = {
   reason: string | null;
 };
 
+/** Metadata from the retained delivery ledger, with current session proof from the core. No bodies. */
+export type OverviewGraphParty = { device_id: string; pane_id: string; session: string };
+export type OverviewGraphLetter = { id: string; sender: OverviewGraphParty; recipient: OverviewGraphParty; kind: string; at_unix_ms: number };
+export type OverviewGraphMetadata = {
+  available: boolean;
+  limit: number;
+  retained_count: number;
+  truncated: boolean;
+  retention_ms: number;
+  letters: OverviewGraphLetter[];
+  sessions: { device_id: string; pane_id: string; session_digest: string; launch_model: string | null }[];
+};
+
 export type SnapshotRest = {
+  overview_graph?: OverviewGraphMetadata;
   git_worktrees_loading?: boolean;
   navigator?: {
     agent_scope?: AgentScope;

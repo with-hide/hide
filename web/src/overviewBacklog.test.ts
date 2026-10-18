@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { english } from "./i18n/catalogs";
-import { BACKLOG_TITLE_LIMIT, backlogIntent, backlogLabels, backlogOf, backlogTitle, destinationOf, filterRows, pendingItems, titleLeft, undoRetryable } from "./overviewBacklog";
+import { BACKLOG_FILTERS, BACKLOG_SHOWN, BACKLOG_TITLE_LIMIT, backlogIntent, backlogLabels, backlogOf, backlogTitle, destinationOf, filterRows, pendingItems, titleLeft, undoRetryable } from "./overviewBacklog";
 import type { BoardProject } from "./projectBoard";
 import type { BacklogFailure, BacklogItem, Task, TaskSource, Workspace } from "./snapshot";
 
@@ -95,6 +95,28 @@ describe("the search and the label chips (B27)", () => {
     const other = workspace("q", [task("github:acme/other#5", "#5", { labels: [{ name: "bug", color: "#ff0000" }, { name: "a11y", color: null }] })]);
     const projects = [{ workspace: workspace("p", rows.map((row) => task(row.key, row.token!, { labels: [...row.labels] }))), agents: [], device: null }, { workspace: other, agents: [], device: null }] as BoardProject[];
     expect(backlogLabels(projects).map((label) => label.name)).toEqual(["a11y", "bug", "docs", "perf"]);
+  });
+});
+
+describe("mixed source filters before the 50-row page", () => {
+  const mixed = workspace("p", [
+    ...Array.from({ length: 55 }, (_, index) => task(`github:acme/app#${index + 1}`, `#${index + 1}`, { updated_at_unix_ms: index, author: "mira", assignees: ["sam"] })),
+    task("local:/p#1", "L-1", { open: false, author: null }),
+    task("github:acme/app#80", "#80", { author: "lee", assignees: ["kim"], labels: [{ name: "bug", color: null }] }),
+  ], ["github:acme/app#80"]);
+
+  it("keeps closed memos and active GitHub items accessible without key collisions", () => {
+    const rows = backlogOf(mixed, true).rows;
+    expect(filterRows(rows, "", [], { ...BACKLOG_FILTERS, source: "local", status: "all" }).map((row) => row.token)).toEqual(["L-1"]);
+    expect(filterRows(rows, "author:lee assignee:kim label:bug", [], { ...BACKLOG_FILTERS, status: "started" }).map((row) => row.token)).toEqual(["#80"]);
+    expect(filterRows(rows, "", [], { ...BACKLOG_FILTERS, status: "closed" }).map((row) => row.token)).toEqual(["L-1"]);
+  });
+
+  it("filters across loaded pages before taking the first 50 results", () => {
+    const rows = backlogOf(mixed, true).rows;
+    const filtered = filterRows(rows, "#1", [], { ...BACKLOG_FILTERS, author: "mira", assignee: "sam" });
+    expect(filtered.map((row) => row.token).sort()).toEqual(["#1", ...Array.from({ length: 10 }, (_, index) => `#${index + 10}`)].sort());
+    expect(filterRows(rows, "", [], BACKLOG_FILTERS).slice(0, BACKLOG_SHOWN)).toHaveLength(50);
   });
 });
 

@@ -439,6 +439,8 @@ fn github_issue(repository: &str, number: u32, title: &str) -> crate::issues::Is
         blocked_by: Vec::new(),
         sub_issues: Default::default(),
         labels: Vec::new(),
+        author: None,
+        assignees: Vec::new(),
     }
 }
 
@@ -822,7 +824,7 @@ fn a_new_github_issue_for_a_node_project_is_made_by_repository_name_here() {
     dispatch(
         &shared,
         "backlog_add",
-        serde_json::json!({"intent": "i-1", "workspace_id": workspace_id, "title": "From the MacBook"}),
+        serde_json::json!({"intent": "i-1", "workspace_id": workspace_id, "title": "From the MacBook", "destination":"github", "repository":"acme/app"}),
     );
     wait(&shared, "the new issue", |runtime| {
         runtime

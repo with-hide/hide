@@ -217,59 +217,44 @@ test("a report letter's turn keeps the question's mark on the task its sender's 
   } finally { daemon?.stop(); herdr.stop(); }
 });
 
-test("@platform 백로그로 makes one title-only issue, a lost create response converges on retry, and 되돌리기 closes it", async ({ page }) => {
+test("@platform 백로그로 saves a local memo without publishing and 되돌리기 restores the missed work", async ({ page }) => {
   const herdr = await startHerdr();
   let daemon: Daemon | undefined;
   try {
-    const github = workFixture(herdr, true);
-    daemon = await startHided(herdr, "session-backlog-retry", undefined, github.env);
+    const github = workFixture(herdr);
+    daemon = await startHided(herdr, "session-backlog-local", undefined, github.env);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await workRepositoryReady(daemon.stateDir);
     await enterWorkspace(page, "fixture");
     const first = Date.now();
     github.clock(first, first);
-    const { session } = seedFirstWork(herdr, first);
-    const root = await taskRow(page, herdr.panes[0], FIRST_GOAL);
-    // 백로그로 creates only in the repository the ledger proved the session
-    // started in, so wait for that proof as an operator's later press would.
-    await expect.poll(() => originalRepository(daemon!.stateDir, session), { timeout: 30_000 }).toBe("acme/repo");
-    await root.hover();
-    await page.locator(`[data-task-record="${herdr.panes[0]}"]`).click();
-    const missed = page.locator(RECORD).locator("[data-missed-work]", { hasText: MISSED });
-    // PRD overview-device-tasks B43-B45: one press, no form; GitHub made the
-    // issue but its answer was lost, so the line fails, and the retry joins
-    // the issue GitHub already has instead of making a second one.
-    await missed.locator("[data-missed-backlog-add]").click({ timeout: 45_000 });
-    await expect(missed.locator("[data-missed-failed]")).toBeVisible({ timeout: 30_000 });
-    await missed.locator("[data-missed-failed]").getByRole("button", { name: "Retry", exact: true }).click();
-    // The item is made, so the line leaves the record (PRD record-card-readability B13).
+    seedFirstWork(herdr, first);
+    const missed = await openRecord(page, herdr.panes[0]!, FIRST_GOAL);
+    // B16: one press retains the missed text in Hide. A private record is
+    // never automatically published to its session's GitHub repository.
+    await missed.locator("[data-missed-backlog-add]").click();
     await expect(missed).toHaveCount(0, { timeout: 30_000 });
-    const calls = () => fs.readFileSync(github.calls, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
-    const creates = calls().filter((args) => args[0] === "issue" && args[1] === "create");
-    expect(creates).toHaveLength(1);
-    // Title only: nothing of the conversation goes to GitHub (D-10).
-    expect(creates[0]![creates[0]!.indexOf("--title") + 1]).toBe(MISSED);
-    expect(creates[0]![creates[0]!.indexOf("--body") + 1]).toBe("");
-
-    // The item is in the Overview's backlog, whose 되돌리기 closes the issue
-    // and opens the missed line again (B32).
+    expect(createdIn(github.contexts)).toEqual([]);
     await openOverview(page, "backlog");
-    await page.locator('[data-backlog-row="github:acme/repo#77"]').getByRole("button").first().click();
+    const row = page.locator('[data-backlog-row^="local:"]', { hasText: MISSED });
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await row.getByRole("button").first().click();
     const item = page.locator("[data-overview-panel] [data-backlog-item]");
-    await expect(item).toHaveAttribute("data-backlog-item", "github:acme/repo#77");
-    // D-21: #41 is in the same backlog but Hide did not make it, so its
-    // panel has no 되돌리기 and Hide never closes someone else's issue.
+    await expect(item).toContainText(MISSED);
+    await expect(item.locator("[data-item-github]")).toHaveCount(0);
+    // Existing GitHub issues still open with full body/activity and retain
+    // their external ownership: Hide offers no undo for someone else's issue.
+    await item.locator("[data-item-close]").click();
     await page.locator('[data-backlog-row="github:acme/repo#41"]').getByRole("button").first().click();
-    await expect(item).toHaveAttribute("data-backlog-item", "github:acme/repo#41");
-    await expect(item.locator("[data-item-start]")).toBeVisible();
+    await expect(item.locator("[data-item-activity]")).toContainText("실제 fixture 댓글", { timeout: 30_000 });
     await expect(item.locator("[data-item-undo]")).toHaveCount(0);
-    await page.locator('[data-backlog-row="github:acme/repo#77"]').getByRole("button").first().click();
-    await expect(item).toHaveAttribute("data-backlog-item", "github:acme/repo#77");
+    await item.locator("[data-item-close]").click();
+    await row.getByRole("button").first().click();
     await item.locator("[data-item-undo]").click();
-    await expect.poll(() => calls().some((args) => args[0] === "issue" && args[1] === "close" && args[2] === "77"), { timeout: 30_000 }).toBe(true);
-    await page.keyboard.press("Escape");
+    await expect(row).toHaveCount(0, { timeout: 30_000 });
     await page.keyboard.press("Escape");
     await expect(missed).toBeVisible({ timeout: 30_000 });
+    expect(createdIn(github.contexts)).toEqual([]);
   } finally { daemon?.stop(); herdr.stop(); }
 });
 
@@ -277,7 +262,7 @@ test("@platform ⌘⇧M adds a backlog issue from the terminal and hands the key
   const herdr = await startHerdr();
   let daemon: Daemon | undefined;
   try {
-    const github = workFixture(herdr);
+    const github = workFixture(herdr, true);
     daemon = await startHided(herdr, "quick-add", undefined, github.env);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await workRepositoryReady(daemon.stateDir);
@@ -298,10 +283,18 @@ test("@platform ⌘⇧M adds a backlog issue from the terminal and hands the key
     await expect(terminal).toBeFocused();
     // B42: a pasted multi-line text is one line.
     await page.keyboard.press(chord("add_backlog"));
+    await expect(quick.locator("[data-backlog-destination]")).toHaveAttribute("data-backlog-destination", "local");
+    // Publishing requires choosing the named repository before typing.
+    await quick.getByRole("combobox", { name: "Save to", exact: true }).click();
+    await page.getByRole("option", { name: /acme\/repo/ }).click();
     await quick.locator("[data-quick-add-input]").fill("빠른 추가\n두 번째 줄");
     await expect(quick.locator("[data-quick-add-input]")).toHaveValue("빠른 추가 두 번째 줄");
     // B40: Enter makes it, the made line names it, and the input closes on its own.
     await page.keyboard.press("Enter");
+    // The response is lost after GitHub creates it. Enter retries the same
+    // intent and joins #77 rather than making another external issue.
+    await expect(quick.locator("[data-quick-add-failure]")).toBeVisible({ timeout: 30_000 });
+    await quick.locator("[data-quick-add-input]").press("Enter");
     await expect(quick.locator('[data-quick-add-made="github:acme/repo#77"]')).toBeVisible({ timeout: 30_000 });
     await expect(quick).toHaveCount(0, { timeout: 10_000 });
     await expect(terminal).toBeFocused();
@@ -328,7 +321,7 @@ async function openRecord(page: import("@playwright/test").Page, pane: string, g
   return missed;
 }
 
-test("@platform 백로그로 keeps a session's original repository after a connection edit, and a session started after it creates in the new one", async ({ page }) => {
+test("@platform local missed-work adds survive a repository edit and keep the session origin", async ({ page }) => {
   const herdr = await startHerdr();
   let daemon: Daemon | undefined;
   try {
@@ -342,9 +335,9 @@ test("@platform 백로그로 keeps a session's original repository after a conne
     await expect.poll(() => originalRepository(daemon!.stateDir, original), { timeout: 30_000 }).toBe("acme/repo");
     await connectRepository(page, "acme/override");
     await workRepositoryReady(daemon.stateDir, "acme/override");
-    // The session started in acme/repo; its missed line makes nothing in acme/override.
+    // Local default does not depend on today's remote connection.
     await missed.locator("[data-missed-backlog-add]").click();
-    await expect(missed.locator('[data-missed-failed="repository_changed"]')).toBeVisible({ timeout: 30_000 });
+    await expect(missed).toHaveCount(0, { timeout: 30_000 });
     expect(createdIn(github.contexts)).toEqual([]);
     expect(originalRepository(daemon.stateDir, original)).toBe("acme/repo");
     // A session that starts after the edit belongs to acme/override.
@@ -353,45 +346,36 @@ test("@platform 백로그로 keeps a session's original repository after a conne
     missed = await openRecord(page, herdr.panes[0]!, NEXT_GOAL);
     await missed.locator("[data-missed-backlog-add]").click();
     await expect(missed).toHaveCount(0, { timeout: 30_000 });
-    expect(createdIn(github.contexts)).toEqual(["acme/override"]);
+    expect(createdIn(github.contexts)).toEqual([]);
     expect(originalRepository(daemon.stateDir, original)).toBe("acme/repo");
   } finally { daemon?.stop(); herdr.stop(); }
 });
 
-test("@platform a 백로그로 create in flight across an A-to-B-to-A connection edit makes nothing, and pressing it again makes one", async ({ page }) => {
+test("@platform a local missed-work add finishes while GitHub is unavailable and survives A-to-B-to-A edits", async ({ page }) => {
   const herdr = await startHerdr();
   let daemon: Daemon | undefined;
   try {
     const github = workFixture(herdr);
-    daemon = await startHided(herdr, "backlog-repository-epoch", undefined, github.env);
+    daemon = await startHided(herdr, "backlog-local-offline", undefined, github.env);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await workRepositoryReady(daemon.stateDir);
     await enterWorkspace(page, "fixture");
-    const { session } = seedFirstWork(herdr, Date.now());
+    seedFirstWork(herdr, Date.now());
     const missed = await openRecord(page, herdr.panes[0]!, FIRST_GOAL);
-    await expect.poll(() => originalRepository(daemon!.stateDir, session), { timeout: 30_000 }).toBe("acme/repo");
-    const callsBefore = fs.readFileSync(github.calls, "utf8").trim().split("\n").length;
-    fs.writeFileSync(github.repositoryGate, "hold the external repository read");
+    fs.writeFileSync(github.repositoryUnavailable, "GitHub is unavailable");
     await missed.locator("[data-missed-backlog-add]").click();
-    await expect.poll(() => fs.readFileSync(github.calls, "utf8").trim().split("\n").slice(callsBefore)
-      .some((line) => { const args = JSON.parse(line) as string[]; return args[0] === "repo" && args[1] === "view"; }), { timeout: 30_000 }).toBe(true);
-    try {
-      await connectRepository(page, "acme/temporary");
-      await connectRepository(page, "acme/repo");
-    } finally { fs.rmSync(github.repositoryGate, { force: true }); }
-    // The connection came back to the same name, but the create was asked under the first one.
-    const failed = missed.locator('[data-missed-failed="repository_changed"]');
-    await expect(failed).toBeVisible({ timeout: 30_000 });
-    expect(createdIn(github.contexts)).toEqual([]);
-    // A moved repository is no failure a retry can change: 백로그로 again reads the repository anew.
-    await expect(failed.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
-    await failed.locator("[data-missed-backlog-add]").click();
     await expect(missed).toHaveCount(0, { timeout: 30_000 });
-    expect(createdIn(github.contexts)).toEqual(["acme/repo"]);
+    expect(createdIn(github.contexts)).toEqual([]);
+    fs.rmSync(github.repositoryUnavailable);
+    await connectRepository(page, "acme/temporary");
+    await connectRepository(page, "acme/repo");
+    await openOverview(page, "backlog");
+    await expect(page.locator('[data-backlog-row^="local:"]', { hasText: MISSED })).toBeVisible({ timeout: 30_000 });
+    expect(createdIn(github.contexts)).toEqual([]);
   } finally { daemon?.stop(); herdr.stop(); }
 });
 
-test("@platform a migrated session's unknown original repository refuses 백로그로 in today's repository", async ({ page }) => {
+test("@platform a migrated session with an unknown original repository can retain its missed work locally", async ({ page }) => {
   const herdr = await startHerdr();
   let daemon: Daemon | undefined;
   try {
@@ -426,7 +410,7 @@ test("@platform a migrated session's unknown original repository refuses 백로�
     await enterWorkspace(page, "fixture");
     const missed = await openRecord(page, herdr.panes[0]!, FIRST_GOAL);
     await missed.locator("[data-missed-backlog-add]").click();
-    await expect(missed.locator('[data-missed-failed="repository_changed"]')).toBeVisible({ timeout: 30_000 });
+    await expect(missed).toHaveCount(0, { timeout: 30_000 });
     expect(originalRepository(daemon.stateDir, identity)).toBeNull();
     expect(createdIn(github.contexts)).toEqual([]);
   } finally { daemon?.stop(); herdr.stop(); }

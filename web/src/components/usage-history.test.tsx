@@ -229,11 +229,12 @@ it("lists Hide AI under an opened date of the full table, expands it into featur
     expect(view.container.querySelector(`[data-usage-unknown-row="${target.date}"]`)).not.toBeNull();
     expect(view.container.querySelector("[data-usage-hide-bound]")).not.toBeNull();
     // The period total is a lower bound too, and says so with the same mark.
-    expect(view.container.querySelector("tfoot td:nth-child(3)")!.textContent).toMatch(/^≥ .*\*$/);
+    const periodTokens = () => view.container.querySelector("[data-usage-period-total-row] td:nth-child(3)")!.textContent;
+    expect(periodTokens()).toMatch(/^≥ .*\*$/);
     expect(view.container.querySelector("[data-usage-total]")!.textContent).toMatch(/^≥ .*\*$/);
     await act(async () => view.container.querySelector<HTMLButtonElement>("[data-usage-exact]")!.click());
     expect(view.container.querySelector("[data-usage-total]")!.textContent).toMatch(/^≥ [\d,]+ \*$/);
-    expect(view.container.querySelector("[data-usage-total]")!.textContent).toBe(view.container.querySelector("tfoot td:nth-child(3)")!.textContent);
+    expect(view.container.querySelector("[data-usage-total]")!.textContent).toBe(periodTokens());
     expect(view.container.querySelector("[data-usage-hide-since]")).not.toBeNull();
   } finally { await view.unmount(); }
 });

@@ -446,6 +446,21 @@ fn one_multi_model_attempt_stays_one_call_after_storage_and_restart() {
     assert_eq!(day.amount.calls, 3);
     assert_eq!(view.year.all.amount.calls, 3);
     assert_eq!(view.year.all.amount.new_tokens, 5 * 1500);
+    // Models report five model usages; the unchanged headline counts three
+    // backend attempts. A model with no credited attempt still has usage.
+    assert_eq!(view.models.len(), 2);
+    assert_eq!(
+        view.models.iter().map(|row| row.amount.calls).sum::<u64>(),
+        5
+    );
+    assert!(view.models.iter().all(|row| row.amount.calls > 0));
+    assert_eq!(
+        view.models
+            .iter()
+            .map(|row| row.amount.new_tokens)
+            .sum::<u64>(),
+        7500
+    );
 }
 
 #[test]
@@ -606,4 +621,95 @@ fn hide_ai_cap_loss_marks_the_headline_range_limited() {
         .find(|r| r.agent == "claude")
         .unwrap();
     assert!(!claude.range.limited);
+}
+
+// Overview B23-B24: the same model on different agents or in Hide AI is
+// distinct; a foreign device and unknown calls cannot invent model tokens.
+#[test]
+fn model_comparison_preserves_recorded_identity_prices_and_hide_ai_inclusion() {
+    let mut second = row("pi", "2026-10-14", 50);
+    second.model = "model-b".into();
+    let mut unnamed = row("grok", "2026-10-14", 20);
+    unnamed.model = hide_session::usage::UNNAMED_MODEL.into();
+    let mut foreign = row("pi", "2026-10-14", 9_000_000);
+    foreign.device = "remote".into();
+    let rows = [row("pi", "2026-10-14", 100), second, unnamed, foreign];
+    let hide = [
+        hide_row("2026-10-14", "claude", "claude-fixture", "labels", 1),
+        hide_row("2026-10-14", "claude", "claude-fixture", "memory", 2),
+        unknown_row("2026-10-14", "claude", "labels", 3),
+    ];
+    let view = project_with(&rows, &hide, "2026-10-14");
+    assert!(!view.models_limited);
+    assert_eq!(view.models.len(), 4);
+    assert_eq!(view.year.all.amount.new_tokens, 4670);
+    assert_eq!(
+        view.models
+            .iter()
+            .map(|row| row.amount.new_tokens)
+            .sum::<u64>(),
+        4670
+    );
+    let hide = view.models.iter().find(|row| row.hide_ai).unwrap();
+    assert_eq!(hide.agent, "claude");
+    assert_eq!(hide.model.as_deref(), Some("claude-fixture"));
+    assert_eq!(hide.amount.new_tokens, 4500);
+    assert_eq!(hide.amount.cost.micro_usd, 22_500);
+    assert_eq!(hide.amount.calls, 3);
+    let unnamed = view.models.iter().find(|row| row.agent == "grok").unwrap();
+    assert!(unnamed.model.is_none());
+    assert_eq!(unnamed.amount.new_tokens, 20);
+    assert_eq!(
+        view.year.all.days[0]
+            .hide_ai
+            .as_ref()
+            .unwrap()
+            .unknown_calls,
+        3
+    );
+}
+
+#[test]
+fn model_detail_cap_reports_partial_coverage_without_truncating_daily_totals() {
+    let rows: Vec<_> = (0..=MODEL_ROW_LIMIT)
+        .map(|index| {
+            let mut row = row("pi", "2026-10-14", 1);
+            row.model = format!("model-{index:04}");
+            row
+        })
+        .collect();
+    let view = project(&rows, &[], "2026-10-14").unwrap();
+    assert!(view.models_limited);
+    assert_eq!(view.models.len(), MODEL_ROW_LIMIT);
+    assert_eq!(view.year.all.amount.new_tokens, 4097);
+    assert_eq!(
+        view.models
+            .iter()
+            .map(|row| row.amount.new_tokens)
+            .sum::<u64>(),
+        4096
+    );
+    assert!(
+        view.models
+            .iter()
+            .all(|row| row.model.as_deref() != Some("model-0000"))
+    );
+    let mut reversed = rows;
+    reversed.reverse();
+    let repeated = project(&reversed, &[], "2026-10-14").unwrap();
+    assert_eq!(view.models, repeated.models);
+}
+
+#[test]
+fn model_detail_uses_the_same_civil_year_bounds_as_the_daily_calendar() {
+    let view = project(
+        &[row("pi", "2025-09-20", 900), row("pi", "2026-10-14", 25)],
+        &[],
+        "2026-10-14",
+    )
+    .unwrap();
+    assert_eq!(view.models.len(), 1);
+    assert_eq!(view.models[0].date, "2026-10-14");
+    assert_eq!(view.models[0].amount.new_tokens, 25);
+    assert!(!view.models_limited);
 }

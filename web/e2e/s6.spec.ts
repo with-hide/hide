@@ -75,11 +75,9 @@ test("Main, Overview and a Workspace with its lane, tools and delegated child", 
     await expect(await projectRow(page, "fixture")).toBeVisible();
     await screenshot(page, "s6-main");
 
-    // A project's row opens its panel beside the tabs, with what its tasks
-    // are doing as words alone, and its Open enters the project's latest
-    // checkout (PRD overview-device-tasks B57; PRD sidebar-task-lens B41).
+    // A project opens its local home with the retained settings, cleanup and Open controls.
     await (await projectRow(page, "fixture")).getByRole("button", { name: "fixture", exact: true }).click();
-    const panel = page.locator("[data-overview-panel=project]");
+    const panel = page.locator("[data-overview-project-home]");
     await expect(panel).toBeVisible();
     await expect(panel.locator('[data-project-panel-now="2"]')).toBeVisible({ timeout: 20_000 });
     await screenshot(page, "s6-overview");

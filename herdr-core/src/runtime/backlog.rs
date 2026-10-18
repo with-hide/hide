@@ -101,6 +101,11 @@ pub(super) struct BacklogAddPayload {
     pub(super) title: String,
     #[serde(default)]
     pub(super) missed: Option<MissedSource>,
+    /// An omitted destination is always a private local memo.
+    #[serde(default)]
+    pub(super) destination: Option<String>,
+    #[serde(default)]
+    pub(super) repository: Option<String>,
 }
 
 /// `backlog_retry` and `backlog_dismiss`.
@@ -415,7 +420,50 @@ impl Runtime {
         if self.retryable_failed() >= FAILED_LIMIT {
             return self.refuse_add(payload, BacklogFailure::QueueFull, "backlog.queue_full");
         }
-        let memo = self.project_source_kind(&workspace) == crate::tasks::SourceKind::Local;
+        let memo = match payload.destination.as_deref() {
+            None | Some("local") if payload.repository.is_none() => true,
+            Some("github") => false,
+            _ => {
+                return self.refuse_add(
+                    payload,
+                    BacklogFailure::Refused,
+                    "backlog.destination_invalid",
+                );
+            }
+        };
+        let pin = if memo {
+            None
+        } else {
+            let Some(repository) = payload
+                .repository
+                .as_deref()
+                .filter(|repository| crate::issues::is_repository(repository))
+            else {
+                return self.refuse_add(
+                    payload,
+                    BacklogFailure::Refused,
+                    "backlog.repository_required",
+                );
+            };
+            let Some(pin) =
+                self.current_pin(node.as_deref(), &workspace.device_id, &workspace.path)
+            else {
+                return self.refuse_add(
+                    payload,
+                    BacklogFailure::NoGithubRemote,
+                    "backlog.repository_unknown",
+                );
+            };
+            if !matches!(&pin.target, crate::github::Where::Repository(known) if known.eq_ignore_ascii_case(repository))
+            {
+                return self.refuse_add(
+                    payload,
+                    BacklogFailure::RepositoryChanged,
+                    "backlog.repository_changed",
+                );
+            }
+            Some(pin)
+        };
         if !memo {
             let device = &workspace.device_id;
             let waiting = self
@@ -431,9 +479,6 @@ impl Runtime {
             "component": "backlog", "kind": "backlog.add",
             "intent": payload.intent, "project": workspace.path, "missed": payload.missed.is_some(),
         }));
-        let pin = (!memo)
-            .then(|| self.current_pin(node.as_deref(), &workspace.device_id, &workspace.path))
-            .flatten();
         let job = Job {
             workspace_id: workspace.id.clone(),
             device: workspace.device_id.clone(),
@@ -463,8 +508,20 @@ impl Runtime {
             missed: job.missed.clone(),
             at_unix_ms: unix_milliseconds(),
         };
-        match self.create_local_issue(job.node.as_deref(), &job.project, &job.title, "") {
+        let made = match self.local_issues.as_mut() {
+            Ok(store) => store.create_once(
+                job.node.as_deref(),
+                &job.project,
+                &intent,
+                &job.title,
+                unix_milliseconds(),
+            ),
+            Err(_) => Err("The memo store is unavailable".to_owned()),
+        };
+        match made {
             Ok(number) => {
+                self.persist_local_issues();
+                self.refresh_issue_rows(job.node.as_deref());
                 let key = crate::tasks::local_key(&job.project, number);
                 row.task_key = Some(key.clone());
                 if let Some(source) = job.missed.clone() {
@@ -549,7 +606,23 @@ impl Runtime {
     /// The repository target and connection epoch a GitHub item of `project`
     /// would be made under now, when its repository is known.
     fn current_pin(&self, node: Option<&str>, device: &str, project: &str) -> Option<Pin> {
-        let target = self.github_place(node, project).ok()?;
+        let target = match self.github_place(node, project).ok()? {
+            crate::github::Where::Repository(repository) => {
+                crate::github::Where::Repository(repository)
+            }
+            crate::github::Where::Checkout(_) => {
+                let repository = self
+                    .snapshot
+                    .navigator
+                    .workspaces
+                    .iter()
+                    .find(|workspace| workspace.path == project)?
+                    .home_issues
+                    .repository
+                    .clone()?;
+                crate::github::Where::Repository(repository)
+            }
+        };
         Some(Pin {
             target,
             epoch: self.connection_epoch(device, project),
@@ -1199,8 +1272,8 @@ impl Runtime {
     fn admission_current(&self, job: &Job, admission: &Admission) -> bool {
         !admission.cancel.is_cancelled()
             && self
-                .github_place(job.node.as_deref(), &job.project)
-                .is_ok_and(|target| target == admission.target)
+                .current_pin(job.node.as_deref(), &job.device, &job.project)
+                .is_some_and(|pin| pin.target == admission.target)
             && self.connection_epoch(&admission.device, &admission.project) == admission.epoch
     }
 
@@ -1359,6 +1432,8 @@ fn issue_named(
         blocked_by: vec![],
         sub_issues: Default::default(),
         labels: vec![],
+        author: None,
+        assignees: Vec::new(),
     }
 }
 

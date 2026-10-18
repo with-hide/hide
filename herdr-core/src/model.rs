@@ -77,6 +77,7 @@ pub struct Snapshot {
     pub usage: crate::usage::model::UsageSnapshot,
     pub schema_version: u32,
     pub delivery_watches: Vec<crate::delivery::watch::View>,
+    pub overview_graph: OverviewGraphSnapshot,
     pub navigator: NavigatorSnapshot,
     pub overlay: OverlaySnapshot,
     pub tab: TabSnapshot,
@@ -4172,6 +4173,10 @@ pub struct IssueDetailSnapshot {
     pub assignees: Vec<String>,
     pub comment_count: Option<u32>,
     pub comments: Vec<crate::tasks::TaskComment>,
+    pub comments_cursor: Option<String>,
+    pub comments_has_more: bool,
+    pub comments_limited: bool,
+    pub comments_loading: bool,
 }
 
 impl IssueDetailSnapshot {
@@ -4204,6 +4209,10 @@ impl IssueDetailSnapshot {
             assignees: detail.assignees,
             comment_count: detail.comment_count,
             comments: detail.comments,
+            comments_cursor: detail.comments_cursor,
+            comments_has_more: detail.comments_has_more,
+            comments_limited: detail.comments_limited,
+            comments_loading: false,
         }
     }
 }
@@ -6005,6 +6014,7 @@ impl Snapshot {
             schema_version: SCHEMA_VERSION,
             usage: crate::usage::model::UsageSnapshot::initial(options.node_id.as_str()),
             delivery_watches: Vec::new(),
+            overview_graph: OverviewGraphSnapshot::default(),
             navigator: NavigatorSnapshot {
                 agent_scope: Default::default(),
                 root_path: None,
@@ -6153,6 +6163,7 @@ impl PetSnapshot {
     }
 }
 
+mod overview_graph;
 /// The sections of [`Snapshot`] that ride the revisioned `rest` channel of
 /// the delta wire: everything except the editor and the changes view (each
 /// with its own revision), the terminal chunk ring (sequence cursor), and the
@@ -6160,6 +6171,7 @@ impl PetSnapshot {
 /// Owned copy retained by the runtime to stamp revisions by comparison, so
 /// no mutation site needs dirty-tracking discipline.
 mod rest;
+pub use overview_graph::{GraphSession, OverviewGraphSnapshot};
 pub use rest::{RestSections, RestWire};
 
 /// One delta response taken from the runtime, holding everything the wire

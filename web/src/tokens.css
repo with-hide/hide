@@ -285,6 +285,9 @@
   --size-settings-sheet-window-inset: 40px;
   --size-overview-sheet-w: 1440px;
   --size-overview-sheet-h: 960px;
+  --size-overview-projects-min: 960px;
+  --size-overview-usage-content: 1120px;
+  --size-overview-usage-plot: 180px;
   --size-add-device-sheet-w: 470px;
   --size-add-device-sheet-h: 300px;
   --size-device-test-stage-col: 64px;
@@ -315,6 +318,18 @@
   --opacity-usage-level-3: 0.66;
   --opacity-usage-level-4: 0.88;
   --size-usage-year: 800px;
+  --size-overview-graph-root-width: 188px;
+  --size-overview-graph-root-height: 184px;
+  --size-overview-graph-child-width: 152px;
+  --size-overview-graph-child-height: 120px;
+  --size-overview-graph-group-width: 360px;
+  --size-overview-graph-group-height: 170px;
+  --size-overview-graph-header: 110px;
+  --size-overview-graph-padding: 24px;
+  --size-overview-graph-gap: 24px;
+  --size-overview-graph-project-gap: 90px;
+  --size-overview-graph-root-orb: 56px;
+  --size-overview-graph-child-orb: 36px;
 }
 
 .interface-scale-exempt {

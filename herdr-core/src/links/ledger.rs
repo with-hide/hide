@@ -620,6 +620,86 @@ pub struct SessionSearchHit {
     pub matched: String,
     pub at_unix_ms: u64,
     pub cwd: Option<String>,
+    pub project_root: Option<String>,
+    /// Current core/archival evidence, never the last recorded native state.
+    pub status: String,
+    pub matches: Vec<SessionSearchMatch>,
+    pub match_count: usize,
+    pub request_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionSearchMatch {
+    pub kind: String,
+    pub text: String,
+    pub at_unix_ms: u64,
+    pub request_offset: Option<u64>,
+}
+
+/// A total order even when devices/providers reuse a native session id.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionSearchCursor {
+    pub at_unix_ms: u64,
+    pub device_id: String,
+    pub agent: String,
+    pub session_id: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SessionSearchOptions {
+    pub request_id: Option<String>,
+    pub device_id: Option<String>,
+    pub project_root: Option<String>,
+    pub agent: Option<String>,
+    pub since_unix_ms: Option<u64>,
+    pub until_unix_ms: Option<u64>,
+    pub status: Option<SessionSearchStatus>,
+    pub include_titles: bool,
+    pub include_tasks: bool,
+    pub cursor: Option<SessionSearchCursor>,
+}
+
+impl SessionSearchOptions {
+    pub fn bounded(&self) -> bool {
+        self.request_id
+            .as_ref()
+            .is_none_or(|value| value.len() <= 128)
+            && [&self.device_id, &self.project_root, &self.agent]
+                .iter()
+                .all(|value| value.as_ref().is_none_or(|value| value.len() <= 4096))
+            && self.cursor.as_ref().is_none_or(|cursor| {
+                [&cursor.device_id, &cursor.agent, &cursor.session_id]
+                    .iter()
+                    .all(|value| !value.is_empty() && value.len() <= 4096)
+            })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionSearchStatus {
+    Current,
+    Working,
+    Done,
+    NeedsYou,
+    Archived,
+    Retained,
+}
+
+/// The runtime's identity-proven state at query admission, bounded before
+/// leaving its lock. It is not persisted as another source of truth.
+#[derive(Clone, Debug, Serialize)]
+pub struct SessionSearchPresence {
+    pub session: SessionIdentity,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionSearchPage {
+    pub results: Vec<SessionSearchHit>,
+    pub next_cursor: Option<SessionSearchCursor>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -633,7 +713,9 @@ pub struct OutputCreator {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct SessionSearchSnapshot {
     pub query: String,
+    pub options: SessionSearchOptions,
     pub loading: bool,
     pub failure: Option<String>,
     pub results: Vec<SessionSearchHit>,
+    pub next_cursor: Option<SessionSearchCursor>,
 }

@@ -27,6 +27,7 @@ import { branchProblem, taskFor } from "./workspaceManage";
 import { useErrorSince } from "./WorkspaceDialogs";
 import { fieldLabel } from "./shortcutLabels";
 import { originOf, useBacklogOrigin } from "./backlogOrigin";
+import { useIssueDetail } from "./issueDetails";
 
 export const DEFAULT_SETTINGS: IssueSettings = { ai_worktree_name: true, closes_instruction: true };
 
@@ -132,7 +133,7 @@ export function StartIssueDialog({ actions, workspace, task, onClose }: { action
   const [agent, setAgent] = useState<AgentSelection>(() => rememberedSelection(useShellStore.getState().rest?.ui_state?.agent_start));
   const [prompt, setPrompt] = useState(() => firstPrompt(task, null, settings.closes_instruction, t));
   const promptEdited = useRef(false);
-  const detail = useShellStore((s) => (s.rest?.issue_work?.detail?.task_key === task.key ? s.rest.issue_work.detail : null));
+  const detail = useIssueDetail(actions, workspace.id, task.key);
   const origin = useShellStore((s) => originOf(s.rest, task.key));
   const nameAnswer = useShellStore((s) => (s.rest?.issue_work?.name?.request_id === requestId ? s.rest.issue_work.name : null));
   const asked = useRef(false);
@@ -144,9 +145,6 @@ export function StartIssueDialog({ actions, workspace, task, onClose }: { action
 
   // The body is read once per dialog; a GitHub issue's comes from `gh`.
   // So is where it came from: a missed line's request and answer join the prompt (B33).
-  useEffect(() => {
-    actions.requestIssueDetail(workspace.id, task.key);
-  }, [actions, workspace.id, task.key]);
   useBacklogOrigin(actions, workspace.id, task.key);
   const bodyKnown = detail !== null && detail.phase !== "reading";
   const originKnown = origin !== null && origin.phase !== "reading";

@@ -11,7 +11,7 @@ import { checkout, REFERENCE_FOLDS, workspace } from "./sceneData";
 
 const MINUTE = 60_000;
 /** The hide project's issue key and the way a request names it, built from the number. */
-const hideKey = (number: number) => `github:example/hide#${number}`;
+export const hideKey = (number: number) => `github:example/hide#${number}`;
 const hideRef = (number: number) => `#${number}`;
 const GB = 1024 ** 3;
 const MB = 1024 ** 2;
@@ -81,7 +81,8 @@ const card = (root: string, state: TaskCardScope["state"], members: string[], ch
 
 function scopeWith(cards: TaskCardScope[]): AgentScope {
   const needs = cards.filter((one) => one.state === "needs_you" || one.state === "blocked").length;
-  return { ...EMPTY_GALLERY_SCOPE, tasks: { cards, needs_you: needs, recency: cards[0]?.recency ?? "" } };
+  const members = cards.flatMap((one) => one.members.map((pane_id) => ({ pane_id, project_id: one.checkouts[0]!.split(":")[0]!, checkout_id: one.checkouts[0]! })));
+  return { ...EMPTY_GALLERY_SCOPE, members, total: members.length, overview_total: members.length, tasks: { cards, needs_you: needs, recency: cards[0]?.recency ?? "" } };
 }
 
 function issue(repository: string, number: number, title: string, ago: number, now: number, labels: string[] = []): Task {
@@ -131,9 +132,12 @@ export function overviewWorld(now: number): OverviewWorld {
   const billingPr = pull("example/billing-api", 88, "Verify webhook signatures", "failed");
   const agents: AgentRow[] = [
     agent({ pane: "h-a3", title: "배포 전 변경 확인", look: "asking", ago: 3 * MINUTE, ask: { verb: "answer", what: "프로덕션 배포 전에 이번 변경 범위를 확인해 주세요", more: 0 }, pulls: [{ pr: hidePrs.release, state: "mergeable" }] }, now),
-    agent({ pane: "h-a1", title: "사이드바 가독성 개선", look: "working", ago: MINUTE, children: ["h-a1c1", "h-a1c2"], pulls: [{ pr: hidePrs.sidebar, state: "pending" }] }, now),
-    agent({ pane: "h-a1c1", title: "컴포넌트 구조 정리", look: "working", ago: 40_000, kind: "codex", parent: "h-a1" }, now),
+    agent({ pane: "h-a1", title: "사이드바 가독성 개선", look: "working", ago: MINUTE, children: ["h-a1c1", "h-a1c2", "h-a1c3", "h-a1c4"], pulls: [{ pr: hidePrs.sidebar, state: "pending" }] }, now),
+    agent({ pane: "h-a1c1", title: "컴포넌트 구조 정리", look: "working", ago: 40_000, kind: "codex", parent: "h-a1", children: ["h-a1g1"] }, now),
     agent({ pane: "h-a1c2", title: "한글 가독성 확인", look: "done", ago: 6 * MINUTE, parent: "h-a1" }, now),
+    agent({ pane: "h-a1c3", title: "긴 한국어와 English title wrapping 검토", look: "working", ago: 3 * MINUTE, parent: "h-a1", kind: "codex" }, now),
+    agent({ pane: "h-a1c4", title: "키보드 이동 확인", look: "idle", ago: 15 * MINUTE, parent: "h-a1" }, now),
+    agent({ pane: "h-a1g1", title: "모바일 표 너비 조정", look: "working", ago: 2 * MINUTE, parent: "h-a1c1" }, now),
     agent({ pane: "h-e1", title: "단축키 설정 화면 연결", look: "working", ago: 4 * MINUTE, kind: "codex" }, now),
     agent({ pane: "h-q2", title: "검색 팔레트", look: "idle", ago: 3 * 60 * MINUTE, pulls: [{ pr: hidePrs.search, state: "merged" }] }, now),
     agent({ pane: "h-r1", title: "릴리스 노트 초안", look: "idle", ago: 26 * 60 * MINUTE }, now),
@@ -145,7 +149,7 @@ export function overviewWorld(now: number): OverviewWorld {
 
   const hideCheckouts: Checkout[] = [
     checkout({ id: "hide:main", workspace: "hide", branch: "main", primary: true, age: 600, panes: ["h-r1", "h-r2"], marks: { quiet: 2 } }, s),
-    { ...checkout({ id: "hide:sidebar", workspace: "hide", branch: "feat/sidebar-readable", age: 120, panes: ["h-a1", "h-a1c1", "h-a1c2"], marks: { going: 2, done: 1 } }, s), task_key: hideKey(151) },
+    { ...checkout({ id: "hide:sidebar", workspace: "hide", branch: "feat/sidebar-readable", age: 120, panes: ["h-a1", "h-a1c1", "h-a1c2", "h-a1c3", "h-a1c4", "h-a1g1"], marks: { going: 4, done: 1 } }, s), task_key: hideKey(151) },
     checkout({ id: "hide:release", workspace: "hide", branch: "release/checklist", age: 900, panes: ["h-a3"], marks: { turn: 1 }, pr: { number: 149, title: "Release checklist before deploy", badge: "open", is_draft: false, state: "mergeable" } }, s),
     { ...checkout({ id: "hide:shortcuts", workspace: "hide", branch: "feat/shortcut-settings", age: 300, panes: ["h-e1"], marks: { going: 1 } }, s), task_key: hideKey(158) },
     merged(checkout({ id: "hide:search", workspace: "hide", branch: "feat/search-palette", age: 3 * 3600, panes: ["h-q2"], marks: { quiet: 1 } }, s), 154, "Search palette", now, 1.6 * GB, 640 * MB),
@@ -158,6 +162,8 @@ export function overviewWorld(now: number): OverviewWorld {
     issue("example/hide", 159, "설치 안내에 Linux 패키지 추가", 3 * 24 * 60 * MINUTE, now, ["docs"]),
     issue("example/hide", 158, "단축키 설정 화면 연결", 4 * 24 * 60 * MINUTE, now),
     issue("example/hide", 151, "좁은 사이드바에서 긴 제목 말줄임", 5 * 24 * 60 * MINUTE, now, ["ux", "bug"]),
+    memo("/work/hide", 1, "메모와 GitHub 이슈를 한 프로젝트에서 함께 비교하기", 10 * MINUTE, now),
+    { ...memo("/work/hide", 2, "이미 완료한 접근성 검토", 12 * 60 * MINUTE, now), open: false },
   ];
   const billingTasks = [
     issue("example/billing-api", 42, "환불 웹훅이 두 번 오는 경우 처리", 2 * 60 * MINUTE, now, ["bug"]),
@@ -175,13 +181,13 @@ export function overviewWorld(now: number): OverviewWorld {
     checkouts: hideCheckouts,
     agent_scope: scopeWith([
       card("h-a3", "needs_you", ["h-a3"], ["hide:release"], recency(3 * MINUTE), 3),
-      card("h-a1", "working", ["h-a1", "h-a1c1", "h-a1c2"], ["hide:sidebar"], recency(MINUTE), 2),
+      card("h-a1", "working", ["h-a1", "h-a1c1", "h-a1c2", "h-a1c3", "h-a1c4", "h-a1g1"], ["hide:sidebar"], recency(MINUTE), 2),
       card("h-e1", "working", ["h-e1"], ["hide:shortcuts"], recency(4 * MINUTE), 1),
       card("h-q2", "cleanup", ["h-q2"], ["hide:search"], recency(3 * 60 * MINUTE), 4),
       card("h-r1", "resting", ["h-r1"], ["hide:main"], recency(26 * 60 * MINUTE)),
       card("h-r2", "resting", ["h-r2"], ["hide:main"], recency(2 * 24 * 60 * MINUTE)),
     ]),
-    tasks: { source: github("example/hide", true, now), tasks: hideTasks, overflow: false },
+    tasks: { source: github("example/hide", true, now), sources: [github("example/hide", true, now), local(now)], tasks: hideTasks.map((row, i) => ({ ...row, author: i % 2 ? "mira" : "jules", assignees: i % 3 ? ["jules"] : [] })), overflow: false },
     disk: disk(9.6 * GB, 3.1 * GB, 2.4 * GB),
     last_activity_unix_ms: now - MINUTE,
     agent_presence: { working: true },
@@ -234,6 +240,11 @@ export function overviewWorld(now: number): OverviewWorld {
   };
 
   const rest: SnapshotRest = {
+    overview_graph: {
+      available: true, limit: 2000, retained_count: 12, truncated: false, retention_ms: 86_400_000,
+      sessions: agents.map((row) => ({ device_id: "local", pane_id: row.pane_id, session_digest: `fixture-${row.pane_id}`, launch_model: row.agent_kind === "codex" ? "model-c" : "model-a" })),
+      letters: Array.from({ length: 12 }, (_, i) => ({ id: `fixture-letter-${i}`, sender: { device_id: "local", pane_id: i % 2 ? "h-a1c1" : "b-1", session: i % 2 ? "fixture-h-a1c1" : "fixture-b-1" }, recipient: { device_id: "local", pane_id: i % 2 ? "h-a1" : "h-a3", session: i % 2 ? "fixture-h-a1" : "fixture-h-a3" }, kind: i % 3 ? "progress" : "request", at_unix_ms: now - i * MINUTE })),
+    },
     navigator: {
       workspaces,
       inactive_projects: [],
@@ -274,6 +285,7 @@ export function overviewWorld(now: number): OverviewWorld {
       request(1, `${hideRef(151)} 좁은 사이드바에서 긴 제목이 잘리는 문제부터 고쳐줘. 툴팁으로 전체 제목이 보이게`, ["task-1"], 70 * MINUTE),
       request(2, "컴포넌트 구조 정리는 자식 에이전트 하나 띄워서 맡기고, 너는 한글 가독성 확인해줘", ["task-2", "task-3"], 35 * MINUTE),
       request(3, "PR 열면 체크 통과하는지 보고 알려줘", [], 4 * MINUTE),
+      ...Array.from({ length: 6 }, (_, index) => request(4 + index, `후속 요청 ${index + 1}: 확인 항목을 기록해줘`, [], (3 - index / 3) * MINUTE)),
     ],
     missed: [
       { id: "missed-1", kind: "follow_up", text: "큰 저장소에서 파일 트리 첫 표시가 느림", status: "backlog", at_unix_ms: now - 20 * MINUTE, turn_offset: 2, issue_repository: "example/hide", issue_number: 161, backlog_key: hideKey(161), creating: false },

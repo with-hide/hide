@@ -3,14 +3,14 @@ import { useEffect, useMemo, useState } from "react";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
-import { frontDeviceId } from "./devices";
+import { deviceConnected, frontDeviceId } from "./devices";
 import { useInterfaceTranslation } from "./i18n/client";
 import { boardProjects } from "./navigation";
 import { cardOfPane, everyAgent } from "./overviewTasks";
 import { machineName } from "./screenMachine";
 import { SessionRecord, type RecordFrame } from "./SessionRecord";
-import { workKey } from "./sessionWork";
-import type { AgentRow, WorkSession } from "./snapshot";
+import { sessionOfAgentOn, workKey } from "./sessionWork";
+import { localDeviceId, type AgentRow, type WorkSession } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore, type OverviewPanel } from "./ui";
 
@@ -27,10 +27,14 @@ export function TaskRecordPanel({ panel, rows, actions }: { panel: Extract<Overv
   const rest = useShellStore((s) => s.rest);
   const agents = useShellStore((s) => s.agents);
   const everyRow = useMemo(() => (rows.size > 0 ? rows : everyAgent(rest, agents)), [rows, rest, agents]);
-  const agent = [...everyRow.values()].find((row) => row.session_id === panel.session.session_id) ?? null;
+  const agent = [...everyRow.values()].find((row) => {
+    const current = sessionOfAgentOn(row, localDeviceId(rest));
+    return current !== null && workKey(current) === workKey(panel.session);
+  }) ?? null;
   const session = panel.session;
   const key = workKey(session);
   const [trail, setTrail] = useState<readonly WorkSession[]>([]);
+  useEffect(() => setTrail([]), [key, panel.locator?.request_offset, panel.locator?.query]);
   // The task may live on another device than the one the Overview shows, so it is found among every device's projects.
   const pane = agent?.pane_id ?? null;
   const owner = useMemo(() => (pane ? cardOfPane(boardProjects(rest, agents), pane) : null), [rest, agents, pane]);
@@ -40,7 +44,11 @@ export function TaskRecordPanel({ panel, rows, actions }: { panel: Extract<Overv
     actions.readSessionRecord(session);
     // The read follows the session's identity, not each snapshot's copy of it.
   }, [actions, key]);
-  const close = () => useUiStore.getState().setOverview({ panel: null });
+  const close = () => {
+    const ui = useUiStore.getState();
+    if (panel.returnTo) ui.setMainView(panel.returnTo);
+    ui.setOverview({ panel: null });
+  };
   const project = owner?.project ?? null;
   const checkout = project && owner ? (owner.card.checkouts.map((id) => project.checkouts.find((row) => row.id === id)).find((row) => row?.exists) ?? null) : null;
   const elsewhere = project !== null && project.device_id !== frontDeviceId(rest);
@@ -51,7 +59,7 @@ export function TaskRecordPanel({ panel, rows, actions }: { panel: Extract<Overv
         <Button variant="ghost" size="icon-sm" aria-label={t("record.close")} onClick={close} data-record-close="true"><XIcon /></Button>
       </Hint>
       <span className="flex-1" />
-      {project && checkout && agent ? (
+      {project && checkout && agent && deviceConnected(rest,session.device_id) ? (
         elsewhere ? (
           <Button size="sm" variant="secondary" onClick={() => { actions.closeOverview(); actions.focusDevice(project.device_id); }} data-record-go-device={project.device_id}>
             {t("record.goToDevice", { device: deviceName })}
@@ -72,10 +80,11 @@ export function TaskRecordPanel({ panel, rows, actions }: { panel: Extract<Overv
     kind: "overview",
     head,
     note,
+    locator: panel.locator,
     trail,
     onTrail: setTrail,
     onRead: () => actions.readSessionRecord(session),
     onLeave: () => actions.leaveOverviewRecord(),
-  }), [head, note, trail, session, actions]);
+  }), [head, note, panel.locator, trail, session, actions]);
   return <SessionRecord key={key} actions={actions} target={session} frame={frame} />;
 }

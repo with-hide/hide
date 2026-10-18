@@ -2,10 +2,8 @@
 //! task-agents-views D-14). The web reads only this shape; each source has an
 //! adapter here that projects its own answer into it: GitHub issues read
 //! through the operator's `gh`, and Local issues kept on this Mac
-//! (`local_issues.rs`). Every local project has exactly one source, the one
-//! the operator chose in Settings › Issues or, by default, GitHub when the
-//! repository reads as a GitHub repository and Local otherwise, so no project
-//! is ever "not connected".
+//! (`local_issues.rs`). A project keeps its memos alongside GitHub issues.
+//! The old source preference never hides or moves either source's records.
 //!
 //! Every value is additive on the wire and none is a string enum an older
 //! reader decodes, so such a reader takes the snapshot exactly as before.
@@ -54,6 +52,8 @@ pub struct TaskSnapshot {
     /// then absent from the wire.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<TaskLabel>,
+    pub author: Option<String>,
+    pub assignees: Vec<String>,
 }
 
 /// GitHub's `completed` of `total` sub-issues and the sub-issues themselves.
@@ -117,8 +117,11 @@ pub struct TaskDetail {
     pub assignees: Vec<String>,
     /// How many comments the issue has; absent for a source without comments.
     pub comment_count: Option<u32>,
-    /// The latest `DETAIL_COMMENTS`, oldest first.
+    /// One bounded page, oldest first; later pages are requested explicitly.
     pub comments: Vec<TaskComment>,
+    pub comments_cursor: Option<String>,
+    pub comments_has_more: bool,
+    pub comments_limited: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -149,8 +152,10 @@ pub struct TaskComment {
     pub body: String,
 }
 
-/// Comments a panel shows; the rest are counted and read on the source.
-pub const DETAIL_COMMENTS: usize = 3;
+/// Comments one explicit page reads; later pages stay behind Load more.
+pub const DETAIL_COMMENTS: usize = 50;
+/// Most comments a detail retains across explicit page requests.
+pub const DETAIL_COMMENT_LIMIT: usize = 200;
 /// A shown comment's length; the whole comment is on the source.
 pub const COMMENT_BODY_LIMIT: usize = 4_000;
 
@@ -158,7 +163,10 @@ pub const COMMENT_BODY_LIMIT: usize = 4_000;
 pub fn capped_comment(body: &str) -> String {
     let body = body.trim();
     match body.char_indices().nth(COMMENT_BODY_LIMIT) {
-        Some((end, _)) => format!("{}…", &body[..end]),
+        Some(_) => {
+            let end = body.char_indices().nth(COMMENT_BODY_LIMIT - 1).unwrap().0;
+            format!("{}…", &body[..end])
+        }
         None => body.to_owned(),
     }
 }
@@ -167,6 +175,9 @@ pub fn capped_comment(body: &str) -> String {
 pub struct ProjectTasksSnapshot {
     /// Absent only for a device's project, whose issues this Mac does not read.
     pub source: Option<TaskSourceSnapshot>,
+    /// Each source's independent freshness and failure; `source` is retained
+    /// for older shells and saved project preferences.
+    pub sources: Vec<TaskSourceSnapshot>,
     pub tasks: Vec<TaskSnapshot>,
     /// The source listed more than Hide keeps (`ISSUE_LIMIT`).
     pub overflow: bool,
@@ -279,6 +290,7 @@ pub fn github_tasks(
         public: issues.public,
     };
     ProjectTasksSnapshot {
+        sources: vec![source.clone()],
         source: Some(source),
         tasks: issues
             .issues
@@ -295,17 +307,19 @@ pub fn local_tasks(project_path: &str, read: LocalRead<'_>, chosen: bool) -> Pro
         LocalRead::Failed(reason) => (Some(reason.to_owned()), None),
         LocalRead::Ready(project) => (None, project),
     };
+    let source = TaskSourceSnapshot {
+        kind: LOCAL.into(),
+        label: "Local".into(),
+        name: None,
+        reading: false,
+        failure,
+        last_read_at_unix_ms: None,
+        chosen,
+        public: None,
+    };
     ProjectTasksSnapshot {
-        source: Some(TaskSourceSnapshot {
-            kind: LOCAL.into(),
-            label: "Local".into(),
-            name: None,
-            reading: false,
-            failure,
-            last_read_at_unix_ms: None,
-            chosen,
-            public: None,
-        }),
+        sources: vec![source.clone()],
+        source: Some(source),
         tasks: project
             .map(|project| {
                 // Newest first, the order GitHub lists issues in.
@@ -326,6 +340,8 @@ pub fn local_tasks(project_path: &str, read: LocalRead<'_>, chosen: bool) -> Pro
                         blocked_by: Vec::new(),
                         sub_issues: None,
                         labels: Vec::new(),
+                        author: None,
+                        assignees: Vec::new(),
                     })
                     .collect()
             })
@@ -379,12 +395,29 @@ fn github_task(issue: &IssueSnapshot, repository: Option<&str>) -> TaskSnapshot 
                 .collect(),
         }),
         labels: issue.labels.clone(),
+        author: issue.author.clone(),
+        assignees: issue.assignees.clone(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// B14: the visible ellipsis counts against the advertised 4,000
+    /// character limit, including for Korean and supplementary characters.
+    #[test]
+    fn comment_truncation_includes_its_marker_in_the_cap() {
+        let exact = "가".repeat(COMMENT_BODY_LIMIT);
+        assert_eq!(capped_comment(&exact), exact);
+        let cut = capped_comment(&"🙂".repeat(COMMENT_BODY_LIMIT + 1));
+        assert_eq!(cut.chars().count(), COMMENT_BODY_LIMIT);
+        assert!(cut.ends_with('…'));
+        assert_eq!(
+            cut.chars().filter(|character| *character == '🙂').count(),
+            COMMENT_BODY_LIMIT - 1
+        );
+    }
 
     fn issue(repository: &str, number: u32, state: &str) -> IssueSnapshot {
         IssueSnapshot {
@@ -402,6 +435,8 @@ mod tests {
             blocked_by: Vec::new(),
             sub_issues: Default::default(),
             labels: Vec::new(),
+            author: None,
+            assignees: Vec::new(),
         }
     }
 

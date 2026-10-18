@@ -16,6 +16,7 @@ test("shared Overview preserves work, returns the keyboard and has direct sideba
     const modal = page.getByRole("dialog", { name: "Overview", exact: true });
     // With no Workspace in front, where a first run starts, the Overview row keeps All projects a page, not the layer.
     await expect(page.locator("[data-overview-page]")).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('[data-main-tab="work"]')).toHaveAttribute("aria-selected", "true");
     await sidebar.click();
     await expect(page.locator("[data-main-screen]")).toBeVisible();
     await expect(modal).toHaveCount(0);

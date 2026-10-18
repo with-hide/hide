@@ -1,3 +1,7 @@
+import { overviewBacklogCatalogs, overviewBacklogEnglish } from "../overviewBacklogMessages";
+import { overviewUsageCatalogs, overviewUsageEnglish } from "../overviewUsageMessages";
+import { overviewHistoryCatalogs, overviewHistoryEnglish } from "../overviewHistoryMessages";
+import { overviewGraphCatalogs, overviewGraphEnglish } from "../overviewGraphMessages";
 import { menusCatalogs, menusEnglish } from "./resources/menus";
 import { projectSettingsCatalogs, projectSettingsEnglish } from "./resources/projectSettings";
 import { usageCatalogs, usageEnglish } from "./resources/usage";
@@ -41,11 +45,17 @@ import { workspaceCatalogs, workspaceEnglish } from "./resources/workspace";
 import type { Catalogs } from "./schema";
 import { sessionWorkCatalogs, sessionWorkEnglish } from "./resources/sessionWork";
 import { deviceOverviewCatalogs, deviceOverviewEnglish } from "./resources/deviceOverview";
+import { overviewRedesignCatalogs, overviewRedesignEnglish } from "./resources/overviewRedesign";
 
 export const english = {
   ...menusEnglish,
   ...sessionWorkEnglish,
   ...deviceOverviewEnglish,
+  ...overviewRedesignEnglish,
+  ...overviewBacklogEnglish,
+  ...overviewUsageEnglish,
+  ...overviewHistoryEnglish,
+  ...overviewGraphEnglish,
   ...agentSessionsEnglish,
   ...taskLensEnglish,
   ...archiveEnglish,
@@ -95,6 +105,11 @@ export const catalogs = {
     ...menusCatalogs.ko,
     ...sessionWorkCatalogs.ko,
     ...deviceOverviewCatalogs.ko,
+    ...overviewRedesignCatalogs.ko,
+    ...overviewBacklogCatalogs.ko,
+    ...overviewUsageCatalogs.ko,
+    ...overviewHistoryCatalogs.ko,
+    ...overviewGraphCatalogs.ko,
     ...agentSessionsCatalogs.ko,
     ...taskLensCatalogs.ko,
     ...archiveCatalogs.ko,
@@ -139,6 +154,11 @@ export const catalogs = {
     ...menusCatalogs["zh-CN"],
     ...sessionWorkCatalogs["zh-CN"],
     ...deviceOverviewCatalogs["zh-CN"],
+    ...overviewRedesignCatalogs["zh-CN"],
+    ...overviewBacklogCatalogs["zh-CN"],
+    ...overviewUsageCatalogs["zh-CN"],
+    ...overviewHistoryCatalogs["zh-CN"],
+    ...overviewGraphCatalogs["zh-CN"],
     ...agentSessionsCatalogs["zh-CN"],
     ...taskLensCatalogs["zh-CN"],
     ...archiveCatalogs["zh-CN"],
@@ -183,6 +203,11 @@ export const catalogs = {
     ...menusCatalogs.ja,
     ...sessionWorkCatalogs.ja,
     ...deviceOverviewCatalogs.ja,
+    ...overviewRedesignCatalogs.ja,
+    ...overviewBacklogCatalogs.ja,
+    ...overviewUsageCatalogs.ja,
+    ...overviewHistoryCatalogs.ja,
+    ...overviewGraphCatalogs.ja,
     ...agentSessionsCatalogs.ja,
     ...taskLensCatalogs.ja,
     ...archiveCatalogs.ja,

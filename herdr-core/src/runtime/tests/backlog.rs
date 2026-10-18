@@ -165,6 +165,14 @@ fn backlog_runtime_with(
         repository: Some("acme/project".into()),
         ..Default::default()
     };
+    runtime
+        .github
+        .projects
+        .push(crate::model::GithubProjectSnapshot {
+            root_path: project.path.clone(),
+            issues: project.home_issues.clone(),
+            ..Default::default()
+        });
     let notes = workspace(
         "n",
         "Notes",
@@ -198,7 +206,9 @@ fn add(shared: &SharedRuntime, intent: &str, workspace: &str, title: &str) {
     send(
         shared,
         "backlog_add",
-        serde_json::json!({"intent": intent, "workspace_id": workspace, "title": title}),
+        serde_json::json!({"intent": intent, "workspace_id": workspace, "title": title,
+            "destination": if workspace == "n" { "local" } else { "github" },
+            "repository": if workspace == "n" { None } else { Some("acme/project") }}),
     );
 }
 
@@ -235,17 +245,52 @@ fn row_key(runtime: &Runtime, intent: &str) -> Option<String> {
         .clone()
 }
 
+/// B15/D14: an omitted destination is a memo even in a GitHub project;
+/// naming GitHub without a repository refuses before any external write.
+#[test]
+fn adding_defaults_to_local_and_publishing_requires_a_repository() {
+    let gh = FakeGh::new();
+    let (shared, _worker) = backlog_runtime(gh.clone());
+    send(
+        &shared,
+        "backlog_add",
+        serde_json::json!({
+            "intent": "private-default", "workspace_id": "w", "title": "Private follow-up"
+        }),
+    );
+    wait(&shared, "the default memo", |runtime| {
+        row_key(runtime, "private-default").is_some()
+    });
+    assert_eq!(
+        row_key(&shared.lock().unwrap(), "private-default").as_deref(),
+        Some("local:/repo#1")
+    );
+    send(
+        &shared,
+        "backlog_add",
+        serde_json::json!({
+            "intent": "missing-repository", "workspace_id": "w", "title": "Publish only explicitly", "destination": "github"
+        }),
+    );
+    let runtime = shared.lock().unwrap();
+    let refused = runtime
+        .snapshot
+        .issue_work
+        .backlog
+        .iter()
+        .find(|row| row.intent == "missing-repository")
+        .unwrap();
+    assert_eq!(
+        (refused.phase, refused.failure),
+        (BacklogPhase::Failed, Some(BacklogFailure::Refused))
+    );
+    assert!(gh.calls("issue create").is_empty());
+}
+
 #[test]
 fn a_github_item_is_one_title_only_create_and_a_repeated_send_makes_no_second() {
     let gh = FakeGh::new();
-    let (shared, _worker) = backlog_runtime_with(gh.clone(), |runtime| {
-        let mut project = crate::model::GithubProjectSnapshot {
-            root_path: "/repo".into(),
-            ..Default::default()
-        };
-        project.issues.repository = Some("acme/project".into());
-        runtime.github.projects = vec![project];
-    });
+    let (shared, _worker) = backlog_runtime(gh.clone());
     add(&shared, "i-1", "w", "Flaky e2e on Windows");
     add(&shared, "i-1", "w", "Flaky e2e on Windows");
     wait(&shared, "the issue", |runtime| {
@@ -767,6 +812,7 @@ fn a_missed_line_whose_session_origin_repository_is_unknown_makes_no_issue() {
             "backlog_add",
             serde_json::json!({
                 "intent": intent, "workspace_id": "w", "title": "Missed follow-up",
+                "destination": "github", "repository": "acme/project",
                 "missed": {"session": {"device_id": session.device_id, "agent": "codex", "session_id": session_id}, "id": "x"},
             }),
         );
@@ -800,6 +846,14 @@ fn add_other_project(runtime: &mut Runtime) {
         repository: Some("acme/project".into()),
         ..Default::default()
     };
+    runtime
+        .github
+        .projects
+        .push(crate::model::GithubProjectSnapshot {
+            root_path: other.path.clone(),
+            issues: other.home_issues.clone(),
+            ..Default::default()
+        });
     runtime.snapshot.navigator.workspaces.push(other);
 }
 
@@ -1149,6 +1203,8 @@ fn add_missed(shared: &SharedRuntime, intent: &str, workspace: &str, id: &str) {
         "backlog_add",
         serde_json::json!({
             "intent": intent, "workspace_id": workspace, "title": "Update the docs",
+            "destination": if workspace == "n" { "local" } else { "github" },
+            "repository": if workspace == "n" { None } else { Some("acme/project") },
             "missed": {"session": {"device_id": session.device_id, "agent": session.agent, "session_id": session.session_id}, "id": id},
         }),
     );
