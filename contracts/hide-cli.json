@@ -1575,6 +1575,8 @@
                 "shell_starting",
                 "agent_not_started",
                 "worktree_unconfirmed",
+                "native_identity_unavailable",
+                "identity_waits_full",
                 "session_too_long"
             ],
             "repeats_at_most": null,
@@ -1895,7 +1897,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:fff22a40798ecf7d7642efc0d5fa8f01af05c8afaa9842534c1164bd88cffe0e",
+    "digest": "sha256:fd9236c8cd042f6800de006d7fe99e4927e3e6e8af311cc8faf7059b704dab8a",
     "envelopes": {
         "agent": {
             "answer": "value",
