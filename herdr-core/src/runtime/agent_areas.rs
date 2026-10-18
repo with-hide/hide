@@ -737,14 +737,16 @@ impl Runtime {
         else {
             return;
         };
-        if view.selected_agent_layout().active() == Some(&tab_id) {
-            return;
-        }
         let group = if delegated {
             self.delegated_group_owner(&key, &tab_id)
         } else {
             view.agent_tab_group(&tab_id).flatten().map(str::to_owned)
         };
+        if view.selected_agent_layout().active() == Some(&tab_id)
+            && view.agent_groups.selected == group
+        {
+            return;
+        }
         let view = self
             .workspace_views
             .as_mut()
@@ -806,6 +808,49 @@ impl Runtime {
             .get(&key.0, &key.1)?
             .agent_tab_group(root_tab)?
             .map(str::to_owned)
+    }
+
+    /// Root membership changes invalidate only canvases belonging to that
+    /// root. The delegated tab stays alive and explicit navigation reveals it
+    /// in its root's new group; the move itself keeps showing the moved root.
+    pub(super) fn prune_agent_group_canvases(&mut self, key: &WorkspaceKey) -> bool {
+        let Some(view) = self
+            .workspace_views
+            .as_ref()
+            .and_then(|store| store.views.get(&key.0, &key.1))
+        else {
+            return false;
+        };
+        let misplaced: Vec<_> = std::iter::once((None, &view.agent_layout))
+            .chain(
+                view.agent_groups
+                    .items
+                    .iter()
+                    .map(|group| (Some(group.id.as_str()), &group.layout)),
+            )
+            .flat_map(|(group, layout)| {
+                layout
+                    .canvases
+                    .iter()
+                    .map(move |(area, tab)| (group, area, tab))
+            })
+            .filter(|(group, _, tab)| self.delegated_group_owner(key, tab).as_deref() != *group)
+            .map(|(group, area, _)| (group.map(str::to_owned), area.clone()))
+            .collect();
+        let changed = !misplaced.is_empty();
+        let view = self
+            .workspace_views
+            .as_mut()
+            .expect("view exists")
+            .views
+            .get_mut(&key.0, &key.1)
+            .expect("view exists");
+        for (group, area) in misplaced {
+            if let Some(layout) = view.group_layout_mut(group.as_deref()) {
+                layout.canvases.remove(&area);
+            }
+        }
+        changed
     }
 
     pub(super) fn shown_agent_tabs(&self) -> Vec<String> {

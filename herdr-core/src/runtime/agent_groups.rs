@@ -160,6 +160,14 @@ impl Runtime {
             return true;
         }
         let changed = *view != before;
+        let changed = self.prune_agent_group_canvases(&key) || changed;
+        let view = self
+            .workspace_views
+            .as_ref()
+            .expect("view exists")
+            .views
+            .get(&key.0, &key.1)
+            .expect("view exists");
         let active = view.selected_agent_layout().active().map(str::to_owned);
         let live = active.filter(|id| !view.agent_groups.drafts.contains(id));
         self.remember_split_request(&key, request);

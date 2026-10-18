@@ -268,6 +268,8 @@ fn names_and_group_limit_refuse_without_replacing_existing_work() {
         "한".repeat(81),
         "one\ntwo".into(),
         "one\u{0007}two".into(),
+        "one\u{2028}two".into(),
+        "one\u{2029}two".into(),
         longest,
     ]
     .into_iter()
@@ -881,11 +883,21 @@ fn an_acknowledged_start_survives_stale_topology_then_closes_after_being_observe
     runtime.sync_workspace_view();
     assert_eq!(tabs(&runtime, Some(&target)), ["w-order:t4"]);
     assert!(!published(&runtime).drafts.contains(&draft));
+    assert_eq!(
+        published(&runtime).group_id.as_deref(),
+        Some(target.as_str()),
+        "acknowledgement retains its selected group"
+    );
     ingest(&mut runtime, &TABS);
     assert_eq!(
         tabs(&runtime, Some(&target)),
         ["w-order:t4"],
         "the acknowledged slot waits for its first authoritative appearance"
+    );
+    assert_eq!(
+        published(&runtime).group_id.as_deref(),
+        Some(target.as_str()),
+        "stale topology retains the selected group"
     );
     assert_eq!(
         ordered_tab_ids(&runtime, &checkout),
@@ -898,6 +910,11 @@ fn an_acknowledged_start_survives_stale_topology_then_closes_after_being_observe
     let live = [TABS[0], TABS[1], TABS[2], "w-order:t4"];
     ingest(&mut runtime, &live);
     assert_eq!(tabs(&runtime, Some(&target)), ["w-order:t4"]);
+    assert_eq!(
+        published(&runtime).group_id.as_deref(),
+        Some(target.as_str()),
+        "first appearance retains the selected group"
+    );
     assert_eq!(ordered_tab_ids(&runtime, &checkout), live);
     ingest(&mut runtime, &TABS);
     assert!(tabs(&runtime, Some(&target)).is_empty());
@@ -907,4 +924,234 @@ fn an_acknowledged_start_survives_stale_topology_then_closes_after_being_observe
         Some(target.as_str())
     );
     assert_eq!(ordered_tab_ids(&runtime, &checkout), TABS);
+}
+
+const CHILDREN: [&str; 2] = ["w-order:t4", "w-order:t5"];
+
+fn with_delegated_canvases() -> (Runtime, String, String) {
+    let (mut runtime, checkout) = setup();
+    let ids = [TABS[0], TABS[1], TABS[2], CHILDREN[0], CHILDREN[1]];
+    let mut payload = tab_order_payload(PATH, &ids, &ids, TABS[0]);
+    payload.agents = serde_json::from_value(
+        crate::sidebar::owned_label_fixture::<Value>(json!({"agents":[
+            {"id":"first-parent","pane_id":"w-order:t1:p","agent_status":"working","state_change_seq":1,"tokens":{"task":"First parent"}},
+            {"id":"second-parent","pane_id":"w-order:t2:p","agent_status":"working","state_change_seq":1,"tokens":{"task":"Second parent"}},
+            {"id":"first-child","pane_id":"w-order:t4:p","spawned_from_pane_id":"w-order:t1:p","agent_status":"working","state_change_seq":1,"tokens":{"task":"First child"}},
+            {"id":"second-child","pane_id":"w-order:t5:p","spawned_from_pane_id":"w-order:t2:p","agent_status":"working","state_change_seq":1,"tokens":{"task":"Second child"}}
+        ]})).unwrap()["agents"].clone(),
+    ).unwrap();
+    runtime.ingest_session(Ok(payload));
+    runtime.sync_workspace_view();
+    assert_eq!(tabs(&runtime, None), TABS);
+    let target = create(&mut runtime, "delegated-group", "Delegated work");
+    group(
+        &mut runtime,
+        "move-parent",
+        json!({"action":"move","group_id":target,"tab_id":TABS[0]}),
+    );
+    runtime.focus_pane("w-order:t4:p".into(), PaneFocusOrigin::Operator, None);
+    runtime.sync_workspace_view();
+    assert_eq!(
+        published(&runtime).canvases.get("a1").map(String::as_str),
+        Some(CHILDREN[0])
+    );
+    (runtime, checkout, target)
+}
+
+#[test]
+fn a_new_draft_replaces_the_delegated_canvas_without_creating_a_pane() {
+    let (mut runtime, checkout, target) = with_delegated_canvases();
+    let before = ordered_tab_ids(&runtime, &checkout);
+    group(
+        &mut runtime,
+        "draft-over-child",
+        json!({"action":"new_tab","group_id":target}),
+    );
+    let layout = published(&runtime);
+    assert!(layout.canvases.is_empty());
+    let Node::Area(area) = &layout.root else {
+        panic!("one area");
+    };
+    assert!(
+        area.active
+            .as_ref()
+            .is_some_and(|id| layout.drafts.contains(id))
+    );
+    assert!(runtime.snapshot().terminal.pane_id.is_none());
+    assert_eq!(
+        ordered_tab_ids(&runtime, &checkout),
+        before,
+        "the child keeps its existing pane; the draft creates none"
+    );
+}
+
+#[test]
+fn a_live_tab_moved_into_a_delegated_canvas_becomes_visible_and_keeps_both_panes() {
+    let (mut runtime, checkout, target) = with_delegated_canvases();
+    let before = ordered_tab_ids(&runtime, &checkout);
+    group(
+        &mut runtime,
+        "move-over-child",
+        json!({"action":"move","group_id":target,"tab_id":TABS[1]}),
+    );
+    assert!(published(&runtime).canvases.is_empty());
+    assert_eq!(
+        runtime.snapshot().terminal.pane_id.as_deref(),
+        Some("w-order:t2:p")
+    );
+    assert_eq!(
+        checkout_active_tab_id(&runtime, &checkout).as_deref(),
+        Some(TABS[1])
+    );
+    assert_eq!(
+        ordered_tab_ids(&runtime, &checkout),
+        before,
+        "moving does not close or restart the child or moved pane"
+    );
+}
+
+#[test]
+fn dissolving_and_undoing_a_group_preserves_each_collections_delegated_canvas() {
+    let (mut runtime, checkout, target) = with_delegated_canvases();
+    let before = ordered_tab_ids(&runtime, &checkout);
+    runtime.focus_pane("w-order:t5:p".into(), PaneFocusOrigin::Operator, None);
+    runtime.sync_workspace_view();
+    assert_eq!(
+        published(&runtime).canvases.get("a1").map(String::as_str),
+        Some(CHILDREN[1])
+    );
+    select(&mut runtime, "show-group-child", Some(&target));
+    assert_eq!(
+        published(&runtime).canvases.get("a1").map(String::as_str),
+        Some(CHILDREN[0])
+    );
+    group(
+        &mut runtime,
+        "dissolve-children",
+        json!({"action":"dissolve","group_id":target}),
+    );
+    assert_eq!(
+        published(&runtime).canvases.get("a1").map(String::as_str),
+        Some(CHILDREN[1])
+    );
+    group(&mut runtime, "restore-children", json!({"action":"undo"}));
+    assert_eq!(
+        published(&runtime).canvases.get("a1").map(String::as_str),
+        Some(CHILDREN[0])
+    );
+    select(&mut runtime, "show-ungrouped-child", None);
+    assert_eq!(
+        published(&runtime).canvases.get("a1").map(String::as_str),
+        Some(CHILDREN[1])
+    );
+    assert_eq!(ordered_tab_ids(&runtime, &checkout), before);
+}
+
+#[test]
+fn add_pane_accepts_the_shown_delegated_tab_and_refuses_a_stale_canvas_target() {
+    let (mut runtime, checkout, target) = with_delegated_canvases();
+    let before = ordered_tab_ids(&runtime, &checkout);
+    let destination = |tab: &str| super::super::group_starts::StartTarget {
+        group_id: Some(target.clone()),
+        area_id: "a1".into(),
+        tab_id: Some(tab.into()),
+        add_pane: true,
+    };
+    assert!(
+        runtime
+            .prepare_group_start(
+                101,
+                crate::node::TEST_NODE,
+                PATH,
+                Some(destination(CHILDREN[1])),
+                Some("stale-child"),
+                Some("claude"),
+                false
+            )
+            .is_err()
+    );
+    let prepared = runtime
+        .prepare_group_start(
+            102,
+            crate::node::TEST_NODE,
+            PATH,
+            Some(destination(CHILDREN[0])),
+            Some("shown-child"),
+            Some("claude"),
+            false,
+        )
+        .expect("shown child admits a pane start");
+    assert_eq!(prepared.request.tab_id.as_deref(), Some(CHILDREN[0]));
+    assert_eq!(prepared.saved.try_recv().unwrap(), Ok(()));
+    assert!(runtime.group_start_target_is_current(102));
+    runtime.dispatch_json(&focus_tab_event(&checkout, TABS[0]));
+    runtime.sync_workspace_view();
+    assert!(
+        runtime.group_start_target_is_current(102),
+        "an admitted start can finish after the user leaves its canvas"
+    );
+    runtime.complete_group_start(102, Some(CHILDREN[0]), "w-order:t4:new-pane");
+    assert!(
+        runtime.group_start_target_is_current(102),
+        "agent launch keeps the accepted live tab"
+    );
+    assert_eq!(
+        tabs(&runtime, Some(&target)),
+        [TABS[0]],
+        "delegated tabs never gain an ordinary strip slot"
+    );
+    assert_eq!(ordered_tab_ids(&runtime, &checkout), before);
+}
+
+#[test]
+fn moving_a_root_prunes_only_its_old_groups_child_canvas_and_reveals_the_child_in_its_new_group() {
+    for create_with_tab in [false, true] {
+        let (mut runtime, checkout, source) = with_delegated_canvases();
+        let before = ordered_tab_ids(&runtime, &checkout);
+        runtime.focus_pane("w-order:t5:p".into(), PaneFocusOrigin::Operator, None);
+        runtime.sync_workspace_view();
+        select(&mut runtime, "root-source", Some(&source));
+        let target = if create_with_tab {
+            group(
+                &mut runtime,
+                "new-root-group",
+                json!({"action":"create","name":"Moved root","tab_id":TABS[0]}),
+            );
+            published(&runtime).group_id.clone().unwrap()
+        } else {
+            let target = create(&mut runtime, "new-root-group", "Moved root");
+            group(
+                &mut runtime,
+                "move-root",
+                json!({"action":"move","group_id":target,"tab_id":TABS[0]}),
+            );
+            target
+        };
+        assert_eq!(
+            runtime.snapshot().terminal.pane_id.as_deref(),
+            Some("w-order:t1:p")
+        );
+        select(&mut runtime, "old-root-group", Some(&source));
+        assert!(published(&runtime).canvases.is_empty());
+        assert!(
+            runtime.snapshot().terminal.pane_id.is_none(),
+            "the empty source cannot show a descendant of the moved root"
+        );
+        select(&mut runtime, "unrelated-root", None);
+        assert_eq!(
+            published(&runtime).canvases.get("a1").map(String::as_str),
+            Some(CHILDREN[1])
+        );
+        runtime.focus_pane("w-order:t4:p".into(), PaneFocusOrigin::Operator, None);
+        runtime.sync_workspace_view();
+        assert_eq!(
+            published(&runtime).group_id.as_deref(),
+            Some(target.as_str())
+        );
+        assert_eq!(
+            published(&runtime).canvases.get("a1").map(String::as_str),
+            Some(CHILDREN[0])
+        );
+        assert_eq!(ordered_tab_ids(&runtime, &checkout), before);
+    }
 }

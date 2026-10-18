@@ -217,11 +217,14 @@ impl WorkspaceView {
     }
 
     fn group_name(&self, name: &str, excluding: Option<&str>) -> Result<String, GroupError> {
-        if name.chars().any(char::is_control) {
+        if name
+            .chars()
+            .any(|ch| ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}'))
+        {
             return Err(GroupError::InvalidName);
         }
         let name = name.trim();
-        if name.is_empty() || name.chars().count() > 80 || name.chars().any(char::is_control) {
+        if name.is_empty() || name.chars().count() > 80 {
             return Err(GroupError::InvalidName);
         }
         if self
@@ -306,12 +309,17 @@ impl WorkspaceView {
                 .clone();
             let area = destination.tree.active_area.clone();
             destination.tree.insert(&area, item, stamp)?;
+            destination.select(tab, false, stamp)?;
             let source_layout = self.group_layout_mut(source.as_deref()).unwrap();
             source_layout.tree.remove(tab);
             source_layout
                 .canvases
                 .retain(|area, _| source_layout.tree.area(area).is_some());
             *self.group_layout_mut(target).unwrap() = destination;
+        } else {
+            self.group_layout_mut(target)
+                .unwrap()
+                .select(tab, false, stamp)?;
         }
         self.agent_groups.selected = target.map(str::to_owned);
         self.agent_groups.undo = None;
@@ -344,7 +352,13 @@ impl WorkspaceView {
             .active()
             .filter(|id| group.layout.canvases.values().any(|t| t == id))
         {
-            destination.canvases.insert(area, tab.to_owned());
+            // Dissolving a group appends its tabs without replacing what
+            // ungrouped already shows. Its prior delegated canvas also has
+            // to remain available after Undo restores the removed group.
+            destination
+                .canvases
+                .entry(area)
+                .or_insert_with(|| tab.to_owned());
         }
         let undo = Undo {
             group,
@@ -401,6 +415,7 @@ impl WorkspaceView {
         self.selected_agent_layout_mut()
             .tree
             .insert(area, Tab::new(id.clone()), stamp)?;
+        self.selected_agent_layout_mut().select(&id, false, stamp)?;
         self.agent_groups.drafts.insert(id.clone());
         self.agent_groups.undo = None;
         Ok(id)

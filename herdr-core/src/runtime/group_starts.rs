@@ -143,6 +143,15 @@ impl Runtime {
     ) -> Result<PreparedStart, String> {
         let workspace = (device.to_owned(), path.to_owned());
         let local = device == self.node.as_str();
+        let delegated_tabs: HashSet<String> = self
+            .catalog_workspaces()
+            .filter(|workspace| workspace.device_id == device)
+            .flat_map(|workspace| &workspace.checkouts)
+            .filter(|checkout| checkout.path == path)
+            .flat_map(|checkout| &checkout.tabs)
+            .filter(|tab| tab.delegated)
+            .filter_map(|tab| tab.id.clone())
+            .collect();
         let stays_behind = self
             .snapshot
             .task_operation
@@ -239,11 +248,10 @@ impl Runtime {
                     .as_deref()
                     .or(existing.live_tab_id.as_deref())
                     .ok_or("The original start has no target. Refresh before retrying.")?;
-                if !layout
-                    .tree
-                    .area(&existing.area_id)
-                    .is_some_and(|area| area.displays.iter().any(|item| item.id == tab))
-                {
+                if !layout.tree.area(&existing.area_id).is_some_and(|area| {
+                    area.displays.iter().any(|item| item.id == tab)
+                        || (existing.add_pane && delegated_tabs.contains(tab))
+                }) {
                     return Err(
                         "The original tab moved. Return to its location before retrying.".into(),
                     );
@@ -263,7 +271,14 @@ impl Runtime {
                 .area(&target.area_id)
                 .ok_or("The area was removed. Select an area and retry.")?;
             if let Some(tab) = target.tab_id.as_deref() {
-                if !area.displays.iter().any(|item| item.id == tab) {
+                if !area.displays.iter().any(|item| item.id == tab)
+                    && !(target.add_pane
+                        && delegated_tabs.contains(tab)
+                        && layout
+                            .canvases
+                            .get(&target.area_id)
+                            .is_some_and(|shown| shown == tab))
+                {
                     return Err("The tab moved. Return to the tab and retry.".into());
                 }
                 if target.add_pane == view.agent_groups.drafts.contains(tab) {
@@ -303,6 +318,11 @@ impl Runtime {
                         .tree
                         .area(&target.area_id)
                         .and_then(|area| area.active.clone());
+                    let prior_canvas = view
+                        .selected_agent_layout()
+                        .canvases
+                        .get(&target.area_id)
+                        .cloned();
                     let draft = view
                         .create_agent_draft(&target.area_id, unix_milliseconds())
                         .map_err(|_| "The tab could not be reserved. Retry.".to_owned());
@@ -313,6 +333,9 @@ impl Runtime {
                             && let Some(area) = layout.tree.area_mut(&target.area_id)
                         {
                             area.active = Some(tab);
+                        }
+                        if let Some(canvas) = prior_canvas {
+                            layout.canvases.insert(target.area_id.clone(), canvas);
                         }
                     }
                     view.agent_groups.selected = selected;
@@ -486,11 +509,24 @@ impl Runtime {
         let Some(start) = view.agent_starts.get(&active.key) else {
             return false;
         };
+        // A delegated tab has no ordinary strip membership. Once its exact
+        // visible canvas admitted an add-pane request, that recorded tab may
+        // finish in the background even if another canvas is selected.
+        let live_delegated = start.add_pane
+            && start.live_tab_id.as_deref().is_some_and(|id| {
+                self.catalog_workspaces()
+                    .filter(|workspace| workspace.device_id == active.workspace.0)
+                    .flat_map(|workspace| &workspace.checkouts)
+                    .filter(|checkout| checkout.path == active.workspace.1)
+                    .flat_map(|checkout| &checkout.tabs)
+                    .any(|tab| tab.delegated && tab.id.as_deref() == Some(id))
+            });
         if start.state == StartState::Ready {
             return start
                 .live_tab_id
                 .as_deref()
-                .is_some_and(|tab| view.agent_tab_group(tab).is_some());
+                .is_some_and(|tab| view.agent_tab_group(tab).is_some())
+                || live_delegated;
         }
         let tab = start
             .draft_tab_id
@@ -500,6 +536,7 @@ impl Runtime {
             .and_then(|layout| layout.tree.area(&start.area_id))
             .is_some_and(|area| {
                 tab.is_some_and(|tab| area.displays.iter().any(|item| item.id == tab))
+                    || live_delegated
             })
     }
 

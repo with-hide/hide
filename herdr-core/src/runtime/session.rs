@@ -2817,7 +2817,16 @@ impl Runtime {
                     .is_some_and(|view| {
                         view.selected_agent_layout()
                             .active()
-                            .is_none_or(|id| view.agent_groups.drafts.contains(id))
+                            .is_none_or(|id| {
+                                view.agent_groups.drafts.contains(id)
+                                    // An acknowledged start owns its slot
+                                    // before the stream supplies its pane.
+                                    // Its temporary absence is not permission
+                                    // to select another group's first pane.
+                                    || !focused_checkout.is_some_and(|checkout| {
+                                        checkout.tabs.iter().any(|tab| tab.id.as_deref() == Some(id))
+                                    })
+                            })
                     });
                 let target_pane_id = if draft_surface {
                     None
