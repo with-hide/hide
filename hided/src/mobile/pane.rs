@@ -117,7 +117,11 @@ pub fn send(
 ) -> Result<(), PaneError> {
     let bytes = match &input {
         Input::Reply(text) => text.len() + 1,
-        Input::Key(key) => key.len(),
+        // Herdr's supported quick keys encode as one byte or a three-byte
+        // cursor sequence (CSI/SS3), not the length of their logical name.
+        Input::Key("up" | "down") => 3,
+        Input::Key("enter" | "esc" | "ctrl+c") => 1,
+        Input::Key(_) => return Err(PaneError::InputRefused),
     };
     let (reply, result) = std::sync::mpsc::channel();
     terminals.input_permit(
