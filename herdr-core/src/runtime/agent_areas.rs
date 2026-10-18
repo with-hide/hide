@@ -804,12 +804,36 @@ impl Runtime {
             .iter()
             .filter(|a| tab.panes.iter().any(|p| p.id == a.pane_id))
             .find_map(|a| a.lineage_path_pane_ids.first())?;
-        let root_tab = checkout
+        let Some(root_tab) = checkout
             .tabs
             .iter()
-            .find(|t| t.panes.iter().any(|p| &p.id == root))?
-            .id
-            .as_deref()?;
+            .find(|t| t.panes.iter().any(|p| &p.id == root))
+        else {
+            // A known root outside this checkout cannot own one of its groups.
+            // Missing same-device topology still leaves ownership unresolved.
+            let outside = self.catalog_workspaces().any(|workspace| {
+                workspace.checkouts.iter().any(|checkout| {
+                    checkout
+                        .tabs
+                        .iter()
+                        .any(|tab| tab.panes.iter().any(|pane| &pane.id == root))
+                })
+            }) || (key.0 != self.node.as_str()
+                && self
+                    .snapshot
+                    .navigator
+                    .agents
+                    .iter()
+                    .any(|agent| &agent.pane_id == root))
+                || self.snapshot.status.remote.iter().any(|remote| {
+                    remote.target_id != key.0
+                        && remote.session.as_ref().is_some_and(|session| {
+                            session.agents.iter().any(|agent| &agent.pane_id == root)
+                        })
+                });
+            return outside.then_some(None);
+        };
+        let root_tab = root_tab.id.as_deref()?;
         self.workspace_views
             .as_ref()?
             .views
