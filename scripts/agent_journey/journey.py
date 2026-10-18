@@ -623,14 +623,16 @@ class Journey:
             self.pane = saved_pane
             self.agent, self.session, self.reference, self.checkout = saved
 
-    def close(self):
-        """Ends the panes this journey opened once its cells are settled. The
-        run's guardian caps the private Herdr's processes at 2 GiB together,
-        and each finished agent would otherwise keep its share beside the
-        next agent's; a pane that does not close is named, and the run's
+    def close(self, keep=None):
+        """Ends the panes this journey opened that no later cell types into:
+        each one but `keep` after a step, so a fork's ends with its cell, and
+        every one once its cells are settled. The run's guardian caps the
+        private Herdr's processes at 2 GiB together, and a fork, the session
+        it came from and an untrusted start of omp held 2.17 GB at once on
+        Linux (2026-10-18); a pane that does not close is named, and the run's
         teardown ends it."""
-        closed = self.record["closed"] = {}
-        for pane in dict.fromkeys(pane for pane in self.opened if pane):
+        closed = self.record.setdefault("closed", {})
+        for pane in dict.fromkeys(pane for pane in self.opened if pane and pane != keep and pane not in closed):
             try:
                 code, _, err = self.runtime.command(["pane", "close", pane], check=False)
             except ProcessError as error:

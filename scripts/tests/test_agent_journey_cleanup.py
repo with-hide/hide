@@ -132,6 +132,30 @@ class FinishedAgent(unittest.TestCase):
         self.assertEqual(calls, [["pane", "close", pane] for pane in ("w4:p2", "w4:p3", "w5:p1")])
         self.assertEqual(record["closed"], {"w4:p2": "closed", "w4:p3": "closed", "w5:p1": "pane_not_found"})
 
+    def test_a_pane_no_later_cell_types_into_closes_after_its_step_and_each_pane_closes_once(self):
+        calls = []
+
+        def command(argv, check=True):
+            calls.append(argv[-1])
+            return 0, "", ""
+        runtime = SimpleNamespace(run=Path("/run"), command=command,
+                                  owner=SimpleNamespace(cancelled=threading.Event()))
+        journey = Journey(runtime, None, None, {}, {"id": "omp", "herdr_kind": "omp", "model_flag": []},
+                          Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={})
+        # The agent's pane, then its fork's: the fork's ends with the fork cell.
+        journey.pane = "w4:p2"
+        journey.opened += ["w4:p2", "w4:p3"]
+        journey.close(keep=journey.pane)
+        self.assertEqual(calls, ["w4:p3"])
+        # Wake moved the agent to a new pane; the untrusted start opens one more.
+        journey.pane = "w4:p4"
+        journey.opened += ["w4:p4"]
+        journey.close(keep=journey.pane)
+        journey.close()
+        journey.opened += ["w5:p2"]
+        journey.close()
+        self.assertEqual(calls, ["w4:p3", "w4:p2", "w4:p4", "w5:p2"])
+
 
 class FailedCellScreen(unittest.TestCase):
     def test_a_failed_cell_keeps_the_screen_of_the_pane_it_measured(self):

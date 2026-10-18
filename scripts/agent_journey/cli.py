@@ -586,6 +586,7 @@ def main(argv=None):
                                   quota=quota_rows)
                 for step in STEPS:
                     journey.step(step, *((card,) if step == memory.CELL else ()))
+                    journey.close(keep=journey.pane)
                 if key in services:
                     # Its pane closed at Sleep and opened again at Wake: one server must still serve it.
                     running = opencode_service.ours(str(runtime.home))
@@ -599,6 +600,8 @@ def main(argv=None):
                     cells.settle(table, key, "start_untrusted", cells.NOT_MEASURED,
                                  untrusted_reason.removeprefix("not measured: "))
                 else:
+                    # No later cell types into the agent's earlier panes.
+                    journey.close()
                     journey.step("untrusted", untrusted)
                 agent["requests"] = journey.requests()
                 if fake:
