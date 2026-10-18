@@ -54,6 +54,10 @@ pub(super) struct ActiveStart {
     pub task: u64,
     pub workspace: workspace_view::WorkspaceKey,
     pub key: String,
+}
+
+pub(super) struct TaskStartFocus {
+    task: u64,
     /// Global starts may bring their checkout forward only while the
     /// original screen's selection has not been superseded.
     global_focus: Option<StartFocus>,
@@ -61,6 +65,7 @@ pub(super) struct ActiveStart {
 }
 
 struct RemoteStartFocus {
+    workspace: workspace_view::WorkspaceKey,
     pane: String,
     generation: u64,
     deadline: std::time::Instant,
@@ -461,13 +466,20 @@ impl Runtime {
             intent: intent.clone(),
             sender,
         });
-        let global_focus = (!explicit && !stays_behind).then(|| self.start_focus());
+        if self
+            .task_start_focus
+            .as_ref()
+            .is_none_or(|focus| focus.task != task)
+        {
+            self.capture_task_start_focus(task, "agent_start");
+        }
+        if explicit || stays_behind {
+            self.supersede_start_navigation();
+        }
         self.group_start = Some(ActiveStart {
             task,
             workspace,
             key,
-            global_focus,
-            remote_focus: None,
         });
         self.persist_workspace_views();
         Ok(PreparedStart {
@@ -697,39 +709,69 @@ impl Runtime {
 
     /// A user visit remains newer even after returning to the original empty
     /// group or draft, which needs no Herdr focus turn of its own.
-    pub(super) fn supersede_group_start_navigation(&mut self) {
-        if let Some(active) = self.group_start.as_mut() {
+    pub(super) fn supersede_start_navigation(&mut self) {
+        if let Some(active) = self.task_start_focus.as_mut() {
             active.global_focus = None;
             active.remote_focus = None;
         }
     }
 
+    pub(super) fn capture_task_start_focus(&mut self, task: u64, kind: &str) {
+        self.task_start_focus = (kind == "agent_start").then(|| TaskStartFocus {
+            task,
+            global_focus: Some(self.start_focus()),
+            remote_focus: None,
+        });
+    }
+
     /// One pending follow belongs to the current start, never a shell-side
     /// open intent. It expires with the start panel's 90-second answer bound.
-    pub(super) fn queue_remote_group_start_focus(&mut self, task: u64, pane: String) {
-        let Some(active) = self.group_start.as_mut().filter(|start| start.task == task) else {
+    pub(super) fn queue_remote_start_focus(&mut self, task: u64, pane: String) {
+        let operation = self
+            .snapshot
+            .task_operation
+            .as_ref()
+            .expect("the task result is ready");
+        let device = operation
+            .device_id
+            .clone()
+            .expect("a remote start names its device");
+        let path = operation
+            .path
+            .clone()
+            .expect("a successful start names its checkout");
+        let Some(active) = self
+            .task_start_focus
+            .as_mut()
+            .filter(|start| start.task == task)
+        else {
+            self.push_diagnostic(
+                "agent_start.focus_unavailable",
+                format!("Task {task} has no navigation permission"),
+            );
             return;
         };
         active.remote_focus = Some(RemoteStartFocus {
+            workspace: (device.clone(), path),
             pane,
             generation: self
                 .remote_connection_generations
-                .get(&active.workspace.0)
+                .get(&device)
                 .copied()
                 .unwrap_or(0),
             deadline: std::time::Instant::now() + std::time::Duration::from_secs(90),
         });
     }
 
-    pub(super) fn follow_remote_group_start(&mut self, device: &str) -> bool {
-        let Some(active) = self
-            .group_start
-            .as_ref()
-            .filter(|start| start.workspace.0 == device)
-        else {
+    pub(super) fn follow_remote_start(&mut self, device: &str) -> bool {
+        let Some(active) = self.task_start_focus.as_ref() else {
             return false;
         };
-        let Some(pending) = active.remote_focus.as_ref() else {
+        let Some(pending) = active
+            .remote_focus
+            .as_ref()
+            .filter(|pending| pending.workspace.0 == device)
+        else {
             return false;
         };
         let current = self
@@ -746,7 +788,7 @@ impl Runtime {
                     .unwrap_or(0)
             && std::time::Instant::now() < pending.deadline;
         if !current {
-            self.group_start.as_mut().unwrap().remote_focus = None;
+            self.task_start_focus.as_mut().unwrap().remote_focus = None;
             self.push_diagnostic(
                 "agent_start.remote_focus_cancelled",
                 format!("Remote start focus on {device} was superseded or expired"),
@@ -759,16 +801,16 @@ impl Runtime {
             .catalog_workspaces()
             .filter(|workspace| workspace.device_id == device)
             .flat_map(|workspace| &workspace.checkouts)
-            .filter(|checkout| checkout.path == active.workspace.1)
+            .filter(|checkout| checkout.path == pending.workspace.1)
             .flat_map(|checkout| &checkout.tabs)
             .flat_map(|tab| &tab.panes)
             .any(|pane| pane.id == pending.pane);
         if !listed {
             return false;
         }
-        let request_id = format!("agent-start-focus:{}:{}", active.task, active.key);
+        let request_id = format!("agent-start-focus:{}:{}", active.task, pending.generation);
         let pending = self
-            .group_start
+            .task_start_focus
             .as_mut()
             .unwrap()
             .remote_focus
@@ -788,12 +830,21 @@ impl Runtime {
     /// A targeted start keeps its selected slot. A global start may open its
     /// checkout if no intervening selection superseded the original press.
     pub(super) fn group_start_should_focus(&self, task: u64) -> bool {
+        let origin = self
+            .task_start_focus
+            .as_ref()
+            .filter(|focus| focus.task == task);
         let Some(active) = self
             .group_start
             .as_ref()
             .filter(|active| active.task == task)
         else {
-            return true;
+            return origin.is_none_or(|focus| {
+                focus
+                    .global_focus
+                    .as_ref()
+                    .is_some_and(|origin| *origin == self.start_focus())
+            });
         };
         let Some(view) = self
             .workspace_views
@@ -806,9 +857,8 @@ impl Runtime {
             return false;
         };
         (self.front_workspace_key().as_ref() == Some(&active.workspace)
-            || active
-                .global_focus
-                .as_ref()
+            || origin
+                .and_then(|focus| focus.global_focus.as_ref())
                 .is_some_and(|origin| *origin == self.start_focus()))
             && view.agent_groups.selected == start.group_id
             && view

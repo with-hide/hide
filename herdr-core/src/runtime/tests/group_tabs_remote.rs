@@ -99,10 +99,13 @@ fn active(runtime: &Runtime) -> Option<&str> {
 }
 
 #[test]
-fn a_global_remote_start_follows_its_pane_once_even_when_the_answer_precedes_the_catalog() {
-    for (origin, boundary) in origins().into_iter().flat_map(|origin| {
+fn a_global_remote_start_follows_checkout_and_home_once_across_result_and_catalog_order() {
+    for (origin, boundary, prepared) in origins().into_iter().flat_map(|origin| {
         ["answer-first", "catalog-first", "newer-visit", "reconnect"]
-            .map(|boundary| (origin.clone(), boundary))
+            .into_iter()
+            .flat_map(move |boundary| {
+                [false, true].map(|prepared| (origin.clone(), boundary, prepared))
+            })
     }) {
         let t = tree();
         let (mut runtime, _saved) = setup(origin, &t.main);
@@ -120,16 +123,19 @@ fn a_global_remote_start_follows_its_pane_once_even_when_the_answer_precedes_the
             .begin_task_operation("agent_start", None, None, None, None)
             .unwrap();
         runtime.snapshot.task_operation.as_mut().unwrap().device_id = Some(DEVICE.into());
-        runtime
-            .prepare_group_start(
-                task,
-                (DEVICE, &t.main),
-                None,
-                Some("remote-start"),
-                None,
-                false,
-            )
-            .unwrap();
+        // Home starts use the same task slot but have no prepared group claim.
+        if prepared {
+            runtime
+                .prepare_group_start(
+                    task,
+                    (DEVICE, &t.main),
+                    None,
+                    Some("remote-start"),
+                    None,
+                    false,
+                )
+                .unwrap();
+        }
         let mut landed = raw(&t.main);
         let new_tab = herdr_workspace(DEVICE, "w1", &t.main, &[("t3", &t.main)])
             .checkouts
@@ -201,6 +207,60 @@ fn a_global_remote_start_follows_its_pane_once_even_when_the_answer_precedes_the
             );
         }
     }
+}
+
+#[test]
+fn a_global_local_start_brings_its_device_forward_from_a_remote_screen() {
+    let t = tree();
+    let (mut runtime, _saved) = setup(LinkOrigin::Inbound, &t.main);
+    let (mut local, _) = live_tab_order_runtime(&t.main);
+    runtime.live = local.live.take();
+    runtime
+        .snapshot
+        .ui_state
+        .workspace_registrations
+        .extend(local.snapshot.ui_state.workspace_registrations.clone());
+    runtime.rebuild_catalog();
+    assert_eq!(
+        runtime.snapshot.navigator.focused_device_id.as_deref(),
+        Some(DEVICE)
+    );
+    let task = runtime
+        .begin_task_operation("agent_start", None, None, None, None)
+        .unwrap();
+    runtime
+        .prepare_group_start(
+            task,
+            (crate::node::TEST_NODE, &t.main),
+            None,
+            Some("local-from-remote"),
+            None,
+            false,
+        )
+        .unwrap();
+    runtime.ingest_task_operation_result(
+        task,
+        Ok(live::WorktreeTaskOutcome {
+            path: t.main.clone(),
+            pane_id: "w-order:t4:p".into(),
+            created_tab_id: Some("w-order:t4".into()),
+            purpose_error: None,
+            unconfirmed_purpose_token: None,
+            issue_error: None,
+            shell: crate::agent_start::ShellStart::Plain,
+        }),
+    );
+    runtime.sync_workspace_view();
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    assert_eq!(
+        runtime.snapshot.navigator.focused_device_id.as_deref(),
+        Some(crate::node::TEST_NODE)
+    );
+    assert_eq!(
+        runtime.snapshot.focused.pane_id.as_deref(),
+        Some("w-order:t4:p")
+    );
+    assert_eq!(active(&runtime), Some("w-order:t4"));
 }
 
 #[test]

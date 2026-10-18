@@ -1649,6 +1649,7 @@ pub struct Runtime {
     /// on the wire after the surface that sent it.
     task_agent_launch: Option<TaskAgentLaunch>,
     group_start: Option<group_starts::ActiveStart>,
+    task_start_focus: Option<group_starts::TaskStartFocus>,
     group_start_saves: Vec<group_starts::SaveWaiter>,
     /// How the pane a task created says its shell has finished starting,
     /// by task id, for that task's agent start.
@@ -2276,6 +2277,7 @@ impl Runtime {
             pr_link_checkout: None,
             task_agent_launch: None,
             group_start: None,
+            task_start_focus: None,
             group_start_saves: Vec::new(),
             task_pane_shell: None,
             home_links: HashMap::new(),
@@ -2639,7 +2641,7 @@ impl Runtime {
             self.supersede_memory_navigation();
         }
         if (chooses_workspace || supersedes_memory) && self.snapshot.status.last_error.is_none() {
-            self.supersede_group_start_navigation();
+            self.supersede_start_navigation();
         }
         // A committed visit to another tab wakes what sleeps there (PRD
         // agent-sleep B12); a refused one moved nothing.

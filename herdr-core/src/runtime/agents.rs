@@ -372,7 +372,7 @@ impl Runtime {
                 });
             self.show_agent_workspace_tab(&key, live);
             self.remember_core_workspace_choice(&target_id, &request_id, key);
-            self.supersede_group_start_navigation();
+            self.supersede_start_navigation();
             if self.remote_control_requests.len() == 128 {
                 self.remote_control_requests.pop_front();
             }
@@ -941,7 +941,7 @@ impl Runtime {
             return true;
         }
         if chooses_focus {
-            self.supersede_group_start_navigation();
+            self.supersede_start_navigation();
         }
         if let Some(key) = chosen_key {
             if let Some((tab, delegated)) = focused_tab {

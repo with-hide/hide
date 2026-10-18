@@ -2185,7 +2185,7 @@ impl Runtime {
         changed |= self.refresh_device_snapshots();
         if observed_session.is_some() {
             self.reconcile_node_agent_topology(target_id);
-            changed |= self.follow_remote_group_start(target_id);
+            changed |= self.follow_remote_start(target_id);
         }
         if let Some(session) = observed_session.as_ref() {
             let (live_pane_ids, active_pane_ids) = remote_terminal_pane_sets(
@@ -3976,6 +3976,7 @@ impl Runtime {
         }
         self.next_task_operation_id = self.next_task_operation_id.wrapping_add(1).max(1);
         let id = self.next_task_operation_id;
+        self.capture_task_start_focus(id, kind);
         self.begin_op_timing(
             &super::op_timing::task_create_op_id(id),
             "tab.create",
@@ -4118,12 +4119,17 @@ impl Runtime {
                 // (`ingest_task_agent_result`).
                 let input_ready = operation.agent_phase.is_none().then(|| pane_id.clone());
                 if should_focus && let Some(device) = device.as_deref() {
-                    self.queue_remote_group_start_focus(id, pane_id.clone());
-                    self.follow_remote_group_start(device);
+                    self.queue_remote_start_focus(id, pane_id.clone());
+                    self.follow_remote_start(device);
                 } else if should_focus {
                     // Targeted creation intentionally did not focus Herdr.
                     // Use the same ordered, acknowledged focus as a pane press.
                     self.focus_pane(pane_id, PaneFocusOrigin::Restore, None);
+                    if self.snapshot.status.last_error.is_none()
+                        && !self.device_in_front(self.node.as_str())
+                    {
+                        self.bring_device_forward(self.node.as_str().to_owned());
+                    }
                 }
                 // A tab that does not take the screen is not where the
                 // operator's keys were going, agent or not.

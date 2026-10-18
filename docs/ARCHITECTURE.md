@@ -999,6 +999,8 @@ The root takes the screen as an ordinary start does; a descendant starts as a ph
 A group-qualified creation starts without Herdr focus; once its selected target is accepted, the core uses the ordinary ordered pane-focus control to bring it forward.
 The global agent-start panel reads that result without issuing a second pane-focus intent, so a result left behind stays behind in the shell too.
 For a connected device, the current start may hold one follow for at most 90 seconds until its exact pane appears in that checkout's catalog, then sends one ordinary remote pane focus with device forwarding.
+The task captures this navigation permission before Home sync or checkout preparation, so Home and checkout starts share the same rule; Home creation itself does not move Herdr's focus ahead of that result.
+An accepted local result uses the same local device forwarding as an accepted pane press, including when a remote device was in front.
 An intervening local or remote visit, a replacement task or a changed device connection cancels that follow; repeated catalog answers cannot focus it again.
 A global start, including an archived root, may open another checkout while its original checkout, group, tab and control-lane focus serial remain current; a later explicit visit cancels that permission even if the operator returns to the same empty group or draft without sending Herdr a focus command.
 A retry reuses the pane the earlier attempt made instead of opening another.

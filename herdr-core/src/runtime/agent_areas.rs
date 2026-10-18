@@ -478,7 +478,7 @@ impl Runtime {
         }
         if !resize {
             let prior = self.focused_visible_tab_id();
-            self.supersede_group_start_navigation();
+            self.supersede_start_navigation();
             self.show_agent_workspace_tab(&key, tab);
             if key.0 == self.node.as_str() {
                 self.agent_sleep_visit(prior.as_deref());
