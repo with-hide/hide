@@ -91,6 +91,7 @@ struct InputRequest {
     /// When it opened, about when its first key was typed; none for a
     /// creation refused before it reached Herdr.
     opened: Option<Instant>,
+    input_lost: bool,
 }
 
 impl InputRequest {
@@ -116,10 +117,10 @@ impl InputRequests {
     /// still pending is discarded. An id already naming another creation is
     /// that client's newer request, so the old row leaves rather than keep
     /// pointing keys at the old pane.
-    pub(super) fn open(&mut self, request_id: &str, origin: InputOrigin, now: Instant) {
+    pub(super) fn open(&mut self, request_id: &str, origin: InputOrigin, now: Instant) -> bool {
         if !valid_request_id(request_id) {
             report_invalid_request_id(request_id);
-            return;
+            return false;
         }
         if let Some(index) = self
             .requests
@@ -127,11 +128,19 @@ impl InputRequests {
             .position(|request| request.request_id == request_id)
         {
             if self.requests[index].origin == origin {
-                return;
+                return true;
+            }
+            if self.requests[index].state == InputRequestState::Pending
+                && matches!(self.requests[index].origin, InputOrigin::Fork(_))
+            {
+                return false;
             }
             self.requests.remove(index);
         }
-        self.make_room();
+        if !self.make_room() {
+            return false;
+        }
+        let fork = matches!(origin, InputOrigin::Fork(_));
         self.requests.push_back(InputRequest {
             request_id: request_id.to_owned(),
             origin,
@@ -139,19 +148,30 @@ impl InputRequests {
             laid_out: false,
             held_for: None,
             opened: Some(now),
+            input_lost: false,
         });
         self.controls.push(TerminalControl::RequestOpen {
             request: request_id.to_owned(),
+            fork,
         });
+        true
     }
 
-    fn make_room(&mut self) {
-        if self.requests.len() >= INPUT_REQUEST_LIMIT
-            && let Some(mut evicted) = self.requests.pop_front()
-            && evicted.state == InputRequestState::Pending
-        {
+    fn make_room(&mut self) -> bool {
+        if self.requests.len() < INPUT_REQUEST_LIMIT {
+            return true;
+        }
+        let Some(index) = self.requests.iter().position(|request| {
+            request.state != InputRequestState::Pending
+                || !matches!(request.origin, InputOrigin::Fork(_))
+        }) else {
+            return false;
+        };
+        let mut evicted = self.requests.remove(index).expect("found");
+        if evicted.state == InputRequestState::Pending {
             self.discard_row(&mut evicted, "evicted");
         }
+        true
     }
 
     fn discard_row(&mut self, request: &mut InputRequest, reason: &str) {
@@ -211,6 +231,12 @@ impl InputRequests {
             request.laid_out = false;
         }
         request.held_for = Some(pane_id.to_owned());
+        if changed {
+            self.controls.push(TerminalControl::RequestHold {
+                request: request.request_id.clone(),
+                pane: pane_id.to_owned(),
+            });
+        }
         changed
     }
 
@@ -234,12 +260,19 @@ impl InputRequests {
     /// The node discarded what it held for `request_id` at its own cap: the
     /// row ends, so the shell's mark ends with it. Returns whether it changed.
     pub(super) fn discarded_by_node(&mut self, request_id: &str) -> bool {
-        let Some(request) = self.requests.iter_mut().find(|request| {
-            request.request_id == request_id && request.state == InputRequestState::Pending
-        }) else {
+        let Some(request) = self
+            .requests
+            .iter_mut()
+            .find(|request| request.request_id == request_id)
+        else {
             return false;
         };
-        request.state = InputRequestState::Discarded;
+        if request.input_lost {
+            return false;
+        }
+        // Keep the lifecycle pending so completion still releases the node's
+        // pane guard. The discarded snapshot ends the screen's request mark.
+        request.input_lost = true;
         true
     }
 
@@ -259,7 +292,9 @@ impl InputRequests {
         {
             return false;
         }
-        self.make_room();
+        if !self.make_room() {
+            return false;
+        }
         self.requests.push_back(InputRequest {
             request_id: request_id.to_owned(),
             origin: InputOrigin::Refused,
@@ -267,6 +302,7 @@ impl InputRequests {
             laid_out: false,
             held_for: None,
             opened: None,
+            input_lost: false,
         });
         self.controls.push(TerminalControl::RequestDiscard {
             request: request_id.to_owned(),
@@ -323,6 +359,18 @@ impl InputRequests {
     }
 
     /// The controls the node has not been sent yet.
+    pub(super) fn close(&mut self) {
+        for request in &mut self.requests {
+            if request.state == InputRequestState::Pending {
+                request.state = InputRequestState::Discarded;
+                self.controls.push(TerminalControl::RequestDiscard {
+                    request: request.request_id.clone(),
+                    reason: "runtime_closed".into(),
+                });
+            }
+        }
+    }
+
     pub(super) fn take_controls(&mut self) -> Vec<TerminalControl> {
         std::mem::take(&mut self.controls)
     }
@@ -348,10 +396,14 @@ impl InputRequests {
             .iter()
             .map(|request| InputRequestSnapshot {
                 request_id: request.request_id.clone(),
-                state: match request.state {
-                    InputRequestState::Pending => WireState::Pending,
-                    InputRequestState::Ready(_) => WireState::Ready,
-                    InputRequestState::Discarded => WireState::Discarded,
+                state: if request.input_lost {
+                    WireState::Discarded
+                } else {
+                    match request.state {
+                        InputRequestState::Pending => WireState::Pending,
+                        InputRequestState::Ready(_) => WireState::Ready,
+                        InputRequestState::Discarded => WireState::Discarded,
+                    }
                 },
                 held_for: (request.state == InputRequestState::Pending)
                     .then(|| request.held_for.clone())
@@ -513,9 +565,10 @@ impl super::Runtime {
             .map(|operation| operation.id);
         let before = self.input_requests.snapshot();
         match task {
-            Some(id) => self
-                .input_requests
-                .open(request_id, InputOrigin::Task(id), Instant::now()),
+            Some(id) => {
+                self.input_requests
+                    .open(request_id, InputOrigin::Task(id), Instant::now());
+            }
             None => {
                 self.input_requests.refuse_unopened(request_id);
             }
@@ -656,6 +709,28 @@ mod tests {
     }
 
     #[test]
+    fn pending_forks_keep_their_holder_when_other_creations_reach_the_cap() {
+        let mut requests = InputRequests::default();
+        let now = Instant::now();
+        for index in 0..INPUT_REQUEST_LIMIT {
+            assert!(requests.open(
+                &format!("fork-{index}"),
+                InputOrigin::Fork(format!("source-{index}")),
+                now,
+            ));
+        }
+        requests.take_controls();
+        assert!(!requests.open("tab", InputOrigin::TabCreate(1), now));
+        assert!(!requests.open("fork-extra", InputOrigin::Fork("extra".into()), now));
+        assert!(!requests.open("fork-0", InputOrigin::TabCreate(2), now));
+        assert!(requests.take_controls().is_empty());
+        let origin = InputOrigin::Fork("source-0".into());
+        assert!(requests.hold_for(&origin, "fork-pane"));
+        assert!(requests.resolve(&origin, "fork-pane"));
+        assert!(requests.open("fork-extra", InputOrigin::Fork("extra".into()), now));
+    }
+
+    #[test]
     fn a_request_tells_the_node_when_it_opens_and_which_pane_answers_it() {
         let mut requests = InputRequests::default();
         requests.open("r1", InputOrigin::Split("op-1".to_owned()), Instant::now());
@@ -664,7 +739,8 @@ mod tests {
             controls(&mut requests),
             [
                 TerminalControl::RequestOpen {
-                    request: "r1".into()
+                    request: "r1".into(),
+                    fork: false,
                 },
                 TerminalControl::RequestResolve {
                     request: "r1".into(),
@@ -989,7 +1065,37 @@ mod tests {
         let mut requests = InputRequests::default();
         requests.open("r1", InputOrigin::TabCreate(1), Instant::now());
         assert!(requests.discarded_by_node("r1"));
-        assert_eq!(requests.state_of("r1"), Some(InputRequestState::Discarded));
+        assert_eq!(requests.snapshot()[0].state, WireState::Discarded);
         assert!(!requests.discarded_by_node("r1"));
+        assert!(requests.resolve(&InputOrigin::TabCreate(1), "w1:p2"));
+    }
+
+    #[test]
+    fn a_fork_loss_report_after_core_discard_is_shown_once() {
+        let mut requests = InputRequests::default();
+        let origin = InputOrigin::Fork("w1:p1".into());
+        requests.open("fork-1", origin.clone(), Instant::now());
+        requests.hold_for(&origin, "w1:p2");
+        assert!(requests.discard(&origin, "unconfirmed"));
+        assert!(requests.discarded_by_node("fork-1"));
+        assert!(!requests.discarded_by_node("fork-1"));
+        assert!(!requests.resolve(&origin, "w1:p2"));
+    }
+
+    #[test]
+    fn a_fork_cap_report_is_kept_when_completion_overtakes_its_report() {
+        let mut requests = InputRequests::default();
+        let origin = InputOrigin::Fork("w1:p1".into());
+        requests.open("fork-1", origin.clone(), Instant::now());
+        assert!(requests.hold_for(&origin, "w1:p2"));
+        assert!(
+            controls(&mut requests).contains(&TerminalControl::RequestHold {
+                request: "fork-1".into(),
+                pane: "w1:p2".into(),
+            })
+        );
+        assert!(requests.resolve(&origin, "w1:p2"));
+        assert!(requests.discarded_by_node("fork-1"));
+        assert_eq!(requests.snapshot()[0].state, WireState::Discarded);
     }
 }

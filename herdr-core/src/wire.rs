@@ -1550,6 +1550,10 @@ pub(crate) enum Readiness {
 }
 
 impl Readiness {
+    pub(crate) fn accepts_input(self) -> bool {
+        matches!(self, Self::Ready | Self::Unreported)
+    }
+
     fn of(interactive_ready: Option<bool>, launch_pending: Option<bool>) -> Self {
         match (interactive_ready, launch_pending) {
             (_, Some(true)) => Self::Launching,

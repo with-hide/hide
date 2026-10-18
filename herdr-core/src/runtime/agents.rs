@@ -2507,7 +2507,7 @@ impl Runtime {
         // Only the operator's own press brings the fork forward with the
         // keyboard; any other caller's fork waits where it was put (#1271).
         if fork_origin != super::events::ForkOrigin::Operator {
-            self.discard_input_request(&origin, "not_shown");
+            self.hold_background_fork_input(&origin, press, pane_id);
             return true;
         }
         // A tab the Agent area has no room for waits in the strip, as a new
@@ -2524,7 +2524,7 @@ impl Runtime {
                     format!("A view was chosen after {source_pane_id} was forked; the fork waits where it was put")
                 },
             );
-            self.discard_input_request(&origin, "not_shown");
+            self.hold_background_fork_input(&origin, press, pane_id);
             return true;
         }
         let prior_intent_serial = self.last_view_intent_serial;
@@ -2532,14 +2532,13 @@ impl Runtime {
         // A focus the core refused (a waiting tab, a closing pane) moved
         // nothing: the fork does not hold the keys or count as a move.
         if self.snapshot.focused.pane_id.as_deref() != Some(pane_id) {
-            self.discard_input_request(&origin, "not_shown");
+            self.hold_background_fork_input(&origin, press, pane_id);
             return true;
         }
         if let Some(pending) = self.forks_in_flight.get_mut(source_pane_id) {
             pending.focused = Some(pane_id.to_owned());
         }
-        // The shell keeps typing against the request while the fork's pane
-        // has the keyboard, so nothing reaches its shell first.
+        // Every client's keys wait on the node while the agent starts.
         self.hold_input_request_for(&origin, pane_id);
         self.fork_focus = Some(ForkFocus {
             intent_serial: self.last_view_intent_serial,
@@ -2547,6 +2546,23 @@ impl Runtime {
             press,
         });
         true
+    }
+
+    fn hold_background_fork_input(
+        &mut self,
+        origin: &super::terminal_input::InputOrigin,
+        press: u64,
+        pane_id: &str,
+    ) {
+        // Keys from the abandoned press stay discarded, but later clients
+        // addressing the pane still wait for its agent.
+        self.discard_input_request(origin, "not_shown");
+        self.input_requests.open(
+            &format!("fork-hold-{press}"),
+            origin.clone(),
+            std::time::Instant::now(),
+        );
+        self.hold_input_request_for(origin, pane_id);
     }
 
     /// `Fork agent`'s tab goes right of the source's tab in the source's Agent
@@ -2609,6 +2625,13 @@ impl Runtime {
         Some(checkout_path)
     }
 
+    /// Readiness affects held keys only. A slow or unreadable agent keeps
+    /// its successful fork and pane; the node reports actual lost bytes.
+    pub(crate) fn discard_fork_input(&mut self, parent_pane_id: &str) {
+        let origin = super::terminal_input::InputOrigin::Fork(parent_pane_id.to_owned());
+        self.discard_input_request(&origin, "unconfirmed");
+    }
+
     pub fn ingest_fork_result(
         &mut self,
         parent_pane_id: &str,
@@ -2645,14 +2668,7 @@ impl Runtime {
                 // Keys typed since the press reach the fork's agent now that
                 // it has started, never its launch command; a fork that did
                 // not take the keyboard was not where they were going.
-                if pending
-                    .as_ref()
-                    .is_some_and(|pending| pending.focused.is_some())
-                {
-                    self.resolve_input_request(&origin, &forked_pane_id);
-                } else {
-                    self.discard_input_request(&origin, "not_shown");
-                }
+                self.resolve_input_request(&origin, &forked_pane_id);
                 true
             }
             Err(message) => {

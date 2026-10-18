@@ -17,7 +17,7 @@ export type GateParams = Record<string, unknown>;
  * decides belongs in `herdr-core/src/runtime/tests/control_order.rs`; use the
  * gate for the one journey that shows the pieces are connected.
  */
-export async function herdrGate(herdr: HerdrFixture) {
+export async function herdrGate(herdr: HerdrFixture, paneEnv?: Record<string, string>) {
   const socket = path.join(herdr.root, "gate.sock");
   const clientSocket = socket.replace(/\.sock$/, "-client.sock");
   const peers = new Set<net.Socket>();
@@ -41,6 +41,19 @@ export async function herdrGate(herdr: HerdrFixture) {
         method: string; params: GateParams;
       };
       const method = request.method;
+      // A pane made by the product gets the same private tools as panes made
+      // by the fixture's CLI. Windows' fresh PowerShell otherwise resolves
+      // the runner's PATH, outside the fixture, when its launch has no env.
+      // Only launch environment is changed; Herdr still executes and answers.
+      if (paneEnv) {
+        const put = (pane: GateParams) => {
+          if (pane.type === "pane") pane.env = { ...(pane.env as GateParams ?? {}), ...paneEnv };
+          if (Array.isArray(pane.children)) pane.children.forEach((child: GateParams) => put(child));
+        };
+        if (method === "layout.apply" && request.params.root) put(request.params.root as GateParams);
+        if (method === "pane.split") request.params.env = { ...(request.params.env as GateParams ?? {}), ...paneEnv };
+        buffer = Buffer.concat([Buffer.from(`${JSON.stringify(request)}\n`), buffer.subarray(end + 1)]);
+      }
       calls.push({ method, params: request.params ?? {} });
       const running = (active.get(method) ?? 0) + 1;
       active.set(method, running);
