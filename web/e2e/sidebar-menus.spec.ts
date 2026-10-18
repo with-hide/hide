@@ -15,6 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { claudeProjects, labelAgent, setFixtureSession, writeFixtureTranscript, startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startDraftTerminal } from "./group-start-helper";
+import { herdrTabs } from "./failure-dump";
 import { startHided } from "./hided-fixture";
 import { rest, screenshot } from "./wire";
 import { chord, commandLabel } from "./chords";
@@ -261,16 +262,22 @@ test("a checkout row's menu offers worktree actions, and the default checkout ca
 });
 
 test("New tab in main opens a draft in the default checkout and its terminal starts there", async ({ page }) => {
-  const { projectRow, main, stop } = await startMenus(page);
+  const { herdr, projectRow, main, stop } = await startMenus(page);
   try {
+    const nativeTabs = () => (herdrTabs(herdr) as { tabs: string[] }[]).flatMap((workspace) => workspace.tabs).sort();
+    const before = nativeTabs();
+    // Drafts share the Agent tab kind; native IDs distinguish the live tabs.
+    const liveTabs = page.locator('[data-tab-bar] [data-tab-kind="herdr"]:not([data-tab^="draft:"])');
     const menu = await openMenu(page, projectRow, "repo actions");
     await menu.locator('[data-menu-item="new_tab_primary"]').click();
     await expect(page.locator("[data-workspace-screen]")).toBeVisible({ timeout: 20_000 });
     await expect(page.locator("[data-agent-tab-start]")).toHaveAttribute("data-agent-tab-start", /^draft:/);
-    await expect(page.locator('[data-tab-bar] [data-tab-kind="herdr"]')).toHaveCount(1);
+    await expect(liveTabs).toHaveCount(1);
+    expect(nativeTabs()).toEqual(before);
     await expect(main.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
-    await startDraftTerminal(page);
-    await expect(page.locator(`[data-tab-bar] [data-tab-kind="herdr"]`)).toHaveCount(2, { timeout: 20_000 });
+    const started = await startDraftTerminal(page);
+    await expect(liveTabs).toHaveCount(2, { timeout: 20_000 });
+    await expect.poll(nativeTabs).toEqual([...before, started].sort());
     await expect(main.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
   } finally { stop(); }
 });

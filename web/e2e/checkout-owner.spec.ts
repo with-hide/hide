@@ -51,7 +51,7 @@ async function twoDraftTerminals(page: Page, herdr: HerdrFixture): Promise<void>
   const ids = await drafts.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-tab")!));
   for (const id of ids) {
     await page.locator(`[data-agent-tab-bar] [data-tab="${id}"]`).click();
-    await startDraftTerminal(page);
+    await startDraftTerminal(page, id);
   }
 }
 

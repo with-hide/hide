@@ -657,9 +657,9 @@ function lastFiveShown(shown: string[], tabPanes: Map<string, string[]>): string
   return recent.flatMap((tab) => tabPanes.get(tab)!).sort();
 }
 
-test("creating a sixth tab keeps the four retained tabs, and two revisit cycles restore every evicted tab", async ({ page }) => {
+test("starting a terminal in a sixth tab keeps the four retained tabs, and two revisit cycles restore every evicted tab", async ({ page }) => {
   // Five tabs in a folder whose workspace is not its owner, so the sixth,
-  // created here, opens the owner workspace: Herdr answers with the new
+  // explicitly started in its draft, opens the owner workspace: Herdr answers with the new
   // pane before the core knows its workspace (I3 of the interaction audit).
   const flow = await startFlow(page, { tabLabels: ["second", "third", "fourth", "fifth"], ownerMark: false });
   try {
@@ -699,6 +699,7 @@ test("creating a sixth tab keeps the four retained tabs, and two revisit cycles 
     const before = flow.terminalLists.length;
     await page.locator("[data-new-agent-tab]").first().click();
     await expect(page.locator("[data-tab]")).toHaveCount(6);
+    await startDraftTerminal(page);
     await expect(page.locator("[data-pane-view]")).not.toHaveAttribute("data-pane-view", warmPane);
     await expect(page.locator("[data-pane-view]")).toHaveAttribute("data-transport", "controlling");
     await expect.poll(() => screen(page)).toContain("fixture %");
