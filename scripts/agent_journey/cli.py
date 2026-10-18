@@ -44,14 +44,16 @@ from .report import save, table_lines
 KIT_SECONDS = 90
 # The whole run's cap, every process under it included: the candidate's start
 # and kit, then each measured agent's cells. Keyless, on the fake model or the
-# stand-ins, an agent took 4 to 7 minutes on macOS (2026-10-18), so seven make
-# 61 minutes, inside the CI step's 75. A real provider's turns are slower and
+# stand-ins, an agent took 4 to 7 minutes on macOS and up to 9 on Windows,
+# whose failing cells wait out their windows (seven took 60 minutes in run
+# 39099935719 and ran past 61 in 39104633599), so seven get 75 minutes,
+# inside the CI step's 85. A real provider's turns are slower and
 # the journey waits up to 120 s for a title, so a signed-in or local run gives
-# each agent about twice that: seven make 110 minutes, inside the signed-in CI
+# each agent 15 minutes: seven make 110 minutes, inside the signed-in CI
 # step's 115. Either way the journey ends itself, writes its report and cleans
 # up before its step would.
 SETUP_SECONDS = 5 * 60
-AGENT_SECONDS = {"keyless": 8 * 60, "provider": 15 * 60}
+AGENT_SECONDS = {"keyless": 10 * 60, "provider": 15 * 60}
 SYSTEM_NAMES = {"darwin": "macOS", "linux": "Linux", "win32": "Windows"}
 
 

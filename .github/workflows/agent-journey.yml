@@ -111,7 +111,7 @@ jobs:
     # Every job's cap is at least the sum of its steps' caps, so a step that
     # times out still leaves the report's upload its time
     # (scripts/tests/test_agent_journey_workflow.py).
-    timeout-minutes: 90
+    timeout-minutes: 95
     strategy:
       fail-fast: false
       matrix:
@@ -157,8 +157,8 @@ jobs:
           cc -O2 -o "$RUNNER_TEMP/journey-controller/claude" web/e2e/shims/spawn-provider.c
       - name: The journey on the stand-ins
         id: journey
-        # Above the journey's own cap for two agents (21 minutes, cli.py).
-        timeout-minutes: 25
+        # Above the journey's own cap for two agents (25 minutes, cli.py).
+        timeout-minutes: 30
         run: |
           set +e
           python3 scripts/agent-journey-check.py --mode ci \
@@ -214,9 +214,9 @@ jobs:
     if: ${{ inputs.fake }}
     runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
     # Seven agents of eleven cells each, about 4 to 7 minutes an agent on
-    # macOS (2026-10-18), inside the journey step's 75; the job's cap is its
-    # steps' caps summed.
-    timeout-minutes: 160
+    # macOS and up to 9 on Windows (2026-10-18), inside the journey step's 85;
+    # the job's cap is its steps' caps summed.
+    timeout-minutes: 170
     strategy:
       fail-fast: false
       matrix:
@@ -291,7 +291,7 @@ jobs:
           fi
           echo "provider=$provider" >> "$GITHUB_OUTPUT"
       - name: The journey against the fake model
-        timeout-minutes: 75
+        timeout-minutes: 85
         run: |
           set +e
           "$PYTHON" scripts/agent-journey-check.py --mode ci --fake-model --agents claude-code,codex,grok,opencode,pi,omp,antigravity \
