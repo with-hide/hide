@@ -3363,7 +3363,8 @@ fn read_pane_text(
 
 /// Topology reads and opening an SSH stream can wait. Recheck the same
 /// control, file node and admitted intent on both sides of every connection.
-/// The callback reads only current runtime facts, never files or sockets.
+/// The callback checks current runtime facts and, for a saved group start,
+/// its owning node's terminal incarnation outside Runtime's mutex.
 pub(crate) struct CurrentSessionConnector<'a> {
     pub(crate) connector: &'a dyn ApiConnector,
     pub(crate) current: &'a (dyn Fn() -> Result<(), String> + Sync),

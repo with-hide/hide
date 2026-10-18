@@ -49,6 +49,8 @@ mod first_run;
 mod fork_registration;
 #[path = "tests/github_reads.rs"]
 mod github_reads;
+#[path = "../worktree_control/group_start_tests.rs"]
+mod group_start_admission;
 mod group_tabs;
 mod group_tabs_remote;
 mod guardrails;
