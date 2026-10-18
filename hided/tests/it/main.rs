@@ -4,6 +4,7 @@
 //! test binary per crate", owns the rule.
 
 mod browser_control;
+mod closed_stdout;
 mod connect_build;
 mod connect_stop;
 mod core_move;
