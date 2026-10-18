@@ -14,7 +14,7 @@ import json
 
 from agent_live_check.protection import private_directory, write_private
 
-from . import omp_state, opencode_service
+from . import ci, omp_state, opencode_service
 from .fake_model import MODEL
 
 # Not a secret: the fake model takes any key, and a CLI needs one to start.
@@ -115,9 +115,7 @@ def agy(home, url, root, local):
     """agy 1.4.0 signs in with GEMINI_API_KEY once its settings name the
     Gemini provider (ci.py); its base URL variable is the Gemini SDK's."""
     del root, local
-    settings = home / ".gemini/antigravity-cli/settings.json"
-    private_directory(settings.parent)
-    write_private(settings, json.dumps({"modelProvider": "gemini"}).encode())
+    ci.agy_set_up(home)
     return {"GEMINI_API_KEY": KEY, "GOOGLE_GEMINI_BASE_URL": url}
 
 

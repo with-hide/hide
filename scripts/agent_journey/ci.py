@@ -156,9 +156,7 @@ def login(runtime, kind, launch, root):
         claude_settings(runtime.home, root, secret)
         return None
     if kind == "agy":
-        settings = runtime.home / ".gemini/antigravity-cli/settings.json"
-        private_directory(settings.parent)
-        write_private(settings, json.dumps({"modelProvider": "gemini"}).encode())
+        agy_set_up(runtime.home)
         return None
     if kind == "omp":
         folder = runtime.home / ".omp/agent"
@@ -177,6 +175,20 @@ def login(runtime, kind, launch, root):
         return "codex login --with-api-key refused: " + error.strip()[:200]
     code, output, error = runtime.owner.run([str(launch), "login", "status"], env=environment, check=False)
     return None if not code else "codex login status after the key login: " + (output + error).strip()[:200]
+
+
+def agy_set_up(home):
+    """What a set-up agy 1.4.2 keeps in its HOME: Gemini as its provider,
+    and its first-run onboarding (a color scheme, then a security notice)
+    finished, the status it saves in `cache/onboarding.json`. In a HOME
+    without it the onboarding opens over the first prompt and can hold it,
+    so the start answers nothing."""
+    folder = home / ".gemini/antigravity-cli"
+    private_directory(folder / "cache")
+    write_private(folder / "settings.json", json.dumps({"modelProvider": "gemini"}).encode())
+    write_private(folder / "cache/onboarding.json", json.dumps({
+        "onboardingComplete": True, "consumerOnboardingComplete": True,
+        "enterpriseOnboardingComplete": False}).encode())
 
 
 def claude_settings(home, root, secret):
