@@ -426,7 +426,7 @@ def prepare_fake_local(runtime, report, table, rows, measured, operator, root, u
     return sandbox, guard, ready + legacy_ready
 
 
-def prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, fake, services):
+def prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, fake, services, diagnostics=None):
     """CI mode's agents in the disposable HOME, signed in with the lane's keys,
     pointed at the fake model (`fake`, each agent's URL) or replaced by the
     fixture stand-ins; the agents ready to measure."""
@@ -452,6 +452,11 @@ def prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, fake, 
         fake_env = fake_lane.configure(kind, runtime.home, fake[key], root, local=False) if fake else None
         if fake_env is not None:
             agent["fake_env"] = sorted(fake_env)
+        if fake and kind == "grok" and sys.platform == "darwin" and diagnostics is not None:
+            from .grok_diagnostic import Diagnostic
+            diagnostic = Diagnostic(runtime)
+            diagnostics.append((agent, diagnostic))
+            program = diagnostic.launcher(runtime, program)
         launch = ci.wrapper(runtime, program, kind, os.environ.get("PATH", ""),
                             runtime.probe / f"fixture-{kind}.config" if fixture_bin else None, fake_env)
         environment = {**clean_env(), "HOME": str(runtime.home), "TMPDIR": runtime.env["TMPDIR"]}
@@ -588,6 +593,7 @@ def main(argv=None):
     servers = {}
     # Each OpenCode agent's program, environment and private server port, whose server the run ends.
     services = {}
+    diagnostics = []
     try:
         home = run / "probe/daemon-home"
         # The macOS sandbox opens the probe to agents, so a local run keeps the
@@ -626,7 +632,7 @@ def main(argv=None):
             sandbox, guard, ready = prepare_local(runtime, report, table, rows, measured, operator, root, urls, services)
         else:
             sandbox, ready = None, prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, urls,
-                                              services)
+                                              services, diagnostics)
         if WINDOWS and not local:
             # Before Herdr opens a pane, which reads its PATH from the
             # account's registry: the agents' wrappers are found through it.
@@ -780,6 +786,13 @@ def main(argv=None):
                 owner.close()
             except Exception as cleanup_error:
                 report["cleanup"]["failures"].append(str(cleanup_error))
+        for agent, diagnostic in diagnostics:
+            try:
+                agent["authentication_diagnostic"] = diagnostic.close()
+                if diagnostic.result.get("failure"):
+                    report["failures"].append({"type": "DiagnosticError", "reason": diagnostic.result["failure"]})
+            except Exception as error:
+                report["failures"].append({"type": "DiagnosticError", "reason": type(error).__name__})
         if path_left:
             report["cleanup"]["confirmed"] = False
             report["cleanup"].setdefault("failures", []).append(path_left)

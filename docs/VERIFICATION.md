@@ -420,7 +420,9 @@ Each entry is keyed by the CLI pin, installer specification, operating system an
 The cap includes in-progress installations and cached downloads; crossing it fails with exit 2 and asks the operator to remove unused pins, never silently evicts another run's CLI or increases the cap.
 A lease holds the cache until the run's children have ended, so another local fake run refuses a busy cache.
 An unconfirmed child cleanup leaves a cache marker that refuses reuse until that run has been inspected and the marker cleared.
-An interrupted installation remains an explicitly incomplete pin and must be removed before retrying.
+A failed installation removes its incomplete pin after confirming its children have ended.
+An uncatchable kill can leave an incomplete pin that must be removed before retrying.
+Native executables linked into the installer's temporary HOME are retained in the pin before that HOME is removed.
 
 The four guards are enforced before or during every admitted agent's journey:
 
@@ -493,6 +495,9 @@ Operator skills must neither enter a fake run nor alter its folder-trust measure
 The fixture seeds no Pi trust decision, and the untrusted-start path remains untrusted.
 Private fake runs use the bounded before/after watch above instead of the real-login route's trust-entry inventory, which includes project paths.
 The candidate's Hide AI is off in both fake modes, and native titles are what the title cell reads.
+The macOS fake CI lane temporarily records Grok's authentication method, key-variable name/presence, and wrapper HOME/config paths relative to the run to investigate its CI-only login prompt.
+It streams the native debug log through a private FIFO, retains only the selected facts, and removes the FIFO at cleanup; the reader has a 32 MiB input cap, a 4 MiB line cap and a 64-event cap.
+The configured route and the native model-config observation are separate evidence; this diagnostic does not trace filesystem opens.
 `scripts/tests/test_agent_journey_private_home.py` exercises content, top-level entry and link changes on fake watch roots, concurrent SQLite copies, unchanged source bytes, missing proof, cache refusal and authenticated requests; no test watches or changes the operator's folders.
 The report is marked as a fake model run with what a fake model cannot show: it proves the CLI, Hide's kit and Herdr's integration, never a provider, a login or a quota, and its rows are kept apart from a signed-in run's.
 

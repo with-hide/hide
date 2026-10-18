@@ -54,6 +54,8 @@ def markdown(report):
         lines.append(f"- CLI: {text(agent.get('version', 'not probed'))}")
         if "private_home" in agent:
             lines.append(f"- private HOME: `{text(json.dumps(agent['private_home']))}`")
+        if "authentication_diagnostic" in agent:
+            lines.append(f"- authentication diagnostic: `{text(json.dumps(agent['authentication_diagnostic']))}`")
         if "requests" in agent:
             budget = agent.get("request_budget")
             lines.append(f"- model requests: {agent['requests']}" + (f" (budget {budget})" if budget is not None else "")
