@@ -5,7 +5,8 @@
 //! After that the phone may only: open one agent's detail, choose its
 //! conversation or its terminal, ask for older messages or more rows, close
 //! it, send that pane a reply or one key, open the start sheet and start an
-//! agent from it, wake or inspect a listed sleeping conversation, and register
+//! agent from it, wake a sleeping agent in its pane, wake or inspect a listed
+//! sleeping conversation, and register
 //! or report its push subscription. Anything else is refused and recorded.
 //! It never receives a file, a path, a setting or the core's snapshot; the one
 //! exception is the interface language, which rides each `agents` frame so the
@@ -616,6 +617,7 @@ async fn handle(
             None
         }
         "input" => Some(input(mobile, phone_id, message, projection).await),
+        "wake_agent" => Some(wake_agent(mobile, phone_id, message, projection).await),
         "wake_sleeping_session" | "check_sleeping_session" => {
             Some(sleeping_session(mobile, phone_id, message, projection).await)
         }
@@ -733,6 +735,81 @@ async fn sleeping_session(
     }
 }
 
+/// Wake agent, Retry and Start new session from a phone: the desktop's own
+/// `agent_wake` for a pane the projection says holds a sleeping or failed
+/// agent. The phone names the pane it sees; the core checks its record again.
+async fn wake_agent(
+    mobile: &Arc<Mobile>,
+    phone_id: &str,
+    message: &Value,
+    projection: &Projection,
+) -> Value {
+    let key = key_of(message);
+    let answer = |ok: bool, reason: Option<&str>| {
+        json!({
+            "type": "sleep_result", "request_id": message.get("request_id"),
+            "sleep_id": key.as_ref().map(AgentKey::tag), "ok": ok, "reason": reason,
+        })
+    };
+    let (Some(_), Some(key)) = (request_id_of(message), key.as_ref()) else {
+        return answer(false, Some("invalid_request"));
+    };
+    let bytes = match wake_action(message, projection, key) {
+        Some(Wake::Dispatch(bytes)) => bytes,
+        // A wake already running is the same intent and starts nothing.
+        Some(Wake::Running) => return answer(true, None),
+        None => {
+            refusal_logged("scope.refused", Some(phone_id), "wake_not_available");
+            return answer(false, Some("unavailable"));
+        }
+    };
+    if mobile.still_admitted(phone_id).is_err() {
+        return answer(false, Some("unavailable"));
+    }
+    let (mobile, phone_id) = (Arc::clone(mobile), phone_id.to_owned());
+    let dispatched = tokio::task::spawn_blocking(move || {
+        mobile.still_admitted(&phone_id).map_err(str::to_owned)?;
+        mobile.config.core.dispatch(bytes)
+    })
+    .await;
+    match dispatched {
+        Ok(Ok(())) => answer(true, None),
+        _ => answer(false, Some("unavailable")),
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum Wake {
+    Dispatch(Vec<u8>),
+    Running,
+}
+
+/// What a phone's wake does: the `agent_wake` event, nothing when the agent
+/// is already waking, and no action when the pane holds no sleeping agent.
+fn wake_action(message: &Value, projection: &Projection, key: &AgentKey) -> Option<Wake> {
+    if !message.as_object()?.keys().all(|name| {
+        matches!(
+            name.as_str(),
+            "type" | "request_id" | "device_id" | "pane_id" | "fresh"
+        )
+    }) {
+        return None;
+    }
+    let fresh = match message.get("fresh") {
+        None => false,
+        Some(value) => value.as_bool()?,
+    };
+    let sleep = projection.find(key)?.sleep.as_ref()?;
+    if sleep.state == "waking" {
+        return Some(Wake::Running);
+    }
+    let event = json!({
+        "schema_version": herdr_core::SCHEMA_VERSION, "kind": "agent_wake",
+        "payload": {"pane_id": key.pane_id, "fresh": fresh},
+    });
+    Some(Wake::Dispatch(event.to_string().into_bytes()))
+}
+
 fn sleep_action<'a>(
     message: &'a Value,
     projection: &Projection,
@@ -780,6 +857,15 @@ async fn input(
         refusal_logged("scope.refused", Some(phone_id), "input_not_an_agent");
         return answer(false, Some("gone"));
     };
+    // The shell under a sleeping agent is not who the phone talks to: nothing
+    // reaches the pane until the agent is back, whatever the phone drew.
+    if projection
+        .find(&key)
+        .is_some_and(|agent| agent.sleep.is_some())
+    {
+        refusal_logged("scope.refused", Some(phone_id), "input_to_sleeping_agent");
+        return answer(false, Some("asleep"));
+    }
     let text = message.get("text").and_then(Value::as_str);
     let herdr_key = message.get("key").and_then(Value::as_str);
     let problem = match (text, herdr_key) {
@@ -891,6 +977,154 @@ mod tests {
         assert!(sleep_action(&message, &projection(&row), "local").is_some());
         row["checking"] = json!(true);
         assert!(sleep_action(&message, &projection(&row), "local").is_none());
+    }
+
+    fn sleeping_projection(state: Option<&str>) -> Projection {
+        let mut agent = json!({
+            "pane_id": "w1:p1", "group": "seen", "mark": "asleep", "identity_label": "Review parser",
+            "agent_kind": "claude", "status_code": "sleeping", "demand": "none",
+        });
+        if let Some(state) = state {
+            agent["sleep"] = json!({
+                "state": state, "reason": null, "since_unix_ms": 1, "progress": null,
+            });
+        }
+        super::super::projection::project(&json!({"navigator": {"agents": [agent]}}), "local")
+    }
+
+    fn pane() -> AgentKey {
+        AgentKey {
+            device_id: "local".to_owned(),
+            pane_id: "w1:p1".to_owned(),
+        }
+    }
+
+    /// A reply meant for the agent must never reach the shell under a sleeping
+    /// one. This Mac has no Herdr socket here, so an input that gets as far as
+    /// writing answers `unavailable`; `asleep` is the refusal before that.
+    #[tokio::test]
+    async fn input_to_a_pane_whose_agent_is_not_running_is_refused_before_anything_is_written() {
+        let directory = tempfile::tempdir().unwrap();
+        let mobile = Mobile::start(super::super::Config {
+            state_dir: directory.path().join("state"),
+            home: directory.path().to_path_buf(),
+            port: 0,
+            cli: super::super::tailscale::CliSource {
+                pinned: None,
+                search_path: None,
+            },
+            host_name: None,
+            core: Arc::new(crate::core::CoreHandle::bare(directory.path())),
+            herdr_socket: None,
+            renderers: Arc::default(),
+            start_demand: Arc::default(),
+            open: tokio::sync::watch::channel(true).1,
+            desktop: Arc::default(),
+        });
+        let message = |request_id: &str, body: Value| {
+            let mut message = json!({
+                "type": "input", "request_id": request_id, "device_id": "local", "pane_id": "w1:p1",
+            });
+            message
+                .as_object_mut()
+                .unwrap()
+                .extend(body.as_object().unwrap().clone());
+            message
+        };
+        let reason = |answer: Value| answer["reason"].as_str().map(str::to_owned);
+
+        for state in ["sleeping", "waking", "failed"] {
+            let projection = sleeping_projection(Some(state));
+            for (id, body) in [
+                ("reply", json!({"text": "echo R11-PHONE-SHELL"})),
+                ("key", json!({"key": "enter"})),
+            ] {
+                let request_id = format!("{state}-{id}");
+                let answer =
+                    input(&mobile, "phone-a", &message(&request_id, body), &projection).await;
+                assert_eq!(answer["ok"], false, "{state} {id}");
+                assert_eq!(reason(answer), Some("asleep".to_owned()), "{state} {id}");
+                assert!(
+                    matches!(
+                        mobile.reserve_input("phone-a", &request_id),
+                        Reservation::Write
+                    ),
+                    "a refused input claims nothing, so the phone may send it once the agent is back"
+                );
+            }
+        }
+
+        // The agent is back (no sleep on its row): the same input now reaches
+        // the write step, which has no Herdr to write to.
+        let awake = sleeping_projection(None);
+        let answer = input(
+            &mobile,
+            "phone-a",
+            &message("awake", json!({"text": "yes"})),
+            &awake,
+        )
+        .await;
+        assert_eq!(reason(answer), Some("unavailable".to_owned()));
+    }
+
+    #[test]
+    fn a_phone_wakes_only_a_sleeping_or_failed_pane_and_may_ask_for_a_new_session() {
+        let message = |extra: Value| {
+            let mut message = json!({
+                "type": "wake_agent", "request_id": "request-1", "device_id": "local", "pane_id": "w1:p1",
+            });
+            message
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            message
+        };
+        let event = |action: Option<Wake>| match action {
+            Some(Wake::Dispatch(bytes)) => Some(serde_json::from_slice::<Value>(&bytes).unwrap()),
+            _ => None,
+        };
+        let sleeping = sleeping_projection(Some("sleeping"));
+        let resume = event(wake_action(&message(json!({})), &sleeping, &pane())).expect("a wake");
+        assert_eq!(resume["kind"], "agent_wake");
+        assert_eq!(
+            resume["payload"],
+            json!({"pane_id": "w1:p1", "fresh": false})
+        );
+
+        let failed = sleeping_projection(Some("failed"));
+        let fresh = event(wake_action(
+            &message(json!({"fresh": true})),
+            &failed,
+            &pane(),
+        ))
+        .expect("a new session");
+        assert_eq!(fresh["payload"], json!({"pane_id": "w1:p1", "fresh": true}));
+        assert_eq!(
+            wake_action(&message(json!({"fresh": "yes"})), &failed, &pane()),
+            None
+        );
+
+        // A wake already running starts nothing; an awake pane has nothing to wake.
+        let waking = sleeping_projection(Some("waking"));
+        assert_eq!(
+            wake_action(&message(json!({})), &waking, &pane()),
+            Some(Wake::Running)
+        );
+        assert_eq!(
+            wake_action(&message(json!({})), &sleeping_projection(None), &pane()),
+            None
+        );
+
+        // The phone names a pane the list holds and nothing else.
+        let other = AgentKey {
+            device_id: "local".to_owned(),
+            pane_id: "w1:p9".to_owned(),
+        };
+        assert_eq!(wake_action(&message(json!({})), &sleeping, &other), None);
+        assert_eq!(
+            wake_action(&message(json!({"cwd": "/"})), &sleeping, &pane()),
+            None
+        );
     }
 
     #[test]
