@@ -59,6 +59,7 @@ impl Runtime {
         model: Option<String>,
         prompt: Option<String>,
         request_id: Option<String>,
+        stay_behind: bool,
     ) -> bool {
         let local = device == self.node.as_str();
         if !local
@@ -118,6 +119,7 @@ impl Runtime {
         if let Some(operation) = self.snapshot.task_operation.as_mut() {
             operation.request_id = request_id;
             operation.device_id = (!local).then(|| device.to_owned());
+            operation.stays_behind = stay_behind;
         }
         self.remember_agent_choice(agent_kind.as_deref(), model.as_deref());
         self.set_task_agent_launch(
@@ -165,6 +167,7 @@ impl Runtime {
         }
         let request_id = operation.request_id.clone();
         let agent_kind = operation.agent_kind.clone();
+        let focus = !operation.stays_behind;
         let synced = match synced {
             Ok(synced) => synced,
             Err(LinkError::Refused(error))
@@ -227,6 +230,7 @@ impl Runtime {
             checkout_path: synced.home,
             label,
             host,
+            focus,
         })
     }
 

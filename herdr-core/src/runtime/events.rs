@@ -861,6 +861,11 @@ pub(super) struct AgentStartInCheckoutPayload {
     /// The archived file selected by the caller, proved again off-lock.
     #[serde(default)]
     pub(super) resume_session_path: Option<String>,
+    /// The start comes from a surface that is not the operator's own screen
+    /// (the phone): the tab is made and listed, but the desktop's visible
+    /// tab, keyboard focus and Herdr's focus stay where they are.
+    #[serde(default)]
+    pub(super) stay_behind: bool,
 }
 
 #[derive(Debug, Deserialize)]
