@@ -72,7 +72,18 @@ class OperatorWatch:
         changed = [name for name in self.before if self.before[name] != after[name]]
         if (after.get(".claude.json") or {}).get("run_projects") and ".claude.json" not in changed:
             changed.append(".claude.json")
-        return {"before": self.before, "after": after, "database_copies": self.copies, "changed": changed}
+        protected = {".claude.json": "claude_login_install", ".omp/agent/agent.db": "omp_login_settings",
+                     ".local/share/opencode/opencode.db": "opencode_login"}
+        comparisons = {}
+        for path, label in protected.items():
+            fields = (list(claude_watch.KEYS) + ["projects_in_run"] if path == ".claude.json"
+                      else list(database_watch.DATABASES[path]))
+            comparisons[label] = {"keys": fields, "status": "fail" if path in changed else "pass"}
+        # Login hashes and run-project path names stay in memory, never evidence.
+        return {"before": {key: value for key, value in self.before.items() if key not in protected},
+                "after": {key: value for key, value in after.items() if key not in protected},
+                "login_comparisons": comparisons, "database_copies": self.copies,
+                "changed": [protected.get(name, name) for name in changed]}
 
     def check(self, result=None):
         result = self.compare() if result is None else result

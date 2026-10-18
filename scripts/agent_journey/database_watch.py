@@ -115,7 +115,9 @@ def digest(root, scratch, name, copies=None):
                     raise ProtectionError("operator_watch_database_copy_changed")
                 hashes[path] = hashed
                 if copies is not None:
-                    copies.append({"path": str(path.relative_to(root)), "method": method, "bytes": before[path][2]})
+                    copies.append({"agent": "omp" if name.startswith(".omp/") else "opencode",
+                                   "file": "database" if path == source else "wal",
+                                   "method": method, "bytes": before[path][2]})
             if metadata(paths, root, MAX_DATABASE_BYTES) != before:
                 raise ProtectionError("operator_watch_database_copy_changed")
             for path, hashed in hashes.items():

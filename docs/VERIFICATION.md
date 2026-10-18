@@ -455,8 +455,13 @@ Claude Code's mixed global file is compared by this approved refinement of (b):
 > (ii) at the end, no key in projects is a path inside this run's folders (the run folder, its worktrees and its private HOME). A run whose HOME leaked writes its own cwd there, so this catches a write by the run itself exactly, and other sessions' entries don't matter.
 > Counters, caches and other projects' entries are live session state and stay out, like omp's usage counters. JSON that is half written or cannot be read counts as a change: exit 2.
 
+The login-state evidence follows these additional conditions, also applied to the omp and OpenCode row comparisons:
+
+> Only read it. Do not leave a copy anywhere outside the run folder, and delete any copy made inside the run folder at cleanup.
+> The report records only key names and pass or fail. It never holds values, paths, or the raw hashes.
+
 The selected keys are `oauthAccount`, `primaryApiKey`, `customApiKeyResponses`, `installMethod`, `autoUpdates`, `hasCompletedOnboarding` and `lastOnboardingVersion`.
-The whole selected object is hashed canonically, including the absence of a key; no selected value is retained in evidence.
+The whole selected object is hashed canonically in memory, including the absence of a key; evidence retains only the compared key names and pass/fail, not values, project paths or hashes.
 Claude Code is closed source: these names follow its configuration/onboarding format, while its official settings documentation is live rather than version-pinned.
 Every absolute `projects` key is checked against the run directory, which contains the private HOME and both worktree roots; any such key at the end fails even if it was already present at the start.
 

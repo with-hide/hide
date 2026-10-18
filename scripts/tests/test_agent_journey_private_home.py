@@ -85,18 +85,21 @@ class PrivateHome(unittest.TestCase):
         data['numStartups'] = 2
         data['projects'][str(self.root / 'other')] = {'hasTrustDialogAccepted': True}
         config.write_text(json.dumps(data))
-        self.assertEqual(watch.check()['changed'], [])
+        result = watch.check()
+        self.assertEqual(result['changed'], [])
+        self.assertNotIn(watch.before['.claude.json']['sha256'], json.dumps(result))
+        self.assertNotIn(str(self.root / 'other'), json.dumps(result))
         data['oauthAccount']['accountUuid'] = 'changed'
         config.write_text(json.dumps(data))
-        with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: .claude.json'):
+        with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: claude_login_install'):
             watch.check()
         data['oauthAccount']['accountUuid'] = 'fixture'
         data['projects'][str(run / 'probe/worktrees/pi')] = {}
         config.write_text(json.dumps(data))
-        with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: .claude.json'):
+        with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: claude_login_install'):
             watch.check()
         # Even a path already present at the start cannot pass the end guard.
-        with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: .claude.json'):
+        with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: claude_login_install'):
             fake_private.OperatorWatch(self.root, run=run).check()
 
     def test_half_written_claude_json_is_not_an_empty_configuration(self):
@@ -250,13 +253,16 @@ class OmpWatch(unittest.TestCase):
         self.assertEqual({path: (path.read_bytes(), path.stat().st_mtime_ns)
                           for path in self.path.parent.iterdir()}, originals)
         self.assertNotIn('fixture-secret', json.dumps(watch.before))
+        evidence = json.dumps(watch.compare())
+        self.assertNotIn(watch.before['.omp/agent/agent.db']['auth_credentials']['sha256'], evidence)
+        self.assertNotIn(str(self.path), evidence)
         self.assertEqual(list(self.scratch.iterdir()), [])
         self.connection.execute('UPDATE command_usage SET count = 2')
         self.connection.commit()
         self.assertEqual(watch.check()['changed'], [])
         self.connection.execute("UPDATE auth_credentials SET data = 'changed-secret'")
         self.connection.commit()
-        with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: .omp/agent/agent.db'):
+        with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: omp_login_settings'):
             watch.check()
         self.assertEqual(list(self.scratch.iterdir()), [])
 
@@ -264,7 +270,7 @@ class OmpWatch(unittest.TestCase):
         watch = fake_private.OperatorWatch(self.root, self.scratch)
         self.connection.execute("UPDATE settings SET value = 'light'")
         self.connection.commit()
-        with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: .omp/agent/agent.db'):
+        with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: omp_login_settings'):
             watch.check()
 
     def test_unreadable_schema_is_a_failure_not_missing_configuration(self):
@@ -341,7 +347,7 @@ class OpenCodeWatch(unittest.TestCase):
                 self.assertEqual(watch.check()['changed'], [])
                 connection.execute("UPDATE credential SET value = 'changed'")
                 connection.commit()
-                with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: .local/share/opencode/opencode.db'):
+                with self.assertRaisesRegex(ProtectionError, 'operator_watch_changed: opencode_login'):
                     watch.check()
                 self.assertEqual(list(scratch.iterdir()), [])
                 if sys.platform == 'darwin':
