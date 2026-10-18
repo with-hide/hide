@@ -39,6 +39,81 @@ pub fn create_dir_all(path: &Path) -> io::Result<()> {
     }
 }
 
+/// What [`own_dir`] found at the folder it answered for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OwnDir {
+    /// It was missing; it and every missing folder above it are made private.
+    Made,
+    /// It was already a private folder of this account.
+    Private,
+    /// It was this account's and others could reach it; it is private now.
+    Restricted,
+}
+
+/// Makes `path` a private folder of this account, whatever an earlier
+/// program left there: a missing one is made as [`create_dir_all`] makes it,
+/// and an existing folder this account owns that others can reach, such as
+/// one `fs::create_dir_all` made under the process's umask, is restricted to
+/// its owner. A link, anything but a folder, and a folder another account
+/// owns are refused (`PermissionDenied`, naming the path) and left as they
+/// are, never followed or changed. The folder is opened as the entry itself
+/// and judged and changed through that handle, so a link swapped in at the
+/// name after the look cannot redirect the change. Only the last name is
+/// judged: the folders above it are the caller's to trust.
+pub fn own_dir(path: &Path) -> io::Result<OwnDir> {
+    // Every failure names the folder, so a caller can show it as it is.
+    let at =
+        |error: io::Error| io::Error::new(error.kind(), format!("{}: {error}", path.display()));
+    let made = match fs::symlink_metadata(path) {
+        Ok(_) => false,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            create_dir_all(path).map_err(at)?;
+            true
+        }
+        Err(error) => return Err(at(error)),
+    };
+    let refused = |why: &str| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} {why}", path.display()),
+        )
+    };
+    // Looked at again when it was just made: another process may have made
+    // it first, the way an earlier build did.
+    let metadata = fs::symlink_metadata(path).map_err(at)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(refused("is a link or not a folder"));
+    }
+    let folder = match sys::open_entry_dir(path) {
+        Ok(folder) => folder,
+        // Swapped for a link or a file since the look above.
+        Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
+            return Err(refused("is a link or not a folder"));
+        }
+        // A folder this account may not open: another account's, or its
+        // own closed even to it, which only its owner can open again.
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            return Err(match owned_by_current_user(path) {
+                Ok(false) => refused("belongs to another account"),
+                Ok(true) => refused(sys::CLOSED_TO_ITS_OWNER),
+                Err(_) => refused("cannot be read by this account"),
+            });
+        }
+        Err(error) => return Err(at(error)),
+    };
+    if !handle_owned_by_current_user(&folder).map_err(at)? {
+        return Err(refused("belongs to another account"));
+    }
+    if !sys::handle_access_of_others(&folder, false).map_err(at)? {
+        return Ok(if made { OwnDir::Made } else { OwnDir::Private });
+    }
+    sys::restrict_dir_handle(&folder).map_err(at)?;
+    if sys::handle_access_of_others(&folder, false).map_err(at)? {
+        return Err(refused("could not be made private"));
+    }
+    Ok(OwnDir::Restricted)
+}
+
 /// A bootstrap failure, with the last directory whose entries were synced.
 /// An uncertain component is retained, including one this call created;
 /// recovery revalidates and syncs the chain rather than assuming rollback.
@@ -89,83 +164,99 @@ impl std::error::Error for DirectoryDurabilityError {
 /// namespace stable; system aliases in that namespace are canonicalized.
 /// Shared system ancestors are not made private or treated as account-owned.
 ///
-/// Unix syncs the existing chain from the filesystem root, with at most 64
-/// components. No directory is created or removed, including on failure.
-/// Windows currently reports `Unsupported`, never the legacy sync no-op.
+/// The existing chain is synced from the filesystem root ([`sync_dir`] on
+/// each folder), with at most 64 components below the root. No directory is
+/// created or removed, including on failure. On Windows an ancestor this
+/// account neither owns nor may add an entry to, such as `C:\Users` for a
+/// standard account, is passed over: a flush needs that right, and without
+/// it no entry there can be one this account made. Every other folder, the
+/// leaf always among them, is flushed, and a failed flush is an error.
+///
+/// [`sync_dir`]: super::atomic::sync_dir
 pub fn establish_dir_durability(path: &Path) -> Result<PathBuf, DirectoryDurabilityError> {
     let before = |source| DirectoryDurabilityError::BeforeCreate { source };
-    #[cfg(windows)]
-    {
-        let _ = path;
-        Err(before(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "directory-chain persistence is not established on Windows",
-        )))
+    let leaf = trusted_dir(path).map_err(before)?;
+    let canonical = fs::canonicalize(path).map_err(before)?;
+    // `/` on Unix; the volume and its root, `\\?\C:\`, on Windows.
+    let root: PathBuf = canonical
+        .components()
+        .take_while(|part| matches!(part, Component::Prefix(_) | Component::RootDir))
+        .collect();
+    let parts: Vec<_> = canonical
+        .components()
+        .skip_while(|part| matches!(part, Component::Prefix(_) | Component::RootDir))
+        .collect();
+    if parts.len() > 64 {
+        return Err(before(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "durable directory chain exceeds 64 components",
+        )));
     }
-    #[cfg(unix)]
+    let canonical_leaf = trusted_dir(&canonical).map_err(before)?;
+    if super::identity::file_id_of(&leaf).map_err(before)?
+        != super::identity::file_id_of(&canonical_leaf).map_err(before)?
     {
-        let leaf = trusted_dir(path).map_err(before)?;
-        let canonical = fs::canonicalize(path).map_err(before)?;
-        if canonical.components().count() > 65 {
-            return Err(before(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "durable directory chain exceeds 64 components",
-            )));
-        }
-        let canonical_leaf = trusted_dir(&canonical).map_err(before)?;
-        if super::identity::file_id_of(&leaf).map_err(before)?
-            != super::identity::file_id_of(&canonical_leaf).map_err(before)?
-        {
-            return Err(before(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "directory identity changed during validation",
-            )));
-        }
-        let mut completed = PathBuf::from("/");
-        let mut parent = super::open_dir(&completed).map_err(before)?;
-        super::atomic::sync_dir(&parent).map_err(|source| DirectoryDurabilityError::Uncertain {
+        return Err(before(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "directory identity changed during validation",
+        )));
+    }
+    let mut completed = root;
+    let mut parent = super::open_dir(&completed).map_err(before)?;
+    chain_barrier(&parent, !parts.is_empty()).map_err(|source| {
+        DirectoryDurabilityError::Uncertain {
             completed: completed.clone(),
             path: completed.clone(),
             source,
-        })?;
-        for part in canonical.components().skip(1) {
-            let child_path = completed.join(part.as_os_str());
-            let step: io::Result<fs::File> = (|| {
-                let child = super::open_dir(&child_path)?;
-                #[cfg(test)]
-                bootstrap_faults::fail(bootstrap_faults::Point::ChildSync)?;
-                super::atomic::sync_dir(&child)?;
-                #[cfg(test)]
-                bootstrap_faults::fail(bootstrap_faults::Point::ParentSync)?;
-                super::atomic::sync_dir(&parent)?;
-                Ok(child)
-            })();
-            parent = step.map_err(|source| DirectoryDurabilityError::Uncertain {
-                completed: completed.clone(),
-                path: child_path.clone(),
-                source,
-            })?;
-            completed = child_path;
         }
-        let changed = |source| DirectoryDurabilityError::Uncertain {
+    })?;
+    for (index, part) in parts.iter().enumerate() {
+        let child_path = completed.join(part.as_os_str());
+        let step: io::Result<fs::File> = (|| {
+            let child = super::open_dir(&child_path)?;
+            #[cfg(test)]
+            bootstrap_faults::fail(bootstrap_faults::Point::ChildSync)?;
+            chain_barrier(&child, index + 1 < parts.len())?;
+            #[cfg(test)]
+            bootstrap_faults::fail(bootstrap_faults::Point::ParentSync)?;
+            chain_barrier(&parent, true)?;
+            Ok(child)
+        })();
+        parent = step.map_err(|source| DirectoryDurabilityError::Uncertain {
             completed: completed.clone(),
-            path: canonical.clone(),
+            path: child_path.clone(),
             source,
-        };
-        if super::identity::file_id_of(&parent).map_err(changed)?
-            != super::identity::file_id_of(&leaf).map_err(changed)?
-        {
-            return Err(DirectoryDurabilityError::Uncertain {
-                completed,
-                path: canonical,
-                source: io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "directory identity changed during barriers",
-                ),
-            });
-        }
-        Ok(canonical)
+        })?;
+        completed = child_path;
     }
+    let changed = |source| DirectoryDurabilityError::Uncertain {
+        completed: completed.clone(),
+        path: canonical.clone(),
+        source,
+    };
+    if super::identity::file_id_of(&parent).map_err(changed)?
+        != super::identity::file_id_of(&leaf).map_err(changed)?
+    {
+        return Err(DirectoryDurabilityError::Uncertain {
+            completed,
+            path: canonical,
+            source: io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "directory identity changed during barriers",
+            ),
+        });
+    }
+    Ok(canonical)
+}
+
+/// One barrier of an existing chain: an ancestor is passed over only when
+/// [`sys::flushes_ancestor`] says no entry in it can be this account's, which
+/// is read from the folder before any flush, never from a refused one.
+fn chain_barrier(dir: &fs::File, ancestor: bool) -> io::Result<()> {
+    if ancestor && !sys::flushes_ancestor(dir)? {
+        return Ok(());
+    }
+    super::atomic::sync_dir(dir)
 }
 
 /// Creates at most 64 private descendant directories and checks their
@@ -174,16 +265,15 @@ pub fn establish_dir_durability(path: &Path) -> Result<PathBuf, DirectoryDurabil
 /// Neither a successful read nor `AlreadyExists` establishes that fact.
 /// The caller must keep the entire namespace stable, with no competing writer.
 ///
-/// On Unix, each new or existing child and its containing directory are
-/// synced before proceeding. Links and directories another account can
-/// modify are refused. Existing permissions are left unchanged, so a caller
-/// requiring privacy also checks any existing directory's access.
+/// Each new or existing child and its containing directory are synced
+/// ([`super::atomic::sync_dir`]) before proceeding; every one of them is this
+/// account's own, so on Windows too a folder it cannot flush is a failure,
+/// never passed over. Links and directories another account can modify are
+/// refused. Existing permissions are left unchanged, so a caller requiring
+/// privacy also checks any existing directory's access.
 /// Failures retain the partial chain and identify its uncertain component;
 /// a later explicit recovery checks all existing levels again.
-///
-/// Windows currently returns `Unsupported` before creating anything: the
-/// legacy directory-sync no-op is not a persistence barrier. This is not a
-/// cross-platform bootstrap guarantee or a physical power-loss promise.
+/// This is not a physical power-loss promise.
 pub fn create_dir_all_durable(
     path: &Path,
     durable_ancestor: &Path,
@@ -210,51 +300,40 @@ pub fn create_dir_all_durable(
             return Err(before(invalid()));
         }
     }
-    #[cfg(windows)]
-    {
-        Err(before(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "directory-chain persistence is not established on Windows",
-        )))
-    }
-    #[cfg(unix)]
-    {
-        let mut parent = trusted_dir(durable_ancestor).map_err(before)?;
-        let mut completed = durable_ancestor.to_path_buf();
-        for part in relative.components() {
-            let child_path = completed.join(part.as_os_str());
-            let step: io::Result<fs::File> = (|| {
-                #[cfg(test)]
-                bootstrap_faults::fail(bootstrap_faults::Point::Create)?;
-                match create_dir(&child_path) {
-                    Ok(()) => {
-                        #[cfg(test)]
-                        bootstrap_faults::fail(bootstrap_faults::Point::Created)?;
-                    }
-                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-                    Err(error) => return Err(error),
+    let mut parent = trusted_dir(durable_ancestor).map_err(before)?;
+    let mut completed = durable_ancestor.to_path_buf();
+    for part in relative.components() {
+        let child_path = completed.join(part.as_os_str());
+        let step: io::Result<fs::File> = (|| {
+            #[cfg(test)]
+            bootstrap_faults::fail(bootstrap_faults::Point::Create)?;
+            match create_dir(&child_path) {
+                Ok(()) => {
+                    #[cfg(test)]
+                    bootstrap_faults::fail(bootstrap_faults::Point::Created)?;
                 }
-                let child = trusted_dir(&child_path)?;
-                #[cfg(test)]
-                bootstrap_faults::fail(bootstrap_faults::Point::ChildSync)?;
-                super::atomic::sync_dir(&child)?;
-                #[cfg(test)]
-                bootstrap_faults::fail(bootstrap_faults::Point::ParentSync)?;
-                super::atomic::sync_dir(&parent)?;
-                Ok(child)
-            })();
-            parent = step.map_err(|source| DirectoryDurabilityError::Uncertain {
-                completed: completed.clone(),
-                path: child_path.clone(),
-                source,
-            })?;
-            completed = child_path;
-        }
-        Ok(())
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+            let child = trusted_dir(&child_path)?;
+            #[cfg(test)]
+            bootstrap_faults::fail(bootstrap_faults::Point::ChildSync)?;
+            super::atomic::sync_dir(&child)?;
+            #[cfg(test)]
+            bootstrap_faults::fail(bootstrap_faults::Point::ParentSync)?;
+            super::atomic::sync_dir(&parent)?;
+            Ok(child)
+        })();
+        parent = step.map_err(|source| DirectoryDurabilityError::Uncertain {
+            completed: completed.clone(),
+            path: child_path.clone(),
+            source,
+        })?;
+        completed = child_path;
     }
+    Ok(())
 }
 
-#[cfg(unix)]
 fn trusted_dir(path: &Path) -> io::Result<fs::File> {
     let metadata = fs::symlink_metadata(path)?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
@@ -275,7 +354,7 @@ fn trusted_dir(path: &Path) -> io::Result<fs::File> {
 
 // Only the external syscall boundary is faulted; the public bootstrap,
 // directory validation and sync helpers remain real.
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod bootstrap_faults {
     use std::cell::Cell;
     use std::io;
@@ -291,6 +370,11 @@ mod bootstrap_faults {
     thread_local! {
         static FAULT: Cell<Option<(Point, usize)>> = const { Cell::new(None) };
     }
+
+    #[cfg(unix)]
+    pub(super) const IO_ERROR: i32 = libc::EIO;
+    #[cfg(windows)]
+    pub(super) const IO_ERROR: i32 = windows_sys::Win32::Foundation::ERROR_WRITE_FAULT as i32;
 
     pub(super) struct Scope(Option<(Point, usize)>);
 
@@ -309,7 +393,7 @@ mod bootstrap_faults {
             && wanted == point
         {
             if skip == 0 {
-                return Err(io::Error::from_raw_os_error(libc::EIO));
+                return Err(io::Error::from_raw_os_error(IO_ERROR));
             }
             FAULT.set(Some((wanted, skip - 1)));
         }
@@ -317,9 +401,9 @@ mod bootstrap_faults {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod bootstrap_tests {
-    use super::bootstrap_faults::{self, Point};
+    use super::bootstrap_faults::{self, IO_ERROR, Point};
     use super::*;
 
     #[test]
@@ -333,7 +417,7 @@ mod bootstrap_tests {
             assert!(matches!(
                 establish_dir_durability(&anchor),
                 Err(DirectoryDurabilityError::Uncertain { source, .. })
-                    if source.raw_os_error() == Some(libc::EIO)
+                    if source.raw_os_error() == Some(IO_ERROR)
             ));
             assert_eq!(super::super::identity::file_id(&anchor).unwrap(), identity);
             drop(fault);
@@ -343,7 +427,7 @@ mod bootstrap_tests {
             assert!(matches!(
                 establish_dir_durability(&anchor),
                 Err(DirectoryDurabilityError::Uncertain { source, .. })
-                    if source.raw_os_error() == Some(libc::EIO)
+                    if source.raw_os_error() == Some(IO_ERROR)
             ));
             drop(fault);
             establish_dir_durability(&anchor).unwrap();
@@ -367,7 +451,7 @@ mod bootstrap_tests {
                 } => {
                     assert_eq!(completed, first);
                     assert_eq!(path, second);
-                    assert_eq!(source.raw_os_error(), Some(libc::EIO));
+                    assert_eq!(source.raw_os_error(), Some(IO_ERROR));
                 }
                 other => panic!("unexpected outcome: {other:?}"),
             }
@@ -397,7 +481,7 @@ mod bootstrap_tests {
                 } => {
                     assert_eq!(completed, first);
                     assert_eq!(path, second);
-                    assert_eq!(source.raw_os_error(), Some(libc::EIO));
+                    assert_eq!(source.raw_os_error(), Some(IO_ERROR));
                 }
                 other => panic!("unexpected outcome: {other:?}"),
             }
@@ -411,7 +495,7 @@ mod bootstrap_tests {
             assert!(matches!(
                 create_dir_all_durable(&end, root.path()),
                 Err(DirectoryDurabilityError::Uncertain { path, source, .. })
-                    if path == first && source.raw_os_error() == Some(libc::EIO)
+                    if path == first && source.raw_os_error() == Some(IO_ERROR)
             ));
             assert!(!end.exists());
             drop(fault);
@@ -506,7 +590,10 @@ pub enum InspectionDirectory {
 
 /// Inspects one entry without following it. Real directories must belong
 /// to this account or the system and deny other-account modification; a
-/// root-owned sticky system directory also protects existing child names.
+/// system directory others may only add entries to protects the names in it
+/// as well (the sticky rule: a root-owned sticky folder on Unix, on Windows a
+/// system-owned folder that grants others only `FILE_ADD_FILE` and
+/// `FILE_ADD_SUBDIRECTORY`, as a drive's root does).
 /// A system-owned alias returns its raw target so the caller can inspect
 /// that namespace before following it. Account-owned links are refused.
 /// This creates nothing and leaves permissions unchanged.
@@ -547,6 +634,38 @@ mod sys {
             options.write(true).create(true).truncate(false).mode(0o600);
         }
         options.open(path)
+    }
+
+    /// Why [`super::own_dir`] refuses a folder of this account it cannot
+    /// open, and the fix.
+    pub(super) const CLOSED_TO_ITS_OWNER: &str =
+        "is this account's but closed to it; `chmod 700` it so Hide can use it";
+
+    /// The folder entry at `path` itself, open for reading; a link or
+    /// anything but a folder there is `InvalidInput`.
+    pub(super) fn open_entry_dir(path: &Path) -> io::Result<fs::File> {
+        let mut options = fs::OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_NONBLOCK);
+        options
+            .open(path)
+            .map_err(|error| match error.raw_os_error() {
+                Some(libc::ELOOP | libc::ENOTDIR) => {
+                    io::Error::new(io::ErrorKind::InvalidInput, "the entry is not a folder")
+                }
+                _ => error,
+            })
+    }
+
+    /// `fchmod` on the open folder: only the folder it names changes.
+    pub(super) fn restrict_dir_handle(folder: &fs::File) -> io::Result<()> {
+        folder.set_permissions(fs::Permissions::from_mode(0o700))
+    }
+
+    /// Unix syncs every folder it can open, whoever may write to it.
+    pub(super) fn flushes_ancestor(_: &fs::File) -> io::Result<bool> {
+        Ok(true)
     }
 
     pub(super) fn restrict_to_owner(path: &Path) -> io::Result<()> {
@@ -613,28 +732,34 @@ mod sys {
 
     use widestring::U16CString;
     use windows_sys::Win32::Foundation::{
-        CloseHandle, ERROR_SUCCESS, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
-        LocalFree,
+        CloseHandle, ERROR_NO_TOKEN, ERROR_SUCCESS, GENERIC_READ, GENERIC_WRITE, HANDLE,
+        INVALID_HANDLE_VALUE, LUID, LocalFree,
     };
     use windows_sys::Win32::Security::Authorization::{
         ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
-        GetNamedSecurityInfoW, GetSecurityInfo, SDDL_REVISION_1, SE_FILE_OBJECT,
-        SetNamedSecurityInfoW,
+        ConvertStringSidToSidW, GetNamedSecurityInfoW, GetSecurityInfo, SDDL_REVISION_1,
+        SE_FILE_OBJECT, SetNamedSecurityInfoW, SetSecurityInfo,
     };
     use windows_sys::Win32::Security::{
-        ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
-        CreateWellKnownSid, DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetAclInformation,
-        GetSecurityDescriptorDacl, GetTokenInformation, INHERIT_ONLY_ACE,
-        OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-        PSID, SECURITY_ATTRIBUTES, SECURITY_MAX_SID_SIZE, TOKEN_OWNER, TOKEN_QUERY, TOKEN_USER,
-        TokenOwner, TokenUser, WinBuiltinAdministratorsSid, WinLocalSystemSid,
+        ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AccessCheck, AclSizeInformation,
+        CreateWellKnownSid, DACL_SECURITY_INFORMATION, DuplicateToken, EqualSid, GENERIC_MAPPING,
+        GROUP_SECURITY_INFORMATION, GetAce, GetAclInformation, GetSecurityDescriptorDacl,
+        GetTokenInformation, INHERIT_ONLY_ACE, LUID_AND_ATTRIBUTES, OWNER_SECURITY_INFORMATION,
+        PRIVILEGE_SET, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+        SECURITY_ATTRIBUTES, SECURITY_MAX_SID_SIZE, SecurityImpersonation, TOKEN_DUPLICATE,
+        TOKEN_OWNER, TOKEN_QUERY, TOKEN_USER, TokenOwner, TokenUser, WinBuiltinAdministratorsSid,
+        WinLocalSystemSid,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ATTRIBUTE_NORMAL,
-        FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        OPEN_ALWAYS, OPEN_EXISTING,
+        CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY,
+        FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_EXECUTE,
+        FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, OPEN_ALWAYS, OPEN_EXISTING,
     };
-    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    use windows_sys::Win32::System::SystemServices::MAXIMUM_ALLOWED;
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken,
+    };
 
     use super::{Handle, InspectionDirectory};
     use crate::fs::wide;
@@ -651,6 +776,14 @@ mod sys {
         | 0x0008_0000
         | 0x4000_0000
         | 0x1000_0000;
+
+    /// What others may do to a system folder without touching what is in
+    /// it: add a file or a folder of their own. Every signed-in account may
+    /// do that to a drive's root, as anyone may to `/tmp` on Unix, and only
+    /// deleting, renaming or re-permissioning a folder or an entry in it
+    /// (`DELETE`, `FILE_DELETE_CHILD`, `WRITE_DAC`, `WRITE_OWNER`) or
+    /// rewriting it takes away what a caller relies on: the sticky rule.
+    const ADD_ENTRY: u32 = FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY;
 
     /// The ACE type of an entry that allows access.
     const ACCESS_ALLOWED: u8 = 0;
@@ -706,6 +839,26 @@ mod sys {
             unsafe { EqualSid(self.as_psid(), other) != 0 }
         }
 
+        /// The SID an `S-1-...` string names.
+        fn parse(text: &str) -> io::Result<Self> {
+            let text = U16CString::from_str(text)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+            let mut sid = null_mut();
+            // SAFETY: `text` is NUL-terminated and `sid` receives a LocalAlloc
+            // SID freed below.
+            if unsafe { ConvertStringSidToSidW(text.as_ptr(), &mut sid) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let sid = Local(sid);
+            // SAFETY: the call returned a valid SID, whose length its header
+            // gives.
+            let length = unsafe { windows_sys::Win32::Security::GetLengthSid(sid.0) } as usize;
+            // SAFETY: as above, `length` bytes are readable at the SID.
+            Ok(Self(
+                unsafe { std::slice::from_raw_parts(sid.0.cast::<u8>(), length) }.to_vec(),
+            ))
+        }
+
         /// `S-1-5-21-...`, the form an access-list string names an account by.
         fn text(&self) -> io::Result<String> {
             let mut text = null_mut();
@@ -720,7 +873,7 @@ mod sys {
         }
     }
 
-    /// The account this process runs as, and the owner a file it creates gets
+    /// The account this thread acts as, and the owner a file it creates gets
     /// (the Administrators group for an elevated process).
     struct Account {
         user: Sid,
@@ -757,13 +910,28 @@ mod sys {
         .to_vec()))
     }
 
-    fn account() -> io::Result<Account> {
+    /// The token this thread acts with: the one it impersonates, which is what
+    /// the system checks its opens against, or else the process's.
+    fn acting_token(access: u32) -> io::Result<Closing> {
         let mut token = null_mut();
+        // SAFETY: the current-thread pseudo handle is always valid; the token
+        // is opened with the process's own rights.
+        if unsafe { OpenThreadToken(GetCurrentThread(), access, 1, &mut token) } != 0 {
+            return Ok(Closing(token));
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(ERROR_NO_TOKEN as i32) {
+            return Err(error);
+        }
         // SAFETY: the current-process pseudo handle is always valid.
-        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        if unsafe { OpenProcessToken(GetCurrentProcess(), access, &mut token) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        let token = Closing(token);
+        Ok(Closing(token))
+    }
+
+    fn account() -> io::Result<Account> {
+        let token = acting_token(TOKEN_QUERY)?;
         Ok(Account {
             user: token_sid(token.0, TokenUser)?,
             owner: token_sid(token.0, TokenOwner)?,
@@ -884,8 +1052,8 @@ mod sys {
         Ok(unsafe { fs::File::from_raw_handle(handle) })
     }
 
-    pub(super) fn restrict_to_owner(path: &Path) -> io::Result<()> {
-        let folder = fs::metadata(path)?.is_dir();
+    /// The private access list, in the descriptor that holds it.
+    fn private_acl(folder: bool) -> io::Result<(Descriptor, *mut ACL)> {
         let descriptor = private_descriptor(folder)?;
         let mut present = 0;
         let mut defaulted = 0;
@@ -907,6 +1075,11 @@ mod sys {
             // gives everybody everything.
             return Err(io::Error::other("the private access list has no entries"));
         }
+        Ok((descriptor, acl))
+    }
+
+    pub(super) fn restrict_to_owner(path: &Path) -> io::Result<()> {
+        let (_descriptor, acl) = private_acl(fs::metadata(path)?.is_dir())?;
         let name = wide(path)?;
         // SAFETY: `name` is NUL-terminated and `acl` lives in the descriptor
         // that outlives the call.
@@ -925,6 +1098,144 @@ mod sys {
             return Err(io::Error::from_raw_os_error(status as i32));
         }
         Ok(())
+    }
+
+    /// Why [`super::own_dir`] refuses a folder of this account it cannot
+    /// open, and the fix.
+    pub(super) const CLOSED_TO_ITS_OWNER: &str = "is this account's but closed to it; give the account full control of it so Hide can use it";
+
+    /// The folder entry at `path` itself, a link or junction opened as the
+    /// link; anything but a real folder is `InvalidInput`. Asked for the
+    /// right to change its access list too, which only its owner has
+    /// without an entry granting it; another account's folder is opened to
+    /// be read only, so the caller can say whose it is.
+    pub(super) fn open_entry_dir(path: &Path) -> io::Result<fs::File> {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, READ_CONTROL, WRITE_DAC,
+        };
+        let open = |access: u32| {
+            fs::OpenOptions::new()
+                .access_mode(access)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(path)
+        };
+        let folder = match open(READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES) {
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                open(READ_CONTROL | FILE_READ_ATTRIBUTES)?
+            }
+            opened => opened?,
+        };
+        // A link or junction opened as itself is not a folder here.
+        if !folder.metadata()?.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the entry is not a folder",
+            ));
+        }
+        Ok(folder)
+    }
+
+    /// The private access list set on the open folder, protected from
+    /// what its parent would pass down.
+    pub(super) fn restrict_dir_handle(folder: &fs::File) -> io::Result<()> {
+        let (_descriptor, acl) = private_acl(true)?;
+        // SAFETY: the handle is open for the borrow of `folder` and `acl`
+        // lives in the descriptor that outlives the call.
+        let status = unsafe {
+            SetSecurityInfo(
+                folder.as_raw_handle(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                acl,
+                null(),
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return Err(io::Error::from_raw_os_error(status as i32));
+        }
+        Ok(())
+    }
+
+    /// Whether this account owns the open folder or may add a file or a
+    /// folder to it, which a flush of its entries needs: an ancestor that
+    /// holds neither holds no entry the account made. The right is what the
+    /// system's own access check answers for the process's token against
+    /// the folder's owner, group and access list (`AccessCheck`, asked for
+    /// the most the folder allows).
+    pub(super) fn flushes_ancestor(folder: &fs::File) -> io::Result<bool> {
+        if handle_owned_by_current_user(folder)? {
+            return Ok(true);
+        }
+        let mut descriptor = null_mut();
+        // SAFETY: the handle is open for the borrow of `folder`, and
+        // `descriptor` receives a LocalAlloc buffer `Local` frees.
+        let status = unsafe {
+            GetSecurityInfo(
+                folder.as_raw_handle(),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                &mut descriptor,
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return Err(io::Error::from_raw_os_error(status as i32));
+        }
+        let descriptor = Local(descriptor);
+        let acting = acting_token(TOKEN_QUERY | TOKEN_DUPLICATE)?;
+        // The access check takes an impersonation token.
+        let mut token = null_mut();
+        // SAFETY: `acting` is an open token; `token` receives a new one.
+        if unsafe { DuplicateToken(acting.0, SecurityImpersonation, &mut token) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let token = Closing(token);
+        let mapping = GENERIC_MAPPING {
+            GenericRead: FILE_GENERIC_READ,
+            GenericWrite: FILE_GENERIC_WRITE,
+            GenericExecute: FILE_GENERIC_EXECUTE,
+            GenericAll: FILE_ALL_ACCESS,
+        };
+        let mut privileges = PRIVILEGE_SET {
+            PrivilegeCount: 0,
+            Control: 0,
+            Privilege: [LUID_AND_ATTRIBUTES {
+                Luid: LUID {
+                    LowPart: 0,
+                    HighPart: 0,
+                },
+                Attributes: 0,
+            }],
+        };
+        let mut length = size_of::<PRIVILEGE_SET>() as u32;
+        let mut granted = 0u32;
+        let mut allowed = 0;
+        // SAFETY: the descriptor holds the owner, group and access list the
+        // check needs, the token is an impersonation token, and every out
+        // parameter is writable for the length given.
+        if unsafe {
+            AccessCheck(
+                descriptor.0,
+                token.0,
+                MAXIMUM_ALLOWED,
+                &mapping,
+                &mut privileges,
+                &mut length,
+                &mut granted,
+                &mut allowed,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(allowed != 0 && granted & (FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY) != 0)
     }
 
     /// The security a path or an open file carries, and who owns it.
@@ -1024,11 +1335,22 @@ mod sys {
         let system = [
             Sid::well_known(WinLocalSystemSid)?,
             Sid::well_known(WinBuiltinAdministratorsSid)?,
+            // TrustedInstaller, which owns a system drive's root.
+            Sid::parse("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464")?,
         ]
         .iter()
         .any(|sid| sid.same_as(security.owner));
-        if !access_of_security(&security, true)? {
-            if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        let alias = metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+        // Others may add their own entries to a system folder (ADD_ENTRY);
+        // a folder that inherited a drive root's grant of change to every
+        // signed-in account still lets them delete, and stays refused.
+        let changes = if system && metadata.is_dir() && !alias {
+            CHANGE & !ADD_ENTRY
+        } else {
+            CHANGE
+        };
+        if !access_of_security(&security, changes)? {
+            if alias {
                 if system && metadata.file_type().is_symlink() {
                     return fs::read_link(path).map(InspectionDirectory::SystemAlias);
                 }
@@ -1045,14 +1367,20 @@ mod sys {
     /// Whether an access list the current account does not own grants `others`
     /// any access (`changes` false) or any access that changes the file.
     pub(super) fn access_of_others(path: &Path, changes: bool) -> io::Result<bool> {
-        access_of_security(&security_of_path(path)?, changes)
+        access_of_security(&security_of_path(path)?, watched(changes))
     }
 
     pub(super) fn handle_access_of_others(handle: &impl Handle, changes: bool) -> io::Result<bool> {
-        access_of_security(&security_of_handle(handle)?, changes)
+        access_of_security(&security_of_handle(handle)?, watched(changes))
     }
 
-    fn access_of_security(security: &Security, changes: bool) -> io::Result<bool> {
+    fn watched(changes: bool) -> u32 {
+        if changes { CHANGE } else { u32::MAX }
+    }
+
+    /// Whether anyone but this account and the system is allowed any of the
+    /// `watched` access.
+    fn access_of_security(security: &Security, watched: u32) -> io::Result<bool> {
         let account = account()?;
         let trusted = [
             account.user,
@@ -1110,7 +1438,7 @@ mod sys {
             if trusted.iter().any(|known| known.same_as(sid)) {
                 continue;
             }
-            if (!changes && allowed.Mask != 0) || allowed.Mask & CHANGE != 0 {
+            if allowed.Mask & watched != 0 {
                 return Ok(true);
             }
         }

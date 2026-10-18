@@ -26,6 +26,7 @@ pub mod codex_trust;
 pub mod counters;
 pub mod delivery;
 pub mod diagnosis;
+pub mod folder_trust;
 pub mod guardrails;
 pub mod guidance;
 pub mod install;

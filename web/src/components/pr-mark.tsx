@@ -64,7 +64,7 @@ function PrStateCounts({ counts, stale = false, className, ...rest }: { counts: 
 }
 
 /** A row's or a family's mark, one PR or several. */
-function PartsMark({ parts, stale, ...rest }: { parts: PrMarkParts; stale?: boolean } & HTMLAttributes<HTMLSpanElement>) {
+export function PartsMark({ parts, stale, ...rest }: { parts: PrMarkParts; stale?: boolean } & HTMLAttributes<HTMLSpanElement>) {
   return "counts" in parts ? <PrStateCounts counts={parts.counts} stale={stale} {...rest} /> : <PrMark state={parts.state} number={parts.number} stale={stale} {...rest} />;
 }
 
@@ -116,7 +116,7 @@ export const PR_MARK_PRESS = "flex shrink-0 items-center rounded-xs px-xxs outli
  */
 export function AgentPrMark({ agent, family, staleness, disabled = false, onOpen, onExternal }: { agent: AgentRow; family?: SessionPull[]; staleness?: PrStaleness; disabled?: boolean; onOpen: (pull: AgentPullRequest) => void; onExternal?: (pull: AgentPullRequest) => void }) {
   const { t } = useInterfaceTranslation();
-  const entries: { pull: AgentPullRequest; state: PrState; owners?: AgentRow[] }[] = family ?? ownPulls(agent);
+  const entries: MarkPulls = family ?? ownPulls(agent);
   const parts = prMarkParts(entries);
   const label = useMarkLabel(parts, staleness);
   if (!parts) return null;
@@ -180,13 +180,17 @@ function PrListItem({ pull, state, owners }: { pull: AgentPullRequest; state: Pr
   );
 }
 
+/** A mark's PRs: a root's family with who holds each, or the row's own. */
+export type MarkPulls = { pull: AgentPullRequest; state: PrState; owners?: AgentRow[] }[];
+
 /**
- * The sidebar row's and the tree popover's mark: the same mark, not a menu.
- * Under the pointer `card` draws what it opens (the PR card for one PR, the
- * list for several); with none, a stale mark still says when GitHub was read.
+ * The sidebar row's and the tree popover's mark: the same mark, not a menu,
+ * over the row's own PRs or a root's `family`. Under the pointer `card` draws
+ * what it opens (the PR card for one PR, the list for several); with none, a
+ * stale mark still says when GitHub was read.
  */
-export function AgentPrHover({ agent, staleness, card }: { agent: AgentRow; staleness?: PrStaleness; card?: (mark: ReactNode) => ReactNode }) {
-  const parts = prMarkParts(ownPulls(agent));
+export function AgentPrHover({ agent, family, staleness, card }: { agent: AgentRow; family?: SessionPull[]; staleness?: PrStaleness; card?: (mark: ReactNode) => ReactNode }) {
+  const parts = prMarkParts(family ?? ownPulls(agent));
   const label = useMarkLabel(parts, staleness);
   if (!parts) return null;
   const node = <PartsMark role="img" aria-label={label} data-agent-pr={agent.pane_id} parts={parts} stale={staleness?.stale} />;
@@ -195,11 +199,12 @@ export function AgentPrHover({ agent, staleness, card }: { agent: AgentRow; stal
 }
 
 /**
- * Under the pointer, each of a row's own PRs with its mark and title, and
- * when GitHub was last read if it cannot be read now. Choosing a PR opens it;
- * the list stays open while the pointer moves into it.
+ * Under the pointer, each of the mark's PRs worst first with its mark, title
+ * and, for a root's family, the sessions that hold it, and when GitHub was
+ * last read if it cannot be read now. Choosing a PR opens it; the list stays
+ * open while the pointer moves into it.
  */
-export function PrHoverList({ agent, staleness, onOpen, children }: { agent: AgentRow; staleness?: PrStaleness; onOpen: (pull: AgentPullRequest) => void; children: ReactNode }) {
+export function PrHoverList({ agent, pulls, staleness, onOpen, children }: { agent: AgentRow; pulls: MarkPulls; staleness?: PrStaleness; onOpen: (pull: AgentPullRequest) => void; children: ReactNode }) {
   const { t, i18n } = useInterfaceTranslation();
   const { open, onOpenChange, triggerProps } = useHintOpen();
   const stale = staleLabel(staleness, t, requireInterfaceLanguage(i18n.language));
@@ -209,9 +214,9 @@ export function PrHoverList({ agent, staleness, onOpen, children }: { agent: Age
         {children}
       </TooltipTrigger>
       <TooltipContent side="right" align="start" aria-label={t("agentSessions.pr.list", { name: agent.identity_label })} className="pointer-events-auto flex w-(--size-pr-popover) flex-col gap-xxs rounded-md p-xs text-left" data-pr-list={agent.pane_id}>
-        {ownPulls(agent).map(({ pull, state }) => (
+        {pulls.map(({ pull, state, owners }) => (
           <button key={pull.url} type="button" onClick={() => onOpen(pull)} data-pr-list-item={pull.number} className="flex min-w-0 items-center gap-xs rounded-xs px-xs py-xxs text-left outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring">
-            <PrListItem pull={pull} state={state} />
+            <PrListItem pull={pull} state={state} owners={owners} />
           </button>
         ))}
         {stale ? <span className="px-xs text-caption text-muted-foreground">{stale}</span> : null}

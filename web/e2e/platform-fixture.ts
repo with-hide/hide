@@ -79,6 +79,26 @@ export function fixtureHomeEnv(home: string): Record<string, string> {
   };
 }
 
+/**
+ * The fixture HOME's login shell puts `toolPath` first, as an account's own
+ * startup files put the folders it installs into first. A daemon starts the
+ * programs it names (`gh`, `git`, Hide AI's agents) from that shell's PATH
+ * before its own (`hide_platform::programs`), and macOS's `path_helper` puts
+ * the system's folders, with a runner's own `gh` and `git`, ahead of the PATH
+ * a shell was handed, so without this a shim on the fixture PATH loses to the
+ * runner's program. Windows asks no login shell.
+ */
+export function fixtureLoginShellPath(home: string, toolPath: string): void {
+  if (process.platform === "win32") return;
+  fs.mkdirSync(home, { recursive: true });
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  const posix = `PATH=${quote(toolPath)}:"$PATH"\nexport PATH\n`;
+  for (const file of [".zprofile", ".bash_profile", ".profile"]) fs.writeFileSync(path.join(home, file), posix);
+  const fish = path.join(home, ".config", "fish", "config.fish");
+  fs.mkdirSync(path.dirname(fish), { recursive: true });
+  fs.writeFileSync(fish, `set -gx PATH ${toolPath.split(path.delimiter).map(quote).join(" ")} $PATH\n`);
+}
+
 /** System tools only: do not append the account's agent-provider PATH. */
 export function fixtureToolPath(bin: string): string {
   if (process.platform !== "win32") return [bin, "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(path.delimiter);

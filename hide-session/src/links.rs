@@ -590,17 +590,19 @@ fn opencode_candidates(
     window: Window,
     found: &mut Vec<Candidate>,
 ) -> Result<(), String> {
-    let path = crate::opencode::database_path(home);
+    let path = crate::opencode::database_path(home)?;
     if !path.is_file() {
         return Ok(());
     }
-    let rows = crate::opencode::with_read(home, |connection| {
+    let rows = crate::opencode::with_read(home, |connection, schema| {
         connection
-        .prepare(
-            "SELECT id, time_updated, (SELECT count(*) FROM message WHERE session_id = session.id) \
-             FROM session WHERE time_updated >= ?1 AND time_updated <= ?2 \
+        .prepare(&format!(
+            "SELECT id, time_updated, (SELECT count(*) FROM {messages} WHERE session_id = {sessions}.id) \
+             FROM {sessions} WHERE time_updated >= ?1 AND time_updated <= ?2 \
              ORDER BY time_updated DESC LIMIT ?3",
-        )
+            sessions = schema.sessions(),
+            messages = schema.messages()
+        ))
         .and_then(|mut statement| {
             statement
                 .query_map(

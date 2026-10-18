@@ -6,7 +6,7 @@ import type { TFunction } from "i18next";
 import type { DaemonInfo } from "./store";
 import type { MessageKey } from "./i18n/catalogs";
 import type { AccentName } from "./theme";
-import type { AgentRow, CoreDiagnostic, Device, DeviceHost, EnvironmentStatus, GithubFailureCategory, HerdrStatus, KitComponent, RemoteStatus, Workspace } from "./snapshot";
+import type { AgentRow, CoreDiagnostic, Device, DeviceHost, EnvironmentStatus, GithubFailureCategory, HerdrStatus, KitComponent, KitRefusal, RemoteStatus, Workspace } from "./snapshot";
 import { readsHere } from "./devices";
 import { registeredName } from "./screenMachine";
 import { redact } from "./redact";
@@ -243,6 +243,18 @@ export function deviceProblemLine(problem: string | null | undefined, alias: str
   }
 }
 
+/**
+ * What a screen showing a device's last state says while the device is away:
+ * the machine's name and that it is not connected, and for a refused trust or
+ * sign-in its class, with what to do in the hint. The words the connection
+ * failed with are the device row's and the diagnostic log's, never this sentence.
+ */
+export function deviceAwayLine(device: Device, name: string, t: Translate): { text: string; hint: string | null } {
+  const problem = deviceProblemLine(device.problem, device.ssh_alias, t);
+  if (!problem) return { text: t("panes.workspace.stale", { device: name }), hint: null };
+  return { text: t("panes.workspace.staleProblem", { device: name, problem: problem.headline }), hint: problem.action };
+}
+
 /** The helper line a device row carries: whether file and Git work may run there, and why not. */
 export function hostLine(host: DeviceHost | undefined, t: Translate): { text: string; tone: "ok" | "warn" | "pending" | "muted" | "local" } {
   if (!host || host.consent === "this_machine") return { text: t("devices.helper.local"), tone: "local" };
@@ -341,6 +353,33 @@ export function kitPartText(part: Pick<KitComponent, "state" | "reason">, t: Tra
 export function kitProblems(kit: Device["kit"]): KitComponent[] {
   if (!kit || kit.unavailable) return [];
   return kit.components.filter((part) => kitPartNeedsReinstall(part));
+}
+
+/**
+ * The one line a machine says when its kit pass stopped before changing
+ * anything: what stopped it, the folder or file at fault, and what the
+ * operator changes, naming the variable that chose Hide's state folder when
+ * one did.
+ */
+export function kitRefusalLine(refusal: KitRefusal, t: Translate): string {
+  const path = refusal.path ?? "";
+  switch (refusal.cause) {
+    case "unsafe":
+      if (!refusal.variable) return t("devices.kitRefused.unsafe", { path });
+      // The background service outlives the app and reads the variable only when it starts, so this machine's line names how to stop it.
+      return refusal.stop
+        ? t("devices.kitRefused.unsafeVariableStop", { variable: refusal.variable, path, stop: refusal.stop })
+        : t("devices.kitRefused.unsafeVariable", { variable: refusal.variable, path });
+    case "record":
+      return t("devices.kitRefused.record", { path });
+    case "projects":
+      return t("devices.kitRefused.projects");
+    case "busy":
+      return t("devices.kitRefused.busy");
+    default:
+      // A cause a newer machine named that this build does not know.
+      return t("devices.kitRefused.other");
+  }
 }
 
 /** A device Herdr socket must be an absolute single-line path on that device, or left empty. */

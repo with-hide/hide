@@ -385,10 +385,11 @@ function review(project: Workspace, pr: PullRequest) {
 // --- timeline ------------------------------------------------------------------
 
 /**
- * 타임라인 (D-03, D-05, D-06, B3-B10): the sessions that made or worked on
- * the pull request and its milestones, oldest first, with `세션 N` at the
- * head's right. The milestones come from the list and the card's own read;
- * the sessions from the link record, whose spinner, failure, fold and empty
+ * 타임라인 (D-03, D-05, D-06, B3-B10; PRD record-card-readability D-01,
+ * D-09): the sessions that made or worked on the pull request and its
+ * milestones, oldest first, under a small `타임라인 · 세션 N`. The
+ * milestones come from the list and the card's own read; the sessions from
+ * the link record, whose spinner, failure, fold and empty
  * line keep their rules inside the section.
  */
 function Timeline({ project, pr, card, panel, number, actions }: { project: Workspace; pr: PullRequest | null; card: PrCard | null; panel: LinkPanel | null; number: number; actions: Actions }) {
@@ -397,9 +398,9 @@ function Timeline({ project, pr, card, panel, number, actions }: { project: Work
   const rows = useMemo(() => (pr ? milestones(pr, card) : []), [pr, card]);
   return (
     <section className="flex flex-col gap-xs" aria-label={t("work.card.timeline")} data-pr-card-timeline="true">
-      <h3 className="flex min-h-(--size-control-sm) items-center gap-xs text-caption font-medium text-foreground">
+      <h3 className="flex min-h-(--size-control-sm) items-baseline gap-xs text-micro font-medium text-muted-foreground">
         <span>{t("work.card.timeline")}</span>
-        {holder.loading ? null : <span className="ml-auto text-micro font-normal text-muted-foreground" data-pr-card-sessions={holder.total}>{t("links.sessionsCount", { count: holder.total })}</span>}
+        {holder.loading || !holder.total ? null : <span className="font-normal" data-pr-card-sessions={holder.total}>· {t("links.sessionsCount", { count: holder.total })}</span>}
       </h3>
       <LinkTimeline panel={holder} project={project} pr={pr} milestones={rows} branchOf={() => pr?.head_branch ?? null} onRetry={() => actions.openLinks(project.id, { kind: "pr", number })} actions={actions} />
     </section>
@@ -552,7 +553,7 @@ function Body({ card, actions, projectId, number, scroller }: { card: PrCard | n
         </nav>
       ) : null}
       <div ref={content} className="flex flex-col gap-sm pb-md text-caption" data-pr-card-body={body === null ? "unread" : body.trim() === "" ? "empty" : "open"}>
-        {body === null ? <PartState part="body" card={card} actions={actions} projectId={projectId} number={number} /> : body.trim() === "" ? <p className="text-caption text-muted-foreground">{t("work.card.noBody")}</p> : <div className="flex flex-col gap-sm" data-pr-card-markdown="true">{renderMarkdown(body)}</div>}
+        {body === null ? <PartState part="body" card={card} actions={actions} projectId={projectId} number={number} /> : body.trim() === "" ? <p className="text-caption text-muted-foreground">{t("work.card.noBody")}</p> : <div className="flex flex-col gap-sm" data-pr-card-markdown="true">{renderMarkdown(body, { html: true })}</div>}
       </div>
     </section>
   );

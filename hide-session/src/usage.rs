@@ -63,6 +63,10 @@ pub enum Refusal {
     OutsideRoot,
     InvalidCheckpoint,
     Database,
+    /// A database that holds none of the schemas Hide reads.
+    Schema,
+    /// An environment value of the node that the read depends on is unusable.
+    Environment,
 }
 
 impl std::fmt::Display for Refusal {
@@ -159,7 +163,9 @@ pub struct Step {
 fn roots(home: &Path, agent: Agent) -> Result<Vec<PathBuf>, Refusal> {
     match agent {
         Agent::Cursor => Err(Refusal::Unsupported),
-        Agent::OpenCode => Ok(vec![crate::opencode::database_path(home)]),
+        Agent::OpenCode => Ok(vec![
+            crate::opencode::database_path(home).map_err(|_| Refusal::Environment)?,
+        ]),
         Agent::Codex => Ok(vec![
             home.join(crate::CODEX_SESSIONS),
             home.join(".codex/archived_sessions"),

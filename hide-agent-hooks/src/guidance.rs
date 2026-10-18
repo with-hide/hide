@@ -1049,7 +1049,11 @@ pub fn remove(agent: GuidanceAgent, home: &Path) -> Result<RemoveOutcome, Instal
     // Switching agy off also takes out the folder trust Hide added (D-08)
     // and Hide AI's folder for agy (D-09).
     if agent == GuidanceAgent::Antigravity {
-        let forgotten = crate::antigravity_trust::forget_all(home)?;
+        let forgotten = crate::folder_trust::forget_all(
+            crate::folder_trust::Agent::Antigravity,
+            home,
+            crate::folder_trust::Tools::none(),
+        )?;
         let removed = crate::antigravity_trust::remove_read_only(home)?;
         total.changed |= forgotten > 0 || removed;
         total.removed_entries += forgotten;

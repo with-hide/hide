@@ -1269,6 +1269,9 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "intent_conflict" => {
             "Use a new intent, or repeat the request this intent was first used for"
         }
+        "invalid_launch_choice" => {
+            "Pass a --model that is a model name, and an --effort the agent's CLI takes (Claude Code: low, medium, high, xhigh, max; Codex: minimal, low, medium, high, xhigh), then run the command again"
+        }
         "worktree_unconfirmed" => {
             "Herdr had not confirmed the new worktree in time and may still finish it; run the same command again with the same intent"
         }
@@ -1278,8 +1281,75 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "shell_starting" => {
             "The new pane's shell had not finished starting; answer what its startup files ask in that pane, then spawn with a new intent"
         }
+        "native_identity_unavailable" => {
+            "The agent started and has not reported its session yet (Codex and OpenCode 2 report theirs at their first turn); Hide registers it with its parent and watch when it does, and the same command with the same intent then answers it"
+        }
+        "identity_waits_full" => {
+            "Too many agents Hide started are waiting to report their session; give one of them a first prompt or close its pane, then run the same command again"
+        }
+        "session_too_long" => {
+            "The agent names its session by a file path longer than 4096 bytes; spawn it with a new intent in a checkout with a shorter path"
+        }
+        "target_ambiguous" => {
+            "More than one agent answers to that name, on different machines; send to its registration ID from hide agent list (agent-N), or to the pane's full address remote:<device>:pane:<id>"
+        }
+        "target_unavailable" => {
+            "No agent answers to that; a bare pane ID names a pane on your own machine. Find the recipient in hide agent list and send to its name or registration ID"
+        }
+        "codex_capability_unknown" => {
+            "Hide has not read whether that machine's Codex runs a shared server; ask the operator to press Check again in Settings > Agents for that machine, then run the same command again with the same intent"
+        }
         _ => "Check the current agent pane and retry the same intent",
     }
+}
+
+/// What a refused `hide factory` command asks of its caller: the codes the
+/// core answers before the engine does. A refusal the engine decides carries
+/// its own next step.
+pub(crate) fn factory_next_action(code: &str) -> &'static str {
+    match code {
+        "factory_local_only" => {
+            "Run the command from an agent on the machine that runs Hide, or on a machine that connects to Hide; a device that Hide connects to cannot use the Factory"
+        }
+        // A timed-out command may still apply: retrying blind can add a
+        // Task twice, so look first.
+        "factory_timeout" => {
+            "The command may still apply; check hide factory status before retrying"
+        }
+        "factory_busy" => "Try again in a moment",
+        "factory_unavailable" => {
+            "Hide's Factory is not running; tell the operator, the reason is in Hide's diagnostic log"
+        }
+        "caller_context_changed" => {
+            "This pane's checkout changed while the command ran; run hide workspace info, then retry"
+        }
+        "ambiguous_checkout" => "Register this checkout once in Hide and retry",
+        "pane_not_connected" | "ambiguous_pane" | "checkout_not_registered" => {
+            crate::pane_auth::refusal_next_action(code)
+        }
+        "link_down" => "Reconnect this device in Hide, then retry",
+        "unregistered" => "Register this device in Hide, then retry",
+        _ => "Retry; if it is refused again, the reason is in Hide's diagnostic log",
+    }
+}
+
+/// What the core knows of a display a `hide browser` command relays to:
+/// whether it is its area's selected View (the only one shown, so the CLI
+/// refuses input to any other before sending it) and `source_url`, the
+/// address the core keeps for it. A device's page loads from a loopback route
+/// on this machine, so the page reports that address and the CLI names this
+/// one instead. `None` when the checkout has no such display.
+pub(crate) fn relay_facts(
+    views: &[herdr_core::workspace_control::View],
+    display_id: &str,
+) -> Option<Value> {
+    let view = views.iter().find(|view| view.view_id == display_id)?;
+    Some(json!({"selected": view.selected, "source_url": view.target}))
+}
+
+/// The relay's answer to the CLI: `relay_facts` under the display's id.
+pub(crate) fn relay_ready(display_id: &str, facts: &Value) -> Value {
+    json!({"display_id": display_id, "selected": facts["selected"], "source_url": facts["source_url"]})
 }
 
 /// The reason and next action of a refused command. A refusal that names the
@@ -1576,10 +1646,8 @@ async fn scoped_client_loop(
                                     let relay = browser_control.relay(&result, &display_id, caller_node.as_deref())
                                         .map_err(|(reason, next_action)| (reason.to_owned(), next_action))?;
                                     *command_relay.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(relay);
-                                    // Only an area's selected View is ever on screen; the
-                                    // CLI refuses input to any other before sending it.
-                                    json!({"selected": result.views.iter().flatten()
-                                        .any(|view| view.view_id == display_id && view.selected)})
+                                    relay_facts(result.views.as_deref().unwrap_or(&[]), &display_id)
+                                        .ok_or(("display_missing".to_owned(), "Run hide view list and retry"))?
                                 }
                                 ScopedRequest::Delivery(command, hint) => {
                                     crate::hook_request::delivery(&core, &cap, command, hint)?
@@ -1587,14 +1655,8 @@ async fn scoped_client_loop(
                                 ScopedRequest::Factory(command, hint) => {
                                     core.prepare_factory(&cap.context.device_id, &cap.pane_id, &cap.context, hint, command)
                                         .and_then(|prepared| prepared.run(FACTORY_ANSWER_TIMEOUT))
-                                        // A timed-out command may still apply: retrying blind
-                                        // can add a Task twice, so look first.
                                         .map_err(|code| {
-                                            let next = if code == "factory_timeout" {
-                                                "The command may still apply; check hide factory status before retrying"
-                                            } else {
-                                                "Check that Hide is running and retry"
-                                            };
+                                            let next = factory_next_action(&code);
                                             (code, next)
                                         })?
                                 }
@@ -1704,7 +1766,7 @@ async fn scoped_client_loop(
                         let outcome = match (outcome, &relay_display) {
                             (Ok(Ok(result)), Some(display_id)) => {
                                 use crate::browser_control::Relay;
-                                let mut ready = json!({"display_id": display_id, "selected": result["selected"]});
+                                let mut ready = relay_ready(display_id, &result);
                                 let chosen = chosen
                                     .lock()
                                     .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -3034,7 +3096,11 @@ fn index_result(
 ) -> Value {
     let (files, truncated, indexing, unavailable) = match answer {
         IndexAnswer::Indexing => (Vec::new(), false, true, None),
-        IndexAnswer::Ready { entries, truncated } => (
+        IndexAnswer::Ready {
+            entries,
+            truncated,
+            refreshing,
+        } => (
             entries
                 .iter()
                 .filter_map(|relative| {
@@ -3042,7 +3108,7 @@ fn index_result(
                 })
                 .collect(),
             truncated,
-            false,
+            refreshing,
             None,
         ),
         IndexAnswer::Failed(message) => (Vec::new(), false, false, Some(message)),
@@ -4442,11 +4508,44 @@ mod tests {
             "agent_not_started",
             "worktree_unconfirmed",
             "shell_starting",
+            "native_identity_unavailable",
+            "identity_waits_full",
+            "session_too_long",
+            "target_ambiguous",
+            "target_unavailable",
+            "codex_capability_unknown",
         ] {
             let (reason, next) = refusal_answer(code.to_owned(), delivery_next_action(code));
             assert_eq!(reason, code);
             assert_ne!(next, delivery_next_action("other"), "{code}");
         }
+    }
+
+    /// An agent on a device Hide connects to is refused the Factory for good,
+    /// so its next step names where the Factory can be reached; every other
+    /// refusal before the engine keeps a step of its own.
+    #[test]
+    fn a_device_refused_the_factory_is_told_where_to_run_it() {
+        let next = factory_next_action("factory_local_only");
+        assert!(next.contains("machine that runs Hide"), "{next}");
+        assert!(!next.contains("is running and retry"), "{next}");
+        let fallback = factory_next_action("other");
+        for code in [
+            "factory_local_only",
+            "factory_timeout",
+            "factory_busy",
+            "factory_unavailable",
+            "caller_context_changed",
+            "ambiguous_checkout",
+            "pane_not_connected",
+            "ambiguous_pane",
+            "checkout_not_registered",
+            "link_down",
+            "unregistered",
+        ] {
+            assert_ne!(factory_next_action(code), fallback, "{code}");
+        }
+        assert!(factory_next_action("factory_timeout").contains("hide factory status"));
     }
 
     /// A caller refused for lacking an agent pane is told where to run the

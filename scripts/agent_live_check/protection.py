@@ -8,6 +8,11 @@ from pathlib import Path
 import stat
 import tomllib
 
+from .system import WINDOWS
+
+if WINDOWS:
+    from . import windows
+
 MAX_CONFIG_FILES = 50_000
 MAX_CONFIG_BYTES = 256 * 1024 * 1024
 MAX_BACKUP_BYTES = 16 * 1024 * 1024
@@ -30,6 +35,16 @@ def beneath(path: Path, root: Path) -> bool:
     return path.resolve().is_relative_to(root.resolve())
 
 
+def private(path: Path) -> bool:
+    """Whether this account owns `path` and no other account may open it: no
+    group or other mode bits on Unix, an access list naming no other account
+    (the system and the administrators aside) on Windows."""
+    if WINDOWS:
+        return windows.is_private(path)
+    info = path.stat()
+    return info.st_uid == os.getuid() and not info.st_mode & 0o077
+
+
 def private_directory(path: Path) -> None:
     """Create every missing component privately; never widen existing access."""
     pending, parent = [], path
@@ -41,15 +56,18 @@ def private_directory(path: Path) -> None:
     if parent.is_symlink() or path.is_symlink():
         raise ProtectionError("private_directory_is_link")
     for folder in reversed(pending):
-        folder.mkdir(mode=0o700)
-    mode = path.stat().st_mode
-    if path.stat().st_uid != os.getuid() or mode & 0o077:
+        if WINDOWS:
+            windows.make_private_directory(folder)
+        else:
+            folder.mkdir(mode=0o700)
+    if not private(path):
         raise ProtectionError("private_directory_not_private")
 
 
 def write_private(path: Path, data: bytes) -> None:
     """Create a new private file, never follow or replace a preexisting name."""
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    fd = (windows.create_private_file(path) if WINDOWS
+          else os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
     with os.fdopen(fd, "wb") as stream:
         stream.write(data)
         stream.flush()
@@ -67,7 +85,10 @@ def validate_isolation(run: Path, home: Path, socket: Path, state: Path,
     for path in (home, state):
         if not beneath(path, run) or path.resolve() == run.resolve():
             raise ProtectionError("runtime_path_outside_run")
-    defaults = [operator_home / ".config/herdr/herdr.sock",
+    # Herdr's config folder, where its default socket is: ~/.config/herdr,
+    # and %APPDATA%\herdr on Windows (hide-platform's `host`).
+    herdr_config = operator_home / ("AppData/Roaming/herdr" if WINDOWS else ".config/herdr")
+    defaults = [herdr_config / "herdr.sock",
                 operator_home / ".hide/state"]
     if operator_socket is not None:
         defaults.append(operator_socket)
@@ -82,10 +103,9 @@ def validate_isolation(run: Path, home: Path, socket: Path, state: Path,
     if not beneath(socket, run):
         if (socket_root is None or parent != socket_root
                 or not parent.is_dir() or parent.is_symlink()
-                or parent.stat().st_uid != os.getuid()
-                or parent.stat().st_mode & 0o077):
+                or not private(parent)):
             raise ProtectionError("socket_parent_not_owned_by_run")
-    for forbidden in (operator_home / ".hide", operator_home / ".config/herdr"):
+    for forbidden in (operator_home / ".hide", herdr_config):
         if beneath(state, forbidden) or beneath(socket, forbidden):
             raise ProtectionError("operator_state_refused")
 

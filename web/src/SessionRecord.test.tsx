@@ -27,7 +27,7 @@ const task = (id: string, name: string, at: number, done: boolean, end: WorkTask
 const request = (offset: number, text: string, task_ids: string[], author: WorkRequest["author"] = "operator", judged = true): WorkRequest => ({ offset, at_unix_ms: AT + offset, text, author, task_ids, chapter_id: "c", judged });
 const missed = (id: string, text: string, turn_offset: number, status: MissedWork["status"] = "open"): MissedWork => ({ id, kind: "problem", text, status, at_unix_ms: AT, turn_offset, issue_repository: null, issue_number: null, creating: false, backlog_key: null });
 const output = (number: number, state: string, task_id: string | null, source: WorkSession): WorkOutput => ({ kind: "pr", repository: "acme/app", number, title: `PR title ${number}`, url: `https://example.invalid/pull/${number}`, state, stale: false, last_read_at_unix_ms: AT, created_at_unix_ms: AT, task_id, source, source_name: source.session_id });
-const child: RecordValue = { session: CHILD, title: "Child work", fallback_title: "Codex", native_title: null, manual_title: null, state: "idle", last_end: "done", cwd: null, path: null, started_at_unix_ms: AT, ended_at_unix_ms: null, chapters: [], tasks: [], requests: [], missed: [], outputs: [], children: [] };
+const child: RecordValue = { session: CHILD, title: "Child work", fallback_title: "Codex", native_title: null, manual_title: null, state: "idle", last_end: "done", cwd: null, path: null, started_at_unix_ms: AT + 2, ended_at_unix_ms: null, chapters: [], tasks: [], requests: [], missed: [], outputs: [], children: [] };
 const BASE: RecordValue = {
   session: SESSION, title: "Session goal", fallback_title: "Claude", native_title: null, manual_title: null, state: "idle", last_end: "unfinished", cwd: null, path: null, started_at_unix_ms: AT, ended_at_unix_ms: null,
   chapters: [{ id: "c", goal: "Only goal", at_unix_ms: AT }],
@@ -39,13 +39,12 @@ const BASE: RecordValue = {
   children: [child],
 };
 
-async function mount(record: RecordValue | null, options: { summaries?: boolean; words?: boolean } = {}) {
+async function mount(record: RecordValue | null, options: { summaries?: boolean } = {}) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   initializeInterfaceI18n("en");
   const rest = { navigator: { devices: [{ id: "local", kind: "local" }] }, status: { background_ai: { provider: "claude", providers: [], unavailable_reason: null, enabled: options.summaries !== false, chosen: true, agent_summary: options.summaries !== false } } } as unknown as SnapshotRest;
   useShellStore.setState({ rest, sessionRecord: record ? { session: SESSION, loading: false, failure: null, record } : null });
-  useUiStore.setState({ sessionRecordWords: options.words ?? false });
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -67,65 +66,108 @@ it("asks for the record once when the slot draws one nothing has read, as after 
   try { expect(read.sent).toEqual([]); } finally { await read.unmount(); }
 });
 
+it("asks again when the window lands on a new core session while the slot still draws the record", async () => {
+  const restored = await mount(null);
+  try {
+    expect(restored.sent).toHaveLength(1);
+    // The same slot, a self-contained snapshot of a core that has read nothing.
+    await act(async () => useShellStore.setState({ viewGeneration: useShellStore.getState().viewGeneration + 1, sessionRecord: null }));
+    expect(restored.sent).toHaveLength(2);
+    await act(async () => useShellStore.setState({ sessionRecord: { session: SESSION, loading: true, failure: null, record: null } }));
+    expect(restored.sent).toHaveLength(2);
+  } finally { await restored.unmount(); }
+});
+
 it("draws no PR list: a task's PR stands on its line, a child's on the child's row, and no status words (B15)", async () => {
   const { container, unmount } = await mount(BASE);
   try {
     expect(container.querySelector("[data-record-outputs]")).toBeNull();
     expect(Array.from(container.querySelectorAll('[data-record-output="pr"]')).map((node) => node.getAttribute("data-record-output-number"))).toEqual(["1100", "1093"]);
     expect(container.querySelector('[data-record-child="child"] [data-record-output-number="1093"]')).not.toBeNull();
-    expect(text(container.querySelector("[data-record-work] h3"))).toBe("Assigned work 1/2");
     const tasks = Array.from(container.querySelectorAll("[data-record-task]"));
     expect(tasks.map((row) => row.getAttribute("data-record-task"))).toEqual(["t1", "t2"]);
-    expect(tasks.map((row) => row.querySelector("[data-task-state]")?.getAttribute("aria-label"))).toEqual(["Done", null]);
-    expect(text(tasks[1]!.querySelector("[data-record-task-pr]"))).toBe("#" + "1100");
-    // A PR-bound task's slot is empty and its PR mark says the state, never a word on the line.
+    expect(tasks.map((row) => row.querySelector("[data-task-box]")?.getAttribute("data-task-box"))).toEqual(["checked", "empty"]);
+    // A PR-bound task's PR mark says the state, never a word on the line.
     expect(tasks[1]!.querySelector("[data-record-task-pr] [aria-label]")?.getAttribute("aria-label")).toMatch(new RegExp("^#" + "1100 "));
-    expect(text(tasks[1]!)).not.toContain("Review pending");
-    expect(container.querySelector("[data-record-verdict]")).toBeNull();
+    expect(text(tasks[1]!.querySelector("[data-task-word]"))).toBe("");
   } finally { await unmount(); }
 });
 
-it("keeps the operator's words behind the words button and puts a missed item under its task", async () => {
-  const off = await mount(BASE);
+it("heads the checklist with its count and the delegated children in words, hangs each child under the task it started in, and drops the place line's child count (B1, B3, B5)", async () => {
+  const { container, unmount } = await mount(BASE);
   try {
-    const button = off.container.querySelector<HTMLButtonElement>("[data-record-words]")!;
-    expect(button.getAttribute("aria-label")).toBe("Show my words");
-    expect(button.getAttribute("aria-pressed")).toBe("false");
-    expect(off.container.querySelector("[data-record-words-bubble]")).toBeNull();
-    const second = off.container.querySelector('[data-record-task="t2"]')!;
-    expect(second.querySelector('[data-missed-work="m-open"][data-missed-status="open"]')).not.toBeNull();
-    expect(second.querySelector('[data-missed-work="m-closed"]')?.textContent).toContain("Spacing of the heading · Handled");
-    await act(async () => button.click());
-    expect(useUiStore.getState().sessionRecordWords).toBe(true);
-  } finally { await off.unmount(); }
-  const on = await mount(BASE, { words: true });
-  try {
-    expect(on.container.querySelector("[data-record-words]")?.getAttribute("aria-pressed")).toBe("true");
-    const bubbles = (scope: Element | null) => Array.from(scope?.querySelectorAll("[data-record-words-bubble]") ?? []).map(text);
-    expect(bubbles(on.container.querySelector('[data-record-task="t1"]'))).toEqual(["Please write the record"]);
-    expect(bubbles(on.container.querySelector("[data-record-other]"))).toEqual(["How is it going?"]);
-    expect(text(on.container.querySelector("[data-record-other] h4"))).toBe("Other words");
-  } finally { await on.unmount(); }
-});
-
-it("names the button for requests received when a parent made them, and draws no person mark for them", async () => {
-  const delegated = { ...BASE, requests: BASE.requests.map((one) => ({ ...one, author: "parent" as const })) };
-  const { container, unmount } = await mount(delegated, { words: true });
-  try {
-    expect(container.querySelector("[data-record-words]")?.getAttribute("aria-label")).toBe("Show requests received");
-    expect(container.querySelector("[data-record-words-bubble] svg")).toBeNull();
+    expect(text(container.querySelector("[data-record-work] h3"))).toBe("Assigned work1/2· Delegated 1");
+    const row = container.querySelector('[data-record-task="t2"] [data-record-child="child"]')!;
+    expect(row.querySelector("[data-record-child-arrow]")).not.toBeNull();
+    // A finished child is a check and a quiet title, with no state word.
+    expect(row.querySelector("[data-agent-status-mark]")?.getAttribute("data-agent-status-mark")).toBe("done-check");
+    expect(row.querySelector("[data-record-child-state]")).toBeNull();
+    expect(container.querySelector("[data-record-delegated]")).toBeNull();
+    expect(text(container.querySelector("[data-record-place]"))).not.toMatch(/child/i);
+    expect(container.querySelector("[data-child-progress], [data-child-segment]")).toBeNull();
   } finally { await unmount(); }
+  // A child that started before every task stands at the end, under a small `Delegated`.
+  const early = await mount({ ...BASE, children: [{ ...child, started_at_unix_ms: AT, state: "idle", last_end: "unfinished" }] });
+  try {
+    const rest = early.container.querySelector("[data-record-delegated]")!;
+    expect(text(rest.querySelector("h4"))).toBe("Delegated");
+    expect(rest.querySelector("[data-record-child-arrow]")).toBeNull();
+    expect(text(rest.querySelector("[data-record-child-state]"))).toBe("Idle");
+  } finally { await early.unmount(); }
 });
 
-it("shows the newest unjudged request as Now whatever the words button says, and not once the session stopped", async () => {
+it("lists only the open missed work in its own section, named by its task, with no undo for what was handled (B12, B13)", async () => {
+  const { container, unmount } = await mount(BASE);
+  try {
+    const section = container.querySelector("[data-record-missed]")!;
+    expect(text(section.querySelector("h3"))).toBe("Missed1");
+    expect(Array.from(section.querySelectorAll("[data-missed-work]")).map((node) => node.getAttribute("data-missed-work"))).toEqual(["m-open"]);
+    expect(text(section.querySelector("[data-missed-note]"))).toBe(" · Check the search");
+    expect(container.querySelector('[data-missed-work="m-closed"]')).toBeNull();
+    expect(container.textContent).not.toMatch(/Undo|Reopen|Handled/);
+  } finally { await unmount(); }
+  const handled = await mount({ ...BASE, missed: [missed("m-done", "Done already", 2, "backlog")] });
+  try { expect(handled.container.querySelector("[data-record-missed]")).toBeNull(); } finally { await handled.unmount(); }
+});
+
+it("ends with the requests, the newest four open behind `n earlier`, and no words button or bubbles (B24, B25)", async () => {
+  const requests = Array.from({ length: 6 }, (_, index) => request(index + 1, `request ${index + 1}\nmore`, []));
+  const { container, unmount } = await mount({ ...BASE, requests });
+  try {
+    expect(container.querySelector("[data-record-words-bubble], [data-record-words] [aria-pressed]")).toBeNull();
+    const section = container.querySelector("[data-record-words]")!;
+    expect(text(section.querySelector("h3"))).toBe("My words6");
+    const rows = () => Array.from(section.querySelectorAll("[data-record-request]")).map((row) => text(row).replace(/\d{2}:\d{2}$/, ""));
+    expect(rows()).toEqual(["Merequest 3", "Merequest 4", "Merequest 5", "Merequest 6"]);
+    await act(async () => section.querySelector<HTMLButtonElement>("[data-record-words-earlier]")!.click());
+    expect(rows()).toHaveLength(6);
+  } finally { await unmount(); }
+  // A parent's requests are received, and say who asked.
+  const delegated = await mount({ ...BASE, requests: BASE.requests.map((one) => ({ ...one, author: "parent" as const })) });
+  try {
+    expect(text(delegated.container.querySelector("[data-record-words] h3"))).toBe("Requests received3");
+    expect(text(delegated.container.querySelector("[data-record-request]"))).toMatch(/^Parent/);
+  } finally { await delegated.unmount(); }
+  // Opened as its own item, a child's record names its asker from the live parent row (B24).
+  useShellStore.setState({ agents: [
+    legacyAgentRow({ pane_id: "p0", agent_kind: "claude", session_id: "lead", identity_label: "Release lead" }),
+    legacyAgentRow({ pane_id: "p1", agent_kind: "claude", session_id: "root", lineage_parent_pane_id: "p0" }),
+  ] });
+  const named = await mount({ ...BASE, requests: BASE.requests.map((one) => ({ ...one, author: "parent" as const })) });
+  try {
+    expect(text(named.container.querySelector("[data-record-request]"))).toMatch(/^Release lead/);
+  } finally { await named.unmount(); }
+});
+
+it("shows the newest unjudged request as Just asked while the session works, and not once it stopped", async () => {
   const unjudged = { ...BASE, requests: [...BASE.requests, request(4, "Install and measure again", [], "operator", false)] };
   const working = await mount({ ...unjudged, state: "working" });
   try {
-    expect(text(working.container.querySelector("[data-record-now-request]"))).toBe("NowInstall and measure again");
+    expect(text(working.container.querySelector("[data-record-latest-request]"))).toBe("Just askedInstall and measure again");
   } finally { await working.unmount(); }
   const idle = await mount({ ...unjudged, state: "idle" });
   try {
-    expect(idle.container.querySelector("[data-record-now-request]")).toBeNull();
+    expect(idle.container.querySelector("[data-record-latest-request]")).toBeNull();
   } finally { await idle.unmount(); }
 });
 
@@ -146,28 +188,25 @@ it("draws an output no task claims beside the title, and none for a session with
   } finally { await off.unmount(); }
 });
 
-it("with Hide AI off shows the PRs and the requests oldest first, the newest five open, and no checklist", async () => {
-  const requests = Array.from({ length: 7 }, (_, index) => request(index + 1, `request ${index + 1}`, []));
-  const { container, unmount } = await mount({ ...BASE, requests }, { summaries: false });
+it("with Hide AI off lists the children as their own section, the requests at the end, and no checklist or missed work", async () => {
+  const { container, unmount } = await mount({ ...BASE, missed: [missed("m-off", "Found while summaries were on", 2)] }, { summaries: false });
   try {
-    expect(container.querySelector("[data-record-words]")).toBeNull();
-    expect(container.querySelector("[data-record-task]")).toBeNull();
-    expect(container.querySelector("[data-missed-work]")).toBeNull();
-    expect(Array.from(container.querySelectorAll("[data-record-request]")).map((row) => text(row).replace(/^\d{2}:\d{2}/, ""))).toEqual(["request 3", "request 4", "request 5", "request 6", "request 7"]);
-    const earlier = Array.from(container.querySelectorAll("button")).find((button) => text(button) === "Earlier requests 2")!;
-    await act(async () => earlier.click());
-    expect(container.querySelectorAll("[data-record-request]")).toHaveLength(7);
+    expect(container.querySelector("[data-record-task], [data-record-work], [data-record-missed]")).toBeNull();
+    expect(text(container.querySelector("[data-record-delegated] h3"))).toBe("Delegated1");
+    expect(container.querySelector("[data-record-delegated] [data-record-child-arrow]")).toBeNull();
+    expect(container.querySelectorAll("[data-record-request]")).toHaveLength(3);
   } finally { await unmount(); }
 });
 
-it("draws a descendant's missed item once, named, at the end of the top record, where the child is a row to open rather than a second checklist", async () => {
+it("draws a descendant's missed item once, named by its session, at the end of the missed section", async () => {
   const withMissed = { ...BASE, children: [{ ...child, tasks: [task("ct", "Child task", AT, true)], missed: [missed("m-child", "Child found this", 99)] }] };
   const { container, unmount } = await mount(withMissed);
   try {
     expect(container.querySelector('[data-record-child="child"]')?.getAttribute("role")).toBe("button");
     const items = container.querySelectorAll('[data-missed-work="m-child"]');
     expect(items).toHaveLength(1);
-    expect(items[0]!.closest("[data-record-other]")?.textContent).toContain("Child found this · Child work");
+    expect(text(items[0]!)).toContain("Child found this · Child work");
+    expect(Array.from(container.querySelectorAll("[data-record-missed] [data-missed-work]")).at(-1)).toBe(items[0]);
   } finally { await unmount(); }
 });
 
@@ -192,12 +231,12 @@ it("gives a task's PR button the last read time while GitHub cannot be read", as
   } finally { await unmount(); }
 });
 
-it("says so when the only requests were not tasks and the words button is off, and gives a task-less child no count", async () => {
+it("says so when no request became a task, and lists a task-less record's child under Delegated (B4)", async () => {
   const noTasks = { ...BASE, tasks: [], missed: [], outputs: [], requests: [request(1, "Just a question", [])], children: [child] };
   const { container, unmount } = await mount(noTasks);
   try {
-    expect(text(container.querySelector("[data-record-work]"))).toContain("No recorded requests yet");
-    expect(text(container.querySelector("[data-record-child]"))).not.toContain("0/0");
+    expect(text(container.querySelector("[data-record-work] h3"))).toBe("Assigned work· Delegated 1");
+    expect(container.querySelector('[data-record-delegated] [data-record-child="child"]')).not.toBeNull();
   } finally { await unmount(); }
 });
 
@@ -212,61 +251,22 @@ it("heads the record with the now box: ended with the elapsed time and no button
   } finally { await unmount(); }
 });
 
-it("heads the children with their work done over their count and one segment each, or the plain count while one is unjudged (B7, B8)", async () => {
-  const judged = await mount({ ...BASE, children: [child, { ...child, session: { ...CHILD, session_id: "second" } }], child_progress: { children: ["done", "working"], done: 1 } });
-  try {
-    const head = judged.container.querySelector("[data-child-progress]")!;
-    expect(head.getAttribute("data-child-progress")).toBe("1/2");
-    expect(text(head)).toBe("Children's work1/2");
-    expect(Array.from(head.querySelectorAll("[data-child-segment]")).map((node) => node.getAttribute("data-child-segment"))).toEqual(["done", "working"]);
-    // The children list itself is unchanged below the heading.
-    expect(judged.container.querySelectorAll("[data-record-child]")).toHaveLength(2);
-  } finally { await judged.unmount(); }
-  const unjudged = await mount({ ...BASE, child_progress: { children: ["unjudged"], done: null } });
-  try {
-    expect(unjudged.container.querySelector("[data-child-progress]")?.getAttribute("data-child-progress")).toBe("count");
-    expect(unjudged.container.querySelector("[data-child-segment]")).toBeNull();
-  } finally { await unjudged.unmount(); }
-  // With Agent summaries off the record keeps its old children heading.
-  const off = await mount({ ...BASE, child_progress: { children: ["done"], done: 1 } }, { summaries: false });
-  try {
-    expect(off.container.querySelector("[data-child-progress]")).toBeNull();
-  } finally { await off.unmount(); }
-});
-
-it("shows a split request's words once, under its first task, with the button on (B18)", async () => {
-  const split: RecordValue = {
-    ...BASE,
-    tasks: [task("task-3", "README tags", AT + 3, false, "waiting"), task("task-3.2", "Comment marks", AT + 3, false, "waiting")],
-    requests: [request(3, "1. README tags 2. comment marks", ["task-3", "task-3.2"]), request(5, "merge it", ["task-3", "task-3.2"])],
-    missed: [missed("m-split", "Pen board icon", 3)],
-    outputs: [],
-  };
-  const { container, unmount } = await mount(split, { words: true });
-  try {
-    expect(text(container.querySelector("[data-record-work] h3"))).toBe("Assigned work 0/2");
-    const rows = Array.from(container.querySelectorAll("[data-record-task]"));
-    expect(rows.map((row) => Array.from(row.querySelectorAll("[data-record-words-bubble]")).map((node) => node.getAttribute("data-record-words-bubble")))).toEqual([["3", "5"], []]);
-    expect(rows.map((row) => row.querySelectorAll("[data-missed-work]").length)).toEqual([1, 0]);
-  } finally { await unmount(); }
-});
-
-// A task the label left in progress draws its live row's ring, dashed while the row waits,
-// and reads as work left once no row of this session on this device draws one (status-marks B34).
-it("draws a task in progress with its live row's ring and as work left without one", async () => {
-  const record: RecordValue = { ...BASE, tasks: [task("t1", "Write the record", AT + 1, true), task("t3", "Ship the change", AT + 3, false, "waiting")], outputs: [] };
+// A task's box never draws an agent mark; the live row decides whether a task in progress
+// is still at work, and whether a question asks with `!` or says it ended (D-05, B8, B9).
+it("asks with `!` only while the session has a live row, and says a task in progress is work left once the row stops", async () => {
+  const record: RecordValue = { ...BASE, tasks: [task("t3", "Ship the change", AT + 3, false, "waiting"), task("t4", "Answer me", AT + 4, false, "question")], outputs: [] };
   const row = (mark: "going" | "waiting", device_id?: string) => legacyAgentRow({ pane_id: "p1", agent_kind: "claude", session_id: "root", device_id, mark, group: "working", activity: mark === "going" ? "working" : "stopped", status_code: mark === "going" ? "working" : "waiting" });
   const slot = async (agents: AgentRow[]) => {
     useShellStore.setState({ agents });
     const view = await mount(record);
     try {
-      const item = view.container.querySelector('[data-record-task="t3"]')!;
-      return [item.querySelector("[data-task-state]")?.getAttribute("data-task-state"), item.querySelector("[data-mark]")?.getAttribute("data-mark") ?? null, item.querySelector("[data-task-word]")?.getAttribute("data-task-word") ?? null];
+      const at = (id: string) => view.container.querySelector(`[data-record-task="${id}"]`)!;
+      return [at("t3").querySelector("[data-task-word]")?.getAttribute("data-task-word") ?? null, at("t4").querySelector("[data-task-asks]") !== null, text(at("t4").querySelector("[data-task-word]")), view.container.querySelector("[data-record-task] [data-mark]")];
     } finally { await view.unmount(); }
   };
-  expect(await slot([row("going")])).toEqual(["working", "going", null]);
-  expect(await slot([row("waiting")])).toEqual(["working", "waiting", null]);
-  expect(await slot([])).toEqual(["unfinished", null, "unfinished"]);
+  expect(await slot([row("going")])).toEqual([null, true, "Needs you · Question", null]);
+  expect(await slot([row("waiting")])).toEqual([null, true, "Needs you · Question", null]);
+  expect(await slot([])).toEqual(["unfinished", false, "Unfinished · asked, then ended", null]);
   // The same session id on another device is another session.
-  expect(await slot([row("going", "mini")])).toEqual(["unfinished", null, "unfinished"]);
+  expect(await slot([row("going", "mini")])).toEqual(["unfinished", false, "Unfinished · asked, then ended", null]);
 });

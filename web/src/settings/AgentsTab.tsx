@@ -5,7 +5,7 @@ import { Disclosure, Group, Note, Row } from "../components/settings-rows";
 import { Button } from "../components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { useInterfaceTranslation } from "../i18n/client";
-import { machineName, screenDeviceId } from "../screenMachine";
+import { machineName, windowDeviceId, windowFirst } from "../screenMachine";
 import { useShellStore } from "../store";
 import { agentMachines, checkFailedReason, type AgentMachine } from "./agentRows";
 import { AgentRow, NotInstalledRow } from "./AgentRow";
@@ -25,10 +25,11 @@ export function AgentsTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const remote = useShellStore((s) => s.rest?.status?.remote);
-  const own = useShellStore((s) => screenDeviceId(s.rest));
+  const own = useShellStore((s) => windowDeviceId(s.rest?.navigator?.devices));
   const [selected, setSelected] = useState<string | null>(null);
   useAgentsDemand(actions, true);
-  const machines = agentMachines(devices ?? [], remote);
+  // This Mac first, then the rest as the Devices tab orders them (N1).
+  const machines = agentMachines(windowFirst(devices), remote);
   const machine = machines.find((row) => row.device.id === (selected ?? own)) ?? machines[0];
   return (
     <>
@@ -92,6 +93,15 @@ function MachineAgents({ machine, actions }: { machine: AgentMachine; actions: A
     <div data-agents-machine-list={device.id}>
       {machine.blocked === "unavailable" && device.kit?.unavailable ? <Note data-agents-unavailable={device.id}>{device.kit.unavailable}</Note> : null}
       {machine.unread && machine.blocked === null ? <Note data-agents-unread={device.id}>{t("agents.reading")}</Note> : null}
+      {machine.unlisted && machine.blocked === null ? (
+        <Group>
+          <Row label={<Note data-agents-unlisted={device.id}>{t("agents.unlisted")}</Note>}>
+            <Button variant="secondary" size="sm" onClick={() => actions.checkKit()} data-agents-unlisted-check={device.id}>
+              {t("agents.checkAgain")}
+            </Button>
+          </Row>
+        </Group>
+      ) : null}
       {machine.installed.length + machine.notInstalled.length > 0 ? (
         <>
           <Group

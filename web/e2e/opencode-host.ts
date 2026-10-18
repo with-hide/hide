@@ -99,8 +99,9 @@ const run = {
 
 (async () => {
   announce();
-  const { HidePlugin } = await import(pathToFileURL(config.plugin).href);
-  const hooks = await HidePlugin({ client, directory: process.cwd() });
+  // OpenCode 1.x runs the default definition's server.
+  const { server } = (await import(pathToFileURL(config.plugin).href)).default;
+  const hooks = await server({ client, directory: process.cwd() });
   await hooks.event({ event: { type: "session.created", properties: { sessionID: session, info: sessions[session] } } });
   fs.writeFileSync(path.join(folder, "ready.json.part"), JSON.stringify({ session, hooks: Object.keys(hooks) }));
   fs.renameSync(path.join(folder, "ready.json.part"), path.join(folder, "ready.json"));

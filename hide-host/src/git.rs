@@ -183,7 +183,7 @@ impl<'a> GitDirectory<'a> {
     }
 
     fn command(self) -> Command {
-        let mut command = Command::new("git");
+        let mut command = hide_platform::programs::command("git");
         // A path is a path, never a pathspec pattern: a file named `*.rs` or
         // `:(top)x` selects only itself.
         command.arg("--literal-pathspecs");

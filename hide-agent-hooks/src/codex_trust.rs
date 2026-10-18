@@ -66,6 +66,14 @@ impl Limits {
 /// before its whole tree is ended.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
+/// The longest one session with [`Limits::DEFAULT`] runs, its end included:
+/// the requests, the grace to end on its own, then the reap and the reader's
+/// join. A folder trust change holds Hide's lock for that long at most, so
+/// one that waits for it waits this long (`crate::folder_trust`).
+pub(crate) const SESSION_BOUND: Duration = Duration::from_secs(
+    Limits::DEFAULT.overall.as_secs() + SHUTDOWN_GRACE.as_secs() + 2 * REAP_GRACE.as_secs(),
+);
+
 /// How often a wait looks at the caller's stop flag.
 const POLL: Duration = Duration::from_millis(50);
 
@@ -652,6 +660,73 @@ impl<'a> Session<'a> {
         .map_err(Failed::into_failure)
     }
 
+    /// The user layer's `projects` table, read with `config/read` from the
+    /// account's home, so no project layer is read.
+    fn projects(&mut self) -> Result<Projects, TrustFailure> {
+        let answer = self
+            .request("config/read", json!({"includeLayers": true}))
+            .map_err(Failed::into_failure)?;
+        let unreadable = |detail: &str| {
+            TrustFailure::new(
+                TrustFailureKind::Refused,
+                format!("config/read answered something Hide cannot read: {detail}"),
+            )
+        };
+        let layers = answer
+            .get("layers")
+            .and_then(Value::as_array)
+            .ok_or_else(|| unreadable("there is no layers list"))?;
+        let Some(user) = layers
+            .iter()
+            .find(|layer| layer.pointer("/name/type").and_then(Value::as_str) == Some("user"))
+        else {
+            return Ok(Projects {
+                table: serde_json::Map::new(),
+                version: None,
+            });
+        };
+        let version = user
+            .get("version")
+            .and_then(Value::as_str)
+            .ok_or_else(|| unreadable("the user layer has no version"))?;
+        let table = match user.pointer("/config/projects") {
+            None => serde_json::Map::new(),
+            Some(Value::Object(table)) => table.clone(),
+            Some(_) => return Err(unreadable("projects is not a table")),
+        };
+        Ok(Projects {
+            table,
+            version: Some(version.to_owned()),
+        })
+    }
+
+    /// One `config/batchWrite` of `edits` to the user layer read at
+    /// `version`. Codex answers `okOverridden` when a managed layer decides
+    /// the value instead, which leaves the write without effect.
+    fn write_projects(
+        &mut self,
+        version: Option<&str>,
+        edits: Vec<Value>,
+    ) -> Result<(), TrustFailure> {
+        let answer = self
+            .request(
+                "config/batchWrite",
+                json!({"edits": edits, "expectedVersion": version}),
+            )
+            .map_err(Failed::into_failure)?;
+        match answer.get("status").and_then(Value::as_str) {
+            Some("ok") => Ok(()),
+            Some("okOverridden") => Err(TrustFailure::new(
+                TrustFailureKind::Unconfirmed,
+                "a managed Codex configuration decides that folder's trust instead",
+            )),
+            _ => Err(TrustFailure::new(
+                TrustFailureKind::Refused,
+                format!("config/batchWrite answered something Hide cannot read: {answer}"),
+            )),
+        }
+    }
+
     fn write(&mut self, message: &Value) -> Result<(), Failed> {
         let mut line = serde_json::to_vec(message)
             .map_err(|error| Failed::Gone(format!("a request could not be encoded: {error}")))?;
@@ -834,6 +909,195 @@ impl Failed {
             ),
         }
     }
+}
+
+/// The user layer's `projects` table as Codex reads it, and the layer's
+/// version, which a write names so it never lands on a newer file. A Codex
+/// with no `config.toml` yet has no user layer and no version.
+struct Projects {
+    table: serde_json::Map<String, Value>,
+    version: Option<String>,
+}
+
+impl Projects {
+    /// The entry Codex reads for `key`: the key as written, else, on Windows
+    /// where Codex compares keys without case, the first one that matches so
+    /// (`project_trust_for_lookup_key`, codex-rs 0.163.0).
+    fn entry(&self, key: &str) -> Option<(&str, &serde_json::Map<String, Value>)> {
+        if let Some((found, entry)) = self.table.get_key_value(key) {
+            return entry.as_object().map(|entry| (found.as_str(), entry));
+        }
+        if !cfg!(windows) {
+            return None;
+        }
+        let mut alike: Vec<_> = self
+            .table
+            .iter()
+            .filter(|(found, _)| found.to_lowercase() == key)
+            .collect();
+        alike.sort_by_key(|(found, _)| *found);
+        alike
+            .first()
+            .and_then(|(found, entry)| entry.as_object().map(|entry| (found.as_str(), entry)))
+    }
+
+    fn trust_level(&self, key: &str) -> Option<&str> {
+        self.entry(key)?.1.get("trust_level")?.as_str()
+    }
+}
+
+/// The key path of `projects."<key>"`, with the folder quoted so its dots and
+/// separators stay one segment (`parse_key_path`, codex-rs 0.163.0).
+fn project_key_path(key: &str, field: Option<&str>) -> String {
+    let quoted = key.replace('\\', "\\\\").replace('"', "\\\"");
+    match field {
+        Some(field) => format!("projects.\"{quoted}\".{field}"),
+        None => format!("projects.\"{quoted}\""),
+    }
+}
+
+fn config_failure(home: &Path, failure: TrustFailure) -> crate::install::InstallFailure {
+    crate::install::InstallFailure::NotWritable {
+        path: crate::folder_trust::Agent::Codex
+            .settings_path(home)
+            .display()
+            .to_string(),
+        detail: format!("Codex {}: {}", failure.kind.summary(), failure.detail),
+    }
+}
+
+/// A session for a folder trust change; a Codex with no app-server cannot
+/// record one.
+fn project_session<'a>(
+    codex: &Path,
+    home: &Path,
+    stop: &'a AtomicBool,
+) -> Result<Session<'a>, crate::install::InstallFailure> {
+    match Session::start(codex, home, stop, Limits::DEFAULT) {
+        Ok(Started::Ready(session)) => Ok(session),
+        Ok(Started::Unsupported) => Err(config_failure(
+            home,
+            TrustFailure::new(
+                TrustFailureKind::Ended,
+                "this Codex has no app-server to record a folder's trust through",
+            ),
+        )),
+        Err(failure) => Err(config_failure(home, failure)),
+    }
+}
+
+/// Records Codex's trust of the folder spelled `key` through Codex's own
+/// `config/batchWrite`, unless Codex already trusts it. `repository` is the
+/// key of the main checkout the folder was made from: one Codex marks
+/// untrusted is the operator saying no to those files, so the folder is not
+/// trusted past it, and neither is a folder Codex itself marks untrusted.
+/// `remember` runs once Hide knows it will write, before the write, and the
+/// same write takes out Hide's trust of each folder in `gone`, whose folder no
+/// longer exists.
+pub(crate) fn add_project_trust(
+    codex: &Path,
+    home: &Path,
+    stop: &AtomicBool,
+    key: &str,
+    repository: Option<&str>,
+    gone: &[String],
+    remember: &mut dyn FnMut() -> Result<(), crate::install::InstallFailure>,
+) -> Result<crate::folder_trust::Added, crate::install::InstallFailure> {
+    let refused = |detail: String| crate::install::InstallFailure::Refused {
+        path: crate::folder_trust::Agent::Codex
+            .settings_path(home)
+            .display()
+            .to_string(),
+        detail,
+    };
+    let mut session = project_session(codex, home, stop)?;
+    let projects = session
+        .projects()
+        .map_err(|failure| config_failure(home, failure))?;
+    match projects.trust_level(key) {
+        Some("trusted") => return Ok(crate::folder_trust::Added::Present),
+        Some("untrusted") => {
+            return Err(refused(format!(
+                "Codex marks {key} untrusted; trust it in Codex, or start the agent there yourself"
+            )));
+        }
+        _ => {}
+    }
+    if let Some(repository) = repository
+        && projects.trust_level(repository) == Some("untrusted")
+    {
+        return Err(refused(format!(
+            "Codex marks {repository} untrusted, the repository this worktree was made from; trust it in Codex, or start the agent there yourself"
+        )));
+    }
+    remember()?;
+    let mut edits = removal_edits(&projects, gone);
+    edits.push(json!({
+        "keyPath": project_key_path(key, Some("trust_level")),
+        "value": "trusted",
+        "mergeStrategy": "replace",
+    }));
+    session
+        .write_projects(projects.version.as_deref(), edits)
+        .map_err(|failure| config_failure(home, failure))?;
+    match session.projects() {
+        Ok(after) if after.trust_level(key) == Some("trusted") => {
+            Ok(crate::folder_trust::Added::New)
+        }
+        Ok(_) => Err(config_failure(
+            home,
+            TrustFailure::new(
+                TrustFailureKind::Unconfirmed,
+                format!("codex accepted the write and does not list {key} as trusted"),
+            ),
+        )),
+        Err(failure) => Err(config_failure(home, failure)),
+    }
+}
+
+/// Takes out Codex's trust of each folder spelled in `keys` that Codex still
+/// lists as trusted, through Codex's own `config/batchWrite`: the folder's
+/// whole entry when trust is all it holds, its `trust_level` otherwise.
+/// Answers how many entries changed.
+pub(crate) fn remove_project_trust(
+    codex: &Path,
+    home: &Path,
+    stop: &AtomicBool,
+    keys: &[String],
+) -> Result<usize, crate::install::InstallFailure> {
+    let mut session = project_session(codex, home, stop)?;
+    let projects = session
+        .projects()
+        .map_err(|failure| config_failure(home, failure))?;
+    let edits = removal_edits(&projects, keys);
+    if edits.is_empty() {
+        return Ok(0);
+    }
+    let removed = edits.len();
+    session
+        .write_projects(projects.version.as_deref(), edits)
+        .map_err(|failure| config_failure(home, failure))?;
+    Ok(removed)
+}
+
+/// The edits that take out Codex's trust of each folder spelled in `keys`
+/// that Codex still lists as trusted: the folder's whole entry when trust is
+/// all it holds, its `trust_level` otherwise.
+fn removal_edits(projects: &Projects, keys: &[String]) -> Vec<Value> {
+    keys.iter()
+        .filter_map(|key| {
+            let (found, entry) = projects.entry(key)?;
+            if entry.get("trust_level").and_then(Value::as_str) != Some("trusted") {
+                return None;
+            }
+            let field = (entry.len() > 1).then_some("trust_level");
+            Some(json!({
+                "keyPath": project_key_path(found, field),
+                "value": Value::Null,
+                "mergeStrategy": "replace",
+            }))
+        })
+        .collect()
 }
 
 /// A file Codex could not use, as `hooks/list` reports it.

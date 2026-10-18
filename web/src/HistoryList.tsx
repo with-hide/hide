@@ -5,7 +5,7 @@ import { fileIcon } from "./fileIcons";
 import { EntryContextMenu, type MenuEntry } from "./components/entry-menu";
 import { FileMark } from "./components/file-mark";
 import { Hint } from "./components/ui/tooltip";
-import { screenDeviceId } from "./screenMachine";
+import { windowDeviceId } from "./screenMachine";
 import { changesFor, explorerContext, frontCheckout, type ChangedFileSnapshot, type ChangedFileStatus } from "./snapshot";
 import { revealHost } from "./host";
 import { revealExternalEntry } from "./revealExternal";
@@ -53,7 +53,7 @@ function ChangeRow({ entry, committed, selected, actions }: {
     const rest = useShellStore.getState().rest;
     return [
       { id: "open_beside", label: t("history.openBeside"), unavailable: besideUnavailable(workspaceViewOf(rest)?.layout, drawnViews()) },
-      ...revealExternalEntry(revealHost(), explorerContext(rest).device, screenDeviceId(rest), t, entry.status === "deleted" ? t("history.fileDeleted") : null, true),
+      ...revealExternalEntry(revealHost(), explorerContext(rest).device, windowDeviceId(rest?.navigator?.devices), t, entry.status === "deleted" ? t("history.fileDeleted") : null, true),
     ];
   };
   return (

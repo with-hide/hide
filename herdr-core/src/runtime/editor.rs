@@ -896,6 +896,7 @@ impl Runtime {
                     .map(|agent| ClosedAgent {
                         kind: agent.agent_kind.clone(),
                         session_id: agent.session_id.clone(),
+                        launch: self.launch_choice_of(agent),
                     });
                 ClosedPane {
                     pane_id: pane.id.clone(),
@@ -1283,8 +1284,8 @@ impl Runtime {
             .panes
             .iter()
             .all(|pane| pane.failed_terminal_id.is_some());
-        let retain_for_reopen =
-            !self
+        let retain_for_reopen = !self.archive_closes_pane(&target_id)
+            && !self
                 .snapshot
                 .ui_state
                 .agent_sleep
@@ -2936,6 +2937,17 @@ impl Runtime {
                 }
             }
             Ok(live::FileReopenResultOrHerdr::Herdr(outcome)) => {
+                // Only this machine's closes reopen, so each pane id is the
+                // core's own.
+                for agent in &outcome.agents {
+                    self.record_pane_launch(
+                        &agent.pane_id,
+                        &agent.kind,
+                        &agent.name,
+                        &agent.launch,
+                        agent.session_id.as_deref(),
+                    );
+                }
                 if let Some(tab_id) = outcome.tab_id.as_ref() {
                     let context = match &request.item {
                         ClosedItem::Pane { context, .. } | ClosedItem::Tab { context, .. } => {

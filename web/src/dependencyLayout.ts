@@ -93,6 +93,8 @@ let shared: Promise<ELK> | null = null;
 
 /** The one layout worker the page keeps, started the first time a graph opens. */
 export function workerElk(): Promise<ELK> {
+  // Without workers the layout cannot run, so refuse before loading the layout library.
+  if (typeof Worker === "undefined") return Promise.reject(new Error("this page cannot start a layout worker"));
   shared ??= Promise.all([import("elkjs/lib/elk-api.js"), import("elkjs/lib/elk-worker.min.js?url")]).then(([api, worker]) => new api.default({ workerUrl: worker.default }));
   // A worker that failed to start is not kept, so the next graph tries again.
   shared.catch(() => {

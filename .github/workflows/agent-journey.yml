@@ -1,0 +1,237 @@
+# The agent journey (docs/VERIFICATION.md, Agent journey) in CI mode: each
+# agent spawned through `hide agent spawn` on an isolated candidate, judged
+# from what Hide reports (PRD agent-journey-check D-31, D-46).
+#
+# `fixture` runs the compiled stand-ins of `web/e2e/shims` in place of Claude
+# Code and Codex, with no key, and proves the journey's isolation, spawn,
+# verdicts, report and cleanup; it passes only when every cell a stand-in
+# imitates passed. It runs on Linux and macOS only for now (docs/INSTALL.md,
+# What each system supports).
+# `windows-forms` runs the journey's Windows process jobs, private files and
+# pane shell commands on Windows itself. `pr.yml` runs both when the
+# journey's code or the shims change, `nightly.yml` and `release.yml` every time.
+#
+# With `live`, the `login` job runs the real CLIs in the runner's disposable
+# HOME, signed in with the CI account's keys (`HIDE_CLAUDE_API_KEY`,
+# `HIDE_CODEX_API_KEY`). An agent without its key reads "not configured" and
+# leaves a notice, a provider quota refusal leaves a warning; neither fails
+# the job. A failed cell, an isolation or cleanup failure, a request budget
+# overrun, or a refused login or missing CLI with the key set does. Its report is never a release's agent evidence when it
+# came from the stand-ins (`skills/release/SKILL.md`).
+name: agent journey
+
+on:
+  workflow_call:
+    inputs:
+      systems:
+        description: The systems to run, as a JSON array of `linux`, `macos` and `windows`.
+        type: string
+        required: true
+      live:
+        description: Also run the signed-in journey for each agent whose key is set.
+        type: boolean
+        default: false
+    secrets:
+      HIDE_CLAUDE_API_KEY:
+        required: false
+      HIDE_CODEX_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  fixture:
+    name: agent journey stand-ins (${{ matrix.system }})
+    # A Windows-only run leaves no system for the stand-ins.
+    if: ${{ inputs.systems != '["windows"]' }}
+    runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15"}')[matrix.system] }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        system: ${{ fromJSON(inputs.systems) }}
+        exclude:
+          - system: windows
+    defaults:
+      run:
+        shell: bash
+    env:
+      HERDR_PLATFORM: ${{ fromJSON('{"linux":"linux-x86_64","macos":"macos-aarch64"}')[matrix.system] }}
+      RUN_DIR: agents/runs/agent-journey-fixture-${{ matrix.system }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install zsh on Linux
+        # Every private pane starts from SHELL=/bin/zsh, and the Herdr fetch
+        # script is zsh; the Linux image has neither.
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: sudo apt-get install -y --no-install-recommends zsh
+      - name: Build hided, hide, the hooks and Hide's conversation reader
+        timeout-minutes: 25
+        run: |
+          bash scripts/verify-cargo.sh cli
+          bash scripts/verify-cargo.sh build -p hide-session --example journey_conversation
+          bash scripts/verify-cargo.sh build -p hide-memory --example journey_memory
+      - name: Fetch the pinned Herdr runtime
+        id: herdr
+        timeout-minutes: 5
+        run: echo "bin=$(zsh scripts/fetch-herdr-runtime.sh --platform "$HERDR_PLATFORM")" >> "$GITHUB_OUTPUT"
+      - name: Build the Claude and Codex stand-ins
+        run: |
+          mkdir -p "$RUNNER_TEMP/journey-shims"
+          cc -O1 -o "$RUNNER_TEMP/journey-shims/claude" web/e2e/shims/claude-shim.c
+          cp "$RUNNER_TEMP/journey-shims/claude" "$RUNNER_TEMP/journey-shims/codex"
+      - name: The journey on the stand-ins
+        id: journey
+        timeout-minutes: 20
+        run: |
+          set +e
+          python3 scripts/agent-journey-check.py --mode ci \
+            --fixture-bin "$RUNNER_TEMP/journey-shims" --herdr-bin "${{ steps.herdr.outputs.bin }}" --run-dir "$RUN_DIR"
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+      - name: The lane's verdict
+        run: python3 scripts/agent-journey-lane.py "$RUN_DIR/report.json" --lane fixture
+      - name: Keep the report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-journey-fixture-${{ matrix.system }}
+          # The report and each cell's evidence; the probe, which held the
+          # private daemon, is gone by now.
+          path: |
+            ${{ env.RUN_DIR }}/report.*
+            ${{ env.RUN_DIR }}/*.json
+            ${{ env.RUN_DIR }}/*.txt
+            ${{ env.RUN_DIR }}/*.log
+          if-no-files-found: warn
+
+  windows-forms:
+    name: agent journey Windows forms
+    if: ${{ contains(fromJSON(inputs.systems), 'windows') }}
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Process jobs, private files and pane shell commands on Windows
+        # scripts/tests/test_agent_live_windows.py: an owner that dies takes
+        # its children's trees with it, each cap is the Unix guardian's and a
+        # crossed one is named, and the files and commands the journey
+        # writes work on Windows itself.
+        timeout-minutes: 10
+        run: python -m unittest scripts/tests/test_agent_live_windows.py -v
+
+  login:
+    name: agent journey signed in (${{ matrix.system }})
+    if: ${{ inputs.live }}
+    runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        system: ${{ fromJSON(inputs.systems) }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      HERDR_PLATFORM: ${{ fromJSON('{"linux":"linux-x86_64","macos":"macos-aarch64","windows":"windows-x86_64"}')[matrix.system] }}
+      RUN_DIR: agents/runs/agent-journey-login-${{ matrix.system }}
+      # The journey needs Python 3.12; Windows names it python.
+      PYTHON: ${{ matrix.system == 'windows' && 'python' || 'python3' }}
+      HAS_KEYS: ${{ secrets.HIDE_CLAUDE_API_KEY != '' || secrets.HIDE_CODEX_API_KEY != '' }}
+    steps:
+      - name: Not configured without the CI account's keys
+        if: ${{ env.HAS_KEYS != 'true' }}
+        run: echo "::notice title=agent journey signed in::not configured (no HIDE_CLAUDE_API_KEY or HIDE_CODEX_API_KEY secret); the signed-in journey stays unproven"
+      - name: Keep line endings as committed
+        if: ${{ env.HAS_KEYS == 'true' && runner.os == 'Windows' }}
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        if: ${{ env.HAS_KEYS == 'true' }}
+        with:
+          # The keyed steps never need the repository token.
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ env.HAS_KEYS == 'true' }}
+        with:
+          workspaces: ". -> target"
+          save-if: false
+      - uses: actions/setup-node@v4
+        if: ${{ env.HAS_KEYS == 'true' }}
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        if: ${{ env.HAS_KEYS == 'true' && runner.os == 'Windows' }}
+        with:
+          python-version: "3.12"
+      - name: Install zsh on Linux
+        if: ${{ env.HAS_KEYS == 'true' && runner.os == 'Linux' }}
+        run: sudo apt-get install -y --no-install-recommends zsh
+      - name: Install Claude Code and Codex
+        # The vendors' current releases, so a night measures what operators
+        # install; the step and the report name the version each answered
+        # with, so a red night says which CLI changed.
+        if: ${{ env.HAS_KEYS == 'true' }}
+        timeout-minutes: 5
+        run: |
+          npm install -g @anthropic-ai/claude-code @openai/codex
+          echo "::notice title=agent journey CLIs::claude $(claude --version), codex $(codex --version)"
+      - name: Build hided, hide, the hooks and Hide's conversation reader
+        if: ${{ env.HAS_KEYS == 'true' }}
+        timeout-minutes: 25
+        run: |
+          bash scripts/verify-cargo.sh cli
+          bash scripts/verify-cargo.sh build -p hide-session --example journey_conversation
+          bash scripts/verify-cargo.sh build -p hide-memory --example journey_memory
+      - name: Fetch the pinned Herdr runtime
+        if: ${{ env.HAS_KEYS == 'true' }}
+        id: herdr
+        timeout-minutes: 5
+        # Assigned first, so a failed fetch fails this step rather than
+        # handing the next one an empty path.
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            bin=$(pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1 | tr -d '\r')
+          else
+            bin=$(zsh scripts/fetch-herdr-runtime.sh --platform "$HERDR_PLATFORM")
+          fi
+          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+      - name: The journey, signed in with the CI keys
+        # The keys reach only this step; the journey keeps each one under the
+        # run's probe, which its cleanup removes, and the report names them only.
+        if: ${{ env.HAS_KEYS == 'true' }}
+        timeout-minutes: 40
+        env:
+          HIDE_CLAUDE_API_KEY: ${{ secrets.HIDE_CLAUDE_API_KEY }}
+          HIDE_CODEX_API_KEY: ${{ secrets.HIDE_CODEX_API_KEY }}
+        run: |
+          set +e
+          "$PYTHON" scripts/agent-journey-check.py --mode ci \
+            --herdr-bin "${{ steps.herdr.outputs.bin }}" --run-dir "$RUN_DIR"
+          echo "journey exit $?"
+      - name: The lane's verdict
+        if: ${{ env.HAS_KEYS == 'true' }}
+        run: '"$PYTHON" scripts/agent-journey-lane.py "$RUN_DIR/report.json" --lane login'
+      - name: Keep the report
+        if: ${{ env.HAS_KEYS == 'true' && !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-journey-login-${{ matrix.system }}
+          path: |
+            ${{ env.RUN_DIR }}/report.*
+            ${{ env.RUN_DIR }}/*.json
+            ${{ env.RUN_DIR }}/*.txt
+            ${{ env.RUN_DIR }}/*.log
+          if-no-files-found: warn

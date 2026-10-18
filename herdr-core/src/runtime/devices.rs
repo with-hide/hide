@@ -63,6 +63,16 @@ impl DeviceReach {
     }
 }
 
+/// Why a device's connection is retired. A removed device keeps nothing of
+/// the core's; a retried one is the same device on a new attempt, so what is
+/// about the device and not about the attempt stays: the state it last
+/// reported, when it first stopped answering, and the kit work queued for it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Retiring {
+    Removed,
+    Retried,
+}
+
 pub(super) struct RemoteDeviceConnection {
     pub(super) transport: DeviceReach,
     /// `None` when the coordinator could not be started; the status entry
@@ -296,7 +306,7 @@ impl Runtime {
     /// projected panes. What its helper answered about its directories stays
     /// (`forget_device_catalog`). The coordinator is joined later, off the
     /// lock, by whoever drains `take_retired_remote_syncs`.
-    pub(super) fn disconnect_remote_device(&mut self, device_id: &str) {
+    pub(super) fn disconnect_remote_device(&mut self, device_id: &str, why: Retiring) {
         self.device_machine_ids.remove(device_id);
         self.device_ports.remove(device_id);
         self.device_disk.remove(device_id);
@@ -307,7 +317,7 @@ impl Runtime {
         self.device_github_read_generation
             .retain(|(device, _), _| device != device_id);
         self.device_github_over_limit.remove(device_id);
-        self.forget_device_host(device_id);
+        self.forget_device_host(device_id, why);
         if let Some(connection) = self.remote_connections.remove(device_id)
             && let Some(sync) = connection.sync
         {
@@ -323,10 +333,27 @@ impl Runtime {
             .retain(|(target_id, _, _, _)| target_id != device_id);
         self.remote_device_tests.remove(device_id);
         self.device_herdr_behind.remove(device_id);
-        self.snapshot
-            .status
-            .remote
-            .retain(|status| status.target_id != device_id);
+        match why {
+            Retiring::Removed => self
+                .snapshot
+                .status
+                .remote
+                .retain(|status| status.target_id != device_id),
+            // The row reports the new attempt, not the failure of the last
+            // one, and keeps the last session and the age of the outage.
+            Retiring::Retried => {
+                if let Some(status) = self
+                    .snapshot
+                    .status
+                    .remote
+                    .iter_mut()
+                    .find(|status| status.target_id == device_id)
+                {
+                    status.state = "not_connected".to_owned();
+                    status.message = Some("Reconnecting to the device".to_owned());
+                }
+            }
+        }
         self.reconcile_remote_terminal_panes(device_id, &HashSet::new(), &HashSet::new());
         if self.snapshot.navigator.focused_device_id.as_deref() == Some(device_id) {
             self.snapshot.navigator.focused_device_id = Some(self.node.as_str().to_owned());
@@ -354,7 +381,7 @@ impl Runtime {
         let mut devices = workspace::devices(
             &self.node,
             self.machine_name.as_deref(),
-            &self.snapshot.ui_state.device_registrations,
+            &self.snapshot.ui_state,
         );
         for device in &mut devices {
             if let Some(count) = counts.get(&device.id) {
@@ -410,7 +437,7 @@ impl Runtime {
         }
         let focused_device = self.snapshot.navigator.focused_device_id.clone();
         let persisted_focus = self.snapshot.ui_state.focused_device_id.clone();
-        self.disconnect_remote_device(device_id);
+        self.disconnect_remote_device(device_id, Retiring::Retried);
         self.snapshot.navigator.focused_device_id = focused_device;
         self.snapshot.ui_state.focused_device_id = persisted_focus;
         self.push_diagnostic(

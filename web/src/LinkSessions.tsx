@@ -1,6 +1,7 @@
 import { CopyIcon, LoaderCircleIcon, MessageSquareIcon, PlayIcon, CircleHelpIcon, SquareTerminalIcon, ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
+import { AgentMark } from "./AgentMark";
 import { agentProductName } from "./agentAdapters";
 import { markTone, rowLine } from "./agentRow";
 import { statusText } from "./agentStatus";
@@ -18,17 +19,29 @@ import { timeline, type Milestone, type TimelineEntry } from "./prCardModel";
 import { recordTitle } from "./sessionWork";
 import { catalogOf, localDeviceId, type LinkPanel, type PullRequest, type Workspace } from "./snapshot";
 import { startAnswer, startRequestId } from "./startAnswer";
+import { startReasonText } from "./startReason";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
 // The PR card's timeline (PRD link-graph B6-B25, B34; PRD pr-card-and-
 // session-record-redesign D-03, D-05 to D-09, B3-B10): the record's session
 // lines joined with what is live now and the pull request's milestones, one
-// list oldest first, each row in the sidebar's agent-row shape. A live row
+// list oldest first, each row in the sidebar's agent-row shape, joined by one
+// rail behind the marks (PRD record-card-readability D-09). A live row
 // keeps the one button its state needs under its line; an ended row shows
 // `View conversation` and `Resume` only while the pointer or the keyboard is
 // on it. The record's failure, its first read and its empty line stand in
 // the section's own place; the rest of the card never moves.
+
+/**
+ * The rail (PRD record-card-readability D-09, B16): one line behind the
+ * marks, from the first row's mark to the last's, so the sessions and the
+ * milestones read as one run. Each mark stands on the page's ground, so the
+ * line joins the marks rather than crossing them.
+ */
+const RAIL = "before:absolute before:top-(--size-sidebar-line) before:bottom-(--size-sidebar-line) before:left-[calc(var(--spacing-xs)+var(--size-agent-mark)/2)] before:w-(--size-hairline) before:bg-border";
+/** A timeline row's mark on the page's ground, over the rail. */
+const ON_RAIL = "relative inline-flex rounded-full bg-background";
 
 /** How long a resume waits for the core's answer before it says so; a device start can take a Home sync and a tab. */
 const RESUME_TIMEOUT_MS = 90_000;
@@ -108,9 +121,9 @@ export function LinkTimeline({
         </p>
       ) : null}
       {shown.length > 0 ? (
-        <ol className="flex flex-col" aria-label={t("work.card.timeline")} data-pr-card-timeline-rows={shown.length}>
+        <ol className={cn("relative flex flex-col", RAIL)} aria-label={t("work.card.timeline")} data-pr-card-timeline-rows={shown.length}>
           {shown.map((entry) => {
-            if (entry.kind === "session") return <SessionLineView key={entry.session.line.id} entry={entry.session} project={project} checkoutBranch={branchOf(entry.session.line.pr)} actions={actions} />;
+            if (entry.kind === "session") return <SessionLineView key={entry.session.line.id} entry={entry.session} project={project} checkoutBranch={branchOf(entry.session.line.pr)} opener={lines.length > 1} actions={actions} />;
             if (entry.kind === "milestone") return <MilestoneRow key={`${entry.milestone.kind}:${entry.milestone.at ?? ""}`} milestone={entry.milestone} />;
             return <NowRow key="now" running={entry.running} />;
           })}
@@ -145,14 +158,14 @@ function MilestoneRow({ milestone }: { milestone: Milestone }) {
   const { t } = useInterfaceTranslation();
   const look = milestoneLook(milestone, t);
   return (
-    <SessionRow mark={<MilestoneMark className={look.tone} />} title={look.text} right={milestone.at !== null ? <span className="font-mono text-caption text-muted-foreground">{timeText(milestone.at)}</span> : null} data-timeline-milestone={milestone.kind} data-timeline-at={milestone.at ?? undefined} />
+    <SessionRow mark={<span className={ON_RAIL}><MilestoneMark className={look.tone} /></span>} title={look.text} right={milestone.at !== null ? <span className="font-mono text-caption text-muted-foreground">{timeText(milestone.at)}</span> : null} data-timeline-milestone={milestone.kind} data-timeline-at={milestone.at ?? undefined} />
   );
 }
 
-/** `지금` at the end of an open pull request (B6): while checks run, the dashed ring of proven work it waits on and the count under it (status-marks D-06, D-25); otherwise an empty slot. */
+/** `지금` at the end of an open pull request (B6; PRD record-card-readability D-12, B21): one line, `지금 · 검사 N개 도는 중` with the dashed ring of proven work it waits on while checks run (status-marks D-06, D-25), otherwise `지금` and an empty slot. */
 function NowRow({ running }: { running: number }) {
   const { t } = useInterfaceTranslation();
-  return <SessionRow mark={<StatusMark mark={running > 0 ? "waiting" : "quiet"} />} title={t("work.card.now")} line={running > 0 ? { text: t("work.card.why.ci", { count: running }), className: "text-warning" } : null} data-timeline-now={running} />;
+  return <SessionRow mark={<span className={ON_RAIL}><StatusMark mark={running > 0 ? "waiting" : null} /></span>} title={running > 0 ? `${t("work.card.now")} · ${t("work.card.why.ci", { count: running })}` : t("work.card.now")} data-timeline-now={running} />;
 }
 
 /** A resume in flight: the request it sent, then the core's refusal if it came. */
@@ -174,11 +187,12 @@ function useResume(): { resume: Resume; start: (send: (request: string) => void)
       const ui = useUiStore.getState();
       if (answer.agentPhase) ui.setWatchedTask(answer.taskId);
       if (answer.paneId) ui.setFocusWhenListed(answer.paneId);
-      setResume({ request: null, failure: answer.agentPhase === "failed" ? (answer.agentMessage ?? "") : null });
+      const reason = answer.agentMessage ? startReasonText(answer.agentMessage, t) : "";
+      setResume({ request: null, failure: answer.agentPhase === "failed" ? reason : null });
     } else if (answer.phase === "refused" || answer.phase === "failed") {
       setResume({ request: null, failure: answer.message ?? "" });
     }
-  }, [request, phase]);
+  }, [request, phase, t]);
   useEffect(() => {
     if (!request) return undefined;
     const timer = window.setTimeout(() => setResume({ request: null, failure: t("shell.startTimeout") }), RESUME_TIMEOUT_MS);
@@ -208,7 +222,7 @@ function useSessionTitle(line: SessionLine["line"], live: SessionLine["live"], w
   return row ? recordTitle(row, summaries) : agentProductName(line.agent);
 }
 
-function SessionLineView({ entry, project, checkoutBranch, actions }: { entry: SessionLine; project: Workspace; checkoutBranch: string | null; actions: Actions }) {
+function SessionLineView({ entry, project, checkoutBranch, opener, actions }: { entry: SessionLine; project: Workspace; checkoutBranch: string | null; opener: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const workspaces = useShellStore((s) => s.rest?.navigator?.workspaces);
@@ -236,7 +250,8 @@ function SessionLineView({ entry, project, checkoutBranch, actions }: { entry: S
     line.ids.length > 1 ? t("links.continued", { count: line.ids.length }) : null,
     line.device_id !== node ? deviceLabel(devices, line.device_id) : null,
   ].filter((part): part is string => part !== null).join(" · ");
-  const mark = live ? <StatusMark mark={live.agent.mark} className={markTone(live.agent)} data-agent-status-mark={live.agent.mark} /> : <StatusMark mark="quiet" data-agent-status-mark="ended" />;
+  // The status mark on the rail, then the agent's logo, as a sidebar row (D-09, B17).
+  const mark = <><span className={ON_RAIL}>{live ? <StatusMark mark={live.agent.mark} className={markTone(live.agent)} data-agent-status-mark={live.agent.mark} /> : <StatusMark mark={null} data-agent-status-mark="ended" />}</span><AgentMark kind={line.agent} /></>;
   const caption = asked ? { text: asked, className: "text-warning", wrap: true } : { text: `${agent} · ${live ? statusText(t, live.agent.status_code) : t("sessionWork.done")}` };
   const right = live ? <Elapsed since={line.started_at_unix_ms} className="font-mono text-caption text-muted-foreground" data-link-elapsed={line.id} /> : (() => {
     const span = spanText(line.started_at_unix_ms, line.ended_at_unix_ms);
@@ -265,7 +280,7 @@ function SessionLineView({ entry, project, checkoutBranch, actions }: { entry: S
       title={title}
       titleClassName={gone ? "text-muted-foreground" : undefined}
       hint={hint}
-      chips={line.role === "created" ? <span className="inline-flex h-(--size-control-sm) shrink-0 items-center rounded-xs border border-border px-xs text-micro text-pr-merged" data-link-chip="created">{t("links.created")}</span> : null}
+      chips={opener && line.role === "created" ? <span className="inline-flex h-(--size-control-sm) shrink-0 items-center rounded-xs border border-border px-xs text-micro text-pr-merged" data-link-chip="created">{t("links.created")}</span> : null}
       right={right}
       reveal={busy && !live ? undefined : reveal}
       line={caption}

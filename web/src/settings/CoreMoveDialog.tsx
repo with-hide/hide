@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Actions } from "../actions";
 import { Button } from "../components/ui/button";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
-import { checkCommand, giveUpOffered, moveCopy, stepMarks, type MoveView, type StepMark } from "../coreMove";
+import { checkCommand, checkMachine, giveUpOffered, moveCopy, stepMarks, type MoveView, type StepMark } from "../coreMove";
 import { useInterfaceTranslation } from "../i18n/client";
 import { takesEun, takesEuro } from "../i18n/koParticle";
 import { cn } from "../lib/utils";
@@ -154,7 +154,7 @@ export function CoreMoveDialog({ request, asked: first, giveUp = false, actions,
               </p>
               <ul className="space-y-xs">
                 {failed.map((row) => (
-                  <FailedCheck key={row.check} check={row.check} detail={row.detail} machine={machines.to} actions={actions} />
+                  <FailedCheck key={row.check} check={row.check} detail={row.detail} machine={checkMachine(row.check, machines)} actions={actions} />
                 ))}
               </ul>
             </>

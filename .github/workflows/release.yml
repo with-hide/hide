@@ -12,7 +12,9 @@ name: hide release
 #     its packaged-app specs; the Windows installer installed, installed again
 #     while Herdr runs and uninstalled, and the installed app opened with its
 #     window; the Linux deb installed on Ubuntu and the rpm in Fedora, and
-#     every installed daemon started (PRD auto-update D-32).
+#     every installed daemon started (PRD auto-update D-32);
+#   - `agent-journey.yml` spawns Claude Code and Codex through Hide on the
+#     stand-ins and, with the CI keys, signed in (PRD agent-journey-check B26).
 # One job then drafts the release with exactly the files
 # `expectedAssetNames` lists (the installers, their checksums, the three
 # update files the app reads and the blockmaps; D-35), verifies each checksum
@@ -125,8 +127,25 @@ jobs:
       APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
       APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
 
+  # The agent journey on the release's commit: the stand-ins on Linux and
+  # macOS, the Windows forms, and Claude Code and Codex signed in with the CI
+  # keys on all three systems when they are set (docs/VERIFICATION.md, Agent
+  # journey). A failed cell, isolation or cleanup stops the release; an agent
+  # without its key is a notice.
+  agent-journey:
+    needs: [test, main-verified]
+    uses: ./.github/workflows/agent-journey.yml
+    permissions:
+      contents: read
+    with:
+      systems: '["linux","macos","windows"]'
+      live: true
+    secrets:
+      HIDE_CLAUDE_API_KEY: ${{ secrets.HIDE_CLAUDE_API_KEY }}
+      HIDE_CODEX_API_KEY: ${{ secrets.HIDE_CODEX_API_KEY }}
+
   publish:
-    needs: packages
+    needs: [packages, agent-journey]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

@@ -12,8 +12,9 @@
 //! The core closes its own node when it stops, which ends a child the kit is
 //! waiting on; dropping the pump then joins the thread (engineering rule 14).
 //!
-//! A device's kit runs on its helper (`hide_host::kit`); a worker per device
-//! makes those calls while the device has kit work queued.
+//! A device's kit runs on its helper (`hide_host::kit`), and a node's that
+//! dials this core on that node, through its link; a worker per device makes
+//! those calls while the device has kit work queued.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak, mpsc};
@@ -204,6 +205,7 @@ fn completed(device_id: &str, scope: &hide_kit::Scope, report: &hide_kit::KitRep
             "state": part.state,
             "reason": part.reason,
         })).collect::<Vec<_>>(),
+        "refused": report.refused,
     }));
 }
 

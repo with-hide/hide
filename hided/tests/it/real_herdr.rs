@@ -69,6 +69,7 @@ fn daemon_env(root: &Path, herdr: &PrivateHerdr) -> Env {
         home: herdr.home.clone(),
         herdr_socket_path: Some(herdr.socket.display().to_string()),
         herdr_bin_path: Some(herdr.bin.clone()),
+        login_shell: None,
         state_dir: root.join("state"),
         legacy_state_dir: None,
         account_state_folder: false,
@@ -349,6 +350,17 @@ async fn assert_private_pane_input() -> tempfile::TempDir {
         failure_snapshot(&herdr),
         control_attempt(&herdr, &pane),
         std::fs::read_to_string(&herdr.log).unwrap_or_default()
+    );
+    // The core opened its letters' ledger on this system: startup writes it
+    // back through the durable folder chain, and refuses it otherwise.
+    let state = root.path().join("state");
+    let ledger = std::fs::read(hide_kit::layout::delivery_ledger(&state))
+        .expect("the daemon saved its delivery ledger at startup");
+    serde_json::from_slice::<Value>(&ledger).expect("the saved ledger is JSON");
+    let log = std::fs::read_to_string(state.join("Logs/core.jsonl")).unwrap_or_default();
+    assert!(
+        !log.contains("\"ledger.load_failed\""),
+        "the daemon refused its ledger: {log}"
     );
     drop(socket);
     running.stop();

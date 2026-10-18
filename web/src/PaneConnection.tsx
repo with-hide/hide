@@ -17,6 +17,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover
 import { useInterfaceTranslation } from "./i18n/client";
 import { connectionCopy, notConnected, offersReopen, offersSharedServerOff, reopenFailureKey, reopenPending, sharedServerOutcome } from "./paneConnectionRules";
 import { remoteContext } from "./remote";
+import { machineName, windowDeviceId } from "./screenMachine";
 import type { PaneRow } from "./snapshot";
 import { useShellStore } from "./store";
 
@@ -60,6 +61,9 @@ function ConnectionPopover({
   const rest = useShellStore((s) => s.rest);
   const device = local ? rest?.navigator?.devices?.find((row) => row.kind !== "remote") : remoteContext(rest)?.device;
   const machineId = device?.id ?? null;
+  // The copy names the machine as this window does: its own is this Mac, wherever the core runs.
+  const here = machineId !== null && machineId === windowDeviceId(rest?.navigator?.devices);
+  const machine = machineId ? machineName(rest?.navigator?.devices, machineId, t) : "";
   const copy = connectionCopy(connection.reason);
   const pending = reopenPending(connection);
   const failure = reopenFailureKey(connection);
@@ -138,7 +142,7 @@ function ConnectionPopover({
               {t("panes.connection.sharedServer.link")}
             </Button>
             <span className="text-caption text-muted-foreground">
-              {local ? t("panes.connection.sharedServer.scopeLocal") : t("panes.connection.sharedServer.scopeDevice", { device: device?.label ?? "" })}
+              {here ? t("panes.connection.sharedServer.scopeLocal") : t("panes.connection.sharedServer.scopeDevice", { device: machine })}
             </span>
           </div>
         ) : null}
@@ -158,7 +162,7 @@ function ConnectionPopover({
           <AlertDialogContent data-codex-shared-server-confirm={machineId}>
             <AlertDialogHeader>
               <AlertDialogTitle>
-                {local ? t("panes.connection.sharedServer.confirmTitleLocal") : t("panes.connection.sharedServer.confirmTitleDevice", { device: device?.label ?? "" })}
+                {here ? t("panes.connection.sharedServer.confirmTitleLocal") : t("panes.connection.sharedServer.confirmTitleDevice", { device: machine })}
               </AlertDialogTitle>
               <AlertDialogDescription>{t("panes.connection.sharedServer.confirmEffect")}</AlertDialogDescription>
             </AlertDialogHeader>

@@ -76,9 +76,39 @@ pub(crate) fn install(target: &KitTarget, runtime: AgentRuntime) -> Result<(), S
         .map_err(|failure| failure.message())
 }
 
+/// Takes out Hide's hook entries and, with them, the folder trust Hide
+/// recorded for the worktrees it started this agent in, as switching agy off
+/// does (docs/agent-hooks.md, Folder trust for the worktrees Hide makes).
 pub(crate) fn remove(target: &KitTarget, runtime: AgentRuntime) -> RemoveOutcome {
-    match hide_agent_hooks::remove(runtime, &target.home) {
-        Ok(outcome) if outcome.removed_entries > 0 => RemoveOutcome::Removed,
+    use hide_agent_hooks::folder_trust::{self, Agent, Tools};
+    let removed = match hide_agent_hooks::remove(runtime, &target.home) {
+        Ok(outcome) => outcome.removed_entries,
+        Err(failure) => {
+            return RemoveOutcome::Failed {
+                reason: failure.message(),
+            };
+        }
+    };
+    let agent = match runtime {
+        AgentRuntime::ClaudeCode => Agent::ClaudeCode,
+        // Codex's trust is taken out by Codex itself; with no Codex left to
+        // ask, its entries and Hide's record of them stay for a later pass
+        // that finds one, and nothing reads them meanwhile.
+        AgentRuntime::Codex if target.codex.is_none() => {
+            return if removed > 0 {
+                RemoveOutcome::Removed
+            } else {
+                RemoveOutcome::Absent
+            };
+        }
+        AgentRuntime::Codex => Agent::Codex,
+    };
+    let tools = Tools {
+        codex: target.codex.as_deref(),
+        stop: &target.stop,
+    };
+    match folder_trust::forget_all(agent, &target.home, tools) {
+        Ok(forgotten) if removed + forgotten > 0 => RemoveOutcome::Removed,
         Ok(_) => RemoveOutcome::Absent,
         Err(failure) => RemoveOutcome::Failed {
             reason: failure.message(),

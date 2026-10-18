@@ -14,6 +14,23 @@
 # `GEMINI_API_KEY` with `"modelProvider": "gemini"`), and on Linux and macOS
 # one real agy turn through Hide's hooks. Without the secret the job says
 # "not configured" and passes (docs/INSTALL.md, What each system supports).
+#
+# The key's free tier allows 20 requests a day for `HIDE_AGY_MODEL` across
+# its project, and every run that signs agy in with it spends them. The
+# listing asks the model nothing (it passed in run 38958746826 after the
+# quota was spent). A turn spends one request per model response, which a
+# passing turn prints (`agy turn: <n> model responses`): 2 on Linux and on
+# macOS in run 39045723831, the tool call and the answer to its refusal, so
+# a nightly spends 4, and at most one more for each 503 agy retries. The turn is not retried
+# (.config/nextest.toml), and a hand run of `lane=agy` spends what a nightly
+# does. It still runs on both Unix systems, each with its own agy build: 4
+# fits the 20, and one turn a night would leave a system unproven to save
+# requests the nightly does not need.
+# A turn the provider answers nothing, because the day's requests are spent
+# (`contracts/provider-quota.json`), checks the hooks and the
+# letter, writes a `Not measured` warning for the refusal and passes; a quota
+# of 0, any other quota, a 503 that never recovers and every other error
+# fail (docs/TESTING.md, A real agent on CI).
 name: agy contract
 
 on:
@@ -146,8 +163,9 @@ jobs:
         # The turn (hooks fired, the letter injected, a direct start refused)
         # runs on Linux and macOS; its stand-in `hide` is a shell script.
         if: ${{ env.HAS_KEY == 'true' }}
-        # Two attempts of the turn's 240 s guard, with room for the listing.
-        timeout-minutes: 12
+        # One attempt of the turn's 240 s guard (it is not retried), with room
+        # for the listing's two.
+        timeout-minutes: 9
         env:
           HIDE_AGY_BINARY: ${{ steps.agy.outputs.bin }}
           HIDE_AGY_API_KEY: ${{ secrets.HIDE_AGY_API_KEY }}

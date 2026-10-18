@@ -56,6 +56,17 @@ pub fn legacy_state_dir(home: &Path) -> PathBuf {
     home.join(".local/state/hide")
 }
 
+/// The environment variable that moves the state folder away from
+/// [`default_state_dir`], named so the operator can be told which one to
+/// change or unset.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum StateVariable {
+    #[serde(rename = "HIDE_STATE_DIR")]
+    HideStateDir,
+    #[serde(rename = "XDG_STATE_HOME")]
+    XdgStateHome,
+}
+
 /// `HIDE_STATE_DIR` wins; a set `XDG_STATE_HOME` keeps `$XDG_STATE_HOME/hide`
 /// as before and is never moved; otherwise `~/.hide/state` (D-04). Empty
 /// values count as unset, as the callers read them.
@@ -64,20 +75,43 @@ pub fn state_dir(
     hide_state_dir: Option<&str>,
     xdg_state_home: Option<&str>,
 ) -> PathBuf {
-    if let Some(dir) = hide_state_dir.filter(|value| !value.is_empty()) {
-        return PathBuf::from(dir);
+    state_dir_choice(home, hide_state_dir, xdg_state_home).0
+}
+
+/// [`state_dir`] with the variable that chose it, `None` for the default.
+/// Judged by the folder, not by which variable is set: `hide connect` hands
+/// the daemon it starts the folder it chose through `HIDE_STATE_DIR`, so that
+/// variable naming the account's own folder chose nothing.
+fn state_dir_choice(
+    home: &Path,
+    hide_state_dir: Option<&str>,
+    xdg_state_home: Option<&str>,
+) -> (PathBuf, Option<StateVariable>) {
+    let (account, account_variable) = match xdg_state_home.filter(|value| !value.is_empty()) {
+        Some(xdg) => (
+            Path::new(xdg).join("hide"),
+            Some(StateVariable::XdgStateHome),
+        ),
+        None => (default_state_dir(home), None),
+    };
+    match hide_state_dir.filter(|value| !value.is_empty()) {
+        Some(dir) if Path::new(dir) != account => {
+            (PathBuf::from(dir), Some(StateVariable::HideStateDir))
+        }
+        _ => (account, account_variable),
     }
-    if let Some(xdg) = xdg_state_home.filter(|value| !value.is_empty()) {
-        return Path::new(xdg).join("hide");
-    }
-    default_state_dir(home)
 }
 
 /// [`state_dir`] from this process's environment, for a program that has no
 /// environment registry of its own (the device helper).
 pub fn state_dir_from_process(home: &Path) -> PathBuf {
+    state_dir_choice_from_process(home).0
+}
+
+/// [`state_dir_from_process`] with the variable that chose it.
+pub fn state_dir_choice_from_process(home: &Path) -> (PathBuf, Option<StateVariable>) {
     let read = |key: &str| std::env::var(key).ok();
-    state_dir(
+    state_dir_choice(
         home,
         read("HIDE_STATE_DIR").as_deref(),
         read("XDG_STATE_HOME").as_deref(),
@@ -265,6 +299,40 @@ pub fn runtime_dir(home: &Path, build: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A daemon `hide connect` started always has `HIDE_STATE_DIR`, naming
+    /// the folder that connect chose; only a folder other than the account's
+    /// own was chosen by it.
+    #[test]
+    fn a_variable_naming_the_account_s_own_folder_chose_nothing() {
+        let home = Path::new("/Users/example");
+        let choice = |hide: Option<&str>, xdg: Option<&str>| state_dir_choice(home, hide, xdg);
+        assert_eq!(
+            choice(Some("/Users/example/.hide/state"), None),
+            (PathBuf::from("/Users/example/.hide/state"), None)
+        );
+        assert_eq!(
+            choice(Some("/xdg/hide"), Some("/xdg")),
+            (
+                PathBuf::from("/xdg/hide"),
+                Some(StateVariable::XdgStateHome)
+            )
+        );
+        assert_eq!(
+            choice(Some("/Volumes/Team/hide"), None),
+            (
+                PathBuf::from("/Volumes/Team/hide"),
+                Some(StateVariable::HideStateDir)
+            )
+        );
+        assert_eq!(
+            choice(Some("/Users/example/.hide/state"), Some("/xdg")),
+            (
+                PathBuf::from("/Users/example/.hide/state"),
+                Some(StateVariable::HideStateDir)
+            )
+        );
+    }
 
     #[test]
     fn the_state_folder_is_under_hide_unless_something_relocates_it() {

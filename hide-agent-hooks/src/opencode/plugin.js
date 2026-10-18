@@ -1,6 +1,7 @@
-// Hide's OpenCode plugin, written by Hide's install kit (hide-agent-hooks).
+// Hide's OpenCode 1.x plugin, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane Hide manages, or when its helper is gone, it does nothing.
+// OpenCode 2 loads this file too and finds nothing to run: its plugin is the `hide-opencode` folder beside this one.
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -457,8 +458,10 @@ async function onTool(state, sessionID, directory, input, output) {
     if (typeof command !== "string") return null;
     const launch = !state.guardOnly && (command.includes("herdr") || command.includes("HERDR_BIN_PATH"));
     if (!launch && !guardrailsOn(state)) return null;
+    // OpenCode runs a relative `workdir` in the session's folder, not where this process started.
     const workdir = output.args.workdir;
-    request = { session_id: sessionID, tool, command, cwd: typeof workdir === "string" && workdir ? workdir : directory };
+    const cwd = typeof workdir === "string" && workdir ? (typeof directory === "string" ? path.resolve(directory, workdir) : workdir) : directory;
+    request = { session_id: sessionID, tool, command, cwd };
   } else if (FILE_TOOLS.has(tool)) {
     if (!guardrailsOn(state)) return null;
     request = { session_id: sessionID, tool, args: fileArgs(output?.args), cwd: directory };
@@ -473,7 +476,7 @@ async function onTool(state, sessionID, directory, input, output) {
   return typeof answer?.deny === "string" && answer.deny ? answer.deny : null;
 }
 
-export const HidePlugin = async ({ client, directory }) => {
+const HidePlugin = async ({ client, directory }) => {
   // Outside a Herdr pane Hide has no letters, counts or guidance for the session, but a guarded project's
   // protections hold there too (PRD agent-guardrails B22).
   if (!managed(process.env)) return helperPresent() ? guardOnly(directory) : {};
@@ -555,3 +558,6 @@ function guardOnly(directory) {
     },
   };
 }
+
+// OpenCode 1.x runs `server`; OpenCode 2 reads the same default as a plugin whose setup does nothing.
+export default { id: "hide.opencode.v1", server: HidePlugin, setup() {} };

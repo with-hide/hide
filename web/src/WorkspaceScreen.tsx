@@ -6,9 +6,9 @@ import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { RemotePaneCanvas } from "./PaneGrid";
 import { remoteTabView, remoteView } from "./remote";
-import { canRetryDevice, deviceLine } from "./settings";
-import { catalogWorkspaces, focusedRemoteDevice, frontCheckout, localDeviceId, type Checkout } from "./snapshot";
-import { registeredName } from "./screenMachine";
+import { canRetryDevice, deviceAwayLine, deviceLine } from "./settings";
+import { catalogWorkspaces, focusedRemoteDevice, frontCheckout, type Checkout } from "./snapshot";
+import { awayDevice, machineName, windowDeviceId } from "./screenMachine";
 import { useShellStore } from "./store";
 import { focusTerminal } from "./terminals";
 import { AgentAreas } from "./AgentAreas";
@@ -19,7 +19,7 @@ import { RunningServers } from "./RunningServers";
 import { useUiStore } from "./ui";
 import { noteShellLayer } from "./browserViews";
 import { workspaceKey } from "./viewLayout";
-import { laneFrame, laneToolOf, workspaceViewOf, type LaneFrame, type LaneSizes, type LaneTool, type WorkspaceView } from "./workspace";
+import { laneFrame, laneToolOf, pageLaneWidth, workspaceViewOf, type LaneFrame, type LaneSizes, type LaneTool, type WorkspaceView } from "./workspace";
 import { keyboardOwner, noteKeyboardOwner } from "./viewFocus";
 import { cn } from "./lib/utils";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -58,6 +58,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
       agentMin: tokenPx("--size-agent-views-min"),
       laneMin: tokenPx("--size-lane-min"),
       laneIdeal: tokenPx("--size-lane-ideal"),
+      lanePage: tokenPx("--size-lane-page"),
       treeMin: tokenPx("--size-tree-min"),
       treeIdeal: tokenPx("--size-tree-ideal"),
       divider: tokenPx("--spacing-sm"),
@@ -69,20 +70,41 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   // The lane draws the window's 보기 slot while it is shown, else the Workspace's tool (PRD sidebar-task-lens D-50).
   const detail = useShellStore((s) => s.rest?.ui_state?.detail);
   const tool = laneToolOf(view, detail);
-  const frame = laneFrame({
+  const input = {
     tool,
     pinned: view?.pinned === true,
     tree: view?.tree === true,
     laneWidth: view?.lane_width ?? null,
+    panelWidth: view?.panel_width ?? null,
     treeWidth: view?.tree_width ?? null,
     hasViews,
     shown,
     expanded,
     body: width,
     sizes,
-  });
+  };
+  const frame = laneFrame(input);
+  // The files tool kept under another tool is laid out at its own width, so
+  // its View areas measure what Files will show (an Open to the side's room).
+  const files = tool === "files" ? frame : laneFrame({ ...input, tool: "files" });
   const up = laneUp(frame.mode);
   const checkoutId = checkout?.id ?? null;
+  // A lane call that put a page in front widens the lane once, so the page
+  // lays out wide enough for a site's desktop layout (PRD browser-width-zoom
+  // B1-B5); an expanded lane, or a call into another Workspace, is left as
+  // it is. The width is stored like a divider landing, and a refusal leaves
+  // the page at the width it opened at, with only the log saying so.
+  const pageWiden = useUiStore((s) => s.pageWiden);
+  const front = view ? workspaceKey(view) : null;
+  useLayoutEffect(() => {
+    if (pageWiden === null || width <= 0) return;
+    useUiStore.getState().setPageWiden(null);
+    if (pageWiden !== front || expanded || tool !== "files") return;
+    const laneWidth = pageLaneWidth({ laneWidth: view?.lane_width ?? null, tree: frame.tree, body: width, sizes });
+    if (laneWidth !== null && actions.setWorkspaceView({ lane_width: laneWidth }) === false) {
+      useShellStore.getState().noteDiagnostic(`lane_width: widening for a page refused (${laneWidth})`);
+    }
+  }, [pageWiden, front, width, expanded, tool, view?.lane_width, frame.tree, sizes, actions]);
   // The rail, the chords and the close shortcut read what is drawn.
   useLayoutEffect(() => {
     useUiStore.getState().setDrawnLane({ mode: frame.mode, tool });
@@ -128,7 +150,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
       data-lane-mode={frame.mode}
       data-lane-shows={tool ?? "none"}
     >
-      <LaneRow view={view} tool={tool} frame={frame} width={width} body={body} setBody={setBody} sizes={sizes} actions={actions} checkout={checkout} />
+      <LaneRow view={view} tool={tool} frame={frame} files={files} width={width} body={body} setBody={setBody} sizes={sizes} actions={actions} checkout={checkout} />
       <div className="contents" onKeyDown={(event) => laneEscape(event, frame, view.pinned)}>
         <ToolRail actions={actions} />
       </div>
@@ -180,7 +202,7 @@ function useWidth(element: HTMLElement | null): number {
  * divider and an empty slot under the lane, so Agent Views keeps the width
  * it has (B8).
  */
-function LaneRow({ view, tool, frame, width, body, setBody, sizes, actions, checkout }: { view: WorkspaceView; tool: LaneTool | null; frame: LaneFrame; width: number; body: HTMLElement | null; setBody: (element: HTMLElement | null) => void; sizes: LaneSizes; actions: Actions; checkout: Checkout }) {
+function LaneRow({ view, tool, frame, files, width, body, setBody, sizes, actions, checkout }: { view: WorkspaceView; tool: LaneTool | null; frame: LaneFrame; files: LaneFrame; width: number; body: HTMLElement | null; setBody: (element: HTMLElement | null) => void; sizes: LaneSizes; actions: Actions; checkout: Checkout }) {
   const { t } = useInterfaceTranslation();
   const [guide, setGuide] = useState<number | null>(null);
   // The width Agent Views gives up: a docked lane's, kept while it is expanded.
@@ -218,7 +240,7 @@ function LaneRow({ view, tool, frame, width, body, setBody, sizes, actions, chec
           {frame.mode === "overlay" ? (
             <LaneDivider kind="lane" edge label={t("panes.workspace.resize", { name: t("panes.lane.aria") })} workspace={workspaceKey(view)} acknowledged={view.width_request_id ?? null} frame={frame} origin={body} sizes={sizes} setGuide={setGuide} actions={actions} />
           ) : null}
-          <Lane view={view} tool={tool} frame={frame} sizes={sizes} checkout={checkout} actions={actions} />
+          <Lane view={view} tool={tool} frame={frame} files={files} sizes={sizes} checkout={checkout} actions={actions} />
         </div>
       ) : null}
       {guide !== null ? <DividerGuide left={guide} /> : null}
@@ -245,7 +267,9 @@ export function WorkspaceTitle({ actions }: { actions: Actions }) {
 function WorkspaceTitleBar({ checkout, view, actions }: { checkout: Checkout; view: WorkspaceView; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const project = useShellStore((s) => catalogWorkspaces(s.rest).find((row) => row.checkouts.some((candidate) => candidate.id === checkout.id)) ?? null);
-  const device = useShellStore((s) => focusedRemoteDevice(s.rest));
+  // The band marks a Workspace on another machine than this window's, the core's included; the window's own has none.
+  const device = useShellStore((s) => awayDevice(s.rest));
+  const deviceName = useShellStore((s) => (device ? machineName(s.rest?.navigator?.devices, device.id, t) : null));
   // The menu says what the body draws now (PRD right-lane B20).
   const drawn = useUiStore((s) => s.drawnLane);
   const up = laneUp(drawn.mode);
@@ -264,17 +288,17 @@ function WorkspaceTitleBar({ checkout, view, actions }: { checkout: Checkout; vi
   return (
     <div className="flex h-full min-w-0 flex-1 items-center gap-sm pr-sm text-caption" data-workspace-toolbar="true">
       {device ? (
-        // The front thing is a remote device's: its color and name lead the path, and the pane border wears the same color (PRD home-device-rail D-15).
+        // The front thing is another machine's: its color and name lead the path, and the pane border wears the same color (PRD home-device-rail D-15).
         <span className="flex h-full max-w-(--size-recent-location-max) shrink-0 items-center gap-xs bg-device-remote px-sm font-medium text-primary-foreground" data-device-band={device.id}>
           <ServerIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-          <span className="min-w-0 truncate">{registeredName(device)}</span>
+          <span className="min-w-0 truncate">{deviceName}</span>
         </span>
       ) : null}
       <EntryContextMenu label={t("panes.workspace.aria", { name })} items={menuItems} onSelect={select} className={cn("flex min-w-0 flex-1 self-stretch items-center", !device && "pl-sm")} data-workspace-menu="true">
         <nav aria-label={t("panes.workspace.location")} className="flex min-w-0 items-center gap-xs">
           {project && !home ? (
             <>
-              <Hint label={`${project.label} · ${project.path}${device ? ` · ${registeredName(device)}` : ""}`}>
+              <Hint label={`${project.label} · ${project.path}${deviceName ? ` · ${deviceName}` : ""}`}>
                 <button
                   type="button"
                   className="min-w-0 max-w-(--size-recent-location-max) shrink truncate rounded-xs px-xs text-subtle-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:bg-accent"
@@ -334,11 +358,14 @@ function RemoteAgentArea({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const device = useShellStore((s) => focusedRemoteDevice(s.rest));
   const status = useShellStore((s) => (device ? (s.rest?.status?.remote?.find((row) => row.target_id === device.id) ?? null) : null));
+  const name = useShellStore((s) => (device ? machineName(s.rest?.navigator?.devices, device.id, t) : ""));
+  // The machine this window runs on, which "Show this machine" brings forward; on a node it is not the core's.
+  const own = useShellStore((s) => windowDeviceId(s.rest?.navigator?.devices));
   const session = status?.session ?? null;
   const view = useMemo(() => remoteView(session), [session]);
   if (!device) return null;
-  const name = registeredName(device);
   const connected = status?.state === "connected";
+  const away = deviceAwayLine(device, name, t);
   if (!view) {
     const line = deviceLine(device, status ?? undefined, t);
     return (
@@ -346,16 +373,19 @@ function RemoteAgentArea({ actions }: { actions: Actions }) {
         <h2 className="text-title font-semibold text-foreground">
           {name} <span className="font-mono text-caption text-muted-foreground">{device.ssh_alias}</span>
         </h2>
-        <p>{connected ? t("panes.workspace.connectedEmpty", { device: name }) : status?.message ? t("panes.workspace.remoteStateMessage", { device: name, state: line.text, message: status.message }) : t("panes.workspace.remoteState", { device: name, state: line.text })}</p>
+        <p>{connected ? t("panes.workspace.connectedEmpty", { device: name }) : t("panes.workspace.remoteState", { device: name, state: line.text })}</p>
+        {away.hint ? <p className="text-caption text-muted-foreground">{away.hint}</p> : null}
         <div className="flex gap-sm">
           {canRetryDevice(device, status ?? undefined) ? (
             <Button variant="secondary" onClick={() => actions.retryDevice(device.id)} data-remote-retry={device.id}>
-              {t("common.retry")}
+              {t("sidebar.reconnect")}
             </Button>
           ) : null}
-          <Button variant="ghost" onClick={() => actions.focusDevice(localDeviceId(useShellStore.getState().rest))} data-use-local-device="true">
-            {t("panes.workspace.showThisMachine")}
-          </Button>
+          {device.id === own ? null : (
+            <Button variant="ghost" onClick={() => actions.focusDevice(own)} data-use-local-device="true">
+              {t("panes.workspace.showThisMachine")}
+            </Button>
+          )}
         </div>
       </div>
     );
@@ -366,20 +396,16 @@ function RemoteAgentArea({ actions }: { actions: Actions }) {
         // A lost connection keeps the last session on screen, but the host
         // takes no command until it is back (`remote.control.not_connected`).
         <div role="status" className="flex items-center gap-md border-b border-border bg-card px-md py-xs text-caption text-warning" data-remote-stale={device.id}>
-          {status?.message ? (
-            <Hint label={status.message} reveals>
-              <span className="min-w-0 flex-1 truncate">
-                {t("panes.workspace.staleMessage", { device: name, message: status.message })}
-              </span>
+          {away.hint ? (
+            <Hint label={away.hint} reveals>
+              <span className="min-w-0 flex-1 truncate">{away.text}</span>
             </Hint>
           ) : (
-            <span className="min-w-0 flex-1 truncate">
-              {t("panes.workspace.stale", { device: name })}
-            </span>
+            <span className="min-w-0 flex-1 truncate">{away.text}</span>
           )}
           {canRetryDevice(device, status ?? undefined) ? (
             <Button variant="secondary" onClick={() => actions.retryDevice(device.id)} data-remote-retry={device.id}>
-              {t("common.retry")}
+              {t("sidebar.reconnect")}
             </Button>
           ) : null}
         </div>

@@ -45,6 +45,14 @@ pub(crate) struct Observation {
 }
 
 impl Observation {
+    /// The name the agent answers to, apart from where it sits: an agent
+    /// Herdr gave no name is called by its pane id (`actor.name` restates
+    /// the pane), and a pane id is per machine, so it is no name that a
+    /// caller on another machine could mean.
+    pub(crate) fn given_name(&self) -> Option<&str> {
+        (self.actor.name != self.raw_pane_id).then_some(self.actor.name.as_str())
+    }
+
     /// Input hide routed after the last submission, the last start of work
     /// and the input the operator last released: an unsent draft, a prompt
     /// Esc brought back, a recalled input.
@@ -300,6 +308,7 @@ impl Runtime {
             .dormant
             .values()
             .filter_map(|record| record.registration.as_ref())
+            .chain(self.snapshot.ui_state.session_archive.held_registrations())
             .map(|registration| registration.id.as_str())
             .collect();
         let read =
@@ -544,8 +553,14 @@ impl Runtime {
         if context != *expected {
             return Err("caller_context_changed".into());
         }
+        // Herdr numbers panes per machine and an agent learns the numbers from
+        // its own machine's Herdr, so a bare pane id names a pane on the
+        // caller's machine; the core's panes are observed under their bare ids
+        // and a device's under `remote:<device>:pane:<id>`. A key already
+        // spelled `remote:` is a full address and stays as it is.
+        let on_core = self.node == device;
         let qualify = |pane: &str| {
-            if self.node == device || pane.starts_with(&format!("remote:{device}:pane:")) {
+            if on_core || pane.starts_with("remote:") {
                 pane.to_owned()
             } else {
                 format!("remote:{device}:pane:{pane}")
@@ -606,7 +621,7 @@ impl Runtime {
             }
         }
         let resolves_to_caller = |key: &str| {
-            key == actor.pane_id
+            qualify(key) == actor.pane_id
                 || key == actor.name
                 || self.delivery_ledger.as_ref().is_ok_and(|ledger| {
                     crate::coordination::resolve_actor(ledger, key)
@@ -681,10 +696,11 @@ impl Runtime {
                     .delivery_ledger
                     .as_ref()
                     .ok()
-                    .and_then(|ledger| crate::coordination::resolve_actor(ledger, target));
+                    .and_then(|ledger| crate::coordination::resolve_registered(ledger, target));
+                let pane = qualify(target);
                 let mut matches = self.delivery_observations.values().filter(|observation| {
-                    observation.actor.pane_id == *target
-                        || observation.actor.name == *target
+                    observation.actor.pane_id == pane
+                        || observation.given_name() == Some(target.as_str())
                         || registered
                             .is_some_and(|registered| registered.same_identity(&observation.actor))
                 });
@@ -1192,7 +1208,8 @@ impl Runtime {
                 let gone = proven_absence_or_replacement
                     && self.delivery_connected.contains(&watch.target.device_id)
                     && !self.delivery_overflow.contains(&watch.target.device_id)
-                    && !self.dormant_holds_actor(&watch.target);
+                    && !self.dormant_holds_actor(&watch.target)
+                    && !self.archive_holds_actor(&watch.target);
                 let source = crate::delivery::worker::ActivitySource {
                     link: if self.node == watch.target.device_id {
                         Some(Arc::clone(&self.own_node))
@@ -1451,9 +1468,10 @@ pub(crate) mod tests {
             .iter_mut()
             .find(|status| status.target_id == device)
             .expect("registered device status");
+        // A Reconnect keeps the last session on screen until the new
+        // coordinator publishes its own, so only the connection starts over.
         status.state = "not_connected".into();
         status.message = None;
-        assert!(status.session.is_none());
     }
 
     pub(crate) fn fixture(
@@ -2635,6 +2653,13 @@ pub(crate) mod tests {
                 });
             let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[{"id":"remote-sender","pane_id":"sender","agent":"claude","agent_status":"working","state_change_seq":1,"lineage_session":"remote-session"}]})).unwrap();
             guard.observe_delivery("device", &payload, Some("fixture-device"), None);
+            // The core's recipient has a name of its own, which is how a
+            // device's agent reaches a pane on another machine.
+            let core: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+                {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
+                {"id":"recipient-agent","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"recipient-session"},
+            ]})).unwrap();
+            guard.observe_delivery(crate::node::TEST_NODE, &core, None, None);
             context = guard
                 .workspace_control_query("device", caller, Query::Info)
                 .unwrap()
@@ -2671,7 +2696,7 @@ pub(crate) mod tests {
                 &context,
                 Some("sender"),
                 Command::Send {
-                    target: "recipient".into(),
+                    target: "recipient-agent".into(),
                     intent: "remote-once".into(),
                     body: "done".into(),
                     kind: "report".into(),
@@ -2689,6 +2714,216 @@ pub(crate) mod tests {
             stored.letters[0].sender.session.as_deref(),
             Some("remote-session")
         );
+        drop(worker);
+    }
+
+    /// A core with its own `w1:p2`, `w1:p9` and unnamed `w1:p5`, `w1:p6`, and a
+    /// connected device whose agents sit in `sender` (the caller), a `w1:p2` and
+    /// an unnamed `w1:p5` of its own, and an unnamed `w1:p7`.
+    fn two_machines_with_one_pane_id(guard: &mut Runtime) -> (String, String) {
+        let local: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+            {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
+            {"id":"core-agent","pane_id":"w1:p2","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"core-session"},
+            {"id":"core-only","pane_id":"w1:p9","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"core-only-session"},
+            {"id":"w1:p5","pane_id":"w1:p5","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"core-unnamed-session"},
+            {"id":"w1:p6","pane_id":"w1:p6","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"core-unnamed-only-session"},
+        ]})).unwrap();
+        guard.observe_delivery(crate::node::TEST_NODE, &local, None, None);
+        let mut remote = guard.snapshot.navigator.workspaces[0].clone();
+        remote.device_id = "device".into();
+        remote.id = "remote-workspace".into();
+        remote.remote_target_id = Some("device".into());
+        for tab in &mut remote.checkouts[0].tabs {
+            for pane in &mut tab.panes {
+                pane.id = format!("remote:device:pane:{}", pane.id);
+            }
+        }
+        guard.snapshot.navigator.workspaces.push(remote);
+        guard
+            .snapshot
+            .status
+            .remote
+            .push(crate::model::RemoteStatusSnapshot {
+                target_id: "device".into(),
+                state: "connected".into(),
+                message: None,
+                herdr_version: None,
+                session: None,
+                files: crate::model::RemoteFileListSnapshot::idle(),
+                catalog: Default::default(),
+                unreachable_since_unix_ms: None,
+            });
+        let device: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+            {"id":"device-sender","pane_id":"sender","agent":"claude","agent_status":"working","state_change_seq":1,"lineage_session":"device-sender-session"},
+            {"id":"device-agent","pane_id":"w1:p2","agent":"claude","agent_status":"working","state_change_seq":1,"lineage_session":"device-session"},
+            {"id":"w1:p5","pane_id":"w1:p5","agent":"claude","agent_status":"working","state_change_seq":1,"lineage_session":"device-unnamed-session"},
+            {"id":"w1:p7","pane_id":"w1:p7","agent":"claude","agent_status":"working","state_change_seq":1,"lineage_session":"device-unnamed-only-session"},
+        ]})).unwrap();
+        guard.observe_delivery("device", &device, Some("fixture-device"), None);
+        ("sender".to_owned(), "remote:device:pane:sender".to_owned())
+    }
+
+    fn report_to(target: &str, intent: &str) -> Command {
+        Command::Send {
+            target: target.into(),
+            intent: intent.into(),
+            body: "done".into(),
+            kind: "report".into(),
+            now: false,
+        }
+    }
+
+    #[test]
+    fn a_bare_pane_id_names_a_pane_on_the_callers_own_machine() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, _, _, path) = fixture(root.path());
+        let (worker, client) = Worker::spawn(
+            Arc::downgrade(&runtime),
+            ChangeNotifier::noop(),
+            path.clone(),
+        )
+        .unwrap();
+        let (local_caller, device_caller) = {
+            let mut guard = runtime.lock().unwrap();
+            guard.install_delivery_client(client);
+            two_machines_with_one_pane_id(&mut guard)
+        };
+        let prepare = |device: &str, caller: &str, command: Command| {
+            let mut guard = runtime.lock().unwrap();
+            let context = guard
+                .workspace_control_query(device, caller, Query::Info)
+                .unwrap()
+                .context;
+            guard.prepare_delivery(device, caller, &context, None, command)
+        };
+
+        // The device's agent writes `w1:p2`, the number its own Herdr shows,
+        // and the core has a different agent under the same number.
+        let result = prepare("device", &device_caller, report_to("w1:p2", "from-device"))
+            .unwrap()
+            .run(Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(result["recipient"]["pane_id"], "remote:device:pane:w1:p2");
+        assert_eq!(result["recipient"]["device_id"], "device");
+
+        // The core's own agent writes the same number and gets its own pane.
+        let result = prepare(
+            crate::node::TEST_NODE,
+            &local_caller,
+            report_to("w1:p2", "from-core"),
+        )
+        .unwrap()
+        .run(Duration::from_secs(5))
+        .unwrap();
+        assert_eq!(result["recipient"]["pane_id"], "w1:p2");
+        assert_eq!(result["recipient"]["device_id"], crate::node::TEST_NODE);
+
+        // A pane of another machine is reached by its full address.
+        let result = prepare(
+            crate::node::TEST_NODE,
+            &local_caller,
+            report_to("remote:device:pane:w1:p2", "full-address"),
+        )
+        .unwrap()
+        .run(Duration::from_secs(5))
+        .unwrap();
+        assert_eq!(result["recipient"]["device_id"], "device");
+
+        // An agent with no name of its own is called by its pane id, which is
+        // still a pane address: the caller's machine wins when both have it,
+        // and the other machine's agent is not reached when only it has it.
+        let result = prepare(
+            "device",
+            &device_caller,
+            report_to("w1:p5", "unnamed-device"),
+        )
+        .unwrap()
+        .run(Duration::from_secs(5))
+        .unwrap();
+        assert_eq!(result["recipient"]["pane_id"], "remote:device:pane:w1:p5");
+        let result = prepare(
+            crate::node::TEST_NODE,
+            &local_caller,
+            report_to("w1:p5", "unnamed-core"),
+        )
+        .unwrap()
+        .run(Duration::from_secs(5))
+        .unwrap();
+        assert_eq!(result["recipient"]["pane_id"], "w1:p5");
+        assert_eq!(
+            prepare("device", &device_caller, report_to("w1:p6", "core-unnamed"))
+                .err()
+                .as_deref(),
+            Some("target_unavailable"),
+            "the core's unnamed agent is no pane of the device"
+        );
+        assert_eq!(
+            prepare(
+                crate::node::TEST_NODE,
+                &local_caller,
+                report_to("w1:p7", "device-unnamed"),
+            )
+            .err()
+            .as_deref(),
+            Some("target_unavailable"),
+            "the device's unnamed agent is no pane of the core"
+        );
+
+        // A number that exists only on the core is no pane of the device, and
+        // the refusal is the one a target nobody holds gets.
+        for (command, what) in [
+            (report_to("w1:p9", "core-only"), "send"),
+            (
+                Command::WatchStart {
+                    target: "w1:p9".into(),
+                    observer: None,
+                    actor: None,
+                },
+                "watch",
+            ),
+        ] {
+            let prepared = prepare("device", &device_caller, command);
+            let refused = match prepared {
+                Ok(prepared) => prepared.run(Duration::from_secs(5)).err(),
+                Err(reason) => Some(reason),
+            };
+            assert_eq!(
+                refused.as_deref(),
+                Some("target_unavailable"),
+                "{what} to a pane id only the core has"
+            );
+        }
+
+        // The caller's own bare pane id declares it, as its hint does.
+        assert!(
+            prepare(
+                "device",
+                &device_caller,
+                Command::WatchStart {
+                    target: "w1:p2".into(),
+                    observer: Some("sender".into()),
+                    actor: Some("sender".into()),
+                },
+            )
+            .is_ok()
+        );
+        // The core's pane under that number is not the device caller's.
+        assert_eq!(
+            prepare(
+                "device",
+                &device_caller,
+                Command::WatchStart {
+                    target: "w1:p2".into(),
+                    observer: Some("w1:p2".into()),
+                    actor: None,
+                },
+            )
+            .err()
+            .as_deref(),
+            Some("caller_identity_conflict")
+        );
+        let stored = crate::delivery::ledger::load(&path).unwrap();
+        assert_eq!(stored.letters.len(), 5);
         drop(worker);
     }
 
@@ -3156,5 +3391,110 @@ pub(crate) mod tests {
             None,
         );
         assert_eq!(verdict_for_recipient(&runtime), Ok(()));
+    }
+
+    /// Letters stand on the state folder's durable files on every system:
+    /// the core opens its ledger from a real folder, two agents register,
+    /// one sends and the other finds the letter in its inbox, and the ledger
+    /// read back from disk holds both agents and the letter. The Windows
+    /// check runs it, where the ledger once refused to open (`Unsupported`).
+    #[test]
+    fn agents_register_and_a_letter_reaches_the_inbox_through_the_saved_ledger() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, sender, _, path) = fixture(root.path());
+        assert!(runtime.lock().unwrap().delivery_ledger.is_ok());
+        let native = |pane: &str, session: &str| {
+            json!({"pane_id":pane,"workspace_id":"workspace","tab_id":"tab",
+                "terminal_id":format!("terminal-{pane}"),"revision":1,"focused":false,
+                "agent_status":"working","agent":"codex",
+                "agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":session}})
+        };
+        let herdr =
+            crate::fake_herdr::FakeHerdr::start("delivery-register-send-read", move |method, _| {
+                assert_eq!(method, "agent.list");
+                json!({"type":"agent_list","agents":[
+                native("sender", "writer-session"), native("recipient", "reader-session")]})
+            });
+        let (worker, client) = Worker::spawn(
+            Arc::downgrade(&runtime),
+            ChangeNotifier::noop(),
+            path.clone(),
+        )
+        .unwrap();
+        {
+            let mut guard = runtime.lock().unwrap();
+            guard.install_delivery_client(client);
+            set_live(&mut guard, Some(&herdr));
+            let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+                {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,
+                    "lineage_session":crate::wire::session_digest("writer-session")},
+                {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,
+                    "lineage_session":crate::wire::session_digest("reader-session")},
+            ]})).unwrap();
+            guard.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+        }
+        let context = authority(&sender).context;
+        let run = |pane: &str, command: Command| {
+            let prepared = runtime.lock().unwrap().prepare_delivery(
+                crate::node::TEST_NODE,
+                pane,
+                &context,
+                None,
+                command,
+            )?;
+            prepared.run(Duration::from_secs(5))
+        };
+        let scope = herdr.socket_path().to_str().unwrap().to_owned();
+        for (pane, name, session) in [
+            ("sender", "writer", "writer-session"),
+            ("recipient", "reader", "reader-session"),
+        ] {
+            let registered = run(
+                pane,
+                Command::Agents {
+                    command: crate::coordination::Command::Register {
+                        check: false,
+                        machine: None,
+                        host_scope: scope.clone(),
+                        session: session.into(),
+                        instance: format!("terminal-{pane}"),
+                        name: name.into(),
+                        pane: pane.into(),
+                        parent: None,
+                        project: None,
+                    },
+                },
+            )
+            .unwrap();
+            assert_eq!(registered["pane"], pane);
+        }
+
+        let letter = run(
+            "sender",
+            Command::Send {
+                target: "reader".into(),
+                intent: "durable-letter".into(),
+                body: "read me after a restart".into(),
+                kind: "request".into(),
+                now: false,
+            },
+        )
+        .unwrap();
+        let inbox = run("recipient", Command::Inbox).unwrap();
+        assert_eq!(inbox.as_array().map(Vec::len), Some(1), "{inbox}");
+        assert_eq!(inbox[0]["id"], letter["id"]);
+        assert_eq!(inbox[0]["body"], "read me after a restart");
+        drop(worker);
+
+        let saved = crate::delivery::ledger::recover(&path).unwrap();
+        let mut names: Vec<_> = saved
+            .agents
+            .iter()
+            .filter_map(|agent| agent.name.clone())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["reader", "writer"]);
+        assert_eq!(saved.letters.len(), 1);
+        assert_eq!(saved.letters[0].body, "read me after a restart");
     }
 }

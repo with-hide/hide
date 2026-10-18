@@ -5,9 +5,7 @@ import { statusText } from "../agentStatus";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import type { TaskState } from "../sessionWork";
-import type { ChildProgress, ChildWork, RowMark } from "../snapshot";
-import { StatusMark } from "./status-mark";
-import { Hint } from "./ui/tooltip";
+import type { RowMark } from "../snapshot";
 
 /**
  * The state a task is drawn in: work in progress only while its agent's row
@@ -19,66 +17,43 @@ export function shownTaskState(state: TaskState, mark: RowMark | null): TaskStat
 }
 
 /**
- * A task's mark, the row's marks (status-marks D-23, B34): a finished task's
- * `✓`, a task in progress the ring its agent's row draws (dashed while the row
- * waits), a question or a block the operator's `!`, and an empty slot for work
- * left and for a task a pull request holds, whose name's small word or PR mark
- * says the state. Each drawn mark says its state in its hint and accessible
- * name with the row's words; an empty slot says nothing a screen reader would
- * hear twice.
+ * A task's mark, a checkbox (PRD record-card-readability D-05, B7, B8): ☑
+ * once done, ☐ otherwise. A live session's question or block puts the
+ * operator's `!` in front of the box; an ended session has no pane to answer,
+ * so its task says it in words instead. The agents' rings and dots are the
+ * agent rows' and never a task's.
  */
-export function TaskMark({ state, mark }: { state: TaskState; mark: RowMark | null }) {
+export function TaskMark({ state, live }: { state: TaskState; live: boolean }) {
   const { t } = useInterfaceTranslation();
-  if (state === "unfinished" || state === "review" || state === "ci_failed") return <span aria-hidden="true" data-task-state={state} className="flex size-(--size-icon-sm) shrink-0" />;
-  const ring: RowMark = mark === "waiting" ? "waiting" : "going";
-  const name = state === "question" || state === "blocked" ? `${markName(t, "turn")} · ${statusText(t, state === "blocked" ? "error" : "question")}`
-    : state === "working" ? (ring === "waiting" ? `${markName(t, ring)} · ${statusText(t, "waiting")}` : markName(t, ring))
-      : t("sessionWork.done");
-  return <Hint label={name}><span role="img" aria-label={name} data-task-state={state} className="flex size-(--size-icon-sm) shrink-0 items-center justify-center">
-    {state === "done" ? <CheckIcon aria-hidden="true" className="size-(--size-icon-sm) text-success" /> : state === "working" ? <StatusMark mark={ring} /> : <StatusMark mark="turn" />}
-  </span></Hint>;
-}
-
-/**
- * A task's name, with its state in small text after it where its slot is
- * empty and no PR mark beside it says it (B34): `일 남음` while work is left,
- * and a pull request's state on a task of a request whose PR mark hangs on
- * its first task (`prShown` false).
- */
-export function TaskName({ state, name, prShown, className, ...rest }: { state: TaskState; name: string; prShown: boolean } & HTMLAttributes<HTMLSpanElement>) {
-  const { t } = useInterfaceTranslation();
-  const word = state === "unfinished" ? statusText(t, "unfinished") : (state === "review" || state === "ci_failed") && !prShown ? t(`sessionWork.${state}`) : null;
-  return <span className={cn("min-w-0 flex-1 whitespace-normal [overflow-wrap:anywhere]", className)} {...rest}>
-    {name}
-    {word ? <span className="ml-xs text-micro text-muted-foreground" data-task-word={state}>{word}</span> : null}
+  const done = state === "done";
+  const asks = live && (state === "question" || state === "blocked");
+  return <span role="img" aria-label={t(done ? "sessionWork.done" : "sessionWork.left")} data-task-state={state} className="flex h-(--size-sidebar-line) shrink-0 items-center gap-xxs">
+    {asks ? <span aria-hidden="true" className="font-semibold text-warning" data-task-asks="true">!</span> : null}
+    {done
+      ? <span aria-hidden="true" className="flex size-(--size-icon-sm) items-center justify-center rounded-xs bg-success text-background" data-task-box="checked"><CheckIcon className="size-(--size-status-mark)" strokeWidth={3} /></span>
+      : <span aria-hidden="true" className="size-(--size-icon-sm) rounded-xs border border-muted-foreground" data-task-box="empty" />}
   </span>;
 }
 
-const SEGMENT: Record<ChildWork, string> = { done: "bg-success", working: "bg-agent-working", other: "bg-muted-foreground", unjudged: "bg-muted" };
-
 /**
- * `자식 일 4/5` and one segment per direct child (PRD task-split-checklist
- * B7, B8): done green, working blue, the rest grey. While any child has no
- * judgment the fraction and the segments give way to the plain count, so a
- * missing judgment never reads as not done.
+ * The words at a task's right end where its box does not say enough (B8,
+ * B9): a live session's `내 차례 · 질문`, an ended one's `일 남음 · 질문하고
+ * 끝남`, `일 남음` while work is left, and a pull request's state on a task
+ * whose request's PR mark hangs on its first task (`prShown` false). Work in
+ * progress and a done task say nothing.
  */
-export function ChildProgressHead({ progress }: { progress: ChildProgress }) {
+export function TaskWord({ state, live, prShown }: { state: TaskState; live: boolean; prShown: boolean }) {
   const { t } = useInterfaceTranslation();
-  const count = progress.children.length;
-  if (progress.done === null) {
-    return <span className="flex min-w-0 items-baseline gap-xs" data-child-progress="count">
-      <span>{t("sessionWork.children")}</span>
-      <span className="text-micro tabular-nums text-muted-foreground">{count}</span>
-    </span>;
-  }
-  return <span className="flex min-w-0 flex-wrap items-center gap-xs" data-child-progress={`${progress.done}/${count}`}>
-    <span>{t("sessionWork.childWork")}</span>
-    <span className="text-micro tabular-nums text-muted-foreground">{progress.done}/{count}</span>
-    <span className="flex flex-wrap items-center gap-xxs" role="list" aria-label={t("sessionWork.childWork")}>
-      {progress.children.map((child, index) => {
-        const name = t(`sessionWork.childState.${child}`);
-        return <Hint key={index} label={name}><span role="listitem" aria-label={name} data-child-segment={child} className={cn("h-[calc(4*var(--size-hairline))] w-(--size-control-sm) rounded-full", SEGMENT[child])} /></Hint>;
-      })}
-    </span>
-  </span>;
+  const asked = state === "question" || state === "blocked";
+  const word = asked
+    ? live ? `${markName(t, "turn")} · ${statusText(t, state === "blocked" ? "error" : "question")}` : `${statusText(t, "unfinished")} · ${t(state === "blocked" ? "sessionWork.endedBlocked" : "sessionWork.endedAsking")}`
+    : state === "unfinished" ? statusText(t, "unfinished")
+      : (state === "review" || state === "ci_failed") && !prShown ? t(`sessionWork.${state}`) : null;
+  if (!word) return null;
+  return <span className={cn("shrink-0 text-micro leading-(--size-sidebar-line)", asked && live ? "text-warning" : "text-muted-foreground")} data-task-word={state}>{word}</span>;
+}
+
+/** A task's name: the box's neighbour, dimmed once done. */
+export function TaskName({ state, name, className, ...rest }: { state: TaskState; name: string } & HTMLAttributes<HTMLSpanElement>) {
+  return <span className={cn("min-w-0 flex-1 whitespace-normal leading-(--size-sidebar-line) [overflow-wrap:anywhere]", state === "done" ? "text-subtle-foreground" : "text-foreground", className)} {...rest}>{name}</span>;
 }

@@ -41,6 +41,7 @@ LANES = (
     "os-contract",
     "os-contract-macos",
     "agy-contract",
+    "agent-journey",
     "windows-check",
     "windows-e2e",
     "windows-desktop",
@@ -154,6 +155,8 @@ READERS = (
     ("contracts/agent-adapters.json", {"rust", "checks", "web-e2e", "desktop-e2e"}, {"hide-agent-adapter"}),
     # hided's `cli_contract` test.
     ("contracts/hide-cli.json", {"rust"}, {"hided"}),
+    # hide-agent-hooks' agy_binary test, which the agy contract also runs.
+    ("contracts/provider-quota.json", {"rust"}, {"hide-agent-hooks"}),
     # hide-agent-adapter's contract test.
     ("contracts/usage-coverage.json", {"rust"}, {"hide-agent-adapter"}),
 )
@@ -196,9 +199,10 @@ POLICY_ONLY = (
     ".github/ISSUE_TEMPLATE/*", ".github/DISCUSSION_TEMPLATE/*", ".github/APPROVED_CONTRIBUTORS",
     ".github/workflows/contribution-gate.yml",
     # Workflows no `pr.yml` job calls; `design-contract.yml` has its own pull
-    # request trigger, and the nightly calls `perf.yml`.
+    # request trigger, and the nightly calls `perf.yml` and
+    # `agent-trust-contract.yml`.
     ".github/workflows/nightly.yml", ".github/workflows/herdr-update.yml", ".github/workflows/design-contract.yml",
-    ".github/workflows/perf.yml",
+    ".github/workflows/perf.yml", ".github/workflows/agent-trust-contract.yml",
     "scripts/tests/*",
     # Scripts only `policy`, another workflow or nobody runs.
     "scripts/check-agent-asset-committed.sh", "scripts/check-capability-readers-off-lock.sh",
@@ -223,7 +227,32 @@ POLICY_ONLY = (
 # check`, so neither is web-only or desktop-only.
 WEB_E2E_LANES = {"checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check"}
 DESKTOP_E2E_LANES = {"checks", "desktop-e2e", "windows-desktop", "windows-check"}
+# The agent journey's keyless lane runs its code on the compiled stand-ins
+# (`agent-journey.yml`); the stand-ins' sources are also the e2e's.
+JOURNEY_LANES = {"agent-journey"}
+# Files inside a crate the journey runs as its own tools: Hide's conversation
+# reader, its Project Memory card writer and Codex's app-server stand-in.
+JOURNEY_CRATE_FILES = ("hide-session/examples/journey_conversation.rs", "hide-memory/examples/journey_memory.rs",
+                       "hide-agent-hooks/tests/fixtures/fake-codex.py")
+# The live check's code, which the journey runs and `agent-live-check.spec.ts`
+# drives in the web e2e; its unit tests are `policy`'s.
+LIVE_CHECK_LANES = {"web-e2e"} | JOURNEY_LANES
+# Script tests that also run on another system than `policy`'s Linux, in
+# these lanes: `agent-journey.yml` runs the live check's Windows forms on Windows.
+SYSTEM_TESTS = (
+    ("scripts/tests/test_agent_live_windows.py", JOURNEY_LANES),
+)
 NAMED_LANES = (
+    ("scripts/agent_live_check/*", LIVE_CHECK_LANES),
+    ("scripts/agent-live-check.py", LIVE_CHECK_LANES),
+    ("web/e2e/shims/claude-shim.c", WEB_E2E_LANES | JOURNEY_LANES),
+    ("web/e2e/shims/live-check.h", WEB_E2E_LANES | JOURNEY_LANES),
+    # The journey's controller builds the desktop e2e's spawn provider.
+    ("web/e2e/shims/spawn-provider.c", WEB_E2E_LANES | JOURNEY_LANES),
+    ("scripts/agent_journey/*", JOURNEY_LANES),
+    ("scripts/agent-journey-check.py", JOURNEY_LANES),
+    ("scripts/agent-journey-lane.py", JOURNEY_LANES),
+    ("contracts/agent-journey.json", JOURNEY_LANES),
     ("web/e2e/*", WEB_E2E_LANES),
     ("desktop/e2e/*", DESKTOP_E2E_LANES),
     ("web/playwright.config.ts", {"checks", "web-e2e", "windows-e2e"}),
@@ -253,6 +282,7 @@ NAMED_LANES = (
     (".github/workflows/desktop-e2e.yml", {"desktop-e2e", "windows-desktop"}),
     (".github/workflows/os-contract.yml", {"os-contract", "os-contract-macos"}),
     (".github/workflows/agy-contract.yml", {"agy-contract"}),
+    (".github/workflows/agent-journey.yml", JOURNEY_LANES),
     ("scripts/install-agy.sh", {"agy-contract"}),
     (".github/workflows/remote-mailbox.yml", {"remote-mailbox"}),
     (".github/workflows/package.yml", set()),
@@ -263,6 +293,9 @@ NAMED_LANES = (
 def named_lanes(path):
     """The lanes a named path needs, or None when no rule names it."""
     name = path.as_posix()
+    for pattern, lanes in SYSTEM_TESTS:
+        if fnmatchcase(name, pattern):
+            return set(lanes), f"script test that also runs on another system: {name}"
     if any(fnmatchcase(name, pattern) for pattern in POLICY_ONLY):
         return set(), f"named path, no lane reads it: {name}"
     # Documentation below a folder no rule claims (a crate's own README is
@@ -349,6 +382,8 @@ def classify(path, status, crates, root):
             lanes.add("os-contract-macos")
         if crate["name"] in AGY_CRATES:
             lanes.add("agy-contract")
+        if path.as_posix() in JOURNEY_CRATE_FILES:
+            lanes.update(JOURNEY_LANES)
         return lanes, f"crate {crate['name']}: {path}", packages
     if parts[0] == "web" and len(parts) > 1:
         if parts[1] == "e2e" and len(parts) == 3 and path.name.endswith(".spec.ts"):

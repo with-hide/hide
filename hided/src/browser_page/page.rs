@@ -100,6 +100,10 @@ pub struct Page {
     pub top: String,
     /// Whether the display is its area's selected View, the only one shown.
     selected: bool,
+    /// The address the core keeps for the display. A device's page loads from
+    /// a loopback route on the core's machine, so the page itself reports
+    /// that address; this is the one the operator and the caller know.
+    pub source: Option<String>,
     /// How long a call waits for an answer: `STEP`, shorter in a test that
     /// lets one lapse.
     pub step: Duration,
@@ -292,6 +296,7 @@ impl Page {
             display: "browser-1".into(),
             top: "top".into(),
             selected: true,
+            source: None,
             step,
             deadline: None,
             known: Vec::new(),
@@ -315,6 +320,7 @@ impl Page {
             display: display.to_owned(),
             top: String::new(),
             selected,
+            source: None,
             step,
             deadline: None,
             known: Vec::new(),
@@ -1244,6 +1250,60 @@ impl Page {
     }
 }
 
+/// `top`, a snapshot's top document, with its address line naming the display's
+/// `source` address in place of the loopback route the page loaded from. Only a
+/// loopback http(s) address on another origin than `source`'s is a route; its
+/// path, query and fragment are the page's own and stay.
+pub fn with_source_address(top: &str, source: Option<&str>) -> String {
+    let Some(source) = source.and_then(origin_split) else {
+        return top.to_owned();
+    };
+    let mut lines = top.splitn(3, '\n');
+    let (Some(title), Some(address)) = (lines.next(), lines.next()) else {
+        return top.to_owned();
+    };
+    let Some((origin, tail)) = address.strip_prefix("# ").and_then(origin_split) else {
+        return top.to_owned();
+    };
+    if origin == source.0 || !loopback_origin(origin) {
+        return top.to_owned();
+    }
+    let mut out = format!("{title}\n# {}{tail}", source.0);
+    if let Some(rest) = lines.next() {
+        out.push('\n');
+        out.push_str(rest);
+    }
+    out
+}
+
+/// An http(s) address as its origin and the rest (path, query, fragment).
+fn origin_split(url: &str) -> Option<(&str, &str)> {
+    let (scheme, after) = url.split_once("://")?;
+    if !matches!(scheme, "http" | "https") {
+        return None;
+    }
+    let end = after.find(['/', '?', '#']).unwrap_or(after.len());
+    if after[..end].contains('@') || end == 0 {
+        return None;
+    }
+    let split = scheme.len() + 3 + end;
+    Some((&url[..split], &url[split..]))
+}
+
+fn loopback_origin(origin: &str) -> bool {
+    let authority = origin
+        .split_once("://")
+        .map_or("", |(_, authority)| authority);
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split_once(']').map_or("", |(host, _)| host),
+        None => authority.split(':').next().unwrap_or(""),
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.to_canonical().is_loopback())
+}
+
 /// A frame's snapshot without its title and address lines, with each ref
 /// renamed into the frame's namespace (`@3` -> `@k7q2:3`).
 pub fn section_body(text: &str, tag: &str) -> String {
@@ -1285,6 +1345,35 @@ pub fn first_line(details: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_routed_pages_address_line_names_its_source_address() {
+        let top = "# Title\n# http://127.0.0.1:64423/docs/index.html?x=1#top\n\n@1 button \"Go\"\n";
+        assert_eq!(
+            with_source_address(top, Some("http://localhost:8765/index.html")),
+            "# Title\n# http://localhost:8765/docs/index.html?x=1#top\n\n@1 button \"Go\"\n"
+        );
+        // The page already at its source address, a page that is not a route,
+        // and a display with no known source stay as they are.
+        for (top, source) in [
+            (
+                "# T\n# http://localhost:8765/a\n\n",
+                Some("http://localhost:8765/"),
+            ),
+            (
+                "# T\n# https://example.com/a\n\n",
+                Some("http://localhost:8765/"),
+            ),
+            ("# T\n# http://127.0.0.1:1/a\n\n", Some("about:blank")),
+            (
+                "# T\n# http://127.evil.example:1/a\n\n",
+                Some("http://localhost:8765/"),
+            ),
+            ("# T\n# http://127.0.0.1:1/a\n\n", None),
+        ] {
+            assert_eq!(with_source_address(top, source), top);
+        }
+    }
 
     #[test]
     fn a_frame_section_names_its_refs_in_its_own_namespace() {

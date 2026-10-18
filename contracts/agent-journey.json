@@ -1,0 +1,191 @@
+[
+  {
+    "id": "claude-code",
+    "herdr_kind": "claude",
+    "prompt_flag": "--",
+    "model_flag": [
+      "--model",
+      "{}"
+    ],
+    "untitled": "Claude",
+    "cells": {
+      "start": true,
+      "start_untrusted": true,
+      "reply": true,
+      "integration": true,
+      "guidance_memory": true,
+      "letter": true,
+      "sleep_wake": true,
+      "resume": true,
+      "fork": true,
+      "title": true,
+      "usage": true
+    },
+    "request_budget": 18
+  },
+  {
+    "id": "codex",
+    "herdr_kind": "codex",
+    "prompt_flag": "--",
+    "model_flag": [
+      "--model",
+      "{}"
+    ],
+    "untitled": "Codex",
+    "cells": {
+      "start": true,
+      "start_untrusted": true,
+      "reply": true,
+      "integration": true,
+      "guidance_memory": true,
+      "letter": true,
+      "sleep_wake": true,
+      "resume": true,
+      "fork": true,
+      "title": true,
+      "usage": true
+    },
+    "request_budget": 18
+  },
+  {
+    "id": "grok",
+    "herdr_kind": "grok",
+    "prompt_flag": "--",
+    "model_flag": [
+      "--model",
+      "{}"
+    ],
+    "untitled": "grok",
+    "cells": {
+      "start": true,
+      "start_untrusted": true,
+      "reply": true,
+      "integration": true,
+      "guidance_memory": false,
+      "letter": true,
+      "sleep_wake": true,
+      "resume": true,
+      "fork": true,
+      "title": true,
+      "usage": true
+    },
+    "request_budget": 15
+  },
+  {
+    "id": "opencode",
+    "herdr_kind": "opencode",
+    "prompt_flag": "--prompt",
+    "model_flag": [],
+    "untitled": "OpenCode",
+    "cells": {
+      "start": true,
+      "start_untrusted": true,
+      "reply": true,
+      "integration": true,
+      "guidance_memory": true,
+      "letter": true,
+      "sleep_wake": true,
+      "resume": true,
+      "fork": true,
+      "title": true,
+      "usage": true
+    },
+    "request_budget": 18
+  },
+  {
+    "id": "pi",
+    "herdr_kind": "pi",
+    "prompt_flag": "--",
+    "model_flag": [
+      "--model",
+      "{}"
+    ],
+    "untitled": "pi",
+    "cells": {
+      "start": true,
+      "start_untrusted": true,
+      "reply": true,
+      "integration": true,
+      "guidance_memory": true,
+      "letter": true,
+      "sleep_wake": true,
+      "resume": true,
+      "fork": true,
+      "title": true,
+      "usage": true
+    },
+    "request_budget": 18
+  },
+  {
+    "id": "omp",
+    "herdr_kind": "omp",
+    "prompt_flag": "--",
+    "model_flag": [
+      "--model",
+      "{}"
+    ],
+    "untitled": "omp",
+    "cells": {
+      "start": true,
+      "start_untrusted": true,
+      "reply": true,
+      "integration": true,
+      "guidance_memory": true,
+      "letter": true,
+      "sleep_wake": true,
+      "resume": true,
+      "fork": true,
+      "title": true,
+      "usage": true
+    },
+    "request_budget": 18
+  },
+  {
+    "id": "cursor",
+    "herdr_kind": "cursor",
+    "prompt_flag": "--",
+    "model_flag": [
+      "--model",
+      "{}"
+    ],
+    "untitled": "cursor",
+    "cells": {
+      "start": true,
+      "start_untrusted": true,
+      "reply": true,
+      "integration": true,
+      "guidance_memory": false,
+      "letter": true,
+      "sleep_wake": true,
+      "resume": true,
+      "fork": false,
+      "title": false,
+      "usage": false
+    },
+    "request_budget": 12
+  },
+  {
+    "id": "antigravity",
+    "herdr_kind": "agy",
+    "prompt_flag": "-i",
+    "model_flag": [
+      "--model",
+      "{}"
+    ],
+    "untitled": "Antigravity",
+    "cells": {
+      "start": true,
+      "start_untrusted": true,
+      "reply": true,
+      "integration": true,
+      "guidance_memory": true,
+      "letter": true,
+      "sleep_wake": true,
+      "resume": true,
+      "fork": true,
+      "title": true,
+      "usage": true
+    },
+    "request_budget": 18
+  }
+]

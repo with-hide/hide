@@ -4,21 +4,21 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { clientI18n } from "../i18n/translator";
 import type { TaskState } from "../sessionWork";
-import { shownTaskState, TaskMark, TaskName } from "./task-progress";
+import { shownTaskState, TaskMark, TaskWord } from "./task-progress";
 import { TooltipProvider } from "./ui/tooltip";
 
 vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 
-// A checklist task's mark is the row's mark (status-marks D-23, B34): no ?, ⛔
-// or ◐; a question or a block is the operator's `!`, work in progress the
-// row's ring, work left and a PR-bound task an empty slot.
+// A checklist task's mark is a checkbox (PRD record-card-readability D-05,
+// B7-B9): ☑ done, ☐ otherwise; a live session's question or block adds `!`,
+// an ended one says it in words; no ring, dot, ?, or ⛔ on a task.
 afterEach(async () => {
   await clientI18n.changeLanguage("en");
   vi.unstubAllGlobals();
   document.body.innerHTML = "";
 });
 
-it("draws each task state as a row mark or an empty slot and names it", async () => {
+it("draws each task state as a checkbox, with `!` and words only where the box does not say enough", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   await clientI18n.changeLanguage("ko");
   const container = document.createElement("div");
@@ -27,26 +27,24 @@ it("draws each task state as a row mark or an empty slot and names it", async ()
   // A checklist task's states (sessionWork.taskState), not an agent's, spelled as one string so the
   // core's guard against a shell-side agent state vocabulary (axes_no_state_name_array_remains_in_the_shell) reads no array.
   const states = "done working question blocked unfinished review ci_failed".split(" ") as TaskState[];
+  const asked = "question blocked".split(" ") as TaskState[];
   await act(async () => root.render(<TooltipProvider>
-    {states.map((state) => <div key={state} data-case={state}><TaskMark state={state} mark="going" /><TaskName state={state} name="파서 나누기" prShown /></div>)}
-    <div data-case="grouped"><TaskName state="ci_failed" name="좁은 열 확인" prShown={false} /></div>
-    <div data-case="waiting"><TaskMark state="working" mark="waiting" /></div>
+    {states.map((state) => <div key={state} data-case={state}><TaskMark state={state} live /><TaskWord state={state} live prShown /></div>)}
+    {asked.map((state) => <div key={state} data-case={`ended-${state}`}><TaskMark state={state} live={false} /><TaskWord state={state} live={false} prShown /></div>)}
+    <div data-case="grouped"><TaskWord state="ci_failed" live prShown={false} /></div>
   </TooltipProvider>));
   try {
-    const at = (name: string) => container.querySelector(`[data-case="${name}"] [data-task-state]`)!;
-    const mark = (name: string) => at(name).querySelector("[data-mark]")?.getAttribute("data-mark") ?? null;
-    expect(at("done").querySelector("svg")).not.toBeNull();
-    expect(mark("done")).toBeNull();
-    expect([mark("working"), at("working").getAttribute("aria-label")]).toEqual(["going", "진행 중"]);
-    expect([mark("waiting"), at("waiting").getAttribute("aria-label")]).toEqual(["waiting", "진행 중 · 대기"]);
-    expect([mark("question"), at("question").getAttribute("aria-label")]).toEqual(["turn", "내 차례 · 질문"]);
-    expect([mark("blocked"), at("blocked").getAttribute("aria-label")]).toEqual(["turn", "내 차례 · 막힘"]);
-    // An empty slot is silent: the name's word or the PR mark says the state once.
-    for (const empty of ["unfinished", "review", "ci_failed"]) expect([at(empty).childElementCount, at(empty).getAttribute("aria-hidden")]).toEqual([0, "true"]);
-    // Work left says so after the name; a PR-bound task's PR mark says its state, and
-    // a task whose request's PR mark hangs on another task says the state in words.
+    const box = (name: string) => container.querySelector(`[data-case="${name}"] [data-task-box]`)!.getAttribute("data-task-box");
+    const asks = (name: string) => container.querySelector(`[data-case="${name}"] [data-task-asks]`) !== null;
+    expect(states.map(box)).toEqual(["checked", "empty", "empty", "empty", "empty", "empty", "empty"]);
+    expect(states.filter(asks)).toEqual(asked);
+    expect([asks("ended-question"), asks("ended-blocked")]).toEqual([false, false]);
     const words = [...container.querySelectorAll("[data-task-word]")].map((word) => [word.closest("[data-case]")!.getAttribute("data-case"), word.textContent]);
-    expect(words).toEqual([["unfinished", "일 남음"], ["grouped", "CI 실패"]]);
+    expect(words).toEqual([
+      ["question", "내 차례 · 질문"], ["blocked", "내 차례 · 막힘"], ["unfinished", "일 남음"],
+      ["ended-question", "일 남음 · 질문하고 끝남"], ["ended-blocked", "일 남음 · 막혀서 끝남"], ["grouped", "CI 실패"],
+    ]);
+    expect(container.querySelector("[data-mark]")).toBeNull();
     expect(container.textContent).not.toMatch(/[?⛔◐]/);
   } finally {
     await act(async () => root.unmount());

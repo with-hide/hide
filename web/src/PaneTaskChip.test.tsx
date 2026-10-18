@@ -67,25 +67,30 @@ it("shows done over tasks from one task, and nothing for a pane with no task", a
   } finally { await none.unmount(); }
 });
 
-it("never puts a child count on the chip; the children's fraction is only in the list", async () => {
+it("never puts a child count on the chip; the list says the children in one line, the done count only once every child is judged (B15)", async () => {
   const children: ChildProgress = { children: ["done", "done", "working", "done", "done"], done: 4 };
   const view = await mount([progress([task("task-3", "가"), task("task-3.2", "나"), task("task-3.3", "다"), task("task-3.4", "라")], { children })]);
   try {
     expect(view.chip()?.textContent).toBe("0/4");
     await act(async () => view.chip()!.focus());
-    expect(view.list()?.querySelector("[data-child-progress]")?.getAttribute("data-child-progress")).toBe("4/5");
-    expect([...view.list()!.querySelectorAll("[data-child-segment]")].map((node) => node.getAttribute("data-child-segment"))).toEqual(["done", "done", "working", "done", "done"]);
+    expect(view.list()?.querySelector("[data-task-list-children]")?.textContent).toBe("Delegated5· Done 4");
+    expect(view.list()!.querySelector("[data-child-segment], [data-child-progress]")).toBeNull();
   } finally { await view.unmount(); }
+  const unjudged = await mount([progress([task("task-3", "가")], { children: { children: ["done", "unjudged"], done: null } })]);
+  try {
+    await act(async () => unjudged.chip()!.focus());
+    expect(unjudged.list()!.querySelector("[data-task-list-children]")?.textContent).toBe("Delegated2");
+  } finally { await unjudged.unmount(); }
 });
 
-it("shows the plain child count while a child has no judgment, never a false zero", async () => {
-  const view = await mount([progress([task("task-3", "가")], { children: { children: ["done", "unjudged"], done: null } })]);
+it("puts this pane's own Now box right under the tasks, in the warning colour with `!` while it asks (B15)", async () => {
+  const view = await mount([progress([task("task-3", "가")], { children: { children: ["working"], done: 0 } })]);
   try {
     await act(async () => view.chip()!.focus());
-    const head = view.list()!.querySelector("[data-child-progress]")!;
-    expect(head.getAttribute("data-child-progress")).toBe("count");
-    expect(head.textContent).toBe("Children2");
-    expect(view.list()!.querySelector("[data-child-segment]")).toBeNull();
+    const box = view.list()!.querySelector("[data-task-list-now]")!;
+    expect([box.getAttribute("data-state-box"), box.textContent]).toEqual(["working", "Now · WorkingREADME 태그 고치는 중"]);
+    // Tasks, then the box, then the children's line.
+    expect(box.compareDocumentPosition(view.list()!.querySelector("[data-task-list-children]")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   } finally { await view.unmount(); }
 });
 
@@ -97,7 +102,7 @@ it("opens on the pointer and on focus, closes when both leave, and pins on a pre
     await act(async () => view.chip()!.dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
     expect(view.list()).not.toBeNull();
     expect([...view.list()!.querySelectorAll("[data-task-list-name]")].map((node) => node.textContent)).toEqual(["README의 HTML 태그가 보이게 하기", "댓글 + 마크 위치 맞추기"]);
-    expect(view.list()!.querySelector("[data-task-list-line]")?.textContent).toBe("README 태그 고치는 중");
+    expect(view.list()!.querySelector("[data-task-list-line]")?.textContent).toBe("Now · WorkingREADME 태그 고치는 중");
     await act(async () => { view.chip()!.dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body })); vi.advanceTimersByTime(200); });
     expect(view.list()).toBeNull();
     await act(async () => view.chip()!.focus());
@@ -213,6 +218,6 @@ it("draws no current line when the agent has none rather than a placeholder", as
   const view = await mount([progress([task("task-3", "가")])], { line: null });
   try {
     await act(async () => view.chip()!.focus());
-    expect(view.list()!.querySelector("[data-task-list-line]")).toBeNull();
+    expect(view.list()!.querySelector("[data-task-list-line], [data-task-list-now]")).toBeNull();
   } finally { await view.unmount(); }
 });

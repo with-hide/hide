@@ -253,16 +253,29 @@ pub(super) async fn prepare_back(
         });
     }
     // The core's settings come back with it and are never merged with
-    // settings this machine kept.
-    match &inspected.ai {
-        Ok(Some(_)) => {}
-        Ok(None) => failed.push(FailedCheck {
-            check: CheckId::Ai,
-            detail: "the core's machine holds no Hide AI settings".to_owned(),
-        }),
-        Err(reason) => failed.push(FailedCheck {
-            check: CheckId::Ai,
-            detail: reason.clone(),
+    // settings this machine kept; every agent they ask has to answer here,
+    // with this machine's logins, as the forward move asks of its target.
+    let asks = match &inspected.ai {
+        Ok(Some(theirs)) => herdr_core::hide_ai_asks_of_stored(theirs),
+        Ok(None) => Err("the core's machine holds no Hide AI settings".to_owned()),
+        Err(reason) => Err(reason.clone()),
+    };
+    match asks {
+        Ok(asks) => {
+            let ready = tokio::task::spawn_blocking(move || herdr_core::hide_ai_ready_here(&asks))
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|ready| ready);
+            if let Err(detail) = ready {
+                failed.push(FailedCheck {
+                    check: CheckId::Ai,
+                    detail,
+                });
+            }
+        }
+        Err(detail) => failed.push(FailedCheck {
+            check: CheckId::AiSetup,
+            detail,
         }),
     }
     let unlike = match (

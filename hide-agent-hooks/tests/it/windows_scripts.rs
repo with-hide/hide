@@ -1,8 +1,9 @@
-//! OpenCode's plugin and Pi's and omp's extension on Windows
-//! (`docs/agent-hooks.md`, Installing): the file this build writes, loaded in
-//! Node by `tests/windows/scripts.mjs` as each host loads it, starts the real
-//! helper by the path the file names, with no shell, from a folder whose name
-//! has a space, a quote, brackets and a `$`. The session's guidance reaching
+//! OpenCode's plugin (the 1.x file and OpenCode 2's two halves) and Pi's and
+//! omp's extension on Windows (`docs/agent-hooks.md`, Installing): the files
+//! this build writes, loaded in Node by `tests/windows/scripts.mjs` as each
+//! host loads them, start the real helper by the path the file names, with
+//! no shell, from a folder whose name has a space, a quote, brackets and a
+//! `$`. The session's guidance reaching
 //! its prompt is the proof that the spawn, stdin and stdout crossed Windows,
 //! and a tool result's ask for the letters due while the session works
 //! (`letters`, PRD letters-to-busy-agents) is proved the same way: the
@@ -36,10 +37,27 @@ struct Answered {
     tool_result: String,
 }
 
-fn run(agent: &str, file: &PluginFile, home: &Path, helper: &Path) -> Answered {
-    // `.mjs`: Node reads the file as the ES module each host loads.
-    let script = home.join(format!("{agent}.mjs"));
-    std::fs::write(&script, file.text(helper)).unwrap();
+/// Writes the agent's files and names the one the host loads first.
+fn write(agent: &str, files: &[&PluginFile], home: &Path, helper: &Path) -> PathBuf {
+    if let [file] = files {
+        // `.mjs`: Node reads the file as the ES module each host loads.
+        let script = home.join(format!("{agent}.mjs"));
+        std::fs::write(&script, file.text(helper)).unwrap();
+        return script;
+    }
+    // OpenCode 2's folder, whose halves import each other by name, read as ES
+    // modules as OpenCode reads them.
+    let folder = home.join(agent);
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("package.json"), r#"{"type":"module"}"#).unwrap();
+    for file in files {
+        std::fs::write(folder.join(file.file_name), file.text(helper)).unwrap();
+    }
+    folder.join(files[0].file_name)
+}
+
+fn run(agent: &str, files: &[&PluginFile], home: &Path, helper: &Path) -> Answered {
+    let script = write(agent, files, home, helper);
     let output = Command::new("node")
         .arg(crate_dir().join("tests/windows/scripts.mjs"))
         .current_dir(home)
@@ -68,12 +86,13 @@ fn the_scripts_start_the_helper_by_its_path_and_carry_its_guidance() {
     std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
     std::fs::copy(env!("CARGO_BIN_EXE_hide-agent-hooks"), &helper).unwrap();
 
-    for (agent, file) in [
-        ("opencode", &opencode::PLUGIN),
-        ("pi", &pi_extension::PI),
-        ("omp", &pi_extension::OMP),
+    for (agent, files) in [
+        ("opencode", &[&opencode::V1][..]),
+        ("opencode2", &[&opencode::SERVER, &opencode::TUI]),
+        ("pi", &[&pi_extension::PI]),
+        ("omp", &[&pi_extension::OMP]),
     ] {
-        let answered = run(agent, file, home, &helper);
+        let answered = run(agent, files, home, &helper);
         let added = &answered.prompts;
         assert!(
             added.iter().any(|text| text.contains(GUIDANCE_LINE)),

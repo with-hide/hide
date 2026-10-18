@@ -1033,6 +1033,7 @@ impl Runtime {
         let kit = self.kit_state(self.node.as_str());
         let failed = !kit.busy
             && (kit.unavailable.is_some()
+                || kit.refused.is_some()
                 || kit.components.iter().any(|part| {
                     matches!(
                         part.id,

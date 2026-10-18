@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
+use std::sync::Mutex;
+
+use hide_platform::fs::identity::{self, FileId};
 
 use serde::{Deserialize, Serialize};
 
@@ -107,6 +110,8 @@ struct StoredUiState {
     /// store unreadable.
     #[serde(default, deserialize_with = "readable_device_registrations")]
     device_registrations: Vec<DeviceRegistration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    machine_label: Option<String>,
     #[serde(default = "default_accent_hex")]
     accent_hex: String,
     /// Kept as text so a value this build does not know loads as Dark with a
@@ -159,6 +164,11 @@ struct StoredUiState {
     /// so a completion a restored server no longer reports is lost once.
     #[serde(default)]
     pane_completions: BTreeMap<String, PaneCompletion>,
+    /// Absent in a store written before Hide kept each pane's launch choice;
+    /// loads empty, so an agent started before then restarts on its CLI's
+    /// defaults, as it did.
+    #[serde(default)]
+    pane_launches: BTreeMap<String, crate::model::PaneLaunch>,
     /// Absent in a store written before the request view; loads empty, and
     /// each row's wait starts over once.
     #[serde(default)]
@@ -189,6 +199,9 @@ struct StoredUiState {
     /// The stamps and the sleeping agents; absent loads as none.
     #[serde(default)]
     agent_sleep: crate::agent_sleep::AgentSleepStore,
+    /// The archived sessions; absent loads as none.
+    #[serde(default)]
+    session_archive: crate::session_archive::SessionArchive,
     /// Absent in a store written before the recent list existed, which loads
     /// empty. More entries than the limit (a hand edit) are cut to it.
     #[serde(default)]
@@ -461,6 +474,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             focused_checkout_id: stored.focused_checkout_id,
             workspace_registrations: stored.workspace_registrations,
             device_registrations: stored.device_registrations,
+            machine_label: stored.machine_label,
             accent_hex: stored.accent_hex,
             theme,
             agent_logo_mode,
@@ -482,6 +496,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             conversation_pane_ids: Default::default(),
             pane_read_records: stored.pane_read_records,
             pane_completions: stored.pane_completions,
+            pane_launches: stored.pane_launches,
             request_verbs: stored.request_verbs,
             agent_sleep_after_hours: stored
                 .agent_sleep_after_hours
@@ -503,6 +518,11 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
                 let mut store = stored.agent_sleep;
                 store.after_load();
                 store
+            },
+            session_archive: {
+                let mut archive = stored.session_archive;
+                archive.after_load();
+                archive
             },
             recent_checkouts: {
                 let mut recent = stored.recent_checkouts;
@@ -526,6 +546,44 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
     )
 }
 
+/// The folders whose chain of folders from the volume's root this process has
+/// made durable, by the folder's file identity. That chain is a fact about
+/// the folder, not about one save, so a save reaches it again only for a
+/// folder it has not seen, a replaced one included; every save still flushes
+/// its file and the file's folder.
+static DURABLE_FOLDERS: Mutex<Vec<FileId>> = Mutex::new(Vec::new());
+
+/// More folders than a process keeps its UI state in; past it the oldest is
+/// forgotten and made durable again on its next save.
+const DURABLE_FOLDER_LIMIT: usize = 8;
+
+fn establish_folder_once(folder: &Path) -> std::io::Result<()> {
+    let id = identity::file_id(folder)?;
+    let known = |folders: &Vec<FileId>| folders.contains(&id);
+    if known(&DURABLE_FOLDERS.lock().unwrap_or_else(|e| e.into_inner())) {
+        return Ok(());
+    }
+    let canonical = hide_platform::fs::private::establish_dir_durability(folder)
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    #[cfg(test)]
+    tests::CHAINS_ESTABLISHED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(id);
+    // A folder replaced while its chain was made durable is not the one
+    // recorded, and its next save makes its own chain durable.
+    if identity::file_id(&canonical)? == id {
+        let mut folders = DURABLE_FOLDERS.lock().unwrap_or_else(|e| e.into_inner());
+        if !known(&folders) {
+            if folders.len() == DURABLE_FOLDER_LIMIT {
+                folders.remove(0);
+            }
+            folders.push(id);
+        }
+    }
+    Ok(())
+}
+
 pub fn save(
     path: &Path,
     state: &UiStateSnapshot,
@@ -537,14 +595,14 @@ pub fn save(
         .ok_or_else(|| "UI state path has no parent directory".to_owned())?;
     // Existence alone cannot authorize a destructive close. Reuse the
     // platform's checked ancestor barriers, outside the runtime lock.
-    // An unsupported platform or an untrusted directory refuses the receipt.
-    if !state.agent_sleep.dormant.is_empty() {
-        hide_platform::fs::private::establish_dir_durability(parent).map_err(|_| {
+    // An untrusted directory refuses the receipt.
+    if !state.agent_sleep.dormant.is_empty() || !state.session_archive.is_empty() {
+        establish_folder_once(parent).map_err(|_| {
             "UI state directory persistence could not be confirmed; no new close or start was sent"
                 .to_owned()
         })?;
     }
-    fs::create_dir_all(parent)
+    hide_platform::fs::private::create_dir_all(parent)
         .map_err(|_| "UI state directory could not be prepared".to_owned())?;
     let stored = StoredUiState {
         resolved_sessions: state.resolved_sessions.clone(),
@@ -586,6 +644,7 @@ pub fn save(
         focused_checkout_id: state.focused_checkout_id.clone(),
         workspace_registrations: state.workspace_registrations.clone(),
         device_registrations: state.device_registrations.clone(),
+        machine_label: state.machine_label.clone(),
         accent_hex: state.accent_hex.clone(),
         theme: Some(state.theme.as_str().to_owned()),
         agent_logo_mode: Some(state.agent_logo_mode.as_str().to_owned()),
@@ -604,6 +663,7 @@ pub fn save(
         editor_text_scale: state.editor_text_scale,
         pane_read_records: state.pane_read_records.clone(),
         pane_completions: state.pane_completions.clone(),
+        pane_launches: state.pane_launches.clone(),
         request_verbs: state.request_verbs.clone(),
         pane_terminal_sizes: pane_terminal_sizes.clone(),
         agent_sleep_after_hours: state.agent_sleep_after_hours,
@@ -614,6 +674,7 @@ pub fn save(
         },
         agent_start: Some(state.agent_start.clone()),
         agent_sleep: state.agent_sleep.clone(),
+        session_archive: state.session_archive.clone(),
         recent_checkouts: state.recent_checkouts.clone(),
         recent_pane_ids: state.recent_pane_ids.clone(),
         factory_secretary_pane: state.factory_secretary_pane.clone(),
@@ -621,32 +682,106 @@ pub fn save(
     };
     let bytes = serde_json::to_vec_pretty(&stored)
         .map_err(|_| "UI state could not be encoded".to_owned())?;
-    hide_platform::fs::atomic::write_file_durable(path, &bytes, hide_platform::fs::Access::Private)
-        .map(|_| ())
-        .map_err(|error| {
-            let phase = match error {
-                hide_platform::fs::atomic::DurableWriteError::BeforeReplace { .. } => {
-                    "before_replace"
-                }
-                hide_platform::fs::atomic::DurableWriteError::ReplacementUncertain { .. } => {
-                    "replacement_uncertain"
-                }
-                hide_platform::fs::atomic::DurableWriteError::ReplacedNotDurable { .. } => {
-                    "replaced_not_durable"
-                }
-            };
-            crate::diagnostic!(serde_json::json!({
-                "component": "ui_state",
-                "kind": "ui_state.durable_save_failed",
-                "phase": phase,
-            }));
-            "UI state persistence could not be confirmed".to_owned()
-        })
+    hide_platform::fs::atomic::write_file_durable(
+        path,
+        &bytes,
+        hide_platform::fs::atomic::DurableAccess::Private,
+    )
+    .map(|_| ())
+    .map_err(|error| {
+        let phase = match error {
+            hide_platform::fs::atomic::DurableWriteError::BeforeReplace { .. } => "before_replace",
+            hide_platform::fs::atomic::DurableWriteError::ReplacementUncertain { .. } => {
+                "replacement_uncertain"
+            }
+            hide_platform::fs::atomic::DurableWriteError::ReplacedNotDurable { .. } => {
+                "replaced_not_durable"
+            }
+        };
+        crate::diagnostic!(serde_json::json!({
+            "component": "ui_state",
+            "kind": "ui_state.durable_save_failed",
+            "phase": phase,
+        }));
+        "UI state persistence could not be confirmed".to_owned()
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each folder whose whole chain a save made durable, once per time.
+    pub(super) static CHAINS_ESTABLISHED: Mutex<Vec<FileId>> = Mutex::new(Vec::new());
+
+    fn chains_established(folder: &Path) -> usize {
+        let id = identity::file_id(folder).unwrap();
+        CHAINS_ESTABLISHED
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|established| **established == id)
+            .count()
+    }
+
+    #[test]
+    fn a_save_makes_its_folders_chain_durable_once_until_the_folder_is_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("state");
+        hide_platform::fs::private::create_dir(&folder).unwrap();
+        let path = folder.join("ui-state.json");
+        let mut state = UiStateSnapshot::default();
+        state.agent_sleep.dormant.insert(
+            crate::agent_sleep::SleepId::new().unwrap(),
+            crate::agent_sleep::fixture_record("w1:p1"),
+        );
+
+        save(&path, &state, &BTreeMap::new()).unwrap();
+        save(&path, &state, &BTreeMap::new()).unwrap();
+        assert_eq!(chains_established(&folder), 1);
+
+        let earlier = root.path().join("earlier");
+        fs::rename(&folder, &earlier).unwrap();
+        hide_platform::fs::private::create_dir(&folder).unwrap();
+        save(&path, &state, &BTreeMap::new()).unwrap();
+        save(&path, &state, &BTreeMap::new()).unwrap();
+
+        assert_eq!(chains_established(&folder), 1);
+        assert_eq!(chains_established(&earlier), 1);
+        assert_eq!(load(&path).0.agent_sleep.dormant.len(), 1);
+    }
+
+    /// An archived session saves through the state folder's barrier and
+    /// loads back, on every system (PRD session-archive B33, D-24).
+    #[test]
+    fn an_archived_session_saves_through_the_folders_barrier_and_loads_back() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("state");
+        hide_platform::fs::private::create_dir(&folder).unwrap();
+        let path = folder.join("core-state.json");
+        let mut state = UiStateSnapshot::default();
+        let id = crate::session_archive::ArchiveId::new().unwrap();
+        state
+            .session_archive
+            .admit(
+                id.clone(),
+                crate::session_archive::fixture_record(
+                    vec![
+                        crate::session_archive::fixture_member("root", None),
+                        crate::session_archive::fixture_member("child", Some("root")),
+                    ],
+                    7,
+                ),
+            )
+            .unwrap();
+
+        save(&path, &state, &BTreeMap::new()).unwrap();
+        assert_eq!(chains_established(&folder), 1);
+        let loaded = load(&path).0.session_archive;
+        assert_eq!(loaded.records.len(), 1);
+        assert_eq!(loaded.records[&id].members.len(), 2);
+        assert_eq!(loaded.records[&id].archived_at_unix_ms, 7);
+    }
 
     #[test]
     fn retired_git_panel_restores_overview_without_losing_other_ui_state() {

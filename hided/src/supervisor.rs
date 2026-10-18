@@ -702,11 +702,13 @@ async fn prepare(
             detail: "this machine has no Herdr server".to_owned(),
         });
     }
+    // This machine's own setting, which moves with the core: not a login
+    // of the machine taking it.
     let asks = match herdr_core::hide_ai_asks(&env.home) {
         Ok(asks) => asks,
         Err(detail) => {
             failed.push(FailedCheck {
-                check: CheckId::Ai,
+                check: CheckId::AiSetup,
                 detail,
             });
             Vec::new()
@@ -807,8 +809,14 @@ async fn prepare(
         held.push(format!("move {}", handover.intent));
     }
     // Named here, before anything stops: the copy to that folder would
-    // fail only after this machine's core stopped.
-    held.extend(inspected.path_refused.clone());
+    // fail only after this machine's core stopped. It has a check of its
+    // own, since clearing earlier records never helps.
+    if let Some(reason) = inspected.path_refused.clone() {
+        failed.push(FailedCheck {
+            check: CheckId::TargetFolder,
+            detail: reason,
+        });
+    }
     // Hide AI settings move with the core and are never merged.
     match (
         &inspected.ai,
@@ -844,10 +852,15 @@ async fn prepare(
     let Some(own_socket) = own_socket else {
         return Err(failed);
     };
-    let own_label = crate::host_name().unwrap_or_else(|| source.node.clone());
-    let (change, ids) =
-        driver::forward_change(&source, &env.home, &own_label, own_socket, target_socket)
-            .map_err(|failure| fail(CheckId::Connection, format!("{failure:?}")))?;
+    let host_name = crate::host_name();
+    let (change, ids) = driver::forward_change(
+        &source,
+        &env.home,
+        host_name.as_deref(),
+        own_socket,
+        target_socket,
+    )
+    .map_err(|failure| fail(CheckId::Connection, format!("{failure:?}")))?;
     // A retry keeps its intent, so the copy the device holds from it is
     // checked by digest rather than sent again.
     let intent = retry

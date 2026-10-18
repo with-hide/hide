@@ -120,10 +120,12 @@ impl NodeLink for Node {
     }
 }
 
-struct PrivateHerdr {
+/// A private pinned Herdr server: its own socket, session, config and home
+/// (also `real_agent_trust_tests`).
+pub(super) struct PrivateHerdr {
     shell: Option<String>,
     bin: PathBuf,
-    home: PathBuf,
+    pub(super) home: PathBuf,
     socket: PathBuf,
     config: PathBuf,
     log: PathBuf,
@@ -133,7 +135,7 @@ struct PrivateHerdr {
 
 impl PrivateHerdr {
     /// A server whose own shell, on unix, is `shell`.
-    fn new(shell: Option<String>) -> Self {
+    pub(super) fn new(shell: Option<String>) -> Self {
         let bin = PathBuf::from(
             std::env::var_os("HIDE_E2E_HERDR_BIN")
                 .expect("HIDE_E2E_HERDR_BIN names the pinned herdr"),
@@ -240,16 +242,16 @@ impl PrivateHerdr {
         std::fs::read_to_string(&self.log).unwrap_or_default()
     }
 
-    fn connector(&self) -> LocalSocketConnector {
+    pub(super) fn connector(&self) -> LocalSocketConnector {
         LocalSocketConnector::new(&self.socket)
     }
 
-    fn request(&self, method: &str, params: Value) -> Value {
+    pub(super) fn request(&self, method: &str, params: Value) -> Value {
         request_with_connector(&self.connector(), method, params, READ_TIMEOUT)
             .unwrap_or_else(|error| panic!("{method}: {error}"))
     }
 
-    fn screen(&self, pane: &str) -> String {
+    pub(super) fn screen(&self, pane: &str) -> String {
         let params = wire::pane_read_params(pane, "visible", 40).unwrap();
         wire::pane_text(self.request("pane.read", params))
             .unwrap()
@@ -325,7 +327,13 @@ impl PrivateHerdr {
         tab.pane_id
     }
 
-    fn wait_on(&self, pane: &str, within: Duration, what: &str, done: impl FnMut() -> bool) {
+    pub(super) fn wait_on(
+        &self,
+        pane: &str,
+        within: Duration,
+        what: &str,
+        done: impl FnMut() -> bool,
+    ) {
         self.wait_until(within, done, || {
             format!(
                 "{what}; pane {pane} shows:\n{}\nprocesses: {}",

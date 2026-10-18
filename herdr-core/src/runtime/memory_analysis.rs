@@ -3414,6 +3414,150 @@ mod tests {
     }
 
     #[test]
+    fn an_opencode_2_session_has_its_receipt_recorded_and_is_analyzed_once_by_message() {
+        // The same walk over OpenCode 2.0.29's tables: a message is one
+        // `session_message` row, Hide's plugin stores a receipt in a
+        // synthetic message of its own, and the cursor and a report's place
+        // still count messages.
+        const OPENCODE: &str = "ses_0a1b2c3d4e5f60718293a4b5c6";
+        let fixture = Fixture::new();
+        let directory = fixture._temp.path().join("home/.local/share/opencode");
+        std::fs::create_dir_all(&directory).unwrap();
+        let connection = rusqlite::Connection::open(directory.join("opencode.db")).unwrap();
+        connection
+            .execute_batch(include_str!(
+                "../../../hide-session/tests/fixtures/adapters/opencode-2.0.29/opencode.sql"
+            ))
+            .unwrap();
+        let checkout = fixture.root.to_string_lossy().into_owned();
+        connection
+            .execute(
+                "UPDATE session_v2 SET directory = ?1, time_updated = ?2",
+                rusqlite::params![checkout, now_ms() as i64],
+            )
+            .unwrap();
+        let auth = fixture
+            .store()
+            .receipt_auth_tag(
+                &fixture.project_id,
+                "opencode",
+                OPENCODE,
+                "UserPromptSubmit",
+                "m1@1",
+            )
+            .unwrap();
+        let receipt = format!(
+            "<hide-memory-receipt event=\"UserPromptSubmit\" count=\"1\" items=\"m1@1\" auth=\"{auth}\" />"
+        );
+        connection
+            .execute(
+                "INSERT INTO session_message VALUES ('msg_hide', ?1, 'synthetic', 8, \
+                 1790989200001, 1790989200001, ?2)",
+                rusqlite::params![
+                    OPENCODE,
+                    json!({"time": {"created": 1790989200001_u64},
+                        "text": format!("<system-reminder>\n{receipt}\n</system-reminder>")})
+                    .to_string()
+                ],
+            )
+            .unwrap();
+        let key = ("opencode", OPENCODE.to_owned());
+        let delivered = || {
+            fixture
+                .store()
+                .item_by_number(&fixture.project_id, 1)
+                .unwrap()
+                .unwrap()
+                .provided_session_count
+        };
+        let analyzed_to = || {
+            fixture
+                .store()
+                .load_cursor(
+                    CursorReader::Analysis,
+                    &fixture.project_id,
+                    "opencode",
+                    OPENCODE,
+                )
+                .unwrap()
+                .map(|cursor| cursor.byte_offset)
+        };
+
+        // Outside a pane the walk records its receipt, once; a session
+        // written a moment ago is not quiet, so it is not analyzed yet.
+        assert!(fixture.pass_for(key.clone(), false, false).0.is_empty());
+        assert_eq!(delivered(), 2);
+        assert!(fixture.pass_for(key.clone(), false, false).0.is_empty());
+        assert_eq!(delivered(), 2);
+        assert_eq!((fixture.calls(), analyzed_to()), (0, None));
+
+        // Its pane closed: one call carries the operator's request, the
+        // letter, the image and the answer (messages 0, 3, 4 and 5), never the
+        // text OpenCode or Hide's plugin added, and the cursor stands after
+        // the eighth and last message.
+        fixture.answer(&[]);
+        assert_eq!(
+            fixture.pass_for(key.clone(), false, true).0,
+            ["analyzing", "learned one"]
+        );
+        let first: Value =
+            serde_json::from_str(&fixture.backend.inputs.lock().unwrap()[0]).unwrap();
+        let events = first["new_events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| {
+                (
+                    event["offset"].as_u64().unwrap(),
+                    event["kind"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            events,
+            [
+                (0, "human".to_owned()),
+                (3, "human".to_owned()),
+                (4, "human".to_owned()),
+                (5, "assistant".to_owned()),
+            ]
+        );
+        assert!(
+            !first["new_events"]
+                .to_string()
+                .contains("hide-memory-receipt")
+        );
+        assert_eq!(analyzed_to(), Some(8));
+        assert!(fixture.pass_for(key, false, true).0.is_empty());
+        assert_eq!((fixture.calls(), analyzed_to()), (1, Some(8)));
+
+        // A step OpenCode is still writing counts in the place a report
+        // would name, as the node answers it: nine messages.
+        connection
+            .execute(
+                "INSERT INTO session_message VALUES ('msg_09', ?1, 'assistant', 9, \
+                 1790989400000, ?2, ?3)",
+                rusqlite::params![
+                    OPENCODE,
+                    now_ms() as i64,
+                    json!({"time": {"created": 1790989400000_u64}, "content": []}).to_string()
+                ],
+            )
+            .unwrap();
+        let identity =
+            project_identity(fixture.node.as_ref(), &crate::node::test_node(), &checkout).unwrap();
+        let session = project_sessions(fixture.node.as_ref(), &identity, SESSION_CALL_TIMEOUT)
+            .unwrap()
+            .into_iter()
+            .find(|session| session.id == OPENCODE)
+            .unwrap();
+        let place = session_stat(fixture.node.as_ref(), &session, SESSION_CALL_TIMEOUT)
+            .unwrap()
+            .size;
+        assert_eq!(place, 9);
+    }
+
+    #[test]
     fn a_codex_session_has_its_developer_receipt_recorded_and_is_analyzed() {
         // Codex writes the instructions it adds to a turn, Memory's receipt
         // among them, as `developer` records. The core refused every page

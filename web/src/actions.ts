@@ -32,7 +32,7 @@ import { draftExported, unstoredDeviceDrafts, type SettingsTab } from "./setting
 import { latestDraft, noteClosing, noteSent } from "./editor/draft";
 import { RELATION_ANSWER_TIMEOUT_MS, relationState } from "./lineage";
 import { frontDeviceId, localDeviceId, railShown } from "./devices";
-import { registeredName } from "./screenMachine";
+import { machineName } from "./screenMachine";
 import { allAgents, boardProjects, type OpenTarget } from "./navigation";
 import { cardOfItem } from "./overviewTasks";
 import { backlogIntent } from "./overviewBacklog";
@@ -69,6 +69,7 @@ import { requestLine } from "./editor/lineRequest";
 import { terminalPathOwner, type FoundPath } from "./terminalLinkProvider";
 import { homeOpening } from "./hideAiOrigin";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
+import { archiveWorking } from "./archive";
 import { useShellStore } from "./store";
 import { FACTORY_ENTRY, useUiStore, type FactoryPlace, type MainView, type OverviewPlace, type PendingClose } from "./ui";
 import type { FactoryCommand } from "./factory/commands";
@@ -247,7 +248,7 @@ export function createActions(send: DispatchFn) {
     const context = remoteContext(rest());
     if (!context) return null;
     if (!remoteConnected(context)) {
-      ui().setNotice({ text: translate("shell.deviceNotConnected", { device: registeredName(context.device), command: translate(command) }), refreshable: false });
+      ui().setNotice({ text: translate("shell.deviceNotConnected", { device: machineName(rest()?.navigator?.devices, context.device.id, translate), command: translate(command) }), refreshable: false });
       return null;
     }
     return { targetId: context.device.id, view: remoteView(context.session), agents: context.session?.agents ?? [] };
@@ -382,7 +383,7 @@ export function createActions(send: DispatchFn) {
    * should end at, so the same event sent twice lands where it did once. The
    * core keeps the lane per Workspace, so another Workspace is never touched.
    */
-  const setWorkspaceView = (patch: { tool?: Tool | null; pinned?: boolean; tree?: boolean; prs_only_checkout?: boolean; lane_width?: number; tree_width?: number; width_request_id?: string; reveal?: string }) => {
+  const setWorkspaceView = (patch: { tool?: Tool | null; pinned?: boolean; tree?: boolean; prs_only_checkout?: boolean; lane_width?: number; panel_width?: number; tree_width?: number; width_request_id?: string; reveal?: string }) => {
     if (!workspaceViewOf(rest())) return diagnostic("workspace_view: no Workspace in front");
     return dispatch({ schema_version: 2, kind: "workspace_view", payload: patch });
   };
@@ -1016,6 +1017,49 @@ export function createActions(send: DispatchFn) {
     },
 
     /**
+     * `세션 보관` (PRD session-archive B5-B7): a session that is not working,
+     * or waits on the operator, goes at once; one with work running asks
+     * first with what is working.
+     */
+    archiveSession(paneId: string) {
+      const byPane = agentsByPane(allPaneAgents(useShellStore.getState().agents, rest()?.status?.remote));
+      const root = byPane.get(paneId);
+      if (root && archiveWorking(root, byPane).length > 0) return ui().setPendingArchive({ paneId });
+      dispatch({ schema_version: 2, kind: "archive_session", payload: { pane_id: paneId, confirmed: false } });
+    },
+    /** 작업 멈추고 보관: the confirmation the working session asked for (B6). */
+    confirmArchive() {
+      const pending = ui().pendingArchive;
+      if (!pending) return;
+      ui().setPendingArchive(null);
+      dispatch({ schema_version: 2, kind: "archive_session", payload: { pane_id: pending.paneId, confirmed: true } });
+    },
+    cancelArchive() {
+      ui().setPendingArchive(null);
+    },
+    /** 이어가기: the archived root and its descendants, or the one member named (B21, B24). */
+    resumeArchived(archiveId: string, sessionId?: string) {
+      dispatch({ schema_version: 2, kind: "archive_resume", payload: { archive_id: archiveId, ...(sessionId ? { session_id: sessionId } : {}) } });
+    },
+    /** 상태 확인 after a restart left an archive or a resume unknown (B34). */
+    checkArchived(archiveId: string) {
+      dispatch({ schema_version: 2, kind: "archive_check", payload: { archive_id: archiveId } });
+    },
+    /** 보관함에서 지우기…: asks first (B28). */
+    deleteArchived(archiveId: string) {
+      ui().setPendingArchiveDelete({ id: archiveId });
+    },
+    confirmArchiveDelete() {
+      const pending = ui().pendingArchiveDelete;
+      if (!pending) return;
+      ui().setPendingArchiveDelete(null);
+      dispatch({ schema_version: 2, kind: "archive_delete", payload: { archive_id: pending.id } });
+    },
+    keepArchived() {
+      ui().setPendingArchiveDelete(null);
+    },
+
+    /**
      * Fork agent (`tab`) and Fork agent to the side (`side`) from the pane menu: a
      * new execution of this agent's conversation, the operator's own root, which
      * takes the keyboard. Keys typed before its agent starts wait for it.
@@ -1160,9 +1204,10 @@ export function createActions(send: DispatchFn) {
     /**
      * The operator left the wizard's step `from` (Continue, Not now, Skip for now, a project added); the core moves only the step on screen.
      * `notifications` is the desktop switch the notification step leaves with: on for Continue on a Mac that already allows Hide (B16),
-     * off for Not now (B21), absent to leave it as it is.
+     * off for Not now (B21), absent to leave it as it is. The agent step leaves this way only while this Mac's pass is refused: the
+     * wizard closes with the question unanswered.
      */
-    advanceFirstRun(from: "notifications" | "project", notifications?: boolean) {
+    advanceFirstRun(from: "agents" | "notifications" | "project", notifications?: boolean) {
       dispatch({ schema_version: 2, kind: "first_run_advance", payload: notifications === undefined ? { from } : { from, notifications } });
     },
 
@@ -1790,7 +1835,7 @@ export function createActions(send: DispatchFn) {
       const tab = workspaces?.flatMap((row) => row.checkouts).flatMap((row) => row.tabs).find((row) => row.panes.some((pane) => pane.id === paneId));
       if (!tab?.id) return diagnostic(`close_tab: no tab holds ${paneId}`);
       if (targetId && status?.state !== "connected") {
-        const label = rest()?.navigator?.devices?.find((row) => row.id === targetId)?.label ?? targetId;
+        const label = machineName(rest()?.navigator?.devices, targetId, translate);
         ui().setNotice({ text: translate("shell.deviceNotConnected", { device: label, command: translate("shell.command.closeTab") }), refreshable: false });
         return;
       }
@@ -2556,7 +2601,7 @@ export function createActions(send: DispatchFn) {
       dispatch({ schema_version: 2, kind: "project_target", payload: { parent, name } });
     },
 
-    /** Makes `path` as a new folder with its own Git repository, then registers it; this Mac only. */
+    /** Makes `path` as a new folder with its own Git repository, then registers it; on the core's machine only, whichever window asks. */
     createProject(path: string, label: string) {
       dispatch({ schema_version: 2, kind: "create_workspace", payload: { path, label, initialize_git: true, new_folder: true } });
     },
@@ -2644,7 +2689,7 @@ export function createActions(send: DispatchFn) {
     },
 
     /**
-     * A path a terminal link names on this Mac (docs/ARCHITECTURE.md, A
+     * A path a terminal link names on this window's machine (docs/ARCHITECTURE.md, A
      * clicked path is one event). Inside a registered checkout it is one
      * event naming the checkout whose physical root holds it longest:
      * `browser_open` for HTML, `file_open` or `reveal_path` for another file
@@ -2684,18 +2729,20 @@ export function createActions(send: DispatchFn) {
         }
         if (found.kind === "file" && line !== null) requestLine([path, found.real], line, column);
         if (found.kind === "file") followOpen(path, "file", null, here ?? { device_id: deviceId, path: owner.checkout.path });
+        // A node's own checkout is its machine's path: hided leaves it to that node's helper, not the core's roots.
+        const device = deviceField(deviceId, localDeviceId(rest()));
         if (here) {
           dispatch({
             schema_version: 2,
             kind: "file_open",
-            payload: { path, workspace_id: owner.checkout.workspace_id, checkout_id: owner.checkout.id, preview: false, view: here, ...opener },
+            payload: { path, workspace_id: owner.checkout.workspace_id, checkout_id: owner.checkout.id, preview: false, view: here, ...device, ...opener },
           });
           return;
         }
         dispatch({
           schema_version: 2,
           kind: "reveal_path",
-          payload: { path, workspace_id: owner.checkout.workspace_id, checkout_id: owner.checkout.id, is_directory: found.kind === "directory", ...opener },
+          payload: { path, workspace_id: owner.checkout.workspace_id, checkout_id: owner.checkout.id, is_directory: found.kind === "directory", ...device, ...opener },
         });
       });
     },

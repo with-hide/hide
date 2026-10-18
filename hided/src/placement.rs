@@ -78,9 +78,13 @@ pub fn update(
 pub fn write(state_dir: &Path, placement: &Placement) -> Result<(), String> {
     let path = record_path(state_dir);
     let bytes = serde_json::to_vec_pretty(placement).map_err(|error| error.to_string())?;
-    hide_platform::fs::atomic::write_file_durable(&path, &bytes, hide_platform::fs::Access::Private)
-        .map(|_| ())
-        .map_err(|error| format!("{}: {error}", path.display()))
+    hide_platform::fs::atomic::write_file_durable(
+        &path,
+        &bytes,
+        hide_platform::fs::atomic::DurableAccess::Private,
+    )
+    .map(|_| ())
+    .map_err(|error| format!("{}: {error}", path.display()))
 }
 
 /// Removes the record: this machine is its own core again.

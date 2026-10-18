@@ -68,7 +68,7 @@ fn a_task_is_its_root_and_every_descendant_with_their_projects_and_devices() {
     );
     assert!(!runtime.refresh_agent_scopes());
 
-    let mut remote_device = crate::workspace::local_device(&crate::node::test_node(), None);
+    let mut remote_device = crate::workspace::local_device(&crate::node::test_node(), None, None);
     remote_device.id = "other-device".into();
     remote_device.label = Some("mini".into());
     remote_device.kind = "remote".into();
@@ -529,7 +529,7 @@ fn disconnected_devices_zero_the_physical_tile_but_keep_overview_members_from_th
     let mut runtime = runtime();
     runtime.snapshot.navigator.agents.clear();
     runtime.snapshot.navigator.workspaces.clear();
-    let mut device = crate::workspace::local_device(&crate::node::test_node(), None);
+    let mut device = crate::workspace::local_device(&crate::node::test_node(), None, None);
     device.id = "mini".into();
     device.kind = "remote".into();
     runtime.snapshot.navigator.devices.push(device);
@@ -825,6 +825,68 @@ fn a_working_agent_turns_stalled_and_a_quiet_pull_request_old_with_the_clock_alo
     );
     assert!(runtime.tick_work_clock(1_000_000 + crate::agent_state::work::board::OLD_MS + 120_000));
     assert_eq!(row(&runtime).fold, Some("old"));
+}
+
+/// A node's project lists its pull requests as this machine's does (PRD
+/// core-host-node-move D-29), so the clock judges its PRs list too while this
+/// machine lists none.
+#[test]
+fn the_clock_judges_a_nodes_pull_requests_while_this_machine_lists_none() {
+    let mut runtime = runtime();
+    let mut pr: PullRequestSnapshot = serde_json::from_value(serde_json::json!({
+        "number":42,"title":"Ship","url":"https://github.com/acme/app/pull/42",
+        "head_branch":"feature","base_branch":"main","badge":"open","checks":"passing","is_draft":false,
+        "closing_issues":[], "updated_at_unix_ms": 1_000_000
+    })).unwrap();
+    pr.work.mine = Some(true);
+    pr.work.asked_of_me = crate::model::ReviewAsk::None;
+    pr.work.queue = crate::model::MergeQueuePlace::NotQueued;
+    pr.work.merge_state = crate::model::MergeState::Clean;
+    pr.work.sessions = vec!["s-maker".into()];
+    let mut agents = rows();
+    agents[0].session_id = Some("s-maker".into());
+    agents[0].activity = "working".into();
+    agents[0].changed_at_unix_ms = Some(1_000_000);
+    agents[0].state = crate::agent_state::turn::row_state(&agents[0]);
+    let mut project = workspace(
+        "remote:mbp:project:1",
+        "Project",
+        "/fixture",
+        vec![checkout(
+            "remote:mbp:project:1",
+            "feature",
+            "/fixture/feature",
+            None,
+        )],
+    );
+    project.device_id = "mbp".into();
+    project.pull_requests = vec![pr];
+    let mut session = super::device_catalog::session(vec![project]);
+    session.agents = agents;
+    let mut node = super::device_catalog::connected_status("mbp");
+    node.session = Some(session);
+    runtime.snapshot.status.remote.push(node);
+    fn row(runtime: &Runtime) -> crate::agent_state::work::board::Row {
+        runtime.snapshot.status.remote[0]
+            .session
+            .as_ref()
+            .unwrap()
+            .workspaces[0]
+            .agent_scope
+            .prs
+            .rows[0]
+            .clone()
+    }
+    assert!(runtime.tick_work_clock(1_000_000 + 60_000));
+    assert_eq!(
+        (row(&runtime).group, row(&runtime).reason.kind),
+        ("working", "working")
+    );
+    assert!(runtime.tick_work_clock(1_000_000 + crate::delivery::INACTIVITY_MS + 60_000));
+    assert_eq!(
+        (row(&runtime).group, row(&runtime).reason.kind),
+        ("needs_you", "check")
+    );
 }
 
 #[test]

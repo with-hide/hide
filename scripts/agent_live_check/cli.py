@@ -50,6 +50,10 @@ def default_herdr(checkout, home):
         cache, digest = home / "Library/Caches/hide/herdr-runtime", pin["sha256"]
     elif sys.platform.startswith("linux"):
         cache, digest = home / ".cache/hide/herdr-runtime", pin["linux_x86_64"]["sha256"]
+    elif sys.platform == "win32" and os.environ.get("LOCALAPPDATA"):
+        # scripts/fetch-herdr-runtime.ps1's cache: the zip and what it unpacks to.
+        digest = pin["windows_x86_64"]["sha256"]
+        return Path(os.environ["LOCALAPPDATA"]) / "hide/herdr-runtime" / digest / "unpacked/herdr.exe"
     else:
         raise ProtectionError("live_check_host_not_supported")
     return cache / digest / "herdr"

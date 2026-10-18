@@ -84,6 +84,9 @@ enum Command {
         device_id: String,
         reply: Sender<Option<Arc<dyn hide_herdr_client::ApiConnector>>>,
     },
+    InputGate {
+        reply: Sender<Arc<herdr_core::input_gate::PaneInputGate>>,
+    },
     InboundRefusal {
         node: String,
         reply: Sender<Option<String>>,
@@ -375,6 +378,17 @@ impl CoreHandle {
             outputs,
             running: Mutex::new(Some(Running { thread, local })),
         })
+    }
+
+    /// The core's input gate (`herdr_core::input_gate`), which a writer that
+    /// does not go through a node's terminal asks at the write.
+    pub fn input_gate(&self) -> Result<Arc<herdr_core::input_gate::PaneInputGate>, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::InputGate { reply })
+            .map_err(|_| "core owner thread is gone".to_owned())?;
+        rx.recv()
+            .map_err(|_| "core owner thread dropped the input gate reply".to_owned())
     }
 
     pub fn dispatch(&self, event: Vec<u8>) -> Result<(), String> {
@@ -741,13 +755,12 @@ fn owner_loop(
 ) {
     // The core's own node answers for the home the core reads and writes
     // for: the configured one, else the process's, as the core decides.
-    let mut own_node = hide_node::Local::new(
-        options
-            .home
-            .as_ref()
-            .map(std::path::PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from)),
-    );
+    let home = options
+        .home
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from));
+    let mut own_node = hide_node::Local::new(home.clone());
     // What the node measured of each repository's worktrees outlives the
     // daemon, in the core's state folder.
     let state_dir = std::path::Path::new(&options.app_state_path)
@@ -757,14 +770,16 @@ fn owner_loop(
     own_node = own_node
         .keeping_worktree_facts_in(hide_kit::layout::worktree_facts(&state_dir))
         .keeping_feedback_in(state_dir);
-    // The install kit's parts ship beside this binary in the app bundle; a
-    // daemon anywhere else installs nothing (PRD device-parity D-19).
-    if let Some(kit_dir) = std::env::current_exe()
-        .ok()
-        .as_deref()
-        .and_then(hide_kit::bundled_kit_dir)
-    {
-        own_node = own_node.bundled(kit_dir);
+    // The install kit's parts ship beside this binary: in the app bundle, or
+    // in the build folder a move or a core update placed in this account's
+    // helper root, which a moved core's login item runs. A daemon anywhere
+    // else, a development build among them, installs nothing (PRD
+    // device-parity D-19).
+    if let Ok(executable) = std::env::current_exe() {
+        own_node = own_node.with_kit(hide_host::serve::KitPlace::of_program(
+            &executable,
+            home.as_deref(),
+        ));
     }
     let own_herdr = options
         .herdr_socket_path
@@ -896,6 +911,9 @@ fn owner_loop(
             }
             Command::RemoteHerdrApi { device_id, reply } => {
                 let _ = reply.send(core.remote_herdr_api(&device_id));
+            }
+            Command::InputGate { reply } => {
+                let _ = reply.send(core.input_gate());
             }
             Command::InboundRefusal { node, reply } => {
                 let _ = reply.send(core.inbound_refusal(&node));

@@ -22,7 +22,7 @@ afterAll(() => browserCanvas.restore());
 
 const view: WorkspaceView = {
   device_id: "local", path: "/projects/studio", tool: null, last_tool: null, prs: { only_checkout: false }, pinned: false, tree: false,
-  lane_width: null, tree_width: null, lane_called: 0, lane_calls: 0,
+  lane_width: null, panel_width: null, tree_width: null, lane_called: 0, lane_calls: 0,
 };
 function checkout(servers: { host: string; port: number }[]): Checkout {
   return { agent_scope: emptyScope(),
@@ -143,7 +143,15 @@ describe("Workspace server action", () => {
   it("opens a server of the machine this screen runs on when the core runs on another, and of no other device", async () => {
     const remote = checkout([{ host: "127.0.0.1", port: 4000 }]);
     const remoteView = { ...view, device_id: "mini" };
-    useShellStore.setState({ rest: catalog(checkout([]), remote) });
+    // A node that dials the core lists its projects in its own session, as every device does, never in the core's own list.
+    const base = catalog(checkout([]), remote);
+    useShellStore.setState({
+      rest: {
+        ...base,
+        navigator: { ...base.navigator, workspaces: [project("local", [checkout([])])], devices: [{ id: "local", kind: "local" }, { id: "mini", kind: "remote", dials_in: true }] as never },
+        status: { ...base.status, remote: [{ target_id: "mini", state: "connected", session: { workspaces: [project("mini", [remote])] } }] as never },
+      },
+    });
     const actions = createActions((event) => { events.push(event); return true; });
     const show = async () => act(async () => root.render(<TooltipProvider><RunningServers checkout={remote} view={remoteView} actions={actions} /></TooltipProvider>));
     await show();

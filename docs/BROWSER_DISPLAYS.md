@@ -183,6 +183,7 @@ Native file displays and unrestricted browser-context administration are unsuppo
 
 `hide browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ...` read and drive one browser display of the caller's checkout, by its View id.
 `hide browser help` prints the agent guide for them, the commands, the ref format, checking with `--diff` and `changed`, and each failure reason with its recovery; it is the source of the `hide browser` agent skill, and the session guidance names the commands and points at it (`hide-agent-hooks/src/workspace_context.rs`).
+A snapshot of a device's loopback page names the address the core keeps for the display (`http://localhost:8765/...`) on its address line, not the loopback route that page loaded from on the core's machine; console and network lines still print the addresses the page used.
 A snapshot is text and exits zero; an action prints one JSON line with what it did, `changed` and `next`; every failure prints `{"ok":false,"reason","display","next_action"}` and exits non-zero.
 
 Each command is one connection and one debugger lease: the CLI asks hided for a relay to the display ([ARCHITECTURE.md](ARCHITECTURE.md#hided-and-the-websocket-boundary)), attaches to its page, does its work and disconnects, which releases the lease and turns the tab's attachment mark off.
@@ -311,7 +312,7 @@ A name is resolved once per page generation and the answer kept, so a name that 
 `localPageRequest` and `isLocalNetworkHost` in `desktop/src/main/browserSync.ts` decide, and `BrowserViews.localPageRequest` applies the decision to a request of every local file page, whoever opened it.
 Each kind of refusal (a file, the network) is logged once per page generation as `browser.request_refused` with `reason: local_page_boundary` and the kind, and shows nothing on screen.
 A page of a connected device's checkout is served through its own route, which refuses every request that is not that route's.
-What the fuse changes beyond these pages: any `file:` page the app itself loads (the status page) is an origin of its own and loads only its own script and style, which it does; the shell, the preload and the main process load over loopback or from the asar and are unchanged.
+What the fuse changes beyond these pages: any `file:` page the app itself loads (the status page) is an origin of its own and loads only its own script and style, which it does; the shell, the preload and the main process load over loopback or from the asar and are unchanged. The `file:` loader no longer reads inside the asar, so the status page ships unpacked beside it (`ARCHITECTURE.md`, The desktop host).
 `desktop/e2e` runs on a copy of Electron flipped the same way (`fused-electron.ts`), so what its tests prove is what ships; an unpackaged run of the app (`pnpm --dir desktop dev`) is stock Electron, where the request rules hold and the fuse does not.
 What Comment's world can read on a local page is what the page itself can read, and no more.
 The comment session evaluates in an isolated world of the page's own document: the same origin, session and request rules as the page's scripts, the file partition's `webSecurity`, and the `onBeforeRequest` rules of `desktop/src/main/browser.ts`.
@@ -360,6 +361,7 @@ Authority stays with the core: it checks the caller's credential, decides the Wo
 The core chooses the window on the caller's own machine first, then its own window, then the one node window there is; several of a kind refuse with `browser_control_ambiguous`, as several windows on one daemon do.
 A caller on this Mac gets this Mac's own capability URLs from `hide browser connect` and `hide browser open`, and for a page command a one-shot relay URL on this Mac's daemon (`ws://127.0.0.1:<port>/browser-relay/<ticket>`, valid ten seconds) that its CLI dials after the claim; the daemon pumps that CDP to its gateway, so none of it crosses the link.
 The relay listens on a loopback port of its own that serves nothing else, so a ticket is no key to the daemon's screen routes, and it holds at most four relays, counting tickets not yet dialed; one past that is refused with `browser_relay_limit` before the gateway is asked.
+A caller on a device gets no capability URL from the core's own window either (`hide browser open` and `connect` answer `browser_control_elsewhere` at once, without asking the gateway), because those URLs are the core machine's loopback; its page commands reach the window through the core.
 A caller on the core's machine, or on a device, whose only window is this Mac's gets no capability URL (`browser_control_elsewhere`, since those URLs are this Mac's loopback); its page commands are relayed by the core through a link stream to the same relay, at most four per link, and a stream past that cap is refused with `browser_relay_limit` and a `link_stream.cap_reached` diagnostic.
 The gateway's own limits stay the ones that hold: its client cap answers a relay's upgrade with a refusal the caller reads as `browser_control_busy`.
 A page action the gateway asks for (open, close, select) goes to this Mac's daemon, which passes it to the core's `POST /relay/browser-control/action`; the core runs it as that window, through the same prepare/read/commit contract as its own window's, and refuses a pid the node never announced (`browser_control_unavailable`).
@@ -444,6 +446,26 @@ With the shell holding the keyboard the same commands size the focused terminal 
 Chromium keeps one zoom level per host within a page's session partition, so web pages of the same host in different Workspaces zoom together.
 The shell's own zoom, which places every page on its slot, is a separate session and never moves with a page's zoom.
 
+Each page reports its zoom factor with its state (`BrowserPageState.zoom`): after every committed navigation, which takes the new host's zoom, and after every zoom the host makes.
+No Chromium event says that a zoom moved another page of the same host, so after any zoom, a text-size command, ⌘+, the toolbar's popover or a popup's, the host reads the zoom of every page of that session partition again and reports those whose zoom moved (`BrowserViews.zoomMoved`); that is at most `MAX_LIVE_VIEWS` reads, only on a zoom.
+The shell draws the zoom as a badge inside the address field's right end while it is not 100%, and its popover sends `zoom_in`, `zoom_out` and `zoom_reset` (`BrowserCommand`), which step that page the way the text-size commands do without moving the keyboard ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#browser-displays)).
+The popover is a shell layer over the page, so the page stands behind its still while it is open; each zoom it reports asks the host for a fresh capture, which the host takes of a page it hides for an overlay of the front Workspace, so every step shows (`zoomMoved` in `web/src/browserViews.ts`).
+A popup has no badge; the text-size commands still zoom it.
+
+## Device size
+
+A display can lay its page out at a device's width instead of its slot's: Fit, mobile 390, tablet 768 or desktop 1280 CSS pixels (PRD browser-width-zoom D-10..D-12, `web/src/browserDevice.ts`).
+The choice is the display's own and page-local, kept by host key in `ui.ts` (`browserDevices`) for as long as the core keeps the display; it is never sent to the core or saved, so a reload of the shell or a restart returns every page to Fit.
+The shell draws a frame for the page in its area, at the device's width centered at the top when that is narrower than the area, and at the area's width when it is wider; the frame is the slot it registers, so the placement, the still and the page share one rectangle.
+The placement carries `device: { width, mobile }` beside that rectangle (`BrowserPlacement.device`), and the host lays the page out with `webContents.enableDeviceEmulation` (`deviceEmulation` in `browserSync.ts`): a viewport of the device's width at the scale that fits it into the rectangle, as tall as the rectangle at that scale, with a mobile screen for mobile and tablet so the page's meta viewport applies, and a desktop screen for desktop; the user agent is not changed.
+Chromium lays a desktop screen out at the page's zoom and a mobile one at the device's own width, so the desktop viewport is the device's width times the zoom, and `window.innerWidth` is the device's width at any zoom.
+A new document starts without the emulation, so the host applies it again after every committed navigation, and again whenever the page's bounds or zoom change; Fit turns it off.
+While a page has a device size, its zoom does not move: the text-size commands and ⌘+ on it are taken and do nothing, neither the page nor the shell's text, and the shell hides its zoom badge.
+An agent that drives the page's viewport through CDP `Emulation` overrides it until the display's size, bounds or document next change.
+Pages of a connected device and of a node's window are placed by the same sync, so a device size applies to them the same way.
+
+The idle still is taken and drawn at the page's frame, so a page at a device size freezes and comes back at the same centered or scaled rectangle.
+
 A trackpad pinch magnifies the page up to 3x without reflowing it, as in Chrome.
 Electron turns pinch off by default, and the limit lives in the page's renderer, so the host sets it again on every committed navigation, including one that moves the page to a new renderer.
 
@@ -471,7 +493,7 @@ When every side that fits meets a page it keeps its own side and is drawn under 
 
 ## States
 
-The toolbar holds Back, Forward, Reload (Stop while the page loads) and the address, shown without a web scheme until it is focused, so a narrow area still shows the host.
+The toolbar holds Back, Forward, Reload (Stop while the page loads), the address, shown without a web scheme until it is focused, so a narrow area still shows the host, with the zoom badge at its right end while the page is not at 100%, the device size button and Comment.
 A page that cannot load says so in its slot with the address and Chromium's reason, and Reload loads its address again.
 A page whose renderer stopped says the same with the reason.
 In a plain browser tab a browser display shows its address on the toolbar row and reads `Pages open in the hide desktop app.` below it, and a web address gets Open in browser, which opens it in a new tab.
@@ -491,7 +513,8 @@ The test window never activates the app or takes the keyboard, because the e2e f
 The zoom test needs the key window: it is tagged `@needs-focus` and brings its window to the front itself.
 Keep screenshots and logs under local-only `agents/runs/`.
 `desktop/e2e/local-page-rules.spec.ts` opens a local page from an isolated pane on the fused Electron and checks that its folder's image and script load, that reads of files and requests to a loopback server and this machine's own network address fail, that an image drawn from its own folder cannot be read back, and that each refusal is logged once.
-`desktop/src/main/browserSync.test.ts` tests the request decision and the address ranges.
+`desktop/src/main/browserSync.test.ts` tests the request decision and the address ranges, the device size field and zoom commands a sync may carry, and the emulation a device size asks for at a zoom.
+`desktop/e2e/browser.spec.ts`'s `page width` tests open a page into a 520px lane and see it widen to 900px, a width the operator narrows stay through a file tab and back, the widening stop where Agent Views keeps 480px over the agents and docked, and an expanded lane stay; its `page zoom` test zooms a focused page with ⌘=, steps it in the popover with the keyboard left in the shell, sees another page of the host show the zoom and the badge go at 100%, and sees ⌘= take nothing at a device size; its `device size` test reads the page's `window.innerWidth` at 390, 768 and 1280 with the host at 110%, the scaled label in a narrow lane, the size kept through a navigation, the user agent unchanged and Fit back at the zoom.
 `desktop/e2e/view-comment-file.spec.ts` turns Comment on for a local HTML page, picks an element and drags an area, Sends both with their screenshots, sees an agent's page command on that page still answer `display_unsupported`, and measures what the comment world reads against the page's own.
 `desktop/src/main/browserCdp.test.ts` proves the comment capability's allowlist (every method outside it refused before the page, an evaluation in the page's own world refused, only the four events passed, no discovery), that a capability without the purpose never sees a local file page, and that the purpose is accepted only as `comment` for one display; `hided/src/browser_control.rs` proves that only the comment path names a purpose to the gateway.
 `desktop/e2e/browser-cdp.spec.ts` exercises the scoped native gateway against its own candidate, including pre-attachment native file-request cancellation and persistent download cancellation after client disconnect.

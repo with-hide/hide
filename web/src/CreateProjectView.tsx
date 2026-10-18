@@ -1,6 +1,7 @@
 // Add a project's Create new project: a name and the folder it goes in, and
 // one `create_workspace` with `new_folder` that makes the folder, starts a Git
-// repository in it and registers it (this Mac only). hided answers a
+// repository in it and registers it (on the core's machine only, whose hided
+// makes it, so `node` here is the core's machine). hided answers a
 // `project_target` probe as the operator types, on the same `$HOME` line the
 // create is checked on, so an existing folder, a parent outside home or a
 // name that is not one folder is said here before anything is sent.
@@ -18,7 +19,8 @@ import { localDeviceId, type WorkspaceRegistration } from "./snapshot";
 import { useShellStore } from "./store";
 import { useInterfaceTranslation } from "./i18n/client";
 
-export function CreateProjectView({ actions, registrations, onBack }: { actions: Actions; registrations: readonly WorkspaceRegistration[]; onBack: () => void }) {
+/** `pickParent`: the native folder picker shows the core's folders, which it does only in a window on the core's machine. */
+export function CreateProjectView({ actions, registrations, pickParent, onBack }: { actions: Actions; registrations: readonly WorkspaceRegistration[]; pickParent: boolean; onBack: () => void }) {
   const { t } = useInterfaceTranslation();
   const [parent, setParent] = useState(() => defaultProjectParent(registrations, localDeviceId(useShellStore.getState().rest)));
   const [typed, setTyped] = useState("");
@@ -90,25 +92,23 @@ export function CreateProjectView({ actions, registrations, onBack }: { actions:
             onChange={(event) => setTyped(event.target.value)}
           />
         </label>
-        <button
-          type="button"
-          disabled={pending}
-          onClick={() => void choose()}
-          aria-label={t("addProject.create.locationAria", { parent: shownParent })}
-          data-create-project-location={target?.parent_path ?? parent}
-          className="flex w-full items-center gap-md rounded-md border border-border bg-card px-md py-sm text-left outline-none transition-colors hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-(--opacity-disabled)"
-        >
-          <span aria-hidden="true" className="flex size-(--size-control) shrink-0 items-center justify-center rounded-sm bg-secondary text-foreground [&_svg]:size-(--size-icon)">
-            <GitBranchIcon />
-          </span>
-          <span className="flex min-w-0 flex-1 flex-col">
-            <span className="truncate text-subhead font-medium text-foreground">{t("addProject.create.location", { parent: shownParent })}</span>
-            <span className="break-all font-mono text-caption text-muted-foreground" data-create-project-path={shownPath ?? ""}>
-              {shownPath ?? " "}
-            </span>
-          </span>
-          <FolderOpenIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
-        </button>
+        {pickParent ? (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => void choose()}
+            aria-label={t("addProject.create.locationAria", { parent: shownParent })}
+            data-create-project-location={target?.parent_path ?? parent}
+            className="flex w-full items-center gap-md rounded-md border border-border bg-card px-md py-sm text-left outline-none transition-colors hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-(--opacity-disabled)"
+          >
+            <ProjectLocation parent={shownParent} path={shownPath} />
+            <FolderOpenIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
+          </button>
+        ) : (
+          <div className="flex w-full items-center gap-md rounded-md border border-border bg-card px-md py-sm" data-create-project-location={target?.parent_path ?? parent}>
+            <ProjectLocation parent={shownParent} path={shownPath} />
+          </div>
+        )}
         {problem ? (
           <Note tone="warn" data-create-project-problem={registered ? "already_registered" : (target?.reason ?? "name")}>
             {problem}
@@ -122,5 +122,23 @@ export function CreateProjectView({ actions, registrations, onBack }: { actions:
         <RegistrationStatus registration={registration} />
       </DialogBody>
     </form>
+  );
+}
+
+/** Where the new project goes: the folder it is made in and its full path, which follows the name. */
+function ProjectLocation({ parent, path }: { parent: string; path: string | null }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <>
+      <span aria-hidden="true" className="flex size-(--size-control) shrink-0 items-center justify-center rounded-sm bg-secondary text-foreground [&_svg]:size-(--size-icon)">
+        <GitBranchIcon />
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-subhead font-medium text-foreground">{t("addProject.create.location", { parent })}</span>
+        <span className="break-all font-mono text-caption text-muted-foreground" data-create-project-path={path ?? ""}>
+          {path ?? " "}
+        </span>
+      </span>
+    </>
   );
 }

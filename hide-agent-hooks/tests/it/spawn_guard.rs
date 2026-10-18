@@ -125,8 +125,12 @@ impl Machine {
     }
 
     fn question(&self, tool: &str) -> String {
+        self.question_in("s1", tool)
+    }
+
+    fn question_in(&self, session: &str, tool: &str) -> String {
         serde_json::json!({
-            "session_id":"s1", "tool_name":tool,
+            "session_id":session, "tool_name":tool,
             "tool_input":{"questions":[{"question":"private-question-text"}]},
         })
         .to_string()
@@ -236,6 +240,27 @@ fn current_factory_worker_questions_are_redirected_through_one_authenticated_que
     }
 }
 
+/// A session named by its file path passes 256 bytes in a deep checkout; the
+/// guard asks about any session a letter pull takes, up to its bound.
+#[test]
+fn a_worker_question_from_a_session_path_past_256_bytes_is_redirected() {
+    for bytes in [300, hide_agent_hooks::delivery::SESSION_LIMIT] {
+        let session = format!("/{}.jsonl", "s".repeat(bytes - 7));
+        let machine = Machine::new("worker");
+        let payload = machine.question_in(&session, "AskUserQuestion");
+        let run = machine.run("claude-code", &payload, Some(PANE), &[]);
+        assert!(run.status_ok, "{bytes}");
+        assert!(machine.reason(&run).contains("hide factory ask"), "{bytes}");
+        assert_eq!(
+            machine.calls(),
+            [format!(
+                "workspace factory-question-guard --session {session} --runtime claude-code"
+            )],
+            "{bytes}"
+        );
+    }
+}
+
 #[test]
 fn nonworker_and_unproven_question_answers_let_the_native_tool_run() {
     for mode in ["nonworker", "incomplete", "refused", "down", "oversized"] {
@@ -301,8 +326,9 @@ fn questions_without_native_identity_or_from_another_runtime_never_query() {
         ),
         (
             "claude-code",
-            serde_json::json!({"tool_name":"ExitPlanMode","session_id":"x".repeat(257)})
-                .to_string(),
+            serde_json::json!({"tool_name":"ExitPlanMode",
+                "session_id":"x".repeat(hide_agent_hooks::delivery::SESSION_LIMIT + 1)})
+            .to_string(),
         ),
     ] {
         let run = machine.run(runtime, &payload, Some(PANE), &[]);
@@ -497,6 +523,7 @@ fn a_checkout_with_a_detached_head_leaves_the_branch_for_the_agent() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)] // env_clear: the hook sees only the launch metadata the test names
 fn a_failed_owner_handshake_never_ends_the_guard_with_a_refusal_code() {
     // Exit 2 from a pre-tool hook blocks the call; the guard's own bookkeeping
     // failing must not do that.

@@ -219,6 +219,12 @@ pub(crate) enum Effect {
         names: crate::coordination::naming::Names,
     },
     HumanClaim,
+    /// Settles a registration that waited for its agent's session, as the
+    /// lineage writer found it (`coordination::identity_wait`).
+    IdentityWait {
+        id: String,
+        settle: crate::coordination::identity_wait::Settle,
+    },
     Agents {
         authority: Authority,
         actor: Actor,
@@ -580,6 +586,10 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
         Effect::SpawnNames { work, names } => {
             crate::coordination::naming::apply(ledger, work, names)?;
             return Ok((json!({"saved":true}), false));
+        }
+        Effect::IdentityWait { id, settle } => {
+            return crate::coordination::identity_wait::apply(ledger, id, settle, now)
+                .map(|value| (value, true));
         }
         Effect::HumanClaim => {
             let notices = super::human::claim(ledger, now);

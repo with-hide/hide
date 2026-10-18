@@ -3,6 +3,7 @@
 
 mod executor;
 pub(crate) mod hook_tokens;
+pub(crate) mod identity_wait;
 pub(crate) mod lineage;
 pub(crate) mod naming;
 pub(crate) mod started;
@@ -75,7 +76,15 @@ pub enum Command {
         repo: String,
         branch: String,
         path: Option<String>,
+        /// The agent's own arguments for this start only.
         args: Vec<String>,
+        /// The model and effort the child starts with, which every restart
+        /// Hide makes of it (a wake, a fork, a reopen) starts it with again.
+        #[serde(
+            default,
+            skip_serializing_if = "hide_agent_adapter::LaunchChoice::is_default"
+        )]
+        launch: hide_agent_adapter::LaunchChoice,
         /// What Hide asked the child to do, for the screen to name it. Only
         /// Hide's own identity may give one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -306,6 +315,13 @@ pub struct SpawnRecord {
     pub branch: String,
     pub requested_path: Option<String>,
     pub args: Vec<String>,
+    /// Part of the intent like `args`; a record written before it existed
+    /// has the CLI's defaults.
+    #[serde(
+        default,
+        skip_serializing_if = "hide_agent_adapter::LaunchChoice::is_default"
+    )]
+    pub launch: hide_agent_adapter::LaunchChoice,
     pub path: Option<String>,
     pub pane: Option<String>,
     /// The Herdr terminal `pane` ran when the spawn recorded it. A pane id
@@ -370,6 +386,11 @@ pub(crate) enum Mutation {
     Complete {
         id: String,
     },
+    /// The agent Herdr took a start of has not shown its session yet: the
+    /// registration waits for it (`identity_wait`).
+    AwaitIdentity {
+        wait: identity_wait::IdentityWait,
+    },
 }
 
 impl AgentRecord {
@@ -427,13 +448,28 @@ pub(crate) fn named(ledger: &Ledger, actor: &Actor) -> Actor {
 }
 
 pub fn resolve_actor<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a Actor> {
-    let mut found = ledger.agents.iter().filter(|record| {
-        !record.ended
-            && (record.id == key
-                || record.name.as_deref() == Some(key)
-                || record.actor.pane_id == key
-                || record.pane == key)
-    });
+    resolve_by(ledger, |record| {
+        record.id == key
+            || record.name.as_deref() == Some(key)
+            || record.actor.pane_id == key
+            || record.pane == key
+    })
+}
+
+/// The live registration whose registration id or name is `key`, never one
+/// that only sits in a pane called `key`: a pane id is per machine, so a
+/// caller that names a pane resolves it against its own machine's panes.
+pub(crate) fn resolve_registered<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a Actor> {
+    resolve_by(ledger, |record| {
+        record.id == key || record.name.as_deref() == Some(key)
+    })
+}
+
+fn resolve_by(ledger: &Ledger, is: impl Fn(&AgentRecord) -> bool) -> Option<&Actor> {
+    let mut found = ledger
+        .agents
+        .iter()
+        .filter(|record| !record.ended && is(record));
     let first = found.next()?;
     found.next().is_none().then_some(&first.actor)
 }
@@ -530,6 +566,27 @@ fn key(value: &str) -> bool {
     crate::delivery::valid_key(value)
 }
 
+/// Whether a registration can keep `value` as its pane's native session, as
+/// Herdr reports it: an id, or for Pi and omp the session file's path, which a
+/// deep checkout makes longer than a key. Herdr keeps a path of up to
+/// `SESSION_LIMIT` bytes, and so does the ledger. The one rule for a
+/// registration's session, asked when the record is made and again when the
+/// ledger is saved or read.
+pub(crate) fn kept_session(value: &str) -> Result<(), &'static str> {
+    if value.len() > crate::delivery::SESSION_LIMIT {
+        return Err(SESSION_TOO_LONG);
+    }
+    if value.is_empty() || value.chars().any(char::is_control) {
+        return Err("invalid_registration");
+    }
+    Ok(())
+}
+
+/// The refusal of a registration whose pane reports a session past what the
+/// ledger keeps, given when the record is made rather than when the whole
+/// ledger fails to save.
+pub(crate) const SESSION_TOO_LONG: &str = "session_too_long";
+
 pub(crate) fn validate_records(ledger: &Ledger) -> Result<(), String> {
     if ledger.agents.len() > AGENT_LIMIT || ledger.spawns.len() > SPAWN_LIMIT {
         return Err("capacity".into());
@@ -544,12 +601,12 @@ pub(crate) fn validate_records(ledger: &Ledger) -> Result<(), String> {
                 &record.machine,
                 &record.host_scope,
                 &record.native_machine,
-                &record.session,
                 &record.instance,
                 &record.pane,
             ]
             .into_iter()
             .all(|s| key(s))
+            || kept_session(&record.session).is_err()
             || !record.actor.valid()
             || record.actor.device_id != record.machine
             || record.actor.session != crate::wire::session_digest(&record.session)
@@ -610,6 +667,27 @@ pub(crate) fn validate_records(ledger: &Ledger) -> Result<(), String> {
                 record.mode != SpawnMode::Handoff
                     || task.target.as_deref().is_some_and(|target| !key(target))
             })
+        {
+            return Err("ledger_unavailable".into());
+        }
+    }
+    if ledger.identity_waits.len() > identity_wait::LIMIT {
+        return Err("capacity".into());
+    }
+    for wait in &ledger.identity_waits {
+        if !ids.insert(wait.id.as_str())
+            || !wait.id.starts_with("wait-")
+            || ![&wait.id, &wait.machine, &wait.pane, &wait.name, &wait.kind]
+                .into_iter()
+                .all(|s| key(s))
+            || !match &wait.owed {
+                identity_wait::Owed::Spawn { spawn } => {
+                    ledger.spawns.iter().any(|record| &record.id == spawn)
+                }
+                identity_wait::Owed::Fork { origin } => {
+                    ledger.agents.iter().any(|record| &record.id == origin)
+                }
+            }
         {
             return Err("ledger_unavailable".into());
         }
@@ -700,6 +778,7 @@ pub(crate) fn apply(
                 branch,
                 path,
                 args,
+                launch,
                 task,
                 ..
             } = command
@@ -753,6 +832,7 @@ pub(crate) fn apply(
                     || record.requested_path != *path
                     || record.mode != mode
                     || record.args != *args
+                    || record.launch != *launch
                     || !task_agrees
                 {
                     return Err("intent_conflict".into());
@@ -779,6 +859,7 @@ pub(crate) fn apply(
                 branch: branch.clone(),
                 requested_path: path.clone(),
                 args: args.clone(),
+                launch: launch.clone(),
                 path: None,
                 pane: None,
                 terminal: None,
@@ -1002,6 +1083,7 @@ pub(crate) fn apply(
             spawn.auto_watch_id = auto_watch_id;
             Ok(json!(spawn))
         }
+        Mutation::AwaitIdentity { wait } => identity_wait::reserve(ledger, caller, wait),
     }
 }
 
@@ -1414,6 +1496,7 @@ mod tests {
             branch: "topic".into(),
             path: None,
             args: vec!["--model".into(), "fixture model".into()],
+            launch: Default::default(),
             task: None,
         }
     }
@@ -1974,6 +2057,58 @@ mod tests {
                 assert_eq!(replay["kind"], requested);
                 assert_eq!(ledger.spawns.len(), 1);
             }
+        }
+    }
+
+    /// Pi and omp name a session by its file, in a folder named after the
+    /// checkout's path, so a child in a deep checkout reports a session far
+    /// past a key's 256 bytes; it binds and reads back like any other, up to
+    /// Herdr's own 4096-byte bound for a session path.
+    #[test]
+    fn a_child_whose_session_is_a_deep_session_file_binds_and_reads_back() {
+        let file = "2026-10-18T00-00-00-000Z_0199f0aa-1111-7222-8333-444455556666.jsonl";
+        let folder = "--fixture-home-projects-a-very-deep-checkout-path--";
+        let deep = format!("/fixture/home/.pi/agent/sessions/{folder}/{file}");
+        let longest = format!(
+            "/{}/{file}",
+            "x".repeat(crate::delivery::SESSION_LIMIT - file.len() - 2)
+        );
+        for session in [
+            deep.clone(),
+            format!("{}{deep}", "/deep".repeat(60)),
+            longest,
+        ] {
+            let (mut ledger, caller, parent, spawn, mut child) = pending_spawn();
+            ledger.spawns[0].kind = "pi".into();
+            child.session = session.clone();
+            child.actor.kind = "pi".into();
+            child.actor.session = crate::wire::session_digest(&session);
+            let bound = apply(
+                &mut ledger,
+                &caller,
+                &Mutation::BindChild {
+                    id: spawn,
+                    record: child,
+                },
+                3,
+            )
+            .unwrap_or_else(|error| panic!("{} bytes: {error}", session.len()));
+            let bytes = ledger
+                .bytes()
+                .unwrap_or_else(|error| panic!("{} bytes: {error}", session.len()));
+            let mut read: Ledger = serde_json::from_slice(&bytes).unwrap();
+            read.validate().unwrap();
+            let registered = read
+                .agents
+                .iter_mut()
+                .find(|record| Some(record.id.as_str()) == bound["child"].as_str())
+                .unwrap();
+            assert_eq!(registered.session, session);
+            assert_eq!(registered.parent.as_ref(), Some(&parent));
+            let past = format!("{session}{}", "x".repeat(crate::delivery::SESSION_LIMIT));
+            registered.session = past[..=crate::delivery::SESSION_LIMIT].to_owned();
+            registered.actor.session = crate::wire::session_digest(&registered.session);
+            assert!(read.bytes().is_err());
         }
     }
 

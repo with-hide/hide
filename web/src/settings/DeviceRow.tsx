@@ -189,7 +189,7 @@ function DeviceAttention({ device, actions, onAct, onAllow }: { device: Device; 
   // a device that is not connected already says so on its row.
   const helper = remote && device.state === "ready" && host && host.consent !== "this_machine" && host.state !== "ready" ? hostLine(host, t) : null;
   const kit = device.kit;
-  const kitShown = kit !== undefined && (Boolean(kit.unavailable) || kit.busy || kitProblems(kit).length > 0);
+  const kitShown = kit !== undefined && (Boolean(kit.unavailable) || Boolean(kit.refused) || kit.busy || kitProblems(kit).length > 0);
   const needsAllow = host !== undefined && (host.consent !== "granted" || host.state === "identity_changed");
   const rows = [
     problem ? (

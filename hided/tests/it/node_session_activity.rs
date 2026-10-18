@@ -33,13 +33,35 @@ fn command(executable: &Path, home: &Path) -> Command {
         .env("USERPROFILE", home)
         .env("PATH", "")
         // The helper asks the login shell for the account's PATH and logs a
-        // missing `SHELL`; a fixed one keeps the test from depending on the
-        // environment that runs it (a cleared one has none).
-        .env("SHELL", "/bin/sh")
+        // missing `SHELL` or an ask that failed; a stand-in that answers
+        // keeps the test off the shell and startup files of the machine
+        // that runs it. Ubuntu's `/etc/profile` sets no PATH, so `/bin/sh`
+        // there answers an empty one, which is logged as unread.
+        .env("SHELL", login_shell(home))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     command
+}
+
+/// A login shell in `home` that answers the helper's ask with the system's
+/// folders, as a login profile sets them. Written once, before any helper
+/// starts it.
+fn login_shell(home: &Path) -> PathBuf {
+    let shell = home.join("login-shell");
+    if !shell.exists() {
+        fs::write(
+            &shell,
+            "#!/bin/sh\n[ \"$1\" = -ilc ] || exit 64\nPATH=/usr/bin:/bin\nexport PATH\neval \"$2\"\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&shell, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    shell
 }
 
 fn transcript(home: &Path, agent: &str) -> PathBuf {
@@ -94,7 +116,11 @@ fn serve(
         .unwrap();
     let output = child.capture_until(deadline, OUTPUT_LIMIT).unwrap();
     assert!(output.status.success());
-    assert!(output.stderr.is_empty());
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(
         child.try_wait().unwrap().is_some(),
         "normal EOF must reap the helper"

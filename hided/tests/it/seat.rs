@@ -18,6 +18,7 @@ fn env(dir: &std::path::Path) -> Env {
         home: dir.to_path_buf(),
         herdr_socket_path: None,
         herdr_bin_path: None,
+        login_shell: None,
         state_dir: dir.to_path_buf(),
         legacy_state_dir: None,
         account_state_folder: false,

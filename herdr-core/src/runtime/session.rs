@@ -48,6 +48,14 @@ impl CreatedTabCheckout {
     }
 }
 
+/// The checkout a `reveal_path` names (`Runtime::reveal_checkout`).
+struct RevealCheckout {
+    path: String,
+    device: String,
+    /// The core brings it forward; a device session's checkout it does not.
+    comes_forward: bool,
+}
+
 /// How a path is read before it is compared with a checkout's: this machine's
 /// own paths resolve links and trailing separators on its file system, a
 /// device's are its own strings, which this machine's files cannot speak for.
@@ -765,7 +773,7 @@ impl Runtime {
         self.snapshot.navigator.devices = workspace::devices(
             &self.node,
             self.machine_name.as_deref(),
-            &self.snapshot.ui_state.device_registrations,
+            &self.snapshot.ui_state,
         );
         self.refresh_device_snapshots();
         // An agent belongs to the device whose project holds its pane. The
@@ -1991,6 +1999,9 @@ impl Runtime {
                 ),
             );
         }
+        // The machine answers again: its helper link does not wait out a
+        // retry that doubled while it was away.
+        let reachable_again = session_ok && !was_connected;
         // The row's line holds only while the server it is about still
         // answers with the release it was left on: a server restarted on
         // another release ends it without waiting for the next kit pass (B8).
@@ -2054,6 +2065,15 @@ impl Runtime {
                 if status.state != error.state()
                     || status.message.as_deref() != Some(error.message())
                 {
+                    // The operator sees the plain row; the words the
+                    // connection failed with go to the log.
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "remote_session_sync",
+                        "kind": "remote.session_unavailable",
+                        "target": target_id,
+                        "state": error.state(),
+                        "message": error.message(),
+                    }));
                     status.state = error.state().to_owned();
                     status.message = Some(error.message().to_owned());
                     changed = true;
@@ -2079,6 +2099,9 @@ impl Runtime {
             device.agent_count = agent_count;
             changed = true;
         }
+        if reachable_again {
+            changed |= self.device_reachable_again(target_id);
+        }
         changed |= self.refresh_device_snapshots();
         if observed_session.is_some() {
             self.reconcile_node_agent_topology(target_id);
@@ -2097,6 +2120,7 @@ impl Runtime {
         }
         changed |= self.refresh_agent_lineage();
         changed |= self.advance_tree_closes();
+        changed |= self.advance_session_archive();
         if changed {
             self.sync_async_operations();
         }
@@ -2966,6 +2990,7 @@ impl Runtime {
                 ReadRecordScope::Local,
                 live_pane_ids.as_ref(),
             );
+            self.apply_pane_launches(&agents, ReadRecordScope::Local, live_pane_ids.as_ref());
             // A pull request's checks are a wait the lineage decides and an
             // end the read axis compares, so they are laid before both.
             self.lay_checks(&mut agents);
@@ -2989,6 +3014,7 @@ impl Runtime {
         }
         changed |= self.refresh_agent_lineage();
         changed |= self.advance_tree_closes();
+        changed |= self.advance_session_archive();
         for (tab_id, reason) in &rejected_layouts {
             crate::diagnostic!(serde_json::json!({
                 "component": "session",
@@ -3822,6 +3848,7 @@ impl Runtime {
             agent_phase: None,
             agent_message: None,
             request_id: None,
+            stays_behind: false,
         });
         Ok(id)
     }
@@ -3839,9 +3866,12 @@ impl Runtime {
         let operation_kind = operation.kind.clone();
         let repository_root = operation.repository_root.clone();
         let device = operation.device_id.clone();
+        let stays_behind = operation.stays_behind;
         // A device's Herdr focuses what it created, and the device's screen
-        // follows its host; this machine's focus does not move for it.
-        let should_focus = operation_kind != "branch_migrate" && device.is_none();
+        // follows its host; this machine's focus does not move for it. A
+        // task that stays behind (a phone start, or an archived descendant
+        // resumed after its root) takes the screen nowhere.
+        let should_focus = operation_kind != "branch_migrate" && device.is_none() && !stays_behind;
         match result {
             Ok(outcome) => {
                 let live::WorktreeTaskOutcome {
@@ -4589,6 +4619,7 @@ impl Runtime {
         id: u64,
         prompt: Option<String>,
         args: Vec<String>,
+        launch: hide_agent_adapter::LaunchChoice,
     ) {
         self.task_agent_launch = Some(crate::runtime::TaskAgentLaunch {
             task: id,
@@ -4596,6 +4627,7 @@ impl Runtime {
                 .map(|prompt| prompt.trim().to_owned())
                 .filter(|prompt| !prompt.is_empty()),
             args,
+            launch,
             resume_reference: None,
         });
     }
@@ -4733,13 +4765,33 @@ impl Runtime {
         }
         // A definite failure keeps the prompt for Retry; any other answer
         // settles it, since the agent may be running.
-        if !matches!(outcome, live::TaskAgentOutcome::Failed(_))
+        let launch = if !matches!(outcome, live::TaskAgentOutcome::Failed(_))
             && self
                 .task_agent_launch
                 .as_ref()
                 .is_some_and(|launch| launch.task == id)
         {
-            self.task_agent_launch = None;
+            self.task_agent_launch.take().map(|launch| launch.launch)
+        } else {
+            None
+        };
+        // The pane keeps the choice its agent started with, for the restarts
+        // Hide makes of it, under the name the start gave the agent: the task
+        // worker names it from Herdr's own id for the pane.
+        if let (live::TaskAgentOutcome::Started, Some(launch)) = (&outcome, &launch)
+            && let Some((pane_id, kind, name)) =
+                self.snapshot.task_operation.as_ref().and_then(|operation| {
+                    let pane_id = operation.pane_id.clone()?;
+                    let kind = operation.agent_kind.clone()?;
+                    let herdr_pane_id = match operation.device_id.as_deref() {
+                        Some(device) => super::remote_pane_source_id(device, &pane_id)?,
+                        None => pane_id.as_str(),
+                    };
+                    let name = crate::fork::task_agent_name(&kind, herdr_pane_id);
+                    Some((pane_id, kind, name))
+                })
+        {
+            self.record_pane_launch(&pane_id, &kind, &name, launch, None);
         }
         let Some(operation) = self.snapshot.task_operation.as_mut() else {
             return false;
@@ -5392,7 +5444,7 @@ impl Runtime {
         self.snapshot.navigator.devices = workspace::devices(
             &self.node,
             self.machine_name.as_deref(),
-            &self.snapshot.ui_state.device_registrations,
+            &self.snapshot.ui_state,
         );
         self.refresh_device_snapshots();
         self.resync_navigator_focus();
@@ -5425,19 +5477,29 @@ impl Runtime {
     /// checkout switch, then the panel appear, then the tree move, and a
     /// refusal partway would leave the screen in a state nobody asked for.
     pub(super) fn reveal_path(&mut self, payload: RevealPathPayload) -> bool {
-        if self
-            .reveal_checkout_path(&payload.workspace_id, &payload.checkout_id)
-            .is_none()
-        {
-            self.set_error(
-                "reveal.unknown_checkout",
-                format!(
-                    "Checkout {} is not registered, so {} was not revealed",
-                    payload.checkout_id, payload.path
-                ),
-                false,
-            );
-            return true;
+        match self.reveal_checkout(&payload.workspace_id, &payload.checkout_id) {
+            None => {
+                self.set_error(
+                    "reveal.unknown_checkout",
+                    format!(
+                        "Checkout {} is not registered, so {} was not revealed",
+                        payload.checkout_id, payload.path
+                    ),
+                    false,
+                );
+                return true;
+            }
+            Some(RevealCheckout {
+                comes_forward: false,
+                device,
+                ..
+            }) if self.front_checkout()
+                != Some((payload.workspace_id.as_str(), payload.checkout_id.as_str())) =>
+            {
+                self.reveal_when_in_front(device, payload);
+                return true;
+            }
+            Some(_) => {}
         }
         if payload.is_directory {
             self.settle_reveal_path(&payload, None);
@@ -5494,19 +5556,66 @@ impl Runtime {
         true
     }
 
-    fn reveal_checkout_path(&self, workspace_id: &str, checkout_id: &str) -> Option<String> {
-        self.snapshot
+    /// The checkout a reveal names, wherever the catalog carries it: one the
+    /// navigator lists comes forward with the reveal (`focus_checkout`); one
+    /// of a device's Herdr session, a node's own checkout among them, is that
+    /// session's to bring forward, so the reveal moves no focus of the core's
+    /// and one behind waits for that Herdr (`reveal_when_in_front`).
+    fn reveal_checkout(&self, workspace_id: &str, checkout_id: &str) -> Option<RevealCheckout> {
+        let (workspace, checkout) = self.catalog_checkout(workspace_id, checkout_id)?;
+        let comes_forward = self
+            .snapshot
             .navigator
             .workspaces
             .iter()
-            .find(|workspace| workspace.id == workspace_id)
-            .and_then(|workspace| {
-                workspace
-                    .checkouts
-                    .iter()
-                    .find(|checkout| checkout.id == checkout_id)
-                    .map(|checkout| checkout.path.clone())
-            })
+            .any(|workspace| workspace.id == workspace_id);
+        Some(RevealCheckout {
+            path: checkout.path.clone(),
+            device: workspace.device_id.clone(),
+            comes_forward,
+        })
+    }
+
+    /// A reveal into a device session's checkout that is not in front there,
+    /// as a path clicked on the Overview names: the device's Herdr is asked
+    /// to bring the checkout forward, with the device, and the reveal runs
+    /// once the sync sees it land (`attach_reveal`), so the click ends where
+    /// one on this machine's checkout does. It dies with the request
+    /// (`PendingChoice`); without View areas nothing waits, and the reveal is
+    /// refused before anything moves.
+    fn reveal_when_in_front(&mut self, device: String, payload: RevealPathPayload) {
+        if !self.separate_view_areas() {
+            self.set_error(
+                "reveal.not_in_front",
+                format!(
+                    "Checkout {} is not in front on its device, so {} was not revealed",
+                    payload.checkout_id, payload.path
+                ),
+                false,
+            );
+            return;
+        }
+        let request_id = format!("reveal:{}:{}", unix_milliseconds(), payload.checkout_id);
+        let error_before = self.snapshot.status.last_error.clone();
+        self.request_remote_control(super::RemoteControlPayload {
+            target_id: device.clone(),
+            request_id: request_id.clone(),
+            report_pane_focus_outcome: false,
+            focus_device: true,
+            request: super::RemoteControlRequest::FocusWorkspace {
+                workspace_id: payload.workspace_id.clone(),
+                checkout_id: Some(payload.checkout_id.clone()),
+            },
+        });
+        let checkout = payload.checkout_id.clone();
+        if !self.attach_reveal(&device, &request_id, payload)
+            && self.snapshot.status.last_error == error_before
+        {
+            self.push_diagnostic(
+                "reveal.not_waiting",
+                format!("The reveal into checkout {checkout} on {device} was not kept waiting"),
+            );
+        }
     }
 
     /// A revealed file's read landed: the reveal settles now.
@@ -5532,8 +5641,11 @@ impl Runtime {
         payload: &RevealPathPayload,
         prepared: Option<super::editor::PreparedFileTab>,
     ) {
-        let Some(checkout_path) =
-            self.reveal_checkout_path(&payload.workspace_id, &payload.checkout_id)
+        let Some(RevealCheckout {
+            path: checkout_path,
+            comes_forward,
+            ..
+        }) = self.reveal_checkout(&payload.workspace_id, &payload.checkout_id)
         else {
             self.set_error(
                 "reveal.unknown_checkout",
@@ -5552,8 +5664,9 @@ impl Runtime {
                 .as_ref()
                 == Some(key)
         });
-        if self.snapshot.navigator.focused_checkout_id.as_deref()
-            != Some(payload.checkout_id.as_str())
+        if comes_forward
+            && self.snapshot.navigator.focused_checkout_id.as_deref()
+                != Some(payload.checkout_id.as_str())
         {
             self.focus_checkout(&payload.workspace_id, &payload.checkout_id);
         }

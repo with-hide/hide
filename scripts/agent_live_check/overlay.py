@@ -11,11 +11,14 @@ from .credential_snapshot import snapshot
 from .protection import MAX_BACKUP_BYTES, ProtectionError, beneath, private_directory, stamp, write_private
 
 
-def prepare(recipe: dict, probe: Path, operator: Path, *, owner=None, env=None) -> dict:
+def prepare(recipe: dict, probe: Path, operator: Path, *, owner=None, env=None, root: Path | None = None) -> dict:
     data = recipe.get("overlay")
     if not data:
         return {"env": {}, "copies": [], "settings": [], "session_root": None}
-    root = probe / ("config-" + recipe["id"])
+    # The journey copies into the candidate's own config root under the probe.
+    root = root or probe / ("config-" + recipe["id"])
+    if not beneath(root, probe):
+        raise ProtectionError("credential_copy_root_outside_probe")
     private_directory(root)
     total = 0
     copied = []

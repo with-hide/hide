@@ -146,7 +146,11 @@ def install_hooks(runtime, recipe, integration, overlay, helper, cwd):
         return [path]
     fixtures = runtime.checkout / "hide-agent-hooks/tests/fixtures/hook-bytes"
     if kind == "opencode":
-        source, target = fixtures / "opencode-plugin.js", Path(overlay["env"]["XDG_CONFIG_HOME"]) / "opencode/plugins/hide.js"
+        plugins = Path(overlay["env"]["XDG_CONFIG_HOME"]) / "opencode/plugins"
+        # The 1.x file, and the folder OpenCode 2 loads: its server half and its terminal half.
+        files = [(fixtures / "opencode-plugin.js", plugins / "hide.js"),
+                 (fixtures / "opencode-server.js", plugins / "hide-opencode/server.js"),
+                 (fixtures / "opencode-tui.js", plugins / "hide-opencode/tui.js")]
         # The job's shell calls run without a menu (OpenCode's permission config).
         project = cwd / "opencode.json"
         document = json.loads(project.read_text()) if project.is_file() else {}
@@ -156,13 +160,15 @@ def install_hooks(runtime, recipe, integration, overlay, helper, cwd):
         document["model"] = recipe["model"]
         replace_private(project, (json.dumps(document, indent=2) + "\n").encode())
     else:
-        source, target = fixtures / (kind + "-extension.ts"), Path(overlay["env"]["PI_CODING_AGENT_DIR"]) / "extensions/hide.ts"
-    text = source.read_text().replace(json.dumps(PLACEHOLDER), json.dumps(str(helper)))
-    if str(helper) not in text:
-        raise ProtectionError("fixture_helper_placeholder_missing")
-    private_directory(target.parent)
-    replace_private(target, text.encode())
-    return [target]
+        files = [(fixtures / (kind + "-extension.ts"), Path(overlay["env"]["PI_CODING_AGENT_DIR"]) / "extensions/hide.ts")]
+    for source, target in files:
+        text = source.read_text().replace(json.dumps(PLACEHOLDER), json.dumps(str(helper)))
+        # OpenCode 2's terminal half takes the helper from its server half.
+        if "\nconst HELPER = " in text and str(helper) not in text:
+            raise ProtectionError("fixture_helper_placeholder_missing")
+        private_directory(target.parent)
+        replace_private(target, text.encode())
+    return [target for _, target in files]
 
 
 def allow_hook_route(sandbox, runtime):

@@ -19,6 +19,7 @@ use hide_agent_hooks::guidance::{self, GuidanceAgent};
 
 #[test]
 #[ignore = "runs the real agy named by HIDE_AGY_BINARY in a throwaway home; the os contract lane installs it"]
+#[allow(clippy::disallowed_methods)] // env_clear: the real agy runs in a throwaway home with only what the test names
 fn the_real_agy_loads_hide_s_hook_block() {
     let agy = std::env::var_os("HIDE_AGY_BINARY")
         .expect("HIDE_AGY_BINARY names the agy binary this test runs");
@@ -128,10 +129,14 @@ esac
 /// before agy's own permission check. The turn runs on `HIDE_AGY_MODEL`,
 /// the model the key's free tier serves (`gemini-3.1-pro`, agy's default in
 /// API-key mode, has a quota of 0), and the refusal needs that model to make
-/// the call it is asked for. Unix only: the stand-in is a shell script.
+/// the call it is asked for. A turn the provider answered nothing because
+/// the key's requests for the day were spent leaves the refusal
+/// unmeasured: it says so in a `Not measured` warning and passes. Unix only:
+/// the stand-in is a shell script.
 #[cfg(unix)]
 #[test]
 #[ignore = "runs one real agy turn on HIDE_AGY_API_KEY in a throwaway home; the os contract lane's signed-in job runs it"]
+#[allow(clippy::disallowed_methods)] // env_clear: the real agy runs in a throwaway home with only what the test names
 fn a_signed_in_agy_turn_fires_hide_s_hooks() {
     use std::io::Write;
 
@@ -211,11 +216,11 @@ fn a_signed_in_agy_turn_fires_hide_s_hooks() {
         )
         .expect("agy ends its turn");
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     let calls = std::fs::read_to_string(root.join("hide-calls")).unwrap_or_default();
     let report = format!(
-        "exit {:?}\nhide calls {calls}\nstderr {}\nlog {}",
+        "exit {:?}\nhide calls {calls}\nstderr {stderr}\nlog {}",
         output.status.code(),
-        String::from_utf8_lossy(&output.stderr),
         std::fs::read_to_string(&log).unwrap_or_default(),
     );
     let events: Vec<serde_json::Value> = stdout
@@ -252,6 +257,28 @@ fn a_signed_in_agy_turn_fires_hide_s_hooks() {
         transcript.contains("LETTER-CI-7731"),
         "the letter is not in the conversation:\n{report}"
     );
+    // One request of the key's day per model response agy records.
+    let responses = transcript
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|step| step["type"] == "PLANNER_RESPONSE")
+        .count();
+    // The start reaches Hide only through the model's tool call. When the
+    // provider answered nothing because the key's requests for the day were
+    // spent, the refusal is not measured: said where the run's reader and the
+    // nightly report see it, and passed (docs/TESTING.md, A real agent on
+    // CI). A model that answered and then ran out reads as any other failure.
+    // The line starts on its own, since libtest may have left its own text on
+    // the current one.
+    if responses == 0
+        && let Some(quotas) = spent_quota(&stderr)
+    {
+        println!(
+            "\n::warning title=Not measured::agy_binary::a_signed_in_agy_turn_fires_hide_s_hooks%0Aprovider quota exhausted ({}): the hooks fired and the letter went in, the refused start was not reached",
+            quotas.join(", ")
+        );
+        return;
+    }
     // Refused: the start ended as agy's tool error with Hide's reason.
     let refused = events.iter().any(|event| {
         let step = &event["step_update"];
@@ -268,6 +295,78 @@ fn a_signed_in_agy_turn_fires_hide_s_hooks() {
         refused,
         "agy's start was not refused with Hide's reason:\n{stdout}\n{report}"
     );
+    // What a passing turn spent, for the budget in `agy-contract.yml`.
+    println!("agy turn: {responses} model responses");
+}
+
+/// The quotas named when agy's turn ended on the provider refusing a quota
+/// the key had and spent, by `contracts/provider-quota.json`: the
+/// `AGY_ERROR:` report agy writes to stderr carries Gemini's code and
+/// status, and each violation of its `google.rpc.QuotaFailure` is one of the
+/// spent quotas the contract names with a `quotaValue` above 0. A quota of 0
+/// (a model the key is not served), any other quota, a 503 that never
+/// recovered and every other error are failures.
+fn spent_quota(stderr: &str) -> Option<Vec<String>> {
+    let contract: serde_json::Value =
+        serde_json::from_str(include_str!("../../../contracts/provider-quota.json")).unwrap();
+    let gemini = &contract["gemini"];
+    let report: serde_json::Value = stderr
+        .lines()
+        .find_map(|line| serde_json::from_str(line.strip_prefix("AGY_ERROR: ")?).ok())?;
+    if report["error_code"] != gemini["error_code"] || report["status"] != gemini["status"] {
+        return None;
+    }
+    let spent = gemini["spent_quota_ids"].as_array().unwrap();
+    let (_, failure) = report["short_error"]
+        .as_str()?
+        .split_once("google.rpc.QuotaFailure violations:")?;
+    // agy prints the details as Go maps, whose keys are sorted, so each
+    // violation reads `quotaId:<id> quotaMetric:<metric> quotaValue:<n>]`,
+    // and the API leaves out a value of 0.
+    let mut quotas = Vec::new();
+    for violation in failure.split("quotaId:").skip(1) {
+        let mut fields = violation.split(']').next()?.split_whitespace();
+        let id = fields.next()?;
+        let value: u64 = fields
+            .find_map(|field| field.strip_prefix("quotaValue:"))?
+            .parse()
+            .ok()?;
+        if value == 0 || !spent.iter().any(|quota| quota == id) {
+            return None;
+        }
+        quotas.push(id.to_owned());
+    }
+    (!quotas.is_empty()).then_some(quotas)
+}
+
+#[test]
+fn only_a_spent_quota_leaves_a_signed_in_turn_unmeasured() {
+    let error = |report: &str| format!("error: agent executor error\n{report}\n");
+    let spent = include_str!("../fixtures/agy-errors/quota-spent.txt");
+    assert_eq!(
+        spent_quota(&error(spent)),
+        Some(vec![
+            "GenerateRequestsPerDayPerProjectPerModel-FreeTier".to_owned()
+        ])
+    );
+    // A model the key has no quota for is a wrong model, not a spent day.
+    let zero = include_str!("../fixtures/agy-errors/quota-zero.txt");
+    assert_eq!(spent_quota(&error(zero)), None);
+    // Another quota, such as the input tokens a turn sends in a minute, can
+    // be what Hide's own context spent.
+    for other in [
+        "GenerateRequestsPerMinutePerProjectPerModel-FreeTier",
+        "GenerateContentInputTokensPerModelPerMinute-FreeTier",
+    ] {
+        let other = spent.replace("GenerateRequestsPerDayPerProjectPerModel-FreeTier", other);
+        assert_eq!(spent_quota(&error(&other)), None, "{other}");
+    }
+    // The provider overloaded past agy's own retries (run 38958746826 logged
+    // this 503 before its quota answer).
+    let overloaded = r#"AGY_ERROR: {"short_error":"agent executor error: generating and executing: Error 503, Message: This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later., Status: UNAVAILABLE, Details: []","status":"UNAVAILABLE","error_code":503,"code_kind":"http","retryable":true}"#;
+    assert_eq!(spent_quota(&error(overloaded)), None);
+    // The same words outside agy's report are not its answer.
+    assert_eq!(spent_quota(&spent.replacen("AGY_ERROR: ", "", 1)), None);
 }
 
 /// Writes the `hide` block this build installs into the `.agents/hooks.json`

@@ -27,7 +27,7 @@ const remote = (id: string, over: Partial<Device> = {}): Device => ({ agent_scop
 const state = (devices: Device[]) => ({
   connection: "live" as const,
   rest: {
-    navigator: { focused_device_id: "local", devices: [{ agent_scope: emptyScope(), id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit: kit([part("cli", "installed")]) }, ...devices] },
+    navigator: { focused_device_id: "local", devices: [{ agent_scope: emptyScope(), id: "local", label: null, kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit: kit([part("cli", "installed")]) }, ...devices] },
     status: { remote: devices.map((device) => ({ target_id: device.id, state: "connected", message: null, herdr_version: "0.9.1" })) },
     ui_state: {},
   },
@@ -83,6 +83,31 @@ it("grows one line under the device for a failed part, with Reinstall, and the l
   expect(whole.q('[data-kit-problem="mini"]')).toBeNull();
   expect(whole.q('[data-kit-reinstall="mini"]')).toBeNull();
   await whole.unmount();
+});
+
+it("says a pass that stopped before changing anything once, naming the folder and what to change, and its Retry runs the pass again", async () => {
+  const refused = remote("mini", { kit: kit([], { refused: { cause: "unsafe", path: "/srv/shared", variable: null } }) });
+  const view = await mount(state([refused]));
+  const line = view.q('[data-kit-refused="mini"]')!;
+  expect(line.textContent).toBe("✕Hide stopped before changing anything. Another account can change this, or it is a link: /srv/shared. Make it a folder only you can change, then try again." + "Retry");
+  expect(view.q('[data-kit-problem="mini"]')).toBeNull();
+  await act(async () => { view.q('[data-kit-retry="mini"]')?.click(); });
+  expect(sent(view.events, "kit_reinstall")).toEqual([{ schema_version: 2, kind: "kit_reinstall", payload: { device_id: "mini" } }]);
+  await view.unmount();
+
+  const running = await mount(state([remote("mini", { kit: kit([], { busy: true, refused: { cause: "busy", path: null, variable: null } }) })]));
+  expect((running.q('[data-kit-retry="mini"]') as HTMLButtonElement).disabled).toBe(true);
+  await running.unmount();
+});
+
+it("says a refusal it cannot name as stopped, with Retry, never an empty line; too many projects is its own line", async () => {
+  const future = await mount(state([remote("mini", { kit: kit([], { refused: { cause: "a_cause_from_a_newer_build", path: null, variable: null } as never }) })]));
+  expect(future.q('[data-kit-refused="mini"]')!.textContent).toBe("✕Hide stopped before changing anything, for a reason this version of Hide can't name. Update Hide, then try again." + "Retry");
+  await future.unmount();
+
+  const projects = await mount(state([remote("mini", { kit: kit([], { refused: { cause: "projects", path: null, variable: null } }) })]));
+  expect(projects.q('[data-kit-refused="mini"]')!.textContent).toContain("More projects are registered than it can check.");
+  await projects.unmount();
 });
 
 it("says in one line when a device's Herdr stays older than Hide's, with the step its cause allows, and nothing once it moved or while it is out of reach (PRD device-herdr-update B3, B8)", async () => {
@@ -214,6 +239,18 @@ it("walks the move dialog through the supervisor's frames: failing checks with t
   await act(async () => { (dialog().querySelector("[data-core-move-undo]") as HTMLElement).click(); });
   expect(sent(events, "core_move").at(-1)?.payload).toEqual({ action: "check_back" });
   expect(dialog().getAttribute("data-core-move-direction")).toBe("back");
+  await unmount();
+});
+
+it("names the moving core's own machine when its Hide AI is not set up, and the machine taking it for that machine's sign-ins", async () => {
+  const { q, unmount } = await mount(state([remote("mini")]));
+  await openMenu(q, "mini");
+  await act(async () => { (document.querySelector('[data-device-move="mini"]') as HTMLElement).click(); });
+  const dialog = () => document.querySelector("[data-core-move-dialog]") as HTMLElement;
+  const failed = [{ check: "ai_setup", detail: "Hide AI is not set up: no agent is chosen" }, { check: "ai", detail: "codex: logged_out" }];
+  await act(async () => { useShellStore.setState({ coreMove: frame({ state: "checks_failed", checked: 12, failed }) as never }); });
+  expect(dialog().querySelector('[data-core-move-check="ai_setup"]')?.textContent).toBe("× Hide AI on This computerTurn it on and choose an agent in Settings › Hide AI");
+  expect(dialog().querySelector('[data-core-move-check="ai"]')?.textContent).toBe("× Hide AI sign-inSign in to Hide AI's agents on Mac mini");
   await unmount();
 });
 

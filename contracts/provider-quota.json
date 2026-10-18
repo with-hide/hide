@@ -1,0 +1,8 @@
+{
+  "gemini": {
+    "agents": ["antigravity"],
+    "error_code": 429,
+    "status": "RESOURCE_EXHAUSTED",
+    "spent_quota_ids": ["GenerateRequestsPerDayPerProjectPerModel-FreeTier"]
+  }
+}

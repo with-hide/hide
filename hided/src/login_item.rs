@@ -15,9 +15,13 @@ use serde_json::json;
 /// How long a Herdr server this item started may take to answer.
 const HERDR_STARTED_WITHIN: Duration = Duration::from_secs(10);
 /// The most the core's own output (`Logs/core.log`, which launchd appends
-/// the job's output to) holds before the next start sets it aside, as the
+/// the job's output to) holds before the core sets it aside, as the
 /// diagnostic log's files do.
 const CORE_LOG_LIMIT: u64 = 1024 * 1024;
+/// How often a core the login item runs looks at its output's size: the two
+/// files hold at most twice [`CORE_LOG_LIMIT`] and what one look's wait
+/// writes past it.
+const CORE_LOG_LOOK_EVERY: Duration = Duration::from_secs(60);
 
 /// Installs the login item that runs `program` as the core on
 /// `state_dir`, which starts it; one already installed for that folder is
@@ -93,9 +97,9 @@ pub fn exited_at_start(
 }
 
 /// What the core's login item runs it with: the account's home, the state
-/// folder, and the Herdr binary and socket this machine's hided resolved.
-/// A move's checks of the account's logins run with it too
-/// (`core_move::preflight`).
+/// folder, and the Herdr binary and socket this machine's hided resolved
+/// (`Env::herdr_program`, the herdr the move's checks asked). A move's
+/// checks of the account's logins run with it too (`core_move::preflight`).
 pub fn core_environment(home: &Path, state_dir: &Path) -> Result<Vec<(String, String)>, String> {
     let env =
         crate::env::load().map_err(|errors| format!("{} environment errors", errors.len()))?;
@@ -108,9 +112,10 @@ pub fn core_environment(home: &Path, state_dir: &Path) -> Result<Vec<(String, St
     ];
     let socket = env
         .herdr_socket_path
+        .clone()
         .ok_or("this machine has no Herdr socket for its core (HERDR_SOCKET_PATH)")?;
     environment.push(("HERDR_SOCKET_PATH".to_owned(), socket));
-    if let Some(bin) = env.herdr_bin_path {
+    if let Some(bin) = env.herdr_program() {
         environment.push((
             "HERDR_BIN_PATH".to_owned(),
             bin.to_string_lossy().into_owned(),
@@ -145,41 +150,84 @@ fn core_log(state_dir: &Path) -> PathBuf {
 }
 
 /// Sets the core's output aside as `core.log.1`, replacing the one before,
-/// once it has grown past [`CORE_LOG_LIMIT`]; answers whether it did. The
-/// job that runs now keeps writing to the file it was given, and launchd
-/// opens the path again at the next start, so a core that restarts again
-/// and again keeps two files, never a growing one.
-fn rotate_core_log(state_dir: &Path) -> std::io::Result<bool> {
+/// once it has grown past [`CORE_LOG_LIMIT`]; answers whether it did.
+/// launchd opens the file once, when it starts the job, so the core moves
+/// its own output on to the new file rather than leaving it writing to the
+/// one set aside.
+fn set_core_log_aside(state_dir: &Path) -> std::io::Result<bool> {
     let log = core_log(state_dir);
-    match std::fs::metadata(&log) {
-        Ok(metadata) if metadata.len() > CORE_LOG_LIMIT => {}
-        Ok(_) => return Ok(false),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(error),
+    hide_platform::process::set_output_aside(&log, &log.with_extension("log.1"), CORE_LOG_LIMIT)
+}
+
+/// What the last look at the core's output found: a failure is logged when
+/// it first happens or changes, not at every look while it lasts.
+#[derive(Default)]
+struct LastLook {
+    failure: Option<String>,
+}
+
+impl LastLook {
+    /// Looks at the core's output once, for the log; answers whether a later
+    /// look can do anything, which a system that sets no output aside cannot.
+    fn look(&mut self, state_dir: &Path) -> bool {
+        let outcome = set_core_log_aside(state_dir);
+        if let Ok(true) = outcome {
+            herdr_core::diagnostic!(json!({
+                "component": "login_item",
+                "kind": "core_log.rotated",
+            }));
+        }
+        let failure = outcome.as_ref().err().map(ToString::to_string);
+        if failure.is_some() && failure != self.failure {
+            herdr_core::diagnostic!(json!({
+                "component": "login_item",
+                "kind": "core_log.rotate_failed",
+                "message": failure,
+            }));
+        }
+        self.failure = failure;
+        !matches!(outcome, Err(error) if error.kind() == std::io::ErrorKind::Unsupported)
     }
-    std::fs::rename(&log, log.with_extension("log.1"))?;
-    Ok(true)
+}
+
+/// Keeps the core's output within its limit for as long as this process
+/// runs: a look now, before the daemon writes, and one every
+/// [`CORE_LOG_LOOK_EVERY`] on a thread of its own, which ends with the
+/// process.
+fn keep_core_log_within_limit(state_dir: PathBuf) {
+    let mut last = LastLook::default();
+    if !last.look(&state_dir) {
+        return;
+    }
+    #[allow(clippy::disallowed_methods)] // a production period, not a wait for a state
+    let looks = move || {
+        loop {
+            std::thread::sleep(CORE_LOG_LOOK_EVERY);
+            if !last.look(&state_dir) {
+                return;
+            }
+        }
+    };
+    if let Err(error) = std::thread::Builder::new()
+        .name("core-log".to_owned())
+        .spawn(looks)
+    {
+        herdr_core::diagnostic!(json!({
+            "component": "login_item",
+            "kind": "core_log.watch_failed",
+            "message": error.to_string(),
+        }));
+    }
 }
 
 /// `hided core-login`, before the daemon runs as any start of it does:
-/// the core's output is set aside once it has grown past its limit, and
-/// the machine's Herdr server is started when Herdr says none runs; a
-/// status Herdr cannot give starts nothing, so a server that may be running
-/// is never doubled.
+/// the core's output is kept within its limit while it runs, and the
+/// machine's Herdr server is started when Herdr says none runs; a status
+/// Herdr cannot give starts nothing, so a server that may be running is
+/// never doubled.
 pub fn before_core_at_login() {
     if let Some(state_dir) = std::env::var_os(crate::env::HIDE_STATE_DIR) {
-        match rotate_core_log(Path::new(&state_dir)) {
-            Ok(false) => {}
-            Ok(true) => herdr_core::diagnostic!(json!({
-                "component": "login_item",
-                "kind": "core_log.rotated",
-            })),
-            Err(error) => herdr_core::diagnostic!(json!({
-                "component": "login_item",
-                "kind": "core_log.rotate_failed",
-                "message": error.to_string(),
-            })),
-        }
+        keep_core_log_within_limit(PathBuf::from(state_dir));
     }
     let Some(bin) = std::env::var_os(crate::env::HERDR_BIN_PATH) else {
         return;
@@ -220,7 +268,14 @@ fn ensure_herdr(bin: &Path, started_within: Duration) -> String {
         Ok(false) => {}
         Err(reason) => return format!("status_failed: {reason}"),
     }
-    let mut command = std::process::Command::new(bin);
+    // Its panes' shells start with the server's environment, which launchd
+    // gave the system's folders alone on `PATH`: the server gets the
+    // account's own search with the login shell asked, as the desktop host
+    // gives the server it starts its children's.
+    let mut command = hide_platform::programs::command_on(
+        hide_platform::programs::account_path().as_deref(),
+        bin,
+    );
     command.arg("server");
     if std::env::var_os("LANG").is_none()
         && std::env::var_os("LC_ALL").is_none()
@@ -283,25 +338,6 @@ esac
         std::fs::read_to_string(format!("{}.starts", bin.display()))
             .map(|starts| starts.lines().count())
             .unwrap_or(0)
-    }
-
-    /// The core's output is set aside once it passed its limit, replacing
-    /// the one set aside before, and never below it.
-    #[test]
-    fn the_core_s_output_keeps_one_file_before_it() {
-        let state = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(state.path().join("Logs")).unwrap();
-        let log = core_log(state.path());
-        let aside = log.with_extension("log.1");
-        assert!(!rotate_core_log(state.path()).unwrap(), "no log yet");
-        std::fs::write(&log, vec![b'a'; CORE_LOG_LIMIT as usize]).unwrap();
-        assert!(!rotate_core_log(state.path()).unwrap(), "at the limit");
-        std::fs::write(&log, vec![b'b'; CORE_LOG_LIMIT as usize + 1]).unwrap();
-        assert!(rotate_core_log(state.path()).unwrap());
-        assert!(!log.exists());
-        std::fs::write(&log, vec![b'c'; CORE_LOG_LIMIT as usize + 1]).unwrap();
-        assert!(rotate_core_log(state.path()).unwrap());
-        assert_eq!(std::fs::read(&aside).unwrap()[0], b'c');
     }
 
     /// A login starts the machine's Herdr server only when Herdr says none

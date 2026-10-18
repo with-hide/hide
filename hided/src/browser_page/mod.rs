@@ -605,7 +605,7 @@ async fn execute(env: &Env, command: Command) -> Result<Output, Failure> {
         failure.next_action = Some(crate::cli::bootstrap_next_action(&reason).to_owned());
         failure
     })?;
-    let (socket, selected) = crate::workspace_cli::browser_relay(&mut credential, &display)
+    let (socket, selected, source) = crate::workspace_cli::browser_relay(&mut credential, &display)
         .await
         .map_err(|(reason, next_action)| Failure {
             reason,
@@ -614,6 +614,7 @@ async fn execute(env: &Env, command: Command) -> Result<Output, Failure> {
             silent: false,
         })?;
     let mut page = page::Page::attach(cdp::Cdp::new(socket), &display, selected).await?;
+    page.source = source;
     let outcome = actions::run(&mut page, command).await;
     page.close().await;
     outcome

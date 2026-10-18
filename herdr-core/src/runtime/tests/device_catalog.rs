@@ -884,7 +884,7 @@ fn a_device_whose_helper_is_not_allowed_shows_its_workspaces_unconfirmed() {
 fn a_helper_attempt_from_before_a_removal_cannot_settle_the_new_connection() {
     let mut runtime = runtime();
     let stale = runtime.advance_host_generation(TARGET);
-    runtime.forget_device_host(TARGET);
+    runtime.forget_device_host(TARGET, super::super::devices::Retiring::Removed);
     let current = runtime.advance_host_generation(TARGET);
     assert_ne!(stale, current);
     let device = FakeDevice::new();
@@ -1862,8 +1862,10 @@ fn regrouping_a_device_session_keeps_its_agents_lineage() {
             codex_daemon_on: None,
             codex_daemon_running: None,
             codex_daemon_unreadable: None,
+            codex_capability_unread: None,
             codex_daemon_off: None,
             herdr: None,
+            refused: None,
         },
     );
     assert_eq!(descendants(&runtime), vec![child]);
@@ -1980,8 +1982,10 @@ fn a_device_agent_pane_is_judged_against_its_own_kit() {
             codex_daemon_on: None,
             codex_daemon_running: None,
             codex_daemon_unreadable: None,
+            codex_capability_unread: None,
             codex_daemon_off: None,
             herdr: None,
+            refused: None,
         },
     );
     let after = children(&runtime);

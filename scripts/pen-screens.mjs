@@ -2793,7 +2793,7 @@ export function screenSheets(tokens, root) {
     {name: 'Screen / Core move', build: () => buildCoreMove(tokens, root)},
     {name: 'Screen / Session record', build: () => {
       const build = sessionWorkScreens({frame,text,icon,screenButton,themedXref});
-      return screenSheet('screen-session-record','Screen / Session record','Session work record (PRD session-record-redesign; opens in the lane\'s 보기 slot, PRD sidebar-task-lens D-44): every PR the session and its descendants made, assigned work as a checklist with missed work under its task, the operator\'s words behind 내 말, summaries off, and states. Production SessionRecord and NewIssueDialog.',build,build);
+      return screenSheet('screen-session-record','Screen / Session record','Session work record (PRD session-record-redesign; opens in the lane\'s 보기 slot, PRD sidebar-task-lens D-44): every PR the session and its descendants made, assigned work as a checklist of boxes with each delegated child under the task that handed it on (PRD record-card-readability), open missed work, the operator\'s requests under 내 말, summaries off, and states. Production SessionRecord and NewIssueDialog.',build,build);
     }},
   ];
 }

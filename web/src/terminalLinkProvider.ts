@@ -18,7 +18,7 @@
 import type { IBufferRange, ILink, ILinkHandler, Terminal } from "@xterm/xterm";
 import { hostBridge, holdsCommandKey, type ProbedPath } from "./host";
 import { remoteTargetOfPane } from "./remote";
-import { screenDeviceId } from "./screenMachine";
+import { windowDeviceId } from "./screenMachine";
 import { bufferRow, type CellRow } from "./selection";
 import { catalogWorkspaces, localDeviceId, type Checkout, type SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
@@ -122,10 +122,10 @@ export function pathLookups(written: string, cwd: string | null, root: string | 
 
 /**
  * The pane's working folder and its checkout's root, or null for a pane
- * that is not on this screen's machine (`screen`, `screenMachine.ts`): the
- * core's own unless this screen's machine dials a core elsewhere.
+ * that is not on this window's machine (`screen`, `windowDeviceId`): the
+ * core's own unless this window's machine dials a core elsewhere.
  */
-export function paneContext(rest: SnapshotRest | null, paneId: string, screen: string = localDeviceId(rest)): { cwd: string | null; root: string | null } | null {
+export function paneContext(rest: SnapshotRest | null, paneId: string, screen: string): { cwd: string | null; root: string | null } | null {
   const target = remoteTargetOfPane(rest, paneId);
   if ((target ?? localDeviceId(rest)) !== screen) return null;
   for (const workspace of catalogWorkspaces(rest)) {
@@ -161,7 +161,7 @@ export async function terminalPathOwner(found: FoundPath): Promise<{ checkout: C
   const bridge = hostBridge();
   if (!bridge) return undefined;
   const rest = useShellStore.getState().rest;
-  const deviceId = screenDeviceId(rest);
+  const deviceId = windowDeviceId(rest?.navigator?.devices);
   const checkouts = catalogWorkspaces(rest)
     .filter((workspace) => workspace.device_id === deviceId)
     .flatMap((workspace) => workspace.checkouts)
@@ -252,7 +252,7 @@ async function linksOnRow(term: Terminal, paneId: string, y: number) {
   if (groups.length === 0) return [];
   const rest = useShellStore.getState().rest;
   const bridge = hostBridge();
-  const chosen = await resolveGroups(groups, paneContext(rest, paneId, screenDeviceId(rest)), bridge ? (paths) => bridge.probePaths(paths) : null);
+  const chosen = await resolveGroups(groups, paneContext(rest, paneId, windowDeviceId(rest?.navigator?.devices)), bridge ? (paths) => bridge.probePaths(paths) : null);
   return chosen.map(({ candidate, resolved }) => ({ candidate, resolved, range: rangeOf(candidate, top) }));
 }
 
@@ -266,7 +266,7 @@ export async function terminalLinkAtCell(term: Terminal, paneId: string, state: 
     if (target.kind === "url" || found) return hovered.resolved;
     const bridge = hostBridge();
     const rest = useShellStore.getState().rest;
-    if (!bridge || !paneContext(rest, paneId, screenDeviceId(rest))) return null;
+    if (!bridge || !paneContext(rest, paneId, windowDeviceId(rest?.navigator?.devices))) return null;
     const answers = await probePaths([target.path], (paths) => bridge.probePaths(paths));
     const answer = answers.get(target.path);
     return answer ? { target, found: answer } : null;
@@ -325,7 +325,7 @@ export function osc8Handler(paneId: string, state: LinkState, actions: () => Ter
       }
       const bridge = hostBridge();
       const shown = useShellStore.getState().rest;
-      const context = paneContext(shown, paneId, screenDeviceId(shown));
+      const context = paneContext(shown, paneId, windowDeviceId(shown?.navigator?.devices));
       if (!bridge || !context) {
         diagnostic("terminal link: a file link names a path this Mac cannot open here");
         return;

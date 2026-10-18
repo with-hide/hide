@@ -487,7 +487,7 @@ it("draws the Task's activity with a failed check's log and a report's unchecked
 });
 
 it("keeps the graph in columns and logs why when the layout worker cannot start (D-08)", async () => {
-  // jsdom has no Worker, so the layered layout refuses the way a failed worker does.
+  // jsdom has no Worker, so the layered layout refuses at once, the way a failed worker does.
   const graphed = factory({
     columns: [{ column: "before", label: "waiting", cards: [card("T-1", "waiting", { column: "before" }), card("T-2", "waiting", { column: "before" })] }],
     graph: { nodes: ["T-1", "T-2"], edges: [["T-1", "T-2"]], unrelated: [] },
@@ -613,12 +613,14 @@ it("reads a Factory made before worker candidates as one of its default agent, a
 it("offers a model menu only for a worker whose agent's start takes a model (B28, D-42)", async () => {
   const summary = { my_turn: 0, factories: [factory()], inbox: [] };
   const { container, events } = await mount(summary, { tab: "settings", factory: "f1" });
-  await answerConfig(summary, events, { ...CONFIG, workers: [{ agent: "claude", description: "" }, { agent: "grok", description: "" }] });
+  await answerConfig(summary, events, { ...CONFIG, workers: [{ agent: "claude", description: "" }, { agent: "grok", description: "" }, { agent: "opencode", description: "" }] });
   const row = (at: number) => container.querySelector(`[data-factory-worker-candidate='${at}']`)!;
   expect(row(1).querySelector("[data-agent-model]")).not.toBeNull();
   expect(row(2).querySelector("[data-agent-kind='grok']")).not.toBeNull();
-  expect(row(2).querySelector("[data-agent-model]")).toBeNull();
-  expect(row(2).textContent).toContain(english["factory.settings.cliDefault"]);
+  expect(row(2).querySelector("[data-agent-model]")).not.toBeNull();
+  expect(row(3).querySelector("[data-agent-kind='opencode']")).not.toBeNull();
+  expect(row(3).querySelector("[data-agent-model]")).toBeNull();
+  expect(row(3).textContent).toContain(english["factory.settings.cliDefault"]);
 });
 
 it("changes who answers with one of three choices, and dims them while Hide AI is off, when a risk path is the person's again (B33, B10, B37)", async () => {

@@ -122,6 +122,13 @@ impl Machine {
     }
 }
 
+/// How the target's state folder is spelled.
+enum Reach {
+    Direct,
+    ThroughLink,
+    LinkedFolder,
+}
+
 pub struct Fixture {
     pub source: Machine,
     pub target: Machine,
@@ -157,6 +164,23 @@ fn machine_env(root: &Path, bin: &Path, node: &str) -> Result<(Environment, Path
 
 impl Fixture {
     pub fn start() -> Result<Self> {
+        Self::start_with(Reach::Direct)
+    }
+
+    /// A fixture whose target names its state folder through a link, as a
+    /// machine whose home is reached through one does (`/tmp` on macOS,
+    /// `/home` on a Linux with its homes elsewhere).
+    pub fn start_through_link() -> Result<Self> {
+        Self::start_with(Reach::ThroughLink)
+    }
+
+    /// A fixture whose target's state folder is itself a link, which the
+    /// moved core cannot keep private.
+    pub fn start_with_linked_state_folder() -> Result<Self> {
+        Self::start_with(Reach::LinkedFolder)
+    }
+
+    fn start_with(reach: Reach) -> Result<Self> {
         let repository = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let bin = PathBuf::from(
             std::env::var_os("HIDE_E2E_HERDR_BIN")
@@ -180,8 +204,21 @@ impl Fixture {
         let root = hide_platform::fs::identity::canonical(&root)?;
         let (mut source_env, source_socket, source_state) =
             machine_env(&root.join("m"), &bin, SOURCE_NODE)?;
-        let (mut target_env, target_socket, target_state) =
+        let (mut target_env, target_socket, mut target_state) =
             machine_env(&root.join("c"), &bin, TARGET_NODE)?;
+        match reach {
+            Reach::Direct => {}
+            Reach::ThroughLink => {
+                std::os::unix::fs::symlink(root.join("c"), root.join("via"))?;
+                target_state = root.join("via/s");
+                target_env.set("HIDE_STATE_DIR", target_state.as_os_str());
+            }
+            Reach::LinkedFolder => {
+                std::os::unix::fs::symlink(&target_state, root.join("c/linked"))?;
+                target_state = root.join("c/linked");
+                target_env.set("HIDE_STATE_DIR", target_state.as_os_str());
+            }
+        }
         target_env.set("HIDE_CORE_STARTER", "fixture");
         // The target's reads find `herdr` where a real install puts it.
         fs::create_dir_all(target_env.home.join(".local/bin"))?;
@@ -195,8 +232,11 @@ impl Fixture {
         for (name, script) in STAND_INS {
             stand_in(&preflight.join(name), script)?;
         }
-        stand_in(&target_env.home.join(".local/bin/claude"), CLAUDE)?;
+        // The agent answers as signed in on both machines: the target's for
+        // a move there, this machine's for a move back.
         for environment in [&source_env, &target_env] {
+            fs::create_dir_all(environment.home.join(".local/bin"))?;
+            stand_in(&environment.home.join(".local/bin/claude"), CLAUDE)?;
             fs::create_dir_all(environment.home.join("bin"))?;
             stand_in(&environment.home.join("bin/gh"), GH)?;
         }
@@ -224,6 +264,9 @@ impl Fixture {
             command.args(args);
             successful(command)?;
         }
+        let mut command = source_env.command(source_env.home.join(".local/bin/claude"));
+        command.args(["auth", "status"]);
+        successful(command)?;
         target_env.set("HIDE_PREFLIGHT_PROGRAMS", preflight.into_os_string());
         let settings = hide_platform::host::state_dir_under(&source_env.home).join("hide/ai.json");
         fs::create_dir_all(settings.parent().context("settings folder")?)?;
@@ -353,6 +396,13 @@ impl Fixture {
             fs::write(preflight.join(format!("{name}.fail")), "")?;
         }
         fs::write(self.target.home().join(".local/bin/claude.fail"), "")?;
+        Ok(())
+    }
+
+    /// Signs this machine's agent out, which a move back's check of the
+    /// core's Hide AI finds.
+    pub fn sign_out_here(&self) -> Result<()> {
+        fs::write(self.source.home().join(".local/bin/claude.fail"), "")?;
         Ok(())
     }
 

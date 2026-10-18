@@ -2,7 +2,10 @@ import { ListChecksIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { lineText } from "./agentRow";
-import { ChildProgressHead, shownTaskState, TaskMark, TaskName } from "./components/task-progress";
+import { shownTaskState, TaskMark, TaskName, TaskWord } from "./components/task-progress";
+import { StateBox } from "./components/state-box";
+import { statusText } from "./agentStatus";
+import { cn } from "./lib/utils";
 import { PrMark } from "./components/pr-mark";
 import { Kbd } from "./components/ui/kbd";
 import { Popover, PopoverAnchor, PopoverContent } from "./components/ui/popover";
@@ -129,41 +132,63 @@ export function PaneTaskChip({ paneId, actions }: { paneId: string; actions: Act
   );
 }
 
-/** The checklist: the tasks with their marks and pull requests, the children's progress, the current line, and `기록 열기`. */
+/**
+ * The task box (PRD record-card-readability D-08, B15): the tasks as
+ * checkboxes with their pull requests, right under them this pane's own 지금
+ * box (the record's state box part and words: `지금 · 질문 <line>` in the
+ * warning colour with `!`, `지금 · 작업 중 <line>` quiet), then
+ * `맡긴 일 N · 끝남 k` in one line, and `기록 열기`. The box says only this
+ * session's state, never a child's.
+ */
 function TaskList({ agent, progress, onRecord }: { agent: AgentRow; progress: WorkProgress; onRecord: () => void }) {
   const { t } = useInterfaceTranslation();
   const line = agent.state.line;
   // A request's pull requests show once, on its first task, as in the record.
   const shownGroups = new Set<string>();
+  const asks = agent.status_code === "question" || agent.status_code === "approval" || agent.status_code === "error";
+  const children = progress.children;
   return (
     <div className="flex min-w-0 flex-col [word-break:keep-all]">
-      <div className="px-sm pt-sm">
-        <h3 className="mb-xs flex items-baseline gap-xs font-medium text-subtle-foreground">
-          {t("sessionWork.tasks")}
-          <span className="text-micro tabular-nums text-muted-foreground">{progress.done}/{progress.total}</span>
-        </h3>
-        <ul className="flex flex-col">
-          {progress.tasks.map((task) => {
-            const group = taskGroup(task.id);
-            const prs = shownGroups.has(group) ? [] : orderedOutputs(groupPrs(task, progress.outputs));
-            shownGroups.add(group);
-            const state = shownTaskState(taskState(task, progress.outputs), agent.mark);
-            return (
-              <li key={task.id} className="flex min-w-0 items-start gap-xs py-xxs" data-task-list-item={task.id}>
-                <span className="mt-xxs flex"><TaskMark state={state} mark={agent.mark} /></span>
-                <TaskName state={state} name={task.name} prShown={prs.length > 0} className={state === "done" ? "text-subtle-foreground" : "text-foreground"} data-task-list-name="true" />
-                {prs.map((output) => {
-                  const look = outputPrState(output.state);
-                  return <span key={output.url} role="img" aria-label={`#${output.number} ${t(PR_LOOK[look].word)}`} title={output.title} className="shrink-0"><PrMark state={look} number={output.number} stale={output.stale} /></span>;
-                })}
-              </li>
-            );
-          })}
-        </ul>
-        {progress.children ? <div className="mt-xs text-subtle-foreground" data-task-list-children="true"><ChildProgressHead progress={progress.children} /></div> : null}
+      <div className="flex flex-col gap-sm px-sm pt-sm">
+        <div>
+          <h3 className="mb-xs flex items-baseline gap-xs text-micro font-medium text-muted-foreground">
+            {t("sessionWork.tasks")}
+            <span className="text-caption font-semibold tabular-nums text-foreground">{progress.done}/{progress.total}</span>
+          </h3>
+          <ul className="flex flex-col">
+            {progress.tasks.map((task) => {
+              const group = taskGroup(task.id);
+              const prs = shownGroups.has(group) ? [] : orderedOutputs(groupPrs(task, progress.outputs));
+              shownGroups.add(group);
+              const state = shownTaskState(taskState(task, progress.outputs), agent.mark);
+              return (
+                <li key={task.id} className="flex min-w-0 items-start gap-xs py-xxs" data-task-list-item={task.id}>
+                  <TaskMark state={state} live />
+                  <TaskName state={state} name={task.name} data-task-list-name="true" />
+                  <TaskWord state={state} live prShown={prs.length > 0} />
+                  {prs.map((output) => {
+                    const look = outputPrState(output.state);
+                    return <span key={output.url} role="img" aria-label={`#${output.number} ${t(PR_LOOK[look].word)}`} title={output.title} className="flex h-(--size-sidebar-line) shrink-0 items-center"><PrMark state={look} number={output.number} stale={output.stale} /></span>;
+                  })}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
         {line && line.text ? (
-          <p className="mt-xs flex min-w-0 items-start gap-xs text-muted-foreground" data-task-list-line="true">
-            <span className="min-w-0 flex-1 whitespace-normal [overflow-wrap:anywhere]">{lineText(t, agent, line)}</span>
+          <StateBox tone={asks ? "attention" : agent.status_code === "working" ? "working" : "quiet"} className="flex-row items-start gap-xs px-sm py-xs" aria-label={t("sessionWork.now")} data-task-list-now={agent.status_code}>
+            {asks ? <span aria-hidden="true" className="font-semibold text-warning">!</span> : null}
+            <p className={cn("min-w-0 flex-1 whitespace-normal [overflow-wrap:anywhere]", asks ? "text-warning" : "text-muted-foreground")} data-task-list-line="true">
+              <span className="mr-xs font-semibold text-foreground">{t("sessionWork.now")} · {statusText(t, agent.status_code)}</span>
+              {lineText(t, agent, line)}
+            </p>
+          </StateBox>
+        ) : null}
+        {children ? (
+          <p className="flex items-baseline gap-xs text-micro font-medium text-muted-foreground" data-task-list-children={children.children.length}>
+            {t("sessionWork.delegated")}
+            <span className="text-caption font-semibold tabular-nums text-foreground">{children.children.length}</span>
+            {children.done !== null ? <span className="font-normal">· {t("sessionWork.doneCount", { count: children.done })}</span> : null}
           </p>
         ) : null}
       </div>

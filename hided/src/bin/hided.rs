@@ -91,6 +91,10 @@ fn run() -> Result<(), String> {
         .thread_name("hided")
         .build()
         .map_err(|error| error.to_string())?;
+    // The programs the daemon starts by name run on the account's search;
+    // its first read starts now, so the daemon's first command seldom waits
+    // for it.
+    hide_platform::programs::warm_account_path();
     let ran = runtime.block_on(hided::run_daemon(env));
     // The roles have ended and saved; a step a stop abandoned (an SSH step
     // to a peer that stalls) is not waited for, so `hide stop` sees the

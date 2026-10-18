@@ -258,9 +258,11 @@ pub struct WorkspaceViewSnapshot {
     pub pinned: bool,
     /// Whether the files tool shows the file tree column (D-05).
     pub tree: bool,
-    /// The lane's width in CSS pixels, or null for the shell's default
-    /// until it is resized.
+    /// The files tool's document width in CSS pixels, or null for the
+    /// shell's default until it is resized.
     pub lane_width: Option<u32>,
+    /// The other tools' and the 보기 slot's width, the same way.
+    pub panel_width: Option<u32>,
     /// The tree column's width, the same way.
     pub tree_width: Option<u32>,
     /// The last width request the core accepted for this Workspace. Runtime
@@ -705,6 +707,15 @@ pub struct NavigatorSnapshot {
     pub hide_ai_checkouts: Vec<HideAiCheckoutSnapshot>,
     /// Durable absent-pane sessions are not live agents or pane addresses.
     pub sleeping_sessions: Vec<crate::agent_sleep::SleepingSessionSnapshot>,
+    /// The archived sessions, newest archived first (PRD session-archive
+    /// D-09); a row whose root is live again only feeds that root's record.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub archived_sessions: Vec<crate::session_archive::ArchivedSessionSnapshot>,
+    /// The panes a Factory runs its workers in, sorted: their lifecycle is
+    /// the Factory's, so the shell offers no `세션 보관` there (PRD
+    /// session-archive D-25).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub factory_worker_panes: Vec<String>,
 }
 
 /// Hide AI started this agent, read from the coordination ledger's record of
@@ -861,6 +872,9 @@ pub struct KitSnapshot {
     /// The daemon answer the kit could not read, for the log only.
     #[serde(skip)]
     pub codex_daemon_unreadable: Option<String>,
+    /// Why the kit had no answer for `codex_daemon`, for the log only.
+    #[serde(skip)]
+    pub codex_capability_unread: Option<hide_kit::CodexReadFailure>,
     /// How the last turn-off of the shared server ended, until the next one
     /// starts; the pane popover reads it (B30).
     pub codex_daemon_off: Option<CodexDaemonOffSnapshot>,
@@ -870,6 +884,35 @@ pub struct KitSnapshot {
     /// Why this machine's last read failed, until a read lands; the report
     /// the machine last gave stays as it was (B10).
     pub check_failed: Option<KitCheckFailure>,
+    /// The machine's last pass or read stopped before changing anything:
+    /// what stopped it, for one line with Try again. The parts and agents
+    /// are then empty, and the kit's own words are in the log.
+    pub refused: Option<KitRefusalSnapshot>,
+}
+
+/// Why a machine's kit pass stopped, as the screen words it (`hide_kit::KitRefusal`
+/// without its detail, which stays in the log).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct KitRefusalSnapshot {
+    pub cause: hide_kit::RefusalCause,
+    /// The folder or file at fault, as that machine spells it.
+    pub path: Option<String>,
+    /// The variable that chose Hide's state folder at fault, by name.
+    pub variable: Option<hide_kit::layout::StateVariable>,
+    /// The command that stops this machine's background service, so the
+    /// next launch reads `variable` again.
+    pub stop: Option<String>,
+}
+
+impl From<&hide_kit::KitRefusal> for KitRefusalSnapshot {
+    fn from(refusal: &hide_kit::KitRefusal) -> Self {
+        Self {
+            cause: refusal.cause,
+            path: refusal.path.clone(),
+            variable: refusal.variable,
+            stop: refusal.stop.clone(),
+        }
+    }
 }
 
 /// Why a kit read did not come back with a report. A code, never the call's
@@ -1042,6 +1085,7 @@ impl KitSnapshot {
             codex_daemon_on: report.codex_daemon_on,
             codex_daemon_running: report.codex_daemon_running,
             codex_daemon_unreadable: report.codex_daemon_unreadable.clone(),
+            codex_capability_unread: report.codex_capability_unread,
             codex_daemon_off: report
                 .codex_daemon_off
                 .as_ref()
@@ -1053,6 +1097,7 @@ impl KitSnapshot {
                 }),
             checking: false,
             check_failed: None,
+            refused: report.refused.as_deref().map(Into::into),
         }
     }
 
@@ -1173,6 +1218,11 @@ pub struct SidebarAgentSnapshot {
     /// cannot stand in for this.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub herdr_name: Option<String>,
+    /// The name Herdr reports the agent by, a name Hide made up included,
+    /// which a pane's launch record is matched by (`runtime::agent_choice`).
+    /// Never on the wire.
+    #[serde(skip_serializing)]
+    pub started_name: Option<String>,
     /// What this pane declares about the agent it was forked from: the
     /// source's pane and the digest of the session it hosted
     /// (`wire::fork_declaration`). A fork is the operator's root, so this is
@@ -3567,6 +3617,13 @@ pub struct UiStateSnapshot {
     pub workspace_registrations: Vec<WorkspaceRegistration>,
     #[serde(default)]
     pub device_registrations: Vec<DeviceRegistration>,
+    /// The name the operator registered this machine under while a core on
+    /// another machine dialed it, kept when that core moved here, since a
+    /// core does not register its own machine (`node_migration::reown`); the
+    /// core's own device row carries it as its label, so the machine keeps
+    /// its name across the move. None on a machine never registered so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_label: Option<String>,
     #[serde(default = "default_accent_hex")]
     pub accent_hex: String,
     /// The web shell's mode (Light, Dark or System).
@@ -3664,6 +3721,11 @@ pub struct UiStateSnapshot {
     /// (`agent_state::apply_completions`). The store owns it.
     #[serde(default, skip_serializing)]
     pub pane_completions: BTreeMap<String, PaneCompletion>,
+    /// The model and effort Hide started each pane's agent with, keyed by
+    /// pane id, so a sleep, a close or a fork captures them for the restart
+    /// it makes (`runtime::agent_choice`). The store owns it.
+    #[serde(default, skip_serializing)]
+    pub pane_launches: BTreeMap<String, PaneLaunch>,
     /// Each agent pane's request-view verb and when it took it, so the time
     /// a row has waited survives a restart (PRD overview-request-view D-40).
     /// The store owns it; the shell reads it on the row.
@@ -3693,6 +3755,11 @@ pub struct UiStateSnapshot {
     /// field that did would resend the navigator to every client.
     #[serde(default, skip_serializing)]
     pub agent_sleep: crate::agent_sleep::AgentSleepStore,
+    /// The sessions the operator archived (PRD session-archive). Persisted
+    /// with this store and never on the wire: the navigator carries the
+    /// rows the shell draws (`archived_sessions`).
+    #[serde(default, skip_serializing)]
+    pub session_archive: crate::session_archive::SessionArchive,
     /// The checkouts last brought to the front, newest first, at most
     /// `RECENT_CHECKOUT_LIMIT` (PRD cmdk-recent D-05, D-08, D-09). ⌘K reads
     /// the first five it can show; the rest are there so the exclusions of
@@ -3810,6 +3877,26 @@ pub struct PaneCompletion {
     pub server: Option<String>,
     #[serde(default)]
     pub state_change_seq: Option<u64>,
+}
+
+/// The launch choice of the agent Hide started in a pane, under the name it
+/// started it with.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PaneLaunch {
+    /// The agent kind, in Herdr's spelling.
+    pub kind: String,
+    /// The Herdr name Hide started the agent under (a task's, a wake's, a
+    /// fork's, a reopen's, or `hide agent spawn --name`). Herdr keeps a name
+    /// unique among its live agents, and an agent started in the pane by hand,
+    /// or one Herdr gives the pane's id to again, has another name or none,
+    /// so the record never describes it.
+    pub name: String,
+    pub choice: hide_agent_adapter::LaunchChoice,
+    /// The conversation the named agent last reported, so the same agent
+    /// still matches when it comes back from a Herdr restart without its
+    /// name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
 }
 
 /// The scale a pane has until the user zooms it.
@@ -4334,6 +4421,7 @@ impl Default for UiStateSnapshot {
             focused_checkout_id: None,
             workspace_registrations: Vec::new(),
             device_registrations: Vec::new(),
+            machine_label: None,
             accent_hex: default_accent_hex(),
             theme: ThemePreference::Dark,
             agent_logo_mode: AgentLogoMode::Hidden,
@@ -4353,12 +4441,14 @@ impl Default for UiStateSnapshot {
             conversation_pane_ids: BTreeSet::new(),
             pane_read_records: BTreeMap::new(),
             pane_completions: BTreeMap::new(),
+            pane_launches: BTreeMap::new(),
             request_verbs: BTreeMap::new(),
             agent_sleep_after_hours: None,
             project_issue_sources: BTreeMap::new(),
             issue_settings: IssueSettingsSnapshot::default(),
             agent_start: AgentStartChoice::default(),
             agent_sleep: crate::agent_sleep::AgentSleepStore::default(),
+            session_archive: crate::session_archive::SessionArchive::default(),
             recent_checkouts: Vec::new(),
             recent_pane_ids: Vec::new(),
             factory_secretary_pane: None,
@@ -4433,10 +4523,11 @@ impl LinkOrigin {
         matches!(self, Self::Dialed { .. })
     }
 
-    /// Whether the core installs and keeps Hide's kit there; a node that
-    /// dials in is a machine with Hide's own install, whose kit its own
-    /// hided keeps.
-    pub fn takes_kit(&self) -> bool {
+    /// Whether removing the registration takes Hide's kit off the machine:
+    /// a device the core dials, where its helper put it. A node that dials
+    /// in runs Hide itself and registers again on its next link, so the kit
+    /// the core keeps there through that link stays.
+    pub fn removes_kit(&self) -> bool {
         matches!(self, Self::Dialed { .. })
     }
 
@@ -4743,7 +4834,7 @@ pub enum PullRequestChecks {
 /// The one state every PR mark draws (docs/status-model.md, Pull request
 /// visual states), worst first: a checkout's pull request and an agent row's
 /// own pull requests take it from [`PrState::of`] and nothing else decides it.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrState {
     /// Checks failed, or a reviewer asked for changes.
@@ -5269,6 +5360,11 @@ pub struct TaskOperationSnapshot {
     /// task and never another window's or phone's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    /// The task came from a surface that is not the operator's own screen
+    /// (a phone start): its tab is made without taking the screen, the
+    /// keyboard or Herdr's focus. The core's own fact; no shell reads it.
+    #[serde(skip)]
+    pub stays_behind: bool,
 }
 
 /// The one repository clone Add a project started, and how far it got.
@@ -5904,6 +6000,7 @@ impl Snapshot {
                 devices: vec![crate::workspace::local_device(
                     &options.node_id,
                     options.machine_name.as_deref(),
+                    None,
                 )],
                 workspaces: Vec::new(),
                 inactive_projects: Vec::new(),
@@ -5911,6 +6008,8 @@ impl Snapshot {
                 agents: Vec::new(),
                 hide_ai_checkouts: Vec::new(),
                 sleeping_sessions: Vec::new(),
+                archived_sessions: Vec::new(),
+                factory_worker_panes: Vec::new(),
             },
             overlay: OverlaySnapshot {
                 kind: None,
@@ -6506,6 +6605,7 @@ mod wire_enum_tests {
             RowMark::Done,
             RowMark::Unread,
             RowMark::Quiet,
+            RowMark::Unknown,
             RowMark::Asleep,
         ];
         for variant in marks {
@@ -6516,6 +6616,7 @@ mod wire_enum_tests {
                 | RowMark::Done
                 | RowMark::Unread
                 | RowMark::Quiet
+                | RowMark::Unknown
                 | RowMark::Asleep => {}
             }
         }
@@ -7118,6 +7219,38 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "kit_check_failure", &check_failures);
         checked.insert("kit_check_failure");
+
+        let refusal_causes = [
+            hide_kit::RefusalCause::Unsafe,
+            hide_kit::RefusalCause::Record,
+            hide_kit::RefusalCause::Busy,
+            hide_kit::RefusalCause::Projects,
+            hide_kit::RefusalCause::Other,
+        ];
+        for variant in refusal_causes {
+            match variant {
+                hide_kit::RefusalCause::Unsafe
+                | hide_kit::RefusalCause::Record
+                | hide_kit::RefusalCause::Busy
+                | hide_kit::RefusalCause::Projects
+                | hide_kit::RefusalCause::Other => {}
+            }
+        }
+        assert_wire(&contract, "kit_refusal_cause", &refusal_causes);
+        checked.insert("kit_refusal_cause");
+
+        let state_variables = [
+            hide_kit::layout::StateVariable::HideStateDir,
+            hide_kit::layout::StateVariable::XdgStateHome,
+        ];
+        for variant in state_variables {
+            match variant {
+                hide_kit::layout::StateVariable::HideStateDir
+                | hide_kit::layout::StateVariable::XdgStateHome => {}
+            }
+        }
+        assert_wire(&contract, "kit_state_variable", &state_variables);
+        checked.insert("kit_state_variable");
         use crate::links::{FileState, IssueSource, LinkTarget, SessionRole};
         let files = [FileState::Present, FileState::Missing, FileState::Unknown];
         for variant in files {

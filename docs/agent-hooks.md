@@ -14,13 +14,14 @@ This is the only part of the tree Hide cannot read from the session snapshot, an
 | --- | --- |
 | Claude Code | `~/.claude/settings.json` |
 | Codex | `~/.codex/hooks.json` |
-| OpenCode | `~/.config/opencode/plugins/hide.js` (see [OpenCode: Hide's plugin](#opencode-hides-plugin)) |
+| OpenCode | `~/.config/opencode/plugins/hide.js` and `~/.config/opencode/plugins/hide-opencode/` (see [OpenCode: Hide's plugin](#opencode-hides-plugin)) |
 | Pi | `~/.pi/agent/extensions/hide.ts` (see [Pi and omp: Hide's extension](#pi-and-omp-hides-extension)) |
 | omp | `~/.omp/agent/extensions/hide.ts` (same section) |
 | Grok | `~/.grok/hooks/hide.json`, Hide's own file ([Grok's and Cursor's own hooks](#groks-and-cursors-own-hooks)) |
 | Cursor | `~/.cursor/hooks.json`, shared with the operator's hooks |
 
 On Windows `~` is the account's profile folder (`%USERPROFILE%`), where Claude Code, Codex, Grok and Cursor keep these files and OpenCode, Pi and omp load their plugins and extensions from.
+Beside the hooks, Hide records Claude Code's, Codex's and agy's own folder trust for a worktree it made, in each agent's own file ([Folder trust for the worktrees Hide makes](#folder-trust-for-the-worktrees-hide-makes)).
 
 One entry is appended per registered event, and nothing else in the file is touched.
 The common writer retains JSON source spans through `serde_json::value::RawValue`, splicing only owned changes so unrelated members, groups and handlers retain their literal whitespace, ordering and escapes.
@@ -305,6 +306,51 @@ Each refusal appends one JSON line (pane id, agent kind, shape, runtime; never t
 The per-call cost is what an ordinary shell call pays: the payload is read within 0.5 seconds and a byte test for `herdr` over the whole payload runs before anything is parsed or spawned, so a call whose payload does not mention `herdr` (its working directory and transcript path included) costs one process start and the [project guardrails](#project-guardrails)' policy read; a path containing `herdr` pays one JSON parse and the lexer as well (numbers in [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#the-spawn-guard-hook-on-a-shell-call)).
 `hide-agent-hooks/tests/it/spawn_guard.rs` runs the helper beside a stand-in `hide` for each outcome above, and `src/spawn_guard.rs` holds the parser's table tests.
 
+## Folder trust for the worktrees Hide makes
+
+Claude Code, Codex and agy each ask, the first time they start interactively in a folder they have not been told to trust, whether to trust it, and a delegated child stopped at that question waits for an answer nobody is there to give.
+So before Hide starts one of them in a worktree it made for that start (`hide agent spawn` into a new worktree, a task's agent), it records that agent's own trust of the worktree on the machine that will run it: the core sends `agent_trust` to the node of the machine that runs the worktree's pane, this Mac's or a connected device's, and the node writes it there (`hide_agent_hooks::folder_trust`).
+That node is the pane's, not the one the agent's PATH is checked on (none for a device, whose own Herdr answers for its PATH), so a worktree made on a device from the screen or the phone gets its trust like one made here; a pane whose machine cannot be reached refuses the start with `agent_trust_unavailable`.
+A start in a checkout that already existed, the operator's own or an earlier worktree, records nothing, and the agent asks there as it would outside Hide.
+
+| Agent | Where its trust is kept | What Hide adds |
+| --- | --- | --- |
+| Claude Code | `~/.claude.json`, or `~/.claude/.config.json` while Claude Code still keeps that older file and it is not empty | `projects["<worktree>"].hasTrustDialogAccepted: true` |
+| Codex | `~/.codex/config.toml`, written by Codex's own app-server | `[projects."<worktree>"] trust_level = "trusted"` |
+| agy | `~/.gemini/antigravity-cli/settings.json` | the worktree in `trustedWorkspaces` |
+
+Claude Code's and Codex's files are found from the same folder as their hook files (`AgentRuntime::trust_path` beside `config_path`), so the trust and the hooks always land in one place.
+Like the hooks, they are the account's default folders: an agent run with `CLAUDE_CONFIG_DIR` or `CODEX_HOME` pointing elsewhere reads neither Hide's hooks nor its trust, and asks.
+
+The worktree is named by its resolved path, spelled as the agent compares it: with `/` between names for Claude Code on Windows, and in lower case for Codex on Windows, which compares folders there without case.
+The entry names the worktree itself and never the repository it was made from.
+Answering an agent's own question in a linked worktree trusts the repository's main checkout, which is the operator's and would trust every worktree of that repository with it; Claude Code 2.1.302 and Codex 0.163.0 read an entry for the exact folder before the repository's, and trust given to a folder above a repository does not reach into it (measured on 2026-10-17).
+
+Hide keeps which entries it added in its own record, `~/.hide/agent-hooks/<agent>-trust.json` (`claude-trust.json`, `codex-trust.json`, `antigravity-trust.json`), at most 4096 folders that exist per agent; a trust past that is refused with the cap in its reason.
+The record is written before the entry and taken back when the entry could not be written, so Hide never leaves an entry its record does not name.
+An entry that is already there is the operator's: Hide writes nothing and records nothing, so removing the worktree leaves it.
+Removing a worktree Hide made takes out the entries Hide added for it, for each agent, and switching an agent off, or removing the machine from Hide, takes out every entry Hide added for that agent; an entry the operator added, before Hide or after it, stays, and so does what else the agent keeps under the same folder (Claude Code's project settings, a Codex project's other keys).
+The removal runs once the folder is gone, so it finds the entry by the key Hide recorded, compared as the system compares folders: the folder's parent resolved, and on Windows without case and with either separator, so Git's `C:/x` finds Codex's `c:\x`.
+A worktree removed outside Hide (by hand, or by a Factory cleanup that found the folder already gone) leaves its entries until the next trust Hide records for that agent, which takes out every entry of Hide's whose folder is gone in the same write.
+Codex's entries are taken out through its app-server too; with no Codex left to ask, they and Hide's record of them stay until a pass that finds one, and nothing reads them meanwhile.
+
+Every change holds one account lock per agent, and a change waits for it as long as the change holding it can take: one Codex app-server session's whole bound (`codex_trust::SESSION_BOUND`, 21 s) and a second, so a second start while Codex records the first one's trust waits instead of failing.
+The core gives the node twice that and five seconds for the call (`folder_trust::Agent::longest_change`); a Codex that answers, as it does in well under a second, takes about a second.
+The JSON files are rewritten through the same lossless read and compare-before-replace as the hook files, so their other keys and the operator's formatting keep their bytes.
+Claude Code rewrites `~/.claude.json` while it holds its own lock on it, the `.lock` folder beside the file's real path (proper-lockfile resolves a link, so a linked `~/.claude.json` is locked beside its target), and reads the file again under that lock, so Hide changes the file only while it holds the same lock and neither overwrites the other.
+Hide waits up to two seconds for it and takes over a lock older than ten seconds, which Claude Code treats as left by a process that ended, removing only the folder it saw stale; it removes its own lock only while the folder there is still the one it made, and does not write once Claude Code has taken the lock over.
+Hide's own changes never meet at Claude Code's lock, since each holds Hide's lock first; between Hide and Claude Code, a takeover of a stale lock has the moment between the look and the removal that Claude Code's own takeover has.
+Codex's file is never written by Hide: `hide_agent_hooks::codex_trust` starts `codex app-server`, reads the user layer's `projects` with `config/read`, writes the one key with `config/batchWrite` against the version it read, and reads it back, as it does for [Hide's own hooks](#codex-trusts-hides-own-hooks).
+
+A trust that cannot be recorded refuses the start before the agent runs, with `agent_trust_failed: <agent>'s trust of <worktree> could not be recorded (<reason>)`, so no agent waits unseen on its question (PRD antigravity-first-class B20).
+The node refuses to trust a folder that is not a Git worktree, a path written with `.` or `..`, the filesystem root, the home folder or a folder above it, whoever asks.
+When the operator marked the worktree, or the repository's main checkout it was made from, `untrusted` in Codex, Hide does not override that answer: the reason names that folder and says to trust it in Codex or to start the agent there by hand.
+A Codex configuration the operator's organization manages that decides the folder's trust instead, a machine with no Codex Hide can find, a Claude Code lock held past two seconds and a settings file that does not parse refuse the start too, each with its reason; a machine that is not connected refuses it with `agent_trust_unavailable`.
+
+`hide-agent-hooks/src/folder_trust/tests.rs` checks each agent's format, spelling, ownership and removal in a fixture home on every pull request, on Linux in `rust` and on Windows in `windows check`, and `tests/it/codex_folder_trust.rs` runs Codex's through a stand-in app-server on Linux.
+The nightly `agent trust contract` (`.github/workflows/agent-trust-contract.yml`) installs the pinned Claude Code and Codex on all three systems and checks that the real ones read what Hide wrote: Codex's app-server loads a worktree's own settings once Hide trusted it and stops once Hide took the trust out (`tests/it/codex_binary.rs`), and Claude Code in a pane of the pinned Herdr starts at its prompt in the worktree Hide trusted and asks its question in the repository's other worktree (`herdr-core/src/agent_start/real_agent_trust_tests.rs`).
+The pull request runs no registry install, so a failure that is not Hide's never holds one; a change to the trust writer is proven on all three systems with `gh workflow run nightly.yml --ref <branch> -f lane=agy`.
+
 ## Project guardrails
 
 The pre-tool hook also refuses what a project's protections name, the four switches of Project Settings > Working style ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#project-settings), PRD agent-guardrails).
@@ -355,6 +401,7 @@ The payload each runtime sends, observed on the versions Hide installs into (`hi
 | Cursor 2026.10.14 | `Read` | `Write`, an edit included, and `Delete` (`file_path`) | `Shell` |
 | Grok 1.0.52 | `read_file`, `Read` | `search_replace`, `write`, `Edit`, `Write` | `Bash` |
 | OpenCode 1.18.30 | `read` | `edit`, `write`, `apply_patch`, `multiedit` (`filePath`, `patchText`) | `bash` |
+| OpenCode 2.0.29 | `read` | `edit`, `write`, `patch` (`path`, `patchText`) | `shell` |
 | Pi 1.0.4, omp 18.7.0 | `read` | `edit`, `write` (`path`) | `bash` |
 
 A key another version renames reads as no path, and the call runs.
@@ -366,12 +413,13 @@ A command hook pays one policy read per call and parses the payload only when so
 ## OpenCode: Hide's plugin
 
 OpenCode has no command hook; its official extension point is a JavaScript plugin whose hooks the SDK types (`@opencode-ai/plugin`) declare ([plugins](https://opencode.ai/docs/plugins/)).
-Hide writes one plugin file, `hide.js`, into OpenCode's global plugin folder `~/.config/opencode/plugins/`, beside Herdr's `herdr-agent-state.js`, and nothing else of OpenCode's.
-`hide-agent-hooks/src/opencode.rs` declares it and `hide-agent-hooks/src/plugin.rs`, the owned script file it shares with Pi's and omp's extension, writes, judges and removes it; its source is `hide-agent-hooks/src/opencode/plugin.js` with this build's helper path filled in.
-The first line, `// hide-opencode-plugin@<version> sha256=<hash of the rest>`, proves the file is Hide's, carries its version and shows whether it was edited; the body holds `const HELPER = "<absolute path of this build's hide-agent-hooks>";`.
-OpenCode's configuration folder is never created: with no `~/.config/opencode` the row reads Absent and says OpenCode has not created it yet, and only the `plugins/` folder inside an existing one is made.
+Hide writes into OpenCode's global plugin folder `~/.config/opencode/plugins/`, beside Herdr's `herdr-agent-state.js`, and nothing else of OpenCode's: `hide.js`, the plugin OpenCode 1.x loads, and the folder `hide-opencode/` with `server.js` and `tui.js`, the plugin OpenCode 2 loads ([OpenCode 2](#opencode-2)).
+OpenCode 1.x loads only the files of the folder, so it never sees `hide-opencode/`, and OpenCode 2 loads `hide.js` as a plugin that does nothing.
+`hide-agent-hooks/src/opencode.rs` declares the three files and `hide-agent-hooks/src/plugin.rs`, the owned script files they share with Pi's and omp's extension, writes, judges and removes them together; their sources are `hide-agent-hooks/src/opencode/{plugin,server,tui}.js` with this build's helper path filled in.
+Each file's first line, `// <hide-opencode-plugin|hide-opencode-server|hide-opencode-tui>@<version> sha256=<hash of the rest>`, proves the file is Hide's, carries its version and shows whether it was edited; `hide.js` and `server.js` hold `const HELPER = "<absolute path of this build's hide-agent-hooks>";`, and `tui.js` takes it from `server.js`.
+OpenCode's configuration folder is never created: with no `~/.config/opencode` the row reads Absent and says OpenCode has not created it yet, and only the `plugins/` folder inside an existing one and Hide's `hide-opencode/` inside that are made.
 
-The plugin does nothing outside a pane Hide manages: with no `HERDR_ENV=1`, `HERDR_PANE_ID` and `HERDR_SOCKET_PATH`, or no helper at its path, it registers no hook and starts no process, so OpenCode in an ordinary terminal runs as if the file were not there.
+On OpenCode 1.x the plugin does nothing outside a pane Hide manages: with no `HERDR_ENV=1`, `HERDR_PANE_ID` and `HERDR_SOCKET_PATH`, or no helper at its path, it registers no hook and starts no process, so OpenCode in an ordinary terminal runs as if the file were not there.
 Inside one it uses three hooks, each calling `hide-agent-hooks opencode <start|prompt|confirm|tool|subagents>` with one JSON object on stdin and one answered on stdout; the helper always exits 0 and a failure answers `{}`:
 
 - `chat.message` adds Hide's text to a root session's prompt as one synthetic text part wrapped in `<system-reminder>`: the session guidance (the same text the `SessionStart` hook gives, read once when OpenCode loads the plugin) on the session's first prompt, then Project Memory under Claude Code's rules (the session-start index with the first prompt's cards on the first prompt, the prompt's cards after), then the pane's waiting letters ([docs/delivery.md](delivery.md)).
@@ -389,15 +437,39 @@ Each hook has a budget: 1.85 seconds for a prompt (the Claude Code prompt hook's
 OpenCode waits on a hook without a limit, so the plugin enforces them: past the budget the helper is killed, the prompt goes on unchanged and the tool call runs.
 At most eight helpers run at once; a call skipped at that cap or given up on is counted and passed on the next call, which records it in the private delivery diagnostic (cause `plugin`), since the plugin has no log of its own and a hook's output reaches nobody who could act on it.
 
+### OpenCode 2
+
+OpenCode 2 (2.0.29) refuses a plugin module without a default definition (`{ id, setup }`), and runs its plugins in one shared server that every terminal attached to it talks to, so a plugin there is no pane's: the server carries the environment of whichever terminal started it.
+`hide.js` exports one default definition both versions read: OpenCode 1.x runs its `server`, the plugin above, and OpenCode 2 finds a `setup` that does nothing.
+OpenCode 2 loads `hide-opencode/` as one plugin of two halves, which talk over OpenCode's plugin RPC (`hide.opencode`: the methods `attach`, `detach` and `answer`, and the event `ask`):
+
+- `server.js`, in the server, holds the hooks (the session's `prompt` hook, the tool's `execute.before` and `execute.after`, and OpenCode's event stream) and runs no helper for a pane: it asks the terminal half and waits for the answer within the hook's budget.
+- `tui.js`, in the terminal, carries its pane's environment: it attaches to the root session the terminal shows (a subagent's session shows its root's) and lets it go when the terminal shows none, as on the home screen, answers each question by running the helper in its pane, and keeps the pane's subagent counts from OpenCode's events as 1.x's `event` does.
+  It attaches again every 5 seconds while it shows the session; a terminal that opens a session takes it over, and one that only renews never takes it from another terminal still attached, so of two terminals showing a session the one that opened it last answers.
+  Outside a pane Hide manages it attaches nothing.
+
+OpenCode 2 runs one instance of the server half per project folder and sends a plugin call to the instance of the folder it names, so the terminal half attaches and answers at the folder of the session (`location`); an answer sent without it would reach no question.
+
+- A root session's prompt asks the terminal attached to it, or any terminal now showing it (the prompt that opens a session reaches the plugin before the terminal's route is read again), and writes the answer, the guidance on the session's first prompt, Memory and the letters due, as one synthetic message (`session.synthetic`) inside `<system-reminder>`, which OpenCode admits ahead of the prompt and the operator's screen leaves out; its letters are confirmed once `session.inbox.delivered` names that message.
+  A confirmation still on its way is waited for first, within the prompt's budget, and an answer carrying a letter Hide already took writes the guidance alone, so a letter is not written twice; a letter whose confirmation failed stays pending in Hide and comes with a later prompt, as in 1.x.
+- An attached root's completed tool result asks for the letters due while it works, appends them to the result's content, and confirms them once `session.tool.success` reports the result stored with them; a result stored without them leaves them pending in Hide, as in 1.x.
+- A tool call asks the attached terminal for the spawn guard (a `shell` call whose command mentions `herdr` or `HERDR_BIN_PATH`), the Factory question guard (`question`, asked as its root session's) and, while some project has a protection on, the [project guardrails](#project-guardrails) for `shell`, `read`, `edit`, `write` and `patch` (only `path` and a patch's `*** ` lines); the deny reason is thrown, as in 1.x.
+  A `shell` call's relative `workdir` is resolved against the session's folder, where OpenCode runs it (1.x's against its project folder too), never the shared server's own.
+  A session whose line OpenCode does not tell within 300 ms is taken as its own root, as 1.x takes it, and any terminal showing its root is asked.
+  With no terminal attached, or none answering in time, the server half runs the guardrails alone (`guard_only`), with the pane variables it inherited removed, so a protected project stays protected in `opencode run` and outside Herdr; the spawn and question guards then let the call run, as a timed-out helper does in 1.x, and the miss reaches the helper's diagnostic with the next call.
+  A slow answer never detaches a terminal; one that stopped attaching for 10 seconds (two renewals; a killed terminal says nothing on its way out) is asked no more.
+
+The budgets and the cap of eight running helpers are 1.x's: the server half's wait spends the hook's budget, and the terminal half keeps 150 ms of it for the answer's way back.
+
 No bell rings for OpenCode: on 2026-10-07 its previous-session picker read `done` and a bell's Enter there opened another session, so its letters ride its next prompt instead and are confirmed only once OpenCode stored that prompt ([docs/delivery.md](delivery.md#safe-intake-and-manual-fallback)); while it works they ride a tool result (above).
 Claude Code's hook run inside OpenCode, through an operator plugin that bridges `~/.claude/settings.json`, ends silently (`ForeignOrigin::OpenCode`), so letters and counts are never taken twice.
 
-The kit row reads the plugin as Claude Code's hook part is read: Installed when the file is this build's and unedited; Outdated with the reason when it is another build's, names a helper that is gone, is an older version or was edited; Removed when it was installed and taken out; Off when OpenCode is switched off.
-An older or another build's unedited plugin is replaced by the next pass; an edited one is replaced only by Reinstall, and a switch-off removes only an unedited file that carries Hide's marker.
-A `hide.js` without the marker is not Hide's and is never replaced or removed.
+The kit row reads the plugin as Claude Code's hook part is read: Installed when every file is this build's and unedited; Outdated with the reason when one is another build's, names a helper that is gone, is an older version or was edited; Removed when it was installed and taken out; Off when OpenCode is switched off.
+The three files are judged, written and removed together, so a pass never leaves one version's half beside another's: the row reads as its worst file, an older or another build's unedited plugin is replaced by the next pass (a `hide.js` an earlier build wrote alone gets the `hide-opencode/` folder beside it), an edit in any file keeps all three until Reinstall, and a switch-off removes the unedited files and then `hide-opencode/` unless something else is in it.
+A file without Hide's marker at one of the three paths is not Hide's: it is never replaced or removed, and Hide writes none of the other two beside it.
 The plugin is written on Windows too, where OpenCode runs on Bun as it does elsewhere.
 On a `windows-latest` runner on 2026-10-11, OpenCode 1.18.35 (Bun 1.3.14) loaded a plugin from `%USERPROFILE%\.config\opencode\plugins`, and the plugin's own call, `spawn` of an absolute `.exe` path with no shell, wrote its stdin, read its stdout and killed it with `SIGKILL` there.
-`hide-agent-hooks/tests/it/windows_scripts.rs` runs this build's plugin in Node on Windows against the real helper in a folder whose name has a space, a quote, brackets and a `$`, requires the session guidance to reach the first prompt, and runs a tool result through it: the helper's `letters` ask reaches for the `hide` beside it, records in the home's delivery diagnostics that none is there, and the result goes on unchanged; a letter reaching a result is proved by the Unix fake-host test, since no daemon runs on the runner.
+`hide-agent-hooks/tests/it/windows_scripts.rs` runs this build's plugin, `hide.js` and OpenCode 2's two halves with one terminal, in Node on Windows against the real helper in a folder whose name has a space, a quote, brackets and a `$`, requires the session guidance to reach the first prompt, and runs a tool result through it: the helper's `letters` ask reaches for the `hide` beside it, records in the home's delivery diagnostics that none is there, and the result goes on unchanged; a letter reaching a result is proved by the Unix fake-host test, since no daemon runs on the runner.
 Memory receipts are read back from the OpenCode session's synthetic user parts by the conversation read (`hide-session`, `LabelTranscript.memory_receipts`): the label worker's for a session a live pane holds, the Memory pass's for any other (the same read shaped as a conversation page, where each is a provider-injected event at its message's index), and recorded off the core lock by the one function the Claude and Codex transcripts' go through.
 
 ## Pi and omp: Hide's extension
@@ -414,7 +486,7 @@ The agent's own folder (`~/.pi/agent`, `~/.omp/agent`) is never created, and onl
 The extension does nothing outside a Herdr pane (no `HERDR_ENV=1`, `HERDR_PANE_ID` and `HERDR_SOCKET_PATH`), in an agent started from another Pi's or omp's shell (`PI_SESSION_ID`, `OMPCODE=1`, which those hosts set for every shell they start), or with no helper at its path; like OpenCode's plugin it does not ask whether a Hide daemon owns that Herdr, and the helper answers `{}` when none does.
 Its guidance and letters go only to the pane's own agent, the host's TUI (`ctx.mode` `tui`): both hosts' RPC modes report a UI too but draw nothing in the pane, and another program there may start one, so they, print runs, unsaved sessions and omp's subagents, which run in the same process with their own binding of the module, get none.
 The spawn guard holds for every session in the pane, and omp's `ask` guard for the pane's TUI session and its subagents.
-It names the session by its file, as Herdr's integration does, which a deep checkout makes longer than 250 bytes; the helper, the CLI and the daemon take a session of up to 4096 bytes for a letter pull and a Factory question (`hide_agent_hooks::delivery::SESSION_LIMIT`).
+It names the session by its file, as Herdr's integration does, which a deep checkout makes longer than 250 bytes; the helper, the CLI and the daemon take a session of up to 4096 bytes for a letter pull and a Factory question (`hide_agent_hooks::delivery::SESSION_LIMIT`), and an agent registration keeps the same ([delivery.md: Agent registration and spawning](delivery.md#agent-registration-and-spawning)).
 Each handler calls `hide-agent-hooks <pi|omp> <start|prompt|confirm|tool|subagents>` with one JSON object on stdin, which carries the extension's version, and one answered on stdout; the helper always exits 0, a failure answers `{}`, and a version this build does not write also answers `{}`, so a file another build left does nothing until the kit replaces it.
 
 - `session_start` and `session_switch` read the session guidance once, as OpenCode's plugin does at load; a read that failed is asked again by the next prompt.
@@ -602,8 +674,7 @@ An entry the operator edited reads Outdated and stays until Reinstall, and a `ho
 `hide-agent-hooks/src/antigravity.rs` and `src/guidance.rs` test the answers and the block's install and removal in a fixture home, and the `agy contract` CI lane (`.github/workflows/agy-contract.yml`) also runs the vendor's current agy against the block in the runner's throwaway home.
 
 agy 1.4.0 loads a workspace's own `.agents/hooks.json` only for a folder in `trustedWorkspaces` of `~/.gemini/antigravity-cli/settings.json` (1.3.6 also loaded it in print mode without trust), trust is per exact path and is not inherited from a parent folder, and the first interactive start in a folder it has not been told to trust asks, which would leave a delegated child stopped at that question.
-Hide therefore adds the exact path of a worktree it made to that list before it starts agy there; the node refuses to trust a folder that is not a Git worktree, a path written with `.` or `..`, the filesystem root, the home folder or a folder above it, whoever asks, and keeps which entries it added in `~/.hide/agent-hooks/antigravity-trust.json` (D-08); removing that worktree, or switching agy off, takes out only those entries, and an entry the operator added, before Hide or after it, stays.
-Every change holds one account lock and rewrites `settings.json` through the same lossless read as the hook files, so its other keys keep their bytes; a trust Hide cannot record keeps agy from starting there, and the caller gets the reason (B20).
+Hide therefore adds the exact path of a worktree it made to that list before it starts agy there, as it records Claude Code's and Codex's trust ([Folder trust for the worktrees Hide makes](#folder-trust-for-the-worktrees-hide-makes); D-08).
 Hide AI's own folder for agy is trusted the same way ([AI_PROVIDERS.md](AI_PROVIDERS.md#antigravity)), and switching agy off removes it too.
 
 agy's tool-permission question reaches Needs You as an approval: Herdr 0.9.3 reports the pane as waiting on an approval while it is open (seen in the app on 2026-10-16; an earlier probe outside the app had read it as idle).
@@ -680,14 +751,14 @@ Cursor's Titles feature is a generated goal; its native store supplies no title,
 An agent is a row only when its documentation confirms where it reads skills and the name of the program it installs.
 The other fourteen agents earlier builds supported are no longer rows (see Retired agents below).
 Hide does not write an agent's `AGENTS.md` or `CLAUDE.md`, its MCP configuration or its model settings, and it runs no installer for an agent.
-The things it records in an agent's own state are Codex's trust for Hide's own hooks, below, and agy's folder trust for the worktrees Hide makes ([Antigravity: Hide's hook block](#antigravity-hides-hook-block)).
+The things it records in an agent's own state are Codex's trust for Hide's own hooks, below, and Claude Code's, Codex's and agy's folder trust for the worktrees Hide makes ([Folder trust for the worktrees Hide makes](#folder-trust-for-the-worktrees-hide-makes)).
 
 ### Herdr's integration for an agent
 
 Herdr learns an agent's session id, and for some agents its lifecycle, from a hook script or plugin that `herdr integration install <target>` puts into the agent's own configuration.
 Lineage, the mailbox identity, labels and sleep all read that session id, so the kit installs the integration with the agent's other pieces, as a third piece of the agent's row, `herdr:<agent>` in the record.
 It runs through the machine's own Herdr CLI (`KitTarget::herdr_bin`): the Herdr bundled in the app on this Mac, and the device's own Herdr on a device.
-Every call is one owned child with a deadline and a cleared environment but `HOME` and `PATH`, on the kit worker and never under the runtime lock.
+Every call is one owned child with a deadline and only the account's login variables and `HOME` (`hide_platform::process::restrict_to_login_environment`), on the kit worker and never under the runtime lock.
 The integration is put in only when the agent is on, installed and has made its own folder, since Herdr refuses an agent whose configuration folder is missing.
 For Codex the kit also keeps what Herdr's install wrote into `~/.codex/hooks.json`, because Codex asks the operator to review a hook before it runs and Hide records that trust for the entries it installed ([Codex trusts Hide's own hooks](#codex-trusts-hides-own-hooks)); it goes from the record with the `herdr:codex` piece.
 Hide takes out only what it put in: an integration that was already in place when Hide first looked is the operator's and stays, whether the agent is switched on or off or the machine leaves Hide, and an older one of the operator's is not replaced.
@@ -702,7 +773,7 @@ A survey on 2026-10-07 read each agent's official documentation and the executab
 Pi 1.0.4 and omp 18.7.0 loaded Hide's extension from a private user folder with no approval screen on 2026-10-09.
 Cursor's current CLI hooks are read from its documentation and were not run, so they are an inference.
 agy 1.3.6 and 1.4.0 ran the user folder's `~/.gemini/config/hooks.json` with no approval screen on 2026-10-16, and neither its folder-trust dialog nor `/hooks` has a step that approves one hook; its folder trust, which Hide records for its own worktrees, is the check a workspace's hooks get.
-Hide therefore writes no trust for any other agent, and an agent that starts asking for approval of a user-folder hook is a new row for this section and a new trust step beside Codex's, not a change to Codex's.
+Hide therefore writes no hook trust for any other agent (the folder trust it records for its own worktrees is a separate step, [Folder trust for the worktrees Hide makes](#folder-trust-for-the-worktrees-hide-makes)), and an agent that starts asking for approval of a user-folder hook is a new row for this section and a new trust step beside Codex's, not a change to Codex's.
 
 ### Retired agents
 
@@ -725,7 +796,7 @@ That happened on a machine's first install, whenever Hide's hook changed, and wh
 Installing Hide is the operator's agreement to Hide's hooks, so Hide records Codex's trust for them itself (PRD codex-hook-trust D-01).
 It does it through Codex's own interface and never by hand: `hide_agent_hooks::codex_trust` starts `codex app-server` over stdio for one short check, reads the entries with `hooks/list` (each entry's key, its hash and its status) and stores `trusted_hash` for the ones that need it with one `config/batchWrite` to `hooks.state`, then reads the list again and counts a write Codex did not keep as a failure.
 A listing that shows Codex could not use the file Hide wrote is a failure too, not "nothing to record": codex-cli 0.160.0 reports a `hooks.json` it cannot parse as a `failed to parse hooks config <path>` warning with an empty list, and a broken `config.toml` as an error naming the Codex home; a warning about another tool's hook is not Hide's to fail on.
-Hide computes no hash and writes no `config.toml`, so a change in how Codex hashes is followed, and every other setting in that file stays as Codex wrote it.
+Hide computes no hash and writes no `config.toml`, so a change in how Codex hashes is followed, and every other setting in that file stays as Codex wrote it; the folder trust for Hide's worktrees goes through the same interface ([Folder trust for the worktrees Hide makes](#folder-trust-for-the-worktrees-hide-makes)).
 
 The kit runs the check in every pass that finds the Codex hook part in place, whether the pass wrote it or found it current: at launch, when a device connects, and on Reinstall.
 It runs once, after the pass has put in every agent's pieces, because Herdr's integration is only in place then, so one `codex app-server` session trusts Hide's entries and Herdr's together and a first install is trusted before the operator's first Codex start.
@@ -781,7 +852,7 @@ A device where Hide may not install, or whose platform this build does not carry
 
 ## Installing
 
-Hide's hooks are one part of its install kit (`hide-kit`; [ARCHITECTURE.md, The install kit](ARCHITECTURE.md#the-install-kit)), which installs the same set on this machine at every launch of the packaged app and on every device at every helper connection, without asking: the operator agreed to it once, by installing the app or by adding the device.
+Hide's hooks are one part of its install kit (`hide-kit`; [ARCHITECTURE.md, The install kit](ARCHITECTURE.md#the-install-kit)), which installs the same set on this machine at every launch of the packaged app and on every device at every helper connection, without asking: the operator agreed to it once, by installing the app or by adding the device; after a core move it does so on the core's machine at every start of its core and on the machine the core moved off at every link.
 Every entry's command is guarded, so a session whose app or helper was moved or deleted carries on without a hook error (PRD device-parity B3), and it is written in the form its runtime runs a hook on that system:
 
 | System | Runtime | Entry |
@@ -813,10 +884,10 @@ The marker is looked for in an entry's `command` and in each of its `args`, wher
 The marker stays at version 6: the macOS and Linux bytes are the ones version 6 wrote (`the_posix_entry_is_exactly_what_macos_and_linux_have_installed` pins them), and no earlier build installed anything on Windows.
 `hide-agent-hooks/tests/it/windows_hook_command.rs` runs the Windows entries the way their runtimes start them, under Windows PowerShell and PowerShell 7, with the real helper in a folder whose name has a space, a quote, brackets and a `$`, in the `windows check` lane: Claude Code's and Codex's prove stdin reached the helper by the Memory request only the session it read makes (with no `hide` beside it, recorded as `memory_unavailable`), and Grok's and Cursor's by the spawn guard's `daemon.unreachable` line, which the helper writes only after reading a launch from the event; Cursor's runs inside the script its CLI writes, and its answers parse as JSON.
 Version 6 is the first guarded command, so an older entry reads outdated and the next launch or connection replaces it.
-The kit folder is a path that survives a rebuild: the installed app bundle's `Contents/Resources` on macOS, the unpacked package's `resources` on Windows/Linux, and the helper root's `current` link on a device, which each new build of the helper points at itself.
+The kit folder is a path that survives a rebuild: the installed app bundle's `Contents/Resources` on macOS, the unpacked package's `resources` on Windows/Linux, and the helper root's `current` link on a device, which each new build of the helper points at itself, as a moved core does at the build it runs.
 
-A `hided` outside a desktop package installs nothing, and This machine's row in Settings says the packaged app is where the kit comes from.
-`hide_kit::bundled_kit_dir` decides that from the layout: macOS `*.app/Contents/Resources`, or Windows/Linux `resources` with `app.asar` inside and Electron `hide[.exe]` in its parent folder.
+A `hided` outside a desktop package and outside a build Hide placed in the account's helper root installs nothing, and This machine's row in Settings says the packaged app is where the kit comes from.
+`hide_kit::bundled_kit_dir` decides the package from the layout: macOS `*.app/Contents/Resources`, or Windows/Linux `resources` with `app.asar` inside and Electron `hide[.exe]` in its parent folder; a build is `~/.hide/host-helper/<16 hex>/` in the account's own home, holding `hide` and `hide-agent-hooks` beside `hided`, the folder a core move and a core update make (`KitPlace::of_program`, held by `a_core_installs_from_its_package_or_a_placed_build_and_never_from_another_copy`).
 A folder merely named `resources` grants no install authority.
 The rule exists because a hook command outlives the process that wrote it.
 It is a path stored in the operator's own configuration file and run by every future session of that agent, so the only path worth writing is one that survives a rebuild.
@@ -846,12 +917,13 @@ Install and remove are deliberately not CLI subcommands: writing to the operator
 
 ## Testing
 
-The operator's real `~/.claude/settings.json` and `~/.codex/hooks.json` are never a test target.
+The operator's real `~/.claude/settings.json`, `~/.claude.json`, `~/.codex/hooks.json` and `~/.codex/config.toml` are never a test target.
 Every test in this crate builds its own `HOME` fixture and asserts against that.
 
 OpenCode's plugin is tested at three layers, none of which runs the operator's OpenCode.
-`hide-agent-hooks/src/opencode/tests.rs` writes, judges and removes the file in a fixture `HOME`, and `tests/it/opencode_helper.rs` runs the built helper beside a stand-in `hide` that records each call.
-`tests/it/opencode_plugin.rs` runs `tests/opencode/plugin.test.mjs` in Node 22, which loads the generated plugin as OpenCode does and calls its hooks with OpenCode 1.18.30's event and hook shapes (`tests/fixtures/opencode/events-1.18.30.json`) against a stand-in helper; the rust lane installs Node for it.
+`hide-agent-hooks/src/plugin/tests.rs` writes, judges and removes the files in a fixture `HOME`, and `tests/it/opencode_helper.rs` runs the built helper beside a stand-in `hide` that records each call.
+`tests/it/opencode_plugin.rs` runs `tests/opencode/plugin.test.mjs` in Node 22, which loads the generated `hide.js` as OpenCode 1.x does and calls its hooks with OpenCode 1.18.30's event and hook shapes (`tests/fixtures/opencode/events-1.18.30.json`) against a stand-in helper; the rust lane installs Node for it.
+It runs `tests/opencode/plugin2.test.mjs` the same way, which loads the generated `hide-opencode/` halves on a stand-in for OpenCode 2.0.29's shared server, with the hook and event shapes a 2.0.29 capture showed: an instance per folder with a call routed by the folder it names, every event to every instance, and terminals in two panes; it checks that each prompt, guard and letter is answered in the pane showing its session, a letter's confirmation once OpenCode delivered or stored it, the guardrails alone with no terminal or a vanished one, and the counts of the pane showing a subagent's root.
 `web/e2e/opencode-plugin.spec.ts` lets the kit write the plugin into a private `HOME`, runs a small OpenCode stand-in (`web/e2e/opencode-host.ts`) that loads it in two panes of the pinned Herdr, reports itself the way Herdr's OpenCode integration does, and checks a letter on the next prompt and its confirmation once stored, the spawn guard's refusal, and the subagent counts Herdr receives.
 
 Pi's and omp's extension is tested at the same three layers, none of which runs the operator's Pi or omp.

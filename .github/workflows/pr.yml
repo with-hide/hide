@@ -44,7 +44,7 @@
 # `@platform` tests, the macOS mailbox lane and the rest of the OS contract to
 # `nightly.yml`.
 # Everything else runs on Linux: the Rust suite, the unit suites, the invariant
-# checks, the whole web end-to-end, dealt out to four shards by `web-e2e.yml`,
+# checks, the whole web end-to-end, dealt out to six shards by `web-e2e.yml`,
 # and the remote mailbox lane over private SSH (`remote-mailbox`).
 # `nightly.yml` runs the web end-to-end's `@platform` tests on macOS, and the
 # rest of the web end-to-end is the same code on every system, so the move of
@@ -378,6 +378,16 @@ jobs:
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(=links::store::ledger::tests::native_node_paths_identify_fresh_original_work_but_not_history_or_a_sibling)'
+      - name: Letters and agent sleep on the state folder's durable files
+        # The ledger opens from a real state folder, making a missing chain
+        # through the platform's directory flushes, and a letter goes from
+        # one registered agent to the other's inbox and back from disk; the
+        # record of an agent the sleep closes saves through the same barrier.
+        # Windows refused both before hide-platform flushed folders there;
+        # `real_herdr` below checks the daemon itself.
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 5
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & (test(=delivery::ledger::tests::validated_startup_reestablishes_the_installed_version_without_repairing_corruption) | test(=delivery::ledger::tests::startup_bootstraps_private_sibling_state_and_preserves_refused_or_corrupt_bytes) | test(=runtime::delivery::tests::agents_register_and_a_letter_reaches_the_inbox_through_the_saved_ledger) | test(=runtime::tests::agent_sleep::a_dormant_intent_is_saved_through_the_state_folders_barrier) | test(=persistence::tests::a_save_makes_its_folders_chain_durable_once_until_the_folder_is_replaced) | test(=persistence::tests::an_archived_session_saves_through_the_folders_barrier_and_loads_back))'
       - name: Public repository read deadline
         # Execute the delayed native Git fixture, including Windows child
         # cleanup; compiling the public-boundary regression is not proof.
@@ -500,13 +510,15 @@ jobs:
       lane: linux
       runner: ubuntu-latest
       herdr-platform: linux-x86_64
-      # Four shards: the suite is about 20 job-minutes of tests and every
-      # shard repeats about a minute of setup. Six shards ran 4.5 to 7.5
-      # minutes each (2026-10-05) but 23 of 99 runs waited over 10 minutes for
-      # a Linux shard, because the organization runs 20 jobs at once and a
-      # full run asked for 23. Four shards put two fewer jobs in the queue; each
-      # shard's time at four is measured after merge (docs/TESTING.md).
-      shards: 4
+      # Six shards: the suite is about 68 minutes of tests (4109 s recorded,
+      # 2026-10-18; it was 30 on 2026-10-06) and every shard repeats about two
+      # minutes of setup. Four shards ran 984 to 1111 s of their 1200 s step
+      # (medians over 20 main runs); five would plan 822 s each, over the 720 s
+      # a shard is sized for; six plan 686 s. Six was cut to four on 2026-10-05
+      # because 23 of 99 runs waited over 10 minutes for a Linux shard at the
+      # organization's 20 jobs at once, with a full run asking for 23; a full
+      # run now asks for 25, a web shell change for 14 (docs/TESTING.md).
+      shards: 6
 
   # The remote mailbox crate-boundary lane (hided/tests/it/remote_delivery.rs,
   # docs/TESTING.md), in `remote-mailbox.yml`. It has its own job because it was
@@ -573,6 +585,20 @@ jobs:
       contents: read
       issues: write
 
+  # The agent journey on the compiled Claude and Codex stand-ins, keyless, on
+  # Linux, and its process jobs, private files and pane commands on Windows,
+  # for a change to the journey's code or the stand-ins; the nightly and a
+  # release run it on every system, with the signed-in lane.
+  agent-journey:
+    name: agent journey
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'agent-journey')
+    uses: ./.github/workflows/agent-journey.yml
+    with:
+      systems: '["linux","windows"]'
+    permissions:
+      contents: read
+
   # The Electron app on macOS, the system it is written against: the whole
   # suite, for a change to what the app runs: the desktop host, the web shell
   # or a crate.
@@ -588,6 +614,12 @@ jobs:
       lane: macos
       runner: macos-15
       herdr-platform: macos-aarch64
+      # Two shards: the suite is about 17 minutes of tests (1008 s recorded,
+      # 2026-10-17) and one job ran it in 1048 to 1166 s of its 20-minute
+      # step cap. Two plan about 504 s each, under half the cap, for one more
+      # job of about 4.5 minutes of setup on the five macOS runners; a third
+      # would hold three of the five for the same suite (docs/TESTING.md).
+      shards: 2
 
   # The Electron app on Windows: the desktop tests tagged `@platform` (what
   # the host does differently there: `hide connect` starting hided, the
@@ -607,6 +639,7 @@ jobs:
       lane: windows
       runner: windows-latest
       herdr-platform: windows-x86_64
+      shards: 1
       grep: "@platform"
       keep-screenshots: true
 
@@ -624,7 +657,7 @@ jobs:
 
   verify:
     name: verify
-    needs: [plan, policy, rust, checks, os-contract, os-contract-macos, agy-contract, windows-check, windows-e2e, windows-desktop, web-e2e, remote-mailbox, desktop-e2e, package]
+    needs: [plan, policy, rust, checks, os-contract, os-contract-macos, agy-contract, agent-journey, windows-check, windows-e2e, windows-desktop, web-e2e, remote-mailbox, desktop-e2e, package]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

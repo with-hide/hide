@@ -1116,3 +1116,192 @@ fn a_node_pane_s_hide_memory_reads_for_the_node_s_session() {
     drop(runtime);
     drop(release);
 }
+
+/// The row of `device` as the shell receives it.
+fn kit_row(runtime: &Runtime, device: &str) -> crate::model::KitSnapshot {
+    runtime
+        .snapshot()
+        .navigator
+        .devices
+        .iter()
+        .find(|row| row.id == device)
+        .expect("a device row")
+        .kit
+        .clone()
+}
+
+/// A kit report with Hide's command part in `cli` and one agent, as a
+/// machine whose kit ran answers.
+fn machine_kit(cli: hide_kit::ComponentState) -> hide_kit::KitReport {
+    let mut report = super::device_kit::report(&[(hide_kit::ComponentId::Cli, cli)]);
+    report.agents = vec![hide_kit::AgentReport {
+        id: "claude".to_owned(),
+        label: "Claude Code".to_owned(),
+        availability: hide_kit::Availability::Available,
+        enabled: true,
+        chosen: true,
+        skill: hide_kit::PieceReport {
+            state: hide_kit::ComponentState::Installed,
+            reason: None,
+            location: None,
+        },
+        hook: None,
+        herdr: None,
+        doc_url: String::new(),
+    }];
+    report
+}
+
+/// A machine the core moved off dials in as a node and keeps Hide's kit by
+/// the device rules, from the app it runs and through its link: its link
+/// installs it, with the command folder a device gets by default (which
+/// `HIDE_HOST_CLI_DIR` moves, so a test never writes the account's own) and
+/// no Herdr socket, so the node uses its own; its row shows what the node
+/// answered, and Reinstall repairs it there. Removing the node leaves its
+/// kit, since the node runs Hide itself and registers again on its next
+/// link.
+#[test]
+fn a_node_that_dials_in_has_its_kit_kept_through_its_link() {
+    use hide_kit::{ComponentId, ComponentState};
+    use hide_node_link::protocol::KitAction;
+    let node = super::device_kit::KitDevice::answering(Ok(machine_kit(ComponentState::Removed)));
+    let shared = shared_runtime();
+    shared.lock().unwrap().host_cli_dir = "/private/fixture-bin".to_owned();
+    let (link, release) = held_link_to(Arc::clone(&node) as Arc<dyn crate::node_access::NodeLink>);
+    shared
+        .lock()
+        .unwrap()
+        .accept_inbound_node(NODE, "MacBook", link)
+        .expect("the link");
+    wait(&shared, "the node's kit installed", |runtime| {
+        !runtime.device_kit_running.contains(NODE) && !kit_row(runtime, NODE).components.is_empty()
+    });
+    assert_eq!(
+        node.calls(),
+        [(KitAction::Apply, "/private/fixture-bin".to_owned(), None)]
+    );
+    let kit = kit_row(&shared.lock().unwrap(), NODE);
+    assert_eq!(kit.unavailable, None);
+    assert!(!kit.busy);
+    assert_eq!(
+        kit.components
+            .iter()
+            .map(|part| (part.id, part.state))
+            .collect::<Vec<_>>(),
+        [(ComponentId::Cli, ComponentState::Removed)]
+    );
+
+    let event = serde_json::json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "kit_reinstall",
+        "payload": {"device_id": NODE},
+    });
+    shared
+        .lock()
+        .unwrap()
+        .dispatch_json(&serde_json::to_vec(&event).unwrap());
+    wait(&shared, "the node's Reinstall answered", |runtime| {
+        !runtime.device_kit_running.contains(NODE) && !kit_row(runtime, NODE).busy
+    });
+    assert_eq!(
+        node.calls().last().map(|call| call.0.clone()),
+        Some(KitAction::Reinstall {
+            components: vec![ComponentId::Cli],
+            agents_on: Vec::new(),
+            agents_off: Vec::new(),
+            codex_daemon_off: false,
+        })
+    );
+
+    let asked = node.calls().len();
+    let event = serde_json::json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "remove_device",
+        "payload": {"device_id": NODE},
+    });
+    let ((), records) = crate::diagnostics::capture(|| {
+        shared
+            .lock()
+            .unwrap()
+            .dispatch_json(&serde_json::to_vec(&event).unwrap());
+    });
+    assert!(
+        records
+            .iter()
+            .any(|record| record["kind"] == "device.kit_left" && record["device_id"] == NODE),
+        "{records:?}"
+    );
+    assert_eq!(node.calls().len(), asked, "no removal reaches the node");
+    drop(release);
+}
+
+/// Settings on a moved core reads every machine once: its own, from the
+/// build the core runs, and the node's that dials in, through its link.
+/// Each read ends with an answer, so neither row stays checking (the
+/// Agents tab of 2026-10-18 waited on the node for good).
+#[test]
+fn a_moved_core_reads_its_own_kit_and_its_node_s_and_each_read_ends() {
+    let shared = shared_runtime();
+    let own_node = super::device_kit::KitDevice::answering(Ok(machine_kit(
+        hide_kit::ComponentState::Installed,
+    )));
+    let own = shared.lock().unwrap().node.clone();
+    let pump = crate::kit::KitPump::spawn(
+        shared.weak(),
+        crate::handle::ChangeNotifier::noop(),
+        Arc::clone(&own_node) as Arc<dyn crate::node_access::NodeLink>,
+        None,
+        own.clone(),
+    )
+    .unwrap();
+    let node = super::device_kit::KitDevice::answering(Ok(machine_kit(
+        hide_kit::ComponentState::Installed,
+    )));
+    let (link, release) = held_link_to(Arc::clone(&node) as Arc<dyn crate::node_access::NodeLink>);
+    shared
+        .lock()
+        .unwrap()
+        .accept_inbound_node(NODE, "MacBook", link)
+        .expect("the link");
+    wait(&shared, "the node's connection pass", |runtime| {
+        !runtime.device_kit_running.contains(NODE) && !node.calls().is_empty()
+    });
+
+    let event = serde_json::json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "kit_check",
+        "payload": {},
+    });
+    shared
+        .lock()
+        .unwrap()
+        .dispatch_json(&serde_json::to_vec(&event).unwrap());
+    {
+        let runtime = shared.lock().unwrap();
+        for machine in [own.as_str(), NODE] {
+            assert!(kit_row(&runtime, machine).checking, "{machine} is read");
+        }
+    }
+    wait(&shared, "both machines answered", |runtime| {
+        [own.as_str(), NODE].iter().all(|machine| {
+            let kit = kit_row(runtime, machine);
+            !kit.checking && !kit.busy && !kit.agents.is_empty()
+        })
+    });
+    let runtime = shared.lock().unwrap();
+    for machine in [own.as_str(), NODE] {
+        let kit = kit_row(&runtime, machine);
+        assert_eq!(kit.unavailable, None, "{machine}");
+        assert_eq!(kit.check_failed, None, "{machine}");
+    }
+    assert!(
+        node.calls()
+            .iter()
+            .any(|call| call.0 == hide_node_link::protocol::KitAction::Status),
+        "{:?}",
+        node.calls()
+    );
+    drop(runtime);
+    drop(pump);
+    drop(release);
+}

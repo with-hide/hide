@@ -31,12 +31,13 @@ pub struct ToolCall {
 }
 
 /// The shell tools by name, across runtimes.
-const SHELL_TOOLS: [&str; 5] = [
+const SHELL_TOOLS: [&str; 6] = [
     "Bash",
     "run_terminal_command",
     "Shell",
     "bash",
     "run_command",
+    "shell",
 ];
 
 /// The keys agy's file writes carry their new text under, ahead of the
@@ -48,7 +49,7 @@ const AGY_WRITE_CONTENT_KEYS: [&str; 3] =
 const COMMAND_KEYS: [&str; 2] = ["command", "CommandLine"];
 
 /// The tools that write a file by name, across runtimes.
-const WRITE_TOOLS: [&str; 15] = [
+const WRITE_TOOLS: [&str; 16] = [
     "Edit",
     "Write",
     "MultiEdit",
@@ -64,6 +65,7 @@ const WRITE_TOOLS: [&str; 15] = [
     "write_to_file",
     "replace_file_content",
     "multi_replace_file_content",
+    "patch",
 ];
 
 const READ_TOOLS: [&str; 4] = ["Read", "read_file", "read", "view_file"];
@@ -166,8 +168,9 @@ fn paths(input: &Value) -> Vec<String> {
     paths
 }
 
-/// The files a patch in the `*** Begin Patch` form names (Codex's and
-/// OpenCode's `apply_patch`): added, updated, deleted and moved to.
+/// The files a patch in the `*** Begin Patch` form names (Codex's
+/// `apply_patch`, OpenCode 1.x's `apply_patch` and 2.x's `patch`): added,
+/// updated, deleted and moved to.
 pub fn patch_paths(patch: &str) -> Vec<String> {
     patch
         .lines()

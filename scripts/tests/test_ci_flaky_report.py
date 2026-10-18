@@ -1,6 +1,8 @@
 """What `scripts/ci-flaky-report.py` reads from a report and files as issues."""
+import contextlib
 from datetime import date
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -199,7 +201,7 @@ class Workflows(unittest.TestCase):
                 if re.search(r"ci-flaky-report\.py --(suite|measurement)", step):
                     steps += 1
                     self.assertEqual(step.count("ci-flaky-report.py"), 1, f"{workflow.name}: {step.splitlines()[0]}")
-        self.assertEqual(steps, 10)
+        self.assertEqual(steps, 11)
 
 
 class Annotating(unittest.TestCase):
@@ -281,6 +283,25 @@ def job(id, name, conclusion, steps=(), labels=("macos-15",)):
 
 def failed_test(path, line, name, error="boom"):
     return {"title": "Failed test", "path": path, "start_line": line, "message": f"{name}\n{error}"}
+
+
+# A failed job's log as the runner writes it (run 38958746826, macOS agy job):
+# every step echoes its command in color, and a test may print any byte (an
+# OSC title, a NUL, a byte that is not UTF-8).
+JOB_LOG = (
+    b"2026-10-16T20:25:19.3493170Z ##[group]Run bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS\n"
+    b"2026-10-16T20:25:19.3494430Z \x1b[36;1mbash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS\x1b[0m\n"
+    b"2026-10-16T20:25:19.3655790Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}\n"
+    b"2026-10-16T20:25:19.3656820Z ##[endgroup]\n"
+    b"2026-10-16T20:29:27.0950000Z \x1b]0;unterminated title\n"
+    b"2026-10-16T20:29:27.0960000Z Compiling a\rCompiling b\x7f\xc2\x9b31m\x1bPq#0;2\x1b\\\n"
+    b"2026-10-16T20:29:28.0947990Z      Summary [ 248.007s] 2 tests run: 1 passed, 1 failed, 105 skipped\n"
+    b"2026-10-16T20:29:28.0948760Z   TRY 2 FAIL [ 105.471s] (1/2) hide-agent-hooks::it agy_binary::a_signed_in_agy_turn_fires_hide_s_hooks\n"
+    b"2026-10-16T20:29:28.1043050Z \x1b]0;agy\x07error: test run failed \xff\x00\r\n"
+    b"2026-10-16T20:29:28.1255500Z ##[error]Process completed with exit code 100.\n"
+    b"2026-10-16T20:29:28.1471320Z Post job cleanup.\n"
+)
+CONTROL_CHARACTER = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 
 class FakeGitHub:
@@ -450,6 +471,43 @@ class NightlyFailures(unittest.TestCase):
         self.assertEqual(github.closed(), [1])
         self.assertIn("Passed at cccccccccccc", github.writes[0][2]["body"])
 
+    def test_a_lane_that_passed_without_measuring_closes_nothing_and_is_listed(self):
+        lane = "agy contract / agy signed in (macos)"
+        check = "agy_binary::a_signed_in_agy_turn_fires_hide_s_hooks"
+        unmeasured = {"title": "Not measured", "path": ".github", "start_line": 1,
+                      "message": f"{check}\nprovider quota exhausted: GenerateRequestsPerDayPerProjectPerModel-FreeTier"}
+        issues = [{"number": 1, "body": f"<!-- nightly-failure:{lane}:step x -->"},
+                  {"number": 2, "body": "<!-- nightly-failure:agy contract / agy signed in (linux):step x -->"}]
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        summary = Path(folder.name) / "summary.md"
+        saved = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(saved)))
+        os.environ["GITHUB_STEP_SUMMARY"] = str(summary)
+        github = nightly(FakeGitHub(
+            [job(1, lane, "success"), job(2, "agy contract / agy signed in (linux)", "success")],
+            annotations={1: [unmeasured]}, issues=issues))
+        self.assertEqual(github.closed(), [2])
+        self.assertIn(f"### Not measured\n\n- `{lane}`: {check}: provider quota exhausted: "
+                      "GenerateRequestsPerDayPerProjectPerModel-FreeTier", summary.read_text())
+
+    def test_a_dry_run_lists_what_passed_without_measuring(self):
+        github = FakeGitHub([job(1, "agy contract / agy signed in (macos)", "success")],
+                            annotations={1: [{"title": "Not measured", "message": "check\nprovider quota exhausted (q)"}]})
+        args = r.argparse.Namespace(repo="o/r", run=str(RUN), attempt=None, lane_input="", dry_run=True)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(r.nightly(args, {}, github), 0)
+        self.assertEqual(out.getvalue(), "nothing to write\n\n### Not measured\n\n"
+                         "- `agy contract / agy signed in (macos)`: check: provider quota exhausted (q)\n")
+        self.assertEqual(github.writes, [])
+
+    def test_a_lane_that_passed_without_measuring_is_no_last_green_nightly(self):
+        github = self.package_failed()
+        github.add_earlier(95, "b" * 40, "2026-10-06T18:00:00Z", [job(12, PACKAGE, "success")])
+        github.annotations[12] = [{"title": "Not measured", "message": "check\nprovider quota exhausted: q"}]
+        (issue,) = nightly(github).opened()
+        self.assertIn(f"Last green nightly of this lane: {GREEN[:12]}", issue["body"])
+
     def test_only_a_hand_run_of_every_lane_closes(self):
         issues = [{"number": 1, "body": "<!-- nightly-failure:desktop e2e (macos full):step x -->"}]
         jobs = [job(1, "desktop e2e (macos full)", "success")]
@@ -468,6 +526,22 @@ class NightlyFailures(unittest.TestCase):
         self.assertIn("line a\n##[error]Process completed", issue["body"])
         self.assertNotIn("later", issue["body"])
         self.assertEqual(issue["labels"], ["nightly-failure"])
+
+    def test_an_excerpt_carries_no_terminal_control_from_a_log_or_an_annotation(self):
+        # gh hands a JSON body over with its controls in caret notation, but a lane
+        # writes its annotations from its tool's own report, which carries them raw.
+        github = FakeGitHub(
+            [job(1, "agy contract / agy signed in (macos)", "failure", [("The real agy runs one turn", "failure")]),
+             job(2, PACKAGE, "failure")],
+            logs={1: JOB_LOG.decode("utf-8", "replace")},
+            annotations={2: [failed_test("desktop/e2e/s.spec.ts", 29, "server picker", "\x1b[31mExpected\x1b[0m \x1b]8;;x\x07a\x1b]8;;\x07\x00")]},
+        )
+        opened = nightly(github).opened()
+        self.assertEqual(len(opened), 2)
+        for issue in opened:
+            self.assertIsNone(CONTROL_CHARACTER.search(issue["body"]), issue["body"])
+        self.assertIn("error: test run failed \ufffd\n##[error]Process completed with exit code 100.", opened[0]["body"])
+        self.assertIn("Expected a", opened[1]["body"])
 
     def test_a_failure_while_preparing_the_runner_is_infra(self):
         cases = (("Fetch the pinned Herdr runtime", True), ("Run actions/checkout@v7", True), ("Install dependencies", True),
@@ -563,6 +637,58 @@ class Gh(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stdout.strip(), ascii([{"title": "탭"}]))
 
+
+    def test_a_job_log_is_read_whatever_bytes_it_carries(self):
+        # gh 2.97 and later refuse a raw body carrying a terminal escape unless told
+        # --allow-escape-sequences, and every job log carries one: the nightly report of
+        # run 38958746826 died on it and filed nothing. The stand-in answers as such a gh.
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "log").write_bytes(JOB_LOG)
+            fake = Path(tmp) / "gh"
+            fake.write_text(
+                '#!/bin/sh\ncase " $* " in\n'
+                '  " --version ") echo "gh version 2.97.0 (2026-07-31)" ;;\n'
+                '  *" --allow-escape-sequences "*) cat "$(dirname "$0")/log" ;;\n'
+                '  *) echo "the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway" >&2; exit 1 ;;\n'
+                'esac\n'
+            )
+            fake.chmod(0o755)
+            self.use_gh(tmp)
+            text = r.gh(["repos/o/r/actions/jobs/117168142601/logs"], raw=True)
+        self.assertIsNone(CONTROL_CHARACTER.search(text), repr(text))
+        self.assertIn("Z bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS\n", text)
+        # An unterminated string ends with its line, and a carriage return breaks one.
+        self.assertIn("0950000Z \n2026-10-16T20:29:27.0960000Z Compiling a\nCompiling b\n", text)
+        self.assertTrue(r.log_excerpt(text).endswith(
+            "TRY 2 FAIL [ 105.471s] (1/2) hide-agent-hooks::it agy_binary::a_signed_in_agy_turn_fires_hide_s_hooks\n"
+            "error: test run failed \ufffd\n##[error]Process completed with exit code 100."))
+
+    def test_a_gh_too_old_to_read_a_job_log_is_refused_before_it_is_asked_for_one(self):
+        # gh 2.76.2 does not know --allow-escape-sequences: asked for a log, it answers
+        # `unknown flag` and its usage, which says nothing of the version the report needs.
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "gh"
+            fake.write_text(
+                '#!/bin/sh\necho "$*" >> "$(dirname "$0")/asked"\ncase "$1" in\n'
+                '  --version) printf "gh version 2.76.2 (2025-07-30)\\nhttps://github.com/cli/cli/releases/tag/v2.76.2\\n" ;;\n'
+                '  *) echo "unknown flag: --allow-escape-sequences" >&2; exit 1 ;;\n'
+                'esac\n'
+            )
+            fake.chmod(0o755)
+            self.use_gh(tmp)
+            with self.assertRaises(RuntimeError) as refused:
+                r.gh(["repos/o/r/actions/jobs/117168142601/logs"], raw=True)
+            asked = (Path(tmp) / "asked").read_text()
+        self.assertEqual(str(refused.exception), "needs gh 2.97 or newer to read job logs (found 2.76.2); upgrade gh")
+        self.assertEqual(asked, "--version\n")
+
+    def use_gh(self, folder):
+        """Put the stand-in `gh` in `folder` first on PATH and forget the version read from another."""
+        saved = os.environ["PATH"]
+        os.environ["PATH"] = f"{folder}{os.pathsep}{saved}"
+        self.addCleanup(os.environ.__setitem__, "PATH", saved)
+        r.gh_reads_logs.cache_clear()
+        self.addCleanup(r.gh_reads_logs.cache_clear)
 
     def test_a_test_name_outside_the_runner_code_page_is_filed_and_printed(self):
         # A Windows runner writes stdout as cp1252; the ⌘ in a test name raised

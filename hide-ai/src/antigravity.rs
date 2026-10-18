@@ -19,7 +19,9 @@
 //! folder that does not exist: a signed-out agy opens the operator's browser
 //! to sign in through a program it finds on `PATH` (B32), and every hook,
 //! the operator's included, then fails to start its shell, which agy also
-//! reads as a refused tool. agy's own update check is off.
+//! reads as a refused tool. agy's own update check is off, and its log goes
+//! to one file of Hide's per kind of child, emptied before each start: agy
+//! otherwise keeps a file per process and never removes one.
 //!
 //! The prompt goes on stdin as agy's one `stream-json` input message; plain
 //! `-p` ignores stdin. `--json-schema` is not used: agy ends such a turn
@@ -54,6 +56,19 @@ pub const READ_ONLY_HOOKS: &str = r#"{"hide-ai":{"PreToolUse":[{"matcher":".*","
 const SETTINGS_LIMIT: u64 = 1024 * 1024;
 /// `agy models` and `/usage` read the account and run no model turn.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+/// The folder that keeps the log of the last agy child of each kind Hide
+/// started. Without `--log-file` every agy process adds a file of about 20 KB
+/// to `~/.gemini/antigravity-cli/log/` and agy never removes one: the weekly
+/// `/usage` read alone added one every five minutes, 226 between 2026-10-16
+/// and 10-18. agy appends to a file it is given, so each kind's file is
+/// emptied before its next child starts.
+fn log_folder(home: &Path) -> PathBuf {
+    home.join(".hide").join("ai").join("antigravity-logs")
+}
+/// The log file of each kind of agy child.
+const REQUEST_LOG: &str = "request.log";
+const MODELS_LOG: &str = "models.log";
+const USAGE_LOG: &str = "usage.log";
 
 /// The folder a Hide AI request to agy runs in.
 pub fn read_only_workspace(home: &Path) -> PathBuf {
@@ -213,8 +228,9 @@ impl AntigravityCliBackend {
         &self,
         binary: &Program,
         args: &[String],
+        log: &str,
         cancel: &CancelToken,
-    ) -> Result<runner::Run, runner::RunError> {
+    ) -> Result<runner::Run, Failed> {
         let cwd = self
             .home
             .as_deref()
@@ -224,23 +240,69 @@ impl AntigravityCliBackend {
         } else {
             self.config.cwd.clone()
         };
+        self.start(binary, args, log, &cwd, None, PROBE_TIMEOUT, cancel)
+    }
+
+    /// Runs one agy child in `cwd` with the login environment and the
+    /// variables above, writing its log to the file `log` names in
+    /// [`log_folder`], which is emptied first. Every agy child Hide starts is
+    /// started here, and none starts while its log file cannot be emptied.
+    #[allow(clippy::too_many_arguments)]
+    fn start(
+        &self,
+        binary: &Program,
+        args: &[String],
+        log: &str,
+        cwd: &Path,
+        stdin: Option<&str>,
+        deadline: Duration,
+        cancel: &CancelToken,
+    ) -> Result<runner::Run, Failed> {
+        let log = self
+            .emptied_log(log)
+            .map_err(|error| Failed::Log(error.kind()))?;
+        let mut logged = vec!["--log-file".to_owned(), log.display().to_string()];
+        logged.extend_from_slice(args);
         runner::run(
             &Spec {
                 binary,
-                args,
-                cwd: &cwd,
-                stdin: None,
+                args: &logged,
+                cwd,
+                stdin,
                 environment: Environment::Login,
-                set: &Self::environment(&cwd),
-                deadline: PROBE_TIMEOUT,
+                set: &Self::environment(cwd),
+                deadline,
             },
             cancel,
         )
+        .map_err(Failed::Run)
+    }
+
+    /// The log file `name` in [`log_folder`], private to the account and
+    /// empty.
+    fn emptied_log(&self, name: &str) -> std::io::Result<PathBuf> {
+        let home = self
+            .home
+            .as_deref()
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
+        let folder = log_folder(home);
+        hide_platform::fs::private::own_dir(&folder)?;
+        let path = folder.join(name);
+        // Emptied in place rather than removed: a child of the same kind
+        // that is still running keeps appending to it, which Windows would
+        // refuse a removal for.
+        hide_platform::fs::private::open_own_file(&path, true)?.set_len(0)?;
+        Ok(path)
     }
 
     fn list_models(&self, binary: &Program) -> Result<ModelsOutcome, String> {
         let run = self
-            .probe(binary, &["models".to_owned()], &CancelToken::new())
+            .probe(
+                binary,
+                &["models".to_owned()],
+                MODELS_LOG,
+                &CancelToken::new(),
+            )
             .map_err(|error| error.diagnostic("antigravity_models"))?;
         Ok(parse_models(&run))
     }
@@ -255,10 +317,10 @@ impl AntigravityCliBackend {
             return Err(UsageError::NotAuthenticated);
         }
         let run = self
-            .probe(&binary, &Self::usage_arguments(), cancel)
+            .probe(&binary, &Self::usage_arguments(), USAGE_LOG, cancel)
             .map_err(|error| match error {
-                runner::RunError::Deadline => UsageError::Timeout,
-                runner::RunError::Cancelled => UsageError::Cancelled,
+                Failed::Run(runner::RunError::Deadline) => UsageError::Timeout,
+                Failed::Run(runner::RunError::Cancelled) => UsageError::Cancelled,
                 other => UsageError::Failed(other.diagnostic("antigravity_usage")),
             })?;
         let frame = serde_json::from_str::<Value>(run.stdout.trim()).ok();
@@ -278,6 +340,22 @@ impl AntigravityCliBackend {
             AiError::NotAuthenticated => Err(UsageError::NotAuthenticated),
             _ if frame.is_none() => Err(UsageError::NoResultFrame),
             _ => Err(UsageError::Failed(format!("usage_exit_{}", run.exit()))),
+        }
+    }
+}
+
+/// Why an agy child gave no output: its log file could not be emptied, so it
+/// was never started, or the run itself failed.
+enum Failed {
+    Log(std::io::ErrorKind),
+    Run(runner::RunError),
+}
+
+impl Failed {
+    fn diagnostic(&self, stage: &str) -> String {
+        match self {
+            Self::Log(kind) => format!("{stage}_log_unavailable:{kind}"),
+            Self::Run(error) => error.diagnostic(stage),
         }
     }
 }
@@ -385,23 +463,25 @@ impl AiBackend for AntigravityCliBackend {
         }
         let workspace =
             read_only_prepared(home).map_err(|reason| AiError::Unsupported(reason.to_owned()))?;
-        let run = runner::run(
-            &Spec {
-                binary: &binary,
-                args: &Self::print_arguments(request.model(&self.config.model), request.deadline),
-                cwd: &workspace,
-                stdin: Some(&Self::stdin_message(
+        let run = self
+            .start(
+                &binary,
+                &Self::print_arguments(request.model(&self.config.model), request.deadline),
+                REQUEST_LOG,
+                &workspace,
+                Some(&Self::stdin_message(
                     &request.system_prompt(),
                     &request.output_schema,
                     &request.input,
                 )),
-                environment: Environment::Login,
-                set: &Self::environment(&workspace),
-                deadline: request.deadline,
-            },
-            cancel,
-        )
-        .map_err(|error| error.into_error("antigravity"))?;
+                request.deadline,
+                cancel,
+            )
+            .map_err(|error| match error {
+                Failed::Run(error) => error.into_error("antigravity"),
+                // Nothing was started, so the request never reached agy.
+                log @ Failed::Log(_) => AiError::ProviderUnavailable(log.diagnostic("antigravity")),
+            })?;
         answer(&run)
     }
 }

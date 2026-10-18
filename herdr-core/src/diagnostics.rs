@@ -266,7 +266,7 @@ struct RotatingLog {
 
 impl RotatingLog {
     fn open(directory: PathBuf, limit: u64) -> io::Result<Self> {
-        fs::create_dir_all(&directory)?;
+        hide_platform::fs::private::create_dir_all(&directory)?;
         let file = OpenOptions::new()
             .create(true)
             .append(true)

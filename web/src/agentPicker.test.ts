@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { catalogFor, createCatalogObserver, forgetCatalogs, modelToSend, rememberedSelection, selectKind } from "./agentPicker";
+import { catalogFor, createCatalogObserver, forgetCatalogs, modelToSend, rememberedSelection, selectKind, takesModel } from "./agentPicker";
 import type { AgentStartChoice, BackgroundAi } from "./snapshot";
 
 const START: AgentStartChoice = { kind: "codex", models: { claude: "opus", codex: "gpt-6-astra" } };
@@ -79,6 +79,12 @@ describe("the model a start sends", () => {
 
   it("is none for a terminal", () => {
     expect(modelToSend({ kind: "terminal", model: null })).toBeNull();
+  });
+
+  it("is none for an agent whose start takes no model, even one remembered for it", () => {
+    expect(takesModel("opencode")).toBe(false);
+    expect(modelToSend({ kind: "opencode", model: "remembered" })).toBeNull();
+    for (const kind of ["claude", "codex", "grok", "pi", "omp", "cursor", "agy"] as const) expect(takesModel(kind)).toBe(true);
   });
 });
 

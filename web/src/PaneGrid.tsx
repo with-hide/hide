@@ -5,12 +5,15 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { PaneView } from "./PaneView";
 import { contextAgents, frameStyle, type RemoteView } from "./remote";
 import { resizeStep } from "./resize";
+import { windowDeviceId } from "./screenMachine";
+import { cn } from "./lib/utils";
 import {
   type AgentRow,
   dividerPaneId,
   focusedCheckout,
   layoutForTab,
   type LayoutNode,
+  localDeviceId,
   type PaneLayout,
   type PaneRow,
   type Tab,
@@ -95,6 +98,8 @@ export function RemotePaneCanvas({
   const transportRows = useShellStore((s) => s.rest?.terminal?.panes ?? EMPTY_TRANSPORTS);
   const scales = useShellStore((s) => s.rest?.ui_state?.pane_text_scales ?? EMPTY_SCALES);
   const agents = useAgentsByPane();
+  // A device's panes wear its border, except a node's own drawn in its own window.
+  const away = useShellStore((s) => view.workspace.device_id !== windowDeviceId(s.rest?.navigator?.devices));
   const { t } = useInterfaceTranslation();
   const { tab, layout } = view;
   if (!tab || !layout) {
@@ -108,7 +113,7 @@ export function RemotePaneCanvas({
   const transports = new Map(transportRows.map((row) => [row.pane_id, row]));
   const frames = layout.zoomed ? [{ pane_id: layout.focused_pane_id, x: 0, y: 0, width: 1, height: 1 }] : layout.frames;
   return (
-    <div className="relative min-h-0 min-w-0 flex-1 border border-device-remote" data-canvas={tab.id ?? ""} data-remote-canvas="true" data-zoomed={layout.zoomed ? "true" : "false"}>
+    <div className={cn("relative min-h-0 min-w-0 flex-1", away && "border border-device-remote")} data-canvas={tab.id ?? ""} data-remote-canvas="true" data-zoomed={layout.zoomed ? "true" : "false"}>
       {frames.map((frame) => {
         const pane = panes.get(frame.pane_id);
         return (
@@ -152,6 +157,8 @@ const TabCanvas = memo(function TabCanvas({
 }) {
   const focusedPaneId = useShellStore((s) => s.focusedPaneId);
   const agents = useAgentsByPane();
+  // The core's own panes are another machine's in a window on a node: they wear its border.
+  const away = useShellStore((s) => localDeviceId(s.rest) !== windowDeviceId(s.rest?.navigator?.devices));
   const panes = new Map(tab.panes.map((pane) => [pane.id, pane]));
   const transports = new Map(transportRows.map((row) => [row.pane_id, row]));
   const props: PaneProps = {
@@ -166,7 +173,7 @@ const TabCanvas = memo(function TabCanvas({
   };
   const root: LayoutNode = layout.zoomed ? { type: "pane", pane_id: layout.focused_pane_id } : layout.root;
   return (
-    <div className="relative min-h-0 min-w-0 flex-1" data-canvas={tab.id ?? ""} data-zoomed={layout.zoomed ? "true" : "false"}>
+    <div className={cn("relative min-h-0 min-w-0 flex-1", away && "border border-device-remote")} data-canvas={tab.id ?? ""} data-zoomed={layout.zoomed ? "true" : "false"}>
       <LayoutView node={root} {...props} />
     </div>
   );

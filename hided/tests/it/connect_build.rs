@@ -14,6 +14,7 @@ use serde_json::Value;
 
 /// A command with nothing inherited that could name a live Herdr, daemon or
 /// pane.
+#[allow(clippy::disallowed_methods)] // env_clear: nothing inherited may name a live Herdr, daemon or pane (macOS only)
 fn isolated(program: &Path, home: &Path, state: &Path) -> Command {
     let mut command = Command::new(program);
     command
@@ -280,6 +281,7 @@ fn two_connects_at_once_leave_one_daemon() {
 
 /// `isolated` without a state folder: the CLI resolves its default under the
 /// private HOME, which is what the installed app does.
+#[allow(clippy::disallowed_methods)] // env_clear: nothing inherited may name a live Herdr, daemon or pane (macOS only)
 fn default_state(program: &Path, home: &Path) -> Command {
     let mut command = Command::new(program);
     command

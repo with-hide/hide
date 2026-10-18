@@ -162,7 +162,18 @@ use crate::error::HostError;
 /// row may wait on its pull request's checks (`wait: checks`) and its status
 /// codes add `unfinished` (status-marks-simplify). A screen relayed through a
 /// node on 40 would draw none of it, so it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 41;
+/// 42: `antigravity_trust` becomes `agent_trust`, which names the agent whose
+/// folder trust it records or takes out, for Claude Code and Codex as for agy
+/// (docs/agent-hooks.md, Folder trust for the worktrees Hide makes). A helper
+/// on 41 would refuse the call, so a Claude Code or Codex start in a worktree
+/// Hide made on that device would wait at the agent's own trust question; it
+/// is refused at Hello and upgraded.
+/// 43: `opencode_fork` forks an OpenCode session for a pane to open: by
+/// OpenCode 1.x's own `--fork`, or through OpenCode 2.x's server, whose
+/// interactive command has no `--fork` (docs/ARCHITECTURE.md, OpenCode). A
+/// helper on 42 would refuse the call, so no OpenCode session on that device
+/// could be forked; it is refused at Hello and upgraded.
+pub const PROTOCOL_VERSION: u32 = 43;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -173,6 +184,28 @@ pub struct AntigravityForkMark {
     /// How many steps the source conversation had.
     pub steps: i64,
 }
+
+/// How an OpenCode session is forked ([`Call::OpenCodeFork`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "route", rename_all = "snake_case")]
+pub enum OpenCodeFork {
+    /// OpenCode 1.x: the pane forks it itself, `opencode -s <source> --fork`.
+    Flag,
+    /// OpenCode 2.x: its server made the session `id`, which the pane opens
+    /// with `opencode -s <id>`.
+    Forked { id: String },
+}
+
+/// How long a core waits for a node's OpenCode fork ([`Call::OpenCodeFork`]).
+pub const OPENCODE_FORK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How long a node gives OpenCode 2.x's server to make the fork, the
+/// `opencode` CLI's own start included. It is short of
+/// [`OPENCODE_FORK_TIMEOUT`], so a fork that runs out is the node's answer
+/// while its core still waits, rather than a call the core gave up on.
+pub const OPENCODE_FORK_TIME: std::time::Duration = std::time::Duration::from_secs(20);
+
+const _: () = assert!(OPENCODE_FORK_TIME.as_secs() + 10 <= OPENCODE_FORK_TIMEOUT.as_secs());
 
 /// How a pane's shell is started so that it marks its first prompt
 /// ([`Call::ShellIntegration`]): the command the pane runs, the shell and
@@ -564,10 +597,21 @@ pub enum Call {
         cwd: String,
         mark: AntigravityForkMark,
     },
-    /// Records (`trusted`) or takes out agy's trust of a worktree Hide made,
-    /// in the node account's agy settings
-    /// (`hide_agent_hooks::antigravity_trust`).
-    AntigravityTrust {
+    /// Forks the OpenCode root session `source` in `cwd` for a pane to open,
+    /// an [`OpenCodeFork`]: decided by the schema of the database holding it
+    /// (`hide_session::opencode::fork_route`), and for OpenCode 2.x made by its
+    /// server before the answer, within the node's own bound.
+    #[serde(rename = "opencode_fork")]
+    OpenCodeFork {
+        source: String,
+        cwd: String,
+    },
+    /// Records (`trusted`) or takes out an agent's trust of a worktree Hide
+    /// made, in the node account's own settings of that agent
+    /// (`hide_agent_hooks::folder_trust`). `agent` is the start's kind, as
+    /// the adapter names it.
+    AgentTrust {
+        agent: String,
         path: String,
         trusted: bool,
     },
@@ -885,7 +929,8 @@ impl Call {
             | Self::AgentInstalled { .. }
             | Self::AntigravityForkMark { .. }
             | Self::AntigravityFork { .. }
-            | Self::AntigravityTrust { .. }
+            | Self::OpenCodeFork { .. }
+            | Self::AgentTrust { .. }
             | Self::ShellIntegration
             | Self::ProcessStarts { .. }
             | Self::ProcessDescendants { .. }

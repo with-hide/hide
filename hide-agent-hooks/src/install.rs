@@ -37,6 +37,9 @@ pub enum InstallFailure {
     UnexpectedShape { path: String, detail: String },
     /// The write itself failed.
     NotWritable { path: String, detail: String },
+    /// The file says no to the change: what it holds is the operator's
+    /// decision, which Hide does not override.
+    Refused { path: String, detail: String },
     /// Hide's entry points at a helper that is no longer on disk, so the hook
     /// runs nothing. Reinstalling from the running app repairs it.
     HelperMissing { path: String, helper: String },
@@ -54,6 +57,7 @@ impl InstallFailure {
                 format!("{path} has an unexpected shape: {detail}")
             }
             Self::NotWritable { path, detail } => format!("{path} could not be written: {detail}"),
+            Self::Refused { path, detail } => format!("{detail} ({path})"),
             Self::HelperMissing { helper, .. } => {
                 format!("the installed hook points at {helper}, which is missing")
             }
@@ -370,6 +374,12 @@ pub(crate) fn codex_command(helper: &Path, event: HookEvent) -> String {
     } else {
         posix_command(helper, AgentRuntime::Codex, event)
     }
+}
+
+/// `value` quoted for this system's own shell (PowerShell on Windows, a
+/// POSIX shell elsewhere), for a command the operator is shown to type.
+pub fn quote_for_shell(value: &str) -> String {
+    Quoting::NATIVE.quote(value)
 }
 
 /// How a path is quoted in the command this system writes, and read back.

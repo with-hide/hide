@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use hide_platform::fs::Access;
+use hide_platform::fs::atomic::DurableAccess;
 use hide_platform::fs::lock::{Lock, Mode, Waited};
 use serde::{Deserialize, Serialize};
 
@@ -133,7 +133,7 @@ impl Held {
     pub fn write(&self, record: &Handover) -> Result<(), String> {
         let path = path(&self.state_dir);
         let bytes = serde_json::to_vec_pretty(record).map_err(|error| error.to_string())?;
-        hide_platform::fs::atomic::write_file_durable(&path, &bytes, Access::Private)
+        hide_platform::fs::atomic::write_file_durable(&path, &bytes, DurableAccess::Private)
             .map(|_| ())
             .map_err(|error| format!("{}: {error}", path.display()))
     }

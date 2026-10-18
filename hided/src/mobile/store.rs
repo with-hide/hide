@@ -165,7 +165,7 @@ pub fn write<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
     let directory = path
         .parent()
         .ok_or_else(|| io::Error::other("store path has no parent"))?;
-    fs::create_dir_all(directory)?;
+    hide_platform::fs::private::create_dir_all(directory)?;
     hide_platform::fs::atomic::write_file(
         path,
         &serde_json::to_vec_pretty(value)?,

@@ -681,6 +681,7 @@ mod tests {
                     worktree_facts: None,
                     browser,
                     factory: false,
+                    kit: hide_host::serve::KitPlace::Standalone,
                 },
             );
         });

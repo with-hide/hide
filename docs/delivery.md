@@ -17,6 +17,12 @@ Each queued command revalidates the caller's pane against the prepared Workspace
 Mailbox callers and new recipients require a positive native-session binding; a missing binding returns `native_identity_required`.
 Two missing native references in the same pane never authorize retained mail.
 Target names and pane IDs resolve against the daemon's current observations.
+Herdr numbers panes per machine, and an agent learns the numbers from its own machine's Herdr, so a bare pane ID (`w1:p2`) names the pane on the caller's own machine: a device agent's `w1:p2` is that device's pane, and the core's own agent's `w1:p2` is the core's.
+A bare pane ID never reaches a pane on another machine, even when only that machine has the number: the command is refused `target_unavailable`.
+A pane on another machine is reached by the agent's name or registration ID, or by the full address of a device's pane, `remote:<device>:pane:<id>`.
+The same reading applies to the pane IDs of `--actor` and `--observer`.
+A name that two machines share, such as the default `hide-claude-w1-p2`, is refused `target_ambiguous`.
+Each refusal's `next_action` says so: `target_ambiguous` points to the registration ID from `hide agent list` or the full address, and `target_unavailable` says a bare pane ID names a pane on the caller's own machine and points to the name or registration ID; neither is told to retry.
 A connected device recipient uses its node's pane service over that device's existing SSH link; the credential fixes its device, link, pane, sender and kind, and losing the link revokes that credential immediately.
 The only ledger remains on the controlling daemon.
 A disconnected device hook finishes within its two-second budget with no letters, leaving them pending in that ledger.
@@ -66,6 +72,7 @@ A tool that runs these commands from a program (sasu, a Factory engine) checks t
 
 A caller compares the digest it was written against, or the commands and options it uses, and refuses a mismatch before running anything.
 The CLI admits only the commands and flags the contract names (`hided/src/cli_contract.rs`), its tests hold each parser to the table, and the answer schemas come from the core's answer types (`herdr-core/src/delivery/answer.rs`), so a changed command name, option or answer field changes the exported contract.
+A command whose standard output is closed by its reader (`hide agent list | head`) ends quietly with status 141 and prints nothing to standard error; `docs/ARCHITECTURE.md`, The platform layer, owns the rule.
 `contracts/hide-cli.json` is the committed copy, and a test fails until it is regenerated with `target/debug/hide contract --json | python3 -m json.tool > contracts/hide-cli.json`.
 
 ## Safe intake and manual fallback
@@ -86,6 +93,10 @@ It is typed when every one of these hide-owned facts holds, and the verdict read
   Herdr reports readiness only for an agent it launched itself (`herdr agent start`, which `hide agent spawn` uses): `launch_pending: true` while that start settles or is blocked, then `interactive_ready: true`.
   An agent the operator started by typing its program in a Herdr shell, the usual way a lead is started, carries neither flag; its readiness is unreported, not refused, and the facts above decide it.
   Only `launch_pending: true` or an explicit `interactive_ready: false` holds the letter.
+  The pinned Herdr settles a start only when the agent's state moves again or it is read with `agent.get` (herdrdev/herdr#3853), so the core reads every start Hide made whose agent rests with it pending, from 3 s to 90 s after Herdr took it and a bounded number of times, and a pane that is not a bell target settles too ([ARCHITECTURE.md](ARCHITECTURE.md#the-core-the-shell-and-herdr)).
+  A start Hide did not make, such as an operator's own `herdr agent start`, or one Hide made before its daemon restarted, is never read, since a read past that start's deadline would make Herdr clear the agent's name; it is logged once as `launch_settle.cold`, and its letter waits until the agent's state moves.
+  A start Herdr reads as blocked (a trust or login prompt at launch) stays pending until the agent goes idle, by Herdr's contract, and its letter waits until then.
+  A read after the start's deadline (120 s) is where Herdr applies the deadline and clears the agent's name, as the agent's next state change would; the read does not hold that off.
 
 Herdr's `blocked` status guards every permission and selection menu Herdr reads as `blocked`, so only kinds whose menus were observed to read `blocked` are bell targets.
 Today those are Claude Code and Codex.
@@ -94,7 +105,29 @@ Its ignored run report records active detection-manifest versions and native out
 The adapter declaration is a reviewed product decision; the tool never changes it automatically.
 The shared agent adapter declares bell eligibility separately from prompt intake, spawn refusal and session format; its contract rejects a bell without a prompt hook, and adding prompt intake alone never widens the bell targets.
 Claude Code's plan approval reads `blocked`; Codex's does not, and the session read guards it instead (next section).
-Grok and Cursor are not targets because their menus were not observed (no logged-in CLI was available for the check); at rest their letters are read through `hide inbox`, and while they work their own tool hook hands them over ([Letters while the agent works](#letters-while-the-agent-works)).
+Cursor is not a target: its menus have not been observed, and the agent checks leave Cursor out by the operator's decision of 2026-10-17.
+Grok is not a target for what its terminal was seen to do on 2026-10-18, on Grok 1.0.52 and 1.0.62 under an isolated Herdr 0.9.5 (Grok detection manifest 2026.10.05.1), answered by a scripted stand-in model, with each line typed by the doorbell's own call (`pane.send_input`, the line and Enter), observed by hand rather than by the local measurement tool's matrix.
+Two findings rule it out.
+First, its prompt hook cannot carry the letters, so a bell turn would bring the line and not the letter.
+Second, its plan review reads `working` for as long as it waits, and a bell target is rung while it works, so a bell would act on the review.
+Grok's three hooks did the same on both versions:
+
+- `UserPromptSubmit` runs with the prompt and the session id, but nothing it prints reaches the model (Grok's hooks guide: "stdout of an allowing hook is discarded").
+- A `PreToolUse` hook's `additionalContext` reaches the model after the tool's result, which is how Grok's letters are handed over while it works.
+- A `Stop` hook's block reason reaches the model as "Stop hook feedback", and the turn goes on.
+
+| Scene | Herdr reads | What the line did | Seen on |
+|---|---|---|---|
+| At rest, over the welcome panel or a suggested next line | `idle` | Submitted as one prompt | 1.0.52, 1.0.62 |
+| A turn running | `working` | Waited in Grok's own queue and ran as a turn of its own after the current one | 1.0.52 |
+| Shell and file permission menus | `blocked` | Typed into the shell menu, chose nothing | 1.0.52 |
+| A question (`ask_user_question`) | `blocked` | Chose the first option with the line's `1` | 1.0.52 |
+| Plan review (the terminal title says `Running: Plan: Exit`) | `working` while it waits | Opened a comment on the plan and was lost; the same text typed as keys approved the plan with its `a` (1.0.52) | 1.0.52, 1.0.62 |
+| `/model` picker | `idle` | Taken as a model name: "Unknown model" | 1.0.52 |
+| `/resume` picker | `idle` | Taken as a search; the picker stayed open | 1.0.52 |
+| Folder-trust question at start, before Grok has a session | `idle`, ready | Its Enter trusted the folder; the missing native session holds the bell today (`session_changed`) | 1.0.52, 1.0.62 |
+
+At rest Grok's and Cursor's letters are read through `hide inbox`, and while they work their own tool hook hands them over ([Letters while the agent works](#letters-while-the-agent-works)).
 OpenCode, Pi and omp are not targets either, though Hide's plugin and extension give them a prompt hook: on 2026-10-07 OpenCode's previous-session picker read `done`, and a bell's Enter there opened another session, and Pi's and omp's resume pickers read `done` too.
 Their letters ride their next prompt instead (below), or a tool result while they work, and a bell is reconsidered only in the change that would flip an adapter declaration, once the live-check tool has found a bell harmless in every scene that agent does not read as `blocked`.
 Herdr 0.9.1 reads a built-in slash picker such as `/model` or `/resume` as `done`, not `blocked`, for both targets, and a bell typed into an open picker is accepted by it.
@@ -112,7 +145,7 @@ How it reaches the agent follows the kind, and one letter takes one path and is 
 - Claude Code and Codex, the bell targets, take the line the doorbell types into their composer while they work: both read a line typed during a turn after the current tool call, and the line's prompt hook takes the letters as it does at rest.
   Every other guard of a bell holds as it does at rest: a draft typed since the work began, a key or a status change in the last 30 seconds, a menu, a session not read, and a `working` state Herdr has not yet confirmed (`state_change_seq`), so the composer is never typed over the operator's own words (D-09).
   A pane belled while working is not belled again for a later letter until the letter it rang for has left `pending`: a bell typed into a working pane moves nothing Hide can see, so the second ring would otherwise follow at once (`doorbell::Rung`).
-- OpenCode, Pi and omp take them at a tool result: Hide's plugin (`tool.execute.after`) and extension (`tool_result`) ask the helper's `letters` operation, which runs `hide inbox --hook --session <id> --tool`, and append the bodies to the tool's output inside `<system-reminder>`, so the model reads them before its next step; they are confirmed as a prompt's letters are: OpenCode's once it stored the completed tool part of that session with the letters still in its output, Pi's and omp's once the host finished the result with Hide's text still in its content and the reply after it has ended (a `message_end` handler may still replace the result itself); a result stored or finished without the text never reached the model, and its letters stay pending in Hide for the next ask.
+- OpenCode, Pi and omp take them at a tool result: Hide's plugin (`tool.execute.after`) and extension (`tool_result`) ask the helper's `letters` operation, which runs `hide inbox --hook --session <id> --tool`, and append the bodies to the tool's output inside `<system-reminder>`, so the model reads them before its next step; they are confirmed as a prompt's letters are: OpenCode's once it stored the completed tool part of that session with the letters still in its output (OpenCode 2's once `session.tool.success` reports the result stored with them), Pi's and omp's once the host finished the result with Hide's text still in its content and the reply after it has ended (a `message_end` handler may still replace the result itself); a result stored or finished without the text never reached the model, and its letters stay pending in Hide for the next ask.
   While letters a script handed over wait for their receipt, the host's write and then Hide's confirmation, the script asks nothing, so a letter is never written twice; a write that never comes is forgotten after ten minutes, and the letter then rides the next ask.
 - Grok and Cursor take them through their own `PreToolUse` and `preToolUse` hook: a call that runs is answered with the letters as the hook's added context (`hookSpecificOutput.additionalContext`, which Grok's guide says reaches the model with the batch's tool results; `additional_context` beside `"permission": "allow"` for Cursor), and confirmed once that answer is printed.
   Every tool call reaches the hook, since neither entry carries a matcher (`hide-guidance@6`; an omitted matcher matches everything in Grok's guide, and Cursor's is optional), so a `--now` letter goes at the next call whatever its tool; a refused call carries none.
@@ -161,6 +194,7 @@ Claude Code's hook run inside OpenCode, through an operator plugin that bridges 
 An agent with a prompt hook that no bell rings for, today OpenCode through Hide's plugin and Pi and omp through Hide's extension, takes its letters on its next prompt, whoever typed it, since no turn of Hide's own will ever bring them (`mailbox::next_prompt_letters`).
 Its `hide inbox --hook --session` pull hands over the letter bodies as a bell pull does and confirms nothing: the plugin attaches them to the root session's prompt as a synthetic part, and only when OpenCode reports that part written (`message.part.updated` with the part's id) does it run `hide inbox --confirm`.
 OpenCode's `chat.message` runs before the prompt is stored, so a prompt OpenCode loses before that leaves its letters pending for the next prompt or `hide inbox`.
+OpenCode 2's plugin asks for them from the terminal that shows the session, writes them as a synthetic message OpenCode admits ahead of the prompt, and confirms them once `session.inbox.delivered` names that message ([agent-hooks.md](agent-hooks.md#opencode-2)).
 A subagent's prompt and a prompt of only synthetic text pull nothing.
 The plugin forgets a pull it never saw stored after 10 minutes and keeps at most 16 waiting, so a stored part reported late can still confirm; past that the letter stays pending and comes again.
 Pi's and omp's extension attaches them as a hidden custom message (`display: false`) that `before_agent_start` returns for the pane's own session, and runs `hide inbox --confirm` once the host has written that message and then the reply after it; omp prepares a submission more than once, so each attempt's message carries its own id and only the written one confirms, once.
@@ -267,7 +301,8 @@ The mailbox lives at the state directory's `delivery-ledger.json`, named by `hid
 An admitted mutation is atomically persisted as a private file before the daemon publishes it or returns success.
 Startup establishes the existing trusted ancestor's directory barriers, creates and syncs at most 64 private descendants, validates the actual ledger and reestablishes its file barrier before admitting effects.
 An uncertain replacement disables further delivery effects until a validated restart; corrupt bytes and incomplete directory chains remain available for recovery.
-The canonical platform boundary currently refuses Windows directory-chain establishment with `Unsupported`; that is an open cross-OS requirement, and delivery does not become ready through a legacy no-op.
+The ledger refuses a state folder that is a link or that other accounts can read; the daemon makes its own state folder private before the core starts ([ARCHITECTURE.md](ARCHITECTURE.md#hided-and-the-websocket-boundary)), so a folder an earlier build left open, as a device helper's bridge folder did on a machine a core later moved to, still loads its letters.
+These barriers are the platform layer's on every system ([ARCHITECTURE.md](ARCHITECTURE.md#the-platform-layer)): on Windows each folder is flushed through a handle allowed to add an entry to it, a folder above the state folder that the account neither owns nor may add to (`C:\Users` for a standard account) is passed over because it can hold no entry the account made, and a flush that fails anywhere else leaves the ledger unavailable rather than ready without its barrier.
 A corrupt, oversized or unsafe existing ledger is preserved, and commands return `ledger_unavailable` with a diagnostic instead of starting an empty ledger.
 Capacity errors retain existing letters and watches.
 Finished letters never refuse a new one: the one-day cleanup is the normal way a finished letter leaves, and a full total is the backstop, so a mailbox that finishes more than 5000 letters in a day keeps its newest finished letters and loses the oldest ahead of the day.
@@ -407,8 +442,15 @@ A letter keeps the endpoint names it was written with, so a letter written befor
 `register` records the participant on the caller's own machine, which the pane capability names: `--machine` may be left out, and when given it must name that same machine or the call is refused with `machine_identity_conflict`, so a caller in a connected device's pane registers as that device.
 `hide agent show here` answers the caller's own registration, read only, with no renderer: the one live record whose actor is the caller's attested pane, device and session, the same match as `--parent here` (`coordination::live_self`), refused when two match (`coordination::here`).
 Only a pane-bound credential can ask, as for every delivery and agent command: a checkout-bound one is refused `agent_pane_required`, and a pane-bound one whose hint names another pane is refused `caller_identity_conflict`.
+A registration keeps its pane's agent session as Herdr reports it: an id, or for Pi and omp the session file's path, which lies in a folder named after the checkout's path and so passes 256 bytes in a deep checkout.
+The ledger keeps a session of up to 4096 bytes, Herdr's own bound for a session path (`SESSION_LIMIT`, the bound a letter pull takes), and finds a pane's registration by the session's SHA-256, so its length never reaches a key.
+A longer session is refused `session_too_long` when the record is made, never as an unavailable ledger: `hide agent register` refuses it before it reaches the daemon, as the daemon does again before it asks Herdr, and a spawn whose agent reports one closes the pane it made before it answers, with the next action to spawn with a new intent in a checkout with a shorter path.
+An empty session or one holding a control character is refused `invalid_registration` by the same rule (`coordination::kept_session`).
+A build before this one reads a session past 256 bytes as a damaged ledger, so going back to it after such a registration answers every delivery and agent command `ledger_unavailable` until this build or a later one runs again.
 A caller with no such record is refused `participant_ended` when its record ended, `participant_session_changed` when its pane's live record belongs to another session (the pane's agent session changed), `ambiguous_participant` when two live records match, and `participant_unavailable` otherwise; a remote participant on a pane of the same name is never the local caller.
-`hide agent spawn` requires `--name`, `--intent`, `--kind`, `--repo` and `--branch`, with optional `--parent`, `--machine`, `--path` and native arguments after `--`.
+`hide agent spawn` requires `--name`, `--intent`, `--kind`, `--repo` and `--branch`, with optional `--parent`, `--machine`, `--path`, `--model`, `--effort` and native arguments after `--`.
+`--model` and `--effort` are the agent's launch choice: the start passes them in the kind's own spelling, and every wake, fork and reopen Hide makes of the agent starts it with them again (`docs/ARCHITECTURE.md`, Agent start), while native arguments after `--` apply to this start only.
+A choice the kind does not take is refused `invalid_launch_choice` before anything is created, and the choice is part of the intent, so the same intent with another choice is an `intent_conflict`.
 Choose responsibility when creating the agent; it cannot be transferred afterwards.
 With `--parent here` or the caller's own id, the agent is delegated: its parent owns the work, lineage is written immediately and an automatic watch starts.
 Without `--parent`, the work is handed off to the operator: the agent is an independent root, has no lineage edge to the spawner and starts no automatic watch.
@@ -443,6 +485,9 @@ Completed intent replay returns the durable receipt without contacting Herdr, in
 `--machine <device id>` starts the child on a connected device instead of the caller's own; it works with delegation and handoff alike.
 The id is the `device_id` that `hide workspace info` shows and the `machine` that `hide agent list` shows for agents there; a device label is not accepted, and the caller's own id is the same as leaving the flag out, so a spawn without `--machine` is exactly the spawn above.
 `--repo` and `--path` are then paths on that device.
+A spawn records the machine of its child only when that is not the caller's own, and the ledger refuses a child whose machine is not the spawn's.
+A core move therefore reads the field against the caller's machine after the move (`node_migration::reown`): a spawn that names none stays so, a machine the move renames takes its new id, and one that is now the caller's own is dropped.
+The copy is loaded with the ledger's own reader before it leaves the machine giving the core and again before it is placed on the machine taking it, so a move that would leave the new core without its letters, watches and registrations is rolled back instead of reported done.
 The caller keeps the parent registration, the authority and the watch; the child's checkout (a worktree when the branch has none), tab, agent start, identity wait and lineage tokens are the device's, made through its Herdr API channel, and the tokens name this machine as `parent_machine`.
 The agent is registered under the device, so the sidebar and the Overview's tasks show it under its parent with the device's mark, its reports and inactivity warnings reach the parent as letters over the existing device paths, and a handed-off agent records the caller as `origin`.
 Before the intent is reserved or anything is made, the spawn is refused with a stable code and a next action when the id is not a device (`machine_unknown`, naming the connected device ids the caller could have used), the device is not connected or its helper cannot answer (`machine_unavailable`), `--repo` holds no repository there (`repository_unavailable`) or the agent CLI is not on the device's `PATH` (`agent_not_installed`); the checks are the node link's `repository` and `agent_installed` calls, taken off the runtime lock.
@@ -463,9 +508,10 @@ The unsupported reconciliation/resume/session flags and relay, escalate, graph a
 
 A registration ends when Herdr no longer has its pane, so its name and the watches on it do not outlive the pane; the ended record stays in the ledger, like one `hide agent end` ended, and still counts against the 2048-registration limit.
 The core reads that from its own session sync of the host's Herdr, never from a separate poll: a pane the in-sync replica listed and then stops listing was closed by Herdr or moved to another tab, which gives it a new id and already ends the watches on it, and a pane missing from the fresh `session.snapshot` of a connect is gone for every registration made before that snapshot was asked for, which is how registrations left by panes that closed while no Hide was running end on the first connect.
-Nothing ends on uncertainty: a stream that lost events, a Herdr live handoff or restart and an unreachable Herdr publish no read until a fresh snapshot replaces it, a disconnected device publishes none, a sleeping or resumed agent keeps its pane, a session asleep with its pane closed keeps its registration and the watches on it until its wake continues them or lets them go, a registration on another Herdr socket of the same machine is not judged by this one's read, and a registration made after the snapshot was asked for waits until a read lists its pane.
+Nothing ends on uncertainty: a stream that lost events, a Herdr live handoff or restart and an unreachable Herdr publish no read until a fresh snapshot replaces it, a disconnected device publishes none, a sleeping or resumed agent keeps its pane, a session asleep with its pane closed keeps its registration and the watches on it until its wake continues them or lets them go, an archived session keeps them the same way until 이어가기 continues them or the archive is deleted, a registration on another Herdr socket of the same machine is not judged by this one's read, and a registration made after the snapshot was asked for waits until a read lists its pane.
 The delivery store ends it with the watches on it and the answer waits of the letters it sent or received, as `hide agent end` does, and logs `agent.ended` once with the agent id, machine, pane and reason (`pane_left` or `pane_absent`); nothing reaches the screen.
 A session that sleeps by closing its pane saves the registration it held, and the pane that wakes it takes that registration over: the registration keeps its id, name, parent and watch, the letters addressed to or from it follow it to the new pane, and the delivery store logs `agent.continued` with the agent id and the pane it left.
+An archived session's member (PRD session-archive) is continued the same way when 이어가기 brings it back ([ARCHITECTURE.md: Session archive](ARCHITECTURE.md#session-archive)).
 An agent whose CLI runs no session hook on resume (Cursor) gets its session from the core: the wake worker reports to Herdr the id the pane resumed, so the same-session check below has a session to compare ([ARCHITECTURE.md: Agent sleep](ARCHITECTURE.md#agent-sleep)).
 The core decides this from the wake it started, only when the new pane runs the same native session, kind and device; any other pane is not given the registration, and a registration it cannot continue ends with the pane that held it.
 Removing a device retires its cached pane read and rejects late reads from its retired coordinator; removal does not prove its panes gone or end any registration or watch.
@@ -476,10 +522,11 @@ An agent started through Herdr directly bypasses Hide's responsibility record.
 The Claude Code and Codex `PreToolUse` spawn guard refuses such a call in a registered checkout and offers two filled commands: delegation with `--parent here`, or operator handoff without it ([agent-hooks.md](agent-hooks.md#the-spawn-guard)).
 The guard remains bypassable guidance; it does not change either mode's authority or execution path.
 A launch chained behind another command is refused whole, and a launch inside `bash -c`, `$(...)`, a script or an alias is not seen, so a child started that way has no parent line, as before the guard.
-A first spawn of a new Codex child can answer `native_identity_unavailable` until that Codex has bound its session after its first turn; running the same `hide agent spawn` again with the same intent converges on the same child.
+A spawn whose child shows no session within 5 seconds (Codex before its first turn, OpenCode 2 before its first prompt) answers `native_identity_unavailable`, and the core binds the child when Herdr shows the session ([A registration that waits for its agent's session](#a-registration-that-waits-for-its-agents-session)).
 A spawn's tab runs the account's shell with Hide's shell integration where that shell is zsh, bash or fish (Windows PowerShell on Windows), and its start is typed only after the shell marked its first prompt ([ARCHITECTURE.md](ARCHITECTURE.md)); a shell stopped at a startup question within the 30 s wait is refused as `shell_starting` with that question's line, nothing typed, and the next action is to answer it in that pane and spawn again.
 A start Herdr typed whose agent never showed (a startup question took its first letter in a bash pane, or the program exited before Herdr saw it) leaves Herdr holding the agent's name in that pane until its 120 s deadline, and Herdr gives that name to any agent that appears there meanwhile.
 A spawn waits up to 30 seconds for Herdr to create the worktree, which runs `git worktree add` and can be slow on a large repository under load; when no answer comes in that time the spawn is refused `worktree_unconfirmed`, because Herdr may still finish the worktree, and the next action is to run the same command again with the same intent, which finds that worktree and continues in it; a Factory asks it again after five seconds.
+A Codex start on a machine whose install kit has not read its Codex is refused `codex_capability_unknown` with nothing typed, because every Codex Hide starts takes `--no-daemon` only when that Codex has the shared server ([agent-hooks.md](agent-hooks.md)); the next action is to have the operator press Check again in Settings > Agents for that machine and run the same command with the same intent, which continues in the pane the spawn made, and the screen words the code in the operator's language wherever it shows a start refusal; why the read failed is logged once by the core as `kit` / `codex_capability_unread` with the machine's device id, the cause, and the exit code or a signal, never a path or Codex's own output, and not at all when the read stopped because Hide was quitting.
 Running the same intent again while the name is held answers `native_identity_unavailable` and types nothing; once Herdr let it go and the shell alone holds the terminal it types the start once more (`start.resent`), and a second start that never showed, or anything else in the foreground, answers `agent_not_started`, whose next action is to look at that pane and spawn with a new intent.
 A spawn about to start its agent closes the pane of every earlier spawn of the same parent, name and device that made a pane and never bound a child, where no agent shows and the shell alone holds the terminal, so a new attempt leaves no extra tab and Herdr no longer holds the name for it; each close is logged as `spawn` / `unstarted_attempt.close`, and a pane that cannot be read or closed is left to Herdr's refusal.
 A spawn records the Herdr terminal its pane runs (`terminal_id` from `pane.get`) together with the pane, because Herdr hands a pane id out again once its server is replaced, so an earlier spawn's pane id can name an unrelated shell the operator opened.
@@ -507,6 +554,33 @@ When neither channel reached the operator, one `human.channels_failed` record in
 The claim stays consumed, so the same letter or warning is never announced again, and nothing is drawn on screen: an operator with phone push off and Herdr's toast off learns of a held letter from that record only.
 These cases add no Inbox screen or automatic escalation chain.
 
+### A registration that waits for its agent's session
+
+An agent Hide started is registered from the session Herdr shows in its pane, and some agents show none until their first turn.
+Codex 0.163.0 runs the session hook that Herdr's integration reports from only when its first turn starts, for `codex fork <id>` as for a new start, and OpenCode 2 makes no session before its first prompt; Claude Code runs its hook when it starts, so its spawns and forks register at once.
+Instead of failing after a fixed time, such a registration waits in the ledger (`identity_waits`, `coordination::identity_wait`) until Herdr shows the session, and the core finishes it then.
+
+`hide agent spawn` still waits up to 5 seconds for the child's session.
+When none shows in that time it records the wait and answers `native_identity_unavailable`, an error with no agent, whose next action says the agent started and Hide registers it when it reports its session; the pane and the agent stay as they are, and nothing is typed again.
+Until the child is bound, `hide agent list` does not show it, the parent has no watch on it and its pane carries no lineage tokens.
+Once Herdr shows the session in the spawn's pane under the spawn's agent name, the lineage writer binds the child as the spawn's own answer would: the registration with its parent, or for a handoff its origin, the initial watch of a delegated child, and the lineage tokens on its pane, logged as `identity_wait.bound` with the wait, the agent and the pane.
+Running the same command with the same intent then answers that child from the spawn's receipt and types nothing.
+Asked again before the session shows, it answers `native_identity_unavailable` and keeps the one wait; asked after the session shows but before the core settled the wait, it binds the child itself, and the core's settle finds that same child, so either order leaves one registration and no wait.
+
+Fork agent records the wait once the fork's agent has started: the source is registered then, while it is the execution that was forked, and the fork once Herdr shows the fork's own session, as the operator's root whose origin is the source ([status-model.md](status-model.md#where-a-parent-comes-from)).
+The source's consent is the wait, so a fork whose source closed while the fork rested still names it as its origin.
+
+A wait ends without a registration when its pane closes (`pane_closed`), when its agent ends and Herdr no longer lists the agent's name in the pane (`agent_ended`), or when another session shows in that pane (`pane_taken`).
+A bind the ledger refuses ends the wait with that refusal, such as `parent_unavailable` for a spawn whose parent registration ended, and so does a registration that cannot be made of the agent as Herdr shows it, so nothing is asked again for an agent that cannot be registered.
+A late session past what a registration keeps ends the wait as `session_too_long`, and the pane a spawn made for it is closed, as the spawn's own answer closes it; a fork's pane is the operator's and stays.
+Each end is logged as `identity_wait.ended` with the wait and the reason, and nothing reaches the screen.
+An agent's absence is judged only by an agent list read after the wait was recorded, because a list asked before may predate the agent's start.
+A settle that failed, such as one the store did not take while a core move held its effects, is logged as `identity_wait.settle_failed` and asked again at the next agent list, as a failed token write is; a settle converges, so a repeat binds or ends the wait once, and a queued settle is never asked twice.
+A core move carries each wait with the machine it names (`node_migration::KEYS`), so that machine's lineage writer judges it under its new id.
+At most 64 waits are held at once: a spawn past that answers `identity_waits_full`, whose next action is to give one of the waiting agents a first prompt or close its pane, and a fork past it is logged as `registration_failed` with that code.
+The waits ride on the existing one-second agent refresh, with no timer, no Herdr read of their own and no work under `Mutex<Runtime>`; an unchanged list with unchanged waits plans nothing.
+A ledger with no wait writes no `identity_waits` field, and a build from before waits ignores the field.
+
 ## Verification
 
 Use the worktree-owned entrypoints described in [BUILD.md](BUILD.md#two-entrypoints).
@@ -524,6 +598,7 @@ The helper executable tests use private homes and fixture transcripts, pair JSON
 Each fixture launch and capture shares an absolute five-second deadline and a combined 64 KiB output cap; provider sessions and the installed helper are never used.
 The full Rust test and lint lanes still apply to the final committed head.
 Actual Linux and Windows OS-contract runner results are required for the state-machine, ledger and activity portability claim; declaring a workflow does not prove it passed.
+On Windows the `windows check` lane opens the ledger from a real state folder, registers two agents, sends a letter and reads it from the recipient's inbox and back from disk (`runtime::delivery::tests::agents_register_and_a_letter_reaches_the_inbox_through_the_saved_ledger`), and its `real_herdr` daemon must have saved its ledger at startup.
 Real TUI delivery requires an isolated Herdr server, private HOME/state, precisely identified candidate processes and disposable provider sessions with observed native identity and registered lineage.
 Register only an actual parent session and spawn its child through `hide agent spawn`; never seed a capability or coordination ledger.
 Exercise idle/done delivery to a Claude pane with a statusline and to a Codex pane, a letter whose first line carries `@`, `$`, `/`, `!`, `#`, backticks, a trailing backslash and more than 60 characters of Korean (its bell is submitted as one prompt and its hook takes the letter), the same line typed by a person before the doorbell rings (an ordinary prompt: the letter stays pending until its own bell), working delay, a pending letter held while a permission, question or plan menu is open and delivered after it is answered, each target's menus read as Herdr `blocked` or, for Codex's plan approval, held as `awaiting_operator`, hook confirmation/restart, capacity/corruption, watch clocks/reset/exit/reply and helper privacy/fallback.

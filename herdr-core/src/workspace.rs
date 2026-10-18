@@ -17,21 +17,28 @@ use hide_node_link::protocol::Call;
 use hide_platform::path;
 
 use crate::model::{
-    CheckoutPurposeOrigin, CheckoutPurposeSnapshot, CheckoutSnapshot, DeviceRegistration,
-    DeviceSnapshot, TabSnapshot, WorkspaceRegistration, WorkspaceSnapshot, WorktreeCatalogSnapshot,
+    CheckoutPurposeOrigin, CheckoutPurposeSnapshot, CheckoutSnapshot, DeviceSnapshot, TabSnapshot,
+    WorkspaceRegistration, WorkspaceSnapshot, WorktreeCatalogSnapshot,
 };
 use crate::node::NodeId;
 use crate::node_access::{NodeLink, call_as};
 
 /// The row for the machine the core runs on. Its id is the node id; its
-/// `kind` stays `local`, the role "the core's own machine", not a name; it
-/// has no `label`, since each shell names it as its system does from
-/// `host.platform`; and `machine_name` is what that machine calls itself.
-pub fn local_device(node: &NodeId, machine_name: Option<&str>) -> DeviceSnapshot {
+/// `kind` stays `local`, the role "the core's own machine", not a name; its
+/// `label` is the name the operator registered it under before the core
+/// moved to it (`UiStateSnapshot::machine_label`), which a window on another
+/// machine names it by, and none otherwise, since a window on this machine
+/// names it as its system does from `host.platform`; and `machine_name` is
+/// what that machine calls itself.
+pub fn local_device(
+    node: &NodeId,
+    machine_name: Option<&str>,
+    label: Option<&str>,
+) -> DeviceSnapshot {
     DeviceSnapshot {
         agent_scope: Default::default(),
         id: node.to_string(),
-        label: None,
+        label: label.map(str::to_owned),
         kind: "local".to_owned(),
         state: "ready".to_owned(),
         message: None,
@@ -63,9 +70,14 @@ pub fn local_device(node: &NodeId, machine_name: Option<&str>) -> DeviceSnapshot
 pub fn devices(
     node: &NodeId,
     machine_name: Option<&str>,
-    registrations: &[DeviceRegistration],
+    ui_state: &crate::model::UiStateSnapshot,
 ) -> Vec<DeviceSnapshot> {
-    let mut result = vec![local_device(node, machine_name)];
+    let registrations = &ui_state.device_registrations;
+    let mut result = vec![local_device(
+        node,
+        machine_name,
+        ui_state.machine_label.as_deref(),
+    )];
     let mut seen = HashSet::from([node.to_string()]);
 
     for registration in registrations {

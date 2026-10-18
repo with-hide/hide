@@ -5,6 +5,7 @@
 // strip); these functions only read them, so they are testable without a
 // page. The View areas' own rules are `viewLayout.ts`.
 
+import { findArea } from "./areaLayout";
 import type { Checkout, DetailSlot, SnapshotRest, StripTab, ViewLayoutSnapshot } from "./snapshot";
 
 export { TOOLS, type Tool } from "./laneTools";
@@ -42,8 +43,10 @@ export type WorkspaceView = {
   pinned: boolean;
   /** Whether the files tool shows its tree column (D-05); with no view open the tree shows anyway. */
   tree: boolean;
-  /** The lane's document width in CSS pixels, or null for the default until it is resized. */
+  /** The files tool's document width in CSS pixels, or null for the default until it is resized. */
   lane_width: number | null;
+  /** The other tools' and the 보기 slot's width, the same way, so a wide document leaves them as they were. */
+  panel_width: number | null;
   /** The tree column's width, the same way. */
   tree_width: number | null;
   /** The core's latest width acknowledgement, absent before any named request. Never saved. */
@@ -68,6 +71,8 @@ export type LaneSizes = {
   laneMin: number;
   /** The lane's document width until the operator resizes it. */
   laneIdeal: number;
+  /** The document width a page opened in the lane widens it to (`pageLaneWidth`). */
+  lanePage: number;
   treeMin: number;
   /** The tree column's width until the operator resizes it. */
   treeIdeal: number;
@@ -88,8 +93,17 @@ export type LaneSizes = {
  */
 export type LaneMode = "closed" | "hidden" | "overlay" | "docked" | "expanded";
 
+/** The Workspace width a lane's document draws from: the files tool's, or the panel width every other tool shares. */
+export type LaneWidthField = "lane_width" | "panel_width";
+
+export function laneWidthField(tool: LaneTool | null): LaneWidthField {
+  return tool === "files" ? "lane_width" : "panel_width";
+}
+
 export type LaneFrame = {
   mode: LaneMode;
+  /** The stored width this lane draws from and its divider lands on. */
+  field: LaneWidthField;
   /** Agent Views' width; 0 before the body is measured, so no terminal fits to a guess. */
   agents: number;
   /** The lane's drawn width, its tree column included. */
@@ -110,6 +124,7 @@ export type LaneInput = {
   pinned: boolean;
   tree: boolean;
   laneWidth: number | null;
+  panelWidth: number | null;
   treeWidth: number | null;
   /** The files tool has a view, or a file of this checkout opening into one. */
   hasViews: boolean;
@@ -122,8 +137,9 @@ export type LaneInput = {
 };
 
 /**
- * The body as it is drawn. The lane's width is the same pinned or not (B6);
- * a tree beside a document adds its own width, so the document keeps its
+ * The body as it is drawn. The files tool draws at its document width and
+ * every other tool at the panel width, each the same pinned or not (B6); a
+ * tree beside a document adds its own width, so the document keeps its
  * width (B10). A pinned lane docks wherever its minimums fit beside Agent
  * Views' own, giving up its width first, and only a body too narrow for even
  * those draws it over them, where it stays (D-07); a window that narrows and
@@ -133,7 +149,8 @@ export function laneFrame(input: LaneInput): LaneFrame {
   const { tool, body, sizes } = input;
   const treeOnly = tool === "files" && !input.hasViews;
   const treeBeside = tool === "files" && input.hasViews && input.tree;
-  const documentWant = Math.max(sizes.laneMin, input.laneWidth ?? sizes.laneIdeal);
+  const field = laneWidthField(tool);
+  const documentWant = Math.max(sizes.laneMin, (field === "lane_width" ? input.laneWidth : input.panelWidth) ?? sizes.laneIdeal);
   const treeWant = Math.max(sizes.treeMin, input.treeWidth ?? sizes.treeIdeal);
   const want = documentWant + (treeBeside ? treeWant + sizes.divider : 0);
   const visible = tool !== null && (input.pinned || input.shown || input.expanded);
@@ -143,7 +160,7 @@ export function laneFrame(input: LaneInput): LaneFrame {
   const least = sizes.laneMin + (treeBeside ? sizes.treeMin + sizes.divider : 0);
   const docks = input.pinned && body - sizes.divider - least >= sizes.agentMin;
   const mode: LaneMode = tool === null ? "closed" : !visible ? "hidden" : input.expanded ? "expanded" : docks ? "docked" : "overlay";
-  if (body <= 0) return { mode, agents: 0, width: 0, document: 0, tree: null, treeOnly, narrowPin: false };
+  if (body <= 0) return { mode, field, agents: 0, width: 0, document: 0, tree: null, treeOnly, narrowPin: false };
   const docked = docks ? Math.min(want, body - sizes.divider - sizes.agentMin) : 0;
   const agents = docks ? body - sizes.divider - docked : body;
   const width = mode === "expanded" ? body : docks ? docked : Math.min(want, body);
@@ -155,7 +172,7 @@ export function laneFrame(input: LaneInput): LaneFrame {
     tree = Math.max(0, Math.min(treeWant, width - sizes.divider - document));
   }
   const document = tree === null ? width : width - sizes.divider - tree;
-  return { mode, agents: tool === null ? body : agents, width, document, tree, treeOnly, narrowPin: input.pinned && !docks && tool !== null };
+  return { mode, field, agents: tool === null ? body : agents, width, document, tree, treeOnly, narrowPin: input.pinned && !docks && tool !== null };
 }
 
 /** `value` within `min..max`, the minimum winning when the two cross. */
@@ -163,19 +180,37 @@ function clamp(value: number, min: number, max: number): number {
   return Math.round(Math.max(min, Math.min(value, max)));
 }
 
+/** A divider's landing: the widths it changes, each the value it should end at. */
+export type LaneLanding = Partial<Record<LaneWidthField | "tree_width", number>>;
+
 /**
  * Where the divider at the lane's left edge, dragged to `x` pixels from the
- * body's left edge, lands: the document's width, so the tree keeps its own,
- * never under the lane's minimum. Docked, it leaves Agent Views their own
- * width; over the agents it may reach the body's edge, since nothing beside
- * it gives way.
+ * body's left edge, lands: the document's width, in the width the lane draws
+ * from, so the tree keeps its own, never under the lane's minimum. Docked,
+ * it leaves Agent Views their own width; over the agents it may reach the
+ * body's edge, since nothing beside it gives way.
  */
-export function laneLanding(input: { x: number; body: number; frame: LaneFrame; sizes: LaneSizes }): { lane_width: number } {
+export function laneLanding(input: { x: number; body: number; frame: LaneFrame; sizes: LaneSizes }): LaneLanding {
   const { x, body, frame, sizes } = input;
   const tree = frame.tree === null ? 0 : frame.tree + sizes.divider;
   const document = body - x - sizes.divider - tree;
   const beside = frame.mode === "overlay" ? 0 : sizes.agentMin;
-  return { lane_width: clamp(document, sizes.laneMin, body - sizes.divider - tree - beside) };
+  return { [frame.field]: clamp(document, sizes.laneMin, body - sizes.divider - tree - beside) };
+}
+
+/**
+ * The document width to store when a page opens in the lane (PRD
+ * browser-width-zoom D-02, D-21), or null to leave it: a lane narrower than
+ * `lanePage` widens to it, pinned or not, as far as Agent Views keeps its
+ * minimum beside the lane and its tree; it never narrows the lane.
+ */
+export function pageLaneWidth(input: { laneWidth: number | null; tree: number | null; body: number; sizes: LaneSizes }): number | null {
+  const { body, sizes } = input;
+  const stored = Math.max(sizes.laneMin, input.laneWidth ?? sizes.laneIdeal);
+  if (body <= 0 || stored >= sizes.lanePage) return null;
+  const tree = input.tree === null ? 0 : input.tree + sizes.divider;
+  const width = Math.floor(Math.min(sizes.lanePage, body - sizes.divider - tree - sizes.agentMin));
+  return width > stored ? width : null;
 }
 
 /**
@@ -185,11 +220,11 @@ export function laneLanding(input: { x: number; body: number; frame: LaneFrame; 
  * expanded lane's document only takes what the tree leaves, so there the
  * tree's width alone is stored.
  */
-export function treeLanding(input: { x: number; frame: LaneFrame; sizes: LaneSizes }): { tree_width: number; lane_width?: number } {
+export function treeLanding(input: { x: number; frame: LaneFrame; sizes: LaneSizes }): LaneLanding {
   const { x, frame, sizes } = input;
   const pair = (frame.tree ?? 0) + frame.document;
   const tree = clamp(x, sizes.treeMin, pair - sizes.laneMin);
-  return frame.mode === "expanded" ? { tree_width: tree } : { tree_width: tree, lane_width: pair - tree };
+  return frame.mode === "expanded" ? { tree_width: tree } : { tree_width: tree, [frame.field]: pair - tree };
 }
 
 export function workspaceViewOf(rest: SnapshotRest | null): WorkspaceView | null {
@@ -199,6 +234,29 @@ export function workspaceViewOf(rest: SnapshotRest | null): WorkspaceView | null
 /** Herdr tabs: the Agent area's strip, in the core's order. */
 export function agentEntries(checkout: Checkout): StripTab[] {
   return checkout.strip.filter((entry) => entry.kind === "herdr");
+}
+
+/**
+ * The page in front of the active View area, as its Workspace, display and
+ * load stamp, so a page that came forward or loaded again reads as new; null
+ * when a file, a diff, a new tab or nothing is there.
+ */
+function frontPage(view: Pick<WorkspaceView, "device_id" | "path" | "layout"> | null | undefined): string | null {
+  const layout = view?.layout;
+  if (!layout) return null;
+  const area = findArea(layout.root, layout.active_area);
+  const display = area?.displays.find((row) => row.id === area.active);
+  return display?.kind === "browser" && display.url ? `${view.device_id}\u0000${view.path}\u0000${display.id}\u0000${display.load ?? 0}` : null;
+}
+
+/**
+ * Whether a lane call put a page in front (PRD browser-width-zoom D-04): the
+ * active area's front display is a page that was not in front, or loaded
+ * again, before the call. The rail's Files or a reveal leaves it as it was.
+ */
+export function pageCalled(previous: Pick<WorkspaceView, "device_id" | "path" | "layout"> | null | undefined, view: Pick<WorkspaceView, "device_id" | "path" | "layout"> | null | undefined): boolean {
+  const page = frontPage(view);
+  return page !== null && page !== frontPage(previous);
 }
 
 /** What the page has read of the core's lane calls. */

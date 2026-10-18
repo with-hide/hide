@@ -1,9 +1,10 @@
 //! Machines whose node dials this core (PRD core-host-node-remote-core D-04,
 //! D-10): the screen machine of a core that runs elsewhere. The operator's
-//! own SSH login opened the link, so the core asks no consent, installs no
-//! kit and never dials one; it takes the link the node brought and treats
-//! the node as a device from there on, keyed by its node id. A link that
-//! ends is replaced only by the node dialing again.
+//! own SSH login opened the link, so the core asks no consent, uploads no
+//! helper and never dials one; it takes the link the node brought and treats
+//! the node as a device from there on, keyed by its node id, its kit
+//! included, which the node installs from the app it runs. A link that ends
+//! is replaced only by the node dialing again.
 
 use std::sync::Arc;
 
@@ -112,7 +113,11 @@ impl Runtime {
         if self.remote_connections.contains_key(node) {
             let focused_device = self.snapshot.navigator.focused_device_id.clone();
             let persisted_focus = self.snapshot.ui_state.focused_device_id.clone();
-            self.disconnect_remote_device(node);
+            // The node dialed in again under the id it had: a fresh row for
+            // its new link, since no state of the old link means anything
+            // to a node that reconnects by itself (only a dialed device's
+            // Reconnect keeps its last state).
+            self.disconnect_remote_device(node, super::devices::Retiring::Removed);
             self.snapshot.navigator.focused_device_id = focused_device;
             self.snapshot.ui_state.focused_device_id = persisted_focus;
         }

@@ -63,7 +63,7 @@ impl Drop for Admitted {
 impl Local {
     /// The core's own node, answering for `home`: the home the core was
     /// configured with, which is not the process's for a daemon started with
-    /// a private one. It installs no kit until [`Local::bundled`] says where
+    /// a private one. It installs no kit until [`Local::with_kit`] says where
     /// the parts are.
     pub fn new(home: Option<PathBuf>) -> Self {
         Self {
@@ -73,10 +73,11 @@ impl Local {
         }
     }
 
-    /// The node runs from a desktop package whose resources folder,
-    /// `kit_dir`, holds the kit's parts (`hide_kit::bundled_kit_dir`).
-    pub fn bundled(mut self, kit_dir: PathBuf) -> Self {
-        self.env.kit = KitPlace::Bundled(kit_dir);
+    /// The node's kit takes its parts from `place`: the desktop package or
+    /// the build Hide placed that the core runs from
+    /// (`KitPlace::of_program`).
+    pub fn with_kit(mut self, place: KitPlace) -> Self {
+        self.env.kit = place;
         self
     }
 

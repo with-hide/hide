@@ -33,8 +33,10 @@ issues, so the run's cap, the recurrence comments and the closing never race:
 one issue per test or measurement a lane annotated, or, for a failed job with
 no such annotation, per lane and failed step; a comment per run attempt on the
 issue already open for the same failure; and a lane that passes a scheduled
-run on main closes its issues. docs/TESTING.md, "Flaky tests" and "Nightly
-failures", owns the policy.
+run on main closes its issues. A check that passed without measuring (a
+`Not measured` warning annotation) keeps its lane from passing and is listed
+in the job summary. docs/TESTING.md, "Flaky tests" and "Nightly failures",
+owns the policy.
 
     ci-flaky-report.py --nightly --lane-input all
     ci-flaky-report.py --nightly --repo OWNER/REPO --run RUN_ID --dry-run
@@ -43,12 +45,14 @@ It talks to GitHub through `gh` (GH_TOKEN, GITHUB_REPOSITORY and the run's
 GITHUB_* variables come from Actions). A lane's step needs `issues: write` and
 must not fail the lane: the flaky run already passed, and the report is a
 notice, so a GitHub error costs one missed issue the next flaky run files. The
-report job needs `actions: read`, `checks: read`, `pull-requests: read` and
+nightly report reads job logs, which needs gh 2.97 or newer, and refuses an
+older gh before the first log read. The report job needs `actions: read`, `checks: read`, `pull-requests: read` and
 `issues: write`, and fails when GitHub does, so a failure it could not file is
 a red job rather than a silence.
 """
 import argparse
 from datetime import date, timedelta
+import functools
 import json
 import os
 from pathlib import Path
@@ -62,7 +66,18 @@ EXPIRY_DAYS = 7
 # A run with more flaky tests than this is a broken environment, not flakiness;
 # the rest are counted in the log, not filed.
 MAX_PER_RUN = 20
-ANSI = re.compile(r"\x1b\[[0-9;]*m")
+# The oldest gh that hands over a job log: `gh_reads_logs`.
+GH_FOR_LOGS = (2, 97)
+# Terminal control in text read from a job log or bound for a public page:
+# ECMA-48 escape sequences (CSI, such as the color the runner puts around each
+# step's command in every job log; the OSC, DCS, SOS, PM and APC strings, each
+# to its terminator or the end of its line; and the shorter forms) and every
+# other C0 and C1 control but tab and newline. A carriage return ends a line
+# (`plain`), as a terminal shows it.
+CONTROL = re.compile(
+    r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|\x1b(?:[\]PX^_][^\x07\x1b\n]*(?:\x07|\x1b\\)?|[ -/]*[0-~])?"
+    r"|[\x00-\x08\x0b-\x1f\x7f-\x9f]"
+)
 # Hand-written issues quote a title cut short ("Agent tabs shrink in stages...").
 MATCH_PREFIX = 20
 # A home folder in a quoted path names the account that ran it; an excerpt
@@ -82,6 +97,13 @@ ANNOTATED_TESTS = 8
 # move with any change, so every pull request merged since the lane's last
 # green nightly is a candidate.
 MEASUREMENT_TITLE = "Failed measurement"
+# A check that passed without measuring anything, written by the check as a
+# warning annotation with the check on the first line and the reason after:
+# a real agent's provider refused its turn on a quota the CI key had spent
+# (docs/TESTING.md, "A real agent on CI"). Its job passes, since the cause is
+# not the code's, but its lane is not green: it closes no issue, is no lane's
+# last green nightly, and the report lists it.
+NOT_MEASURED_TITLE = "Not measured"
 
 NIGHTLY_LABEL = "nightly-failure"
 INFRA_LABEL = "infra"
@@ -180,8 +202,13 @@ def nextest_failed(root):
     return found
 
 
+def plain(text):
+    """`text` with its line breaks as newlines and no terminal control."""
+    return CONTROL.sub("", re.sub(r"\r\n?", "\n", text))
+
+
 def clean(text):
-    text = HOME.sub(r"\1~", ANSI.sub("", text))
+    text = HOME.sub(r"\1~", plain(text))
     return TOKEN.sub("***", text).strip()[:600] or "(no message)"
 
 
@@ -255,19 +282,49 @@ def comment(test, system, facts, expired):
     )
 
 
+@functools.cache
+def gh_reads_logs():
+    """Refuse a gh too old to read a job log, before the first one is read.
+
+    gh 2.97 and later refuse a raw body that carries a terminal escape, as every
+    job log does, unless told `--allow-escape-sequences`, which an older gh does
+    not know: it would answer `unknown flag` and print its usage.
+    """
+    try:
+        done = subprocess.run(["gh", "--version"], capture_output=True)
+    except OSError as error:
+        raise RuntimeError(f"gh could not run: {error}") from error
+    said = done.stdout.decode("utf-8", "replace")
+    version = re.match(r"gh version ((\d+)\.(\d+)\S*)", said)
+    if done.returncode or not version:
+        raise RuntimeError(f"gh --version did not say a version: {(said or done.stderr.decode('utf-8', 'replace')).strip()}")
+    if (int(version[2]), int(version[3])) < GH_FOR_LOGS:
+        raise RuntimeError(
+            f"needs gh {'.'.join(map(str, GH_FOR_LOGS))} or newer to read job logs (found {version[1]}); upgrade gh"
+        )
+
+
 def gh(args, body=None, raw=False):
+    """`gh api`'s JSON answer, or with `raw` a body's text with its terminal control removed.
+
+    A raw body, such as a job log, is the bytes the job wrote, terminal escapes
+    and all (`gh_reads_logs`), and a job may have written bytes that are not UTF-8.
+    """
+    if raw:
+        gh_reads_logs()
     try:
         done = subprocess.run(
-            # gh speaks UTF-8; without a named encoding a Windows runner reads it as cp1252.
-            ["gh", "api", *args], input=None if body is None else json.dumps(body), capture_output=True, encoding="utf-8",
+            ["gh", "api", *(["--allow-escape-sequences"] if raw else []), *args],
+            input=None if body is None else json.dumps(body).encode("utf-8"), capture_output=True,
         )
     except OSError as error:
         raise RuntimeError(f"gh could not run: {error}") from error
+    # gh speaks UTF-8; a named encoding keeps a Windows runner from reading it as cp1252.
     if done.returncode:
-        raise RuntimeError(f"gh api {' '.join(args)}: {done.stderr.strip()}")
+        raise RuntimeError(f"gh api {' '.join(args)}: {done.stderr.decode('utf-8', 'replace').strip()}")
     if raw:
-        return done.stdout
-    return json.loads(done.stdout) if done.stdout.strip() else None
+        return plain(done.stdout.decode("utf-8", "replace"))
+    return json.loads(done.stdout.decode("utf-8")) if done.stdout.strip() else None
 
 
 def open_issues(repo, call=gh):
@@ -439,6 +496,7 @@ class Nightly:
         self.lane_input = lane_input or ""
         self.marker = f"<!-- nightly-run:{self.run_id}:{self.attempt} -->"
         self.jobs_of = {}
+        self.annotations_of = {}
         self.pr_files = {}
 
     def jobs(self, run_id, attempt):
@@ -449,12 +507,23 @@ class Nightly:
             ]
         return self.jobs_of[(run_id, attempt)]
 
-    @staticmethod
-    def green_lanes(jobs):
-        lanes = {}
-        for job in jobs:
-            lanes.setdefault(lane_of(job["name"]), []).append(job["conclusion"])
-        return {lane for lane, conclusions in lanes.items() if all(c == "success" for c in conclusions)}
+    def annotations(self, job):
+        if job["id"] not in self.annotations_of:
+            self.annotations_of[job["id"]] = listing(self.call, annotation_path(job))
+        return self.annotations_of[job["id"]]
+
+    def unmeasured(self, jobs):
+        """Each check a passing job of `jobs` ran without measuring, as (lane, check, reason)."""
+        return [
+            (lane_of(job["name"]), *(annotation.get("message") or "").partition("\n")[::2])
+            for job in jobs if job["conclusion"] == "success"
+            for annotation in self.annotations(job) if annotation.get("title") == NOT_MEASURED_TITLE
+        ]
+
+    def green(self, jobs, lane):
+        """Whether `lane` ran in `jobs`, every job of it passed, and none passed without measuring."""
+        mine = [job for job in jobs if lane_of(job["name"]) == lane]
+        return bool(mine) and all(job["conclusion"] == "success" for job in mine) and not self.unmeasured(mine)
 
     def failures(self):
         """Each failure of this run once, in job order, and the count of failed tests no lane annotated."""
@@ -463,7 +532,7 @@ class Nightly:
             if job["conclusion"] not in ("failure", "timed_out"):
                 continue
             lane = lane_of(job["name"])
-            annotations = listing(self.call, annotation_path(job))
+            annotations = self.annotations(job)
             tests = [a for a in annotations if a.get("title") in (FAILED_TITLE, MEASUREMENT_TITLE)]
             left = sum(unannotated_count(a) for a in annotations if a.get("title") == UNANNOTATED_TITLE)
             unannotated += left
@@ -487,7 +556,7 @@ class Nightly:
             if run["created_at"] < self.run["created_at"] and run["event"] in ("schedule", "workflow_dispatch")
         ][:GREEN_LOOKBACK_RUNS]
         for run in earlier:
-            if lane in self.green_lanes(self.jobs(str(run["id"]), run["run_attempt"])):
+            if self.green(self.jobs(str(run["id"]), run["run_attempt"]), lane):
                 return run
         return None
 
@@ -628,17 +697,19 @@ class Nightly:
         scheduled = self.run["event"] == "schedule"
         by_hand = self.run["event"] == "workflow_dispatch" and self.lane_input in ("", "all")
         if scheduled or by_hand:
-            green = self.green_lanes(self.jobs(self.run_id, self.attempt))
+            jobs = self.jobs(self.run_id, self.attempt)
             passed = {"body": f"Passed at {self.run['head_sha'][:12]}: {self.run['html_url']}"}
             for issue in issues:
                 key, earlier = key_of(issue), overflow_run(issue)
-                if key and key.split(":", 1)[0] in green:
+                if key and self.green(jobs, key.split(":", 1)[0]):
                     actions.append(("close", issue["number"], passed))
                 elif earlier and earlier != self.run_id:
                     actions.append(("close", issue["number"], {"body": f"Run {self.run['html_url']} files its own failures."}))
         return actions
 
     def apply(self, actions):
+        # Read before writing, so a GitHub error here leaves nothing half written.
+        unmeasured = self.unmeasured_lines()
         lines = ["### Nightly failures", ""]
         for action, number, payload in actions:
             if action == "open":
@@ -653,7 +724,14 @@ class Nightly:
                 lines.append(f"- closed #{number}")
         for line in lines[2:]:
             print(line[2:])
-        summary(lines if actions else lines + ["Nothing to write."])
+        for line in unmeasured[2:]:
+            print(f"not measured: {line[2:]}")
+        summary((lines if actions else lines + ["Nothing to write."]) + ([""] + unmeasured if unmeasured else []))
+
+    def unmeasured_lines(self):
+        """This run's checks that passed without measuring, as a summary section; none is no section."""
+        found = self.unmeasured(self.jobs(self.run_id, self.attempt))
+        return ["### Not measured", ""] + [f"- `{lane}`: {check}: {reason}" for lane, check, reason in found] if found else []
 
 
 def describe(actions):
@@ -681,7 +759,8 @@ def nightly(args, env, call=gh):
     report_run = Nightly(repo, run, attempt, args.lane_input, call, Path(__file__).resolve().parents[1], date.today())
     actions = report_run.plan()
     if args.dry_run:
-        print(describe(actions))
+        unmeasured = report_run.unmeasured_lines()
+        print(describe(actions) + ("\n\n" + "\n".join(unmeasured) if unmeasured else ""))
         return 0
     report_run.apply(actions)
     return 0
@@ -706,7 +785,7 @@ def main(argv=None):
     source.add_argument("--junit", type=Path, nargs="+", help="cargo-nextest JUnit reports (a lane writes one per nextest run)")
     source.add_argument("--measurement", type=Path, help="a performance lane's record, whose failures are annotated")
     parser.add_argument("--system", default=os.environ.get("RUNNER_OS", "unknown"))
-    parser.add_argument("--nightly", action="store_true", help="the nightly report job: file, comment on and close nightly-failure issues")
+    parser.add_argument("--nightly", action="store_true", help="the nightly report job: file, comment on and close nightly-failure issues (needs gh 2.97 or newer)")
     parser.add_argument("--repo", help="OWNER/REPO (default: GITHUB_REPOSITORY)")
     parser.add_argument("--run", help="the nightly run to report (default: this run)")
     parser.add_argument("--attempt", help="its attempt (default: this attempt, or the run's latest)")
@@ -714,7 +793,12 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true", help="print what the nightly report would write, and write nothing")
     args = parser.parse_args(argv)
     if args.nightly:
-        return nightly(args, os.environ)
+        try:
+            return nightly(args, os.environ)
+        except RuntimeError as error:
+            # A GitHub or gh failure is the job's red, said in one line.
+            print(f"nightly report: {error}", file=sys.stderr)
+            return 1
     if args.measurement:
         return measurement(args.measurement)
     if not args.suite or not (args.playwright or args.junit):

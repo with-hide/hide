@@ -628,7 +628,7 @@ fn delayed_memory_choice_changes_only_its_checkout_and_a_refusal_changes_neither
     runtime.sync_workspace_view();
     runtime.choose_when_in_front(crate::node::TEST_NODE, "accepted", key);
     runtime.attach_memory_navigation(crate::node::TEST_NODE, "accepted", "visible-id".into());
-    runtime.acknowledge_memory_navigation(crate::node::TEST_NODE, "accepted");
+    runtime.acknowledge_choice(crate::node::TEST_NODE, "accepted");
     runtime.focus_checkout("visible-id", &second.id);
     runtime.sync_workspace_view();
     assert_eq!(
@@ -704,7 +704,7 @@ fn a_later_local_memory_or_device_visit_supersedes_delayed_remote_memory() {
             runtime.choose_when_in_front("mini", "old-memory", key.clone());
             runtime.attach_memory_navigation("mini", "old-memory", "remote-project".into());
             if acknowledged_first {
-                runtime.acknowledge_memory_navigation("mini", "old-memory");
+                runtime.acknowledge_choice("mini", "old-memory");
             }
             let (kind, payload) = if visit_memory {
                 (
@@ -718,38 +718,8 @@ fn a_later_local_memory_or_device_visit_supersedes_delayed_remote_memory() {
                 )
             };
             runtime.dispatch_json(&serde_json::to_vec(&serde_json::json!({"schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload})).unwrap());
-            runtime.acknowledge_memory_navigation("mini", "old-memory");
-            let mut project = workspace(
-                "remote-project",
-                "Remote",
-                &key.1,
-                vec![checkout("remote-project", "remote-checkout", &key.1, None)],
-            );
-            project.device_id = "mini".into();
-            project.remote_target_id = Some("mini".into());
-            runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
-                target_id: "mini".into(),
-                state: "connected".into(),
-                message: None,
-                herdr_version: None,
-                unreachable_since_unix_ms: None,
-                session: Some(RemoteSessionSnapshot {
-                    workspaces: vec![project],
-                    agents: vec![],
-                    active_tab_ids: Default::default(),
-                    focused_workspace_id: Some("remote-project".into()),
-                    focused_checkout_id: Some("remote-checkout".into()),
-                    focused_tab_id: None,
-                    focused_pane_id: None,
-                    pane_layouts: vec![],
-                    pane_hook_tokens: Default::default(),
-                    issue_tokens: Default::default(),
-                    issue_links: Default::default(),
-                    herdr_version: None,
-                }),
-                files: RemoteFileListSnapshot::idle(),
-                catalog: Default::default(),
-            });
+            runtime.acknowledge_choice("mini", "old-memory");
+            mini_in_front_at(&mut runtime, &key.1);
             runtime.sync_workspace_view();
             assert!(runtime.device_in_front(crate::node::TEST_NODE));
             assert_eq!(
@@ -782,6 +752,78 @@ fn a_later_local_memory_or_device_visit_supersedes_delayed_remote_memory() {
             }
         }
     }
+}
+
+/// An accepted Memory visit whose device front never lands in time dies
+/// with its request: the operator's own later visit to that checkout opens
+/// no Memory and leaves this machine in front.
+#[test]
+fn a_remote_memory_visit_whose_front_never_landed_in_time_opens_nothing_later() {
+    let mut runtime = fixture();
+    let local = runtime.snapshot.navigator.workspaces[0].checkouts[0].clone();
+    let mut remote = runtime.snapshot.navigator.devices[0].clone();
+    remote.id = "mini".into();
+    remote.kind = "remote".into();
+    runtime.snapshot.navigator.devices.push(remote);
+    runtime = super::workspace_view::with_new_views(runtime, "expired-memory");
+    runtime.focus_checkout("visible-id", &local.id);
+    runtime.sync_workspace_view();
+    let key = ("mini".to_owned(), "/fixture/remote".to_owned());
+    runtime.choose_when_in_front("mini", "old-memory", key.clone());
+    runtime.attach_memory_navigation("mini", "old-memory", "remote-project".into());
+    runtime.acknowledge_choice("mini", "old-memory");
+    runtime.tick_async_operations(
+        unix_milliseconds() + crate::runtime::workspace_view::CHOICE_LANDING_TIMEOUT_MS + 1,
+    );
+    mini_in_front_at(&mut runtime, &key.1);
+    runtime.sync_workspace_view();
+    assert!(runtime.device_in_front(crate::node::TEST_NODE));
+    assert!(
+        runtime
+            .workspace_views
+            .as_mut()
+            .unwrap()
+            .views
+            .entry("mini", &key.1)
+            .tool
+            .is_none()
+    );
+}
+
+/// The device "mini" connected with its Herdr's front on its one checkout,
+/// at `path`.
+fn mini_in_front_at(runtime: &mut Runtime, path: &str) {
+    let mut project = workspace(
+        "remote-project",
+        "Remote",
+        path,
+        vec![checkout("remote-project", "remote-checkout", path, None)],
+    );
+    project.device_id = "mini".into();
+    project.remote_target_id = Some("mini".into());
+    runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
+        target_id: "mini".into(),
+        state: "connected".into(),
+        message: None,
+        herdr_version: None,
+        unreachable_since_unix_ms: None,
+        session: Some(RemoteSessionSnapshot {
+            workspaces: vec![project],
+            agents: vec![],
+            active_tab_ids: Default::default(),
+            focused_workspace_id: Some("remote-project".into()),
+            focused_checkout_id: Some("remote-checkout".into()),
+            focused_tab_id: None,
+            focused_pane_id: None,
+            pane_layouts: vec![],
+            pane_hook_tokens: Default::default(),
+            issue_tokens: Default::default(),
+            issue_links: Default::default(),
+            herdr_version: None,
+        }),
+        files: RemoteFileListSnapshot::idle(),
+        catalog: Default::default(),
+    });
 }
 
 #[test]

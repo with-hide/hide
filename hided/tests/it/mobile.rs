@@ -26,6 +26,7 @@ fn env(dir: &Path, tailscale: &Path) -> Env {
         home: dir.to_path_buf(),
         herdr_socket_path: None,
         herdr_bin_path: None,
+        login_shell: None,
         state_dir: dir.join("state"),
         legacy_state_dir: None,
         account_state_folder: false,
@@ -980,6 +981,77 @@ async fn a_start_from_an_unadmitted_phone_is_refused_and_nothing_reaches_the_cor
         let answers = core_answers(&mut shell, request_id, Duration::from_millis(800)).await;
         assert!(answers.is_empty(), "the core saw {request_id}: {answers:?}");
     }
+    running.stop();
+}
+
+/// The next `pong` the phone receives, with the other frames passed over.
+async fn next_pong(socket: &mut Socket) -> Value {
+    loop {
+        let frame = next_frame(socket).await.expect("a pong");
+        if frame["type"] == "pong" {
+            return frame;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_ping_gets_its_number_back_until_the_phone_is_revoked() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = FakeTailscale::new(dir.path());
+    fake.ready();
+    let running = hided::start_daemon(env(dir.path(), &fake.bin))
+        .await
+        .unwrap();
+    let mut shell = renderer(&running).await;
+    let (mut socket, phone_id, _credential) = paired_phone(&running, &mut shell).await;
+    send_phone(&mut socket, json!({"type": "ping", "id": 41})).await;
+    assert_eq!(
+        next_pong(&mut socket).await,
+        json!({"type": "pong", "id": 41})
+    );
+    // An input is written beside the socket loop and answers as a frame; the loop keeps answering after it.
+    send_phone(
+        &mut socket,
+        json!({"type": "input", "request_id": "r-1", "device_id": "local", "pane_id": "w9:p9", "text": "hi"}),
+    )
+    .await;
+    send_phone(&mut socket, json!({"type": "ping", "id": 40})).await;
+    let mut result = None;
+    let mut pong = None;
+    while result.is_none() || pong.is_none() {
+        let frame = next_frame(&mut socket).await.expect("an answer");
+        match frame["type"].as_str() {
+            Some("input_result") => result = Some(frame),
+            Some("pong") => pong = Some(frame),
+            _ => {}
+        }
+    }
+    assert_eq!(result.unwrap()["request_id"], "r-1");
+    assert_eq!(pong.unwrap(), json!({"type": "pong", "id": 40}));
+    // A ping with no number is refused and recorded; the connection stays and the next one is answered.
+    send_phone(&mut socket, json!({"type": "ping"})).await;
+    send_phone(&mut socket, json!({"type": "ping", "id": 42})).await;
+    assert_eq!(
+        next_pong(&mut socket).await,
+        json!({"type": "pong", "id": 42})
+    );
+    // A phone no longer let in is never answered with a pong.
+    event(&mut shell, "mobile_revoke", json!({"phone_id": phone_id})).await;
+    mobile_frame(&mut shell, |frame| {
+        frame["phones"].as_array().is_some_and(Vec::is_empty)
+    })
+    .await;
+    let _ = socket
+        .send(Message::Text(
+            json!({"type": "ping", "id": 43}).to_string().into(),
+        ))
+        .await;
+    let mut refused = false;
+    while let Some(frame) = next_frame(&mut socket).await {
+        assert_ne!(frame["type"], "pong", "{frame}");
+        refused |= frame == json!({"type": "refused", "reason": "revoked"});
+    }
+    assert!(refused, "a revoked phone is told why");
     running.stop();
 }
 

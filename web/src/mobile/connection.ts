@@ -2,6 +2,10 @@
 // QR's code or authenticate with the stored credential, then keep the list
 // live and retry forever after a loss (B23). Nothing here calls any HTTP path
 // but `/ws`; the page, its script and the service worker are the static shell.
+//
+// A Mac that went to sleep leaves the socket open on the phone, and hided's own
+// ping is invisible to the page, so the phone watches its socket itself: one
+// timer per connection, below.
 
 import {
   MAX_MESSAGES,
@@ -12,6 +16,7 @@ import {
   refusalOf,
   replyProblem,
   sameKey,
+  sleepTarget,
   type AgentKey,
   type DetailView,
   type PhoneMessage,
@@ -24,6 +29,12 @@ import { forgetPush, syncPush } from "./push";
 
 const CREDENTIAL_KEY = "hide.phone.credential";
 const RETRY_MS = [1000, 2000, 4000, 8000, 10000];
+/** Silence on a live socket before the phone asks hided whether it is there. */
+const IDLE_MS = 20_000;
+/** How long hided has to answer that question (or send anything) before the socket is given up. */
+const REPLY_MS = 10_000;
+/** How long a new socket has to say hello; the browser's own connect timeout can take minutes. */
+const OPEN_MS = 15_000;
 
 function storedCredential(): string | null {
   try {
@@ -63,6 +74,99 @@ function failPendingSleep(): void {
   clearSleepTimer();
   const pending = usePhone.getState().sleepAction;
   if (pending?.requestId) patch({ sleepAction: { ...pending, requestId: null, error: true } });
+}
+
+/**
+ * What the phone knows of one socket's health. Every frame from hided counts as
+ * proof it is there, so a busy conversation never pings; after `IDLE_MS` of
+ * silence the phone sends `ping` and gives hided `REPLY_MS` to send anything.
+ * The longest a silent hided stays shown as connected is therefore
+ * `IDLE_MS + REPLY_MS` after its last frame, and `REPLY_MS` after the phone
+ * comes back to the foreground. One timer, re-armed for what is left of the
+ * wait, so a frame costs one timestamp and no timer.
+ */
+type Watch = { ws: WebSocket; ready: boolean; heardAt: number; askedAt: number | null; timer: number | null };
+let watch: Watch | null = null;
+let pingCounter = 0;
+
+function hidden(): boolean {
+  return document.visibilityState === "hidden";
+}
+
+function armWatch(w: Watch, ms: number): void {
+  if (w.timer !== null) window.clearTimeout(w.timer);
+  w.timer = window.setTimeout(() => checkWatch(w), ms);
+}
+
+function startWatch(ws: WebSocket): void {
+  stopWatch();
+  const w: Watch = { ws, ready: false, heardAt: Date.now(), askedAt: null, timer: null };
+  watch = w;
+  armWatch(w, OPEN_MS);
+}
+
+function stopWatch(): void {
+  if (watch?.timer != null) window.clearTimeout(watch.timer);
+  watch = null;
+}
+
+function askHided(w: Watch): void {
+  pingCounter += 1;
+  w.askedAt = Date.now();
+  try {
+    w.ws.send(JSON.stringify({ type: "ping", id: pingCounter } satisfies PhoneMessage));
+  } catch {
+    lose(w.ws);
+    return;
+  }
+  armWatch(w, REPLY_MS);
+}
+
+function checkWatch(w: Watch): void {
+  if (watch !== w) return;
+  w.timer = null;
+  // A hidden page may have been suspended; its silence proves nothing, and the way back asks again.
+  if (hidden()) {
+    armWatch(w, IDLE_MS);
+    return;
+  }
+  const now = Date.now();
+  if (w.askedAt !== null && w.heardAt >= w.askedAt) w.askedAt = null;
+  if (w.askedAt !== null) {
+    const left = REPLY_MS - (now - w.askedAt);
+    if (left > 0) armWatch(w, left);
+    else lose(w.ws);
+    return;
+  }
+  const limit = w.ready ? IDLE_MS : OPEN_MS;
+  const quiet = now - w.heardAt;
+  if (quiet < limit) armWatch(w, limit - quiet);
+  else if (w.ready) askHided(w);
+  else lose(w.ws);
+}
+
+/** Gives up a socket hided no longer answers, without waiting for the browser to close it. */
+function lose(ws: WebSocket): void {
+  if (socket !== ws) return;
+  ws.onopen = ws.onmessage = ws.onclose = null;
+  try {
+    ws.close();
+  } catch {
+    // Already closing.
+  }
+  settleLoss(ws, false);
+}
+
+/** The phone came back (foreground, network): check at once instead of trusting the last state. */
+function wake(): void {
+  if (stopped) return;
+  if (!watch) {
+    retryNow();
+  } else if (watch.ready) {
+    askHided(watch);
+  } else {
+    watch.heardAt = Date.now();
+  }
 }
 
 function socketUrl(): string {
@@ -106,8 +210,10 @@ function connect(): void {
   let refused = false;
   const ws = new WebSocket(socketUrl());
   socket = ws;
+  startWatch(ws);
   ws.onopen = () => ws.send(JSON.stringify(first));
   ws.onmessage = (event) => {
+    if (watch) watch.heardAt = Date.now();
     let frame: ServerFrame;
     try {
       frame = JSON.parse(String(event.data)) as ServerFrame;
@@ -124,8 +230,10 @@ function connect(): void {
       credential = frame.credential;
       storeCredential(frame.credential);
     }
+    if (frame.type === "pong") return;
     if (frame.type === "hello") {
       attempt = 0;
+      if (watch) watch.ready = true;
       applyFrame(frame);
       reopenDetail();
       reopenStartSheet();
@@ -152,15 +260,19 @@ function connect(): void {
     // hided sends the push mode right after hello; the subscription follows it.
     if (frame.type === "meta") void syncPush();
   };
-  ws.onclose = () => {
-    if (socket === ws) socket = null;
-    const state = usePhone.getState();
-    failPendingSleep();
-    if (state.pendingInput) patch({ pendingInput: null, inputError: inputFailure("offline") });
-    if (state.startSheet.pending) patch({ startSheet: { ...state.startSheet, pending: null, error: startFailure("offline") } });
-    patch({ connected: false, unreachable: !refused || state.refusal === "mobile_off" });
-    if (!refused || state.refusal === "mobile_off") scheduleRetry();
-  };
+  ws.onclose = () => settleLoss(ws, refused);
+}
+
+/** The socket is gone, closed or given up: the screen says so and the retries go on (B23). */
+function settleLoss(ws: WebSocket, refused: boolean): void {
+  if (socket === ws) socket = null;
+  stopWatch();
+  const state = usePhone.getState();
+  failPendingSleep();
+  if (state.pendingInput) patch({ pendingInput: null, inputError: inputFailure("offline") });
+  if (state.startSheet.pending) patch({ startSheet: { ...state.startSheet, pending: null, error: startFailure("offline") } });
+  patch({ connected: false, unreachable: !refused || state.refusal === "mobile_off" });
+  if (!refused || state.refusal === "mobile_off") scheduleRetry();
 }
 
 function onRefused(reason: string): void {
@@ -172,6 +284,7 @@ function onRefused(reason: string): void {
     return;
   }
   stopped = true;
+  stopWatch();
   if (refusal === "revoked") {
     credential = null;
     storeCredential(null);
@@ -249,13 +362,24 @@ function newRequestId(): string {
   return `${Date.now().toString(36)}-${requestCounter}-${Array.from(random, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
+/** One sleep command at a time; its answer or the timer settles the pending state. */
+function sendSleepCommand(target: string, requestId: string, message: PhoneMessage): void {
+  if (usePhone.getState().sleepAction?.requestId) return;
+  const sent = send(message);
+  patch({ sleepAction: { sleepId: target, requestId: sent ? requestId : null, error: !sent } });
+  if (sent) sleepTimer = window.setTimeout(failPendingSleep, 10_000);
+}
+
 /** A retry keeps the SleepId; a lost answer never triggers an automatic resend. */
 export function actOnSleepingSession(sleepId: string, type: "wake_sleeping_session" | "check_sleeping_session"): void {
-  if (usePhone.getState().sleepAction?.requestId) return;
   const requestId = newRequestId();
-  const sent = send({ type, sleep_id: sleepId, request_id: requestId });
-  patch({ sleepAction: { sleepId, requestId: sent ? requestId : null, error: !sent } });
-  if (sent) sleepTimer = window.setTimeout(failPendingSleep, 10_000);
+  sendSleepCommand(sleepId, requestId, { type, sleep_id: sleepId, request_id: requestId });
+}
+
+/** Wake agent, Retry and Start new session for a pane whose agent sleeps: the desktop's own wake, in the same pane. */
+export function wakeAgent(key: AgentKey, fresh = false): void {
+  const requestId = newRequestId();
+  sendSleepCommand(sleepTarget(key), requestId, { type: "wake_agent", request_id: requestId, device_id: key.device_id, pane_id: key.pane_id, ...(fresh ? { fresh } : {}) });
 }
 
 /** Sends a reply with Enter after it; the caller clears its field only on success (B26, B27). */
@@ -398,12 +522,14 @@ export function pairNow(): void {
 /** Reads the page address and starts: pair, reconnect, or show how to pair (B11-B13). */
 export function start(): void {
   const fragment = parseFragment(window.location.hash);
-  window.addEventListener("online", retryNow);
+  window.addEventListener("online", wake);
   // A socket outlives a lost network until a ping goes unanswered; the phone
   // knows sooner, so the list and an open start sheet say so at once (B44).
-  window.addEventListener("offline", () => socket?.close());
+  window.addEventListener("offline", () => {
+    if (socket) lose(socket);
+  });
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") retryNow();
+    if (!hidden()) wake();
   });
   if (fragment.open) patch({ pendingOpen: fragment.open });
   if (fragment.pair) {

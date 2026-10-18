@@ -7,7 +7,8 @@
 // `create_workspace` a picked folder sends, and its answer is read the same
 // way (`useRegistration`): the dialog closes when that project appears.
 // Closing the dialog leaves a running clone running; opening it again shows
-// it here.
+// it here. The clone runs on the core's machine, its only place, so the
+// registration it makes is that machine's.
 
 import { ArrowLeftIcon, FolderOpenIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -38,7 +39,8 @@ export function cloneRunning(clone: RepositoryClone | null | undefined): boolean
  */
 type Following = { id: number } | { after: number; at: number; path: string };
 
-export function CloneFromUrl({ actions, registrations, onBack }: { actions: Actions; registrations: readonly WorkspaceRegistration[]; onBack: () => void }) {
+/** `pickParent`: the native folder picker shows the core's folders, which it does only in a window on the core's machine. */
+export function CloneFromUrl({ actions, registrations, pickParent, onBack }: { actions: Actions; registrations: readonly WorkspaceRegistration[]; pickParent: boolean; onBack: () => void }) {
   const { t, i18n } = useInterfaceTranslation();
   const slot = useShellStore((s) => s.rest?.repository_clone ?? null);
   const target = useShellStore((s) => s.cloneTarget);
@@ -147,9 +149,11 @@ export function CloneFromUrl({ actions, registrations, onBack }: { actions: Acti
               data-clone-parent="true"
               onChange={(event) => setParent(event.target.value)}
             />
-            <Button variant="secondary" size="icon" disabled={running} aria-label={t("addProject.clone.chooseParent")} onClick={() => void browse()} data-clone-browse="true">
-              <FolderOpenIcon />
-            </Button>
+            {pickParent ? (
+              <Button variant="secondary" size="icon" disabled={running} aria-label={t("addProject.clone.chooseParent")} onClick={() => void browse()} data-clone-browse="true">
+                <FolderOpenIcon />
+              </Button>
+            ) : null}
           </div>
           {name && answer?.reason ? (
             <Note tone="error" data-clone-target-reason={answer.reason}>

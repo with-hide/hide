@@ -18,7 +18,7 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -78,7 +78,7 @@ pub fn clone_repository(
     // killed mid-clone) has this process's id only by reuse; it is ours to
     // replace.
     staging.remove();
-    let mut command = Command::new("git");
+    let mut command = hide_platform::programs::command("git");
     command
         .args(["clone", "--progress", "--"])
         .arg(source.url())

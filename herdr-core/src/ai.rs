@@ -206,8 +206,25 @@ fn backends(
 /// model each is asked for (PRD core-host-node-move D-04): what the machine
 /// taking the core must answer for. `Err` says why Hide AI asks none.
 pub fn hide_ai_asks(home: &std::path::Path) -> Result<Vec<(String, String)>, String> {
-    let settings = hide_ai::settings::load_choice(home)
-        .map_err(|error| format!("the Hide AI settings could not be read: {error}"))?
+    asks_of(
+        hide_ai::settings::load_choice(home)
+            .map_err(|error| format!("the Hide AI settings could not be read: {error}"))?,
+    )
+}
+
+/// [`hide_ai_asks`] of the settings [`stored_hide_ai_settings`] read on
+/// another machine: on a move back, the core's, which come back with it and
+/// which the machine taking the core back must answer for.
+pub fn hide_ai_asks_of_stored(stored: &serde_json::Value) -> Result<Vec<(String, String)>, String> {
+    asks_of(Some(serde_json::from_value(stored.clone()).map_err(
+        |error| format!("the Hide AI settings could not be read: {error}"),
+    )?))
+}
+
+fn asks_of(
+    settings: Option<hide_ai::settings::AiSettings>,
+) -> Result<Vec<(String, String)>, String> {
+    let settings = settings
         .filter(|settings| settings.chosen)
         .ok_or("Hide AI is not set up: no agent is chosen")?;
     if !settings.enabled {

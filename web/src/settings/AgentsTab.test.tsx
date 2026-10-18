@@ -199,6 +199,39 @@ it("lists one machine at a time under a switch that appears only with a device, 
   await off.unmount();
 });
 
+it("on a window of a node, lists the window's machine first and once, beside the core's machine, and resolves each to its agents", async () => {
+  window.location.hash = "#token=t&node=14ad0319-60d7-5a7c-ae5a-f71550dc8a60";
+  // A moved core: its own row on the mini, and the MacBook that dials in to it, whose window this is.
+  const core = device("local", { id: "b06a260a-6c14-5287-9caf-672044350d94", machine_name: "example-Mac-mini.local" });
+  const node = device("14ad0319-60d7-5a7c-ae5a-f71550dc8a60", { label: "example-MacBook-Pro.local", machine_name: "example-MacBook-Pro.local", ssh_alias: null, dials_in: true, host: { platform: "macos aarch64" } as Device["host"] });
+  const { q, all, click, unmount } = await mount(state([core, node]));
+  expect(all("[data-agents-machine]").map((item) => item.getAttribute("data-agents-machine"))).toEqual([node.id, core.id]);
+  expect(all("[data-agent-row]")[0]?.getAttribute("data-agent-row")).toBe(`${node.id}:claude-code:on`);
+  expect(q("[data-agents-unread]")).toBeNull();
+  await click(q(`[data-agents-machine="${core.id}"]`));
+  expect(all("[data-agent-row]")[0]?.getAttribute("data-agent-row")).toBe(`${core.id}:claude-code:on`);
+  await unmount();
+  window.location.hash = "";
+});
+
+it("says a machine whose kit answered with no agent could not be read, with Check again, rather than checking for good", async () => {
+  const failed = { id: "cli", state: "failed", reason: "another Hide was still changing this account's kit after 90 seconds", location: null } as Kit["components"][number];
+  const { q, click, events, text, unmount } = await mount(state([device("local", { kit: kit([], { components: [failed] }) })]));
+  expect(q("[data-agents-unread]")).toBeNull();
+  expect(q('[data-agents-unlisted="local"]')?.textContent).toBe("Hide couldn't read this machine's agents.");
+  const opened = sent(events, "kit_check").length;
+  await click(q('[data-agents-unlisted-check="local"]'));
+  expect(sent(events, "kit_check")).toHaveLength(opened + 1);
+  expect(text()).not.toContain("Checking this machine's agents");
+  await unmount();
+
+  // While that read runs it says so, and before the first answer too.
+  const reading = await mount(state([device("local", { kit: kit([], { components: [failed], checking: true }) })]));
+  expect(reading.q('[data-agents-unread="local"]')?.textContent).toBe("Checking this machine's agents…");
+  expect(reading.q("[data-agents-unlisted]")).toBeNull();
+  await reading.unmount();
+});
+
 it("Check again asks the kit and shows the kit's own state: under way while it reads, the old list and one reason when it failed (B10)", async () => {
   const { q, click, events, unmount } = await mount(state([device("local", { kit: kit(SEVEN, { unavailable: "A daemon outside the package installs nothing" }) })]));
   expect(q("[data-agents-unavailable]")?.textContent).toBe("A daemon outside the package installs nothing");

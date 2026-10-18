@@ -12,7 +12,7 @@ import { linkFixtureTranscripts, type HerdrFixture } from "../../web/e2e/herdr-f
 import { bundledExecutable, linkBundle } from "../../web/e2e/bundled-app";
 import { aiSettingsFile } from "../../web/e2e/hided-fixture";
 import { ownUntilWorkerExit } from "../../web/e2e/worker-owned";
-import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureOpenCommand, fixtureToolPath, inheritedFixtureEnv } from "../../web/e2e/platform-fixture";
+import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureLoginShellPath, fixtureOpenCommand, fixtureToolPath, inheritedFixtureEnv } from "../../web/e2e/platform-fixture";
 import { SHOW_INACTIVE_SWITCH } from "../src/main/launchSwitches";
 import { FUSED_ELECTRON_ENV } from "./fused-env";
 
@@ -327,6 +327,8 @@ async function start(appDir: string, env: Record<string, string>, executablePath
   if (owner.candidates.size + owner.launching >= MAX_CANDIDATES_PER_HOME) throw new Error(`desktop fixture has ${MAX_CANDIDATES_PER_HOME} live or launching candidates; close an owned candidate before launching another`);
   // The bundle is linked when an app is about to run its `hide`, so a fixture that launches nothing needs no build.
   if (env.HIDE_CLI_PATH === bundledExecutable("hide")) linkBundle();
+  // Written at each launch, since a spec may put its own shims on the PATH after `isolate`.
+  fixtureLoginShellPath(env.HOME!, env.PATH!);
   const report = path.join(focusReports.dir, `launch-${focusReports.apps.length + 1}.jsonl`);
   owner.launching++;
   try {

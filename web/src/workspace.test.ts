@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Checkout, StripTab } from "./snapshot";
-import { agentEntries, laneFrame, laneLanding, NO_CALLS_SEEN, readCalls, TOOLS, TOOL_SCOPES, treeLanding, type LaneInput, type LaneSizes } from "./workspace";
+import type { ViewDisplaySnapshot, ViewLayoutSnapshot } from "./snapshot";
+import { agentEntries, laneFrame, laneLanding, NO_CALLS_SEEN, pageCalled, pageLaneWidth, readCalls, TOOLS, TOOL_SCOPES, treeLanding, type LaneInput, type LaneSizes } from "./workspace";
 
 const strip: StripTab[] = [
   { id: "herdr:1", kind: "herdr", source_id: "t1", label: "1", preview: false },
@@ -20,10 +21,10 @@ describe("the Workspace strips", () => {
 // The token values (`--size-agent-views-min`, `--size-lane-min`,
 // `--size-lane-ideal`, `--size-tree-min`, `--size-tree-ideal`,
 // `--spacing-sm`), so the widths read as the PRD and the boards state them.
-const sizes: LaneSizes = { agentMin: 480, laneMin: 360, laneIdeal: 520, treeMin: 180, treeIdeal: 240, divider: 8 };
+const sizes: LaneSizes = { agentMin: 480, laneMin: 360, laneIdeal: 520, lanePage: 900, treeMin: 180, treeIdeal: 240, divider: 8 };
 
 const frame = (input: Partial<Omit<LaneInput, "sizes">> & { body: number }) =>
-  laneFrame({ tool: null, pinned: false, tree: false, laneWidth: null, treeWidth: null, hasViews: true, shown: false, expanded: false, ...input, sizes });
+  laneFrame({ tool: null, pinned: false, tree: false, laneWidth: null, panelWidth: null, treeWidth: null, hasViews: true, shown: false, expanded: false, ...input, sizes });
 
 describe("the right lane (PRD right-lane)", () => {
   it("gives Agent Views the whole body while the lane is closed or put away (B1, B4)", () => {
@@ -33,7 +34,20 @@ describe("the right lane (PRD right-lane)", () => {
 
   it("draws an unpinned lane over Agent Views at its width, Agent Views keeping its own (B3)", () => {
     expect(frame({ tool: "files", shown: true, body: 1200 })).toMatchObject({ mode: "overlay", agents: 1200, width: 520, document: 520, tree: null });
-    expect(frame({ tool: "prs", shown: true, laneWidth: 700, body: 1200 })).toMatchObject({ mode: "overlay", agents: 1200, width: 700 });
+    expect(frame({ tool: "prs", shown: true, panelWidth: 700, body: 1200 })).toMatchObject({ mode: "overlay", agents: 1200, width: 700 });
+  });
+
+  it("draws the files tool at its document width and every other tool and the 보기 slot at the panel width, docked or drawn over (B6)", () => {
+    const widths = { laneWidth: 900, panelWidth: 440 };
+    for (const placed of [{ shown: true }, { pinned: true }]) {
+      expect(frame({ tool: "files", ...placed, ...widths, body: 1600 })).toMatchObject({ width: 900, field: "lane_width" });
+      for (const tool of ["memory", "prs", "changes", "detail"] as const) {
+        expect(frame({ tool, ...placed, ...widths, body: 1600 })).toMatchObject({ width: 440, field: "panel_width" });
+      }
+    }
+    // A wide document leaves a panel never resized at the default.
+    expect(frame({ tool: "memory", shown: true, laneWidth: 900, body: 1600 }).width).toBe(520);
+    expect(frame({ tool: "files", shown: true, panelWidth: 440, body: 1600 }).width).toBe(520);
   });
 
   it("docks a pinned lane, Agent Views giving up its width and the divider's (B5, B7)", () => {
@@ -111,6 +125,9 @@ describe("the right lane (PRD right-lane)", () => {
     expect(laneLanding({ x: 1600 - 520 - 8 - 100, body: 1600, frame: over, sizes })).toEqual({ lane_width: 620 });
     expect(laneLanding({ x: 0, body: 1600, frame: over, sizes })).toEqual({ lane_width: 1600 - 8 });
     expect(laneLanding({ x: 1590, body: 1600, frame: over, sizes })).toEqual({ lane_width: 360 });
+    // Another tool's divider lands the panel width and leaves the document's.
+    const memory = frame({ tool: "memory", shown: true, laneWidth: 900, body: 1600 });
+    expect(laneLanding({ x: 1600 - 520 - 8 - 100, body: 1600, frame: memory, sizes })).toEqual({ panel_width: 620 });
   });
 
   it("trades width between the tree and the document, so the lane and Agent Views keep theirs (B10)", () => {
@@ -122,6 +139,79 @@ describe("the right lane (PRD right-lane)", () => {
     // Expanded, only the tree's width is kept, so the stored document width is not the body's.
     const expanded = frame({ tool: "files", shown: true, expanded: true, tree: true, body: 1600 });
     expect(treeLanding({ x: 300, frame: expanded, sizes })).toEqual({ tree_width: 300 });
+  });
+});
+
+describe("widening the lane for a page (PRD browser-width-zoom)", () => {
+  // `--size-lane-page` is 900: wide enough that a site switching to its
+  // desktop layout at 768 draws it.
+  const widen = (laneWidth: number | null, body: number, tree: number | null = null) => pageLaneWidth({ laneWidth, tree, body, sizes });
+
+  it("widens a lane narrower than 900 to 900 where Agent Views keeps 480 beside it (B1)", () => {
+    expect(widen(null, 1440)).toBe(900);
+    expect(widen(600, 900 + 8 + 480)).toBe(900);
+  });
+
+  it("widens only as far as Agent Views keeps 480, and never narrows a lane (B2)", () => {
+    expect(widen(null, 900 + 8 + 480 - 1)).toBe(899);
+    expect(widen(null, 1100)).toBe(1100 - 8 - 480);
+    // Too narrow a window to widen at all: the stored width stays.
+    expect(widen(null, 1000)).toBeNull();
+    expect(widen(null, 520 + 8 + 480)).toBeNull();
+    expect(widen(900, 2000)).toBeNull();
+    expect(widen(1200, 2000)).toBeNull();
+  });
+
+  it("keeps the tree beside the document within what Agent Views leaves (B2)", () => {
+    expect(widen(null, 1600, 240)).toBe(1600 - 8 - 240 - 8 - 480);
+    expect(widen(null, 2000, 240)).toBe(900);
+  });
+
+  it("reads a stored width under the lane's minimum as the minimum", () => {
+    expect(widen(200, 360 + 8 + 480)).toBeNull();
+  });
+
+  it("does nothing before the body is measured", () => {
+    expect(widen(null, 0)).toBeNull();
+  });
+});
+
+describe("a lane call that puts a page in front (PRD browser-width-zoom D-04)", () => {
+  const display = (id: string, kind: ViewDisplaySnapshot["kind"], url: string | null = null, load = 1) =>
+    ({ id, kind, url, load, tab_id: null, path: "", label: id, committed: null, preview: false, state: "ready", reason: null }) as unknown as ViewDisplaySnapshot;
+  const view = (active: string, displays: ViewDisplaySnapshot[], path = "/a") => ({
+    device_id: "local",
+    path,
+    layout: { root: { area: { id: "area-1", active, displays } }, active_area: "area-1", limits: { areas: 4, depth: 2, displays: 32 }, display_count: displays.length } as unknown as ViewLayoutSnapshot,
+  });
+  const file = display("d1", "file");
+  const page = display("d2", "browser", "http://localhost:5173/");
+
+  it("is a page that came in front, or one that loaded again in front (B1)", () => {
+    expect(pageCalled(view("d1", [file]), view("d2", [file, page]))).toBe(true);
+    expect(pageCalled(view("d1", [file, page]), view("d2", [file, page]))).toBe(true);
+    expect(pageCalled(view("d2", [file, page]), view("d2", [file, { ...page, load: 2 }]))).toBe(true);
+    expect(pageCalled(null, view("d2", [page]))).toBe(true);
+    // The same page in front of another Workspace is new to this one.
+    expect(pageCalled(view("d2", [page], "/b"), view("d2", [page]))).toBe(true);
+  });
+
+  it("is nothing when the page in front stayed, or a file, a diff or a new tab came in front (B4)", () => {
+    expect(pageCalled(view("d2", [file, page]), view("d2", [file, page]))).toBe(false);
+    expect(pageCalled(view("d2", [file, page]), view("d1", [file, page]))).toBe(false);
+    expect(pageCalled(view("d1", [file]), view("d3", [file, display("d3", "browser")]))).toBe(false);
+    expect(pageCalled(view("d1", [file]), view("d4", [file, display("d4", "diff")]))).toBe(false);
+  });
+
+  it("reads only the active area's front display", () => {
+    const split = (active_area: string, other: ViewDisplaySnapshot) => ({
+      device_id: "local",
+      path: "/a",
+      layout: { root: { split: { id: "s", axis: "row", ratio: 0.5, first: { area: { id: "area-1", active: "d1", displays: [file] } }, second: { area: { id: "area-2", active: other.id, displays: [other] } } } }, active_area, limits: { areas: 4, depth: 2, displays: 32 }, display_count: 2 } as unknown as ViewLayoutSnapshot,
+    });
+    // A page loading again in an area the call did not land in widens nothing.
+    expect(pageCalled(split("area-1", page), split("area-1", { ...page, load: 2 }))).toBe(false);
+    expect(pageCalled(split("area-1", page), split("area-2", page))).toBe(true);
   });
 });
 

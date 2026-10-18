@@ -7,6 +7,7 @@ import {
   canRetryDevice,
   deviceSubtitle as deviceSubtitleIn,
   deviceIdFor,
+  deviceAwayLine as deviceAwayLineIn,
   deviceProblemLine as deviceProblemLineIn,
   deviceRemovalLines as deviceRemovalLinesIn,
   deviceLine as deviceLineIn,
@@ -35,6 +36,7 @@ import type { Device, DeviceHost, KitComponent, RemoteStatus } from "./snapshot"
 const t = initializeInterfaceI18n("en").getFixedT(null, "translation");
 const korean = initializeInterfaceI18n("ko").getFixedT(null, "translation");
 const deviceSubtitle = (device: Device, remote: RemoteStatus | undefined) => deviceSubtitleIn(device, remote, t);
+const deviceAwayLine = (patch: Partial<Device>, name = "Mac mini") => deviceAwayLineIn(device(patch), name, t);
 const deviceProblemLine = (problem: string | null | undefined, alias: string | null) => deviceProblemLineIn(problem, alias, t);
 const deviceRemovalLines = (deviceId: string, registrations: Parameters<typeof deviceRemovalLinesIn>[1], tabs: Parameters<typeof deviceRemovalLinesIn>[2], drafts: Parameters<typeof deviceRemovalLinesIn>[3], onlyExported: (tabId: string) => boolean = () => false) =>
   deviceRemovalLinesIn(deviceId, registrations, tabs, drafts, onlyExported, t);
@@ -75,6 +77,21 @@ describe("where settings live and what a device reported", () => {
     expect(deviceProblemLine("host_key_unknown", "studio")?.action).toContain("ssh studio");
     expect(deviceProblemLine("authentication", "studio")?.headline).toBe("Sign-in refused");
     expect(deviceProblemLine(null, "studio")).toBeNull();
+  });
+});
+
+describe("what a screen says while a device is away", () => {
+  it("names the machine in plain words and keeps the SSH diagnostic out of the sentence", () => {
+    const away = deviceAwayLine({ state: "unavailable", message: "remote Herdr socket open failed for ssh:hq3mini: SSH operation timed out" });
+    expect(away.text).toBe("Mac mini is not connected. Showing the last state it reported; nothing is sent until it reconnects.");
+    expect(away.hint).toBeNull();
+    expect(away.text).not.toMatch(/ssh|stage=|timed out/i);
+  });
+
+  it("says a refused trust or sign-in by its class, with the one thing to do in the hint", () => {
+    const away = deviceAwayLine({ state: "unavailable", problem: "authentication", ssh_alias: "mini", message: "stage=auth target=ssh:mini" });
+    expect(away.text).toBe("Mac mini is not connected: Sign-in refused. Showing the last state it reported; nothing is sent until it reconnects.");
+    expect(away.hint).toContain("IdentityFile");
   });
 });
 

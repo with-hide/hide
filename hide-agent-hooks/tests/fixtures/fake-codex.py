@@ -30,6 +30,15 @@ and `fake-pid` (its own pid). `$CODEX_HOME/fake-mode` selects the behaviour:
   refuse_write  answers config/batchWrite with an error
   chatty        prints far more than any caller reads
   project       also lists an identical project-layer hook
+  overridden    answers a projects write `okOverridden`, as when a managed
+                layer decides the value
+  slow_write    takes 2.5 s over a projects write, longer than any wait a
+                second change of the same trust once had
+
+Folder trust (`projects."<folder>".trust_level`) lives in
+`$CODEX_HOME/fake-projects.json`: `config/read` answers it as the user layer's
+`projects`, with the file's hash as the layer's version, and
+`config/batchWrite` refuses a write whose `expectedVersion` is not it.
 """
 import hashlib
 import json
@@ -107,6 +116,42 @@ def listed():
                 })
                 order += 1
     return out
+
+
+def load_projects():
+    try:
+        return json.load(open(path("fake-projects.json")))
+    except OSError:
+        return None
+
+
+def projects_version():
+    try:
+        return "sha256:" + hashlib.sha256(open(path("fake-projects.json"), "rb").read()).hexdigest()
+    except OSError:
+        return None
+
+
+def key_path(text):
+    """Codex's keyPath: dot-separated, a quoted segment keeps its dots."""
+    segments, segment, quoted, i = [], "", False, 0
+    while i < len(text):
+        ch = text[i]
+        if ch == '"' and not quoted and segment == "":
+            quoted = True
+        elif ch == '"' and quoted:
+            quoted = False
+        elif ch == "\\" and quoted:
+            i += 1
+            segment += text[i]
+        elif ch == "." and not quoted:
+            segments.append(segment)
+            segment = ""
+        else:
+            segment += ch
+        i += 1
+    segments.append(segment)
+    return segments
 
 
 def send(obj):
@@ -202,6 +247,36 @@ for raw in sys.stdin:
                 hooks += [dict(h, source="project", key=h["key"] + ":p") for h in hooks]
             warnings = ["skipping prompt hook in /somewhere/else/hooks.json"] if MODE == "warning" else []
             reply(rid, {"data": [{"cwd": os.getcwd(), "hooks": hooks, "warnings": warnings, "errors": []}]})
+    elif method == "config/read":
+        projects = load_projects()
+        layers = [{"name": {"type": "system", "file": "/etc/codex/config.toml"}, "version": "s", "config": {}}]
+        if projects is not None:
+            layers.insert(0, {"name": {"type": "user", "file": path("config.toml")},
+                              "version": projects_version(), "config": {"projects": projects}})
+        reply(rid, {"config": {}, "origins": {}, "layers": layers})
+    elif method == "config/batchWrite" and params["edits"][0]["keyPath"].startswith("projects."):
+        if params.get("expectedVersion") != projects_version():
+            error(rid, -32600, "Configuration was modified since last read. Fetch latest version and retry.")
+            continue
+        if MODE == "slow_write":
+            time.sleep(2.5)
+        projects = load_projects() or {}
+        for edit in params["edits"]:
+            assert edit["mergeStrategy"] == "replace"
+            segments = key_path(edit["keyPath"])
+            assert segments[0] == "projects"
+            if edit["value"] is None:
+                if len(segments) == 2:
+                    projects.pop(segments[1], None)
+                else:
+                    projects.get(segments[1], {}).pop(segments[2], None)
+            else:
+                projects.setdefault(segments[1], {})[segments[2]] = edit["value"]
+        if MODE != "ignore_write":
+            with open(path("fake-projects.json"), "w") as f:
+                json.dump(projects, f)
+        status = "okOverridden" if MODE == "overridden" else "ok"
+        reply(rid, {"status": status, "version": projects_version(), "filePath": path("config.toml")})
     elif method == "config/batchWrite":
         if MODE == "refuse_write":
             error(rid, -32600, "config is read-only")

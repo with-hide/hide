@@ -184,8 +184,18 @@ pub fn save_observed(
             ),
         )
     })?;
-    // A directory that cannot be flushed does not undo a save that landed.
-    let _ = atomic::sync_dir(&parent);
+    // A directory that cannot be flushed does not undo a save that landed;
+    // the node's error stream records it.
+    if let Err(error) = atomic::sync_dir(&parent) {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "component": "save",
+                "kind": "folder_flush_failed",
+                "message": error.to_string(),
+            })
+        );
+    }
     Ok(Saved {
         revision: revision_of(contents),
     })

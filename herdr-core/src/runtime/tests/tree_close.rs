@@ -7,12 +7,12 @@ use super::*;
 // p3, and its child p4, each in its own tab; project B, unregistered, holds
 // only p5, a child of p4.
 
-const A: &str = "/private/tmp/hide-tree-close-a";
-const B: &str = "/private/tmp/hide-tree-close-b";
+pub(super) const A: &str = "/private/tmp/hide-tree-close-a";
+pub(super) const B: &str = "/private/tmp/hide-tree-close-b";
 
 /// The session with every pane in `present`; `status` overrides an agent's
 /// Herdr status by pane. With `shared`, the siblings p2 and p4 share tab t2.
-fn tree_payload(present: &[&str], status: &[(&str, &str)]) -> SessionSnapshotPayload {
+pub(super) fn tree_payload(present: &[&str], status: &[(&str, &str)]) -> SessionSnapshotPayload {
     tree_payload_in(present, status, false)
 }
 
@@ -92,7 +92,7 @@ fn tree_payload_in(
     .expect("tree session payload")
 }
 
-fn tree_catalog() -> session_sync::PrecomputedCatalog {
+pub(super) fn tree_catalog() -> session_sync::PrecomputedCatalog {
     let spaces = vec![
         workspace::SessionSpace {
             id: "w1".to_owned(),
@@ -127,9 +127,9 @@ fn tree_catalog() -> session_sync::PrecomputedCatalog {
     }
 }
 
-const EVERY: [&str; 5] = ["w1:p1", "w1:p2", "w1:p3", "w1:p4", "w5:p5"];
+pub(super) const EVERY: [&str; 5] = ["w1:p1", "w1:p2", "w1:p3", "w1:p4", "w5:p5"];
 
-fn tree_runtime(status: &[(&str, &str)]) -> Runtime {
+pub(super) fn tree_runtime(status: &[(&str, &str)]) -> Runtime {
     let mut runtime = runtime();
     runtime.restore_hint_pending = false;
     let socket_path = std::env::temp_dir()
@@ -173,7 +173,7 @@ fn pane_target(pane: &str) -> serde_json::Value {
 }
 
 /// Panes whose ordinary close has been started, sorted.
-fn started(runtime: &Runtime) -> Vec<String> {
+pub(super) fn started(runtime: &Runtime) -> Vec<String> {
     let mut started = runtime
         .close_operations
         .values()
@@ -183,7 +183,7 @@ fn started(runtime: &Runtime) -> Vec<String> {
     started
 }
 
-fn leave(runtime: &mut Runtime, present: &[&str]) {
+pub(super) fn leave(runtime: &mut Runtime, present: &[&str]) {
     runtime.ingest_session_with_catalog(Ok(tree_payload(present, &[])), Some(tree_catalog()));
 }
 

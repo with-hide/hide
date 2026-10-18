@@ -14,6 +14,11 @@ use crate::model::DeviceRegistration;
 pub struct MoveSource {
     /// This core's node.
     pub node: String,
+    /// The name the operator registered this machine under, which it kept
+    /// when the core moved to it (`UiStateSnapshot::machine_label`): the
+    /// device taking the core registers this machine by it, before its host
+    /// name.
+    pub label: Option<String>,
     /// The device's registration id, which every key of the device carries.
     pub device: String,
     pub ssh_alias: String,
@@ -33,6 +38,15 @@ pub struct MoveSource {
     /// name the sidebar gives them: once this machine is a node, nothing
     /// can wake them.
     pub dormant: Vec<String>,
+}
+
+impl MoveSource {
+    /// The name the device taking the core registers this machine by: the
+    /// one it kept from the move that brought the core here (`label`), else
+    /// `host_name`, else its node id.
+    pub fn own_label<'a>(&'a self, host_name: Option<&'a str>) -> &'a str {
+        self.label.as_deref().or(host_name).unwrap_or(&self.node)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -173,6 +187,7 @@ impl Runtime {
         let projects = self.move_projects(&node, device);
         Ok(MoveSource {
             node,
+            label: self.snapshot.ui_state.machine_label.clone(),
             device: device.to_owned(),
             ssh_alias: ssh_alias.clone(),
             device_node,
@@ -196,5 +211,36 @@ impl Runtime {
                 .map(|record| record.identity_label.clone())
                 .collect(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A machine the core moved to keeps the name it was registered under
+    /// (`machine_label`), so moving the core on from it to a third machine
+    /// registers it there by that name; its host name names it only when it
+    /// kept none, and its node id when it has neither.
+    #[test]
+    fn a_machine_the_core_moved_to_is_registered_by_the_name_it_kept_when_the_core_moves_on() {
+        let source = |label: Option<&str>| MoveSource {
+            node: "mini-node".to_owned(),
+            label: label.map(str::to_owned),
+            device: "studio-ssh".to_owned(),
+            ssh_alias: "studio".to_owned(),
+            device_node: "studio-node".to_owned(),
+            helper_path: "/opt/hide/hided".to_owned(),
+            device_herdr_socket: None,
+            registration: serde_json::json!({}),
+            projects: Vec::new(),
+            other_linked_nodes: Vec::new(),
+            dormant: Vec::new(),
+        };
+        let kept = source(Some("Mac mini"));
+        assert_eq!(kept.own_label(Some("Mac-mini.local")), "Mac mini");
+        let none = source(None);
+        assert_eq!(none.own_label(Some("Mac-mini.local")), "Mac-mini.local");
+        assert_eq!(none.own_label(None), "mini-node");
     }
 }

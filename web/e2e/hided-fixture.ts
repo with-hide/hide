@@ -9,7 +9,7 @@ import path from "node:path";
 import { linkFixtureTranscripts, type HerdrFixture } from "./herdr-fixture";
 import { ownUntilWorkerExit } from "./worker-owned";
 import { bundledExecutable, linkBundle } from "./bundled-app";
-import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureOpenCommand, inheritedFixtureEnv, windowsProcessTree, type WindowsProcess } from "./platform-fixture";
+import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureLoginShellPath, fixtureOpenCommand, inheritedFixtureEnv, windowsProcessTree, type WindowsProcess } from "./platform-fixture";
 
 /**
  * `restart` stops the daemon and starts it again on the same state directory
@@ -38,6 +38,7 @@ export type Daemon = {
  * callback. Windows passes an owner as a job, which Node cannot make.
  */
 export function spawnDaemon(binary: string, env: NodeJS.ProcessEnv): ChildProcess {
+  if (env.HOME && env.PATH) fixtureLoginShellPath(env.HOME, env.PATH);
   if (process.platform === "win32") return spawn(binary, [], { env, stdio: ["ignore", "pipe", "pipe"] });
   return spawn(binary, [], { env: { ...env, HIDE_PROCESS_OWNER_FD: "3" }, stdio: ["ignore", "pipe", "pipe", "pipe"] });
 }

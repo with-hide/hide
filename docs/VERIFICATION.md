@@ -15,19 +15,24 @@ A claim is verified by the check that observes what a caller of the behavior obs
 | Web or desktop logic that needs no window | `bash scripts/verify-web.sh` | [CONTRIBUTING.md: CI gates](../CONTRIBUTING.md#ci-gates) |
 | A flow a user performs in the web shell | `pnpm --dir web e2e` | [Before an e2e run](#before-an-e2e-run) |
 | A desktop app behavior: window, menu, native view, relaunch, a daemon that goes away | `pnpm --dir desktop e2e` | [BUILD.md: The desktop app](BUILD.md#the-desktop-app) |
+| A file the desktop host loads from its own bundle (the status page) | `desktop/e2e/status-page.spec.ts` with `HIDE_E2E_PACKAGED_APP` naming a package | [ARCHITECTURE.md: The desktop host](ARCHITECTURE.md#the-desktop-host) |
 | A browser display | The commands in its guide | [BROWSER_DISPLAYS.md: Verification](BROWSER_DISPLAYS.md#verification) |
 | A screen matches its design | `node scripts/design-review.mjs review <slug> --baseline <bundle>` | [DESIGN_WORKFLOW.md](DESIGN_WORKFLOW.md#reference-bundle-and-review-run) |
 | Responsiveness, rendering, CPU, or memory | The layered procedure | [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md) |
 | The installed app carries the fix | A rebuilt package, then the identity checks | [dev-runtime.md](dev-runtime.md), [INSTALL.md](INSTALL.md#verify-the-installed-app) |
 | A remote device's behavior | A private Herdr on the device | [A device check](#a-device-check) |
+| Each supported agent works end to end in Hide | `python3 scripts/agent-journey-check.py` | [Agent journey](#agent-journey) |
 | Anything the rows above cannot reach yet | Manual QA on an isolated candidate | [Manual native QA](#manual-native-qa) |
+
+The desktop e2e runs the app from plain files, so it cannot see what only a package does: the status page loaded from `app.asar` under the shipped fuses failed in every package while every e2e passed, so a claim about a file the host loads from its own bundle is proven by a package, not by the dev build.
 
 Run the Rust lanes through `scripts/verify-cargo.sh`, never a bare `cargo test` from an agent's pane: the pane carries `HERDR_SOCKET_PATH` for the operator's Herdr, and on 2026-10-02 two daemon tests followed the operator's live Herdr with the real HOME, where the label worker reads the operator's conversations, because the core then took that variable over the socket a test handed it; the core no longer does, it takes its home from hided rather than from the process `HOME`, and the script clears every `HERDR_*` variable first.
 
 For a file-persistence claim, run the platform's public contract and OS fault regressions through `bash scripts/verify-cargo.sh test-scoped -p hide-platform` on each supported system.
-The durable writer's regressions observe returned phases and causes, installed bytes and identity, retained cleanup residue, and Windows's unsupported access modes; unit faults are scoped to the test thread at the OS boundary and exercise the public writer without replacing owned helpers.
-A readable file or legacy `sync_dir` success alone proves no durable acknowledgement, and a file-parent barrier does not prove persistence of a newly created ancestor chain or recovery of the caller's state after an uncertain replacement.
+The durable writer's regressions observe returned phases and causes, installed bytes and identity, retained cleanup residue, and the private access every durable file gets; unit faults are scoped to the test thread at the OS boundary and exercise the public writer without replacing owned helpers.
+A readable file alone proves no durable acknowledgement, and a file-parent barrier does not prove persistence of a newly created ancestor chain or recovery of the caller's state after an uncertain replacement.
 The public bootstrap regressions check the 64-component bound, refusal of escape and untrusted paths, retained partial chains after real mkdir or barrier failure, and recovery that checks existing levels again; the supplied ancestor's established durability remains a caller precondition.
+On Windows they also show which ancestor the chain passes over: one the account neither owns nor may add to, never one whose flush failed.
 The same scoped platform lane exercises guarded launches and captures against real children: stdin payload, both output streams, 64 KiB and 1 MiB limits, inherited-pipe timeout, abrupt owner death with a helper outside its group, and repeated work returning the descendant count to its baseline.
 Capture failures must preserve their primary outcome and report unconfirmed cleanup while retaining ownership; local platform timing checks alone do not prove a consumer's complete 1.85-second deadline or native behavior on another operating system.
 Existing-anchor regressions establish the canonical chain with real barriers before creating sibling home and state directories, reject links and untrusted leaves without mutation, and preserve identity through a reported barrier failure and explicit recovery that checks the existing chain again.
@@ -45,7 +50,7 @@ The Windows/Linux package lanes check the real archive's headless daemon/kit beh
 The call must return the parent's code and both markers within the original five-second deadline, with the helper gone; test recovery is armed with that helper's identity before its parent exits.
 This regression checks process and pipe ownership, not a native app window or Unix crash containment.
 
-CI retries a failed e2e or Rust test once, so a green lane can hide a test whose first attempt failed.
+CI retries a failed e2e or Rust test once (all but the nightly's signed-in agy turn), so a green lane can hide a test whose first attempt failed.
 The `Report flaky and failed tests` step and the open `quarantine` issues say which; read them before claiming a flow verified, and treat a flaky test as unproven ([TESTING.md](TESTING.md#flaky-tests) owns the policy).
 
 A scenario someone would check by hand becomes a spec when it can; [TESTING.md](TESTING.md) says how to write it.
@@ -222,6 +227,14 @@ Those errors remain failures with exit 2; missing process confirmation retains t
 An unseen double-fork descendant that clears its marker and leaves the owned group may escape attribution; record this limitation in the PR's Review section.
 This ownership boundary follows the explicitly recorded B8/D-09 scope decision; it does not claim complete workstation process attribution.
 Linux fixture supervision uses a child subreaper and validates its procfs namespace and visibility before using process identities.
+On Windows each child starts suspended and joins a job object of its own before it runs, so everything it starts is in the job (`scripts/agent_live_check/windows.py`, after hide-platform's `process`).
+The job holds the same caps: 128 processes, and 2 GiB of committed memory, the job's own measure in place of RSS.
+Its handle is never inheritable, and closing it ends what the job holds, so an owner that dies takes the tree with it.
+A refused process or allocation reaches the owner through the job's completion port, ends the job and fails cleanup with the cap's name, as a guardian's refusal does.
+Output, the command time and the run time are capped by the same code as on Unix.
+A program Windows starts on a child's behalf (a service, a COM server, a scheduled task) is outside the job, and the report says so.
+Private files there carry an access list naming only this account and are checked by owner and access list (hide-platform's `fs`).
+The owned pane runs cmd.exe, named as Herdr's default shell with its prompt from `PROMPT`, as the web e2e's Herdr fixture does, and the launchers the run writes are `.cmd` files.
 Darwin group enumeration uses Apple's [process-group API](https://github.com/apple-oss-distributions/xnu/blob/main/libsyscall/wrappers/libproc/libproc.c).
 Token lookup preserves the existing target-width alignment and birth checks and records no argument, environment or marker contents.
 Each Darwin token scan reuses one buffer of at most 1 MiB, supplies its full capacity for every query and interprets only that query's returned prefix.
@@ -315,6 +328,78 @@ The fixture report is marked synthetic and proves tool plumbing, not authenticat
 That lane includes operator-routing refusal, byte-exact configuration restoration, runtime failure, owned-server loss and Ctrl-C cleanup.
 `scripts/tests/test_agent_live_protection.py` exercises real filesystem recovery/conflicts, OS denial, timeout/output caps and owner-death cleanup; `test_agent_live_results.py` challenges unsafe verdicts and false delivery evidence.
 The scene preparation and overlay tests cover supported MCP formats, positive native identity, role separation and bounded private authentication copies.
+
+## Agent journey
+
+`python3 scripts/agent-journey-check.py` follows each supported agent through what an operator does with it in Hide, on an isolated candidate, and says per agent and step whether it worked.
+It is the check a release runs on the Mac before its tag ([skills/release/SKILL.md](../skills/release/SKILL.md), [CONTRIBUTING.md: Releases](../CONTRIBUTING.md#releases)), and the one to run after a change to how Hide starts, wakes or writes to an agent, after moving the pinned Herdr and after a substantial agent CLI update.
+
+### What it proves
+
+Each agent is started only through `hide agent spawn --parent here` from a controller pane, in its own branch, worktree and tab of the measured repository (this checkout's main root), and each step is judged from what Hide itself reports: the daemon's snapshot rows, `hide request show`, Herdr's `agent list` and Hide's own conversation reader (`hide_session::read_conversation`, built as the `journey_conversation` example).
+Every prompt asks only for a fresh token (`Reply with exactly <token>`), so a model never chooses an action.
+
+| Step | Passes when |
+| --- | --- |
+| `start` | The spawn answers registered, running and connected with a native session id, Hide's reader holds the answer to the first prompt and the row reads idle later than that answer's session time, and Herdr's integration reports that session as `herdr:<kind>`; whether the row read working is reported, not required, since Herdr's screen detection misses a turn of about two seconds |
+| `reply` | Hide's reader finds the first turn's token in an assistant message; a reply only another parser finds fails |
+| `letter` | A token sent with `hide request send` comes back in the turn Hide's doorbell opened, `hide request show` says delivered, and the row reads idle after that answer |
+| `sleep_wake` | After the daemon's Sleep event the row reads asleep, and after Wake it runs again |
+| `resume` | The operator opens the woken agent (`focus_pane`), its terminal takes this screen's keys, a typed token prompt is answered in the session it slept in, the row reads idle after that answer, and Herdr reports the same session id |
+| `start_untrusted` | A start in a repository the account never trusted, with no preparation, passes once Hide has recorded the trust of the worktree it made |
+| `integration` | This Mac's kit row in the snapshot reads Hide's hook and Herdr's integration installed (the kit calls Herdr's current) at locations inside the HOME the agent reads its configuration from, and Herdr reports the agent's session as `herdr:<kind>` |
+| `guidance_memory` | A rule card the run wrote into its private state before any start (`hide-memory`'s `journey_memory` example) carries a fresh token in its title, and a turn asked `Run no tool. Reply with exactly the uppercase code in the title of your only Project Memory card.` is answered with it; the question shares no word with the card, so the card came from the start's index and not from prompt-time Memory |
+| `fork` | After the journey sends Fork agent's `fork_pane` as the pane menu does and types one prompt into the fork's pane, as the operator does to use it, a row whose `forked_from` names the source shows a session of its own, Herdr reports that session as `herdr:<kind>`, Hide's reader finds the answer in it, and `hide agent list` registers the fork with no parent and the source as its origin; an agent that tells its session only at its first turn, as Codex does, is registered as a fork only after that prompt |
+| `title` | The row's `identity_label` reads a title other than the agent's name (the contract's `untitled`); whether Hide's label sentences reached the row is reported beside it |
+| `usage` | With the usage window hint the shell sends while it is on screen, Hide's usage reads the agent's consumption with model calls in it; the run's HOME holds no other session, so they are the run's |
+
+The journey runs them in this order, each from the state the last left: `start` and `reply`, `integration`, `guidance_memory`, `letter`, `fork` (before Sleep, while the source still runs the session it copies), `sleep_wake`, `resume`, `title`, `usage`, then `start_untrusted`.
+Only `start`, `start_untrusted`, `guidance_memory`, `letter`, `fork` and `resume` start a turn; the others judge what Hide shows of them and spend no model request.
+Once an agent's cells are settled, the journey closes the panes it opened for that agent, its start, its fork and its untrusted start, before the next agent starts: the run's process guardian ends the private Herdr when everything under it passes 2 GiB together, and two Claude Code processes left running beside a Codex fork crossed it.
+The cells an adapter declares come from `contracts/agent-journey.json`, which `hide-agent-adapter` generates and its contract test keeps current ([contracts/README.md](../contracts/README.md#agent-journey)).
+It does not prove the desktop window, a physical keyboard, an agent other than the declared rows, or a model, provider or CLI version other than the ones its report names.
+
+### Cells, reasons and exit codes
+
+Every cell reads `pass`, `fail`, `not measured`, `N/A` or `excluded`, with a reason and the evidence file under the run folder; a failed cell carries the product's own refusal or the state that never came with the time waited, and the agent's pane capture.
+- `N/A` is a cell the adapter does not declare.
+- `not measured` is a cell the run could not reach without touching the operator's state or spending what it must not: a CLI that is missing or signed out (the journey never signs in), a Codex login copy older than 7 days, a repository Claude was never trusted in, a cell whose earlier step failed or was not measured (`prerequisite cell failed (<cell>)`, `prerequisite cell not measured (<cell>)`), a stopped run, and `not built in this cycle`.
+  Claude's never-trusted start is `not measured` locally, since it would leave an entry in the operator's shared `~/.claude.json`; CI mode measures it in its disposable HOME.
+  Claude's `usage` is `not measured` locally too: Claude writes its sessions under the operator's HOME for its keychain sign-in, and the candidate's usage ledger reads only its own HOME.
+- `excluded` is an agent the operator took out of the journey, with the date: Cursor, `excluded: operator decision 2026-10-17`.
+  `--agents cursor` is refused, and an excluded cell counts toward no exit code and no release's list of blanks.
+
+Exit 0 means every measurable selected cell passed, 1 a failed cell or a request budget overrun, 2 an isolation, setup or cleanup failure (no agent starts when isolation cannot be proven), and 3 no failure but a `not measured` cell.
+Ctrl-C, SIGTERM and SIGHUP stop at the next step, settle the open cells as stopped, write the report and clean up.
+The table is printed and written as `report.md` and `report.json` in a new `agents/runs/agent-journey-<time>-<id>/`, with each agent's spawn arguments, the arguments and environment names its mode added, its model requests and its budget.
+
+### Local mode (macOS)
+
+Build `hided`, `hide` and the hooks with `bash scripts/verify-cargo.sh cli` and the reader with `bash scripts/verify-cargo.sh build -p hide-session --example journey_conversation` and the Memory card writer with `bash scripts/verify-cargo.sh build -p hide-memory --example journey_memory`, fetch the pinned Herdr with `scripts/fetch-herdr-runtime.sh`, then run it from the worktree; `--agents claude-code,codex` narrows the rows and `--model ID=MODEL` passes a model through the product's own flag.
+It reuses `scripts/agent_live_check`'s isolation: the pinned Herdr on a private socket, this worktree's `hided` on private state with the kit installed into a private daemon home, the write sandbox and the process guardian.
+Claude keeps the operator's HOME for its keychain sign-in and reads only the candidate's settings, through the arguments the pane's `claude` adds to every start, Hide's own Wake and Fork restarts included; Codex reads a private `CODEX_HOME` holding a 0600 copy of its login, removed at the end, and the measured repository's trust, written only there.
+The candidate's Hide AI is off in local mode (`enabled: false` in the private home's `ai.json`), since it would run the operator's signed-in CLI with the private HOME; a request from it fails the run (exit 2).
+In CI mode it stays on, and the report counts its model requests by provider apart from each agent's budget.
+The journey writes no operator file; the entries Claude itself leaves for the run's paths are left alone and listed: in `~/.claude.json` by key, in `~/.claude/projects` by exact folder path.
+Hide records folder trust for each worktree it spawns an agent into, and must record Codex's only in the private `CODEX_HOME` the agent reads: before the cleanup and after it the journey reads the operator's `~/.codex/config.toml` and `~/.claude.json` for trust entries naming a path of the run.
+A Codex entry there is an isolation failure (exit 2); a Claude one is reported by key, and one left after the cleanup is listed as a product finding.
+Every exit, a stop and the deadline included, ends the agents, panes, Herdr and `hided` and confirms it, and then removes the run's `journey/<run-id>-<agent>` branches and worktrees: each one only while its worktree is under the run and its start commit matches the run's record, read at the cleanup for a spawn that never answered, since that name is the run's alone.
+A branch that moved or a worktree outside the run is kept and named, and fails the run.
+A run refuses to start (exit 2) while one of its branch names is already in the repository, as a rerun under the same `--run-dir` name finds an earlier run's leftover, so its cleanup never takes that branch for its own.
+Never run a cargo build or test while it runs: either relinks `target/debug` under the running `hided`.
+
+### The CI lanes
+
+`.github/workflows/agent-journey.yml` runs the journey with `--mode ci`, where each agent runs in the runner's disposable HOME with no sandbox, on Linux and macOS, and the signed-in lane on Windows too.
+No keyless run starts an agent on Windows yet; [INSTALL.md](INSTALL.md#what-each-system-supports) says what closes it.
+There the `windows forms` job runs `scripts/tests/test_agent_live_windows.py` instead: an owner that dies takes its children's trees with it, every cap is the Unix guardian's and a crossed one is a named failure, private files admit only this account, and the pane commands and launchers keep their arguments and exit status.
+- The stand-in lane (`fixture`) puts the compiled `web/e2e/shims/claude-shim.c` in place of Claude Code and Codex with `--fixture-bin` and passes only when both pass `start`, `reply`, `integration`, `letter`, `sleep_wake` and `resume`, and fail none; `guidance_memory`, `fork`, `title` and `usage` read `not measured`, since the C stand-in imitates none of them.
+  The stand-in runs the hook commands the kit installed and writes each CLI's session file format, so a change that breaks the journey's verdicts, the hooks' path into Hide or the cleanup fails it; its report is marked `fixture` with what a stand-in cannot show, and is never a release's agent evidence.
+  `pr.yml` runs it on Linux, with `windows forms`, when the journey's code, the live check or the shims change (`scripts/ci-plan.py`), `nightly.yml` and `release.yml` every time.
+- The signed-in lane (`login`, nightly and release) signs each agent in with the CI account's key: `HIDE_CLAUDE_API_KEY` as Claude's `ANTHROPIC_API_KEY`, `HIDE_CODEX_API_KEY` through `codex login --with-api-key`.
+  An agent without its secret reads `not measured: not configured (<secret>)` and leaves a notice; the key is kept under the run's probe, which the cleanup removes, and the report, each cell's evidence, each pane capture and the copy of Herdr's log have the key and the last 20 characters Claude's key question shows of it replaced; `hided` and Herdr never receive it.
+  A failed cell, an isolation, setup or cleanup failure, a request budget overrun, or a refused login or a missing CLI for an agent whose secret is set fails the lane; a turn the provider answered nothing because the key's day was spent is `not measured: provider quota exhausted (<quota ids>)` with a `Not measured` warning, by the rule `contracts/provider-quota.json` keeps ([TESTING.md: A real agent on CI](TESTING.md#a-real-agent-on-ci)), and Claude Code and Codex have no row there yet, so every refusal of theirs, a per-minute rate limit included, fails.
+`scripts/agent-journey-lane.py` turns a report into the lane's verdict and its annotations, and the lane keeps the report as an artifact.
 
 ## A device check
 

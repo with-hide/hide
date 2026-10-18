@@ -168,6 +168,9 @@ pub enum CheckId {
     OtherNode,
     /// The device's state folder holds no brain state and no other move.
     TargetState,
+    /// The copy can reach the device's state folder: nothing on the way is
+    /// a file or a link that leads nowhere, and the account owns it.
+    TargetFolder,
     /// Both machines have a Herdr server.
     Herdr,
     /// The device answers as the machine this core knows.
@@ -186,19 +189,23 @@ pub enum CheckId {
     Sleep,
     /// The `hided` the move runs there is this build.
     Build,
-    /// Hide AI is set up and every agent it asks answers on the machine
-    /// taking the core.
+    /// Every agent Hide AI asks answers on the machine taking the core, with
+    /// that machine's logins.
     Ai,
+    /// Hide AI is on and has an agent chosen on the machine whose core
+    /// moves: its own setting, which moves with the core.
+    AiSetup,
     /// No agent of this machine is asleep with its pane closed: a node
     /// cannot wake it.
     Dormant,
 }
 
 /// The checks of a move toward a device, each once.
-pub const FORWARD_CHECKS: [CheckId; 11] = [
+pub const FORWARD_CHECKS: [CheckId; 13] = [
     CheckId::Connection,
     CheckId::OtherNode,
     CheckId::Herdr,
+    CheckId::AiSetup,
     CheckId::Ai,
     CheckId::Identity,
     CheckId::Build,
@@ -207,16 +214,18 @@ pub const FORWARD_CHECKS: [CheckId; 11] = [
     CheckId::Sleep,
     CheckId::Dormant,
     CheckId::TargetState,
+    CheckId::TargetFolder,
 ];
 
 /// The checks of a move back to this machine, each once.
-pub const BACK_CHECKS: [CheckId; 7] = [
+pub const BACK_CHECKS: [CheckId; 8] = [
     CheckId::Link,
     CheckId::Herdr,
     CheckId::OwnState,
     CheckId::Connection,
     CheckId::Identity,
     CheckId::TargetState,
+    CheckId::AiSetup,
     CheckId::Ai,
 ];
 

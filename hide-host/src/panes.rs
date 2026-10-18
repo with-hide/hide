@@ -720,7 +720,8 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 /// The folder a node's bootstrap folders go in: this account's own, never a
-/// link, made private when the node creates it.
+/// link, and private, as is every folder above it the node makes: it sits in
+/// the state folder, which a core moved here keeps its letters in.
 fn validate_dir(path: &Path) -> io::Result<()> {
     if !path.is_absolute() {
         return Err(io::Error::new(
@@ -728,27 +729,7 @@ fn validate_dir(path: &Path) -> io::Result<()> {
             "bridge directory is not absolute",
         ));
     }
-    if let Ok(metadata) = fs::symlink_metadata(path)
-        && (!metadata.is_dir() || metadata.file_type().is_symlink())
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "bridge directory is unsafe",
-        ));
-    }
-    fs::create_dir_all(path)?;
-    private::restrict_to_owner(path)?;
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata.is_dir()
-        || metadata.file_type().is_symlink()
-        || !private::owned_by_current_user(path)?
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "bridge directory is not owned by this account",
-        ));
-    }
-    Ok(())
+    private::own_dir(path).map(drop)
 }
 
 /// Removes the folders of pane services that ended without removing their
@@ -847,6 +828,20 @@ fn remove_if_present(path: &Path) -> io::Result<()> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    /// On a machine Hide has not written to yet, the bridge folder leaves no
+    /// folder others can read: a core moved here later refuses a state
+    /// folder that is not private, and reads no letters.
+    #[test]
+    fn the_bridge_folder_makes_every_folder_above_it_private() {
+        let home = tempfile::tempdir().unwrap();
+        let state = hide_kit::layout::default_state_dir(home.path());
+        let bridges = hide_kit::layout::workspace_bridges(&state);
+        validate_dir(&bridges).unwrap();
+        for made in [hide_kit::layout::hide_home(home.path()), state, bridges] {
+            assert!(private::is_private(&made).unwrap(), "{}", made.display());
+        }
+    }
 
     #[test]
     fn every_device_bootstrap_refusal_includes_recovery_advice() {

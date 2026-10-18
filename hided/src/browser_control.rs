@@ -38,6 +38,13 @@ const MAX_NODES: usize = 16;
 
 pub type Failure = (&'static str, &'static str);
 
+/// The answer to a caller whose window's capability URLs are on another
+/// machine's loopback: its page commands reach the window through Hide.
+const ELSEWHERE: Failure = (
+    "browser_control_elsewhere",
+    "Use hide browser page commands, which reach that window through Hide",
+);
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Registration {
@@ -84,7 +91,8 @@ enum Window {
     /// The window on the caller's own machine, a linked node, reached by
     /// asking that node over its link.
     Own(RemoteHost),
-    /// The core's own window.
+    /// The core's own window; a capability URL of it is the core machine's
+    /// loopback, so only a caller on that machine is handed one.
     Core(Host),
     /// The one window there is, on another linked node.
     Elsewhere(RemoteHost),
@@ -497,14 +505,13 @@ impl BrowserControl {
         let (area_id, display_id, scope) = scope_of(source, display_id)?;
         let (http, ws) = match self.window(caller_node)? {
             Window::Own(link) => ask_node(&link, &scope)?,
+            // A caller that came over a link is on another machine than the
+            // core, so the core's own window answers it by relay only; the
+            // gateway is not asked, because its URLs are the core's loopback.
+            Window::Core(_) if caller_node.is_some() => return Err(ELSEWHERE),
             Window::Core(host) => ask_gateway(&host, &scope)?,
             // Its URLs are on another machine's loopback.
-            Window::Elsewhere(_) => {
-                return Err((
-                    "browser_control_elsewhere",
-                    "Use hide browser page commands, which reach that window through Hide",
-                ));
-            }
+            Window::Elsewhere(_) => return Err(ELSEWHERE),
         };
         // Return only the bounded public contract, never a registration token
         // or arbitrary fields the desktop sent back.
@@ -980,6 +987,37 @@ mod tests {
             }
         });
         (endpoint, bodies)
+    }
+
+    #[test]
+    fn a_caller_on_another_machine_is_not_handed_the_cores_own_window_urls() {
+        let (endpoint, bodies) = scripted_gateway();
+        let registry = BrowserControl::default();
+        registry
+            .register(Registration {
+                owner_pid: std::process::id() as i32,
+                endpoint,
+                token: "t".repeat(40),
+            })
+            .unwrap();
+        let source = source();
+        // A pane on a device reached the core over that device's link: the
+        // core's window is on another machine, so discovery answers
+        // `elsewhere` without asking the gateway, and the relay still works.
+        assert_eq!(
+            registry
+                .connect(&source, Some("browser-a"), Some("device"))
+                .unwrap_err()
+                .0,
+            "browser_control_elsewhere"
+        );
+        assert!(bodies.lock().unwrap().is_empty());
+        assert!(matches!(
+            registry.relay(&source, "browser-a", Some("device")),
+            Ok(Relay::Core(_))
+        ));
+        // A pane on the core's own machine still gets the URLs.
+        assert!(registry.connect(&source, Some("browser-a"), None).is_ok());
     }
 
     #[test]

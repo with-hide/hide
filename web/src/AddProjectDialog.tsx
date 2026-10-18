@@ -1,15 +1,17 @@
-// Add a project: a Host selector and, on this Mac, Browse folder, which opens
-// macOS's own folder picker through the desktop app, and the other ways to
-// add below it (Clone from URL, Create new project), each its own view of
-// this dialog. A device's folders are not this Mac's to browse, so a device
-// gets a `~/` path field its own helper judges. Every way sends one `create_workspace` and reads its answer through
+// Add a project: a Host selector and, on the machine this window runs on,
+// Browse folder, which opens the system's own folder picker through the
+// desktop app; any other machine's folders are not this window's to browse,
+// so it gets a `~/` path field its own node judges. The other ways to add
+// (Clone from URL, Create new project), each its own view of this dialog, sit
+// on the core's machine, the one a new project is made on (`hostWays`). Every
+// way sends one `create_workspace` and reads its answer through
 // `useRegistration`. A browser tab has no picker and never opens this dialog.
 
 import { CornerDownLeftIcon, FolderOpenIcon, FolderPlusIcon, LinkIcon, type LucideIcon } from "lucide-react";
 import type { TFunction } from "i18next";
 import { useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
-import { addProjectHosts, alreadyRegistered, folderLabel, initialHost, trimFolder } from "./addProject";
+import { addProjectHosts, alreadyRegistered, folderLabel, hostWays, initialHost, trimFolder } from "./addProject";
 import { CloneFromUrl, cloneRunning } from "./CloneFromUrl";
 import { CreateProjectView } from "./CreateProjectView";
 import { Button } from "./components/ui/button";
@@ -20,7 +22,7 @@ import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, Sele
 import { RegistrationStatus, useRegistration } from "./registration";
 import type { MessageKey } from "./i18n/catalogs";
 import { useInterfaceTranslation } from "./i18n/client";
-import { localDeviceId, type WorkspaceRegistration } from "./snapshot";
+import type { WorkspaceRegistration } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -50,7 +52,7 @@ function AddProject({ actions }: { actions: Actions }) {
   );
 }
 
-/** The other ways to add on this Mac, each a view of this dialog. */
+/** The other ways to add on the core's machine, each a view of this dialog. */
 type OtherWay = { id: "clone" | "create"; label: MessageKey; detail: MessageKey; icon: LucideIcon };
 
 const OTHER_WAYS: readonly OtherWay[] = [
@@ -84,10 +86,10 @@ export function AddProjectViews({
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const focused = useShellStore((s) => s.rest?.navigator?.focused_device_id);
   const registrations = useShellStore((s) => s.rest?.ui_state?.workspace_registrations ?? NO_REGISTRATIONS);
-  const node = useShellStore((s) => localDeviceId(s.rest));
   const hosts = addProjectHosts(devices, t);
   const [chosen, setChosen] = useState(() => initialHost(hosts, focused));
   const host = hosts.find((row) => row.id === chosen) ?? hosts[0]!;
+  const ways = hostWays(host.id, devices);
   // A clone still running when the dialog opens is shown where it started.
   const [view, setView] = useState<"add" | OtherWay["id"]>(() => (cloneRunning(useShellStore.getState().rest?.repository_clone) ? "clone" : "add"));
   const [text, setText] = useState("~/");
@@ -129,16 +131,16 @@ export function AddProjectViews({
   useEffect(() => onHost?.(host.id), [onHost, host.id]);
   // The keyboard starts on the primary control of the host in front.
   useEffect(() => {
-    (host.id === node ? browseRef.current : fieldRef.current)?.focus();
+    (ways.browse ? browseRef.current : fieldRef.current)?.focus();
     // Only on mount: a host chosen later moves the keyboard through the select's own close.
   }, []);
 
   return (
       <>
         {view === "create" ? (
-          <CreateProjectView actions={actions} registrations={registrations} onBack={() => open("add")} />
+          <CreateProjectView actions={actions} registrations={registrations} pickParent={ways.pickParent} onBack={() => open("add")} />
         ) : view === "clone" ? (
-          <CloneFromUrl actions={actions} registrations={registrations} onBack={() => open("add")} />
+          <CloneFromUrl actions={actions} registrations={registrations} pickParent={ways.pickParent} onBack={() => open("add")} />
         ) : (
           <>
             <DialogHeader>
@@ -189,7 +191,7 @@ export function AddProjectViews({
                   </SelectContent>
                 </Select>
               </div>
-              {host.id === node ? (
+              {ways.browse ? (
                 <button
                   ref={browseRef}
                   type="button"
@@ -234,7 +236,7 @@ export function AddProjectViews({
                 </div>
               )}
               <RegistrationStatus registration={registration} />
-              {host.id === node ? (
+              {ways.otherWays ? (
                 <div className="flex flex-col gap-xs" data-add-project-other-ways="true">
                   <span className="text-caption text-muted-foreground">{t("addProject.otherWays")}</span>
                   {OTHER_WAYS.map((way) => (

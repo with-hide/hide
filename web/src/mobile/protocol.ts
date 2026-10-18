@@ -8,7 +8,7 @@
 
 import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/catalogs";
-import type { AgentStatusCode, AgentWait, LineMode, RowMark, SleepingSession } from "../snapshot";
+import type { AgentSleep, AgentStatusCode, AgentWait, LineMode, RowMark, SleepingSession } from "../snapshot";
 
 export type PhoneAgent = {
   device_id: string;
@@ -33,6 +33,8 @@ export type PhoneAgent = {
   line: { text: string; mode: LineMode; tone: "warning" | "news" | "subtle"; pull_request?: number } | null;
   status_code: AgentStatusCode;
   demand: string;
+  /** Present while the agent's process is ended and its pane holds a bare shell: nothing may be sent to it, and the detail says so (`AgentSleepSnapshot`). */
+  sleep?: AgentSleep;
   emphasized: boolean;
   holds_notification: boolean;
 };
@@ -123,11 +125,13 @@ export type ServerFrame =
       before?: number | null;
     }
   | { type: "input_result"; request_id?: string; ok: boolean; reason: string | null }
-  /** Accepted for dispatch; progress and refusal remain on the core-owned row. */
+  /** Accepted for dispatch; progress and refusal remain on the core-owned row. A pane's wake answers with `sleepTarget` of its key as `sleep_id`. */
   | { type: "sleep_result"; request_id?: string; sleep_id: string; ok: boolean; reason: string | null }
   | ({ type: "start_catalog" } & StartCatalog)
   | { type: "start_result"; request_id?: string; ok: boolean; reason: string | null; device_id?: string; pane_id?: string }
   | { type: "push_state"; notifications: "on" | "refused" }
+  /** The answer to `ping`: hided is there. */
+  | { type: "pong"; id: number }
   | { type: "refused"; reason: string }
   | { type: "refused_request"; request: string; reason: string };
 
@@ -139,13 +143,21 @@ export type PhoneMessage =
   | { type: "more" }
   | { type: "close" }
   | { type: "wake_sleeping_session" | "check_sleeping_session"; request_id: string; sleep_id: string }
+  | { type: "wake_agent"; request_id: string; device_id: string; pane_id: string; fresh?: boolean }
   | ({ type: "input"; request_id: string; device_id: string; pane_id: string } & ({ text: string } | { key: QuickKey }))
   | { type: "start_sheet"; open: boolean }
   | { type: "start_agent"; request_id: string; text: string; target: string; kind: StartKind; model?: string }
   | { type: "push_subscription"; subscription: { endpoint: string; keys: { p256dh: string; auth: string } } }
-  | { type: "push_permission"; state: "denied" | "default" };
+  | { type: "push_permission"; state: "denied" | "default" }
+  /** Asks whether hided still answers; the phone gives up the socket when nothing comes back. */
+  | { type: "ping"; id: number };
 
 export type AgentKey = { device_id: string; pane_id: string };
+
+/** The target a pane's wake is answered under (`AgentKey::tag` in hided): one id per pane, as a SleepId is per conversation. */
+export function sleepTarget(key: AgentKey): string {
+  return `${key.device_id}|${key.pane_id}`;
+}
 
 export function sameKey(a: AgentKey | null, b: AgentKey | null): boolean {
   return !!a && !!b && a.device_id === b.device_id && a.pane_id === b.pane_id;
@@ -210,6 +222,8 @@ export function inputFailure(reason: string | null): Notice {
       return { key: "mobile.input.controlCharacters" };
     case "gone":
       return { key: "mobile.input.gone" };
+    case "asleep":
+      return { key: "mobile.input.asleep" };
     case "device_unreachable":
       return { key: "mobile.input.deviceUnreachable" };
     case "offline":

@@ -16,7 +16,7 @@ import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 
 const SAMPLES = JSON.parse(readFileSync(new URL("../fixtures/opencode/events-1.18.30.json", import.meta.url), "utf8"));
-const { HidePlugin } = await import(pathToFileURL(process.env.HIDE_OPENCODE_PLUGIN).href);
+const { server: HidePlugin } = (await import(pathToFileURL(process.env.HIDE_OPENCODE_PLUGIN).href)).default;
 const LOG = process.env.HIDE_OPENCODE_HELPER_LOG;
 const ANSWERS = process.env.HIDE_OPENCODE_HELPER_ANSWERS;
 
@@ -117,6 +117,10 @@ test("outside a Herdr pane the plugin only guards a protected project's tools", 
     const [call] = await until("tool");
     assert.deepEqual(call.input.args, { filePath: ".env" });
     assert.equal(call.env.HERDR_PANE_ID, undefined);
+    // OpenCode runs a relative workdir in the session's folder, not where OpenCode started.
+    await hooks["tool.execute.before"]({ tool: "bash", sessionID: "ses_a" }, { args: { command: "cat .env", workdir: "sub" } }).catch(() => {});
+    const [, shell] = await until("tool", 2);
+    assert.equal(shell.input.cwd, "/checkouts/fixture/sub");
   } finally {
     policy({});
   }

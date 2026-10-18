@@ -29,6 +29,8 @@
 //!   memory, reading the kernel's tables and forking nothing.
 //! - [`run_to_end`] answers a child's exit code and capped output, or ends the
 //!   child's whole tree when its deadline passes or the caller stops waiting.
+//! - [`set_output_aside`] keeps this process's own output, when the system
+//!   appends it to a file, to that file and the one set aside before it.
 //! - A pid that names no process a caller may signal (0 and 1) is refused with
 //!   `InvalidInput` by every function that ends a process, so a damaged pid
 //!   file cannot reach the caller's own group or the init process.
@@ -38,7 +40,7 @@
 //! group to signal, no polite termination, and no identity of its image file.
 
 use std::io::{self, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus};
 use std::time::{Duration, Instant};
 
@@ -104,6 +106,7 @@ pub const LOGIN_CHILD_VARIABLES: &[&str] = if cfg!(windows) {
 /// Gives `command` exactly [`LOGIN_CHILD_VARIABLES`], each copied from this
 /// process when it is set, and removes every other inherited variable. A
 /// variable the caller sets on `command` afterwards is added to those.
+#[allow(clippy::disallowed_methods)] // env_clear: the one place a child's environment is cleared, to the login variables
 pub fn restrict_to_login_environment(command: &mut Command) {
     let kept: Vec<_> = LOGIN_CHILD_VARIABLES
         .iter()
@@ -1048,6 +1051,25 @@ pub fn descendants(root: u32) -> io::Result<Vec<u32>> {
         level = next;
     }
     Ok(found)
+}
+
+/// Sets this process's own output aside once it has grown past `limit`
+/// bytes: when its standard error is the file at `log`, as a login agent's
+/// is when the system appends the agent's output there, that file is renamed
+/// to `aside`, replacing the one before, and standard error, and standard
+/// output where it went to the same file, go on in a new private file at
+/// `log`. Answers whether it did. Output that is not that file (a terminal, a
+/// pipe, another file) is left alone, whatever `log` holds, except the file
+/// at `aside` with nothing at `log`: a set-aside that failed and could not
+/// name its file back leaves the output there, and the next ask moves it on
+/// to a new file at `log`.
+///
+/// The system opens the file once, when it starts the process, so a rename
+/// alone would leave this process writing on under the new name; asked again
+/// and again while the process runs, this keeps it to two files. `Unsupported`
+/// on Windows, which starts no login agent with its output appended to a file.
+pub fn set_output_aside(log: &Path, aside: &Path, limit: u64) -> io::Result<bool> {
+    sys::set_output_aside(log, aside, limit)
 }
 
 #[cfg(unix)]
@@ -2198,6 +2220,95 @@ mod sys {
         Ok(pages.saturating_mul(u64::try_from(page).unwrap_or(4096)))
     }
 
+    pub(super) fn set_output_aside(log: &Path, aside: &Path, limit: u64) -> io::Result<bool> {
+        use crate::fs::identity::{file_id, file_id_of};
+
+        let error_output = crate::fs::duplicate(&io::stderr())?;
+        let written = error_output.metadata()?;
+        if !written.is_file() || written.len() <= limit {
+            return Ok(false);
+        }
+        let at_log = match file_id(log) {
+            Ok(id) => Some(id),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        let written_to = file_id_of(&error_output)?;
+        let output_too = file_id_of(&io::stdout()).is_ok_and(|id| id == written_to);
+        let mut onto = vec![libc::STDERR_FILENO];
+        if output_too {
+            onto.push(libc::STDOUT_FILENO);
+        }
+        match at_log {
+            Some(id) if id == written_to => {
+                std::fs::rename(log, aside)?;
+                // A step after the rename that fails puts the file back at
+                // `log` with the streams on it, so the next ask finds it as
+                // before and tries again.
+                onto_fresh(log, &error_output, &onto)
+                    .map_err(|error| put_back(aside, log, error))?;
+            }
+            // A set-aside whose file could not be named back left the
+            // streams on `aside` with nothing at `log`; this ask finishes it,
+            // so this process never writes on, uncapped, to a file no ask
+            // would set aside.
+            None if file_id(aside).is_ok_and(|id| id == written_to) => {
+                onto_fresh(log, &error_output, &onto)?;
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    /// Moves the standard streams `onto` from `was` to a new private file at
+    /// `log`, or, when a step fails, leaves every one on `was` and no file
+    /// at `log`.
+    fn onto_fresh(log: &Path, was: &std::fs::File, onto: &[libc::c_int]) -> io::Result<()> {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let fresh = std::fs::OpenOptions::new()
+            .append(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(log)?;
+        for (moved, descriptor) in onto.iter().enumerate() {
+            if let Err(error) = redirect(&fresh, *descriptor) {
+                for descriptor in &onto[..moved] {
+                    let _ = redirect(was, *descriptor);
+                }
+                drop(fresh);
+                let _ = std::fs::remove_file(log);
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    /// `descriptor` (a standard stream) now writes to `file`. `dup2`
+    /// replaces it in one step, so a write from another thread goes to one
+    /// file or the other.
+    fn redirect(file: &std::fs::File, descriptor: libc::c_int) -> io::Result<()> {
+        // SAFETY: `file` is open for the call, and `descriptor` is a
+        // standard stream this process holds.
+        if unsafe { libc::dup2(file.as_raw_fd(), descriptor) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// Names the file set aside `log` again after `error`, and answers
+    /// `error`, or both when that fails too; the next ask then finds the
+    /// streams on `aside` with nothing at `log` and finishes the set-aside.
+    fn put_back(aside: &Path, log: &Path, error: io::Error) -> io::Error {
+        match std::fs::rename(aside, log) {
+            Ok(()) => error,
+            Err(back) => io::Error::new(
+                error.kind(),
+                format!("{error}; the output stays at {} ({back})", aside.display()),
+            ),
+        }
+    }
+
     /// Every pid `/proc` lists now.
     #[cfg(target_os = "linux")]
     pub(super) fn all_pids() -> io::Result<Vec<u32>> {
@@ -2818,6 +2929,13 @@ mod sys {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "Windows names a process's image by the path it started from, not by its file",
+        ))
+    }
+
+    pub(super) fn set_output_aside(_: &Path, _: &Path, _: u64) -> io::Result<bool> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Windows starts no login agent with its output appended to a file",
         ))
     }
 

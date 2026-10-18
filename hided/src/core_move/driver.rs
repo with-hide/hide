@@ -221,17 +221,18 @@ pub fn inspect(remote: &Remote, ai: &[(String, String)]) -> Result<Inspected, Mo
 /// The owner change of a forward move from this machine to the device
 /// `source` names, and the id table from every project both machines
 /// hold. This machine's project roots are resolved here, as its node will
-/// report them to the new core.
+/// report them to the new core. The device registers this machine by
+/// `MoveSource::own_label`.
 pub fn forward_change(
     source: &herdr_core::MoveSource,
     home: &Path,
-    own_label: &str,
+    host_name: Option<&str>,
     own_herdr_socket: String,
     target_herdr_socket: String,
 ) -> Result<(OwnerChange, IdTable), MoveFailure> {
     let registration = serde_json::from_value(json!({
         "id": source.node,
-        "label": own_label,
+        "label": source.own_label(host_name),
         "inbound": true,
     }))
     .map_err(|error| MoveFailure::Local {
@@ -327,6 +328,9 @@ pub fn stage(
         "files": outcome.files,
         "pruned": outcome.pruned,
     }));
+    // The target loads the copy before it is placed; this machine asks the
+    // same of it first, while its own core can still be started again.
+    copy::check_loadable(&staging).map_err(failed)?;
     copy::digest(&staging).map_err(failed)
 }
 

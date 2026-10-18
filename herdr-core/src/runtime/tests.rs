@@ -45,6 +45,8 @@ mod editor_reopen;
 mod factory_screen;
 #[path = "tests/first_run.rs"]
 mod first_run;
+#[path = "tests/fork_registration.rs"]
+mod fork_registration;
 #[path = "tests/github_reads.rs"]
 mod github_reads;
 mod guardrails;
@@ -58,6 +60,8 @@ mod issues;
 mod key_routing;
 #[path = "tests/labels.rs"]
 mod labels;
+#[path = "tests/launch_choice.rs"]
+mod launch_choice;
 #[path = "tests/lineage.rs"]
 mod lineage;
 #[path = "tests/links.rs"]
@@ -87,6 +91,8 @@ mod recent_panes;
 mod remote_spawn;
 #[path = "tests/repository_clone.rs"]
 mod repository_clone;
+#[path = "tests/session_archive.rs"]
+mod session_archive;
 #[path = "tests/session_navigation.rs"]
 mod session_navigation;
 #[path = "tests/session_state.rs"]

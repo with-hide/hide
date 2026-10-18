@@ -131,7 +131,7 @@ pub fn prepare(resources: &Path, home: &Path, build: &str) -> Result<Prepared, S
             install.display()
         ));
     }
-    fs::create_dir_all(&root)
+    hide_platform::fs::private::create_dir_all(&root)
         .map_err(|error| format!("{} could not be made: {error}", root.display()))?;
     let _lock = lock(&root)?;
     let dir = layout::runtime_dir(home, build);

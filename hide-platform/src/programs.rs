@@ -1,5 +1,6 @@
-//! Where the programs an agent runs are looked for, and the one lookup every
-//! crate uses to say whether an agent's CLI is installed.
+//! Where the programs an agent runs are looked for, the one lookup every
+//! crate uses to say whether an agent's CLI is installed, and the command a
+//! node starts any program it names by ([`command`]).
 //!
 //! The search is the folders the account's login shell puts on its `PATH`,
 //! then this process's own `PATH`, then the folders installers put a CLI in
@@ -21,8 +22,9 @@
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::host;
@@ -230,6 +232,172 @@ pub fn find_cli(name: &str) -> Option<PathBuf> {
     host::find_program(&account_path()?, name)
 }
 
+/// A command that runs `program` the way the account's own terminal would:
+/// a bare name is found on the account's search ([`account_path_now`]), and
+/// the program is run with that `PATH`, so what it starts by name in turn
+/// (git's hooks, filters and credential helpers, a script's interpreter, a
+/// check's tools) is found the same way. A daemon an SSH exec or a login item
+/// started has the system's folders alone on its own `PATH`, which miss what
+/// the account installed. Every program a node starts by name is started
+/// this way. Only a process's first command waits for the login shell, and
+/// at most [`FIRST_READ_WITHIN`]; a caller that must have the shell's
+/// current answer (a move's checks, a login item's Herdr server) asks
+/// [`account_path`] and runs [`command_on`] with it.
+pub fn command(program: impl AsRef<Path>) -> Command {
+    command_on(account_path_now().as_deref(), program)
+}
+
+/// How long the account's search, as [`account_path_now`] last read it,
+/// serves before it is read again: an installer's edit to a startup file
+/// reaches the commands started after the next read.
+const ACCOUNT_REREAD: Duration = Duration::from_secs(10);
+
+/// How long a process's first command waits for the first read: the login
+/// shell's own deadline, with a second for the startup files' stats.
+const FIRST_READ_WITHIN: Duration = Duration::from_secs(LOGIN_SHELL_DEADLINE.as_secs() + 1);
+
+/// The account's search as last read, kept for [`command`].
+static ACCOUNT: Latest = Latest::new();
+
+/// [`account_path`], read once per process and then again on a thread of its
+/// own once it is [`ACCOUNT_REREAD`] old, a caller taking the answer last
+/// read meanwhile. Until a first read has finished the caller waits for it,
+/// so a fresh process (the `hide` CLI, a short-lived helper) finds on its
+/// first command what only the login shell's `PATH` reaches; a daemon starts
+/// that read as it comes up ([`warm_account_path`]), so its own first
+/// command seldom waits. A read that did not finish in [`FIRST_READ_WITHIN`]
+/// leaves the search without the shell's folders.
+pub fn account_path_now() -> Option<OsString> {
+    ACCOUNT
+        .latest(ACCOUNT_REREAD, FIRST_READ_WITHIN, account_path)
+        .or_else(|| cli_path_with(&host::home_dir().ok()?, None))
+}
+
+/// Starts the first read of the account's search without waiting for it.
+pub fn warm_account_path() {
+    let mut state = ACCOUNT.state();
+    ACCOUNT.start_due(&mut state, ACCOUNT_REREAD, account_path);
+}
+
+/// A value read on a thread of its own and kept: a caller takes the last
+/// one at once once there is one, and at most one read runs at a time.
+struct Latest {
+    state: Mutex<LatestState>,
+    finished: Condvar,
+}
+
+struct LatestState {
+    value: Option<OsString>,
+    read: Option<Instant>,
+    reading: bool,
+}
+
+/// A read under way: whether it returns or panics, it is marked finished
+/// and its waiters are woken, so a read that failed never holds the next
+/// one off.
+struct Reading {
+    latest: &'static Latest,
+    value: Option<Option<OsString>>,
+}
+
+impl Drop for Reading {
+    fn drop(&mut self) {
+        let mut state = self.latest.state();
+        if let Some(value) = self.value.take() {
+            state.value = value;
+        }
+        state.read = Some(Instant::now());
+        state.reading = false;
+        drop(state);
+        self.latest.finished.notify_all();
+    }
+}
+
+impl Latest {
+    const fn new() -> Self {
+        Self {
+            state: Mutex::new(LatestState {
+                value: None,
+                read: None,
+                reading: false,
+            }),
+            finished: Condvar::new(),
+        }
+    }
+
+    fn state(&self) -> MutexGuard<'_, LatestState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The value last read. A read of `read` starts when none runs and the
+    /// last finished `every` ago or never; while none has finished, the
+    /// caller waits up to `first_within` for one.
+    fn latest(
+        &'static self,
+        every: Duration,
+        first_within: Duration,
+        read: impl FnOnce() -> Option<OsString> + Send + 'static,
+    ) -> Option<OsString> {
+        let mut state = self.state();
+        self.start_due(&mut state, every, read);
+        if state.read.is_none() {
+            state = self
+                .finished
+                .wait_timeout_while(state, first_within, |state| {
+                    state.read.is_none() && state.reading
+                })
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        state.value.clone()
+    }
+
+    /// Starts a read of `read` when none runs and the last finished `every`
+    /// ago or never; a thread that cannot start is logged and leaves the
+    /// next call to try.
+    fn start_due(
+        &'static self,
+        state: &mut LatestState,
+        every: Duration,
+        read: impl FnOnce() -> Option<OsString> + Send + 'static,
+    ) {
+        let due = state.read.is_none_or(|read| read.elapsed() >= every);
+        if !due || state.reading {
+            return;
+        }
+        let started = std::thread::Builder::new()
+            .name("account-search".to_owned())
+            .spawn(move || {
+                let mut reading = Reading {
+                    latest: self,
+                    value: None,
+                };
+                reading.value = Some(read());
+            });
+        if let Err(error) = &started {
+            eprintln!("platform.account_search_unstarted kind={:?}", error.kind());
+        }
+        state.reading = started.is_ok();
+    }
+}
+
+/// [`command`] with `search` as the `PATH` `program` is found on and run
+/// with. A path is run as given, with the same `PATH`; a name found nowhere
+/// is left as named, so its start fails as not found. `None` (no home to
+/// search from) leaves both to this process's own `PATH`.
+pub fn command_on(search: Option<&OsStr>, program: impl AsRef<Path>) -> Command {
+    let named = program.as_ref();
+    let Some(search) = search else {
+        return Command::new(named);
+    };
+    let found = (named.components().count() == 1)
+        .then(|| host::find_program(search, named.to_str()?))
+        .flatten();
+    let mut command = Command::new(found.as_deref().unwrap_or(named));
+    command.env("PATH", search);
+    command
+}
+
 /// [`find_cli`] for a given home and login shell.
 pub fn find_cli_with(
     home: &Path,
@@ -258,4 +426,88 @@ fn usual_install_folders(home: &Path) -> [PathBuf; 9] {
         PathBuf::from("/opt/homebrew/bin"),
         PathBuf::from("/usr/local/bin"),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
+
+    use super::*;
+
+    const LONG: Duration = Duration::from_secs(3600);
+
+    fn latest() -> &'static Latest {
+        Box::leak(Box::new(Latest::new()))
+    }
+
+    /// Waits until no read runs.
+    fn settled(latest: &Latest) {
+        let state = latest.state();
+        drop(
+            latest
+                .finished
+                .wait_while(state, |state| state.reading)
+                .unwrap(),
+        );
+    }
+
+    /// The first caller waits for the first read and takes what it read;
+    /// once there is a value, a caller takes it at once while the next read
+    /// is under way, no second read starts beside it, and the caller after
+    /// it takes what it read.
+    #[test]
+    fn only_the_first_caller_waits_and_later_ones_take_the_last_value() {
+        let latest = latest();
+        assert_eq!(
+            latest.latest(LONG, LONG, || Some(OsString::from("/first/bin"))),
+            Some(OsString::from("/first/bin"))
+        );
+
+        let (release, released) = mpsc::channel::<()>();
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&reads);
+        let read = move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            released.recv().unwrap();
+            Some(OsString::from("/second/bin"))
+        };
+        assert_eq!(
+            latest.latest(Duration::ZERO, LONG, read),
+            Some(OsString::from("/first/bin")),
+            "the second read is under way"
+        );
+        assert_eq!(
+            latest.latest(Duration::ZERO, LONG, || panic!("a second read beside it")),
+            Some(OsString::from("/first/bin"))
+        );
+        release.send(()).unwrap();
+        settled(latest);
+        assert_eq!(
+            latest.latest(LONG, LONG, || panic!("not due")),
+            Some(OsString::from("/second/bin"))
+        );
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+    }
+
+    /// A read that panics is finished all the same: the caller waiting for
+    /// it is answered, and the next due read starts.
+    #[test]
+    fn a_read_that_panics_holds_off_neither_its_caller_nor_the_next_read() {
+        let latest = latest();
+        assert_eq!(
+            latest.latest(LONG, LONG, || panic!("the read failed")),
+            None
+        );
+        assert_eq!(
+            latest.latest(Duration::ZERO, LONG, || Some(OsString::from("/read/bin"))),
+            None,
+            "the read after it is under way"
+        );
+        settled(latest);
+        assert_eq!(
+            latest.latest(LONG, LONG, || panic!("not due")),
+            Some(OsString::from("/read/bin"))
+        );
+    }
 }

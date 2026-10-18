@@ -17,7 +17,6 @@ const words = {
   "overviewTasks.openHint": ["Open the latest checkout of {{project}}", "{{project}}의 가장 최근 체크아웃 열기", "{{project}} の最新チェックアウトを開く", "打开 {{project}} 最近的检出"],
   "overviewTasks.newAgent": ["New agent", "새 에이전트", "新しいエージェント", "新建智能体"],
   "overviewTasks.fold": ["Fold", "접기", "折りたたむ", "收起"],
-  "overviewTasks.children": ["{{count}} children", "자식 {{count}}", "子 {{count}}", "子 {{count}}"],
   "record.close": ["Close the record", "기록 닫기", "記録を閉じる", "关闭记录"],
   "record.openWorkspace": ["Open Workspace", "Workspace 열기", "Workspaceを開く", "打开 Workspace"],
   "record.viewInLane": ["View in lane", "lane에서 보기", "レーンで表示", "在侧栏查看"],
@@ -122,7 +121,6 @@ const words = {
   "missed.toBacklog": ["To backlog", "백로그로", "バックログへ", "放入待办"],
   "missed.public": ["public", "공개", "公開", "公开"],
   "missed.maybePublic": ["may be public", "공개일 수 있음", "公開の可能性あり", "可能公开"],
-  "missed.inBacklog": ["· backlog {{token}}", "· 백로그 {{token}}", "· バックログ {{token}}", "· 待办 {{token}}"],
 } as const;
 
 export const deviceOverviewEnglish = Object.fromEntries(Object.entries(words).map(([key, value]) => [key, value[0]])) as { [K in keyof typeof words]: string };

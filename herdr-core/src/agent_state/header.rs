@@ -53,6 +53,39 @@ pub enum Action {
     },
 }
 
+/// Why a device's helper link is away, when that is why a pane of the device
+/// is unavailable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LinkWait {
+    /// The core tries the link again by itself.
+    Returns,
+    /// The operator has not allowed the helper, or withdrew the consent.
+    NeedsConsent,
+}
+
+/// A pane of a device whose helper link is away: a band that says the pane is
+/// unavailable says what the link waits for, so the pane no longer reads as a
+/// failure the operator could do something about, or as one nothing can fix.
+pub(crate) fn waiting_on_link(mut header: Header, wait: LinkWait) -> Header {
+    if let Some(band) = header
+        .band
+        .as_mut()
+        .filter(|band| band.kind == "unavailable")
+    {
+        match wait {
+            LinkWait::Returns => {
+                band.kind = "reconnecting".to_owned();
+                band.tone = "muted";
+            }
+            LinkWait::NeedsConsent => {
+                band.kind = "helper_not_allowed".to_owned();
+                band.tone = "warning";
+            }
+        }
+    }
+    header
+}
+
 pub(crate) fn of(
     pane: &PaneSnapshot,
     agent: Option<&SidebarAgentSnapshot>,

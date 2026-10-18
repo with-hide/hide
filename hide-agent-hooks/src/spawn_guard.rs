@@ -233,10 +233,7 @@ pub fn read_question(
         (HookDialect::Antigravity, "ask_question") => "ask_question",
         _ => return None,
     };
-    if payload.session_id.is_empty()
-        || payload.session_id.len() > 256
-        || payload.session_id.chars().any(char::is_control)
-    {
+    if !crate::delivery::valid_session(&payload.session_id) {
         return None;
     }
     Some(QuestionCall {

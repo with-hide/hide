@@ -55,8 +55,9 @@ export function windowStrip(
     return giveUpOffered(move) ? { ...strip, action: "give_up" } : strip;
   }
   if (connection !== "live" && link && link.phase !== "connecting") {
-    // A window that has not drawn the core yet knows no name for its machine but the alias it is dialed by.
-    const machine = link.machine ?? (input.coreMachine || link.alias);
+    // The core's machine as the window's rows name it once it drew the core; before that by the name the
+    // core's hello gave, which is its host name, or the alias it is dialed by.
+    const machine = input.coreMachine || link.machine || link.alias;
     switch (link.phase) {
       case "updating":
         return { kind: "updating", text: t("coreMove.strip.updating", { machine }), mark: "pending" };

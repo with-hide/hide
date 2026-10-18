@@ -21,12 +21,17 @@ fn event(kind: &str, payload: serde_json::Value) -> Vec<u8> {
 /// The two-tab session with t1 in front, and, when `seq` is given, an
 /// idle Claude agent in t2 that Herdr lists with that state sequence.
 fn session(seq: Option<u64>) -> SessionSnapshotPayload {
-    let mut payload = tab_order_payload(CHECKOUT, &TABS, &TABS, "w-order:t1");
+    session_in(CHECKOUT, seq)
+}
+
+/// `session` with its tabs and agent in the checkout at `path`.
+fn session_in(path: &str, seq: Option<u64>) -> SessionSnapshotPayload {
+    let mut payload = tab_order_payload(path, &TABS, &TABS, "w-order:t1");
     if let Some(seq) = seq {
         let owned: SessionSnapshotPayload =
             crate::sidebar::owned_label_fixture(serde_json::json!({"agents": [{
                 "id": "reviewer", "pane_id": SLEEPER, "agent": "claude",
-                "agent_status": "idle", "state_change_seq": seq, "cwd": CHECKOUT,
+                "agent_status": "idle", "state_change_seq": seq, "cwd": path,
                 "agent_session": {"kind": "id", "value": "11111111-2222-3333-4444-555555555555"},
                 "tokens": {"task": "Review the parser"}
             }]}))
@@ -102,15 +107,7 @@ fn dormant_intent(runtime: &mut Runtime) -> crate::agent_sleep::SleepId {
         .find(|agent| agent.pane_id == SLEEPER)
         .unwrap()
         .clone();
-    let tab = runtime
-        .snapshot
-        .navigator
-        .workspaces
-        .iter()
-        .flat_map(|project| &project.checkouts)
-        .flat_map(|checkout| &checkout.tabs)
-        .find(|tab| tab.panes.iter().any(|pane| pane.id == SLEEPER))
-        .unwrap();
+    let (tab, owner) = runtime.sleep_place(SLEEPER).unwrap();
     let context = runtime.close_context(tab).unwrap();
     let native_session_id = agent.session_id.unwrap();
     runtime
@@ -144,8 +141,38 @@ fn dormant_intent(runtime: &mut Runtime) -> crate::agent_sleep::SleepId {
             transition_started_unix_ms: 1,
             reason: None,
             registration: None,
+            launch: Default::default(),
+            owner: Some(owner),
         })
         .unwrap()
+}
+
+/// Herdr with no workspace open: an unregistered project whose last
+/// workspace closed is no longer listed.
+fn no_workspaces() -> SessionSnapshotPayload {
+    crate::sidebar::owned_label_fixture(serde_json::json!({
+        "agents": [], "workspaces": [], "tabs": [], "panes": [], "layouts": []
+    }))
+    .unwrap()
+}
+
+fn listed(runtime: &Runtime, path: &str) -> bool {
+    runtime
+        .snapshot
+        .navigator
+        .workspaces
+        .iter()
+        .flat_map(|project| &project.checkouts)
+        .any(|checkout| checkout.path == path)
+}
+
+/// The project list stops showing the sleeping session's checkout, as it
+/// does for an unregistered project once its last workspace closes, and for
+/// a linked worktree no window has read since hided started.
+fn unlist(runtime: &mut Runtime, path: &str) {
+    runtime.snapshot.ui_state.workspace_registrations.clear();
+    runtime.ingest_session(Ok(no_workspaces()));
+    assert!(!listed(runtime, path));
 }
 
 /// External Herdr replies use its pinned wire contract, not an owned worker mock.
@@ -168,7 +195,6 @@ fn dormant_wire_session(cwd: &str, tabs: &[&str]) -> serde_json::Value {
         })).collect::<Vec<_>>(),"agents":[]})
 }
 
-#[cfg(unix)]
 fn persisted_dormant(path: &Path, id: &crate::agent_sleep::SleepId) -> serde_json::Value {
     let state: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     state["agent_sleep"]["dormant"][id.as_str()].clone()
@@ -270,10 +296,31 @@ fn an_opencode_dormant_journey_refuses_a_changed_route_before_close_wake_or_star
     }
 }
 
+/// The same proof over OpenCode 2.0's tables: Herdr reports the session's id,
+/// and Hide proves it from `session_v2`, so sleep is not refused for want of
+/// a conversation.
+#[test]
+#[cfg(unix)]
+fn an_opencode_2_dormant_journey_refuses_a_changed_route_before_close_wake_or_start() {
+    for phase in [
+        "none",
+        "before-close",
+        "before-wake",
+        "before-start",
+        "missing-source-before-close",
+        "missing-source-before-wake",
+        "missing-source-before-start",
+    ] {
+        durable_dormant_journey_in("opencode", phase, true);
+    }
+}
+
 /// What a journey's interference does to the native record its proof reads.
 #[cfg(unix)]
 struct NativeRecord {
     kind: &'static str,
+    /// OpenCode's 2.x tables hold the session, not its 1.x ones.
+    opencode_2: bool,
     path: std::path::PathBuf,
     folder: std::path::PathBuf,
     before: Vec<u8>,
@@ -287,7 +334,17 @@ impl NativeRecord {
     fn duplicate(&self) {
         if self.kind == "opencode" {
             self.database()
-                .execute("UPDATE session SET directory = '/elsewhere/app'", [])
+                .execute(
+                    &format!(
+                        "UPDATE {} SET directory = '/elsewhere/app'",
+                        if self.opencode_2 {
+                            "session_v2"
+                        } else {
+                            "session"
+                        }
+                    ),
+                    [],
+                )
                 .unwrap();
         } else {
             std::fs::copy(&self.path, self.folder.join("duplicate.jsonl")).unwrap();
@@ -297,7 +354,11 @@ impl NativeRecord {
     fn remove(&self) {
         if self.kind == "opencode" {
             self.database()
-                .execute_batch("DELETE FROM part; DELETE FROM message; DELETE FROM session;")
+                .execute_batch(if self.opencode_2 {
+                    "DELETE FROM session_message; DELETE FROM session_v2;"
+                } else {
+                    "DELETE FROM part; DELETE FROM message; DELETE FROM session;"
+                })
                 .unwrap();
         } else {
             std::fs::write(self.folder.join("other.jsonl"), &self.other).unwrap();
@@ -314,7 +375,15 @@ impl NativeRecord {
         if self.kind == "opencode" {
             let rows: i64 = self
                 .database()
-                .query_row("SELECT count(*) FROM message", [], |row| row.get(0))
+                .query_row(
+                    if self.opencode_2 {
+                        "SELECT count(*) FROM session_message"
+                    } else {
+                        "SELECT count(*) FROM message"
+                    },
+                    [],
+                    |row| row.get(0),
+                )
                 .unwrap();
             assert_eq!(rows, i64::from(!interference.starts_with("missing-source")));
             return;
@@ -349,6 +418,12 @@ fn a_factory_workers_sleep_is_no_operator_close_and_keeps_its_way_back_until_bou
 
 #[cfg(unix)]
 fn durable_dormant_journey(kind: &'static str, interference: &'static str) {
+    durable_dormant_journey_in(kind, interference, false);
+}
+
+/// The journey of `kind`; `opencode_2` puts an OpenCode session in the 2.x tables.
+#[cfg(unix)]
+fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, opencode_2: bool) {
     use crate::agent_sleep::DormantPhase;
     let folder = tempfile::Builder::new()
         .prefix(if interference == "hashed-before-close" {
@@ -369,10 +444,16 @@ fn durable_dormant_journey(kind: &'static str, interference: &'static str) {
     let home = tempfile::tempdir().unwrap();
     let native_id = "11111111-2222-3333-4444-555555555555";
     let native = if kind == "opencode" {
-        crate::fixture::opencode_database(home.path(), &[(native_id, None, cwd.as_str())]);
+        let sessions = [(native_id, None, cwd.as_str())];
+        if opencode_2 {
+            crate::fixture::opencode_2_database(home.path(), &sessions);
+        } else {
+            crate::fixture::opencode_database(home.path(), &sessions);
+        }
         let path = home.path().join(".local/share/opencode/opencode.db");
         NativeRecord {
             kind,
+            opencode_2,
             folder: path.parent().unwrap().to_path_buf(),
             before: Vec::new(),
             other: Vec::new(),
@@ -404,6 +485,7 @@ fn durable_dormant_journey(kind: &'static str, interference: &'static str) {
         let other_before = [native_before.as_slice(), b"{\"type\":\"message\",\"id\":\"other-message\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"different history\"}]}}\n"].concat();
         NativeRecord {
             kind,
+            opencode_2: false,
             path: native_path,
             folder: native_folder,
             before: native_before,
@@ -447,6 +529,25 @@ fn durable_dormant_journey(kind: &'static str, interference: &'static str) {
     });
     runtime.ingest_session(Ok(initial));
     let id = dormant_intent(&mut runtime);
+    // The choice the agent was started with, and the words each CLI takes it
+    // by after its resume arguments; OpenCode takes no model.
+    let (launch, launch_words): (hide_agent_adapter::LaunchChoice, &[&str]) = match kind {
+        "claude" => (
+            hide_agent_adapter::LaunchChoice {
+                model: Some("sonnet".into()),
+                effort: Some("high".into()),
+            },
+            &["--model", "sonnet", "--effort", "high"],
+        ),
+        "opencode" => (Default::default(), &[]),
+        _ => (
+            hide_agent_adapter::LaunchChoice {
+                model: Some("fixture-model".into()),
+                effort: None,
+            },
+            &["--model", "fixture-model"],
+        ),
+    };
     {
         let record = runtime
             .snapshot
@@ -457,6 +558,10 @@ fn durable_dormant_journey(kind: &'static str, interference: &'static str) {
             .unwrap();
         record.kind = kind.into();
         record.label_owner = hide_session::label_reference_token(kind, "id", native_id).unwrap();
+        record.launch = launch.clone();
+        // The wake opens its tab from the owner this record kept, and starts
+        // the agent with the choice the record kept.
+        assert!(record.owner.is_some());
     }
     let bound = crate::agent_sleep::FactoryWorker {
         factory: "f-1".into(),
@@ -602,16 +707,17 @@ fn durable_dormant_journey(kind: &'static str, interference: &'static str) {
             assert_eq!(saved["wake_pane_id"], "w-order:t3:p");
             assert_eq!(params["pane_id"], "w-order:t3:p");
             assert_eq!(params["kind"], kind);
+            let resume = [
+                match kind {
+                    "pi" => "--session",
+                    "opencode" => "-s",
+                    _ => "--resume",
+                },
+                "11111111-2222-3333-4444-555555555555",
+            ];
             assert_eq!(
                 params["args"],
-                serde_json::json!([
-                    match kind {
-                        "pi" => "--session",
-                        "opencode" => "-s",
-                        _ => "--resume",
-                    },
-                    "11111111-2222-3333-4444-555555555555"
-                ])
+                serde_json::json!([resume.as_slice(), launch_words].concat())
             );
             effects.send("start").unwrap();
             serde_json::json!({"type":"agent_started","argv":[],"agent":{
@@ -728,6 +834,10 @@ fn durable_dormant_journey(kind: &'static str, interference: &'static str) {
         if interference == "missing-source-before-wake" {
             native.remove();
         }
+        if interference == "unlisted-before-wake" {
+            unlist(&mut runtime, &cwd);
+            assert!(runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
+        }
         assert!(runtime.request_dormant_wake(&id));
         assert!(!runtime.request_dormant_wake(&id));
     }
@@ -815,6 +925,8 @@ fn durable_dormant_journey(kind: &'static str, interference: &'static str) {
             "w-order:t1",
         );
         let mut agent = session(Some(5)).agents.remove(0);
+        let wake_name = crate::agent_sleep_herdr::dormant_wake_name(&work);
+        agent.name = Some(wake_name.clone());
         agent.agent = Some(kind.into());
         agent.pane_id = Some("w-order:t3:p".into());
         agent.cwd = Some(cwd.clone());
@@ -825,6 +937,17 @@ fn durable_dormant_journey(kind: &'static str, interference: &'static str) {
         confirmed.agents.push(agent);
         runtime.ingest_session(Ok(confirmed));
         assert!(runtime.snapshot.navigator.sleeping_sessions.is_empty());
+        // The woken pane keeps the choice for the agent's next restart.
+        assert_eq!(
+            runtime
+                .snapshot
+                .ui_state
+                .pane_launches
+                .get("w-order:t3:p")
+                .map(|record| (record.name.as_str(), &record.choice)),
+            (!launch.is_default()).then_some((wake_name.as_str(), &launch)),
+            "{kind}"
+        );
         if factory_port.is_some() {
             // The conversation runs in its wake pane; the record stays, with
             // its worker, until the Factory has bound that pane.
@@ -896,6 +1019,17 @@ fn durable_dormant_journey(kind: &'static str, interference: &'static str) {
             "{calls:?}"
         );
     }
+}
+
+/// The wake opens the checkout from the owner its record kept, so it works
+/// while no list shows the checkout: Wake from a phone, with no window
+/// attached since hided restarted, or in an unregistered project whose last
+/// workspace was the sleeping session's. It starts the agent with the model
+/// and effort the record kept, as every journey asserts at `agent.start`.
+#[test]
+#[cfg(unix)]
+fn a_sleeping_session_wakes_in_its_checkout_while_no_list_shows_it() {
+    durable_dormant_journey("claude", "unlisted-before-wake");
 }
 
 fn factory_worker(agent: &str) -> crate::agent_sleep::FactoryWorker {
@@ -976,6 +1110,281 @@ fn factory_sleep_saves_a_close_pane_agents_intent_bound_to_its_worker() {
             assert!(runtime.factory_worker_probe(SLEEPER).asleep);
         }
     }
+}
+
+/// A sleep that closes the pane keeps the choice Hide started the agent with
+/// in its saved intent, which its wake starts the agent with again.
+#[test]
+fn a_dormant_sleep_keeps_the_choice_the_agent_was_started_with() {
+    let launch = hide_agent_adapter::LaunchChoice {
+        model: Some("fixture-model".into()),
+        effort: None,
+    };
+    for (recorded, saved) in [(Some(&launch), launch.clone()), (None, Default::default())] {
+        let mut runtime = close_pane_runtime("pi");
+        // The name Hide started it under, which Herdr reports it by.
+        runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter_mut()
+            .find(|agent| agent.pane_id == SLEEPER)
+            .unwrap()
+            .started_name = Some("reviewer".into());
+        if let Some(recorded) = recorded {
+            runtime.record_pane_launch(SLEEPER, "pi", "reviewer", recorded, None);
+        }
+        assert_eq!(runtime.factory_sleep(SLEEPER), Ok(true));
+        let record = runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .dormant
+            .values()
+            .next()
+            .expect("the saved intent");
+        assert_eq!(record.launch, saved);
+    }
+}
+
+/// Case (b) itself: an agent that slept in a linked worktree is woken through
+/// `worktree.open` from its repository's main worktree, and the workspace
+/// Herdr opens takes the worktree's branch name, while the list shows the
+/// repository but not the worktree (no window has read it).
+#[test]
+#[cfg(unix)]
+fn a_sleeping_worktree_session_is_opened_from_its_repository_while_no_list_shows_it() {
+    use crate::agent_sleep::{DormantOwner, DormantPhase};
+    let repo = super::device_worktrees::repo();
+    let (mut runtime, _) = live_tab_order_runtime(&repo.root);
+    runtime.ingest_session(Ok(session_in(&repo.linked, Some(4))));
+    let id = dormant_intent(&mut runtime);
+    {
+        let record = runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .dormant
+            .get_mut(&id)
+            .unwrap();
+        assert_eq!(
+            record.owner,
+            Some(DormantOwner {
+                repository_root: repo.root.clone(),
+                is_git: true,
+                label: "feature".into(),
+            })
+        );
+        record.closed = true;
+        record.phase = DormantPhase::Sleeping;
+    }
+    runtime.refresh_dormant_rows();
+    runtime.ingest_session(Ok(no_workspaces()));
+    assert!(listed(&runtime, &repo.root));
+    assert!(!listed(&runtime, &repo.linked));
+    assert!(runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
+
+    let herdr = FakeHerdr::start_with_errors("dormant-worktree-owner", |method, _| match method {
+        "session.snapshot" => Ok(serde_json::json!({"type": "session_snapshot", "snapshot": {
+            "version": "fixture", "protocol": hide_herdr_client::HERDR_PROTOCOL_REVISION,
+            "workspaces": [], "tabs": [], "panes": [], "layouts": [], "agents": []
+        }})),
+        "worktree.open" => Ok(serde_json::json!({
+            "type": "worktree_opened",
+            "already_open": false,
+            "workspace": {"workspace_id": "w9", "number": 9, "label": "linked", "focused": true, "pane_count": 1, "tab_count": 1, "active_tab_id": "w9:t1", "agent_status": "idle"},
+            "worktree": {"path": "/fixture/linked", "is_bare": false, "is_detached": false, "is_prunable": false, "is_linked_worktree": true, "label": "linked"},
+            "tab": {"tab_id": "w9:t1", "workspace_id": "w9", "number": 1, "label": "1", "focused": true, "pane_count": 1, "agent_status": "idle"},
+            "root_pane": {"pane_id": "w9:p1", "terminal_id": "fixture-terminal", "workspace_id": "w9", "tab_id": "w9:t1", "focused": true, "agent_status": "idle", "revision": 1}
+        })),
+        "workspace.rename" => Ok(serde_json::json!({
+            "type": "workspace_info",
+            "workspace": {"workspace_id": "w9", "number": 9, "label": "feature", "focused": true, "pane_count": 1, "tab_count": 1, "active_tab_id": "w9:t1", "agent_status": "idle"}
+        })),
+        // The owner is open; what follows is the ordinary wake tab.
+        _ => Err((
+            "fixture_end".into(),
+            "the fixture stops after the owner".into(),
+        )),
+    });
+    runtime.live.as_mut().unwrap().api_connector = Arc::new(herdr.connector());
+    let shared = Arc::new(std::sync::Mutex::new(runtime));
+    shared.lock().unwrap().live.as_mut().unwrap().runtime = Arc::downgrade(&shared);
+    shared.lock().unwrap().write_ui_state().unwrap();
+    assert!(shared.lock().unwrap().request_dormant_wake(&id));
+    wait_for("the wake tab's owner", || {
+        herdr
+            .methods()
+            .iter()
+            .any(|method| method == "layout.apply")
+    });
+    let calls = herdr.calls();
+    let params = |wanted: &str| {
+        calls
+            .iter()
+            .find(|(method, _)| method == wanted)
+            .map(|(_, params)| params.clone())
+            .unwrap_or_else(|| panic!("no {wanted} in {calls:?}"))
+    };
+    assert_eq!(
+        params("worktree.open"),
+        serde_json::json!({"cwd": repo.root, "path": repo.linked, "focus": true})
+    );
+    assert_eq!(params("workspace.rename")["label"], "feature");
+}
+
+/// A sleep keeps its checkout's owner as the list names it then, and a Wake
+/// asked once the list no longer shows that checkout begins from the record.
+#[test]
+fn a_sleep_keeps_its_checkouts_owner_for_the_wake() {
+    use crate::agent_sleep::{DormantOwner, DormantPhase};
+    let mut runtime = close_pane_runtime("pi");
+    assert!(runtime.begin_dormant_sleep(SLEEPER, 1));
+    let id = {
+        let (id, record) = runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .dormant
+            .iter_mut()
+            .next()
+            .unwrap();
+        assert_eq!(
+            record.owner,
+            Some(DormantOwner {
+                repository_root: CHECKOUT.into(),
+                is_git: false,
+                label: "order".into(),
+            })
+        );
+        record.closed = true;
+        record.phase = DormantPhase::Sleeping;
+        id.clone()
+    };
+    // The close landed: no close of the pane is still waiting.
+    runtime.close_operations.clear();
+    runtime.refresh_dormant_rows();
+    unlist(&mut runtime, CHECKOUT);
+    assert!(runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
+    assert!(runtime.request_dormant_wake(&id));
+    assert!(runtime.snapshot.status.last_error.is_none());
+    // The wake's intent was saved and its tab is being opened in the
+    // checkout the record names.
+    assert_eq!(
+        runtime.snapshot.ui_state.agent_sleep.dormant[&id].phase,
+        DormantPhase::Creating
+    );
+}
+
+/// A record an older build saved names no owner, so it wakes only while the
+/// list shows its checkout; until then its row offers no Wake and says what
+/// to do, instead of a Wake that is refused.
+#[test]
+fn a_sleeping_session_an_older_build_saved_offers_wake_only_while_its_checkout_is_listed() {
+    use crate::agent_sleep::{DormantPhase, DormantRecord};
+    let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
+    runtime.ingest_session(Ok(session(Some(4))));
+    let id = dormant_intent(&mut runtime);
+    {
+        let record = runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .dormant
+            .get_mut(&id)
+            .unwrap();
+        let mut saved = serde_json::to_value(&*record).unwrap();
+        assert!(saved.as_object_mut().unwrap().remove("owner").is_some());
+        *record = serde_json::from_value::<DormantRecord>(saved).unwrap();
+        assert!(record.owner.is_none());
+        record.closed = true;
+        record.phase = DormantPhase::Sleeping;
+    }
+    let open = || tab_order_payload(CHECKOUT, &TABS[..1], &TABS[..1], "w-order:t1");
+    runtime.ingest_session(Ok(open()));
+    assert!(runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
+
+    // With no workspace open, the registration still lists the checkout;
+    // removing the project takes it off the list, and the row follows at once.
+    runtime.ingest_session(Ok(no_workspaces()));
+    assert!(runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
+    assert!(runtime.retire_workspace_registration("workspace:order"));
+    assert!(!listed(&runtime, CHECKOUT));
+    let row = &runtime.snapshot.navigator.sleeping_sessions[0];
+    assert!(!row.wake_available);
+    let next = "This session's checkout is not listed. Open Hide on this computer and add its project if it is missing; Wake returns once the checkout is listed.";
+    assert_eq!(row.reason.as_deref(), Some(next));
+    assert!(runtime.request_dormant_wake(&id));
+    let error = runtime.snapshot.status.last_error.clone().unwrap();
+    assert_eq!(
+        (error.kind.as_str(), error.message.as_str()),
+        ("agent_sleep.wake_unavailable", next)
+    );
+    assert_eq!(
+        runtime.snapshot.ui_state.agent_sleep.dormant[&id].phase,
+        DormantPhase::Sleeping
+    );
+
+    // A wake that failed keeps saying why it failed.
+    let failed = "The conversation couldn\u{2019}t be resumed.";
+    {
+        let record = runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .dormant
+            .get_mut(&id)
+            .unwrap();
+        record.phase = DormantPhase::Failed;
+        record.reason = Some(failed.into());
+    }
+    runtime.refresh_dormant_rows();
+    let row = &runtime.snapshot.navigator.sleeping_sessions[0];
+    assert!(!row.wake_available);
+    assert_eq!(row.reason.as_deref(), Some(failed));
+
+    // Its workspace open again, the list shows the checkout and Wake returns.
+    runtime.ingest_session(Ok(open()));
+    assert!(listed(&runtime, CHECKOUT));
+    assert!(runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
+}
+
+/// Wake is offered only where the wake can begin: over this machine's
+/// connection to Herdr.
+#[test]
+fn a_sleeping_session_offers_wake_only_over_a_connection() {
+    use crate::agent_sleep::DormantPhase;
+    let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
+    runtime.ingest_session(Ok(session(Some(4))));
+    let id = dormant_intent(&mut runtime);
+    {
+        let record = runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .dormant
+            .get_mut(&id)
+            .unwrap();
+        record.closed = true;
+        record.phase = DormantPhase::Sleeping;
+    }
+    runtime.refresh_dormant_rows();
+    assert!(runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
+
+    let live = runtime.live.take().unwrap();
+    runtime.refresh_dormant_rows();
+    let row = &runtime.snapshot.navigator.sleeping_sessions[0];
+    assert!(!row.wake_available);
+    let unavailable = "This session's reader, checkout or connection is unavailable";
+    assert_eq!(row.reason.as_deref(), Some(unavailable));
+    assert!(runtime.request_dormant_wake(&id));
+    assert_eq!(
+        runtime.snapshot.status.last_error.clone().unwrap().message,
+        unavailable
+    );
+
+    runtime.set_live(live);
+    assert!(runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
 }
 
 /// A close-pane agent the Factory does not sleep is refused before anything
@@ -1276,6 +1685,21 @@ fn a_failed_actual_state_write_never_sends_a_dormant_close() {
     );
     assert_eq!(row(&runtime)["pane_id"], SLEEPER);
     assert!(runtime.snapshot.navigator.sleeping_sessions.is_empty());
+}
+
+/// The record of an agent the sleep closes is saved before its close, and
+/// the save stands on the state folder's directory barrier, which every
+/// system gives; Windows refused this save while the barrier was missing
+/// there, so the sleep could never close an agent.
+#[test]
+fn a_dormant_intent_is_saved_through_the_state_folders_barrier() {
+    let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
+    runtime.ingest_session(Ok(session(Some(4))));
+    let id = dormant_intent(&mut runtime);
+
+    runtime.write_ui_state().unwrap();
+
+    assert!(!persisted_dormant(&runtime.state_path, &id)["phase"].is_null());
 }
 
 #[test]
@@ -1595,12 +2019,52 @@ fn input_to_a_sleeping_pane_goes_nowhere() {
         pane: SLEEPER.into(),
         asleep: true,
     };
-    assert!(
-        !terminals.take().contains(&asleep),
-        "the agent takes keys until its end lands (B8)"
-    );
-    assert!(runtime.ingest_agent_sleep_end(SLEEPER, Ok(4)));
+    // The end has begun, so no key can land behind it: a key typed now would
+    // run in the shell the agent leaves, however the pane is still drawn.
     assert!(terminals.take().contains(&asleep));
+    assert!(runtime.ingest_agent_sleep_end(SLEEPER, Ok(4)));
+    assert!(!terminals.take().contains(&TerminalControl::Asleep {
+        pane: SLEEPER.into(),
+        asleep: false,
+    }));
+}
+
+/// Every writer that asks the gate (a phone's reply, an agent's find keys)
+/// is refused from the moment the end begins, through asleep, until the
+/// agent is back; an end the agent refuses opens the pane again.
+#[test]
+fn the_input_gate_follows_the_sleep_records_from_the_first_moment_of_the_end() {
+    let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
+    let gate = runtime.input_gate();
+    runtime.ingest_session(Ok(session(Some(4))));
+    assert!(gate.admit(SLEEPER).is_ok(), "an awake agent takes input");
+
+    runtime.dispatch_json(&event(
+        "agent_sleep",
+        serde_json::json!({"pane_id": SLEEPER}),
+    ));
+    assert!(
+        row(&runtime).get("sleep").is_none(),
+        "the row still draws the agent awake while the end runs"
+    );
+    assert!(gate.admit(SLEEPER).is_err(), "ending refuses input");
+    assert!(gate.admit("w1:other").is_ok(), "another pane is not closed");
+    assert!(runtime.ingest_agent_sleep_end(SLEEPER, Ok(4)));
+    assert!(gate.admit(SLEEPER).is_err(), "asleep refuses input");
+
+    let (mut refused, _) = live_tab_order_runtime(CHECKOUT);
+    let gate = refused.input_gate();
+    refused.ingest_session(Ok(session(Some(4))));
+    refused.dispatch_json(&event(
+        "agent_sleep",
+        serde_json::json!({"pane_id": SLEEPER}),
+    ));
+    assert!(gate.admit(SLEEPER).is_err());
+    refused.ingest_agent_sleep_end(SLEEPER, Err("did not hand the terminal back".into()));
+    assert!(
+        gate.admit(SLEEPER).is_ok(),
+        "an agent that stayed awake takes input again"
+    );
 }
 
 /// B12, D-12: a committed visit to the tab wakes the agent; another event
@@ -1855,14 +2319,14 @@ fn a_pending_core_puts_no_agent_to_sleep_until_its_link_commits() {
 const WOKEN: &str = "w-order:t3:p";
 const CHILD_NATIVE: &str = "child-native";
 
-fn delivery_agent(id: &str, pane: &str, kind: &str, session: &str) -> serde_json::Value {
+pub(super) fn delivery_agent(id: &str, pane: &str, kind: &str, session: &str) -> serde_json::Value {
     serde_json::json!({
         "id": id, "pane_id": pane, "agent": kind, "agent_status": "idle",
         "state_change_seq": 4, "lineage_session": crate::wire::session_digest(session)
     })
 }
 
-fn delivery_panes(agents: Vec<serde_json::Value>) -> SessionSnapshotPayload {
+pub(super) fn delivery_panes(agents: Vec<serde_json::Value>) -> SessionSnapshotPayload {
     serde_json::from_value(serde_json::json!({ "agents": agents })).unwrap()
 }
 

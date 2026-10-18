@@ -47,6 +47,7 @@ async fn desktop_registration_requires_daemon_auth_and_local_origin() {
         state_dir: dir.path().into(),
         herdr_socket_path: None,
         herdr_bin_path: None,
+        login_shell: None,
         legacy_state_dir: None,
         account_state_folder: false,
         keep_alive: true,

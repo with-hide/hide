@@ -42,7 +42,7 @@ impl KitDevice {
         (device, release)
     }
 
-    fn calls(&self) -> Vec<(KitAction, String, Option<String>)> {
+    pub(super) fn calls(&self) -> Vec<(KitAction, String, Option<String>)> {
         self.calls.lock().unwrap().clone()
     }
 }
@@ -95,7 +95,7 @@ impl NodeLink for KitDevice {
     }
 }
 
-fn report(states: &[(ComponentId, ComponentState)]) -> KitReport {
+pub(super) fn report(states: &[(ComponentId, ComponentState)]) -> KitReport {
     KitReport {
         components: states
             .iter()
@@ -114,8 +114,10 @@ fn report(states: &[(ComponentId, ComponentState)]) -> KitReport {
         codex_daemon_on: None,
         codex_daemon_running: None,
         codex_daemon_unreadable: None,
+        codex_capability_unread: None,
         codex_daemon_off: None,
         herdr: None,
+        refused: None,
     }
 }
 
@@ -1307,7 +1309,13 @@ fn a_first_pass_that_did_not_run_does_not_decide_the_first_run_choice() {
     let shared = with_consent(None);
     shared.lock().unwrap().ingest_kit_report(
         crate::node::TEST_NODE,
-        &KitReport::unavailable("another Hide was still changing this account's kit"),
+        &KitReport::refused(hide_kit::KitRefusal {
+            cause: hide_kit::RefusalCause::Busy,
+            path: None,
+            variable: None,
+            stop: None,
+            detail: "another Hide was still changing this account's kit".into(),
+        }),
     );
     assert_eq!(onboarding(&shared), None);
 
@@ -2080,15 +2088,12 @@ pub(super) fn node_ready(
     }
 }
 
-/// D-19, B17: the device's pane on screen attaches again inside the link
-/// that comes back after one dropped, and its keys go nowhere meanwhile.
-#[test]
-fn a_devices_shown_pane_attaches_again_when_its_link_returns() {
-    let probe = device_runtime(None, None);
-    let shared = device_runtime(Some(granted(&probe)), None);
-    let mut runtime = shared.lock().unwrap();
-    let terminals = record_terminals(&mut runtime);
-    let pane_id = "remote:studio:pane:w1:p1";
+const PANE: &str = "remote:studio:pane:w1:p1";
+
+/// The device's Herdr session showing one pane in front, as its session sync
+/// would publish it.
+fn session_with_pane() -> RemoteSessionSnapshot {
+    let pane_id = PANE;
     let workspace_id = "remote:studio:workspace:w1";
     let checkout_id = "remote:studio:checkout:w1";
     let tab_id = "remote:studio:tab:w1:t1";
@@ -2107,7 +2112,7 @@ fn a_devices_shown_pane_attaches_again_when_its_link_returns() {
     );
     device_workspace.remote_target_id = Some(DEVICE.to_owned());
     device_workspace.device_id = DEVICE.to_owned();
-    let session = RemoteSessionSnapshot {
+    RemoteSessionSnapshot {
         workspaces: vec![device_workspace],
         agents: Vec::new(),
         active_tab_ids: [(checkout_id.to_owned(), tab_id.to_owned())]
@@ -2122,7 +2127,19 @@ fn a_devices_shown_pane_attaches_again_when_its_link_returns() {
         issue_tokens: Default::default(),
         issue_links: Default::default(),
         herdr_version: None,
-    };
+    }
+}
+
+/// D-19, B17: the device's pane on screen attaches again inside the link
+/// that comes back after one dropped, and its keys go nowhere meanwhile.
+#[test]
+fn a_devices_shown_pane_attaches_again_when_its_link_returns() {
+    let probe = device_runtime(None, None);
+    let shared = device_runtime(Some(granted(&probe)), None);
+    let mut runtime = shared.lock().unwrap();
+    let terminals = record_terminals(&mut runtime);
+    let pane_id = PANE;
+    let session = session_with_pane();
     runtime.snapshot.navigator.focused_device_id = Some(DEVICE.to_owned());
     let attaches = |terminals: &RecordedTerminals| {
         terminals
@@ -2323,4 +2340,297 @@ fn a_device_reads_its_servers_own_version_and_device_advice_for_an_older_protoco
     let message = status.message.expect("the device row says why");
     assert!(message.contains("restart Herdr on the device"), "{message}");
     assert!(!message.contains("reopen Hide"), "{message}");
+}
+
+fn status_of(runtime: &Runtime) -> crate::model::RemoteStatusSnapshot {
+    runtime
+        .snapshot
+        .status
+        .remote
+        .iter()
+        .find(|status| status.target_id == DEVICE)
+        .cloned()
+        .expect("the device's remote status")
+}
+
+fn helper_failed() -> Result<hosts::HostReady, hide_node_link::device::EstablishError> {
+    Err(hide_node_link::device::EstablishError::Helper(
+        "the device did not answer".to_owned(),
+    ))
+}
+
+/// A device's Herdr session that answers again means the machine can be
+/// reached, so the helper link's retry is due now instead of at the end of a
+/// wait grown while the machine was away; the wait after it keeps doubling,
+/// and a session that flaps while the helper keeps failing moves the retry
+/// forward once per outage, never once per flap.
+#[test]
+fn a_device_session_that_answers_again_makes_the_helper_retry_due_once_per_outage() {
+    let probe = device_runtime(None, None);
+    let shared = device_runtime(Some(granted(&probe)), None);
+    let mut runtime = shared.lock().unwrap();
+    runtime.start_device_host(DEVICE);
+    for _ in 0..4 {
+        let generation = runtime.device_host_generation(DEVICE);
+        runtime.ingest_host_established(DEVICE, generation, helper_failed());
+        let at = runtime.device_host_retries[DEVICE].at_unix_ms.unwrap();
+        runtime.tick_device_hosts(at);
+    }
+    let generation = runtime.device_host_generation(DEVICE);
+    runtime.ingest_host_established(DEVICE, generation, helper_failed());
+    assert!(
+        runtime.device_host_retries[DEVICE].at_unix_ms.unwrap()
+            > super::unix_milliseconds() + 10_000,
+        "the wait has grown past ten seconds"
+    );
+
+    let flap = |runtime: &mut Runtime| {
+        runtime.ingest_remote_session(
+            DEVICE,
+            Err(SessionFetchError::Unreachable("no answer".to_owned())),
+        );
+        runtime.ingest_remote_session(DEVICE, Ok(live_session("0.9.3")));
+    };
+    flap(&mut runtime);
+    let attempt = runtime.device_host_generation(DEVICE);
+    assert_ne!(
+        attempt, generation,
+        "the machine answers again, so the helper link is tried at once"
+    );
+
+    // That attempt fails too; the wait after it is the schedule's next, not
+    // the first one again.
+    let before = super::unix_milliseconds();
+    runtime.ingest_host_established(DEVICE, attempt, helper_failed());
+    let at = runtime.device_host_retries[DEVICE].at_unix_ms.unwrap();
+    assert_eq!(
+        (at - before) / 1_000,
+        60,
+        "the doubling goes on to its cap, not back to two seconds"
+    );
+
+    for _ in 0..5 {
+        flap(&mut runtime);
+    }
+    assert_eq!(
+        runtime.device_host_generation(DEVICE),
+        attempt,
+        "five more flaps start no attempt"
+    );
+    assert_eq!(runtime.device_host_retries[DEVICE].at_unix_ms, Some(at));
+}
+
+/// A pane of a device whose helper link will be tried again by itself reads
+/// reconnecting, not unavailable; one that waits for the operator still reads
+/// unavailable, and so does one whose link is up without terminals.
+#[test]
+fn a_device_pane_waiting_for_its_helper_reads_reconnecting_only_while_it_will_retry() {
+    let probe = device_runtime(None, None);
+    let shared = device_runtime(Some(granted(&probe)), None);
+    let mut runtime = shared.lock().unwrap();
+    let _terminals = record_terminals(&mut runtime);
+    runtime.start_device_host(DEVICE);
+    let first = runtime.device_host_generation(DEVICE);
+    runtime.ingest_host_established(
+        DEVICE,
+        first,
+        Ok(hosts::HostReady::Dialed(established_with_terminals())),
+    );
+    runtime.ingest_remote_session(DEVICE, Ok(session_with_pane()));
+    runtime.snapshot.navigator.focused_device_id = Some(DEVICE.to_owned());
+    report_terminal(&mut runtime, PANE, terminal_state("controlling", 1));
+    let band = |runtime: &Runtime| {
+        runtime.snapshot.terminal.headers[PANE]
+            .band
+            .as_ref()
+            .map(|band| band.kind.clone())
+    };
+    assert_eq!(band(&runtime), None);
+
+    runtime.ingest_host_closed(DEVICE, first, "the link dropped".to_owned());
+    assert_eq!(band(&runtime).as_deref(), Some("reconnecting"));
+
+    // The retry finds no SSH connection to dial and schedules no other: the
+    // pane waits for something that is not coming, so it is not reconnecting.
+    let at = runtime.device_host_retries[DEVICE].at_unix_ms.unwrap();
+    runtime.tick_device_hosts(at);
+    assert_eq!(band(&runtime).as_deref(), Some("unavailable"));
+
+    runtime.start_device_host(DEVICE);
+    let second = runtime.device_host_generation(DEVICE);
+    runtime.ingest_host_established(
+        DEVICE,
+        second,
+        Err(hide_node_link::device::EstablishError::Unsupported(
+            "this build cannot serve the device".to_owned(),
+        )),
+    );
+    assert_eq!(
+        band(&runtime).as_deref(),
+        Some("unavailable"),
+        "a device waiting for the operator is not reconnecting"
+    );
+}
+
+/// A Reconnect pressed while the device still does not answer is a new
+/// attempt, not a new device: the last state it reported stays on screen, the
+/// age says when it first stopped answering, and a queued Reinstall waits for
+/// the link (UI_BEHAVIOR, the Overview's unreachable body).
+#[test]
+fn reconnecting_a_device_that_is_still_down_keeps_its_last_state_age_and_queued_work() {
+    let probe = device_runtime(None, None);
+    let shared = device_runtime(Some(granted(&probe)), None);
+    let mut runtime = shared.lock().unwrap();
+    runtime.ingest_remote_session(DEVICE, Ok(session_with_pane()));
+    runtime.ingest_remote_session(
+        DEVICE,
+        Err(SessionFetchError::Unreachable("no answer".to_owned())),
+    );
+    let since = 1_000;
+    runtime
+        .snapshot
+        .status
+        .remote
+        .iter_mut()
+        .find(|status| status.target_id == DEVICE)
+        .unwrap()
+        .unreachable_since_unix_ms = Some(since);
+    runtime.queue_kit_reinstall(DEVICE, vec![ComponentId::Cli]);
+    assert!(runtime.device_kit_pending.contains_key(DEVICE));
+
+    assert!(runtime.retry_remote_device(DEVICE));
+
+    let status = status_of(&runtime);
+    assert!(status.session.is_some(), "the last state stays on screen");
+    assert_ne!(status.state, "connected");
+    assert_eq!(status.unreachable_since_unix_ms, Some(since));
+    assert!(
+        runtime.device_kit_pending.contains_key(DEVICE),
+        "a queued Reinstall is not dropped"
+    );
+}
+
+/// A helper link that ended while its connection was still being set up has
+/// no one to hear it end once the connection is stored, so it is read as a
+/// lost link then: tried again on its own, never stored ready and dead.
+#[test]
+fn a_helper_link_that_closed_during_establish_is_retried_not_stored_ready() {
+    let probe = device_runtime(None, None);
+    let shared = device_runtime(Some(granted(&probe)), None);
+    let mut runtime = shared.lock().unwrap();
+    runtime.start_device_host(DEVICE);
+    let generation = runtime.device_host_generation(DEVICE);
+    let host = KitDevice::answering(Err("not asked".to_owned()));
+    host.close("the link dropped during hello");
+    // The close was heard while the attempt still ran, which ignores it.
+    assert!(!runtime.ingest_host_closed(DEVICE, generation, "the link dropped".to_owned()));
+    runtime.ingest_host_established(
+        DEVICE,
+        generation,
+        Ok(hosts::HostReady::Dialed(established(host, None))),
+    );
+    assert!(
+        matches!(
+            runtime.device_hosts[DEVICE].phase,
+            hosts::HostPhase::Unavailable(_)
+        ),
+        "a dead link is not stored ready"
+    );
+    assert!(
+        runtime.device_host_retries[DEVICE].at_unix_ms.is_some(),
+        "its retry is scheduled"
+    );
+}
+
+/// The session answering again while a helper attempt still runs leaves that
+/// attempt alone; should it fail, the retry is due at once, the once, and the
+/// wait after that is the schedule's next.
+#[test]
+fn a_session_back_while_the_helper_link_starts_makes_its_failure_retry_at_once_once() {
+    let probe = device_runtime(None, None);
+    let shared = device_runtime(Some(granted(&probe)), None);
+    let mut runtime = shared.lock().unwrap();
+    runtime.start_device_host(DEVICE);
+    for _ in 0..4 {
+        let generation = runtime.device_host_generation(DEVICE);
+        runtime.ingest_host_established(DEVICE, generation, helper_failed());
+        let at = runtime.device_host_retries[DEVICE].at_unix_ms.unwrap();
+        runtime.tick_device_hosts(at);
+    }
+    runtime.device_hosts.get_mut(DEVICE).unwrap().phase = hosts::HostPhase::Connecting;
+    let generation = runtime.device_host_generation(DEVICE);
+
+    runtime.ingest_remote_session(DEVICE, Ok(live_session("0.9.3")));
+    assert_eq!(
+        runtime.device_host_generation(DEVICE),
+        generation,
+        "the attempt that is running is left alone"
+    );
+
+    let before = super::unix_milliseconds();
+    runtime.ingest_host_established(DEVICE, generation, helper_failed());
+    let at = runtime.device_host_retries[DEVICE].at_unix_ms.unwrap();
+    assert!(at - before < 1_000, "its failure is retried at once");
+    runtime.tick_device_hosts(at);
+
+    // The next attempt fails after another flap: no second shortcut.
+    runtime.device_hosts.get_mut(DEVICE).unwrap().phase = hosts::HostPhase::Connecting;
+    let generation = runtime.device_host_generation(DEVICE);
+    runtime.ingest_remote_session(
+        DEVICE,
+        Err(SessionFetchError::Unreachable("no answer".to_owned())),
+    );
+    runtime.ingest_remote_session(DEVICE, Ok(live_session("0.9.3")));
+    let before = super::unix_milliseconds();
+    runtime.ingest_host_established(DEVICE, generation, helper_failed());
+    let at = runtime.device_host_retries[DEVICE].at_unix_ms.unwrap();
+    assert_eq!((at - before) / 1_000, 60);
+}
+
+/// Revoking the helper ends the device's terminals with its link: a pane the
+/// operator could type into reads unavailable at once, naming consent as the
+/// reason, instead of looking live while every key is dropped.
+#[test]
+fn revoking_the_helper_ends_the_devices_terminals_and_its_panes_say_why() {
+    let probe = device_runtime(None, None);
+    let shared = device_runtime(Some(granted(&probe)), None);
+    let mut runtime = shared.lock().unwrap();
+    let terminals = record_terminals(&mut runtime);
+    runtime.start_device_host(DEVICE);
+    let generation = runtime.device_host_generation(DEVICE);
+    runtime.ingest_host_established(
+        DEVICE,
+        generation,
+        Ok(hosts::HostReady::Dialed(established_with_terminals())),
+    );
+    runtime.ingest_remote_session(DEVICE, Ok(session_with_pane()));
+    report_terminal(&mut runtime, PANE, terminal_state("controlling", 1));
+    let band = |runtime: &Runtime| {
+        runtime.snapshot.terminal.headers[PANE]
+            .band
+            .as_ref()
+            .map(|band| band.kind.clone())
+    };
+    assert_eq!(band(&runtime), None);
+
+    runtime.set_host_consent(DEVICE, false);
+
+    assert_eq!(terminals.devices(), ["install:studio", "remove:studio"]);
+    let pane = runtime
+        .snapshot()
+        .terminal
+        .panes
+        .iter()
+        .find(|row| row.pane_id == PANE)
+        .expect("the pane stays projected")
+        .clone();
+    assert_eq!(pane.transport_state, "unavailable");
+    assert_eq!(band(&runtime).as_deref(), Some("helper_not_allowed"));
+
+    runtime.set_host_consent(DEVICE, true);
+    assert_ne!(
+        band(&runtime).as_deref(),
+        Some("helper_not_allowed"),
+        "allowing it again ends the consent wait"
+    );
 }

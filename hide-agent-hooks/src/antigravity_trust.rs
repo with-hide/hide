@@ -1,209 +1,17 @@
-//! agy's folder trust for the worktrees Hide makes (PRD antigravity-first-class
-//! D-08). agy asks whether to trust a folder the first time it starts there
-//! interactively, and a started prompt loses its workspace while it asks, so
-//! Hide records the trust before it starts agy in a worktree it made.
-//!
-//! The trust list is `trustedWorkspaces` in `~/.gemini/antigravity-cli/
-//! settings.json`, one exact path per entry. Hide adds only the path it is
-//! about to start agy in, and remembers in its own record which entries it
-//! added: removing a worktree, or switching agy off, takes out only those,
-//! and an entry the operator added, before Hide or after it, stays.
-//!
-//! Every change holds one account lock and rewrites settings.json through the
-//! same lossless read and compare-before-replace as the hook files, so the
-//! other keys and the operator's formatting are kept byte for byte.
+//! Hide AI's tool-free folder for agy (PRD antigravity-first-class D-09):
+//! agy loads a folder's own hook file only for a folder it trusts, so the
+//! folder Hide AI runs agy in is made with its refuse-every-tool hook file and
+//! recorded in agy's trust list through [`crate::folder_trust`], beside the
+//! worktrees Hide makes. Switching agy off takes both out.
 
 use std::io;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::path::Path;
 
-use serde_json::Value;
+use crate::folder_trust::{self, Agent, Tools};
+use crate::install::InstallFailure;
 
-use crate::install::{HookDocument, InstallFailure, read_document, write_document};
-
-const KEY: &str = "trustedWorkspaces";
-const LOCK_WAIT: Duration = Duration::from_secs(2);
-/// The most entries Hide's record keeps; a worktree is removed long before.
-const RECORD_LIMIT: usize = 4096;
-
-/// agy's settings file under `home`.
-pub fn settings_path(home: &Path) -> PathBuf {
-    home.join(".gemini")
-        .join("antigravity-cli")
-        .join("settings.json")
-}
-
-fn record_path(home: &Path) -> PathBuf {
-    home.join(".hide")
-        .join("agent-hooks")
-        .join("antigravity-trust.json")
-}
-
-fn lock_path(home: &Path) -> PathBuf {
-    home.join(".hide")
-        .join("agent-hooks")
-        .join("antigravity-trust.lock")
-}
-
-fn hold(home: &Path) -> Result<hide_platform::fs::lock::Lock, InstallFailure> {
-    let failure = |detail: String| InstallFailure::NotWritable {
-        path: lock_path(home).display().to_string(),
-        detail,
-    };
-    let path = lock_path(home);
-    if let Some(parent) = path.parent() {
-        hide_platform::fs::private::create_dir_all(parent)
-            .map_err(|error| failure(error.to_string()))?;
-    }
-    let file = hide_platform::fs::private::open_or_create_file(&path)
-        .map_err(|error| failure(error.to_string()))?;
-    match hide_platform::fs::lock::lock_file(
-        file,
-        hide_platform::fs::lock::Mode::Exclusive,
-        LOCK_WAIT,
-        &|| false,
-    )
-    .map_err(|error| failure(error.to_string()))?
-    {
-        hide_platform::fs::lock::Waited::Locked(held) => Ok(held),
-        _ => Err(failure("another trust change held the lock".to_owned())),
-    }
-}
-
-fn read_record(home: &Path) -> Result<Vec<String>, InstallFailure> {
-    let path = record_path(home);
-    let unreadable = |detail: String| InstallFailure::Unreadable {
-        path: path.display().to_string(),
-        detail,
-    };
-    match std::fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| unreadable(error.to_string())),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(unreadable(error.to_string())),
-    }
-}
-
-fn write_record(home: &Path, record: &[String]) -> Result<(), InstallFailure> {
-    let path = record_path(home);
-    let failure = |detail: String| InstallFailure::NotWritable {
-        path: path.display().to_string(),
-        detail,
-    };
-    if record.len() > RECORD_LIMIT {
-        return Err(failure(format!(
-            "Hide's record of agy trust holds more than {RECORD_LIMIT} folders"
-        )));
-    }
-    let bytes = serde_json::to_vec(record).map_err(|error| failure(error.to_string()))?;
-    hide_platform::fs::atomic::write_file(&path, &bytes, hide_platform::fs::Access::Private)
-        .map(drop)
-        .map_err(|error| failure(error.to_string()))
-}
-
-/// The spelling agy compares a folder by: the absolute path as agy's own
-/// trust dialog writes it.
-fn spelling(path: &Path) -> Result<String, InstallFailure> {
-    path.to_str()
-        .filter(|_| path.is_absolute())
-        .map(str::to_owned)
-        .ok_or_else(|| InstallFailure::UnexpectedShape {
-            path: path.display().to_string(),
-            detail: "an agy trust folder must be an absolute UTF-8 path".to_owned(),
-        })
-}
-
-/// The trust list of `document`, made when the file has none.
-fn entries<'a>(
-    document: &'a mut HookDocument,
-    settings: &Path,
-) -> Result<&'a mut Vec<Value>, InstallFailure> {
-    let shape = |detail: &str| InstallFailure::UnexpectedShape {
-        path: settings.display().to_string(),
-        detail: detail.to_owned(),
-    };
-    let object = document
-        .as_object_mut()
-        .ok_or_else(|| shape("agy's settings are not a JSON object"))?;
-    object
-        .entry(KEY)
-        .or_insert_with(|| Value::Array(Vec::new()))
-        .as_array_mut()
-        .ok_or_else(|| shape("trustedWorkspaces is not a list"))
-}
-
-/// Records that agy may trust `folder` without asking. A folder agy already
-/// trusts is left as it is and stays the operator's.
-pub fn trust(home: &Path, folder: &Path) -> Result<(), InstallFailure> {
-    let folder = spelling(folder)?;
-    let settings = settings_path(home);
-    let _lock = hold(home)?;
-    let mut document = read_document(&settings)?
-        .unwrap_or_else(|| HookDocument::new(Value::Object(Default::default())));
-    let list = entries(&mut document, &settings)?;
-    if list
-        .iter()
-        .any(|entry| entry.as_str() == Some(folder.as_str()))
-    {
-        return Ok(());
-    }
-    // The record is written first, so a crash between the two writes leaves
-    // a recorded folder agy does not trust, which a removal skips. A settings
-    // write that fails takes the folder back out of the record: left there,
-    // it would make a trust the operator gives agy later look like Hide's.
-    let mut record = read_record(home)?;
-    let added = !record.contains(&folder);
-    if added {
-        record.push(folder.clone());
-        write_record(home, &record)?;
-    }
-    list.push(Value::String(folder.clone()));
-    let written = write_document(&settings, &document);
-    if written.is_err() && added {
-        record.retain(|entry| entry != &folder);
-        // The settings failure is the one reported; a record left behind is
-        // the crash case above.
-        let _ = write_record(home, &record);
-    }
-    written
-}
-
-/// [`trust`] for a worktree Hide made for an agy start, refused unless the
-/// folder is one: a directory with a `.git` entry, named without `.` or
-/// `..`, and neither the filesystem root, the home folder nor a folder above
-/// it. Trust makes agy load the folder's own hooks without asking, so a path
-/// that is not such a worktree is never trusted, whoever asks.
-pub fn trust_worktree(home: &Path, folder: &Path) -> Result<(), InstallFailure> {
-    let refuse = |detail: &str| InstallFailure::UnexpectedShape {
-        path: folder.display().to_string(),
-        detail: detail.to_owned(),
-    };
-    // Read from the spelling itself: `components()` drops a `.` that is not
-    // the first name, and agy matches the entry as it is written.
-    if folder
-        .to_string_lossy()
-        .split(['/', std::path::MAIN_SEPARATOR])
-        .any(|name| name == "." || name == "..")
-    {
-        return Err(refuse(
-            "an agy worktree trust names its folder without . or ..",
-        ));
-    }
-    let canonical = hide_platform::fs::identity::canonical(folder)
-        .map_err(|_| refuse("an agy worktree trust names a folder that exists"))?;
-    if !canonical.is_dir() || std::fs::symlink_metadata(canonical.join(".git")).is_err() {
-        return Err(refuse("an agy worktree trust names a Git worktree"));
-    }
-    let account =
-        hide_platform::fs::identity::canonical(home).unwrap_or_else(|_| home.to_path_buf());
-    if canonical.parent().is_none() || account.starts_with(&canonical) {
-        return Err(refuse(
-            "an agy worktree trust never names the root, the home folder or a folder above it",
-        ));
-    }
-    // The entry is the folder's resolved path, so a link along the way cannot
-    // be pointed elsewhere after it is trusted, and `//` or a trailing
-    // separator never reaches it; [`forget`] takes it out by either spelling.
-    trust(home, &canonical)
+fn settings_path(home: &Path) -> std::path::PathBuf {
+    Agent::Antigravity.settings_path(home)
 }
 
 /// Makes Hide AI's tool-free folder for agy (`hide_ai::read_only_workspace`)
@@ -235,7 +43,7 @@ pub fn prepare_read_only(home: &Path) -> Result<(), InstallFailure> {
     }
     let canonical = hide_platform::fs::identity::canonical(&folder)
         .map_err(|error| failure(error.to_string()))?;
-    trust(home, &canonical)
+    folder_trust::trust(Agent::Antigravity, home, &canonical, Tools::none())
 }
 
 /// Whether Hide AI's agy folder is as [`prepare_read_only`] leaves it.
@@ -249,8 +57,8 @@ pub fn read_only_due(home: &Path) -> bool {
     settings_path(home).parent().is_some_and(Path::is_dir) && !read_only_ready(home)
 }
 
-/// Takes Hide AI's agy folder away; its trust goes with [`forget_all`].
-/// Answers whether there was one.
+/// Takes Hide AI's agy folder away; its trust goes with
+/// [`folder_trust::forget_all`]. Answers whether there was one.
 pub fn remove_read_only(home: &Path) -> Result<bool, InstallFailure> {
     let folder = hide_ai::read_only_workspace(home);
     match std::fs::remove_dir_all(&folder) {
@@ -263,133 +71,21 @@ pub fn remove_read_only(home: &Path) -> Result<bool, InstallFailure> {
     }
 }
 
-/// Takes out the trust Hide added for `folder`, as when Hide removes the
-/// worktree; a folder Hide did not add is left alone. Answers how many
-/// entries left agy's settings.
-pub fn forget(home: &Path, folder: &Path) -> Result<usize, InstallFailure> {
-    let resolved = hide_platform::fs::identity::canonical(folder)
-        .ok()
-        .and_then(|path| spelling(&path).ok());
-    let folder = spelling(folder)?;
-    forget_where(home, |entry| {
-        entry == folder || resolved.as_deref() == Some(entry)
-    })
-}
-
-/// Takes out every trust Hide added, as when agy is switched off.
-pub fn forget_all(home: &Path) -> Result<usize, InstallFailure> {
-    forget_where(home, |_| true)
-}
-
-fn forget_where(home: &Path, chosen: impl Fn(&str) -> bool) -> Result<usize, InstallFailure> {
-    // A machine where Hide never trusted a folder has no record and needs
-    // no lock, so a removal there writes nothing of agy's or Hide's.
-    if !record_path(home)
-        .try_exists()
-        .map_err(|error| InstallFailure::Unreadable {
-            path: record_path(home).display().to_string(),
-            detail: error.to_string(),
-        })?
-    {
-        return Ok(0);
-    }
-    let settings = settings_path(home);
-    let _lock = hold(home)?;
-    let record = read_record(home)?;
-    let (gone, kept): (Vec<_>, Vec<_>) = record.into_iter().partition(|entry| chosen(entry));
-    if gone.is_empty() {
-        return Ok(0);
-    }
-    let mut removed = 0;
-    if let Some(mut document) = read_document(&settings)? {
-        let list = entries(&mut document, &settings)?;
-        let before = list.len();
-        list.retain(|entry| {
-            entry
-                .as_str()
-                .is_none_or(|entry| !gone.iter().any(|g| g == entry))
-        });
-        removed = before - list.len();
-        if removed > 0 {
-            write_document(&settings, &document)?;
-        }
-    }
-    write_record(home, &kept)?;
-    Ok(removed)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// An absolute folder on this system: `/work/<name>`, or `C:\work\<name>`.
-    fn folder(name: &str) -> PathBuf {
-        if cfg!(windows) {
-            PathBuf::from(format!(r"C:\work\{name}"))
-        } else {
-            PathBuf::from(format!("/work/{name}"))
-        }
-    }
-
-    fn home() -> tempfile::TempDir {
-        let home = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(home.path().join(".gemini/antigravity-cli")).unwrap();
-        home
-    }
-
-    #[test]
-    fn hide_takes_out_only_the_trust_it_added_and_keeps_the_rest_byte_for_byte() {
-        let home = home();
-        let settings = settings_path(home.path());
-        let (mine, tree) = (folder("me"), folder("tree-1"));
-        let original = format!(
-            "{{\n  \"theme\": \"dark\",\n  \"trustedWorkspaces\": [{}]\n}}\n",
-            serde_json::to_string(mine.to_str().unwrap()).unwrap()
-        );
-        std::fs::write(&settings, &original).unwrap();
-        trust(home.path(), &tree).unwrap();
-        trust(home.path(), &tree).unwrap();
-        trust(home.path(), &mine).unwrap();
-        let written: Value = serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
-        assert_eq!(
-            written[KEY],
-            serde_json::json!([mine.to_str().unwrap(), tree.to_str().unwrap()])
-        );
-        // The operator's own folder is never Hide's to take out.
-        forget(home.path(), &mine).unwrap();
-        forget(home.path(), &tree).unwrap();
-        assert_eq!(std::fs::read_to_string(&settings).unwrap(), original);
-    }
-
-    #[test]
-    fn switching_agy_off_takes_out_every_folder_hide_added() {
-        let home = home();
-        let settings = settings_path(home.path());
-        trust(home.path(), &folder("a")).unwrap();
-        trust(home.path(), &folder("b")).unwrap();
-        assert_eq!(forget_all(home.path()).unwrap(), 2);
-        let written: Value = serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
-        assert_eq!(written[KEY], serde_json::json!([]));
-        assert!(read_record(home.path()).unwrap().is_empty());
-    }
-
-    #[test]
-    fn removing_where_hide_never_trusted_a_folder_writes_nothing() {
-        let home = home();
-        assert_eq!(forget(home.path(), &folder("a")).unwrap(), 0);
-        assert_eq!(forget_all(home.path()).unwrap(), 0);
-        assert!(!home.path().join(".hide").exists());
-        assert!(!settings_path(home.path()).exists());
-    }
-
     #[test]
     fn hide_ai_s_folder_is_made_trusted_and_taken_away_with_agy() {
-        let home = home();
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".gemini/antigravity-cli")).unwrap();
         prepare_read_only(home.path()).unwrap();
         prepare_read_only(home.path()).unwrap();
         assert!(read_only_ready(home.path()));
-        assert_eq!(read_record(home.path()).unwrap().len(), 1);
-        assert_eq!(forget_all(home.path()).unwrap(), 1);
+        assert_eq!(
+            folder_trust::forget_all(Agent::Antigravity, home.path(), Tools::none()).unwrap(),
+            1
+        );
         assert!(remove_read_only(home.path()).unwrap());
         assert!(!read_only_ready(home.path()));
         assert!(!remove_read_only(home.path()).unwrap());
@@ -397,93 +93,5 @@ mod tests {
         let fresh = tempfile::tempdir().unwrap();
         prepare_read_only(fresh.path()).unwrap();
         assert!(!fresh.path().join(".hide").exists());
-    }
-
-    #[test]
-    fn settings_hide_cannot_read_stay_untouched_and_the_trust_fails() {
-        let home = home();
-        let settings = settings_path(home.path());
-        std::fs::write(&settings, "{ not json").unwrap();
-        assert!(matches!(
-            trust(home.path(), &folder("a")),
-            Err(InstallFailure::Unparsable { .. })
-        ));
-        assert_eq!(std::fs::read_to_string(&settings).unwrap(), "{ not json");
-        assert!(trust(home.path(), Path::new("relative")).is_err());
-    }
-
-    #[test]
-    fn only_a_git_worktree_below_home_is_trusted_as_a_worktree() {
-        let home = home();
-        let tree = home.path().join("repo-tree");
-        std::fs::create_dir_all(tree.join(".git")).unwrap();
-        let plain = home.path().join("downloads");
-        std::fs::create_dir_all(&plain).unwrap();
-
-        for refused in [
-            plain.clone(),
-            home.path().to_path_buf(),
-            home.path().parent().unwrap().to_path_buf(),
-            tree.join("..").join("repo-tree"),
-            home.path().join(".").join("repo-tree"),
-            tree.join("."),
-            home.path().join("missing"),
-        ] {
-            assert!(
-                trust_worktree(home.path(), &refused).is_err(),
-                "{}",
-                refused.display()
-            );
-        }
-        assert!(!settings_path(home.path()).exists());
-
-        trust_worktree(home.path(), &tree).unwrap();
-        let resolved = hide_platform::fs::identity::canonical(&tree).unwrap();
-        assert_eq!(
-            read_record(home.path()).unwrap(),
-            [resolved.to_str().unwrap()],
-            "the entry is the folder's resolved path"
-        );
-        assert_eq!(
-            forget(home.path(), &tree).unwrap(),
-            1,
-            "undone by its own spelling"
-        );
-
-        // Named through a link, the entry is still the worktree itself, so
-        // pointing the link elsewhere afterwards trusts nothing new.
-        #[cfg(unix)]
-        {
-            let link = home.path().join("tree-link");
-            std::os::unix::fs::symlink(&tree, &link).unwrap();
-            trust_worktree(home.path(), &link).unwrap();
-            assert_eq!(
-                read_record(home.path()).unwrap(),
-                [resolved.to_str().unwrap()]
-            );
-            assert_eq!(forget(home.path(), &link).unwrap(), 1);
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_trust_whose_settings_write_fails_leaves_no_record_of_it() {
-        use std::os::unix::fs::PermissionsExt;
-        let home = home();
-        let settings = settings_path(home.path());
-        std::fs::write(&settings, "{}").unwrap();
-        let folder_of_settings = settings.parent().unwrap();
-        std::fs::set_permissions(folder_of_settings, std::fs::Permissions::from_mode(0o555))
-            .unwrap();
-
-        let trusted = trust(home.path(), &folder("tree-1"));
-
-        std::fs::set_permissions(folder_of_settings, std::fs::Permissions::from_mode(0o755))
-            .unwrap();
-        assert!(trusted.is_err());
-        assert_eq!(std::fs::read_to_string(&settings).unwrap(), "{}");
-        assert!(read_record(home.path()).unwrap().is_empty());
-        // So a trust the operator gives agy later stays theirs.
-        assert_eq!(forget(home.path(), &folder("tree-1")).unwrap(), 0);
     }
 }

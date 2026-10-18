@@ -120,7 +120,7 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     // B18: Resolve from the ⋯ menu is saved, and the row stays under 쉬는 중.
     await row(stopped).hover();
     await tasks.locator(`[data-task-more="${stopped}"]`).click();
-    await page.locator('[data-task-menu-item="resolve"]').click();
+    await page.locator(`[data-task-menu="${stopped}"] [data-menu-item="resolve"]`).click();
     await expect.poll(resolved(daemon, stopped)).toBe(true);
     await expect(row(stopped)).toHaveAttribute("data-task-state", "resting");
     // B3: a restart keeps the 태스크 list, and the resolution keeps the agent out of the 프로젝트 tree.

@@ -1,9 +1,9 @@
 import { allAgents } from "../test/legacyNavigation";
 import { agentSections, liveDescendantCounts } from "../test/legacyAgentScope";
 import { emptyScope, legacyRest } from "../test/legacyAgentScope";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createInterfaceI18n } from "./i18n/instance";
-import { agentGroupTitle, allProjectsCount, mainSections as drawMainSections, openingProgress, overviewProject, startupScreen } from "./navigation";
+import { agentGroupTitle, agentPlaces, allAgents as listAgents, allProjectsCount, boardProjects, mainSections as drawMainSections, openingProgress, overviewProject, startupScreen } from "./navigation";
 import type { SnapshotRest } from "./snapshot";
 
 const project = (id: string, device: string, pinned = false) => ({ agent_scope: emptyScope(),
@@ -140,6 +140,48 @@ describe("every current agent", () => {
   });
 });
 
+describe("a window on a node whose core runs on another machine", () => {
+  // The MacBook's window after the core moved to the mini: the core's row is the mini's, the MacBook dials in.
+  const rest = {
+    navigator: {
+      devices: [
+        { id: "mini-node", kind: "local", label: "Mac mini", machine_name: "Mac-mini.local" },
+        { id: "mbp", kind: "remote", label: "MacBook-Pro.local", dials_in: true },
+      ],
+      workspaces: [project("core-app", "mini-node")],
+    },
+    status: {
+      remote: [{
+        target_id: "mbp",
+        state: "connected",
+        session: {
+          agents: [{ pane_id: "remote:mbp:pane:1", group: "working" }],
+          workspaces: [{
+            ...project("remote:mbp:site", "mbp"),
+            label: "site",
+            checkouts: [{ id: "site-main", label: "main", branch: "main", tabs: [] }],
+            agent_scope: { ...emptyScope(), places_live: true, places: { "remote:mbp:pane:1": { kind: "checkout", checkout_id: "site-main" } } },
+          }],
+        },
+      }],
+    },
+  } as unknown as SnapshotRest;
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("places the window's own agents, and names the core's machine on its projects and nothing on the window's own", () => {
+    vi.stubGlobal("window", { location: { hash: "#token=t&node=mbp" } });
+    vi.stubGlobal("navigator", { platform: "MacIntel" });
+    const scope = { listed: [{ device_id: "mbp", pane_id: "remote:mbp:pane:1", index: 0, remote: true, device_label: null }] } as never;
+    const [own] = listAgents(rest.status?.remote, [], scope, rest.navigator?.devices);
+    expect(agentPlaces(rest.navigator?.workspaces, rest.status?.remote, rest.navigator?.devices)(own!.device, own!.agent.pane_id)).toBe("site › main");
+    expect(boardProjects(rest, []).map((row) => [row.workspace.id, row.device])).toEqual([
+      ["core-app", "Mac mini"],
+      ["remote:mbp:site", null],
+    ]);
+  });
+});
+
 describe("the first screen", () => {
   const local = { navigator: { focused_device_id: "local", devices: [{ id: "local", kind: "local", label: "This Mac" }] } };
   const device = { navigator: { focused_device_id: "mini", devices: [{ id: "mini", kind: "remote", label: "Mac mini" }] } };
@@ -225,7 +267,7 @@ describe("an open from Main or an Overview", () => {
 
   it("waits for the requested tool on the target checkout and device", () => {
     const opening = { target: { workspaceId: "w", checkoutId: "c2", deviceId: "local", path: "/w2", tool: "memory" as const }, errorBefore: null, failure: null };
-    const arrived = { ...rest("c2"), workspace_view: { device_id: "local", path: "/w2", tool: "memory", pinned: false, tree: false, lane_width: null, tree_width: null, lane_called: 0, lane_calls: 0 } } as SnapshotRest;
+    const arrived = { ...rest("c2"), workspace_view: { device_id: "local", path: "/w2", tool: "memory", pinned: false, tree: false, lane_width: null, panel_width: null, tree_width: null, lane_called: 0, lane_calls: 0 } } as SnapshotRest;
     expect(openingProgress(rest("c2"), opening)).toBeNull();
     expect(openingProgress({ ...arrived, workspace_view: { ...arrived.workspace_view!, tool: null } }, opening)).toBeNull();
     expect(openingProgress({ ...arrived, workspace_view: { ...arrived.workspace_view!, tool: "files" } }, opening)).toBeNull();

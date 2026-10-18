@@ -149,13 +149,13 @@ fn actor_for(agent: &ProjectedAgent, device: &str, on_node: bool) -> Result<Acto
     actor.require_native_identity()?;
     Ok(actor)
 }
-struct HostIdentity<'a> {
-    machine: &'a str,
-    on_node: bool,
-    scope: &'a str,
-    native_machine: &'a str,
+pub(super) struct HostIdentity<'a> {
+    pub(super) machine: &'a str,
+    pub(super) on_node: bool,
+    pub(super) scope: &'a str,
+    pub(super) native_machine: &'a str,
 }
-fn record(
+pub(super) fn record(
     agent: &ProjectedAgent,
     host: HostIdentity<'_>,
     instance: String,
@@ -163,6 +163,13 @@ fn record(
     parent: Option<String>,
     project: Option<String>,
 ) -> Result<AgentRecord, String> {
+    let session = agent
+        .agent_session
+        .as_ref()
+        .ok_or("native_identity_unavailable")?
+        .value
+        .clone();
+    super::kept_session(&session)?;
     Ok(AgentRecord {
         id: String::new(),
         // A pane id is never a name: Herdr's fallback identifier for an
@@ -171,12 +178,7 @@ fn record(
         machine: host.machine.into(),
         host_scope: host.scope.into(),
         native_machine: host.native_machine.into(),
-        session: agent
-            .agent_session
-            .as_ref()
-            .ok_or("native_identity_unavailable")?
-            .value
-            .clone(),
+        session,
         instance,
         pane: agent.pane_id.clone(),
         parent,
@@ -241,12 +243,13 @@ pub(crate) fn run(
             parent,
             project,
         } => {
-            if ![&host_scope, &session, &instance, &name, &pane]
+            if ![&host_scope, &instance, &name, &pane]
                 .into_iter()
                 .all(|s| super::key(s))
             {
                 return Err("invalid_registration".into());
             }
+            super::kept_session(&session)?;
             let machine = registration_machine(machine, &actor.device_id)?;
             let CoordinationContext {
                 connector,
@@ -320,7 +323,11 @@ fn registration_machine(requested: Option<String>, caller: &str) -> Result<Strin
         Some(machine) => Ok(machine),
     }
 }
-fn publish_tokens(client: &Client, connector: &dyn ApiConnector, id: &str) -> Result<(), String> {
+pub(super) fn publish_tokens(
+    client: &Client,
+    connector: &dyn ApiConnector,
+    id: &str,
+) -> Result<(), String> {
     let ledger = state(client)?;
     let child = ledger
         .agents
@@ -541,6 +548,7 @@ fn spawn(
         branch,
         path,
         args,
+        launch,
         task,
     } = &command
     else {
@@ -563,6 +571,17 @@ fn spawn(
     if !crate::fork::valid_agent_name(name) {
         return Err("invalid_agent_name".into());
     }
+    // The choice goes before the native arguments, which may end with the
+    // first prompt after `--`.
+    let mut start_args =
+        crate::runtime::agent_choice::launch_arguments(kind, launch).map_err(|detail| {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "spawn.invalid_launch_choice", "intent": intent,
+                "agent_kind": kind, "detail": detail,
+            }));
+            "invalid_launch_choice"
+        })?;
+    start_args.extend(args.iter().cloned());
     // The device probe takes the kind as a program name, so only a kind Hide
     // can start reaches it.
     if machine.is_some() && hide_agent_adapter::start_kind(kind).is_none() {
@@ -939,7 +958,7 @@ fn spawn(
                 shell,
                 name,
                 kind,
-                args.clone(),
+                start_args,
                 codex_daemon,
             )?;
             reserved = serde_json::from_value(mutate(
@@ -952,7 +971,59 @@ fn spawn(
             )?)
             .map_err(|_| "spawn_unavailable")?;
         }
-        let native = wait_native_identity(connector.as_ref(), pane, Some(name), kind)?;
+        // The child's pane keeps its launch choice for the restarts Hide
+        // makes of it, under the id the core knows the pane by and the name
+        // it was started under. It is kept before the agent shows its
+        // session, which an agent that reports it only at its first turn
+        // does later, so the record binds to that session when it arrives.
+        if let Some(runtime) = client.runtime.upgrade() {
+            let pane_id = if on_node {
+                pane.to_owned()
+            } else {
+                crate::session_sync::remote_pane_id(&child_device, pane)
+            };
+            runtime
+                .lock()
+                .map_err(|_| "delivery_unavailable")?
+                .record_pane_launch(&pane_id, kind, name, &reserved.launch, None);
+        }
+        let native = match wait_native_identity(connector.as_ref(), pane, Some(name), kind) {
+            Err(reason) if reason == "native_identity_unavailable" => {
+                // The agent rests without a session (Codex and OpenCode 2
+                // report theirs at their first turn): the core binds it when
+                // Herdr shows one, and the caller hears it has not yet.
+                mutate(
+                    client,
+                    authority,
+                    actor,
+                    Mutation::AwaitIdentity {
+                        wait: super::identity_wait::IdentityWait {
+                            id: String::new(),
+                            machine: child_device.clone(),
+                            pane: pane.into(),
+                            name: name.clone(),
+                            kind: kind.clone(),
+                            owed: super::identity_wait::Owed::Spawn {
+                                spawn: reserved.id.clone(),
+                            },
+                        },
+                    },
+                )?;
+                return Err(reason);
+            }
+            native => native?,
+        };
+        let session = native
+            .agent_session
+            .as_ref()
+            .map(|session| session.value.as_str());
+        if let Err(reason) = session.map_or(Ok(()), super::kept_session) {
+            // The agent runs but can never be registered, and a retry of
+            // this intent meets the same session: the pane this spawn made is
+            // closed rather than left running with nothing tracking it.
+            close_refused_pane(connector.as_ref(), &reserved, pane, reason);
+            return Err(reason.into());
+        }
         let mut child = record(
             &native,
             HostIdentity {
@@ -1089,23 +1160,11 @@ fn close_unstarted_attempts(
         {
             continue;
         }
-        let same_pane = match record.terminal.as_deref() {
-            None => Err("pane_identity_unrecorded".to_owned()),
-            Some(recorded) => pane_terminal(connector, pane).and_then(|terminal| {
-                if terminal == recorded {
-                    Ok(())
-                } else {
-                    Err("pane_replaced".to_owned())
-                }
-            }),
-        };
-        let closed = match same_pane.and_then(|()| shell_alone(connector, pane)) {
+        let closed = match same_terminal(connector, record, pane)
+            .and_then(|()| shell_alone(connector, pane))
+        {
             Ok(false) => continue,
-            Ok(true) => crate::wire::pane_target_params(pane).and_then(|params| {
-                request_with_connector(connector, "pane.close", params, Duration::from_secs(5))
-                    .map(drop)
-                    .map_err(|error| error.to_string())
-            }),
+            Ok(true) => close_pane(connector, pane),
             Err(reason) => Err(reason),
         };
         crate::diagnostic!(json!({
@@ -1114,6 +1173,49 @@ fn close_unstarted_attempts(
             "reason": closed.err(),
         }));
     }
+}
+
+/// Closes the pane `reserved` made, whose agent started but whose session a
+/// registration cannot keep (`reason`), when it is still the terminal the
+/// spawn recorded.
+pub(super) fn close_refused_pane(
+    connector: &dyn ApiConnector,
+    reserved: &SpawnRecord,
+    pane: &str,
+    reason: &str,
+) {
+    let closed =
+        same_terminal(connector, reserved, pane).and_then(|()| close_pane(connector, pane));
+    crate::diagnostic!(json!({
+        "component": "spawn", "kind": "refused_pane.close", "spawn": reserved.id,
+        "pane_id": pane, "refusal": reason, "closed": closed.is_ok(),
+        "reason": closed.err(),
+    }));
+}
+
+/// Whether `pane` is still the terminal `record` recorded with it, so a pane
+/// Herdr gave the same id afterwards is never taken for the spawn's.
+fn same_terminal(
+    connector: &dyn ApiConnector,
+    record: &SpawnRecord,
+    pane: &str,
+) -> Result<(), String> {
+    let recorded = record
+        .terminal
+        .as_deref()
+        .ok_or("pane_identity_unrecorded")?;
+    if pane_terminal(connector, pane)? == recorded {
+        Ok(())
+    } else {
+        Err("pane_replaced".to_owned())
+    }
+}
+
+fn close_pane(connector: &dyn ApiConnector, pane: &str) -> Result<(), String> {
+    let params = crate::wire::pane_target_params(pane)?;
+    request_with_connector(connector, "pane.close", params, Duration::from_secs(5))
+        .map(drop)
+        .map_err(|error| error.to_string())
 }
 
 /// A failure of a spawn's work on a device, as the caller should read it: the
@@ -1146,10 +1248,17 @@ fn device_unreachable(
     }
 }
 
+/// Records the fork Hide started in pane `child` from the agent in pane
+/// `source`, under the Herdr name `name` the fork's start gave it. The
+/// source is registered now, while it is the execution that was forked; the
+/// fork is registered once Herdr shows its own session, which Codex reports
+/// only at the fork's first turn, so the registration waits for it in the
+/// ledger (`identity_wait`) rather than for a fixed time here.
 pub(crate) fn link_fork(
     context: &crate::live::LiveContext,
     source: &str,
     child: &str,
+    name: &str,
 ) -> Result<(), String> {
     let runtime = context.runtime.upgrade().ok_or("delivery_unavailable")?;
     let (client, authority, actor) = runtime
@@ -1203,43 +1312,22 @@ pub(crate) fn link_fork(
             .ok_or("parent_unavailable")?
             .to_owned()
     };
-    let native_child = wait_native_identity(
-        connector.as_ref(),
-        child,
-        None,
-        native_source.agent.as_deref().ok_or("parent_unavailable")?,
-    )?;
-    let mut child_record = record(
-        &native_child,
-        HostIdentity {
-            machine: &actor.device_id,
-            scope: &host_scope,
-            native_machine: &native_machine,
-            on_node,
-        },
-        child.into(),
-        native_child.name.clone(),
-        None,
-        native_child.cwd.clone(),
-    )?;
-    // The fork is the operator's own work: no parent supervises it, and the
-    // source it was forked from is its origin, which its fork mark names.
-    child_record.origin = Some(source_id);
-    child_record.forked = true;
-    let value = mutate(
+    mutate(
         &client,
         &authority,
         &actor,
-        Mutation::Register {
-            record: child_record,
-            check: false,
+        Mutation::AwaitIdentity {
+            wait: super::identity_wait::IdentityWait {
+                id: String::new(),
+                machine: actor.device_id.clone(),
+                pane: child.into(),
+                name: name.into(),
+                kind: native_source.agent.clone().ok_or("parent_unavailable")?,
+                owed: super::identity_wait::Owed::Fork { origin: source_id },
+            },
         },
-    )?;
-    publish_tokens(
-        &client,
-        connector.as_ref(),
-        value["id"].as_str().ok_or("child_unavailable")?,
     )
+    .map(drop)
 }
 
 /// Whether the existing worktree `existing` of `repo` is one this spawn
@@ -1357,6 +1445,52 @@ mod tests {
         assert_eq!(unnamed.name, None);
         assert_eq!(make(Some("w9J:p9R".into())).name, None);
         assert_eq!(make(Some("lead".into())).name.as_deref(), Some("lead"));
+    }
+
+    /// Pi names its session by its file path, which Herdr keeps up to 4096
+    /// bytes: a registration keeps the same, and a longer one is refused by
+    /// its own reason when the record is made, never as an unavailable ledger.
+    #[test]
+    fn a_session_path_registers_up_to_herdrs_bound_and_past_it_is_refused_by_name() {
+        for (bytes, expected) in [
+            (crate::delivery::SESSION_LIMIT, None),
+            (
+                crate::delivery::SESSION_LIMIT + 1,
+                Some(super::super::SESSION_TOO_LONG),
+            ),
+        ] {
+            let file = "/session.jsonl";
+            let path = format!("/{}{file}", "d".repeat(bytes - file.len() - 1));
+            let reported = path.clone();
+            let herdr = FakeHerdr::start("coordination-session-path", move |method, _| {
+                assert_eq!(method, "agent.list");
+                json!({"type":"agent_list","agents":[{
+                    "pane_id":"w9J:p9R","workspace_id":"w9J","tab_id":"w9J:t1",
+                    "terminal_id":"terminal","revision":1,"focused":false,
+                    "agent_status":"idle","agent":"pi","name":"child",
+                    "agent_session":{"source":"herdr:pi","agent":"pi",
+                        "kind":"path","value":reported}}]})
+            });
+            let native =
+                wait_native_identity(&herdr.connector(), "w9J:p9R", Some("child"), "pi").unwrap();
+            let made = record(
+                &native,
+                HostIdentity {
+                    machine: crate::node::TEST_NODE,
+                    scope: "scope",
+                    native_machine: "machine",
+                    on_node: true,
+                },
+                "terminal".into(),
+                native.name.clone(),
+                None,
+                None,
+            );
+            match expected {
+                None => assert_eq!(made.unwrap().session, path),
+                Some(code) => assert_eq!(made.unwrap_err(), code),
+            }
+        }
     }
 
     #[test]
@@ -1488,6 +1622,7 @@ mod tests {
                         branch: "factory/801".into(),
                         path: None,
                         args: Vec::new(),
+                        launch: Default::default(),
                         task: None,
                     },
                 },
@@ -1732,6 +1867,7 @@ mod tests {
                 branch: "topic".into(),
                 path: None,
                 args: Vec::new(),
+                launch: Default::default(),
                 task: None,
             };
             let spawn = super::super::apply(

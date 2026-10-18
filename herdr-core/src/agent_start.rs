@@ -171,13 +171,9 @@ pub(crate) enum StartError {
     Herdr(ApiError),
 }
 
-/// How a pane Hide makes for a start runs the account's shell so that it
-/// marks its first prompt, written by `node`, the node of the machine that
-/// will run the pane. `None` for a shell the integration does not reach,
-/// and, logged, for a node that cannot be reached or cannot write it: the
-/// pane then starts as any other and the start is confirmed after typing.
 /// Records, on the node that will run it, that `kind` may work in `path`, a
-/// worktree Hide made, before Hide starts it there (agy's folder trust).
+/// worktree Hide made, before Hide starts it there (the agent's own folder
+/// trust: docs/agent-hooks.md, Folder trust for the worktrees Hide makes).
 /// Nothing is asked for a kind that never asks; a trust that cannot be
 /// recorded refuses the start with its reason, so no agent waits unseen on
 /// its trust question (PRD antigravity-first-class B20).
@@ -186,26 +182,40 @@ pub(crate) fn trust_worktree(
     kind: &str,
     path: &str,
 ) -> Result<(), String> {
-    if !hide_agent_adapter::adapter(kind)
-        .and_then(|adapter| adapter.start)
-        .is_some_and(hide_agent_adapter::LaunchDialect::trusts_worktrees)
-    {
+    let Some((adapter, agent)) = hide_agent_adapter::adapter(kind).and_then(|adapter| {
+        let agent = hide_agent_hooks::folder_trust::Agent::of(adapter.start?)?;
+        Some((adapter, agent))
+    }) else {
         return Ok(());
-    }
-    let node = node.ok_or("agent_trust_unavailable: the worktree's machine is not connected")?;
+    };
+    let node = node.ok_or(
+        "agent_trust_unavailable: the machine that runs the worktree's pane cannot be reached.",
+    )?;
     crate::node_access::call_as::<()>(
         node,
-        hide_node_link::protocol::Call::AntigravityTrust {
+        hide_node_link::protocol::Call::AgentTrust {
+            agent: adapter.id.to_owned(),
             path: path.to_owned(),
             trusted: true,
         },
-        Duration::from_secs(10),
+        // The node may wait for another start's change of the same agent's
+        // trust before its own (a Codex app-server each), and the link
+        // carries the answer back.
+        agent.longest_change() + Duration::from_secs(5),
     )
     .map_err(|error| {
-        format!("agent_trust_failed: agy's trust of {path} could not be recorded ({error})")
+        format!(
+            "agent_trust_failed: {}'s trust of {path} could not be recorded ({error})",
+            adapter.label
+        )
     })
 }
 
+/// How a pane Hide makes for a start runs the account's shell so that it
+/// marks its first prompt, written by `node`, the node of the machine that
+/// will run the pane. `None` for a shell the integration does not reach,
+/// and, logged, for a node that cannot be reached or cannot write it: the
+/// pane then starts as any other and the start is confirmed after typing.
 pub(crate) fn shell_launch(
     node: Option<&dyn NodeLink>,
     correlation_id: &str,
@@ -371,7 +381,15 @@ fn start_within(
                     return Err(StartError::Herdr(ApiError::Remote { code, message }));
                 }
             }
-            answer => return answer.map_err(StartError::Herdr),
+            answer => {
+                // The session sync reads a start Herdr then holds open only
+                // when it knows Hide made it and when (herdrdev/herdr#3853).
+                if let Some(terminal) = answer.as_ref().ok().and_then(wire::started_agent_terminal)
+                {
+                    crate::session_sync::record_start(&terminal, Instant::now());
+                }
+                return answer.map_err(StartError::Herdr);
+            }
         }
     }
 }
@@ -611,6 +629,8 @@ impl Shell<'_> {
     }
 }
 
+#[cfg(test)]
+mod real_agent_trust_tests;
 #[cfg(test)]
 mod real_herdr_tests;
 
@@ -1282,43 +1302,66 @@ mod tests {
     }
 
     #[test]
-    fn only_agy_has_a_worktree_trusted_on_its_node_before_it_starts() {
+    fn claude_and_agy_have_a_worktree_trusted_on_its_node_before_they_start() {
         let home = tempfile::tempdir().unwrap();
-        let settings = home.path().join(".gemini/antigravity-cli/settings.json");
-        std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        let agy = home.path().join(".gemini/antigravity-cli/settings.json");
+        let claude = home.path().join(".claude.json");
+        std::fs::create_dir_all(agy.parent().unwrap()).unwrap();
         let node = hide_node::Local::new(Some(home.path().to_path_buf()));
-        // The core names the worktree in its wire spelling; agy's list holds
-        // the native one, resolved.
+        // The core names the worktree in its wire spelling; each agent's
+        // settings hold the native one, resolved.
         let tree = |name: &str| home.path().join(name);
         let wire = |name: &str| hide_platform::path::to_wire(&tree(name)).unwrap();
+        let resolved = |name: &str| {
+            hide_platform::fs::identity::canonical(&tree(name))
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned()
+        };
         for name in ["tree-1", "tree-2"] {
             std::fs::create_dir_all(tree(name).join(".git")).unwrap();
         }
         std::fs::create_dir_all(tree("plain")).unwrap();
-        trust_worktree(Some(&node), "claude", &wire("tree-1")).unwrap();
-        assert!(!settings.exists(), "Claude asks no folder trust");
+        trust_worktree(Some(&node), "grok", &wire("tree-1")).unwrap();
+        assert!(
+            !agy.exists() && !claude.exists(),
+            "Grok asks no folder trust"
+        );
         trust_worktree(Some(&node), "antigravity", &wire("tree-1")).unwrap();
         let written: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
+            serde_json::from_slice(&std::fs::read(&agy).unwrap()).unwrap();
         assert_eq!(
             written["trustedWorkspaces"],
-            serde_json::json!([hide_platform::fs::identity::canonical(&tree("tree-1"))
-                .unwrap()
-                .to_str()
-                .unwrap()])
+            serde_json::json!([resolved("tree-1")])
+        );
+        trust_worktree(Some(&node), "claude", &wire("tree-1")).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&claude).unwrap()).unwrap();
+        let key = if cfg!(windows) {
+            resolved("tree-1").replace('\\', "/")
+        } else {
+            resolved("tree-1")
+        };
+        assert_eq!(
+            written["projects"][key.as_str()]["hasTrustDialogAccepted"],
+            true
         );
         // A folder that is not a worktree is never trusted.
-        assert!(
-            trust_worktree(Some(&node), "antigravity", &wire("plain"))
-                .unwrap_err()
-                .starts_with("agent_trust_failed")
-        );
-        // A trust that cannot be recorded stops the start with its reason.
-        std::fs::write(&settings, "{ not json").unwrap();
+        for kind in ["antigravity", "claude"] {
+            let refused = trust_worktree(Some(&node), kind, &wire("plain")).unwrap_err();
+            assert!(refused.starts_with("agent_trust_failed"), "{refused}");
+        }
+        // A trust that cannot be recorded stops the start with its reason,
+        // naming the agent.
+        std::fs::write(&agy, "{ not json").unwrap();
         let refused = trust_worktree(Some(&node), "antigravity", &wire("tree-2")).unwrap_err();
-        assert!(refused.starts_with("agent_trust_failed"), "{refused}");
         assert!(
-            trust_worktree(None, "antigravity", &wire("tree-2"))
+            refused.starts_with("agent_trust_failed: Antigravity's trust of"),
+            "{refused}"
+        );
+        assert!(
+            trust_worktree(None, "claude", &wire("tree-2"))
                 .unwrap_err()
                 .starts_with("agent_trust_unavailable")
         );

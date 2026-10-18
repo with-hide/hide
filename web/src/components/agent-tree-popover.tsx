@@ -306,7 +306,7 @@ function TreeItem({
   const child = line.agent;
   const parentDevice = parent.device_id ?? remoteTargetOfPane(rest, parent.pane_id) ?? localDeviceId(rest);
   const device = child.device_id ?? remoteTargetOfPane(rest, child.pane_id) ?? localDeviceId(rest);
-  const deviceLabel = child.device_label ?? machineName(rest?.navigator?.devices, device, t);
+  const deviceLabel = machineName(rest?.navigator?.devices, device, t);
   const unavailable = !deviceConnected(rest, device);
   // A child on a device that is not connected draws no mark and says so on its line (status-marks B16).
   const reason = unavailable ? t("agents.line.disconnected", { device: deviceLabel ?? device }) : null;
@@ -338,7 +338,7 @@ function TreeItem({
       <TreeChevron name={child.identity_label} open={line.hasChildren ? line.open : null} onToggle={onToggle} hangs={line.depth > 1} popup={line.depth >= 2} data-tree-chevron={child.pane_id} />
       <span className="flex min-w-0 flex-1 flex-col gap-xxs py-xs pl-xs">
         <span className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
-          <StatusMark mark={unavailable ? "quiet" : child.mark} className={unavailable ? undefined : markTone(child)} />
+          <StatusMark mark={unavailable ? null : child.mark} className={unavailable ? undefined : markTone(child)} />
           <span className="min-w-0 flex-1 truncate text-foreground" title={[child.identity_label, agentProductName(child.agent_kind)].filter(Boolean).join("\n")}>
             {child.identity_label}
           </span>

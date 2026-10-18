@@ -6,7 +6,8 @@
 # reaches) is found within a day. The Rust toolchain is not one of those: its version is
 # the one `rust-toolchain.toml` names, so a new image cannot change it.
 # A test fails this run only when it fails its retry too (CI retries a failed
-# test once); a test that passes the retry is flaky, and
+# test once, all but the signed-in agy turn, which spends a provider's daily
+# requests; .config/nextest.toml); a test that passes the retry is flaky, and
 # scripts/ci-flaky-report.py files it as an issue, as in pr.yml. A test that
 # fails its retry too is written as a `Failed test` annotation on its job.
 # Runner windows and Linux Xvfb exercise automation, not physical IME/device QA.
@@ -18,15 +19,17 @@
 # expiry; it comments once per run attempt on an issue already open for the
 # same failure, opens at most 10 per run and lists the rest in one, and
 # closes a lane's issues when a scheduled run (or a hand run of `all`) passes
-# it. A run of any other branch writes no issue. docs/TESTING.md, "Nightly
-# failures", owns the policy.
+# it; a lane whose job passed with a `Not measured` warning has not passed,
+# and the report lists it. A run of any other branch writes no issue.
+# docs/TESTING.md, "Nightly failures", owns the policy.
 # Run it by hand from the Actions tab (workflow_dispatch); actual queue load
 # and completed jobs must be measured separately from this configured matrix.
 # A hand run picks `lane`: `all`, or one system's web and desktop suites, so
 # checking Windows does not occupy the macOS runners (one full dispatch used 7
 # macOS jobs for 65 minutes); `macos` also runs the performance lane. `verify`
-# and `package` run for `all` only. `agy` runs only the agy contract, signed in
-# when the key is set, on all three systems, so a branch can check it by hand
+# and `package` run for `all` only. `agy` runs only the agent contracts on all
+# three systems, agy's (signed in when the key is set) and the folder trust
+# contract of Claude Code and Codex, so a branch can check them by hand
 # (`gh workflow run nightly.yml --ref <branch> -f lane=agy`).
 # The schedule runs everything. A lane left out is skipped, and the failure
 # report ignores a skipped job.
@@ -122,6 +125,36 @@ jobs:
     secrets:
       HIDE_AGY_API_KEY: ${{ secrets.HIDE_AGY_API_KEY }}
 
+  # The agent journey: the stand-ins on Linux and macOS, the Windows forms,
+  # and, when the CI account's keys are set, Claude Code and Codex signed in
+  # on all three systems (one system's on that system's hand run);
+  # docs/VERIFICATION.md, Agent journey.
+  agent-journey:
+    name: agent journey
+    if: ${{ inputs.lane != 'agy' }}
+    uses: ./.github/workflows/agent-journey.yml
+    permissions:
+      contents: read
+    with:
+      systems: ${{ inputs.lane == 'linux' && '["linux"]' || inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux","macos","windows"]' }}
+      live: true
+    secrets:
+      HIDE_CLAUDE_API_KEY: ${{ secrets.HIDE_CLAUDE_API_KEY }}
+      HIDE_CODEX_API_KEY: ${{ secrets.HIDE_CODEX_API_KEY }}
+
+  # The real Claude Code and Codex read the folder trust Hide records for a
+  # worktree it made, on all three systems (one system's on that system's
+  # hand run, all three on `agy`'s, the other agent contract); a pull request
+  # runs only the format tests, in `rust` and `windows check`.
+  agent-trust-contract-all:
+    name: agent trust contract
+    uses: ./.github/workflows/agent-trust-contract.yml
+    permissions:
+      contents: read
+      issues: write
+    with:
+      systems: ${{ inputs.lane == 'linux' && '["linux"]' || inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux","macos","windows"]' }}
+
   # The whole desktop suite runs on macOS, the system the desktop app is written
   # against. Linux and Windows run only the tests tagged `@platform`: what the
   # desktop host does differently on that system (its processes and local
@@ -145,7 +178,9 @@ jobs:
       lane: nightly-${{ matrix.system }}
       runner: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
       herdr-platform: ${{ fromJSON('{"linux":"linux-x86_64","macos":"macos-aarch64","windows":"windows-x86_64"}')[matrix.system] }}
-      # The whole suite on macOS, the @platform tests elsewhere.
+      # The whole suite on macOS, in the two shards `pr.yml` gives it, the
+      # @platform tests elsewhere, in one.
+      shards: ${{ matrix.system == 'macos' && 2 || 1 }}
       grep: ${{ matrix.system != 'macos' && '@platform' || '' }}
       keep-screenshots: ${{ matrix.system != 'macos' }}
 
@@ -178,7 +213,7 @@ jobs:
 
   report:
     name: nightly report
-    needs: [web-e2e-macos, web-e2e-windows, remote-mailbox-macos, agy-contract-all, desktop-e2e, perf, verify, package]
+    needs: [web-e2e-macos, web-e2e-windows, remote-mailbox-macos, agy-contract-all, agent-trust-contract-all, agent-journey, desktop-e2e, perf, verify, package]
     if: ${{ always() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10

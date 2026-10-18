@@ -211,9 +211,9 @@ The shell's marks are Material Icon Theme SVGs, which Pen draws empty, so the sh
 Its web files are `web/src/WorkspaceScreen.tsx`, `web/src/TabBar.tsx`, `web/src/ViewAreas.tsx`, `web/src/Tools.tsx`, and `web/src/ExplorerTree.tsx`.
 
 Session record is `Screen / Session record`, built by `sessionWorkScreens` in `scripts/pen-screens-session-work.mjs` (PRD session-record-redesign).
-It draws the record the lane's 보기 slot holds (PRD sidebar-task-lens D-44) in both themes: the default record (the PRs the session and its descendants made, the checklist with its `2/3` count and the missed work under its task, the icon-only `내 말 보기` button, the children), the same with the button on, the Hide AI off record, and a states board.
-Its controls are library refs; the PR mark is a ref of the Agent tree parts; the speech-bubble button is an icon with a secondary fill while on.
-`/gallery?scene=session-record` is the production `SessionRecord` over `web/src/gallery/SessionWorkScene.tsx`, with `words=1`, `state=off`, `case=open-missed|now|goals|delegated|empty` and `state=ended` for the 태스크 list, measured by `web/e2e/session-record-geometry.mjs`.
+It draws the record the lane's 보기 slot holds (PRD sidebar-task-lens D-44) in both themes: the default record (the PRs the session and its descendants made, the checklist with its `2/3 · 맡긴 일 N` head, checkbox tasks and the children under the tasks that delegated them, `놓친 것 N`, and `내 말 N` at the end; PRD record-card-readability), the Hide AI off record, and a states board.
+Its controls are library refs; the PR mark is a ref of the Agent tree parts.
+`/gallery?scene=session-record` is the production `SessionRecord` over `web/src/gallery/SessionWorkScene.tsx`, with `state=off`, `case=open-missed|now|goals|delegated|empty` and `state=ended` for the 태스크 list, measured by `web/e2e/session-record-geometry.mjs`.
 
 Settings is `Screen / Settings`, built by `settingsBoards` in `scripts/pen-screens-settings.mjs` from the boards the operator approved (PRD settings-left-nav D-11).
 It draws the ⌘, sheet with its list on the left, App (General, Notifications, Devices, Shortcuts) and This Mac (Agents, Hide AI, Mobile, GitHub) with About at the list's foot, and each page under its title alone: General as Appearance, Notifications with This Mac and Phone, Agents with its machine switch, Hide AI, GitHub and About.

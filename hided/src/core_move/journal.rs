@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use herdr_core::node_migration::{IdTable, OwnerChange};
-use hide_platform::fs::Access;
+use hide_platform::fs::atomic::DurableAccess;
 use serde::{Deserialize, Serialize};
 
 const VERSION: u32 = 1;
@@ -258,7 +258,7 @@ pub fn read(state_dir: &Path) -> Result<Option<Journal>, String> {
 pub fn write(state_dir: &Path, journal: &Journal) -> Result<(), String> {
     let path = path(state_dir);
     let bytes = serde_json::to_vec_pretty(journal).map_err(|error| error.to_string())?;
-    hide_platform::fs::atomic::write_file_durable(&path, &bytes, Access::Private)
+    hide_platform::fs::atomic::write_file_durable(&path, &bytes, DurableAccess::Private)
         .map(|_| ())
         .map_err(|error| format!("{}: {error}", path.display()))
 }

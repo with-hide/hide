@@ -1,26 +1,28 @@
-// The Sessions record (PRD session-record-redesign): the PRs this session and
-// its descendants made, the assigned work as a checklist with each task's
-// missed work under it, the operator's own words behind the `내 말` toggle,
-// and the summary-off and state boards. Controls reference the existing
-// library through pen-screens' themed helpers; the PR mark is a ref of
-// Component / Agent tree parts, as the Sessions rows draw it.
+// The Sessions record (PRD session-record-redesign, record-card-readability):
+// the PRs this session and its descendants made, the assigned work as a
+// checklist of boxes with each delegated child hanging under the task that
+// handed it on, the open missed work, the operator's requests at the end, and
+// the summary-off and state boards. Controls reference the existing library
+// through pen-screens' themed helpers; the PR mark is a ref of Component /
+// Agent tree parts, as the Sessions rows draw it.
 import {AGENT_TREE_MASTERS, PR_STATES} from './pen-agent-tree.mjs';
 import {markSlot} from './pen-system.mjs';
 
 export function sessionWorkScreens({frame, text, icon, screenButton, themedXref}) {
   const WIDTH = 372;
-  const STEP = 19;
   const label = (id, content, fill = '$--foreground', extra = {}) => text(id, content, {size: '$--text-caption', fill, ...extra});
   const micro = (id, content, fill = '$--muted-foreground', extra = {}) => text(id, content, {size: '$--text-micro', fill, ...extra});
+  const spacer = id => frame(id, 'Spacer', {width: 'fill_container', height: 1}, []);
   const provider = (id, kind = 'claude', size = 14) => frame(id, 'Provider', {width: size, height: size, fill: {type: 'image', enabled: true, url: `../web/src/assets/agent-${kind}.png`, mode: 'contain'}}, []);
   const prMark = (id, number, state) => {
     const [, glyph, fill] = PR_STATES.find(([key]) => key === state);
     return themedXref(id, AGENT_TREE_MASTERS.prIcon, `PR #${number}`, {}, {'ath-pr-g': {icon: glyph, fill}, 'ath-pr-n': {content: `#${number}`}});
   };
-  const heading = (id, title, count, extra = []) => frame(id, title, {width: 'fill_container', height: 24, layout: 'horizontal', gap: 6, alignItems: 'center', padding: [8, 0, 0, 0]}, [
-    label(`${id}-t`, title, '$--subtle-foreground', {weight: '500'}),
-    ...(count === undefined ? [] : [micro(`${id}-n`, count)]),
-    ...(extra.length ? [frame(`${id}-sp`, 'Spacer', {width: 'fill_container', height: 1}, []), ...extra] : []),
+  // A section's head: its name, its count in the foreground, and a muted summary after a dot.
+  const heading = (id, title, count, summary) => frame(id, title, {width: 'fill_container', height: 24, layout: 'horizontal', gap: 6, alignItems: 'end', padding: [8, 0, 0, 0]}, [
+    micro(`${id}-t`, title, '$--muted-foreground', {weight: '500'}),
+    ...(count === undefined ? [] : [label(`${id}-n`, count, '$--foreground', {weight: '600'})]),
+    ...(summary ? [micro(`${id}-s`, `· ${summary}`)] : []),
   ]);
   const top = (id, {title, state, kind = 'claude'}) => [
     screenButton(`${id}-back`, 'Sessions로 돌아가기', {variant: 'ghost', icon: 'arrow-left'}),
@@ -39,168 +41,117 @@ export function sessionWorkScreens({frame, text, icon, screenButton, themedXref}
     ...(by ? [frame(`${id}-by`, 'Made by', {layout: 'horizontal', gap: 3, alignItems: 'center'}, [provider(`${id}-by-mark`, by[0], 12), micro(`${id}-by-name`, by[1])])] : []),
   ]);
 
-  // The operator's own words: a muted person glyph and a bubble, two lines
-  // until pressed, then the whole text and 접기.
-  const said = (id, content, {open = false, quiet = false} = {}) => frame(id, 'Operator words', {width: 'fill_container', layout: 'horizontal', gap: 5, alignItems: 'start', padding: [2, 0, 0, STEP]}, [
-    icon(`${id}-who`, 'user', {size: 11, fill: '$--muted-foreground'}),
-    frame(`${id}-bubble`, 'Bubble', {width: 'fill_container', layout: 'vertical', gap: 2, padding: [4, 8], cornerRadius: '$--radius-sm', fill: '$--secondary'}, [
-      label(`${id}-text`, content, quiet ? '$--subtle-foreground' : '$--foreground', {width: 'fill_container'}),
-      ...(open ? [micro(`${id}-less`, '접기')] : []),
-    ]),
-  ]);
-  // Missed work under the task whose turn found it: open in warning with its
-  // two actions, closed as one muted line.
-  const missed = (id, content, {open = false} = {}) => frame(id, 'Missed work', {width: 'fill_container', layout: 'vertical', gap: 4, padding: [2, 0, 0, STEP]}, [
-    frame(`${id}-line`, 'Line', {width: 'fill_container', layout: 'horizontal', gap: 5, alignItems: 'center'}, [
-      icon(`${id}-flag`, 'flag', {size: 11, fill: open ? '$--warning' : '$--muted-foreground'}),
-      label(`${id}-text`, content, open ? '$--warning' : '$--muted-foreground', {width: 'fill_container'}),
-    ]),
-    ...(open ? [frame(`${id}-actions`, 'Missed actions', {layout: 'horizontal', gap: 4, padding: [0, 0, 0, 16]}, [
-      screenButton(`${id}-issue`, '이슈로', {variant: 'outline', height: 22}),
-      screenButton(`${id}-dismiss`, '무시', {variant: 'ghost', height: 22}),
-    ])] : []),
-  ]);
-  // A task's mark is the row's (status-marks D-23, B34): `✓` done, the ring
-  // in progress, `!` a question or a block, an empty slot for work left (its
-  // name says 일 남음) and for a task a PR holds, whose PR mark says the state;
-  // a task whose request's PR mark hangs on its first task says the state in words.
-  const taskMark = (id, state) => state === 'done' ? label(id, '✓', '$--success', {weight: '600'})
-    : state === 'working' ? markSlot(id, 'going')
-      : state === 'question' || state === 'blocked' ? markSlot(id, 'turn')
-        : frame(id, 'Empty slot', {width: 12, height: 12}, []);
-  const task = (id, {state, name, pr, words = [], misses = []}) => frame(id, name, {width: 'fill_container', layout: 'vertical', gap: 2, padding: [4, 0]}, [
-    frame(`${id}-head`, 'Task', {width: 'fill_container', layout: 'horizontal', gap: 6, alignItems: 'start'}, [
-      taskMark(`${id}-glyph`, state),
-      label(`${id}-name`, name, state === 'done' ? '$--subtle-foreground' : '$--foreground', {width: 'fill_container', weight: state === 'done' ? '400' : '500'}),
-      ...(state === 'unfinished' ? [label(`${id}-left`, '일 남음', '$--muted-foreground')] : []),
-      ...((state === 'review' || state === 'ci_failed') && !pr ? [label(`${id}-left`, state === 'review' ? '리뷰 대기' : 'CI 실패', '$--muted-foreground')] : []),
+  // A task's mark is a checkbox (record-card-readability D-05, B7, B8): checked
+  // once done, empty otherwise; a live session's question or block puts `!` in
+  // front of the box and says it in words at the row's end.
+  const box = (id, done) => done
+    ? frame(id, 'Checkbox checked', {width: 12, height: 12, cornerRadius: 2, fill: '$--success', layout: 'horizontal', justifyContent: 'center', alignItems: 'center'}, [icon(`${id}-g`, 'check', {size: 9, fill: '$--background'})])
+    : frame(id, 'Checkbox', {width: 12, height: 12, cornerRadius: 2, stroke: '$--muted-foreground', strokeWidth: 1, strokeAlignment: 'inner'}, []);
+  const WORDS = {unfinished: '일 남음', question: '내 차례 · 질문', review: '리뷰 대기', ci_failed: 'CI 실패'};
+  const task = (id, {state, name, pr}) => {
+    const done = state === 'done';
+    const word = WORDS[state] && !(pr && (state === 'review' || state === 'ci_failed')) ? WORDS[state] : null;
+    return frame(id, name, {width: 'fill_container', layout: 'horizontal', gap: 8, alignItems: 'center', padding: [3, 0]}, [
+      ...(state === 'question' ? [label(`${id}-ask`, '!', '$--warning', {weight: '700'})] : []),
+      box(`${id}-box`, done),
+      label(`${id}-name`, name, done ? '$--subtle-foreground' : '$--foreground', {width: 'fill_container', weight: done ? '400' : '500'}),
+      ...(word ? [micro(`${id}-word`, word, state === 'question' ? '$--warning' : '$--muted-foreground')] : []),
       ...(pr ? [prMark(`${id}-pr`, pr[0], pr[1])] : []),
-    ]),
-    ...words.map((word, index) => said(`${id}-w${index}`, word.text ?? word, word)),
-    ...misses.map((miss, index) => missed(`${id}-m${index}`, miss.text, miss)),
+    ]);
+  };
+  // A delegated child on one line: `↳` under the task that handed it on, its
+  // state mark, its agent's logo, its name, its state word unless done, its
+  // PR marks; with nothing to hang from it drops the arrow.
+  const child = (id, {title, kind = 'claude', state, word, pr, hang = true}) => frame(id, 'Delegated child', {width: 'fill_container', height: 24, layout: 'horizontal', gap: 6, alignItems: 'center', padding: [0, 0, 0, hang ? 20 : 0]}, [
+    ...(hang ? [micro(`${id}-arrow`, '↳')] : []),
+    state === 'done' ? icon(`${id}-mark`, 'check', {size: 12, fill: '$--success'}) : markSlot(`${id}-mark`, state),
+    provider(`${id}-logo`, kind, 14),
+    label(`${id}-title`, title, state === 'done' ? '$--subtle-foreground' : '$--foreground', {width: 'fill_container'}),
+    ...(word ? [label(`${id}-state`, word, '$--muted-foreground')] : []),
+    ...(pr ? [prMark(`${id}-pr`, pr[0], pr[1])] : []),
   ]);
-  // 내 말 보기: an icon-only pressed button, the speech bubble filled while on.
-  const toggle = (id, on) => frame(`${id}-words`, '내 말 보기', {width: 22, height: 20, layout: 'horizontal', justifyContent: 'center', alignItems: 'center', cornerRadius: '$--radius-xs', ...(on ? {fill: '$--secondary'} : {})}, [
-    icon(`${id}-words-g`, 'message-circle', {size: 12, fill: on ? '$--foreground' : '$--muted-foreground'}),
+  // Missed work still open: one warning line with where it was found, then its two actions.
+  const missed = (id, content, note) => frame(id, 'Missed work', {width: 'fill_container', layout: 'horizontal', gap: 5, alignItems: 'center', padding: [3, 0]}, [
+    icon(`${id}-flag`, 'flag', {size: 11, fill: '$--warning'}),
+    label(`${id}-text`, content, '$--warning'),
+    micro(`${id}-note`, `· ${note}`),
+    spacer(`${id}-sp`),
+    screenButton(`${id}-issue`, '이슈로', {variant: 'outline', height: 22}),
+    screenButton(`${id}-dismiss`, '무시', {variant: 'ghost', height: 22}),
   ]);
-  const children = id => [
-    heading(`${id}-children`, '자식', '1'),
-    frame(`${id}-child`, 'Delegated child', {width: 'fill_container', height: 24, layout: 'horizontal', gap: 6, alignItems: 'center', stroke: '$--lineage-rail', strokeWidth: {left: 1}, strokeAlignment: 'inner', padding: [0, 0, 0, 8]}, [
-      icon(`${id}-child-fold`, 'chevron-right', {size: 12, fill: '$--muted-foreground'}),
-      provider(`${id}-child-mark`, 'claude', 12),
-      label(`${id}-child-title`, '상주 데몬 버그 3건 수정 PR', '$--foreground', {width: 'fill_container'}),
-      micro(`${id}-child-state`, '쉬는 중'),
-    ]),
-  ];
+  // The requests at the record's end, last four, with who asked and when; the
+  // shell cuts a first line to one row, so the board draws it already cut.
+  const request = (id, {who = '나', content, at}) => frame(id, content, {width: 'fill_container', height: 20, layout: 'horizontal', gap: 8, alignItems: 'center'}, [
+    micro(`${id}-who`, who, '$--muted-foreground', {width: 32}),
+    label(`${id}-text`, content, '$--subtle-foreground', {width: 'fill_container'}),
+    micro(`${id}-at`, at, '$--muted-foreground', {mono: true}),
+  ]);
   const panel = (id, name, body) => frame(id, name, {width: WIDTH, layout: 'vertical', gap: 2, padding: [8, 12, 16, 12], fill: '$--card', stroke: '$--border', strokeWidth: 1, strokeAlignment: 'inner', cornerRadius: '$--radius-sm'}, body);
 
-  // The one session the boards draw, read from a real record: three tasks,
-  // two closed missed items found during the second, and a PR the child made.
+  // The one session the boards draw, read from a real record: three tasks, the
+  // child the third handed on and its PR, one missed item still open.
   const TITLE = '성능 최적화 리뷰와 서비스 개선안';
-  const WORDS = {
-    review: '옆 codex pane의 퍼포먼스 최적화 작업을 리뷰하고 그다음에 실제로 우리 서비스에서 느려지거나 할 때 (herdr 병목은 우선 어쩔 수 없음) 어떻게 개선할 수 있을지 고민해보자',
-    measure: '설치가 됐으니 이제 너가 직접 하나 hide 실측을 진행해보고 너가 제안한것들 혹시 코드 구조나 앱…',
-    bugs: '버그 3건 한 PR로 묶어서 진행해줘 opus 5.5로 하나 띄워서 진행시키자',
-    merge: 'PR 열리면 리뷰하고 머지까지 진행해줘',
-  };
-  const tasks = (id, on) => [
-    task(`${id}-t1`, {state: 'done', name: 'codex 성능 최적화 작업 리뷰 및 서비스 개선안 도출', words: on ? [{text: WORDS.review, open: true}] : []}),
-    task(`${id}-t2`, {state: 'done', name: '설치 빌드 실측 및 개선 제안 안전성 평가', words: on ? [WORDS.measure] : [], misses: [
-      {text: 'Codex developer role 매핑 수정 · 처리됨'},
-      {text: 'links ledger 세션 불일치 수정 · 처리됨'},
-    ]}),
-    task(`${id}-t3`, {state: 'working', name: '버그 3건 한 PR로 묶어 수정 (Opus 에이전트)', pr: [1093, 'merged'], words: on ? [WORDS.bugs, WORDS.merge] : []}),
+  const REQUESTS = [
+    ['r3', '15:39', '버그 3건 한 PR로 묶어서 진행해줘 opus 5.5로…'],
+    ['r4', '15:53', '그러면 지금 처리하는 작업들 말고 그다음에…'],
+    ['r5', '16:00', 'PR 열리면 리뷰하고 머지까지 진행해줘'],
+    ['r6', '16:43', '잘 되고 있어?'],
   ];
-  function record(suffix, on) {
-    const id = `swr-${on ? 'words' : 'record'}-${suffix}`;
-    return panel(id, on ? '내 말 켬' : 'Session record', [
-      ...top(id, {title: TITLE, state: '쉬는 중 · 자식 1'}),
+  const BUGS = {title: '상주 데몬 버그 3건 수정 PR', state: 'done', pr: [1093, 'merged']};
+  const words = (id, count) => [
+    heading(`${id}-words`, '내 말', String(count)),
+    micro(`${id}-earlier`, `이전 ${count - REQUESTS.length}턴 ›`),
+    ...REQUESTS.map(([key, at, content]) => request(`${id}-${key}`, {content, at})),
+  ];
+  function record(suffix) {
+    const id = `swr-record-${suffix}`;
+    return panel(id, 'Session record', [
+      ...top(id, {title: TITLE, state: '쉬는 중'}),
       heading(`${id}-prs`, 'PR', '2'),
       prRow(`${id}-pr1`, {number: 1100, state: 'pending', title: 'Measure the install build after the fixes'}),
       prRow(`${id}-pr2`, {number: 1093, state: 'merged', title: 'Stop three resident hided loops', by: ['claude', '상주 데몬 버그…']}),
-      heading(`${id}-work`, '시킨 일', '2/3', [toggle(id, on)]),
-      ...tasks(id, on),
-      ...(on ? [
-        micro(`${id}-other`, '그 밖의 말', '$--muted-foreground', {weight: '500'}),
-        said(`${id}-o1`, '그러면 지금 처리하는 작업들 말고 그다음에 너가 해야할것들 정리좀 해줘봐 ~', {quiet: true}),
-        said(`${id}-o2`, '잘 되고 있어?', {quiet: true}),
-      ] : []),
-      ...children(id),
+      heading(`${id}-work`, '시킨 일', '2/3', '맡긴 일 2'),
+      task(`${id}-t1`, {state: 'done', name: 'codex 성능 최적화 작업 리뷰 및 서비스 개선안 도출'}),
+      task(`${id}-t2`, {state: 'done', name: '설치 빌드 실측 및 개선 제안 안전성 평가'}),
+      child(`${id}-k0`, {title: '설치 빌드 실측 보조', kind: 'codex', state: 'done'}),
+      task(`${id}-t3`, {state: 'unfinished', name: '버그 3건 한 PR로 묶어 수정 (Opus 에이전트)', pr: [1093, 'merged']}),
+      child(`${id}-k1`, BUGS),
+      heading(`${id}-missed`, '놓친 것', '1'),
+      missed(`${id}-m1`, '재측정 전 설치본 버전 확인 안 됨', '설치 후 재측정'),
+      ...words(id, 7),
     ]);
   }
-  // A request split into several tasks (PRD task-split-checklist B1-B8): one
-  // task per deliverable sharing one state, the request's PR and words once on its first task,
-  // and the children's progress over the existing child rows (green done,
-  // blue working, grey the rest).
-  function split(suffix) {
-    const id = `swr-split-${suffix}`;
-    const KIDS = [['markdown-html 출시 전 수정 작업', '완료', 'done'], ['파일 페이지 댓글 기능 구현', '작업 중', 'working'], ['프로젝트 GitHub 마크 배지 적용', '완료', 'done']];
-    const segments = frame(`${id}-seg`, 'Child segments', {layout: 'horizontal', gap: 2, alignItems: 'center'},
-      KIDS.map(([, , kind], index) => frame(`${id}-seg-${index}`, kind, {width: 20, height: 4, cornerRadius: 2, fill: kind === 'done' ? '$--success' : '$--agent-working'}, [])));
-    const kid = (index, [title, state, kind]) => frame(`${id}-k${index}`, 'Delegated child', {width: 'fill_container', height: 24, layout: 'horizontal', gap: 6, alignItems: 'center', stroke: '$--lineage-rail', strokeWidth: {left: 1}, strokeAlignment: 'inner', padding: [0, 0, 0, 8]}, [
-      icon(`${id}-k${index}-fold`, 'chevron-right', {size: 12, fill: '$--muted-foreground'}),
-      provider(`${id}-k${index}-mark`, 'claude', 12),
-      label(`${id}-k${index}-title`, title, '$--foreground', {width: 'fill_container'}),
-      micro(`${id}-k${index}-state`, state, kind === 'working' ? '$--agent-working' : '$--muted-foreground'),
-    ]);
-    return panel(id, '나뉜 요청', [
-      ...top(id, {title: 'Pre-launch bugfix pass for File views and README', state: '쉬는 중 · 자식 3'}),
-      heading(`${id}-prs`, 'PR', '1'),
-      prRow(`${id}-pr1`, {number: 1233, state: 'mergeable', title: 'Draw HTML blocks and images in Markdown Live'}),
-      heading(`${id}-work`, '시킨 일', '0/4', [toggle(id, true)]),
-      task(`${id}-t1`, {state: 'review', name: 'README의 HTML 태그가 보이게 하기', pr: [1233, 'mergeable'], words: ['런칭 전 버그픽스 할 것 1. README에 html 태그가 안 보이는 것 같은데(우리 README 참고) 이거 어케 보여…']}),
-      task(`${id}-t2`, {state: 'review', name: '댓글 + 마크 위치 맞추기'}),
-      task(`${id}-t3`, {state: 'review', name: 'HTML 페이지에서 댓글이 동작하게 하기'}),
-      task(`${id}-t4`, {state: 'review', name: '드래그한 영역 남겨두기'}),
-      frame(`${id}-children`, '자식 일', {width: 'fill_container', height: 24, layout: 'horizontal', gap: 6, alignItems: 'center', padding: [8, 0, 0, 0]}, [
-        label(`${id}-children-t`, '자식 일', '$--subtle-foreground', {weight: '500'}),
-        micro(`${id}-children-n`, '2/3'),
-        segments,
-      ]),
-      ...KIDS.map((spec, index) => kid(index, spec)),
-    ]);
-  }
-  // Summaries off: no task judgment, so the PRs and the operator's raw
-  // requests, oldest first with the last five open.
+  // Summaries off: no task judgment, so the PRs, the children as one list, and the requests.
   function off(suffix) {
     const id = `swr-off-${suffix}`;
-    const request = (key, at, content) => frame(`${id}-${key}`, at, {width: 'fill_container', layout: 'horizontal', gap: 8, alignItems: 'start', padding: [3, 0]}, [
-      micro(`${id}-${key}-at`, at, '$--muted-foreground', {mono: true}),
-      label(`${id}-${key}-text`, content, '$--foreground', {width: 'fill_container'}),
-    ]);
     return panel(id, 'Summaries off', [
-      ...top(id, {title: TITLE, state: '쉬는 중 · 자식 1 · 요청 7'}),
+      ...top(id, {title: TITLE, state: '쉬는 중'}),
       heading(`${id}-prs`, 'PR', '1'),
       prRow(`${id}-pr1`, {number: 1093, state: 'merged', title: 'Stop three resident hided loops', by: ['claude', '상주 데몬 버그…']}),
-      heading(`${id}-requests`, '요청', '7'),
-      micro(`${id}-older`, '› 이전 요청 2'),
-      request('r3', '15:39', WORDS.bugs),
-      request('r4', '15:53', '그러면 지금 처리하는 작업들 말고 그다음에 너가 해야할것들 정리좀 해줘봐 ~'),
-      request('r5', '16:00', WORDS.merge),
-      request('r6', '16:43', '잘 되고 있어?'),
-      request('r7', '17:13', '설치하고 재측정해줘'),
-      ...children(id),
+      heading(`${id}-children`, '맡긴 일', '1'),
+      child(`${id}-k1`, {...BUGS, hang: false}),
+      ...words(id, 7),
     ]);
   }
   function states(suffix) {
     const id = `swr-states-${suffix}`;
     const group = (key, title, body) => frame(`${id}-${key}`, title, {width: 'fill_container', layout: 'vertical', gap: 4}, [micro(`${id}-${key}-cap`, title, '$--subtle-foreground', {weight: '600'}), ...body]);
     return panel(id, 'States', [
-      group('open', '열린 놓친 일: 그 일 밑에 노란 줄과 두 버튼', [
-        task(`${id}-open-t`, {state: 'unfinished', name: '설치 후 재측정', misses: [{text: '재측정 전 설치본 버전 확인 안 됨', open: true}]}),
+      group('asks', '살아 있는 세션의 질문: 박스 앞 ! 와 끝의 말', [
+        task(`${id}-asks-t`, {state: 'question', name: '가격 페이지 시안 세 가지'}),
+        child(`${id}-asks-k`, {title: '요금 비교 표 정리', state: 'going', word: '작업 중'}),
       ]),
-      group('now', '판정 전 마지막 요청: 내 말을 꺼도 맨 끝에 보임', [
+      group('now', '판정 전 마지막 요청: 목록 끝에 방금 시킨 것', [
         task(`${id}-now-t`, {state: 'done', name: '설치 빌드 실측 및 개선 제안 안전성 평가'}),
         frame(`${id}-now-row`, 'Not yet judged', {width: 'fill_container', layout: 'horizontal', gap: 6, alignItems: 'start', padding: [4, 0]}, [
-          label(`${id}-now-w`, '지금', '$--agent-working', {weight: '500'}),
+          label(`${id}-now-w`, '방금 시킨 것', '$--agent-working', {weight: '500'}),
           label(`${id}-now-t2`, '설치하고 재측정해줘', '$--foreground', {width: 'fill_container'}),
         ]),
       ]),
-      group('chapters', '목표가 둘 이상일 때만 챕터 줄', [
-        micro(`${id}-ch1`, '세션 작업 기록 구현 · 09:00', '$--subtle-foreground', {weight: '500'}),
-        task(`${id}-ch1-t`, {state: 'done', name: 'Sessions 기록 화면'}),
-        micro(`${id}-ch2`, '세션 검색과 놓친 일 정리 · 11:20', '$--subtle-foreground', {weight: '500'}),
-        task(`${id}-ch2-t`, {state: 'review', name: '⌘K 세션 검색', pr: [1122, 'failed']}),
+      group('delegated', '어느 일에도 걸리지 않은 자식: 끝에 맡긴 일', [
+        task(`${id}-del-t`, {state: 'review', name: '⌘K 세션 검색', pr: [1122, 'failed']}),
+        micro(`${id}-del-h`, '맡긴 일', '$--muted-foreground', {weight: '500'}),
+        child(`${id}-del-k`, {title: '세션 검색 결과 정리', state: 'quiet', word: '쉬는 중', hang: false}),
       ]),
       group('loading', '읽는 중', [frame(`${id}-skeleton`, 'Skeleton', {width: 'fill_container', height: 32, fill: '$--secondary', cornerRadius: '$--radius-sm'}, [])]),
       group('failure', '기록을 읽지 못함', [screenButton(`${id}-retry`, '다시 시도', {variant: 'ghost'})]),
@@ -214,5 +165,5 @@ export function sessionWorkScreens({frame, text, icon, screenButton, themedXref}
       ]),
     ]);
   }
-  return suffix => [record(suffix, false), record(suffix, true), split(suffix), off(suffix), states(suffix)];
+  return suffix => [record(suffix), off(suffix), states(suffix)];
 }

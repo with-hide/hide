@@ -16,6 +16,7 @@ import { Checkbox } from "./components/ui/checkbox";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Input } from "./components/ui/input";
 import { DiskCleanupSheet } from "./DiskCleanupSheet";
+import { endedSentence, startFailure } from "./startDraft";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import { Note, Status } from "./components/settings-rows";
 import { SubtreeList } from "./components/subtree-list";
@@ -24,6 +25,7 @@ import { StartIssueDialog } from "./IssueDialogs";
 import { PrDelegateDialog, PrLinkDialog, PrNewIssueDialog } from "./PrDialogs";
 import { translate, useInterfaceTranslation } from "./i18n/client";
 import { localDeviceId, type Checkout, type Workspace } from "./snapshot";
+import { machineName, windowDeviceId } from "./screenMachine";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import {
@@ -57,11 +59,11 @@ function findTarget(workspaceId: string, checkoutId?: string): { workspace: Work
   return { workspace, checkout: checkoutId ? (workspace.checkouts.find((row) => row.id === checkoutId) ?? null) : null };
 }
 
-/** The device a workspace belongs to, by its label, or null for the core's own node. */
+/** The machine a workspace belongs to, as this window names it, or null for the window's own. */
 function deviceLabel(workspace: Workspace): string | null {
-  const device = workspace.remote_target_id ?? (workspace.device_id === localDeviceId(useShellStore.getState().rest) ? null : workspace.device_id);
-  if (!device) return null;
-  return useShellStore.getState().rest?.navigator?.devices?.find((row) => row.id === device)?.label ?? device;
+  const devices = useShellStore.getState().rest?.navigator?.devices;
+  const device = workspace.remote_target_id ?? workspace.device_id;
+  return device === windowDeviceId(devices) ? null : machineName(devices, device, translate);
 }
 
 export function WorkspaceDialogs({ actions }: { actions: Actions }) {
@@ -639,12 +641,13 @@ export function WorkspaceNotices({ actions }: { actions: Actions }) {
 
   if (!task || !task.agent_phase || task.agent_phase === "started") return null;
   const dismiss = () => useUiStore.getState().setWatchedTask(null);
+  const failure = startFailure(task.agent_message);
   return (
     <div role="status" data-task-agent={task.agent_phase} className="flex flex-wrap items-center gap-md border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground">
       <span className="min-w-0 flex-1 break-words">
         {task.agent_phase === "starting"
           ? t("workspace.startingAgent", { kind: task.agent_kind ?? t("common.agent") })
-          : `${task.agent_message ?? t("workspace.agentNotStarted")} ${task.kind === "worktree_create" ? t("workspace.worktreePaneKept") : t("workspace.paneKept")}`}
+          : `${endedSentence("key" in failure ? t(failure.key) : failure.message)} ${task.kind === "worktree_create" ? t("workspace.worktreePaneKept") : t("workspace.paneKept")}`}
       </span>
       {task.agent_phase === "failed" ? (
         <button type="button" className="text-foreground underline" onClick={() => actions.retryTaskAgent(task.id)} data-task-agent-retry="true">

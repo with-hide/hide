@@ -528,7 +528,7 @@ pub(super) struct FileClosePayload {
 /// the checkout switch, the panel, the tree and the editor tab land in one
 /// event or the dispatch's fire-and-forget ordering would let the operator
 /// see a half-applied reveal.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub(super) struct RevealPathPayload {
     pub(super) path: String,
     pub(super) workspace_id: String,
@@ -861,6 +861,11 @@ pub(super) struct AgentStartInCheckoutPayload {
     /// The archived file selected by the caller, proved again off-lock.
     #[serde(default)]
     pub(super) resume_session_path: Option<String>,
+    /// The start comes from a surface that is not the operator's own screen
+    /// (the phone): the tab is made and listed, but the desktop's visible
+    /// tab, keyboard focus and Herdr's focus stay where they are.
+    #[serde(default)]
+    pub(super) stay_behind: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1431,6 +1436,10 @@ pub(super) enum Event {
     ForkPane(ForkPanePayload),
     AgentSleepSet(AgentSleepSetPayload),
     AgentSleep(PaneTargetPayload),
+    ArchiveSession(super::session_archive::ArchiveSessionPayload),
+    ArchiveResume(super::session_archive::ArchiveTargetPayload),
+    ArchiveDelete(super::session_archive::ArchiveTargetPayload),
+    ArchiveCheck(super::session_archive::ArchiveTargetPayload),
     PaneInputSubmitted(PaneTargetPayload),
     PaneInputSent(PaneTargetPayload),
     ResolveSession(PaneTargetPayload),
@@ -1681,6 +1690,13 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "fork_pane" => decode!(ForkPanePayload, ForkPane),
         "agent_sleep_set" => decode!(AgentSleepSetPayload, AgentSleepSet),
         "agent_sleep" => decode!(PaneTargetPayload, AgentSleep),
+        "archive_session" => decode!(
+            super::session_archive::ArchiveSessionPayload,
+            ArchiveSession
+        ),
+        "archive_resume" => decode!(super::session_archive::ArchiveTargetPayload, ArchiveResume),
+        "archive_delete" => decode!(super::session_archive::ArchiveTargetPayload, ArchiveDelete),
+        "archive_check" => decode!(super::session_archive::ArchiveTargetPayload, ArchiveCheck),
         "pane_input_submitted" => decode!(PaneTargetPayload, PaneInputSubmitted),
         "pane_input_sent" => decode!(PaneTargetPayload, PaneInputSent),
         "resolve_session" => decode!(PaneTargetPayload, ResolveSession),
@@ -1992,6 +2008,10 @@ impl Runtime {
             Event::SessionSnapshot(payload) => self.ingest_session(Ok(payload)),
             Event::AgentSleepSet(payload) => self.set_agent_sleep_after(payload),
             Event::AgentSleep(payload) => self.request_agent_sleep(&payload.pane_id),
+            Event::ArchiveSession(payload) => self.request_archive(payload),
+            Event::ArchiveResume(payload) => self.request_archive_resume(payload),
+            Event::ArchiveDelete(payload) => self.request_archive_delete(payload),
+            Event::ArchiveCheck(payload) => self.check_archive_status(payload),
             // The phone's reply reached the pane; nothing on screen moves.
             Event::PaneInputSubmitted(payload) => {
                 self.note_delivery_reply(&payload.pane_id);
@@ -2810,7 +2830,10 @@ impl Runtime {
                 // Hide's kit comes off the device on its own helper
                 // connection, which the disconnect below leaves open for it.
                 let kit_removal = self.queue_device_kit_removal(&registration);
-                self.disconnect_remote_device(&payload.device_id);
+                self.disconnect_remote_device(
+                    &payload.device_id,
+                    super::devices::Retiring::Removed,
+                );
                 self.forget_device_directories(&payload.device_id);
                 // Removing a device removes Hide's own record of it: its
                 // project registrations, expanded folders and file tabs. Its
@@ -2843,6 +2866,7 @@ impl Runtime {
                 self.retire_device_editor_tabs(&payload.device_id);
                 self.forget_device_views(&payload.device_id);
                 self.forget_device_sleep(&payload.device_id);
+                self.forget_device_launches(&payload.device_id);
                 self.forget_recent_checkouts(|held| held.device_id == payload.device_id);
                 self.rebuild_device_rows();
                 self.rebuild_tab_strips();
@@ -3073,7 +3097,26 @@ impl Runtime {
                     );
                     return true;
                 }
+                // A choice the agent does not take is refused before any pane
+                // is made for the fork.
+                let launch = self.launch_choice_of(agent);
+                if let Err(detail) =
+                    super::agent_choice::launch_arguments(agent_kind.kind(), &launch)
+                {
+                    self.set_error(
+                        "pane.fork_invalid_launch_choice",
+                        format!(
+                            "Pane {pane_id}'s agent was started with a model or effort it does not take: {detail}"
+                        ),
+                        false,
+                    );
+                    return true;
+                }
                 self.fork_sequence += 1;
+                let name = fork_name(
+                    &pane_id,
+                    &format!("{}-{}", self.fork_sequence, unix_milliseconds()),
+                );
                 self.forks_in_flight.insert(
                     pane_id.clone(),
                     super::agents::PendingFork {
@@ -3084,6 +3127,9 @@ impl Runtime {
                         issued_serial: self.control_lane.issued_serial(),
                         tab_id: None,
                         focused: None,
+                        kind: agent.agent_kind.clone(),
+                        name: name.clone(),
+                        launch: launch.clone(),
                     },
                 );
                 let Some(context) = self.live.as_ref().cloned() else {
@@ -3112,10 +3158,6 @@ impl Runtime {
                         Some((pane.cwd.clone(), checkout.next_tab_label.clone()))
                     })
                     .unzip();
-                let name = fork_name(
-                    &pane_id,
-                    &format!("{}-{}", self.fork_sequence, unix_milliseconds()),
-                );
                 let request = ForkRequest {
                     parent_state_change_seq: agent.state_change_seq,
                     connection_generation: self.live_generation,
@@ -3131,6 +3173,7 @@ impl Runtime {
                     tab_label,
                     placement: payload.placement,
                     codex_daemon: self.codex_daemon_for_pane(&pane_id),
+                    launch,
                 };
                 // Keys typed between the press and the agent's start wait for
                 // the fork's agent rather than reaching the shell that starts
@@ -4095,6 +4138,8 @@ impl Runtime {
                     device_registrations: payload
                         .device_registrations
                         .unwrap_or(current.device_registrations),
+                    // The name a move kept for this machine is the core's own, never a shell's.
+                    machine_label: current.machine_label,
                     accent_hex: payload.accent_hex.unwrap_or(current.accent_hex),
                     // `theme_set` owns the theme; a shared UI-state save carries it through.
                     theme: current.theme,
@@ -4140,6 +4185,7 @@ impl Runtime {
                     conversation_pane_ids: current.conversation_pane_ids,
                     pane_read_records: current.pane_read_records,
                     pane_completions: current.pane_completions,
+                    pane_launches: current.pane_launches,
                     request_verbs: current.request_verbs,
                     // `agent_sleep_set` owns the setting and the core owns
                     // the sleep records; a shared save carries both through.
@@ -4150,6 +4196,7 @@ impl Runtime {
                     // Every agent start owns this; a shared save carries it.
                     agent_start: current.agent_start,
                     agent_sleep: current.agent_sleep,
+                    session_archive: current.session_archive,
                     // The core records it on the front change; a shared save
                     // carries it through, or any save would empty the list.
                     recent_checkouts: current.recent_checkouts,

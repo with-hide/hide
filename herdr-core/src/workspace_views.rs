@@ -164,10 +164,15 @@ pub struct WorkspaceView {
     /// Whether the files tool shows the file tree column (D-05). It stays
     /// on until the operator turns it off.
     pub tree: bool,
-    /// The lane's width in CSS pixels once the operator resized it; until
-    /// then the shell's default. The same width floats and docks (B6).
+    /// The files tool's document width in CSS pixels once the operator
+    /// resized it; until then the shell's default. The same width floats and
+    /// docks (B6).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lane_width: Option<u32>,
+    /// The width of every other tool and of the 보기 slot, the same way, so
+    /// a wide document does not widen Memory or PRs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub panel_width: Option<u32>,
     /// The tree column's width, the same way.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tree_width: Option<u32>,
@@ -208,6 +213,8 @@ struct StoredLane {
     #[serde(default)]
     lane_width: Option<u32>,
     #[serde(default)]
+    panel_width: Option<u32>,
+    #[serde(default)]
     tree_width: Option<u32>,
     #[serde(default)]
     last_used_unix_ms: u64,
@@ -234,6 +241,7 @@ impl StoredLane {
             pinned: self.pinned,
             tree: self.tree,
             lane_width: self.lane_width,
+            panel_width: self.panel_width,
             tree_width: self.tree_width,
             last_used_unix_ms: self.last_used_unix_ms,
             layout: self.layout,
@@ -306,6 +314,7 @@ impl StoredColumns {
             // Widths stored before the columns were shares of a panel that
             // floated; the lane starts at its default.
             lane_width: if columns { self.views_width } else { None },
+            panel_width: None,
             tree_width: None,
             last_used_unix_ms: self.last_used_unix_ms,
             layout: self.layout,
@@ -372,6 +381,7 @@ impl WorkspaceView {
             pinned: false,
             tree: false,
             lane_width: None,
+            panel_width: None,
             tree_width: None,
             last_used_unix_ms: 0,
             layout: Layout::default(),
@@ -682,6 +692,7 @@ fn settle(
     let mut repairs = Vec::new();
     for view in &mut workspaces {
         view.lane_width = view.lane_width.map(clamp_width);
+        view.panel_width = view.panel_width.map(clamp_width);
         view.tree_width = view.tree_width.map(clamp_width);
         for note in view
             .layout
@@ -717,7 +728,7 @@ pub fn save(path: &Path, views: &WorkspaceViews) -> Result<(), String> {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .ok_or_else(|| "Workspace view state path has no parent directory".to_owned())?;
-    fs::create_dir_all(parent)
+    hide_platform::fs::private::create_dir_all(parent)
         .map_err(|_| "Workspace view state directory could not be prepared".to_owned())?;
     let stored = StoredWorkspaceViews {
         schema_version: SCHEMA_VERSION,

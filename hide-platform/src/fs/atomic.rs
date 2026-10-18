@@ -135,12 +135,31 @@ pub fn write_file(path: &Path, contents: &[u8], access: Access) -> io::Result<Fi
     write(path, contents, access, WriteMode::Visibility).map_err(DurableWriteError::into_io_error)
 }
 
+/// Who may use a file [`write_file_durable`] writes: the current account
+/// alone, as [`Access::Private`] and [`Access::PrivateExecutable`] say. A
+/// durable write never keeps the access of the file it replaces: Windows
+/// keeps an access list only through `ReplaceFileW`, which has no
+/// write-through form.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DurableAccess {
+    Private,
+    PrivateExecutable,
+}
+
+impl From<DurableAccess> for Access {
+    fn from(access: DurableAccess) -> Self {
+        match access {
+            DurableAccess::Private => Access::Private,
+            DurableAccess::PrivateExecutable => Access::PrivateExecutable,
+        }
+    }
+}
+
 /// Writes a whole file and returns its identity only after the operating
-/// system acknowledges the persistence barrier. On Unix this is file sync,
-/// rename and fallible parent open/sync. On Windows it is file sync and a
-/// same-directory `MoveFileExW` with replacement and write-through flags.
-/// Windows supports only `Access::Private` here; other access modes fail
-/// before mutation rather than changing their ACL-preservation contract.
+/// system acknowledges the persistence barrier: file sync, a same-folder
+/// rename over the destination, then a fallible open and flush of the
+/// folder ([`sync_dir`]). On Windows the rename is `MoveFileExW` with the
+/// replace and write-through flags, the form the `atomicwrites` crate uses.
 ///
 /// The parent must already exist, its ancestry must have an established
 /// durability boundary, and the caller must keep that trusted parent stable.
@@ -155,9 +174,9 @@ pub fn write_file(path: &Path, contents: &[u8], access: Access) -> io::Result<Fi
 pub fn write_file_durable(
     path: &Path,
     contents: &[u8],
-    access: Access,
+    access: DurableAccess,
 ) -> Result<FileId, DurableWriteError> {
-    write(path, contents, access, WriteMode::Durable)
+    write(path, contents, access.into(), WriteMode::Durable)
 }
 
 #[derive(Clone, Copy)]
@@ -179,9 +198,6 @@ fn write(
         Some(parent) if !parent.as_os_str().is_empty() => parent,
         _ => Path::new("."),
     };
-    if matches!(mode, WriteMode::Durable) {
-        sys::validate_durable(path, access).map_err(DurableWriteError::before_replace)?;
-    }
     let kept = match access {
         Access::KeepOrPrivate => match fs::File::open(path) {
             Ok(existing) => {
@@ -238,9 +254,6 @@ fn write(
         match mode {
             WriteMode::Visibility => sync_path_parent(folder),
             WriteMode::Durable => {
-                // Windows's write-through replacement is the barrier; its
-                // legacy no-op sync_dir must not stand in for one.
-                #[cfg(unix)]
                 sync_durable_parent(folder).map_err(|source| {
                     DurableWriteError::ReplacedNotDurable {
                         file_id: id,
@@ -304,7 +317,6 @@ impl Drop for OwnedTemporary {
     }
 }
 
-#[cfg(unix)]
 fn sync_durable_parent(folder: &Path) -> io::Result<()> {
     #[cfg(test)]
     os_faults::fail(os_faults::Point::ParentOpen)?;
@@ -326,9 +338,11 @@ pub fn replace_file(from: &Path, to: &Path) -> io::Result<FileId> {
     Ok(id)
 }
 
-/// Syncs an open folder's entries on Unix. Windows retains the legacy no-op
-/// `Ok` result, which is not a durability acknowledgement. Use
-/// [`write_file_durable`] when a writer must check its persistence barrier.
+/// Makes an open folder's entries durable: `fsync` on Unix, and on Windows
+/// `FlushFileBuffers` on the same folder opened again with the right to add
+/// an entry, which a flush asks of its handle (etcd's `fileutil.OpenDir`
+/// takes the same route). A Windows folder this account may add no entry to
+/// cannot be flushed by it and is `PermissionDenied`, never a quiet `Ok`.
 pub fn sync_dir(dir: &impl Handle) -> io::Result<()> {
     sys::sync_dir(dir)
 }
@@ -398,10 +412,6 @@ mod sys {
 
     pub(super) fn replace(from: &Path, to: &Path, _keep_acl: bool) -> io::Result<()> {
         fs::rename(from, to)
-    }
-
-    pub(super) fn validate_durable(_: &Path, _: Access) -> io::Result<()> {
-        Ok(())
     }
 
     pub(super) fn replace_durable(from: &Path, to: &Path) -> io::Result<()> {
@@ -609,19 +619,6 @@ mod sys {
         fs::rename(from, to)
     }
 
-    pub(super) fn validate_durable(path: &Path, access: Access) -> io::Result<()> {
-        if !matches!(access, Access::Private) {
-            // ReplaceFileW preserves an existing ACL, but its write-through
-            // flag is unsupported. Do not substitute an ACL-changing move.
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "durable replacement supports only private access on Windows",
-            ));
-        }
-        wide(path)?;
-        Ok(())
-    }
-
     pub(super) fn replace_durable(from: &Path, to: &Path) -> io::Result<()> {
         let (from, to) = (wide(from)?, wide(to)?);
         #[cfg(test)]
@@ -644,8 +641,11 @@ mod sys {
         Ok(())
     }
 
-    pub(super) fn sync_dir(_: &impl Handle) -> io::Result<()> {
-        Ok(())
+    pub(super) fn sync_dir(dir: &impl Handle) -> io::Result<()> {
+        // A normal flush writes a folder's data and metadata and has the
+        // storage flush its cache; only the data-sync flush refuses folders
+        // (`NtFlushBuffersFileEx`).
+        crate::fs::reopen_dir_for_flush(dir)?.sync_all()
     }
 
     /// `replacement` takes the name `replaced` had, with its attributes and
@@ -723,9 +723,7 @@ mod os_faults {
         Replacement,
         ReplacementAcknowledgement,
         Cleanup,
-        #[cfg(unix)]
         ParentOpen,
-        #[cfg(unix)]
         ParentSync,
     }
 
@@ -795,7 +793,7 @@ mod tests {
             let old_id = identity::file_id(&path).unwrap();
             let _fault = os_faults::install(&[point]);
 
-            let error = write_file_durable(&path, b"new", Access::Private).unwrap_err();
+            let error = write_file_durable(&path, b"new", DurableAccess::Private).unwrap_err();
 
             match &error {
                 DurableWriteError::BeforeReplace { source, cleanup } => {
@@ -811,7 +809,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn parent_open_or_sync_failure_preserves_the_installed_file_for_recovery() {
         for point in [Point::ParentOpen, Point::ParentSync] {
@@ -821,7 +818,8 @@ mod tests {
             let old_id = identity::file_id(&path).unwrap();
             let fault = os_faults::install(&[point]);
 
-            let error = write_file_durable(&path, b"new intent", Access::Private).unwrap_err();
+            let error =
+                write_file_durable(&path, b"new intent", DurableAccess::Private).unwrap_err();
 
             match error {
                 DurableWriteError::ReplacedNotDurable { file_id, source } => {
@@ -839,7 +837,7 @@ mod tests {
             // gone. The writer itself never retries or restores old bytes.
             drop(fault);
             let retained = fs::read(&path).unwrap();
-            let recovered = write_file_durable(&path, &retained, Access::Private).unwrap();
+            let recovered = write_file_durable(&path, &retained, DurableAccess::Private).unwrap();
             assert_eq!(fs::read(&path).unwrap(), b"new intent");
             assert_eq!(identity::file_id(&path).unwrap(), recovered);
         }
@@ -852,7 +850,7 @@ mod tests {
         fs::write(&path, b"old").unwrap();
         let _fault = os_faults::install(&[Point::Replacement]);
 
-        let error = write_file_durable(&path, b"new", Access::Private).unwrap_err();
+        let error = write_file_durable(&path, b"new", DurableAccess::Private).unwrap_err();
 
         match error {
             DurableWriteError::ReplacementUncertain { source, cleanup } => {
@@ -875,7 +873,7 @@ mod tests {
         // faulted, modeling a failed operation with a changed namespace.
         let _fault = os_faults::install(&[Point::ReplacementAcknowledgement]);
 
-        let error = write_file_durable(&path, b"new intent", Access::Private).unwrap_err();
+        let error = write_file_durable(&path, b"new intent", DurableAccess::Private).unwrap_err();
 
         match error {
             DurableWriteError::ReplacementUncertain { source, cleanup } => {
@@ -896,7 +894,7 @@ mod tests {
         fs::write(&path, b"old").unwrap();
         let _fault = os_faults::install(&[Point::FileSync, Point::Cleanup]);
 
-        let error = write_file_durable(&path, b"new", Access::Private).unwrap_err();
+        let error = write_file_durable(&path, b"new", DurableAccess::Private).unwrap_err();
 
         match error {
             DurableWriteError::BeforeReplace {
@@ -928,12 +926,12 @@ mod tests {
         let _fault = os_faults::install(&[Point::FileSync]);
 
         assert!(matches!(
-            write_file_durable(&strict, b"strict", Access::Private),
+            write_file_durable(&strict, b"strict", DurableAccess::Private),
             Err(DurableWriteError::BeforeReplace { .. })
         ));
         write_file(&legacy, b"legacy", Access::KeepOrPrivate).unwrap();
         let other_id = std::thread::spawn(move || {
-            write_file_durable(&other_thread, b"other", Access::Private).unwrap()
+            write_file_durable(&other_thread, b"other", DurableAccess::Private).unwrap()
         })
         .join()
         .unwrap();

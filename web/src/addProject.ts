@@ -7,7 +7,7 @@
 
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
-import { machineName, thisMachineKey, windowDeviceId, windowFirst } from "./screenMachine";
+import { isCoreMachine, machineName, thisMachineKey, windowDeviceId, windowFirst } from "./screenMachine";
 import type { Device, WorkspaceRegistration } from "./snapshot";
 
 export type Host = { id: string; label: string };
@@ -19,6 +19,22 @@ export function addProjectHosts(devices: readonly Device[] | undefined, t: TFunc
   const hosts = rows.map((device) => ({ id: device.id, label: machineName(devices, device.id, t) }));
   // Before the snapshot names this machine, it is the core's own node by the empty id.
   return rows.some((device) => device.id === own) ? hosts : [{ id: own, label: t(thisMachineKey(null)) }, ...hosts];
+}
+
+/**
+ * What the dialog offers on a host: Browse folder only on the machine this
+ * window runs on, whose folders the native picker shows, and a typed `~/`
+ * path that machine's node judges anywhere else; the other ways to add only on
+ * the core's machine, the one a new project can be made on (the core refuses
+ * a new folder on any other), and their parent picker only when the window
+ * runs there too.
+ */
+export type HostWays = { browse: boolean; otherWays: boolean; pickParent: boolean };
+
+export function hostWays(host: string, devices: readonly Device[] | undefined): HostWays {
+  const own = host === windowDeviceId(devices);
+  const core = isCoreMachine(devices, host);
+  return { browse: own, otherWays: core, pickParent: own && core };
 }
 
 /** The host the dialog opens on: the focused device while it is still listed, this Mac otherwise. */

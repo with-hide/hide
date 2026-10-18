@@ -97,24 +97,33 @@ export function sessionScreens(tokens, {frame, text, icon, themedXref, screenBut
   function taskBoard(suffix) {
     const id=`tsc-ph-board-${suffix}`;
     const labeled = (key, label, children) => frame(`${id}-sec-${key}`, label, {width:'fill_container',layout:'vertical',gap:8}, [caption(`${id}-sec-${key}-label`, label, '$--subtle-foreground', {weight:'600'}), ...children]);
-    // One request's tasks share one state (B5): four in review behind its PR.
-    // A task a pull request holds draws an empty slot; its PR mark says the state (status-marks D-23, B34).
-    const item = (key, state, name, pr) => frame(`${id}-pop-${key}`, name, {width:'fill_container',layout:'horizontal',gap:'$--spacing-xs',alignItems:'start',padding:[2,0]}, [
-      frame(`${id}-pop-${key}-g`, 'Empty slot', {width:12,height:12}, []),
+    // One request's tasks share one state (B5): four in review, the request's PR mark on its
+    // first task and `리뷰 대기` in words on the rest; every task is a checkbox (PRD
+    // record-card-readability D-05, B7, B8), `!` in front while the session asks.
+    const box = (key, done) => done
+      ? frame(key, 'Checkbox checked', {width:12,height:12,cornerRadius:2,fill:'$--success',layout:'horizontal',justifyContent:'center',alignItems:'center'}, [icon(`${key}-g`, 'check', {size:9,fill:'$--background'})])
+      : frame(key, 'Checkbox', {width:12,height:12,cornerRadius:2,stroke:'$--muted-foreground',strokeWidth:1,strokeAlignment:'inner'}, []);
+    const item = (key, state, name, {pr, word} = {}) => frame(`${id}-pop-${key}`, name, {width:'fill_container',layout:'horizontal',gap:'$--spacing-xs',alignItems:'center',padding:[2,0]}, [
+      box(`${id}-pop-${key}-g`, state === 'done'),
       caption(`${id}-pop-${key}-n`, name, state === 'done' ? '$--subtle-foreground' : '$--foreground', {width:'fill_container'}),
+      ...(word ? [text(`${id}-pop-${key}-w`, word, {size:'$--text-micro',fill:'$--muted-foreground'})] : []),
       ...(pr ? [prChip(`${id}-pop-${key}-pr`, pr)] : []),
     ]);
-    const segments = kinds => frame(`${id}-pop-seg`, 'Child segments', {layout:'horizontal',gap:'$--spacing-xxs',alignItems:'center'},
-      kinds.map((kind, index) => frame(`${id}-pop-seg-${index}`, kind, {width:20,height:4,cornerRadius:2,fill:kind === 'done' ? '$--success' : '$--agent-working'}, [])));
+    // This pane's own 지금 box, the record's state box part: edged in the state's colour, the line quiet.
+    const now = frame(`${id}-pop-now`, '지금', {width:'fill_container',layout:'horizontal',gap:'$--spacing-xs',alignItems:'start',padding:['$--spacing-xs','$--spacing-sm'],cornerRadius:'$--radius-md',fill:'$--card',stroke:'$--agent-working',strokeWidth:1,strokeAlignment:'inner'}, [
+      caption(`${id}-pop-now-w`, '지금 · 작업 중', '$--foreground', {weight:'600'}),
+      caption(`${id}-pop-now-t`, '파일 페이지 댓글 PR 검증 중', '$--muted-foreground', {width:'fill_container'}),
+    ]);
     const list = frame(`${id}-pop`, 'Task list', {width:340,layout:'vertical',gap:0,fill:'$--popover',stroke:'$--border',strokeWidth:1,strokeAlignment:'inner',cornerRadius:'$--radius-md'}, [
       frame(`${id}-pop-body`, 'Tasks', {width:'fill_container',layout:'vertical',gap:2,padding:['$--spacing-sm','$--spacing-sm',0,'$--spacing-sm']}, [
-        frame(`${id}-pop-h`, 'Heading', {width:'fill_container',layout:'horizontal',gap:'$--spacing-xs',alignItems:'center',padding:[0,0,4,0]}, [caption(`${id}-pop-h-t`, '시킨 일', '$--subtle-foreground', {weight:'500'}), text(`${id}-pop-h-n`, '0/4', {size:'$--text-micro',fill:'$--muted-foreground',mono:true})]),
-        item('t0', 'review', 'README의 HTML 태그가 보이게 하기', {number:1233,state:'mergeable'}),
-        item('t1', 'review', '댓글 + 마크 위치 맞추기'),
-        item('t2', 'review', 'HTML 페이지에서 댓글이 동작하게 하기'),
-        item('t3', 'review', '드래그한 영역 남겨두기'),
-        frame(`${id}-pop-kids`, 'Children progress', {width:'fill_container',layout:'horizontal',gap:'$--spacing-xs',alignItems:'center',padding:[6,0,0,0]}, [caption(`${id}-pop-kids-t`, '자식 일', '$--subtle-foreground'), text(`${id}-pop-kids-n`, '4/5', {size:'$--text-micro',fill:'$--muted-foreground',mono:true}), segments(['done','done','working','done','done'])]),
-        frame(`${id}-pop-line`, 'Current line', {width:'fill_container',layout:'horizontal',gap:'$--spacing-xs',alignItems:'center',padding:[6,0,0,0]}, [caption(`${id}-pop-line-t`, '파일 페이지 댓글 PR 검증 중', '$--muted-foreground', {width:'fill_container'})]),
+        frame(`${id}-pop-h`, 'Heading', {width:'fill_container',layout:'horizontal',gap:'$--spacing-xs',alignItems:'end',padding:[0,0,4,0]}, [text(`${id}-pop-h-t`, '시킨 일', {size:'$--text-micro',fill:'$--muted-foreground',weight:'500'}), caption(`${id}-pop-h-n`, '0/4', '$--foreground', {weight:'600'})]),
+        item('t0', 'review', 'README의 HTML 태그가 보이게 하기', {pr:{number:1233,state:'mergeable'}}),
+        item('t1', 'review', '댓글 + 마크 위치 맞추기', {word:'리뷰 대기'}),
+        item('t2', 'review', 'HTML 페이지에서 댓글이 동작하게 하기', {word:'리뷰 대기'}),
+        item('t3', 'review', '드래그한 영역 남겨두기', {word:'리뷰 대기'}),
+        frame(`${id}-pop-now-gap`, 'Gap', {width:'fill_container',height:6}, []),
+        now,
+        frame(`${id}-pop-kids`, '맡긴 일', {width:'fill_container',layout:'horizontal',gap:'$--spacing-xs',alignItems:'end',padding:[8,0,0,0]}, [text(`${id}-pop-kids-t`, '맡긴 일', {size:'$--text-micro',fill:'$--muted-foreground',weight:'500'}), caption(`${id}-pop-kids-n`, '5', '$--foreground', {weight:'600'}), text(`${id}-pop-kids-d`, '· 끝남 4', {size:'$--text-micro',fill:'$--muted-foreground'})]),
       ]),
       frame(`${id}-pop-foot`, 'Open record', {width:'fill_container',layout:'horizontal',alignItems:'center',padding:['$--spacing-xs','$--spacing-sm'],stroke:'$--border',strokeWidth:{top:1},strokeAlignment:'inner'}, [
         caption(`${id}-pop-open`, '기록 열기', '$--foreground', {width:'fill_container'}),
@@ -125,7 +134,7 @@ export function sessionScreens(tokens, {frame, text, icon, themedXref, screenBut
       labeled('one','One task: the chip alone, done over tasks',[pane(`${id}-one`,{provider:'codex',title:'README 번역 정리',tasks:{count:'0/1'}})]),
       labeled('split','A request split into four, with a PR and children: the chip counts tasks only; the children keep their own row',[pane(`${id}-split`,{mark:'●',provider:'claude',title:'Pre-launch bugfix pass for File views',tasks:{count:'0/4'},pr:{number:1233,state:'mergeable'},children:5,counts:{working:1,result:4},summary:'파일 페이지 댓글 기능 구현 · 작업 중'})]),
       labeled('none','No task, or Agent summaries off: no chip',[pane(`${id}-none`,{title:'아침 점검 위임',children:2,counts:{working:2},summary:'두 자식이 점검하는 중'})]),
-      labeled('open','The list under the chip: tasks with the request\'s PR once, children\'s progress, the current line and 기록 열기 (⇧⌘U pins it, Esc closes a pinned list)',[
+      labeled('open','The task box under the chip: checkbox tasks with the request\'s PR once, this pane\'s 지금 box, 맡긴 일 N · 끝남 k and 기록 열기 (⇧⌘U pins it, Esc closes a pinned list)',[
         pane(`${id}-open`,{mark:'●',provider:'claude',title:'Pre-launch bugfix pass for File views',tasks:{count:'0/4',open:true},pr:{number:1233,state:'mergeable'},terminal:'● 머지 가능한 건 바로 머지했어요.'}),
         list,
       ]),

@@ -324,6 +324,27 @@ impl AgentRuntime {
             Self::Codex => self.home_directory(home).join("hooks.json"),
         }
     }
+
+    /// The file that keeps this runtime's folder trust, found from the same
+    /// folder as [`Self::config_path`], so the trust Hide records and its
+    /// hooks are always read from one place (`crate::folder_trust`).
+    ///
+    /// Claude Code's is its global config, `~/.claude.json`, or the older
+    /// `.config.json` in its folder while that file has content, which Claude
+    /// Code then reads instead (its `getGlobalClaudeFile`); Codex's is the
+    /// `config.toml` in its folder, which only Codex writes.
+    pub fn trust_path(self, home: &Path) -> PathBuf {
+        match self {
+            Self::ClaudeCode => {
+                let legacy = self.home_directory(home).join(".config.json");
+                if std::fs::metadata(&legacy).is_ok_and(|meta| meta.is_file() && meta.len() > 0) {
+                    return legacy;
+                }
+                home.join(".claude.json")
+            }
+            Self::Codex => self.home_directory(home).join("config.toml"),
+        }
+    }
 }
 
 /// The hook events Hide registers.

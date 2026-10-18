@@ -634,16 +634,29 @@ fn each_lane_field_ends_at_its_sent_value_and_a_repeat_converges() {
         serde_json::json!({"lane_width": 700, "tree_width": 300}),
     );
     layout(&mut runtime, serde_json::json!({"tree_width": 99_999}));
+    // The other tools keep a width of their own, so a wide document leaves
+    // them as they were.
+    layout(&mut runtime, serde_json::json!({"panel_width": 440}));
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
     assert_eq!(
-        (view.lane_width, view.tree_width),
-        (Some(700), Some(crate::workspace_views::MAX_WIDTH))
+        (view.lane_width, view.panel_width, view.tree_width),
+        (
+            Some(700),
+            Some(440),
+            Some(crate::workspace_views::MAX_WIDTH)
+        )
     );
     let (saved, _) = crate::workspace_views::load(&state, 0);
     let saved = saved.get(&view.device_id, &view.path).unwrap();
     assert_eq!(
-        (saved.tool, saved.pinned, saved.tree, saved.lane_width),
-        (Some(Tool::Files), true, true, Some(700))
+        (
+            saved.tool,
+            saved.pinned,
+            saved.tree,
+            saved.lane_width,
+            saved.panel_width
+        ),
+        (Some(Tool::Files), true, true, Some(700), Some(440))
     );
     let written = std::fs::read_to_string(&state).unwrap();
     for retired in ["\"views\"", "\"tools\"", "views_width", "lane_called"] {
@@ -1530,6 +1543,16 @@ fn workspace_width_requests_are_bounded_ephemeral_and_confirm_exact_intents() {
             .as_deref(),
         Some("divider:third")
     );
+    // The other tools' divider confirms its intent the same way.
+    layout(
+        &mut runtime,
+        serde_json::json!({"panel_width": 448, "width_request_id": "divider:panel"}),
+    );
+    let published = runtime.snapshot.workspace_view.as_ref().unwrap();
+    assert_eq!(
+        (published.panel_width, published.width_request_id.as_deref()),
+        (Some(448), Some("divider:panel"))
+    );
     layout(&mut runtime, serde_json::json!({"lane_width": 650}));
     assert_eq!(
         runtime
@@ -1583,7 +1606,7 @@ fn an_explicit_file_visit_supersedes_a_delayed_memory_visit() {
         "file_focus",
         serde_json::json!({"tab_id": tab}),
     ));
-    runtime.acknowledge_memory_navigation(crate::node::TEST_NODE, "old-memory");
+    runtime.acknowledge_choice(crate::node::TEST_NODE, "old-memory");
     runtime.sync_workspace_view();
     assert_eq!(active_label(&runtime).as_deref(), Some("notes.md"));
     assert_ne!(

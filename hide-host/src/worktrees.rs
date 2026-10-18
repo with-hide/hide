@@ -1008,12 +1008,10 @@ fn merged_into(path: &Path, base: &str, until: Instant) -> Option<bool> {
             return None;
         }
         let output = output_within(
-            Command::new("git").arg("-C").arg(path).args([
-                "merge-base",
-                "--is-ancestor",
-                "HEAD",
-                &candidate,
-            ]),
+            hide_platform::programs::command("git")
+                .arg("-C")
+                .arg(path)
+                .args(["merge-base", "--is-ancestor", "HEAD", &candidate]),
             left.min(GIT_DEADLINE),
         )
         .ok()??;
@@ -1189,7 +1187,7 @@ fn git_within(cwd: &Path, arguments: &[&str], deadline: Duration) -> Result<Stri
         calls.push((cwd.to_owned(), arguments.first().unwrap_or(&"").to_string()));
     }
     let output = output_within(
-        Command::new("git")
+        hide_platform::programs::command("git")
             .arg("--no-optional-locks")
             .arg("-C")
             .arg(cwd)
@@ -1574,7 +1572,7 @@ pub fn check_new_branch(repository_root: &Path, branch: &str) -> HostResult<()> 
     if branch.starts_with('-') {
         return Err(invalid());
     }
-    let checked = Command::new("git")
+    let checked = hide_platform::programs::command("git")
         .arg("--no-optional-locks")
         .arg("-C")
         .arg(repository_root)
@@ -1585,7 +1583,7 @@ pub fn check_new_branch(repository_root: &Path, branch: &str) -> HostResult<()> 
         return Err(invalid());
     }
     let reference = format!("refs/heads/{branch}");
-    let exists = Command::new("git")
+    let exists = hide_platform::programs::command("git")
         .arg("--no-optional-locks")
         .arg("-C")
         .arg(repository_root)
@@ -1609,7 +1607,7 @@ pub fn check_new_branch(repository_root: &Path, branch: &str) -> HostResult<()> 
     }
     // Ask Git itself for the branch-exists diagnostic. This command is
     // side-effect free because the branch was proven to exist above.
-    let refusal = Command::new("git")
+    let refusal = hide_platform::programs::command("git")
         .arg("--no-optional-locks")
         .arg("-C")
         .arg(repository_root)
@@ -1776,24 +1774,40 @@ pub fn remove_worktree(
     }
 }
 
-/// Takes out the agy folder trust Hide recorded for a removed worktree
-/// (PRD antigravity-first-class D-08). The worktree is already gone, so a
-/// trust that cannot be taken out is only recorded: the operator has nothing
-/// to do, and switching agy off still takes it out.
+/// Takes out the folder trust Hide recorded for a removed worktree, in each
+/// agent's own settings (docs/agent-hooks.md, Folder trust for the worktrees
+/// Hide makes). The worktree is already gone, so a trust that cannot be taken
+/// out is only recorded: the operator has nothing to do, its record stays,
+/// and switching the agent off still takes it out.
 fn forget_agent_trust(checkout: &Path) {
+    use hide_agent_hooks::folder_trust::{self, Agent, Tools};
     let Ok(home) = hide_platform::host::home_dir() else {
         return;
     };
-    if let Err(failure) = hide_agent_hooks::antigravity_trust::forget(&home, checkout) {
-        eprintln!(
-            "{}",
-            serde_json::json!({
-                "component": "worktree_removal",
-                "kind": "agent_trust_kept",
-                "checkout": checkout,
-                "reason": failure.message(),
-            })
-        );
+    // The removal this follows runs to its own bound whatever its link
+    // does, and so does this: each Codex session ends within its own
+    // (`codex_trust::SESSION_BOUND`).
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    for agent in Agent::ALL {
+        let codex = (agent == Agent::Codex)
+            .then(|| hide_ai::resolve_binary(Path::new("codex")))
+            .flatten();
+        let tools = Tools {
+            codex: codex.as_deref(),
+            stop: &stop,
+        };
+        if let Err(failure) = folder_trust::forget(agent, &home, checkout, tools) {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "component": "worktree_removal",
+                    "kind": "agent_trust_kept",
+                    "agent": agent.label(),
+                    "checkout": checkout,
+                    "reason": failure.message(),
+                })
+            );
+        }
     }
 }
 

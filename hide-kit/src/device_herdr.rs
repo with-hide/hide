@@ -33,16 +33,14 @@ pub fn pinned_herdr(root: &Path) -> PathBuf {
     herdr_dir(root).join(crate::CURRENT).join(HERDR_PROGRAM)
 }
 
-/// The pinned copy for the helper running from `executable`
-/// (`<root>/<build>/hided`), when the build brought one; `None` for any
-/// other program, such as a development build or the desktop package.
-pub fn pinned_for_helper(executable: &Path) -> Option<PathBuf> {
-    let build = executable.parent()?;
-    build
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| crate::is_build_name(name))?;
-    let pinned = pinned_herdr(build.parent()?);
+/// The pinned copy this account's helper holds, found by the account's
+/// layout (`~/.hide/host-helper/herdr/current/herdr`), when one arrived:
+/// the Herdr the device's own uses run, and so the one every Hide program on
+/// that machine runs, whichever program asks (the helper, a core a move put
+/// there and its checks, a development build), never a `herdr` that merely
+/// comes first on a `PATH`.
+pub fn pinned_for_account(home: &Path) -> Option<PathBuf> {
+    let pinned = pinned_herdr(&crate::layout::helper_root(home));
     pinned.is_file().then_some(pinned)
 }
 
@@ -131,23 +129,16 @@ mod tests {
         copy
     }
 
-    /// PRD device-herdr-update B7: the device's terminals run the pinned copy
-    /// only for a helper running from one of its build folders, and only
-    /// when that build brought one.
+    /// PRD device-herdr-update B7: the account's pinned copy is found by its
+    /// layout, whichever program asks, once one arrived.
     #[test]
-    fn a_helper_in_a_build_folder_finds_the_pinned_herdr_and_any_other_program_does_not() {
+    fn the_accounts_pinned_herdr_is_found_by_its_layout() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("helper");
-        let helper = root.join("0123456789abcdef").join("hided");
-        assert_eq!(pinned_for_helper(&helper), None, "no copy arrived");
+        let home = dir.path().join("home");
+        assert_eq!(pinned_for_account(&home), None, "no copy arrived");
 
-        let copy = with_pinned_copy(&root);
-        assert_eq!(pinned_for_helper(&helper), Some(copy));
-        assert_eq!(
-            pinned_for_helper(&root.join("target").join("hided")),
-            None,
-            "a development build keeps the account's own herdr"
-        );
+        let copy = with_pinned_copy(&crate::layout::helper_root(&home));
+        assert_eq!(pinned_for_account(&home), Some(copy));
     }
 
     /// PRD device-herdr-update B7: the kit on a device names the pinned copy

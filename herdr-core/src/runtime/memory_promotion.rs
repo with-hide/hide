@@ -96,8 +96,8 @@ pub(super) struct PromotionStart {
     machine: Option<String>,
     /// The agent the new-agent button starts.
     kind: String,
-    /// Its remembered model's arguments.
-    args: Vec<String>,
+    /// Its remembered model, the spawn's launch choice.
+    launch: hide_agent_adapter::LaunchChoice,
     numbers: Vec<u64>,
     evidence: Vec<String>,
     /// The core's output language, which the agent writes its reasons in.
@@ -290,11 +290,10 @@ impl Runtime {
             .or_else(|| hide_agent_adapter::START_KINDS.first().copied())
             .ok_or("no agent Hide can start")?
             .to_owned();
-        let args = super::agent_choice::agent_arguments(
-            Some(&kind),
-            choice.models.get(&kind).map(String::as_str),
-            &[],
-        );
+        let launch = hide_agent_adapter::LaunchChoice {
+            model: choice.models.get(&kind).cloned(),
+            effort: None,
+        };
         Ok(PromotionStart {
             numbers: Vec::new(),
             evidence: Vec::new(),
@@ -306,7 +305,7 @@ impl Runtime {
             repository: self.promotion_repository(node, repo),
             machine: (*node != self.node).then(|| node.as_str().to_owned()),
             kind,
-            args,
+            launch,
             connector: self.delivery_connector(node.as_str()),
             node: self.node_link(node.as_str()).ok(),
         })
@@ -2050,18 +2049,15 @@ fn spawn_agent(
         .ok_or("agent_not_startable")?;
     let branch = promotion.branch.clone().ok_or("promotion_without_branch")?;
     let started = promotion.started_at_unix_ms;
-    let mut args = start.args.clone();
-    args.push(dialect.prompt_flag().to_owned());
-    args.push(crate::live::prompt_argument(&prompt(
-        &start.numbers,
-        &start.evidence,
-        start.language,
-    ))?);
+    let args = vec![
+        dialect.prompt_flag().to_owned(),
+        crate::live::prompt_argument(&prompt(&start.numbers, &start.evidence, start.language))?,
+    ];
     crate::coordination::register_code_owned(&start.client, &start.authority, &start.actor)?;
     // Stable per Project, card and attempt start, so a start asked again
     // continues the same spawn (rule 11), and an attempt after the
     // Project's data was deleted and its numbers began again is a new one.
-    let digest = &stable_digest(project_id)[..12];
+    let prefix = intent_prefix(project_id);
     let view = crate::coordination::run(
         start.client.clone(),
         crate::delivery::worker::Authority {
@@ -2074,7 +2070,7 @@ fn spawn_agent(
             machine: start.machine.clone(),
             name: agent_name(number, started),
             intent: format!(
-                "memory-promote-{digest}-m{number}-a{}-{}",
+                "{prefix}m{number}-a{}-{}",
                 promotion.attempt,
                 base36(started)
             ),
@@ -2083,6 +2079,7 @@ fn spawn_agent(
             branch,
             path: None,
             args,
+            launch: start.launch.clone(),
             task: Some(crate::coordination::SpawnTask {
                 kind: crate::coordination::TaskKind::MemoryPromote,
                 target: Some(format!("m{number}")),
@@ -2093,6 +2090,13 @@ fn spawn_agent(
         .as_str()
         .map(str::to_owned)
         .ok_or_else(|| "spawn_answer_unreadable".to_owned())
+}
+
+/// What every start of a Project's promotions begins its intent with: the
+/// digest of the Project's id, which tells whose card a task's number names
+/// (`node_migration::reown`).
+pub(crate) fn intent_prefix(project_id: &str) -> String {
+    format!("memory-promote-{}-", &stable_digest(project_id)[..12])
 }
 
 fn stable_digest(value: &str) -> String {

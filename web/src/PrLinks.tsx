@@ -1,4 +1,4 @@
-import { CircleDashedIcon, CircleDotIcon, FolderGit2Icon, Link2Icon } from "lucide-react";
+import { HouseIcon } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "./components/ui/command";
 import { Popover, PopoverAnchor, PopoverContent } from "./components/ui/popover";
@@ -30,9 +30,10 @@ function issueLabel(key: string): string {
 }
 
 /**
- * The links line (B2): each issue with its glyph, `#N 제목` and where the link
- * came from, or `연결된 이슈 없음` with `이슈 잇기`; then the worktree of the
- * branch, a gone one dim with `정리됨`.
+ * The links line (B2; PRD record-card-readability D-10, B18): each issue as
+ * one sentence, `이슈 #N 제목 · 열림/닫음`, its title cut short where it runs
+ * out, or `연결된 이슈 없음 · 이슈 잇기`; then the worktree of the branch as
+ * one chip at the right end, a gone one dim with `정리됨`.
  */
 export function PrLinks({ number, issue: boardIssue, checkout: boardCheckout, linkable, record, project, actions }: { number: number; issue: { key: string } | null; checkout: Checkout | null; linkable: boolean; record: LinkPanel | null; project: Workspace; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -45,43 +46,44 @@ export function PrLinks({ number, issue: boardIssue, checkout: boardCheckout, li
   if (boardCheckout && !paths.includes(boardCheckout.path)) paths.unshift(boardCheckout.path);
   const checkouts = project.checkouts;
   return (
-    <p className="flex min-w-0 flex-wrap items-center gap-x-md gap-y-xxs text-caption text-muted-foreground" data-pr-panel-links="true">
-      {issues.length === 0 ? (
-        <span className="inline-flex min-w-0 items-center gap-xs" data-pr-panel-issue="none">
-          <CircleDashedIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-          <span>{t("links.noIssue")}</span>
-          {linkable ? (
-            <IssuePicker number={number} project={project} open={linking} onOpenChange={setLinking}>
-              <button type="button" className="inline-flex items-center gap-xxs rounded-xs text-primary outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" onClick={() => setLinking(true)} data-pr-link-open={number}>
-                <Link2Icon aria-hidden="true" className="size-(--size-icon-sm)" />
-                {t("prList.linkIssue")}
-              </button>
-            </IssuePicker>
-          ) : null}
-        </span>
-      ) : (
-        issues.map((issue) => {
-          const task = tasks.find((candidate) => sameIssue(candidate.key, issue.key)) ?? null;
-          return <IssueLine key={issue.key} issueKey={issue.key} source={issue.source} task={task} project={project} actions={actions} />;
-        })
-      )}
+    <p className="flex min-w-0 items-center gap-x-md text-caption text-muted-foreground" data-pr-panel-links="true">
+      <span className="flex min-w-0 flex-1 flex-col gap-y-xxs">
+        {issues.length === 0 ? (
+          <span className="inline-flex min-w-0 items-center gap-xs" data-pr-panel-issue="none">
+            <span>{t("links.noIssue")}</span>
+            {linkable ? (
+              <IssuePicker number={number} project={project} open={linking} onOpenChange={setLinking}>
+                <button type="button" className="inline-flex items-center gap-xxs rounded-xs text-primary outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" onClick={() => setLinking(true)} data-pr-link-open={number}>
+                  <span aria-hidden="true">·</span>
+                  {t("prList.linkIssue")}
+                </button>
+              </IssuePicker>
+            ) : null}
+          </span>
+        ) : (
+          issues.map((issue) => {
+            const task = tasks.find((candidate) => sameIssue(candidate.key, issue.key)) ?? null;
+            return <IssueLine key={issue.key} issueKey={issue.key} source={issue.source} task={task} project={project} actions={actions} />;
+          })
+        )}
+      </span>
       {paths.map((path) => {
         const here = checkouts.find((checkout) => checkout.path === path && checkout.exists) ?? null;
         return (
-          <span key={path} className="inline-flex min-w-0 items-center gap-xs" data-pr-panel-worktree={path} data-removed={here ? undefined : "true"}>
-            <FolderGit2Icon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
+          <span key={path} className="inline-flex min-w-0 max-w-2/5 shrink-0 items-center gap-xxs rounded-xs border border-border px-xs font-mono text-micro" data-pr-panel-worktree={path} data-removed={here ? undefined : "true"}>
+            <HouseIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
             {here ? (
               <Hint label={path}>
-                <button type="button" className="min-w-0 truncate rounded-xs font-mono text-subtle-foreground outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" onClick={() => actions.openWorkspace(project.device_id, here.workspace_id, here.id)}>
+                <button type="button" className="min-w-0 truncate rounded-xs text-subtle-foreground outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" onClick={() => actions.openWorkspace(project.device_id, here.workspace_id, here.id)}>
                   {folderName(path)}
                 </button>
               </Hint>
             ) : (
               <>
                 <Hint label={path} reveals>
-                  <span className="min-w-0 truncate font-mono">{folderName(path)}</span>
+                  <span className="min-w-0 truncate">{folderName(path)}</span>
                 </Hint>
-                <span className="shrink-0 text-micro" data-pr-panel-cleaned="true">
+                <span className="shrink-0 font-sans" data-pr-panel-cleaned="true">
                   {t("links.cleaned")}
                 </span>
               </>
@@ -93,25 +95,26 @@ export function PrLinks({ number, issue: boardIssue, checkout: boardCheckout, li
   );
 }
 
-/** One linked issue (B4): its item in the Overview's 백로그 when the project lists it, else GitHub. */
+/** One linked issue (B4, B18): its item in the Overview's 백로그 when the project lists it, else GitHub; where the link came from is in the tooltip. */
 function IssueLine({ issueKey, source, task, project, actions }: { issueKey: string; source: LinkIssueSource | null; task: Task | null; project: Workspace; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const label = task ? `${task.id ?? issueLabel(issueKey)} ${task.title}` : issueLabel(issueKey);
   const url = task?.url ?? issueUrl(issueKey);
   const open = task ? () => actions.openBacklogItem(project.device_id, project.id, task.key) : url ? () => actions.openPullRequest(url, project.device_id, true) : null;
+  const hint = [task ? t("links.openIssue", { issue: label }) : t("prList.openIssue", { issue: label }), source ? t(SOURCE_WORD[source]) : null].filter(Boolean).join(" · ");
+  const sentence = <><span className="text-muted-foreground">{t("links.issue")} </span>{label}</>;
   return (
     <span className="inline-flex min-w-0 items-center gap-xs" data-pr-panel-issue={issueKey} data-pr-panel-source={source ?? undefined}>
-      {task ? <TaskGlyph task={task} className="size-(--size-icon-sm) shrink-0" /> : <CircleDotIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />}
       {open ? (
-        <Hint label={task ? t("links.openIssue", { issue: label }) : t("prList.openIssue", { issue: label })} reveals>
-          <button type="button" className="min-w-0 truncate rounded-xs text-left text-foreground outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" onClick={open}>
-            {label}
+        <Hint label={hint} reveals>
+          <button type="button" className="min-w-0 truncate rounded-xs text-left text-subtle-foreground outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" onClick={open}>
+            {sentence}
           </button>
         </Hint>
       ) : (
-        <span className="min-w-0 truncate text-foreground">{label}</span>
+        <span className="min-w-0 truncate text-subtle-foreground">{sentence}</span>
       )}
-      {source ? <span className="shrink-0 text-micro">{t(SOURCE_WORD[source])}</span> : null}
+      {task ? <span className="shrink-0" data-pr-panel-issue-state={task.open ? "open" : "closed"}>· {t(task.open ? "links.issueOpen" : "links.issueClosed")}</span> : null}
     </span>
   );
 }

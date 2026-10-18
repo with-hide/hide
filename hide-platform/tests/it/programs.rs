@@ -70,6 +70,53 @@ fn a_program_in_an_install_folder_the_daemons_path_misses_is_found() {
     );
 }
 
+/// A program only the login shell's `PATH` reaches is started, and with that
+/// `PATH`: a script it is finds what it starts by name (its interpreter, a
+/// hook) where the account installed it, as a daemon whose own `PATH` is the
+/// system's folders could not.
+#[test]
+fn a_command_runs_what_the_login_shell_finds_with_the_path_it_was_found_on() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let installed = root.path().join("installer-bin");
+    fs::create_dir_all(&installed).unwrap();
+    crate::stand_ins::program(
+        &installed.join("hide-fixture-helper"),
+        "#!/bin/sh\necho helper ran\n",
+    );
+    crate::stand_ins::program(
+        &installed.join("hide-fixture-tool"),
+        "#!/bin/sh\nexec hide-fixture-helper\n",
+    );
+    let shell = shell_adding_installer_bin(root.path());
+    let search = programs::search_path(&home, Some(&shell), &AtomicBool::new(false));
+
+    let output = programs::command_on(search.as_deref(), "hide-fixture-tool")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "helper ran\n");
+
+    // A program named by its path runs as given, with the same `PATH`.
+    let output = programs::command_on(search.as_deref(), installed.join("hide-fixture-tool"))
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "helper ran\n");
+}
+
+/// A program the search does not reach fails to start as not found, the
+/// answer a caller reads as not installed.
+#[test]
+fn a_command_for_a_program_found_nowhere_fails_to_start_as_not_found() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let search = programs::search_path(&home, None, &AtomicBool::new(false));
+    let error = programs::command_on(search.as_deref(), "hide-fixture-absent")
+        .output()
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+}
+
 /// A stand-in login shell that records each time it is started, one line per
 /// start in `starts` beside the home it is asked for.
 fn counting_shell(folder: &Path) -> PathBuf {
@@ -191,4 +238,58 @@ fn a_slow_ask_for_one_home_does_not_hold_another_home_behind_it() {
         1,
         "the second home's answer was remembered, so no shell started while the first ask was held"
     );
+}
+
+/// Set on a copy of this test binary that plays a fresh process; without it
+/// [`a_fresh_process_role`] does nothing.
+const FRESH_PROCESS: &str = "HIDE_PLATFORM_PROGRAMS_FRESH";
+
+/// A fresh process's first [`programs::command`], which prints what the
+/// program said or how it failed to start.
+#[test]
+fn a_fresh_process_role() {
+    if std::env::var_os(FRESH_PROCESS).is_none() {
+        return;
+    }
+    match programs::command("hide-fixture-tool").output() {
+        Ok(output) => print!("RAN {}", String::from_utf8_lossy(&output.stdout)),
+        Err(error) => print!("FAILED {:?}", error.kind()),
+    }
+}
+
+/// A process that has asked nothing yet runs, on its first command, a
+/// program only the login shell's `PATH` reaches. The `hide` CLI and every
+/// short-lived process start this way, and a `gh` missed there reads as not
+/// installed.
+#[test]
+#[allow(clippy::disallowed_methods)] // env_clear: a login item's or an SSH exec's environment, on Unix
+fn a_fresh_process_runs_what_only_the_login_shell_finds_on_its_first_command() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let installed = root.path().join("installer-bin");
+    fs::create_dir_all(&installed).unwrap();
+    crate::stand_ins::program(
+        &installed.join("hide-fixture-tool"),
+        "#!/bin/sh\necho tool ran\n",
+    );
+    let shell = shell_adding_installer_bin(root.path());
+
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "programs::a_fresh_process_role",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env_clear()
+        .env(FRESH_PROCESS, "1")
+        .env("HOME", &home)
+        .env("SHELL", &shell)
+        // A login item's or an SSH exec's own `PATH`.
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&output.stdout);
+    assert!(said.contains("RAN tool ran"), "{said}");
 }

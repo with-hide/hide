@@ -34,6 +34,7 @@ mod github_poll;
 mod github_store;
 mod handle;
 pub mod herdr_contract;
+pub mod input_gate;
 pub mod issues;
 mod kit;
 mod labels;
@@ -59,6 +60,7 @@ pub mod remote;
 mod request_view;
 mod runtime;
 pub mod schema;
+mod session_archive;
 mod session_sync;
 mod sidebar;
 mod split_tree;
@@ -77,7 +79,10 @@ pub mod workspace_views;
 mod worktrees;
 mod zoneinfo;
 
-pub use ai::{hide_ai_asks, hide_ai_ready_here, hide_ai_settings_path, stored_hide_ai_settings};
+pub use ai::{
+    hide_ai_asks, hide_ai_asks_of_stored, hide_ai_ready_here, hide_ai_settings_path,
+    stored_hide_ai_settings,
+};
 pub use handle::Core;
 pub use model::{
     CoreOptions, DeviceRegistration, LinkOrigin, SCHEMA_VERSION, Snapshot, SnapshotDeltaPayload,

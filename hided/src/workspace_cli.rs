@@ -704,11 +704,12 @@ fn read_hook_line(
 /// since the daemon starts the relay only for a claimed one, after which the
 /// socket carries CDP frames to the caller's display. A refusal keeps the daemon's
 /// reason and next action.
-/// The relay socket, and whether the display is its area's selected View.
+/// The relay socket, whether the display is its area's selected View, and the
+/// address the core keeps for it.
 pub(crate) async fn browser_relay(
     credential: &mut Credential<'_>,
     display_id: &str,
-) -> Result<(WorkspaceSocket, bool), (String, Option<String>)> {
+) -> Result<(WorkspaceSocket, bool, Option<String>), (String, Option<String>)> {
     let renewed = |reason: String| {
         let next_action = crate::cli::bootstrap_next_action(&reason).to_owned();
         (reason, Some(next_action))
@@ -725,7 +726,7 @@ pub(crate) async fn browser_relay(
 async fn relay_once(
     path: &Path,
     display_id: &str,
-) -> Result<(WorkspaceSocket, bool), (String, Option<String>)> {
+) -> Result<(WorkspaceSocket, bool, Option<String>), (String, Option<String>)> {
     let reference = read_reference(path).map_err(|reason| (reason, None))?;
     let request_id = fresh_request_id().map_err(|reason| (reason, None))?;
     let payload = json!({"type":"browser_relay","request_id":request_id,"display_id":display_id});
@@ -747,14 +748,23 @@ async fn relay_once(
         .await
         .map_err(|_| ("credential_expired".to_owned(), None))?
         .map_err(|reason| (reason, None))?;
-    let selected = answer["result"]["selected"] == true;
+    let (selected, source) = relay_facts(&answer["result"]);
     // The display is shown on this machine, whose daemon relays it: the
     // CDP runs here and never crosses to the core.
     if let Some(url) = answer["result"]["relay_url"].as_str() {
         let _ = socket.close(None).await;
-        return Ok((dial_relay(url).await?, selected));
+        return Ok((dial_relay(url).await?, selected, source));
     }
-    Ok((socket, selected))
+    Ok((socket, selected, source))
+}
+
+/// Whether the display is its area's selected View and the address the core
+/// keeps for it, from the daemon's relay answer.
+pub(crate) fn relay_facts(result: &serde_json::Value) -> (bool, Option<String>) {
+    (
+        result["selected"] == true,
+        result["source_url"].as_str().map(str::to_owned),
+    )
 }
 
 /// Dials this machine's daemon at the one-shot relay URL the core handed
@@ -1317,6 +1327,7 @@ mod tests {
             home: directory.path().to_path_buf(),
             herdr_socket_path: None,
             herdr_bin_path: None,
+            login_shell: None,
             state_dir: directory.path().to_path_buf(),
             legacy_state_dir: None,
             account_state_folder: false,

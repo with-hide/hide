@@ -19,7 +19,7 @@ const task = (id: string, chapter: string, name: string, end: WorkTask["end"], d
 const request = (offset: number, text: string, task_ids: string[], patch: Partial<WorkRequest> = {}): WorkRequest => ({ offset, text, at_unix_ms: AT + offset * 60_000, author: "operator", task_ids, chapter_id: "chapter-1", judged: true, ...patch });
 const missed = (id: string, text: string, turn_offset: number, status: MissedWork["status"]): MissedWork => ({ id, kind: "follow_up", text, status, at_unix_ms: AT, turn_offset, issue_repository: null, issue_number: null, creating: false, backlog_key: null });
 const pr = (number: number, title: string, state: string, source: WorkSession, sourceName: string, task_id: string | null): WorkOutput => ({ kind: "pr", repository: "example/hide", number, title, url: `https://example.invalid/pull/${number}`, state, stale: false, last_read_at_unix_ms: AT, created_at_unix_ms: AT + number, task_id, source, source_name: sourceName });
-// The approved record: one goal, three tasks, two PRs (one a child's), words behind the button.
+// The approved record: three tasks, two PRs (one a child's), the child under the task that delegated it, the requests at the end.
 const BASE: RecordValue = {
   session: SESSION, title: "성능 최적화 리뷰와 서비스 개선안", fallback_title: "Claude", native_title: "성능 최적화 리뷰", manual_title: null, state: "idle", last_end: "unfinished", cwd: "/work/hide", path: null, started_at_unix_ms: AT, ended_at_unix_ms: null,
   chapters: [{ id: "chapter-1", goal: "성능 최적화 리뷰와 서비스 개선안", at_unix_ms: AT }],
@@ -38,7 +38,7 @@ const BASE: RecordValue = {
   ],
   missed: [missed("missed-1", "Codex developer role 매핑 수정", 2, "resolved"), missed("missed-2", "links ledger 세션 불일치 수정", 2, "resolved")],
   outputs: [pr(1100, "Measure the install build after the fixes", "review", SESSION, "성능 최적화 리뷰와 서비스 개선안", null), pr(1093, "Stop three resident hided loops", "merged", CHILD_SESSION, "상주 데몬 버그 3건 수정 PR", "task-3")],
-  children: [{ session: CHILD_SESSION, title: "상주 데몬 버그 3건 수정 PR", fallback_title: "Claude", native_title: "상주 데몬 버그 3건 수정 PR", manual_title: null, state: "idle", last_end: "done", cwd: "/work/hide/task", path: null, started_at_unix_ms: AT, ended_at_unix_ms: null, chapters: [{ id: "child-chapter", goal: "상주 데몬 버그 수정", at_unix_ms: AT }], tasks: [task("child-task", "child-chapter", "links ledger 루프 멈추기", "done", true, AT)], requests: [request(1, "links ledger 루프를 멈추는 변경을 만들어줘", ["child-task"], { author: "parent", chapter_id: "child-chapter" })], missed: [], outputs: [], children: [] }],
+  children: [{ session: CHILD_SESSION, title: "상주 데몬 버그 3건 수정 PR", fallback_title: "Claude", native_title: "상주 데몬 버그 3건 수정 PR", manual_title: null, state: "idle", last_end: "done", cwd: "/work/hide/task", path: null, started_at_unix_ms: AT + 190_000, ended_at_unix_ms: null, chapters: [{ id: "child-chapter", goal: "상주 데몬 버그 수정", at_unix_ms: AT }], tasks: [task("child-task", "child-chapter", "links ledger 루프 멈추기", "done", true, AT)], requests: [request(1, "links ledger 루프를 멈추는 변경을 만들어줘", ["child-task"], { author: "parent", chapter_id: "child-chapter" })], missed: [], outputs: [], children: [] }],
 };
 
 /** The scene's record for a `case`: the default, or one that shows a state the record draws. */
@@ -82,7 +82,7 @@ export function SessionWorkScene({ params }: { params: URLSearchParams }) {
   }), [fixture]);
   useLayoutEffect(() => {
     useShellStore.setState({ rest: fixture.base.rest, agents: fixture.base.agents, connection: "live", linkSummaries: { filling:false, projects:{[fixture.project.id]:{work:[{session:SESSION,title:fixture.record.title,fallback_title:fixture.record.fallback_title,native_title:fixture.record.native_title,manual_title:null,cwd:fixture.record.cwd,ended_at_unix_ms:AT,open_missed:fixture.record.missed.filter((item)=>item.status==="open").length,subtree_open_missed:0,missed:fixture.record.missed}]}} }, sessionRecord: { session: SESSION, loading: state === "loading", failure: state === "failed" ? "fixture_read_failed" : null, record: state === "loading" || state === "failed" ? null : fixture.record } });
-    useUiStore.setState({ screen: { kind: "workspace" }, overlay: state === "search" ? "search" : "none", sessionRecordWords: params.get("words") === "1" });
+    useUiStore.setState({ screen: { kind: "workspace" }, overlay: state === "search" ? "search" : "none" });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));

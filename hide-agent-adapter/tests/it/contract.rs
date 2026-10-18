@@ -165,6 +165,22 @@ fn generated_web_contract_and_logo_document_sources_are_current() {
 }
 
 #[test]
+fn generated_journey_contract_is_current() {
+    let expected =
+        serde_json::to_value(hide_agent_adapter::journey_contract().collect::<Vec<_>>()).unwrap();
+    let path = root().join("contracts/agent-journey.json");
+    let actual: Value = serde_json::from_slice(
+        &std::fs::read(&path)
+            .expect("missing journey contract: run the export_journey_contract example"),
+    )
+    .unwrap();
+    assert_eq!(
+        actual, expected,
+        "journey contract drift: regenerate contracts/agent-journey.json with export_journey_contract"
+    );
+}
+
+#[test]
 fn every_usage_cell_has_an_independent_declaration_and_unshipped_absences() {
     use hide_agent_adapter::usage::{
         AbsenceKind, LimitSource, SHIPPED_USAGE_LAYER, Support, UsageSource,
@@ -323,7 +339,7 @@ fn every_start_dialect_takes_only_the_model_and_effort_it_declares_and_refuses_u
             .options()
             .arguments(Some("gpt-5.5"), Some("high"))
             .unwrap(),
-        ["-m", "gpt-5.5", "-c", "model_reasoning_effort=high"]
+        ["--model", "gpt-5.5", "-c", "model_reasoning_effort=high"]
     );
     // agy 1.4.0 takes a model by `--model`; its effort is not declared yet.
     assert_eq!(
@@ -332,6 +348,76 @@ fn every_start_dialect_takes_only_the_model_and_effort_it_declares_and_refuses_u
             .arguments(Some("gemini-3.8-flash-high"), None)
             .unwrap(),
         ["--model", "gemini-3.8-flash-high"]
+    );
+}
+
+/// A launch choice reaches an agent only as its declared options take it,
+/// wherever it was asked for: `--model` for each agent whose CLI lists it
+/// (each help read 2026-10-18; OpenCode 2.0.29 lists none), the effort in the
+/// form the dialect declares, and a refusal for anything else.
+#[test]
+fn a_launch_choice_reaches_each_agent_only_as_its_declared_options_take_it() {
+    use hide_agent_adapter::{LaunchChoice, LaunchDialect};
+    let choice = |model: Option<&str>, effort: Option<&str>| LaunchChoice {
+        model: model.map(str::to_owned),
+        effort: effort.map(str::to_owned),
+    };
+    let takes_model = [
+        "claude-code",
+        "codex",
+        "grok",
+        "pi",
+        "omp",
+        "cursor",
+        "antigravity",
+    ];
+    for row in ADAPTERS.iter().filter(|row| row.start.is_some()) {
+        let dialect = row.start.unwrap();
+        assert_eq!(
+            dialect.choice_arguments(&LaunchChoice::default()).unwrap(),
+            Vec::<String>::new()
+        );
+        // A glob in a model id stays one literal argument (Herdr quotes it).
+        let model = dialect.choice_arguments(&choice(Some("opus[1m]"), None));
+        if takes_model.contains(&row.id) {
+            assert_eq!(model.unwrap(), ["--model", "opus[1m]"], "{}", row.id);
+        } else {
+            assert!(model.is_err(), "{} takes no model", row.id);
+        }
+        for unsafe_model in ["model; rm -rf /", "--yolo", "", "two words"] {
+            assert!(
+                dialect
+                    .choice_arguments(&choice(Some(unsafe_model), None))
+                    .is_err(),
+                "{}: {unsafe_model}",
+                row.id
+            );
+        }
+        assert_eq!(
+            dialect
+                .choice_arguments(&choice(None, Some("high")))
+                .is_ok(),
+            dialect.options().efforts.contains(&"high"),
+            "{}",
+            row.id
+        );
+        assert!(
+            dialect
+                .choice_arguments(&choice(None, Some("ultra")))
+                .is_err()
+        );
+    }
+    assert_eq!(
+        LaunchDialect::Claude
+            .choice_arguments(&choice(Some("sonnet"), Some("high")))
+            .unwrap(),
+        ["--model", "sonnet", "--effort", "high"]
+    );
+    assert_eq!(
+        LaunchDialect::Codex
+            .choice_arguments(&choice(Some("gpt-6-luna"), Some("low")))
+            .unwrap(),
+        ["--model", "gpt-6-luna", "-c", "model_reasoning_effort=low"]
     );
 }
 

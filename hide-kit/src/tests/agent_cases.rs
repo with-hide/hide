@@ -1038,7 +1038,7 @@ fn opencode_switched_on_gets_hides_plugin_beside_herdrs_and_reads_installed() {
     assert_eq!(hook.location.as_deref(), opencode_plugin(&fixture).to_str());
     assert_eq!(
         std::fs::read_to_string(opencode_plugin(&fixture)).unwrap(),
-        hide_agent_hooks::opencode::PLUGIN.text(&fixture.target.kit_dir.join("hide-agent-hooks"))
+        hide_agent_hooks::opencode::V1.text(&fixture.target.kit_dir.join("hide-agent-hooks"))
     );
     assert_eq!(std::fs::read(&herdr).unwrap(), b"herdr's plugin");
     assert!(

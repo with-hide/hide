@@ -210,7 +210,7 @@ fn remove_guidance(target: &KitTarget, agent: GuidanceAgent) -> RemoveOutcome {
 // --- OpenCode's plugin, Pi's and omp's extension ---------------------------------
 
 fn remove_plugin(target: &KitTarget, dialect: PluginDialect) -> RemoveOutcome {
-    match plugin::file(dialect).remove(&target.home) {
+    match plugin::of(dialect).remove(&target.home) {
         Ok(true) => RemoveOutcome::Removed,
         Ok(false) => RemoveOutcome::Absent,
         Err(reason) => RemoveOutcome::Failed { reason },
@@ -224,13 +224,13 @@ fn plugin_state(
     dialect: PluginDialect,
     recorded: bool,
 ) -> (ComponentState, Option<String>) {
-    let file = plugin::file(dialect);
-    let noun = file.noun;
+    let file = plugin::of(dialect);
+    let noun = file.noun();
     let helper = helper(target);
     let observed = file.observe(&target.home, &helper);
     if !matches!(
         observed,
-        PluginObserved::Current | PluginObserved::ConfigAbsent | PluginObserved::Foreign
+        PluginObserved::Current | PluginObserved::ConfigAbsent | PluginObserved::Foreign(_)
     ) && !helper.is_file()
     {
         return (
@@ -263,11 +263,10 @@ fn plugin_state(
                 file.config_directory(&target.home).display()
             )),
         ),
-        PluginObserved::Foreign => (
+        PluginObserved::Foreign(name) => (
             ComponentState::Absent,
             Some(format!(
-                "a {noun} named {} that Hide did not write is already there; Hide left it alone",
-                file.file_name
+                "a {noun} named {name} that Hide did not write is already there; Hide left it alone"
             )),
         ),
         PluginObserved::Unreadable(reason) => (ComponentState::Failed, Some(reason)),
@@ -283,7 +282,7 @@ fn plugin_piece(
     detection: &Detection,
     failures: Option<&AgentFailures>,
 ) -> PieceReport {
-    let file = plugin::file(dialect);
+    let file = plugin::of(dialect);
     let location = Some(file.path(&target.home).display().to_string());
     let failure = failures.and_then(|failures| failures.hook.get(adapter.id).cloned());
     let (state, reason) = if !on {
@@ -299,7 +298,7 @@ fn plugin_piece(
             .then(|| {
                 format!(
                     "Hide's {} is still in place; switch the agent on and off again to remove it",
-                    file.noun
+                    file.noun()
                 )
             })
         });
@@ -381,32 +380,17 @@ fn dir_state(
 }
 
 /// Judges every agent without changing anything.
-pub(crate) fn status(
-    target: &KitTarget,
-    record: &Result<Record, String>,
-    parts: &[PartView],
-) -> Vec<AgentReport> {
-    let empty = Record::default();
+pub(crate) fn status(target: &KitTarget, record: &Record, parts: &[PartView]) -> Vec<AgentReport> {
     let scope = Scope::default();
-    let readable = record.as_ref().unwrap_or(&empty);
     let detection = Detection::probe(target);
-    let dirs = observe_dirs(target, readable, &scope, &detection);
+    let dirs = observe_dirs(target, record, &scope, &detection);
     let herdr = Statuses::probe(target);
     ADAPTERS
         .iter()
         .map(|adapter| {
-            let on = enabled(readable, &scope, adapter);
+            let on = enabled(record, &scope, adapter);
             report_agent(
-                target,
-                adapter,
-                readable,
-                on,
-                &dirs,
-                &detection,
-                &herdr,
-                None,
-                record.is_ok(),
-                parts,
+                target, adapter, record, on, &dirs, &detection, &herdr, None, parts,
             )
         })
         .collect()
@@ -444,7 +428,6 @@ fn report_agent(
     detection: &Detection,
     herdr: &HerdrView,
     failures: Option<&AgentFailures>,
-    record_readable: bool,
     parts: &[PartView],
 ) -> AgentReport {
     let installed = detection.installed(adapter);
@@ -499,12 +482,6 @@ fn report_agent(
             )
         } else {
             dir_state(&observed, recorded, failure)
-        };
-        let reason = match (state, record_readable) {
-            (ComponentState::NotInstalled, false) => {
-                Some("Hide's record of what it installed could not be read".to_owned())
-            }
-            _ => reason,
         };
         PieceReport {
             state,
@@ -768,15 +745,9 @@ impl Applied {
 
 /// Applies the operator's per-agent choices in `scope` and what the pass
 /// owes every agent that is on.
-pub(crate) fn apply(
-    target: &KitTarget,
-    scope: &Scope,
-    record: &mut Record,
-    record_failure: Option<&String>,
-) -> Applied {
+pub(crate) fn apply(target: &KitTarget, scope: &Scope, record: &mut Record) -> Applied {
     let mut changed = false;
     let mut failures = AgentFailures::default();
-    let record_readable = record_failure.is_none();
     // Looked for once: every decision below reads this, not the PATH.
     let detection = Detection::probe(target);
 
@@ -791,22 +762,20 @@ pub(crate) fn apply(
             && enabled(record, scope, adapter)
             && (detection.installed(adapter) || record.agent_choice(adapter.id) == Some(true))
     });
-    let retirement = retired_agents::retire(target, record, record_readable, live_reads_shared);
+    let retirement = retired_agents::retire(target, record, live_reads_shared);
     changed |= retirement.changed;
 
     // What the operator chose now is the record's, whatever else this pass
     // can or cannot do for the agent. A switch on for an agent that is not
     // installed here has nothing to switch.
-    if record_readable && answers_choice(scope) {
+    if answers_choice(scope) {
         changed |= record.answer_choice();
     }
     for adapter in ADAPTERS {
-        if record_readable {
-            if scope.agent_on.contains(adapter.id) && detection.installed(adapter) {
-                changed |= record.set_agent_choice(adapter.id, true);
-            } else if scope.agent_off.contains(adapter.id) {
-                changed |= record.set_agent_choice(adapter.id, false);
-            }
+        if scope.agent_on.contains(adapter.id) && detection.installed(adapter) {
+            changed |= record.set_agent_choice(adapter.id, true);
+        } else if scope.agent_off.contains(adapter.id) {
+            changed |= record.set_agent_choice(adapter.id, false);
         }
     }
 
@@ -840,7 +809,7 @@ pub(crate) fn apply(
             Observed::Stale(_) => true,
             // The operator's edit is theirs until Reinstall.
             Observed::Edited(_) => restore,
-            Observed::Missing => restore || (!recorded && record_readable),
+            Observed::Missing => restore || !recorded,
             _ => false,
         };
         if install_now && let Err(reason) = install_guidance(target, agent) {
@@ -852,7 +821,7 @@ pub(crate) fn apply(
         } else {
             observed
         };
-        if matches!(after, Observed::Current) && record_readable {
+        if matches!(after, Observed::Current) {
             changed |= record.insert_piece(&code);
         }
     }
@@ -863,7 +832,7 @@ pub(crate) fn apply(
         let HookSupport::Plugin(dialect) = adapter.hook else {
             continue;
         };
-        let file = plugin::file(dialect);
+        let file = plugin::of(dialect);
         let code = hook_code(adapter);
         if !enabled(record, scope, adapter) {
             if scope.agent_off.contains(adapter.id) {
@@ -890,7 +859,7 @@ pub(crate) fn apply(
                 PluginObserved::Stale(_) => true,
                 // The operator's edit is theirs until Reinstall.
                 PluginObserved::Edited => restore,
-                PluginObserved::Missing => restore || (!recorded && record_readable),
+                PluginObserved::Missing => restore || !recorded,
                 _ => false,
             };
         if install_now && let Err(reason) = file.install(&target.home, &helper) {
@@ -902,7 +871,7 @@ pub(crate) fn apply(
         } else {
             observed == PluginObserved::Current
         };
-        if current && record_readable {
+        if current {
             changed |= record.insert_piece(&code);
         }
     }
@@ -930,7 +899,7 @@ pub(crate) fn apply(
                 SkillObserved::Stale => true,
                 // The operator's edit is theirs until Reinstall.
                 SkillObserved::Edited => switched_on,
-                SkillObserved::Missing => switched_on || (!recorded && record_readable),
+                SkillObserved::Missing => switched_on || !recorded,
                 _ => false,
             };
             if install_now && let Err(reason) = install_skill(dir, &target.home) {
@@ -942,7 +911,7 @@ pub(crate) fn apply(
             } else {
                 observed
             };
-            if matches!(after, SkillObserved::Current) && record_readable {
+            if matches!(after, SkillObserved::Current) {
                 changed |= record.insert_piece(&code);
             }
         } else if switched_off {
@@ -959,7 +928,6 @@ pub(crate) fn apply(
         target,
         scope,
         record,
-        record_readable,
         &detection,
         &mut failures,
         &mut changed,
@@ -980,7 +948,6 @@ pub(crate) fn reports(
     target: &KitTarget,
     scope: &Scope,
     record: &Record,
-    record_failure: Option<&String>,
     applied: &Applied,
     parts: &[PartView],
 ) -> Vec<AgentReport> {
@@ -998,7 +965,6 @@ pub(crate) fn reports(
                 &applied.detection,
                 &applied.herdr,
                 Some(&applied.failures),
-                record_failure.is_none(),
                 parts,
             )
         })
@@ -1012,7 +978,6 @@ fn apply_herdr(
     target: &KitTarget,
     scope: &Scope,
     record: &mut Record,
-    record_readable: bool,
     detection: &Detection,
     failures: &mut AgentFailures,
     changed: &mut bool,
@@ -1025,9 +990,7 @@ fn apply_herdr(
         let code = herdr_code(adapter);
         let recorded = record.contains_piece(&code);
         if !enabled(record, scope, adapter) {
-            // Without a readable record the kit cannot tell its own
-            // integration from the operator's, and takes nothing out.
-            if !(scope.agent_off.contains(adapter.id) && recorded && record_readable) {
+            if !(scope.agent_off.contains(adapter.id) && recorded) {
                 continue;
             }
             match &before {
@@ -1070,7 +1033,7 @@ fn apply_herdr(
         };
         let restore = scope.agent_on.contains(adapter.id);
         let install_now = match statuses.of(integration.target) {
-            Some(Integration::Missing) => restore || (!recorded && record_readable),
+            Some(Integration::Missing) => restore || !recorded,
             // Only what Hide installed is Hide's to bring up to date.
             Some(Integration::Outdated) => recorded,
             Some(Integration::Current) | None => false,
@@ -1106,7 +1069,7 @@ fn apply_herdr(
     if let Some(Ok(statuses)) = &after {
         for (adapter, files) in installed_now {
             let integration = adapter.herdr;
-            if statuses.of(integration.target) == Some(Integration::Current) && record_readable {
+            if statuses.of(integration.target) == Some(Integration::Current) {
                 *changed |= record.insert_piece(&herdr_code(adapter));
                 if let Some(files) = files {
                     *changed |= learn_herdr_hooks(record, adapter, files);

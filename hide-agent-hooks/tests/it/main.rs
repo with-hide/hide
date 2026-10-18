@@ -8,6 +8,8 @@ mod agy_binary;
 mod agy_hooks;
 mod bell_intake;
 mod claude_subagent_counts;
+mod codex_binary;
+mod codex_folder_trust;
 mod codex_trust;
 mod grok_cursor_hooks;
 mod guardrails;

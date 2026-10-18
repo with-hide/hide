@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { agentLogo, monogram } from "./agentLogos";
 import { appliedAgents, hideAiFirstRunKey, selection, tileSwitchable } from "./agentOnboardingRules";
+import { AgentLogo } from "./components/agent-logo";
 import { catalogs } from "./i18n/catalogs";
 import type { KitAgent } from "./snapshot";
 
@@ -38,6 +41,13 @@ describe("the first-run agent choice", () => {
     const drawn = [...manifest.logos, ...manifest.existing].map(({ id }) => id);
     expect(drawn.filter((id) => agentLogo(id) === null)).toEqual([]);
     expect(manifest.monogram.filter(({ id }) => agentLogo(id) !== null)).toEqual([]);
+  });
+
+  it("draws the initials of an agent the kit lists but the shell bundles no mark for, never an invented logo", () => {
+    const markup = renderToStaticMarkup(createElement(AgentLogo, { agent: "no-such-agent", label: "No Such Agent" }));
+    expect(markup).toContain('data-agent-monogram="no-such-agent"');
+    expect(markup).toContain(">NS<");
+    expect(markup).not.toContain("<img");
   });
 
   it("makes a monogram from a name without drawing anything", () => {

@@ -32,7 +32,7 @@ import {
   type ExplorerRow,
   helperNeedsSettings,
 } from "./explorer";
-import { screenDeviceId } from "./screenMachine";
+import { windowDeviceId } from "./screenMachine";
 import { changesFor, explorerContext, localDeviceId } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore, type ExplorerDraft } from "./ui";
@@ -930,7 +930,7 @@ function ExplorerContextMenu({
     besideReason,
     reveal: revealHost(),
     device: explorerContext(useShellStore.getState().rest).device,
-    node: screenDeviceId(useShellStore.getState().rest),
+    node: windowDeviceId(useShellStore.getState().rest?.navigator?.devices),
     canPaste,
     chord: (id) => commandLabel(id),
   });

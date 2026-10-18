@@ -8,5 +8,6 @@ mod conversation_cursor;
 mod cursor;
 mod environment;
 mod links;
+mod opencode_2;
 mod usage;
 mod user_turns;

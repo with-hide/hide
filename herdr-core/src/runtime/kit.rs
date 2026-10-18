@@ -317,12 +317,32 @@ impl Runtime {
                 "failures": legacy.failures,
             }));
         }
-        let mut changed = self.decide_agent_onboarding(device_id, report);
+        let mut snapshot = KitSnapshot::from_report(report);
+        snapshot.busy = self.kit_install_queued(device_id);
+        // A refusal reaches the operator once per change, not on every read
+        // while Settings is open: the kit's own words go to the log, and the
+        // first run opens with it (`decide_agent_onboarding`).
+        let refusal_new = snapshot.refused.is_some()
+            && self
+                .kit_states
+                .get(device_id)
+                .and_then(|state| state.refused.as_ref())
+                != snapshot.refused.as_ref();
+        if let Some(refusal) = report.refused.as_ref().filter(|_| refusal_new) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "kit",
+                "kind": "kit.refused",
+                "device_id": device_id,
+                "cause": refusal.cause,
+                "path": refusal.path,
+                "variable": refusal.variable,
+                "detail": refusal.detail,
+            }));
+        }
+        let mut changed = self.decide_agent_onboarding(device_id, report, refusal_new);
         if let Some(update) = &report.herdr {
             changed |= self.ingest_device_herdr_update(device_id, update);
         }
-        let mut snapshot = KitSnapshot::from_report(report);
-        snapshot.busy = self.kit_install_queued(device_id);
         // A daemon answer the kit could not read reads as no answer; the log
         // keeps it when it appears or changes, not on every read (B13).
         let unreadable_before = self
@@ -337,6 +357,24 @@ impl Runtime {
                 "kind": "codex_daemon.unreadable",
                 "device_id": device_id,
                 "reason": reason,
+            }));
+        }
+        // Every Codex start on this machine is refused while its Codex is
+        // unread (`codex_launch::CAPABILITY_UNKNOWN`); why goes to the log
+        // when it appears or changes, as the cause and exit code alone.
+        let unread_before = self
+            .kit_states
+            .get(device_id)
+            .and_then(|state| state.codex_capability_unread);
+        if let Some(failure) = report.codex_capability_unread
+            && unread_before != Some(failure)
+        {
+            crate::diagnostic!(serde_json::json!({
+                "component": "kit",
+                "kind": "codex_capability_unread",
+                "device_id": device_id,
+                "agent": "codex",
+                "failure": failure,
             }));
         }
         // Only the pass that carried the operator's request answers it; a
@@ -374,10 +412,31 @@ impl Runtime {
     /// asked and keeps what it has on as the saved choice. A device whose own
     /// record waits, once this Mac has answered, gets that choice sent once
     /// per run by its own detection; before that nothing is installed there.
-    fn decide_agent_onboarding(&mut self, device_id: &str, report: &KitReport) -> bool {
+    fn decide_agent_onboarding(
+        &mut self,
+        device_id: &str,
+        report: &KitReport,
+        refusal_new: bool,
+    ) -> bool {
         use crate::model::AgentOnboarding;
-        // A pass that could not run (retirement refused, account lock) lists
-        // no agents and says nothing about the record, so it decides nothing.
+        // A pass that stopped before changing anything says nothing about the
+        // record. On a Mac no pass has ever answered for, it is still the
+        // first run: the wizard opens with a refusal that is new, so the
+        // operator learns why nothing was set up (design principle 13), and
+        // stays closed once they closed it until the refusal changes or Hide
+        // starts again.
+        if report.refused.is_some() {
+            let opened = refusal_new
+                && device_id == self.node.as_str()
+                && self.snapshot.ui_state.agent_onboarding.is_none()
+                && self.open_first_run();
+            if opened {
+                self.persist_ui_state();
+            }
+            return opened;
+        }
+        // A helper that predates agents lists none and says nothing about the
+        // record either.
         if report.agents.is_empty() {
             return false;
         }
@@ -501,7 +560,20 @@ impl Runtime {
         let answer =
             self.snapshot.ui_state.agent_onboarding == Some(crate::model::AgentOnboarding::Pending);
         let node = self.node.clone();
-        if let Some(reason) = self.kit_view(node.as_str()).unavailable {
+        let view = self.kit_view(node.as_str());
+        if view.refused.is_some() {
+            // The pass stopped before changing anything, so the step drew no
+            // tile and there is no choice to record: Try again runs the same
+            // pass, which checks again what stopped it, and its answer brings
+            // the tiles or the refusal back.
+            crate::diagnostic!(serde_json::json!({
+                "component": "first_run",
+                "kind": "first_run.retry_refused",
+                "answer": answer,
+            }));
+            return self.queue_kit_scope(node.as_str(), Scope::automatic());
+        }
+        if let Some(reason) = view.unavailable {
             // Nothing can be written here, and the step may not even have
             // drawn a tile, so the press records and queues nothing: the first
             // run's question stays open and the agents are read again (B12).
@@ -605,6 +677,11 @@ impl Runtime {
         if let Some(reason) = state.unavailable {
             self.set_error("kit.unavailable", reason, false);
             return true;
+        }
+        // A pass that stopped judged nothing, so there is nothing to name:
+        // Try again runs the pass again, which checks again what stopped it.
+        if state.refused.is_some() {
+            return self.queue_kit_scope(device_id, Scope::automatic());
         }
         // Naming parts or agents narrows the repair to what is named.
         let named = only.is_some() || only_agents.is_some();
@@ -817,14 +894,6 @@ impl Runtime {
     /// and the work runs when it does; its row is busy only while the work
     /// can actually run.
     pub(super) fn queue_device_kit(&mut self, device_id: &str, job: KitJob) {
-        // A node that dials this core is a machine with Hide's own install,
-        // whose kit its own hided keeps.
-        if self
-            .link_origin(device_id)
-            .is_some_and(|origin| !origin.takes_kit())
-        {
-            return;
-        }
         let merged = match self.device_kit_pending.remove(device_id) {
             Some(before) => before.merge(job),
             None => job,
@@ -912,8 +981,8 @@ impl Runtime {
             }));
             Err(reason)
         };
-        if !registration.origin.takes_kit() {
-            return left("the machine keeps its own kit; it connects to the core itself");
+        if !registration.origin.removes_kit() {
+            return left("the machine runs Hide itself and connects to the core again");
         }
         if self.registration_sharing_account(registration).is_some() {
             return left("another registered device reaches the same account on that machine");
@@ -996,6 +1065,8 @@ impl Runtime {
             self.device_kit_running.remove(device_id);
             return None;
         };
+        // A node that dials in has no consent, so it links `hide` where a
+        // device would by default, in its own home.
         let cli_dir = registration
             .host_consent
             .and_then(|consent| consent.cli_dir)

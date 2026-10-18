@@ -87,6 +87,7 @@ pub fn serve_with_terminals(
                     Path::new(&home),
                 ))
             }),
+            kit: KitPlace::Installed,
         },
     )
 }
@@ -127,6 +128,10 @@ pub struct Services<'a> {
     /// that restarted or linked again measures only the worktrees that
     /// moved; none keeps them for this link only.
     pub worktree_facts: Option<PathBuf>,
+    /// Where the node's install kit takes its parts from: a device's helper
+    /// is installed under its helper root, and a node that dialed its core
+    /// runs from the program its machine has (`KitPlace::of_program`).
+    pub kit: KitPlace,
 }
 
 /// The checkout roots a node's core opened on it over one link, which are
@@ -194,6 +199,7 @@ impl Services<'_> {
             browser: None,
             factory: false,
             worktree_facts: None,
+            kit: KitPlace::Installed,
         }
     }
 }
@@ -213,6 +219,13 @@ fn serve_in(
     env: Env,
     services: Services<'_>,
 ) -> io::Result<()> {
+    // A kit step still running when this link ends stops with it, and so
+    // does none of the next link's (a node that dials its core again).
+    let env = Env {
+        kit: services.kit,
+        stop: Arc::default(),
+        ..env
+    };
     let env = match services.worktree_facts {
         Some(folder) => Env {
             worktrees: Arc::new(worktrees::Measured::kept_in(folder)),
@@ -354,6 +367,20 @@ fn serve_in(
                                 )
                             },
                         ),
+                        Call::Kit {
+                            action,
+                            cli_dir,
+                            herdr_socket,
+                            retirement_projects,
+                        } => handle_in(
+                            Call::Kit {
+                                action,
+                                cli_dir,
+                                herdr_socket: kit_herdr_socket(herdr_socket, link.herdr_socket()),
+                                retirement_projects,
+                            },
+                            env,
+                        ),
                         Call::RootOpen { root } => {
                             let opened = handle_in(Call::RootOpen { root: root.clone() }, env);
                             if opened.is_ok()
@@ -431,12 +458,19 @@ fn serve_in(
         // The connection is gone: a kit step still running ends its child
         // rather than keep the helper alive after it, and the pane service
         // ends its listener and streams so the scope can close.
-        crate::kit::stop();
+        env.stop.store(true, std::sync::atomic::Ordering::Relaxed);
         panes.stop();
         result
     });
     panes.remove_folder();
     result
+}
+
+/// The Herdr server a kit call installs against: the one the core named,
+/// else the one this link bridges. A node that dialed its core knows its own
+/// Herdr, which the core does not, so the core names none.
+fn kit_herdr_socket(named: Option<String>, bridged: Option<&Path>) -> Option<String> {
+    named.or_else(|| bridged.map(|own| own.to_string_lossy().into_owned()))
 }
 
 /// Why a node asked for the label lock of no named server refuses: its
@@ -736,7 +770,9 @@ fn label_refusal(reason: String) -> HostError {
     let code = match reason.as_str() {
         "session_file_missing" => ErrorCode::NotFound,
         "opencode_db_busy" | "opencode_db_changed" => ErrorCode::Busy,
-        "session_kind_unsupported" => ErrorCode::Unsupported,
+        "session_kind_unsupported"
+        | "opencode_db_schema_unknown"
+        | "opencode_data_home_invalid" => ErrorCode::Unsupported,
         reason if reason.starts_with("session_capacity:") => ErrorCode::TooLarge,
         _ => ErrorCode::Io,
     };
@@ -802,15 +838,43 @@ fn process_ai() -> Arc<crate::ai::Backends> {
 /// target it installs into.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum KitPlace {
-    /// A helper Hide installed under a helper root: the root the running
-    /// executable sits in (`kit::handle`).
+    /// A device's helper Hide installed under a helper root: the root the
+    /// running executable sits in (`kit::handle`). Each connection's pass
+    /// points `current` at its build and removes the others, since the
+    /// connection placed them.
     Installed,
+    /// A build Hide placed in the account's helper root that runs as a core
+    /// or a node, as a moved core's login item runs it
+    /// (`~/.hide/host-helper/<16 hex>/hided`, `kit::placed_build`): the kit
+    /// installs from `<root>/current`, which it points at this build, and
+    /// removes no build, since the core update keeps the one it may go back
+    /// to (`kit::adopt_build`).
+    Build { root: PathBuf, version: String },
     /// The resources folder of the desktop package the node runs from
     /// (`hide_kit::bundled_kit_dir`).
     Bundled(PathBuf),
     /// A development or standalone daemon, which installs nothing
     /// (`hide_kit::STANDALONE_REASON`).
     Standalone,
+}
+
+impl KitPlace {
+    /// Where the kit of a core's own node, or of a node that dialed its
+    /// core, takes its parts from, read from the program it runs and the
+    /// account `home` it installs into: a desktop package, or a build Hide
+    /// placed in that account's helper root. Any other copy, a Cargo build
+    /// directory among them, installs nothing, because a hook that names a
+    /// folder the next build deletes fails every session after it (the
+    /// 2026-09-10 hook incident).
+    pub fn of_program(executable: &Path, home: Option<&Path>) -> Self {
+        if let Some(kit_dir) = hide_kit::bundled_kit_dir(executable) {
+            return Self::Bundled(kit_dir);
+        }
+        match home.and_then(|home| crate::kit::placed_build(executable, home)) {
+            Some((root, version)) => Self::Build { root, version },
+            None => Self::Standalone,
+        }
+    }
 }
 
 impl Env {
@@ -820,7 +884,7 @@ impl Env {
             home: std::env::var_os("HOME").map(PathBuf::from),
             kit: KitPlace::Installed,
             shell: crate::shell_integration::UserShell::of_process(),
-            stop: crate::kit::process_stop(),
+            stop: Arc::default(),
             ai: process_ai(),
             factory: Arc::default(),
             label_locks: Arc::default(),
@@ -1148,17 +1212,44 @@ pub fn handle_with_progress(
                     .map_err(|error| HostError::new(ErrorCode::Io, error.to_string()))?,
             )
         }
-        Call::AntigravityTrust { path, trusted } => {
-            let home = env.home("antigravity_trust_home_unavailable")?;
+        Call::OpenCodeFork { source, cwd } => {
+            let home = env.home("opencode_fork_home_unavailable")?;
+            to_value(crate::opencode_fork::fork(
+                Path::new(&home),
+                &source,
+                &absolute(&cwd)?,
+                &env.stop,
+            )?)
+        }
+        Call::AgentTrust {
+            agent,
+            path,
+            trusted,
+        } => {
+            use hide_agent_hooks::folder_trust::{self, Agent, Tools};
+            let agent = hide_agent_adapter::adapter(&agent)
+                .and_then(|adapter| adapter.start)
+                .and_then(Agent::of)
+                .ok_or_else(|| {
+                    HostError::new(ErrorCode::InvalidPath, "agent_trust_agent_unknown")
+                })?;
+            let home = env.home("agent_trust_home_unavailable")?;
             let home = Path::new(&home);
             let folder = antigravity_folder(&path).ok_or_else(|| {
-                HostError::new(ErrorCode::InvalidPath, "antigravity_trust_path_invalid")
+                HostError::new(ErrorCode::InvalidPath, "agent_trust_path_invalid")
             })?;
             let folder = folder.as_path();
+            let codex = (agent == Agent::Codex)
+                .then(|| hide_ai::resolve_binary(Path::new("codex")))
+                .flatten();
+            let tools = Tools {
+                codex: codex.as_deref(),
+                stop: &env.stop,
+            };
             if trusted {
-                hide_agent_hooks::antigravity_trust::trust_worktree(home, folder)
+                folder_trust::trust_worktree(agent, home, folder, tools)
             } else {
-                hide_agent_hooks::antigravity_trust::forget(home, folder).map(drop)
+                folder_trust::forget(agent, home, folder, tools).map(drop)
             }
             .map_err(|failure| HostError::new(ErrorCode::Io, failure.message()))?;
             to_value(())
@@ -1816,16 +1907,10 @@ mod tests {
         let (written, lines) = mpsc::channel();
         let (done, finished) = mpsc::channel();
         std::thread::spawn(move || {
-            // A stop of its own: another test's helper ending stops the
-            // process's watches.
-            let env = Env {
-                stop: Arc::default(),
-                ..Env::of_process()
-            };
             let _ = done.send(serve_in(
                 io::BufReader::new(theirs),
                 Lines(written),
-                env,
+                Env::of_process(),
                 Services::none(),
             ));
         });
@@ -1923,14 +2008,10 @@ mod tests {
         let (mut input, theirs) = UnixStream::pair().unwrap();
         let (written, lines) = mpsc::channel();
         std::thread::spawn(move || {
-            let env = Env {
-                stop: Arc::default(),
-                ..Env::of_process()
-            };
             let _ = serve_in(
                 io::BufReader::new(theirs),
                 Lines(written),
-                env,
+                Env::of_process(),
                 Services::none(),
             );
         });
@@ -1975,6 +2056,102 @@ mod tests {
         }
     }
 
+    /// A link's end stops its own calls and no other link's: a node serves
+    /// one link after another (a node that dials its core again), and a
+    /// watch on the next link still reports a change after the first link
+    /// ended, until its own input ends.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_s_end_stops_its_own_calls_and_not_the_next_link_s() {
+        use hide_node_link::worktrees::GitWatchReport;
+        use std::os::unix::net::UnixStream;
+        struct Lines(mpsc::Sender<Vec<u8>>);
+        impl Write for Lines {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                let _ = self.0.send(bytes.to_vec());
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        serve_in(
+            io::BufReader::new(&b""[..]),
+            Vec::new(),
+            Env::of_process(),
+            Services::none(),
+        )
+        .unwrap();
+
+        let common = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(common.path().join("refs/heads")).unwrap();
+        let mut line = serde_json::to_vec(&Request {
+            id: 1,
+            call: Call::GitWatch {
+                common_dirs: vec![common.path().to_string_lossy().into_owned()],
+            },
+        })
+        .unwrap();
+        line.push(b'\n');
+        let (mut input, theirs) = UnixStream::pair().unwrap();
+        let (written, lines) = mpsc::channel();
+        let (done, finished) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = done.send(serve_in(
+                io::BufReader::new(theirs),
+                Lines(written),
+                Env::of_process(),
+                Services::none(),
+            ));
+        });
+        input.write_all(&line).unwrap();
+        let mut text = String::new();
+        let mut reports = |until: &dyn Fn(&GitWatchReport) -> bool| loop {
+            let bytes = lines
+                .recv_timeout(Duration::from_secs(20))
+                .expect("the watch went quiet");
+            text.push_str(std::str::from_utf8(&bytes).unwrap());
+            while let Some(end) = text.find('\n') {
+                let written: String = text.drain(..=end).collect();
+                assert!(
+                    serde_json::from_str::<Response>(&written).is_err(),
+                    "the watch ended while its link was open: {written}"
+                );
+                if let Ok(progress) = serde_json::from_str::<Progress>(&written)
+                    && until(&serde_json::from_value(progress.report).unwrap())
+                {
+                    return;
+                }
+            }
+        };
+        reports(&|report| matches!(report, GitWatchReport::Watching { .. }));
+        std::fs::write(common.path().join("refs/heads/main"), b"0000").unwrap();
+        reports(&|report| !matches!(report, GitWatchReport::Watching { .. }));
+
+        input.shutdown(std::net::Shutdown::Write).unwrap();
+        let result = finished
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the watch outlived its link");
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    /// A kit call installs against the Herdr server the core named, else
+    /// the one the link bridges: a core never knows the Herdr of a node
+    /// that dialed it.
+    #[test]
+    fn a_kit_call_that_names_no_herdr_uses_the_link_s() {
+        let bridged = Path::new("/srv/node/herdr.sock");
+        assert_eq!(
+            kit_herdr_socket(None, Some(bridged)),
+            Some("/srv/node/herdr.sock".to_owned())
+        );
+        assert_eq!(
+            kit_herdr_socket(Some("~/named.sock".to_owned()), Some(bridged)),
+            Some("~/named.sock".to_owned())
+        );
+        assert_eq!(kit_herdr_socket(None, None), None);
+    }
+
     /// A request whose id is still running is refused, and the running one
     /// keeps its own cancel.
     #[cfg(unix)]
@@ -1996,14 +2173,10 @@ mod tests {
         let output = kept.clone();
         let (done, finished) = mpsc::channel();
         std::thread::spawn(move || {
-            let env = Env {
-                stop: Arc::default(),
-                ..Env::of_process()
-            };
             let _ = done.send(serve_in(
                 io::BufReader::new(theirs),
                 output,
-                env,
+                Env::of_process(),
                 Services::none(),
             ));
         });

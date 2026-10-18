@@ -158,6 +158,7 @@ mod tests {
             descendant_line: None,
             id: pane_id.to_owned(),
             herdr_name: None,
+            started_name: None,
             declared_fork: None,
             forked_from: None,
             pane_id: pane_id.to_owned(),

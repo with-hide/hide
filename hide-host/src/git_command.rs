@@ -4,7 +4,6 @@
 //! Hide keeps in the repository's configuration.
 
 use std::path::Path;
-use std::process::Command;
 
 use hide_node_link::git::GitCommand;
 
@@ -53,7 +52,7 @@ pub fn run(root: &Path, command: &GitCommand) -> HostResult<String> {
         | GitCommand::Checkout { .. }
         | GitCommand::SetBranchConfig { .. }
         | GitCommand::UnsetBranchConfig { .. } => {
-            let output = Command::new("git")
+            let output = hide_platform::programs::command("git")
                 .arg("--no-optional-locks")
                 .arg("-C")
                 .arg(root)

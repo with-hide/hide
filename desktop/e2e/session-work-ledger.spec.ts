@@ -9,16 +9,15 @@ import { enterWorkspace, openTaskFolds, showTool, taskRow } from "../../web/e2e/
 import { fitWindow, isolate, launchShell, REPO, test } from "./fixture";
 import { captureElectronWindow } from "./electron-window";
 
-/** The record, its words beside the split tasks, then the pane's checklist pinned by Show task list through the app menu's chord. */
+/** The record, the requests at its end, then the pane's checklist pinned by Show task list through the app menu's chord. */
 async function captureRecordAndTaskList(app: ElectronApplication, pane: string, theme: string, facts: Record<string, unknown>) {
   const page = await app.firstWindow();
   const record = page.locator('aside[data-lane="detail"][data-detail="record"] [data-session-record="lane"]');
-  await captureElectronWindow(app, `record-chapters-children-${theme}`, facts);
-  // The split request's words show once, under its first task (D-13).
-  await record.locator('[data-record-words="off"]').click();
-  await expect(record.locator("[data-record-words-bubble]").first()).toBeVisible();
+  await captureElectronWindow(app, `record-tasks-children-${theme}`, facts);
+  // The requests stand at the record's end, the newest four open (PRD record-card-readability B24).
+  await record.locator("[data-record-words]").scrollIntoViewIfNeeded();
+  await expect(record.locator("[data-record-request]").first()).toBeVisible();
   await captureElectronWindow(app, `record-words-${theme}`, facts);
-  await record.locator('[data-record-words="on"]').click();
   await page.locator(`[data-pane-view="${pane}"] .xterm-helper-textarea`).focus();
   await page.keyboard.press(chord("toggle_task_list", "electron"));
   const list = page.locator(`[data-pane-task-list="${pane}"]`);
@@ -96,15 +95,8 @@ test("@platform session work records, missed lines, ended work and search render
       await page.keyboard.press("Escape");
       const facts = { ...fixtureIdentity, theme, tools: await page.locator("[data-lane-frame]").boundingBox() };
       await captureRecordAndTaskList(app, herdr.panes[0], theme, facts);
-      const missed = record.locator('[data-missed-work]', { hasText: MISSED });
-      await missed.getByRole("button", { name: "무시", exact: true }).click();
-      // A closed one is a muted line under its task; Undo shows under the pointer.
-      await expect(missed).toHaveAttribute("data-missed-status", "dismissed");
-      await captureElectronWindow(app, `record-closed-${theme}`, facts);
-      await missed.hover();
-      await missed.getByRole("button", { name: "되돌리기", exact: true }).click();
-      await expect(missed).toHaveAttribute("data-missed-status", "open");
-      // An open line offers 백로그로 and 무시, with no drafted form (PRD overview-device-tasks B43).
+      const missed = record.locator('[data-record-missed] [data-missed-work]', { hasText: MISSED });
+      // An open line in its own section offers 백로그로 and 무시, with no drafted form (PRD overview-device-tasks B43; PRD record-card-readability B12).
       await expect(missed.locator("[data-missed-backlog-add]")).toBeVisible();
       await captureElectronWindow(app, `record-missed-open-${theme}`, facts);
       await page.keyboard.press(chord("search", "electron"));
@@ -135,7 +127,7 @@ test("@platform session work records, missed lines, ended work and search render
     // Resolve from the row's ⋯ menu puts the task under 쉬는 중 once it is saved (B18).
     await root.hover();
     await page.locator(`[data-task-more="${herdr.panes[0]}"]`).click();
-    await page.locator('[data-task-menu-item="resolve"]').click();
+    await page.locator(`[data-task-menu="${herdr.panes[0]}"] [data-menu-item="resolve"]`).click();
     await expect(tasks.locator('[data-task-fold="rest"]')).toBeVisible({ timeout: 30_000 });
     await openTaskFolds(page);
     await expect(root).toHaveAttribute("data-task-state", "resting");

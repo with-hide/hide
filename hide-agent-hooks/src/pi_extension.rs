@@ -16,7 +16,7 @@
 //! uses; an omp profile or a `PI_CODING_AGENT_DIR` folder gets none (PRD
 //! non-goal).
 
-use crate::plugin::PluginFile;
+use crate::plugin::{Plugin, PluginFile};
 
 /// The extension's version: the marker's, and the one the extension tells the
 /// helper. Raise both when the text or the helper protocol changes.
@@ -35,6 +35,7 @@ pub const PI: PluginFile = PluginFile {
     version: VERSION,
     config: &[".pi", "agent"],
     folder: "extensions",
+    own_folder: None,
     file_name: "hide.ts",
     template: TEMPLATE,
     constants: &[
@@ -50,6 +51,7 @@ pub const OMP: PluginFile = PluginFile {
     version: VERSION,
     config: &[".omp", "agent"],
     folder: "extensions",
+    own_folder: None,
     file_name: "hide.ts",
     template: TEMPLATE,
     constants: &[
@@ -57,6 +59,10 @@ pub const OMP: PluginFile = PluginFile {
         ("__HIDE_VERSION__", VERSION_TEXT),
     ],
 };
+
+pub const PI_PLUGIN: Plugin = Plugin { files: &[PI] };
+
+pub const OMP_PLUGIN: Plugin = Plugin { files: &[OMP] };
 
 #[cfg(test)]
 mod tests {

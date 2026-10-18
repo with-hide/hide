@@ -13,7 +13,7 @@ import { thisMachineKey } from "./devices";
 import { translate } from "./i18n/client";
 import type { BoardProject } from "./projectBoard";
 import { projectsOf } from "./remote";
-import { machineName, registeredName } from "./screenMachine";
+import { machineName, windowDeviceId } from "./screenMachine";
 import { hideAiPlace } from "./hideAiOrigin";
 import { focusedRemoteDevice, frontCheckout, localDeviceId, type AgentRow, type Device, type HideAi, type RemoteStatus, type SnapshotRest, type Workspace, type WorkspaceRegistration } from "./snapshot";
 import type { Tool } from "./workspace";
@@ -108,8 +108,9 @@ export function deviceListedAgents(remote: RemoteStatus[] | undefined, devices: 
   return allAgents(remote, localAgents, devices?.find((d) => d.id === deviceId)?.agent_scope, devices);
 }
 
+/** A device's rows' key in `agentPlaces`: the name `allAgents` gives them, so a node's own rows in its window find their places too. */
 function deviceLabel(devices: Device[] | undefined, targetId: string): string {
-  return devices?.find((row) => row.id === targetId)?.label ?? targetId;
+  return machineName(devices, targetId, translate);
 }
 
 /**
@@ -173,14 +174,15 @@ function localAvailability(rest: SnapshotRest | null): DeviceAvailability {
   return { state: "unavailable", text: translate("overview.availability.agentCountsLater", { reason }), retry: null };
 }
 
-function deviceAvailability(device: Device, status: RemoteStatus | undefined): DeviceAvailability {
+/** `name`: the device as this window calls it (`machineName`). */
+function deviceAvailability(device: Device, status: RemoteStatus | undefined, name: string): DeviceAvailability {
   if (device.kind !== "remote") return { state: "ready" };
   if (!status || status.state === "not_connected") return { state: "loading", text: translate("devices.state.connecting") };
   if (status.state !== "connected" && status.state !== "stale") {
-    return { state: "unavailable", text: status.message ?? translate("overview.availability.deviceState", { device: registeredName(device), state: status.state.replace(/_/g, " ") }), retry: status.state === "disabled" ? null : "connect" };
+    return { state: "unavailable", text: status.message ?? translate("overview.availability.deviceState", { device: name, state: status.state.replace(/_/g, " ") }), retry: status.state === "disabled" ? null : "connect" };
   }
   if (status.state === "stale") {
-    return { state: "unavailable", text: status.message ?? translate("overview.availability.deviceStale", { device: registeredName(device) }), retry: "connect" };
+    return { state: "unavailable", text: status.message ?? translate("overview.availability.deviceStale", { device: name }), retry: "connect" };
   }
   const catalog = status.catalog;
   if (catalog?.state === "resolving") return { state: "loading", text: translate("overview.availability.readingProjects") };
@@ -239,7 +241,7 @@ export function mainSections(rest: SnapshotRest | null, localAgents: AgentRow[],
   }
   for (const device of devices.filter((row) => row.kind === "remote")) {
     const status = rest?.status?.remote?.find((row) => row.target_id === device.id);
-    const availability = deviceAvailability(device, status);
+    const availability = deviceAvailability(device, status, machineName(rest?.navigator?.devices, device.id, translate));
     const session = status?.session ?? null;
     const projects = session
       ? projectsOf(session.workspaces).map((workspace) => entryOf(workspace, session.agents, availability.state === "ready"))
@@ -274,14 +276,17 @@ export function allProjectsCount(rest: SnapshotRest | null, deviceId?: string): 
  */
 export function boardProjects(rest: SnapshotRest | null, localAgents: AgentRow[], deviceId?: string): BoardProject[] {
   const localId = localDeviceId(rest);
+  const devices = rest?.navigator?.devices;
+  // A board names the machine of a project that is not the window's own, the core's included on a node's window.
+  const away = (id: string) => (id === windowDeviceId(devices) ? null : machineName(devices, id, translate));
   const projects: BoardProject[] =
     deviceId === undefined || deviceId === localId
-      ? projectsOf(rest?.navigator?.workspaces ?? []).map((workspace) => ({ workspace, agents: localAgents, device: null }))
+      ? projectsOf(rest?.navigator?.workspaces ?? []).map((workspace) => ({ workspace, agents: localAgents, device: away(localId) }))
       : [];
   for (const status of rest?.status?.remote ?? []) {
     const session = status.session;
     if (!session || (deviceId !== undefined && status.target_id !== deviceId)) continue;
-    const device = rest?.navigator?.devices?.find((row) => row.id === status.target_id)?.label ?? status.target_id;
+    const device = away(status.target_id);
     for (const workspace of projectsOf(session.workspaces)) projects.push({ workspace, agents: session.agents, device });
   }
   return projects;
@@ -320,7 +325,7 @@ export function overviewProject(rest: SnapshotRest | null, localAgents: AgentRow
     const workspace = status.session?.workspaces.find((row) => row.id === projectId);
     if (workspace) {
       const device = rest?.navigator?.devices?.find((row) => row.id === status.target_id) ?? null;
-      const availability = device ? deviceAvailability(device, status) : { state: "loading" as const, text: translate("devices.state.connecting") };
+      const availability = device ? deviceAvailability(device, status, machineName(rest?.navigator?.devices, device.id, translate)) : { state: "loading" as const, text: translate("devices.state.connecting") };
       return {
         workspace,
         deviceAgents: status.session?.agents ?? [],

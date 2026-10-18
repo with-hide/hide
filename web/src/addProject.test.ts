@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { addProjectHosts, alreadyRegistered, defaultProjectParent, initialHost, parseCloneUrl, projectNameProblem, projectPath, refusalText, trimFolder } from "./addProject";
+import { addProjectHosts, alreadyRegistered, defaultProjectParent, hostWays, initialHost, parseCloneUrl, projectNameProblem, projectPath, refusalText, trimFolder } from "./addProject";
 import type { Device, WorkspaceRegistration } from "./snapshot";
 
 const { t } = initializeInterfaceI18n("en");
@@ -21,6 +22,31 @@ describe("Add a project", () => {
     vi.stubGlobal("navigator", { platform: "Win32" });
     expect(addProjectHosts(undefined, t)).toEqual([{ id: "", label: "This PC" }]);
     vi.unstubAllGlobals();
+  });
+
+  describe("what each host offers (docs/UI_BEHAVIOR.md, Adding a project)", () => {
+    afterEach(() => {
+      window.location.hash = "";
+      vi.unstubAllGlobals();
+    });
+
+    it("browses this window's own machine and makes a new project on the core's, both on one machine", () => {
+      const devices = [device("core", "", "local"), device("mini", "Mini")];
+      expect(hostWays("core", devices)).toEqual({ browse: true, otherWays: true, pickParent: true });
+      expect(hostWays("mini", devices)).toEqual({ browse: false, otherWays: false, pickParent: false });
+      // Before the snapshot names a machine, the empty id is the core's own, where the window runs.
+      expect(hostWays("", undefined)).toEqual({ browse: true, otherWays: true, pickParent: true });
+    });
+
+    it("in a window on a node whose core runs elsewhere, browses the window's machine only, and makes a new project on the core's without its picker", () => {
+      // The MacBook's window after the core moved to the mini: the core's row is the mini's, the MacBook dials in.
+      vi.stubGlobal("navigator", { platform: "MacIntel" });
+      window.location.hash = "#token=t&node=mbp";
+      const devices = [{ ...device("mini-node", "Mac mini", "local") }, { ...device("mbp", "MacBook-Pro.local"), dials_in: true }];
+      expect(hostWays("mbp", devices)).toEqual({ browse: true, otherWays: false, pickParent: false });
+      expect(hostWays("mini-node", devices)).toEqual({ browse: false, otherWays: true, pickParent: false });
+      expect(addProjectHosts(devices, t).map((host) => host.label)).toEqual(["This Mac", "Mac mini"]);
+    });
   });
 
   it("opens on the focused device while it is listed, this Mac otherwise", () => {

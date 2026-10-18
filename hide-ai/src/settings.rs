@@ -384,7 +384,7 @@ pub fn save(home: &Path, settings: &AiSettings) -> Result<(), AiError> {
     let parent = path
         .parent()
         .ok_or_else(|| AiError::Internal("ai_settings_path_without_parent".to_owned()))?;
-    std::fs::create_dir_all(parent)
+    hide_platform::fs::private::create_dir_all(parent)
         .map_err(|error| AiError::Internal(format!("ai_settings_dir:{}", error.kind())))?;
     let bytes = serde_json::to_vec_pretty(settings)
         .map_err(|_| AiError::Internal("ai_settings_not_encodable".to_owned()))?;

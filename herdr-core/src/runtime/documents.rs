@@ -114,13 +114,6 @@ pub(super) struct PendingReveal {
 type OpenResult = Result<(EditorDocumentSnapshot, DocumentPlace), OpenFailure>;
 
 impl Runtime {
-    /// The checkout a file belongs to, as its device reaches it. This
-    /// machine's checkouts resolve through the roots hided pinned when it
-    /// opened them, so a replaced checkout refuses the read.
-    /// A checkout by its ids wherever the catalog carries it: this machine's
-    /// and registered projects in the navigator, and each device's Herdr
-    /// session. Device ids are scoped (`remote:<device>:…`), so one id never
-    /// names checkouts on two machines.
     /// Every project the catalog carries: this machine's navigator, then each
     /// device's Herdr session.
     pub(super) fn catalog_workspaces(&self) -> impl Iterator<Item = &WorkspaceSnapshot> {
@@ -134,6 +127,10 @@ impl Runtime {
         self.snapshot.navigator.workspaces.iter().chain(sessions)
     }
 
+    /// A checkout by its ids wherever the catalog carries it: this machine's
+    /// and registered projects in the navigator, and each device's Herdr
+    /// session. Device ids are scoped (`remote:<device>:…`), so one id never
+    /// names checkouts on two machines.
     pub(super) fn catalog_checkout(
         &self,
         workspace_id: &str,
@@ -270,6 +267,9 @@ impl Runtime {
             .map(|(workspace, checkout)| (workspace.to_owned(), checkout.to_owned()))
     }
 
+    /// The checkout a file belongs to, as its device reaches it. This
+    /// machine's checkouts resolve through the roots hided pinned when it
+    /// opened them, so a replaced checkout refuses the read.
     pub(super) fn document_root(
         &self,
         workspace_id: &str,

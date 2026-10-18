@@ -1028,6 +1028,7 @@ impl Runtime {
             &mut self.snapshot.navigator.workspaces,
             &self.snapshot.navigator.agents,
         );
+        self.refresh_unowned_dormant_rows();
         self.refresh_inactive_groups();
 
         let focused_project = self
@@ -3749,6 +3750,10 @@ impl Runtime {
             id,
             prompt,
             agent_choice::agent_arguments(payload.agent_kind.as_deref(), model.as_deref(), &[]),
+            hide_agent_adapter::LaunchChoice {
+                model,
+                effort: None,
+            },
         );
         if let Some(operation) = self.snapshot.task_operation.as_mut() {
             operation.device_id = device.clone();
@@ -3985,6 +3990,19 @@ impl Runtime {
     /// worktree sheet already reports through. The shell starts the provider
     /// in the pane the slot names, so `terminal` needs nothing more from it.
     pub(super) fn agent_start_in_checkout(&mut self, payload: AgentStartInCheckoutPayload) -> bool {
+        self.start_in_checkout(payload, true, None)
+    }
+
+    /// A start in a checkout's new tab; `remember` false keeps the start out
+    /// of the remembered agent choice (an archive resume). `cwd` is a folder
+    /// inside the checkout the resumed conversation ran in; one outside it is
+    /// ignored and the tab starts at the checkout.
+    pub(super) fn start_in_checkout(
+        &mut self,
+        payload: AgentStartInCheckoutPayload,
+        remember: bool,
+        cwd: Option<String>,
+    ) -> bool {
         let request_id = payload.request_id.clone();
         let agent_kind = match payload.provider.as_str() {
             "terminal" => None,
@@ -4055,7 +4073,14 @@ impl Runtime {
         // A start names one place: a device's Home, or one of its checkouts.
         let checkout_path = match (payload.home, payload.checkout_path.clone()) {
             (true, None) => {
-                return self.start_in_home(&device, agent_kind, model, prompt, request_id);
+                return self.start_in_home(
+                    &device,
+                    agent_kind,
+                    model,
+                    prompt,
+                    request_id,
+                    payload.stay_behind,
+                );
             }
             (false, Some(path)) if !path.is_empty() => path,
             _ => {
@@ -4125,18 +4150,34 @@ impl Runtime {
         if let Some(operation) = self.snapshot.task_operation.as_mut() {
             operation.request_id = request_id;
             operation.device_id = (!local).then(|| device.clone());
+            operation.stays_behind = payload.stay_behind;
         }
-        self.remember_agent_choice(agent_kind.as_deref(), model.as_deref());
+        // A resume Hide makes from the archive is not the operator's choice
+        // of agent.
+        if remember {
+            self.remember_agent_choice(agent_kind.as_deref(), model.as_deref());
+        }
         let mut arguments = resume.unwrap_or_default();
         arguments.extend(agent_choice::agent_arguments(
             agent_kind.as_deref(),
             model.as_deref(),
             &[],
         ));
-        self.set_task_agent_launch(id, prompt, arguments);
+        self.set_task_agent_launch(
+            id,
+            prompt,
+            arguments,
+            hide_agent_adapter::LaunchChoice {
+                model,
+                effort: None,
+            },
+        );
         if let Some(launch) = self.task_agent_launch.as_mut() {
             launch.resume_reference = resume_reference.clone();
         }
+        let cwd = cwd
+            .filter(|cwd| hide_platform::path::wire_relative(&checkout_path, cwd).is_ok())
+            .unwrap_or_else(|| checkout_path.clone());
         let request = live::CheckoutTabRequest {
             id,
             agent_kind,
@@ -4147,11 +4188,13 @@ impl Runtime {
                 .filter(|_| proof.is_some())
                 .map(|id| hide_session::SessionReadScope {
                     id: id.clone(),
-                    cwd: checkout_path.clone(),
+                    cwd: cwd.clone(),
                 }),
+            cwd,
             checkout_path,
             label,
             host,
+            focus: !payload.stay_behind,
         };
         let target = if local {
             self.live
@@ -4502,31 +4545,38 @@ pub(super) fn tab_host(
     }
 }
 
-/// How `checkout` of `project` gets its owner opened. A workspace Hide opens
-/// is named as the sidebar names the checkout: a linked worktree by its
-/// branch, the primary checkout and a plain folder by the project (D-14).
+/// How `checkout` of `project` gets its owner opened.
 pub(super) fn owner_open(
     project: &WorkspaceSnapshot,
     checkout: &crate::model::CheckoutSnapshot,
     device_id: &str,
     node: &crate::node::NodeId,
 ) -> OwnerOpen {
-    let label = if checkout.is_worktree {
-        &checkout.label
-    } else {
-        &project.label
-    };
     let owner = OwnerOpen::for_checkout(
         device_id,
         &checkout.path,
         &project.path,
         project.is_git,
-        label,
+        owner_label(project, checkout),
     );
     if *node == device_id {
         owner.on_node()
     } else {
         owner
+    }
+}
+
+/// The name a workspace Hide opens for `checkout` takes, as the sidebar names
+/// the checkout: a linked worktree by its branch, the primary checkout and a
+/// plain folder by the project (D-14).
+pub(super) fn owner_label<'a>(
+    project: &'a WorkspaceSnapshot,
+    checkout: &'a crate::model::CheckoutSnapshot,
+) -> &'a str {
+    if checkout.is_worktree {
+        &checkout.label
+    } else {
+        &project.label
     }
 }
 
@@ -4604,6 +4654,7 @@ pub(super) fn resume_session_arguments(kind: &str, session_id: &str) -> Option<V
     crate::recent_closed::resume_arguments(&crate::recent_closed::ClosedAgent {
         kind: kind.to_owned(),
         session_id: Some(session_id.to_owned()),
+        ..Default::default()
     })
 }
 

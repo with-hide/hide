@@ -6,6 +6,9 @@ import type { Catalog, Catalogs } from "../schema";
 
 export const linksEnglish = {
   "links.noIssue": "No linked issue",
+  "links.issue": "Issue",
+  "links.issueOpen": "open",
+  "links.issueClosed": "closed",
   "links.source.closes": "Closes",
   "links.source.hide": "Hide link",
   "links.cleaned": "Cleaned up",
@@ -45,6 +48,9 @@ export const linksEnglish = {
 
 const ko = {
   "links.noIssue": "연결된 이슈 없음",
+  "links.issue": "이슈",
+  "links.issueOpen": "열림",
+  "links.issueClosed": "닫음",
   "links.source.closes": "Closes",
   "links.source.hide": "Hide 링크",
   "links.cleaned": "정리됨",
@@ -84,6 +90,9 @@ const ko = {
 
 const zhCN = {
   "links.noIssue": "没有关联的议题",
+  "links.issue": "议题",
+  "links.issueOpen": "开放",
+  "links.issueClosed": "已关闭",
   "links.source.closes": "Closes",
   "links.source.hide": "Hide 关联",
   "links.cleaned": "已清理",
@@ -123,6 +132,9 @@ const zhCN = {
 
 const ja = {
   "links.noIssue": "つながったイシューなし",
+  "links.issue": "イシュー",
+  "links.issueOpen": "オープン",
+  "links.issueClosed": "クローズ",
   "links.source.closes": "Closes",
   "links.source.hide": "Hide リンク",
   "links.cleaned": "整理済み",

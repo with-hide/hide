@@ -1282,6 +1282,11 @@ impl Runtime {
             ReadRecordScope::Remote(&prefix),
             Some(&live_pane_ids),
         );
+        self.apply_pane_launches(
+            &session.agents,
+            ReadRecordScope::Remote(&prefix),
+            Some(&live_pane_ids),
+        );
         crate::agent_state::apply_lineage(
             &mut session.agents,
             &session.workspaces,
@@ -2295,6 +2300,7 @@ impl Runtime {
             );
             self.acknowledge_session_save(&state, result.is_ok());
             self.ingest_dormant_saved(&state.agent_sleep, result.is_ok());
+            self.ingest_archive_saved(&state.session_archive, result.is_ok());
             self.acknowledge_project_settings_save(&state, result.is_ok());
             return result;
         };
@@ -2337,8 +2343,11 @@ impl Runtime {
                         });
                         let resolved_changed =
                             guard.acknowledge_session_save(&state, result.is_ok());
-                        let dormant_changed =
-                            guard.ingest_dormant_saved(&state.agent_sleep, result.is_ok());
+                        let archive_changed =
+                            guard.ingest_archive_saved(&state.session_archive, result.is_ok());
+                        let dormant_changed = guard
+                            .ingest_dormant_saved(&state.agent_sleep, result.is_ok())
+                            | archive_changed;
                         let settings_changed =
                             guard.acknowledge_project_settings_save(&state, result.is_ok());
                         if let Err(message) = &result {
@@ -2352,6 +2361,10 @@ impl Runtime {
                                     "session.resolve.save_failed",
                                     message.clone(),
                                 );
+                            } else if archive_changed {
+                                // The archive said what the failed save left
+                                // closed and open; that notice stays.
+                                guard.push_diagnostic("ui_state.save_failed", message.clone());
                             } else {
                                 guard.set_error("ui_state.save_failed", message.clone(), true);
                             }
@@ -2573,6 +2586,15 @@ impl Runtime {
         // appeared and nothing else happened.
         match result {
             Ok(forked_pane_id) => {
+                if let Some(pending) = &pending {
+                    self.record_pane_launch(
+                        &forked_pane_id,
+                        &pending.kind,
+                        &pending.name,
+                        &pending.launch,
+                        None,
+                    );
+                }
                 self.push_diagnostic(
                     "pane.fork.created",
                     format!("Forked pane {parent_pane_id} into {forked_pane_id} in {elapsed_ms}ms"),
@@ -2802,7 +2824,7 @@ impl Runtime {
                 {
                     self.record_created_device_tab(target_id, tab_id, cwd);
                 }
-                self.acknowledge_memory_navigation(target_id, request_id);
+                self.acknowledge_choice(target_id, request_id);
                 let mut receipt = String::new();
                 if let Some(tab_id) = created_tab_id.as_deref() {
                     receipt.push_str(&format!("; created tab {tab_id}"));
@@ -3305,4 +3327,9 @@ pub(super) struct PendingFork {
     pub(super) tab_id: Option<String>,
     /// The fork's pane, once Herdr made it and it took the keyboard.
     pub(super) focused: Option<String>,
+    /// The source's agent kind and launch choice, and the name the fork
+    /// starts under, which the fork's pane keeps once the fork started.
+    pub(super) kind: String,
+    pub(super) name: String,
+    pub(super) launch: hide_agent_adapter::LaunchChoice,
 }

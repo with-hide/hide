@@ -37,7 +37,7 @@ pub(crate) mod links;
 pub(crate) mod memory;
 pub(crate) mod memory_analysis;
 pub(crate) mod memory_evidence;
-mod memory_promotion;
+pub(crate) mod memory_promotion;
 mod memory_verify;
 mod op_timing;
 mod operations;
@@ -53,6 +53,7 @@ mod recent_panes;
 mod rename;
 mod request_view;
 mod session;
+mod session_archive;
 mod session_state;
 mod snapshot_delta;
 mod ssh_hosts;
@@ -1077,6 +1078,9 @@ pub(crate) struct TaskAgentLaunch {
     pub(crate) task: u64,
     pub(crate) prompt: Option<String>,
     pub(crate) args: Vec<String>,
+    /// The model and effort among `args`, which the started pane keeps for
+    /// the agent's restarts.
+    pub(crate) launch: hide_agent_adapter::LaunchChoice,
     pub(crate) resume_reference: Option<crate::sidebar::SessionAgentSessionPayload>,
 }
 
@@ -1131,6 +1135,13 @@ pub struct Runtime {
     /// store to point at the woken pane; an entry leaves once the published
     /// ledger shows the registration moved.
     registration_rebinds: std::collections::BTreeMap<String, crate::coordination::Rebind>,
+    /// Archive deletes whose record lines the link worker is removing.
+    archive_deletes_sent: HashSet<crate::session_archive::ArchiveId>,
+    /// The archived sessions last handed to the link worker's retention.
+    archive_retention_sent: Arc<Vec<crate::links::store::ArchivedSession>>,
+    /// When each resumed archived member's registration began waiting for
+    /// the delivery store to see its new pane, by agent id.
+    archive_registration_waits: HashMap<String, u64>,
     /// The machine this core runs on. Device labels are mutable
     /// presentation, while lineage and every key naming this machine use
     /// this operating-system id.
@@ -1260,6 +1271,9 @@ pub struct Runtime {
     /// What the nodes were last told is on screen, asleep and closing, so
     /// only a change is sent.
     terminal_intents: terminal::TerminalIntents,
+    /// Which panes take no input while their agent ends, sleeps or wakes,
+    /// asked at the write by the writers that bypass a node's terminal.
+    input_gate: Arc<crate::input_gate::PaneInputGate>,
     next_remote_file_generation: u64,
     attachment: Option<attachments::PendingAttachment>,
     attachment_rejection: Option<crate::model::AsyncOperationSnapshot>,
@@ -1391,6 +1405,10 @@ pub struct Runtime {
     /// One bounded read-only sleeping-session inspection, independent of
     /// durable transition admission. A generation fences its late reply.
     dormant_status_check: Option<(crate::agent_sleep::SleepId, u64)>,
+    /// The local checkout paths the project list showed when the rows of
+    /// owner-less sleeping sessions were last derived, as an order-free
+    /// fingerprint: those rows follow the list only when it changes.
+    unowned_dormant_listing: Option<u64>,
     pane_operations: HashMap<String, PendingPaneOperation>,
     /// The last complete raw layout Herdr confirmed for each tab. Mutation
     /// operations compare fresh geometry with this value, because a model
@@ -1862,6 +1880,8 @@ impl Runtime {
         let local_issues_path = options.local_issues_path.as_ref().map(PathBuf::from);
         snapshot.ui_state = ui_state;
         snapshot.navigator.sleeping_sessions = snapshot.ui_state.agent_sleep.dormant_snapshots();
+        snapshot.navigator.archived_sessions =
+            snapshot.ui_state.session_archive.snapshots(&|_| None);
         let shortcuts_imported = options
             .shortcut_import_path
             .as_deref()
@@ -1869,7 +1889,7 @@ impl Runtime {
         snapshot.navigator.devices = workspace::devices(
             &options.node_id,
             options.machine_name.as_deref(),
-            &snapshot.ui_state.device_registrations,
+            &snapshot.ui_state,
         );
         // This machine's row names the root a device consent would name, so
         // the add form can show it before the first device exists.
@@ -2047,6 +2067,9 @@ impl Runtime {
             delivery_panes: HashMap::new(),
             registrations_gone: std::collections::BTreeMap::new(),
             registration_rebinds: std::collections::BTreeMap::new(),
+            archive_deletes_sent: HashSet::new(),
+            archive_retention_sent: Arc::default(),
+            archive_registration_waits: HashMap::new(),
             node: options.node_id.clone(),
             machine_name: options.machine_name.clone(),
             device_machine_ids: HashMap::new(),
@@ -2092,6 +2115,7 @@ impl Runtime {
             terminal_states: HashMap::new(),
             terminal_attach_requested: HashSet::new(),
             terminal_intents: terminal::TerminalIntents::default(),
+            input_gate: Arc::default(),
             next_remote_file_generation: 0,
             attachment: None,
             attachment_rejection: None,
@@ -2140,6 +2164,7 @@ impl Runtime {
             close_operations: HashMap::new(),
             close_status_checks_in_flight: HashSet::new(),
             dormant_status_check: None,
+            unowned_dormant_listing: None,
             pane_operations: HashMap::new(),
             confirmed_pane_layout_signatures: HashMap::new(),
             op_timings: op_timing::OpTimings::default(),
@@ -2312,10 +2337,17 @@ impl Runtime {
         runtime.apply_persisted_pet_state();
         runtime.refresh_pet();
         runtime.refresh_agent_scopes();
+        // A sleep saved before this start is as closed as it was.
+        runtime.sync_input_gate();
         if shortcuts_imported {
             runtime.persist_ui_state();
         }
         runtime
+    }
+
+    /// The gate the writers that bypass a node's terminal ask at the write.
+    pub fn input_gate(&self) -> Arc<crate::input_gate::PaneInputGate> {
+        Arc::clone(&self.input_gate)
     }
 
     /// Every node's terminals, reached once the shell has built them.
@@ -2395,6 +2427,8 @@ impl Runtime {
     pub fn set_live(&mut self, context: LiveContext) {
         self.live_generation = self.live_generation.saturating_add(1);
         self.live = Some(context);
+        // A sleeping session can wake only over a connection.
+        self.refresh_dormant_rows();
     }
 
     pub fn install_remote_control(&mut self, context: RemoteControlContext) {

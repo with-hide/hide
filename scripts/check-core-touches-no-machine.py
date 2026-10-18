@@ -64,13 +64,18 @@ BANNED = [
 # Each entry is the number of machine touches the file has and why.
 STORES = {
     "herdr-core/src/persistence.rs": (
-        11,
+        13,
         "the core's UI state file, including durable directory/write receipts "
-        "and explicit write-error variants before sleeping-session effects, "
-        "and a moved copy of it read to name what this build cannot read",
+        "with the durable writer's own access type, the state folder's identity "
+        "that keeps its directory receipt once per folder, and explicit "
+        "write-error variants before sleeping-session effects, and a moved copy "
+        "of it read to name what this build cannot read",
     ),
     "herdr-core/src/workspace_views.rs": (6, "the core's saved View layouts"),
-    "herdr-core/src/delivery/ledger.rs": (19, "the core's delivery ledger"),
+    "herdr-core/src/delivery/ledger.rs": (
+        20,
+        "the core's delivery ledger, written with the durable writer's own access type",
+    ),
     "herdr-core/src/labels/store.rs": (3, "the core's agent label store"),
     "herdr-core/src/labels/import.rs": (1, "reads the core's own earlier label store once"),
     "herdr-core/src/links/store.rs": (6, "the core's link graph store"),
@@ -121,9 +126,10 @@ STORES = {
         "settings (PRD overview-device-tasks D-20)",
     ),
     "herdr-core/src/node_migration/reown.rs": (
-        4,
-        "converts a moved copy of the core's own link and Factory stores to "
-        "the receiving node's ids, before a core starts on it, and carries "
+        5,
+        "converts a moved copy of the core's own link, Factory and Project "
+        "Memory stores to the receiving node's ids, before a core starts on "
+        "it, and carries "
         "the retired session-search store's retention to them (PRD "
         "overview-device-tasks D-20)",
     ),

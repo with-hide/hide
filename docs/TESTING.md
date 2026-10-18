@@ -153,6 +153,7 @@ When the behavior depends on the order of two events, the test fixes that order;
   `fixtureExecutable` supplies native `.exe` names and `fixtureToolPath` uses the native path delimiter while refusing missing or non-absolute Windows system-root or program-files values.
   Catalog discovery probes every provider, so appending the host's `PATH` also reaches its installed CLIs even when the test selects Claude.
   A spec adding a GitHub or Git shim prepends it to `fixturePath`; explicit `extraEnv.PATH` remains authoritative.
+  A node finds `git` and `gh` on the account's search, the login shell's `PATH` before its own (`hide_platform::programs::command`), and on macOS the shell's `path_helper` puts the system's folders first, so a shim for a program a system folder also holds (`/usr/bin/git`) is found only when the login shell is the fixture's too: a Rust fixture removes `SHELL` from the child or names a stand-in shell (`hide-host/tests/it/worktrees.rs`), and an end-to-end daemon, whose panes need the real shell, gets a HOME whose startup files put its fixture `PATH` first, as an account's own installs come first (`fixtureLoginShellPath` in `web/e2e/platform-fixture.ts`, which `spawnDaemon` and each desktop app launch call with the `PATH` they start with).
   A repository fixture declares its initial branch when the GitHub answers name one: `session-work-fixture.ts` creates `main` for its `main` pull requests, so the account's `init.defaultBranch` cannot change PR assignment or automatic session resolution.
   A repository fixture a fake `gh` answers for carries a remote naming that GitHub repository, as a real checkout does, because `hided` answers a checkout whose remotes name none "no GitHub remote" without asking `gh`: `session-work-fixture.ts` sets `origin` to it, and the specs start their repository with `initGithubRepository` in `web/e2e/github-remote.ts`, which adds it as `github` so a local bare `origin` keeps measuring branches.
   A claim about a real agent session needs the real CLI inside an otherwise isolated fixture: a shim on the pane's `PATH` that runs the CLI under the operator's `HOME`, while the server keeps its private one.
@@ -212,7 +213,7 @@ A piece that another open change is still building is marked as pending with the
 1. **Start from the fixture, one stack per test.**
    `web/e2e/herdr-fixture.ts` starts a private Herdr and `web/e2e/hided-fixture.ts` a private `hided`; `desktop/e2e/fixture.ts` takes a started Herdr fixture and gives the packaged window its own `HOME` and `hided` state.
    Why: a test that shares a server with another inherits its panes, focus and timers, and its failure cannot be read alone.
-   The config runs one worker (`web/playwright.config.ts`) so a timing assertion does not compete with a neighbour for cores; CI deals tests out across runners by their recorded durations (`scripts/web-e2e-shard.py`, [Balancing the web e2e shards](#balancing-the-web-e2e-shards)).
+   The config runs one worker (`web/playwright.config.ts`) so a timing assertion does not compete with a neighbour for cores; CI deals tests out across runners by their recorded durations (`scripts/e2e-shard.py`, [Balancing the e2e shards](#balancing-the-e2e-shards)).
    A desktop spec sizes its window with `fitWindow` in `desktop/e2e/fixture.ts`, inside the work area of a CI runner's 1024-point screen; `hide-e2e/window-size-through-fixture` refuses `setSize` and `setBounds` anywhere else, and a spec whose subject needs a larger window (`right-lane.spec.ts` asserts lane widths in whole CSS pixels of bodies wider than the screen) says why in a line allow and never orders that window out and in.
    Why: macOS can keep a window larger than the work area until the window is next ordered in, by the test's own `blur()` or `focus()`, and clamp it then, so the layout changes in the middle of the test; `area cycle native` lost both View areas that way in about one run in ten (issue 511).
 2. **Wait for a product signal, never for time.**
@@ -317,6 +318,7 @@ Its tests share a process with the other modules' under `cargo test`, so a test 
    A shared runtime is dropped by whichever holder lets go last, and a worker that let go after the test returned lost to the process exit, so the runtime and its folders were never dropped.
    A folder the runtime's workers write into is the runtime's (`test_dirs`), so it goes after them; a folder a test double writes into from a worker goes once the double's calls have ended (`Machine` in `herdr-core/src/runtime/tests/home.rs`), because a save still running into a removed folder makes it again.
    Make what a test needs beside its folder inside it: `strip_checkout` and `workspace.rs`'s `temp_dir` put the checkout one level inside the scratch folder, so a second checkout, a linked worktree or a link made next to it is removed with it, where a sibling of the scratch folder sat in the shared temp folder for good.
+   A child a test starts is given an environment built from nothing only when that environment is the test's subject (an SSH exec's, a login item's, a throwaway agent home's): `clippy.toml` refuses `Command::env_clear`, so such a test says why in an `#[allow(clippy::disallowed_methods)]`, and a child that stands for one Hide starts gets its environment through `hide_platform::process::restrict_to_login_environment`, as the product's do ([ARCHITECTURE.md](ARCHITECTURE.md#the-platform-layer)).
    Why: a leaked process or file is inherited by the next test and by the next run.
 8. **Give a test a program that has already started once.**
    macOS checks a file the first time it is started, once per file, and the checks of every process on the machine wait in one line: on 2026-10-09 at load 7 a new script's first start took about 90 ms, its second 6 ms, and the last of twenty new scripts started together waited 1.8 s; Linux refuses to start a file another thread's fork still holds open for writing (`ETXTBSY`).
@@ -330,6 +332,7 @@ Its tests share a process with the other modules' under `cargo test`, so a test 
    `fs::copy` may make an APFS clone whose first execution stalls before `main`; copying its bytes keeps that clone-specific cost outside the protocol being tested without warming the helper or changing its deadline.
 9. **Retries are a classification.**
    CI runs every Rust lane (Linux, macOS, Windows, the OS contract and nightly) with `scripts/verify-cargo.sh nextest --profile ci` (`retries = 1` in `.config/nextest.toml`), so a test that fails once and then passes is reported as flaky and recorded in an issue with an expiry; two failures fail the lane.
+   The one test it does not retry is the nightly's signed-in agy turn, which spends a provider's daily requests ([A real agent on CI](#a-real-agent-on-ci)).
    `nextest` does not run doc tests; the workspace has none that runs today, and a runnable one needs its own `cargo test --doc` step.
    `scripts/install-nextest.sh` installs the pinned release on a runner; a lane that runs nextest several times keeps one JUnit report per run, and `scripts/ci-flaky-report.py` reads them all.
    The pin is at least 0.9.145, because an older nextest on macOS let a test started beside another inherit the other's output pipe, and reported the test whose pipe it held as leaking (LEAK) though it had left nothing running; `.config/nextest.toml` warns a local run on an older nextest, and on macOS with 0.9.145 or later a LEAK names a child the test left behind, which rule 7 forbids.
@@ -354,9 +357,9 @@ A planned lane that was skipped, failed or cancelled fails `verify`, so a wrong 
 | The phone page: `web/mobile.html`, `web/public/m` | `checks` and `web-e2e`; hided serves it at `/m/`, and the app never loads it |
 | Web code the desktop host imports or drives through native input (the host bridge, the shortcut registry, keys and keyboard, store, snapshot and socket, terminals, focus and area cycling, `App.tsx`, `main.tsx`; `SHARED_WEB` in the script) | also `windows-e2e` and `windows-desktop` |
 | A `web/e2e` spec | `checks` and `web-e2e`; a spec tagged `@platform` also runs `windows-e2e` (the whole suite runs on Linux, so the Linux leg of `@platform` is `web-e2e`) |
-| `desktop/src`, `desktop/static`, a `desktop/e2e` spec | `checks` and `desktop-e2e`, the only macOS job a change outside the two crates and the package inputs below asks for, and `windows-desktop` (the desktop `@platform` tests on Windows) for `desktop/src`, `desktop/static` and a spec tagged `@platform`; `desktop/src/main` also runs `windows-check`, where the main process's unit suite runs on Windows |
+| `desktop/src`, `desktop/static`, a `desktop/e2e` spec | `checks` and `desktop-e2e`, the only macOS lane (two shard jobs) a change outside the two crates and the package inputs below asks for, and `windows-desktop` (the desktop `@platform` tests on Windows) for `desktop/src`, `desktop/static` and a spec tagged `@platform`; `desktop/src/main` also runs `windows-check`, where the main process's unit suite runs on Windows |
 | A Rust crate | `rust` over the crate and every crate that depends on it (from `cargo metadata`), `windows-check`, which compiles every crate for Windows, the Linux `web-e2e` and the macOS `desktop-e2e`, since every crate reaches `hided` and both suites drive it, and `remote-mailbox` when the crate reaches `herdr-core`, `hided`, `hide-agent-hooks` or `hide-host` |
-| `herdr-core`, `hided`, `hide-platform`, `hide-herdr-client`, `hide-host`, `hide-kit`, `hide-agent-hooks` | also `os-contract` (its Linux and Windows legs), `windows-e2e` and `windows-desktop`; no macOS job beyond every crate's `desktop-e2e` but `package` for the package inputs among them |
+| `herdr-core`, `hided`, `hide-platform`, `hide-herdr-client`, `hide-host`, `hide-kit`, `hide-agent-hooks` | also `os-contract` (its Linux and Windows legs), `windows-e2e` and `windows-desktop`; no macOS lane beyond every crate's `desktop-e2e` but `package` for the package inputs among them |
 | `hide-platform`, `hide-herdr-client` | also `os-contract-macos`, the OS contract's macOS leg, which tests exactly these two crates |
 | `hide-agent-adapter`, `hide-agent-hooks`, `hide-ai`, `hide-kit`, `hide-session` | also `agy-contract`, agy's tests and the real agy on Windows (`AGY_CRATES` in the script); the nightly runs it on all three systems |
 | What goes into a package (`PACKAGE_PATHS` in the script): `desktop/scripts`, `desktop/package.json`, `desktop/resources`, the Herdr pin and its fetch scripts, `verify-cargo.sh`, `verify-web.sh`, `toolchain-env.sh`, `hided/build.rs`, which embeds the web shell, `hided/src/cli.rs`, `hide-kit`, `hide-agent-hooks`, `package.yml` and `release.yml` | also `package`: `package.yml`'s Windows and Linux packages, and the macOS archive with the packaged app's own specs |
@@ -369,7 +372,7 @@ A body edit (`edited`) starts a run too, for the checks that read the body (`che
 Marking the pull request ready (`ready_for_review`) starts the run that plans and runs the lanes, and that run's `verify` replaces the failed one.
 `verify` fails on a draft instead of being skipped because a skipped required check counts as passed, and `verify` is not started until its lanes finish: a skipped `verify` from the draft run would otherwise be the only check on the commit for the minutes after it is marked ready.
 Keep `ready_for_review` in `pr.yml`'s `types`, and keep `verify` running on a draft; `scripts/tests/test_ci_plan.py` reads the workflow for both.
-A hand run of `nightly.yml` takes a `lane` (`all`, `linux`, `macos`, `windows`, `agy`): one system's web and desktop suites, the remote mailbox lane and the agy contract, with `verify` and `package` for `all` only, or for `agy` the agy contract alone on all three systems, signed in when the `HIDE_AGY_API_KEY` secret is set, which a branch can run with `gh workflow run nightly.yml --ref <branch> -f lane=agy`; the schedule runs everything.
+A hand run of `nightly.yml` takes a `lane` (`all`, `linux`, `macos`, `windows`, `agy`): one system's web and desktop suites, the remote mailbox lane and the agy contract, with `verify` and `package` for `all` only, or for `agy` the agent contracts alone on all three systems, agy's (signed in when the `HIDE_AGY_API_KEY` secret is set) and the `agent trust contract` of the real Claude Code and Codex, which a branch can run with `gh workflow run nightly.yml --ref <branch> -f lane=agy`; the schedule runs everything.
 The nightly runs the `@platform` web tests on macOS and Windows (`web e2e (<system> @platform)`) and the desktop suite whole on macOS and only its `@platform` tests on Linux and Windows (`desktop e2e (<system> @platform)`); the whole web suite runs in the pull request and in the `verify` job a scheduled nightly calls, so Linux has no web job there and these two do not repeat it.
 It also runs the performance lane on macOS (`performance (macOS)`, `perf.yml`), for the schedule and a hand run of `all` or `macos`; [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#the-nightly-performance-lane) owns its fixture and what fails it.
 Tag a `desktop/e2e` test `{ tag: "@platform" }`, with a comment saying what differs, when it checks what the desktop host does differently on another system: its processes and local stream (including whether closing the last window ends the app), the CLI's name and places, the path it hands the wire, the file manager's reveal, the accelerators it registers for the system (one test reads them through `web/e2e/chords.ts`).
@@ -399,67 +402,92 @@ The organization runs 20 jobs at once and five of them on macOS, so a pull reque
 
 | macOS job | Runs in a pull request | Otherwise guarded by |
 | --- | --- | --- |
-| `desktop e2e` (the Electron app) | a change to what the app runs: `desktop/`, the web shell, any crate (every one reaches `hided`), the `web/e2e` helpers, and a full plan | Nothing it skips is code the app runs (a `web/e2e` spec, the phone page, documentation); main's full run and the nightly run it whole |
+| `desktop e2e` (the Electron app, two shards) | a change to what the app runs: `desktop/`, the web shell, any crate (every one reaches `hided`), the `web/e2e` helpers, and a full plan | Nothing it skips is code the app runs (a `web/e2e` spec, the phone page, documentation); main's full run and the nightly run it whole |
 | `os contract (macOS)` | a change to `hide-platform` or `hide-herdr-client`, and a full plan | The nightly's `verify` call, which plans every lane and so runs all three legs |
 | `package (macos)` (the packaged app) | a change to what goes into a package (`PACKAGE_PATHS`), not a full plan without one; a cold release build and the packaged app's two specs, 10 to 16 minutes, nearly all of it the build | The nightly's `package.yml` call on main, which found issue #412 a day after its cause merged; no other job starts the packaged app (its signed bundle, host, daemon and Herdr) |
 | the web `@platform` tests on macOS | never (no lane) | The same tests run in every pull request on Linux (`web-e2e` runs the whole suite) and on Windows (`windows-e2e`); the nightly runs them on macOS in `web e2e (macOS full)` |
 | the remote mailbox lane on macOS | never | The nightly's `remote mailbox (macOS)` job; a pull request runs the lane on Linux, and the Mac-only parts of the fixture (codesign of the staged binaries, the system's SFTP server, the macOS Herdr asset) are checked there |
 | the performance lane | never | The nightly's `performance (macOS)` job; a pull request's performance claim is still a matched local comparison ([PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#the-nightly-performance-lane)) |
 
-A change to `herdr-core` or `hided` alone, outside `hided/build.rs` and `hided/src/cli.rs`, therefore starts one macOS job, `desktop e2e`.
+A change to `herdr-core` or `hided` alone, outside `hided/build.rs` and `hided/src/cli.rs`, therefore starts one macOS lane, `desktop e2e`, as two shard jobs.
 What only macOS shows for such a change outside the app's suite (the OS contract's macOS leg, the web `@platform` tests and the remote mailbox lane on macOS) is found by the next nightly, which opens a `nightly-failure` issue when it fails; the cost is that delay.
 Until issue #1288 a web shell or crate change left `desktop e2e` out, and a desktop spec that asserted what the change did failed first on main's full run, where a red run stops every merge but the fix: #1106 (the session record, `session-work-ledger.spec.ts`) and #1147 (the file tree a lane close keeps, `right-lane.spec.ts`) kept main red 92 and 103 minutes on 2026-10-15.
-Replaying the 132 pull requests merged from 2026-10-14 to 2026-10-17 through the rule adds the 22-minute job (the median of 49 macOS runs on 2026-10-16) to 48 of them, so 121 of the 132 run it; a missed desktop spec costs every pull request waiting on main, an extra job only the macOS queue.
+Replaying the 132 pull requests merged from 2026-10-14 to 2026-10-17 through the rule adds the 22-minute job (the median of 49 macOS runs on 2026-10-16, before the suite was split into two shards) to 48 of them, so 121 of the 132 run it; a missed desktop spec costs every pull request waiting on main, an extra job only the macOS queue.
 The desktop `@platform` tests run on Windows in a pull request (`windows-desktop`, about six minutes, on a Windows runner rather than a macOS one) and on Linux only in the nightly.
 
 ### How many jobs a run starts
 
-A run that plans every lane a pull request can plan starts at most 22 jobs, down from 23 (the 2026-10-05 shape of run `37324202934`, before the macOS and mailbox work), and `scripts/tests/test_ci_plan.py` counts them from the workflows:
+A run that plans every lane a pull request can plan starts at most 26 jobs, three more than the 2026-10-05 shape of run `37324202934` before the macOS and mailbox work: that work saved one, the e2e suites outgrew their shards' step caps, which took a second macOS desktop shard and two more web shards ([Balancing the e2e shards](#balancing-the-e2e-shards)), and the agent journey's Linux job added one.
+`scripts/tests/test_ci_plan.py` counts them from the workflows:
 
 | Jobs | Count | Why |
 | --- | --- | --- |
 | `plan`, `policy`, `rust`, `checks`, `windows check`, `verify` | 6 | `checks` merges `web checks` and `desktop checks`: both install the same dependencies, run for a minute or two and start a runner each |
 | `windows e2e` | 1 | the reusable workflow no longer starts a `plan` job that only fanned the shard numbers out; a matrix picks its list by index |
 | `windows desktop` | 1 | the desktop `@platform` tests on Windows, the one job that starts the Electron app there in a pull request; it keeps the window it drew as the run's artifact |
-| `web e2e` (Linux) | 5 | one build, which also downloads the zsh packages the `fetch zsh` job used to, and four shards instead of six, dealt by recorded durations; fewer jobs queue at the 20-job limit, and a shard's time at four is measured after merge |
+| `web e2e` (Linux) | 7 | one build, which also downloads the zsh packages the `fetch zsh` job used to, and six shards dealt by recorded durations: six were cut to four on 2026-10-05 so fewer jobs queued at the 20-job limit, and went back to six on 2026-10-18 when the suite had grown to 68 minutes of tests and four shards ran 984 to 1111 s of their 1200 s step |
 | `os contract` (Linux, Windows), `os contract (macOS)` | 3 | one job per system, the macOS leg planned only for its two crates |
 | `agy contract` (Windows) | 1 | agy's hook block, trust, conversations and Hide AI backend, and the real agy reading Hide's block, where the hook commands and install folder differ; `rust` runs the same tests on Linux and the nightly runs all three systems |
+| `agent journey` (Linux) | 1 | the journey on the compiled Claude and Codex stand-ins, planned only for the journey's code, its contract and the stand-ins; the nightly and a release run every system and the signed-in lane ([VERIFICATION.md](VERIFICATION.md#agent-journey)) |
 | `remote mailbox` | 1 | the lane that was the tail of the macOS `@platform` job, now on Linux and, in the nightly, on macOS |
-| `desktop e2e` | 1 | the only macOS job of the desktop app's own changes |
+| `desktop e2e` | 2 | the only macOS lane of the desktop app's own changes, in two shards that build in place, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
 | `package` (Windows, Linux, macOS) | 3 | `package.yml`'s jobs, planned only for what goes into a package; before the lane its Windows and Linux jobs ran on the same paths outside `verify` |
 
-The common runs are smaller: a `herdr-core` or `hided` change starts 16 jobs with one on macOS (`desktop e2e`), a web shell change 11 with one on macOS, a desktop-only change 6 with one on macOS, a `hide-platform` change 17 with two on macOS, a `hide-kit` or `hide-agent-hooks` change 20 with two on macOS (`desktop e2e` and `package`), and a documentation change 3, as does a push that reuses the pull request's last green run.
-The median wall time, the share of runs whose Linux shards waited more than 10 minutes, and each shard's time at four shards come from a measurement of the pull request runs after this change merges, taken the way issue #561 took its baseline; they are not in this guide because a pull request cannot prove them.
+The common runs are smaller: a `herdr-core` or `hided` change starts 19 jobs with two on macOS (the `desktop e2e` shards), a web shell change 14 with two on macOS, a desktop-only change 7 with two on macOS (8 for `desktop/src/main`, which adds `windows check`), a `hide-platform` change 20 with three on macOS, a `hide-kit` or `hide-agent-hooks` change 23 with three on macOS (the `desktop e2e` shards and `package`), and a documentation change 3, as does a push that reuses the pull request's last green run.
+The median wall time and the share of runs whose Linux shards waited more than 10 minutes come from a measurement of the pull request runs after a change merges, taken the way issue #561 took its baseline; they are not in this guide because a pull request cannot prove them.
 The `plan` job's summary lists each lane with the paths that chose it.
 
-### Balancing the web e2e shards
+### Balancing the e2e shards
 
-Playwright's `--shard` cuts the tests in file order into runs of equal count, and a test takes from 1 second to a minute, so with four shards one shard job took 11 minutes and another 6 (run `37402687007`, 2026-10-06).
-A shard of a lane with more than one shard therefore runs the tests `scripts/web-e2e-shard.py split` deals it: each listed test (`playwright test --list`) weighs its seconds in `web/e2e/shard-durations.json`, a test the table lacks weighs the table's median, and the longest test goes first into the shard with the least work so far.
+Playwright's `--shard` cuts the tests in file order into runs of equal count, and a test takes from 1 second to a minute, so with four shards one web shard job took 11 minutes and another 6 (run `37402687007`, 2026-10-06).
+It also runs a project's dependencies whole in every shard that holds a dependent test, which in the desktop suite is every background test (below).
+A shard of a lane with more than one shard therefore runs the tests `scripts/e2e-shard.py split` deals it: each listed test (`playwright test --list`) weighs its seconds in the suite's own table (`--table`), a test the table lacks weighs the table's median, and the longest test goes first into the shard with the least work so far.
 The same list and table always give the same shards, and every listed test lands in exactly one shard.
 The shard runs them with `--test-list`, so Playwright's retry, the flaky report and `--grep` work as before; the script reads and writes UTF-8, because a title holds `›` and a Windows runner's default encoding cannot write it.
 
-Playwright counts a `--test-list` that matches nothing as a pass, so the step does not trust the file: `web-e2e-shard.py check` fails it unless `playwright test --list --test-list <shard file>` lists exactly the tests `split` planned, and a list, a table or a plan it cannot read is one line and a failed step.
+Playwright counts a `--test-list` that matches nothing as a pass, so the step does not trust the file: `e2e-shard.py check` fails it unless `playwright test --list --test-list <shard file>` lists exactly the tests `split` planned, and a list, a table or a plan it cannot read is one line and a failed step.
 A `grep` that leaves fewer tests than shards leaves the extra shards no test; those steps end at once, which is what the old `--shard` did.
 A plan that finds tests the table lacks, or a heaviest shard more than 15 % over the mean, prints a `::warning::` on the first shard's step and still runs: the table is a recording, and refreshing it fixes the warning.
-`scripts/tests/test_web_e2e_shard.py` checks the split, the check, the encoding and the table's shape.
+`scripts/tests/test_e2e_shard.py` checks the split, the check, the encoding, the budget and both tables' shape.
 
-The table is the median over 20 runs of a passing test's duration on the Linux runner (2026-10-06); on it the four shards plan 472 seconds each, where Playwright's count split planned 306 to 577.
-It is a Linux recording, and only the pull request's Linux lane deals by it: the nightly's macOS and Windows lanes run one shard each.
-A lane that later runs several shards on another system would deal by a table that is not its own, because per-test costs there differ (symlinks, process and terminal tests) and none has been recorded from their logs.
-Refresh it when a shard's time drifts from the others in a run, when the plan warns, or after tests were added or renamed in bulk:
+A shard's step keeps its 20-minute timeout as a cap on a stalled run, never as the size of its work.
+A lane sizes its shards to plan at most 60 % of that cap, and `split --budget <seconds>` turns a plan whose heaviest shard holds more into a `::warning::` on the first shard's step: the suite has outgrown its shards, and the answer is another shard in the caller's `shards:`, not a longer timeout.
+Both lanes pass 720 seconds.
+A macOS shard costs one of the five macOS runners the organization runs at once and about 4.5 minutes of its own setup (checkout, the caches, the cargo build of the CLI binaries and the web build), so the macOS lanes add the fewest shards that keep that margin.
 
-1. Download the logs of the Linux `web e2e` shard jobs of about twenty recent successful runs (`gh api repos/<owner>/<repo>/actions/jobs/<job id>/logs`) into a directory outside the repository.
-2. `bash scripts/verify-web.sh web e2e --list --reporter=list > list.txt`, then `python3 scripts/web-e2e-shard.py durations --list list.txt <logs>... > web/e2e/shard-durations.json`; it keeps only the listed tests, takes a passing retry as its test, and names the listed tests no log has a passing line for (they keep the median).
-3. Commit `web/e2e/shard-durations.json`.
-A table from a Windows or macOS runner's logs would need its own file and a lane that reads it; `durations` already reads their `ok` and `✓` marks.
+The web table is the median over 20 main runs of a passing test's duration on the Linux runner (2026-10-18); on it the six shards plan 684 to 686 seconds each.
+The first recording (2026-10-06, four shards of 472 seconds, where Playwright's count split planned 306 to 577) had fallen behind a suite that grew from 1779 to 4109 seconds of tests in twelve days, 166 of its 332 tests new: half the tests weighed the median, and the four shards ran 984 to 1111 seconds of their 1200-second step.
+On the new table four shards would plan 1027 seconds each and five 822, both over the 720-second budget, so the lane runs six.
+Only the pull request's Linux lane deals by it: the nightly's macOS and Windows web lanes run one shard each.
+
+The desktop table, `desktop/e2e/shard-durations.json`, is the median over 20 runs of each test on the macOS runner (2026-10-17), and 0 for a test those runs only skipped (the packaged-app, device and SSH tests, which that lane skips); it deals the whole macOS suite in two shards, in a pull request (`pr.yml`) and in the nightly, while the Linux and Windows `@platform` legs run one shard each.
+One job ran the suite in 1048 to 1166 seconds of its 1200-second step on main's last seven runs before it was split, and pull request #1306's run was ended at the cap with every test it reached passing; the table puts the suite at 1008 seconds and plans the two shards at 503 and 504.
+A desktop shard runs with `--no-deps`.
+The config runs the `needs-focus` project after `background`, because a test that brings its app to the front leaves macOS activating the next app that opens (`desktop/playwright.config.ts`), and Playwright runs a dependency project whole, never filtered by `--test-list`, `--grep` or `--shard`: without `--no-deps` the shard file for 57 tests, two of them `@needs-focus`, listed 100.
+`check` refuses that shard, since Playwright lists the background tests its file left out.
+With `--no-deps` the order is still the config's: the one worker runs the projects in the order the config lists them, and a failed test's retry right after it, so each shard runs its background tests, retries included, before its focus tests.
+What `--no-deps` gives up is the skip: a background test that fails its retry too no longer skips the shard's focus tests, which still run and report, while the lane fails as before.
+
+A table is its system's and suite's: per-test costs differ by system (symlinks, process and terminal tests), so a lane on another system that runs several shards records its own.
+Refresh a table when a shard's time drifts from the others in a run, when the plan warns, after tests were added or renamed in bulk, or when tests the table records at 0 because the lane skipped them start to run (the Factory specs while `FACTORY_OPEN` is off): no warning sees those.
+Refresh it this way:
+
+1. Download the logs of the lane's jobs (the Linux `web e2e` shards, the macOS `desktop e2e` shards) of about twenty recent successful runs (`gh api repos/<owner>/<repo>/actions/jobs/<job id>/logs`) into a directory outside the repository.
+2. `bash scripts/verify-web.sh <web|desktop> e2e --list --reporter=list > list.txt`, then `python3 scripts/e2e-shard.py durations --list list.txt <logs>... > <web|desktop>/e2e/shard-durations.json`; it keeps only the listed tests, takes a passing retry as its test, records 0 for a test the logs only skipped, and names the listed tests no log has a passing or skipped line for (they keep the median).
+   `durations` reads the `ok` mark of a Windows runner and the `✓` of the others, and the project a desktop run prints before each test.
+3. Commit the table.
 
 ### A real agent on CI
 
 A lane that signs a real agent in, like the nightly `agy contract` lane, proves only what the agent does before and around its model's answer; keep its real turn to the minimum.
 
 - An API key alone may not sign the agent in: agy 1.4.0 asked for a browser sign-in until its settings also named `"modelProvider": "gemini"` (2026-10-16).
-- A free-tier quota is counted per model per day across the key's project: 20 requests on 2026-10-16, so hand runs of the lane spend the nightly's turns and the next one fails with `429`.
+- A free-tier quota is counted per model per day across the key's project (20 requests on 2026-10-16), and every run that signs the agent in with that key spends it, hand runs included; budget the turns to it and say how in the workflow (`agy-contract.yml` spends 4 a night, and a passing turn prints how many model responses it took).
+- A turn the provider answered nothing because that day's requests were spent is not a result: the check still asserts what came before the model (the hooks, the letter), then writes a warning annotation titled `Not measured`, the check on its first line and `provider quota exhausted (<quota ids>)` with what was not reached after it, and passes, and the nightly report keeps its lane from passing (below).
+  It is not retried (`.config/nextest.toml`): a retry spends the requests again, and once they are spent it would pass a real first failure as flaky.
+  The codes that mean a spent day are data both this check and any other signed-in check read, `contracts/provider-quota.json`: the provider's error code and status, and the quota ids that count (for Gemini, `429`, `RESOURCE_EXHAUSTED` and the per-day request quota).
+  The rule is exact, so a broken setup cannot pass as a spent day: the agent's own structured error report, never its screen, carries that code and status, and every quota it names is one of those ids with a value above 0 (agy: `spent_quota` in `hide-agent-hooks/tests/it/agy_binary.rs`, with agy's recorded reports in `hide-agent-hooks/tests/fixtures/agy-errors/`).
+  A quota of 0 (a model the key is not served), any other quota (a per-minute limit, the tokens Hide's own context sends), a model that answered and then ran out, a 503 the agent's retries never got past and every other error fail; a check that signs another agent in adds that provider's row and writes the same annotation.
 - Assert what happens before the model answers (the hooks fired, the letter went in, a refused call carried Hide's reason) rather than what the model writes, and name the model in the workflow so a renamed one is one line to change.
 - Keep the turn's own bounds inside the test's hang guard (`.config/nextest.toml`), so a slow turn fails with the agent's report instead of being ended with nothing.
 
@@ -473,6 +501,7 @@ CI retries a failed test once, for classification and for the report, and for no
 
 - Playwright runs with `retries: 1` when `CI` is set (`web/playwright.config.ts`, `desktop/playwright.config.ts`), and the Rust workspace runs under `cargo nextest` with the `ci` profile's `retries = 1` (`.config/nextest.toml`, `scripts/verify-cargo.sh nextest`).
   Neither retries locally: a flaky test fails where it is written.
+  The nightly's signed-in agy turn is the one test CI does not retry: a retry spends the provider's daily requests again, and once they are spent it would pass a real first failure as flaky ([A real agent on CI](#a-real-agent-on-ci)).
 - A test that fails and passes its retry is flaky: the lane passes, the log marks it, and `scripts/ci-flaky-report.py` reads the tool's own report (Playwright's JSON, nextest's JUnit) and files it as an issue labelled `quarantine`, or comments on the open issue that already tracks it.
   The issue names the first run, the change and the system, and carries a deadline seven days out.
   The report step also sets its `flaky` output, and a lane that keeps its e2e logs for a failure keeps them for a flaky run too, under the same artifact name, because the first attempt's daemon, Herdr and input logs are the only evidence the issue gets; a run with no flaky and no failed test uploads nothing.
@@ -521,8 +550,12 @@ The nightly's `report` job (`scripts/ci-flaky-report.py --nightly`) is the one w
 - A scheduled run on main, or a hand run of `all`, that passes a lane closes that lane's issues with a comment naming the commit and the run; a skipped or cancelled lane closes nothing.
 - One run opens at most 10 issues; the rest, with the count of failed tests a lane had no annotation room for, go into one issue, `nightly: N more failures in run <id>`, which the next scheduled run closes as it files its own.
 - A run of any other branch writes no issue.
+- A check that passed without measuring (a `Not measured` warning annotation, [A real agent on CI](#a-real-agent-on-ci)) passes its job, but its lane is not green: it closes no issue, is no lane's last green nightly, and the report lists it under "Not measured" in its job summary.
 - The report fails its job when GitHub does, so a failure it could not file shows as a red report job rather than a silence.
   `--dry-run` with `--repo` and `--run` prints what it would write for any finished run and writes nothing.
+- The report reads a failed job's log through `gh api`, which from gh 2.97 hands over a body carrying a terminal escape only when told `--allow-escape-sequences`, and every job log carries one (the runner colors each step's command), so the report and its `--dry-run` need gh 2.97 or later.
+  An older gh does not know that flag, so the report reads `gh --version` before the first log and stops with one line naming the minimum, the version it found and the fix (`upgrade gh`) instead of gh's `unknown flag` and usage.
+  It decodes whatever bytes the log holds, reads a carriage return as a line break and removes every terminal control before it parses or quotes the text, and every excerpt a lane writes into an annotation or the report quotes into an issue goes through the same removal; on 2026-10-10 and 2026-10-16 the report died on the first log it read and opened no issue.
 
 ## Reviewing a pull request that adds or changes a test
 

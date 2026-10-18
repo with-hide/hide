@@ -8,7 +8,7 @@
 
 import type { TFunction } from "i18next";
 import type { AgentRow, Checkout, Device, RemotePaneLayout, RemoteSession, RemoteStatus, SnapshotRest, Tab, Workspace } from "./snapshot";
-import { registeredName } from "./screenMachine";
+import { machineName } from "./screenMachine";
 
 export type RemoteContext = {
   device: Device;
@@ -222,8 +222,8 @@ export type DeviceCatalogLine = {
  * is the device's confirmed projects. A failure is never shown as an empty
  * list, and an unconfirmed list is never shown as a confirmed one.
  */
-export function deviceCatalogLine(context: RemoteContext, t: TFunction<"translation">): DeviceCatalogLine | null {
-  const device = registeredName(context.device);
+export function deviceCatalogLine(context: RemoteContext, devices: readonly Device[] | undefined, t: TFunction<"translation">): DeviceCatalogLine | null {
+  const device = machineName(devices, context.device.id, t);
   const status = context.status;
   const session = context.session;
   const connected = status?.state === "connected";

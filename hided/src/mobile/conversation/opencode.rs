@@ -481,4 +481,222 @@ mod tests {
             Err(SessionError::Checkpoint(reason)) if reason == "label_session_cwd_mismatch"
         ));
     }
+    /// The same phone reads over OpenCode 2.0.29's tables, where a message is
+    /// one `session_message` row and the phone's message ids are still its
+    /// indexes in the session.
+    mod opencode_2 {
+        use super::*;
+
+        /// OpenCode 2.0.29's own tables in `home`, holding root session `ID`
+        /// in a checkout and `count` alternating operator and agent messages.
+        fn database(count: u64) -> (tempfile::TempDir, String, rusqlite::Connection) {
+            let home = tempfile::tempdir().unwrap();
+            let cwd = home.path().join("checkout");
+            std::fs::create_dir(&cwd).unwrap();
+            let cwd = std::fs::canonicalize(cwd).unwrap().display().to_string();
+            let folder = home.path().join(".local/share/opencode");
+            std::fs::create_dir_all(&folder).unwrap();
+            let writer = rusqlite::Connection::open(folder.join("opencode.db")).unwrap();
+            writer
+                .execute_batch(
+                    "CREATE TABLE session_v2 (id text PRIMARY KEY, project_id text NOT NULL, \
+                     parent_id text, slug text NOT NULL, directory text NOT NULL, title text, \
+                     version text NOT NULL, time_created integer NOT NULL, \
+                     time_updated integer NOT NULL);
+                     CREATE TABLE session_message (id text PRIMARY KEY, session_id text NOT NULL, \
+                     type text NOT NULL, seq integer NOT NULL, time_created integer NOT NULL, \
+                     time_updated integer NOT NULL, data text NOT NULL);
+                     CREATE UNIQUE INDEX session_message_session_seq_idx \
+                     ON session_message (session_id, seq);",
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "INSERT INTO session_v2 VALUES (?1, 'prj', NULL, 'slug', ?2, 'title', '2.0.29', 1, 1)",
+                    rusqlite::params![ID, cwd],
+                )
+                .unwrap();
+            for index in 0..count {
+                append(&writer, index, &format!("메시지 {index}"));
+            }
+            (home, cwd, writer)
+        }
+
+        /// Message `index` as OpenCode writes it: the operator's on even
+        /// indices, a finished agent answer with a tool call the phone never
+        /// shows on odd ones.
+        fn append(writer: &rusqlite::Connection, index: u64, text: &str) {
+            let at = 1_790_989_200_000 + index;
+            let (kind, data) = if index.is_multiple_of(2) {
+                (
+                    "user",
+                    serde_json::json!({"time": {"created": at}, "text": text}),
+                )
+            } else {
+                (
+                    "assistant",
+                    serde_json::json!({"time": {"created": at, "completed": at},
+                        "content": [text_item("private reasoning", "reasoning"), text_item(text, "text"),
+                            {"type": "tool", "id": format!("c{index}"), "name": "shell",
+                             "state": {"status": "completed", "input": {},
+                                "content": [{"type": "text", "text": "private tool output"}]}}]}),
+                )
+            };
+            writer
+                .execute(
+                    "INSERT INTO session_message VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)",
+                    rusqlite::params![
+                        format!("msg_{index:04}"),
+                        ID,
+                        kind,
+                        index as i64,
+                        at,
+                        data.to_string()
+                    ],
+                )
+                .unwrap();
+        }
+
+        fn text_item(text: &str, kind: &str) -> serde_json::Value {
+            serde_json::json!({"type": kind, "text": text})
+        }
+
+        #[test]
+        fn the_phone_pages_native_messages_by_index_and_only_appends_new_ones() {
+            let (home, cwd, writer) = database(70);
+            let (mut open, page) = Open::open(home.path(), "pane", source(&cwd)).unwrap();
+            assert_eq!(page.messages.len(), PAGE_MESSAGES);
+            assert_eq!(texts(&page.messages).first().unwrap(), "메시지 40");
+            assert_eq!(texts(&page.messages).last().unwrap(), "메시지 69");
+            assert_eq!(page.messages[0].id, 40);
+            assert_eq!(page.messages[0].who, "you");
+            assert_eq!(page.messages[1].who, "agent");
+            let older = open.pager().before(page.before.unwrap()).unwrap();
+            assert_eq!(texts(&older.messages).first().unwrap(), "메시지 10");
+            assert_eq!(texts(&older.messages).last().unwrap(), "메시지 39");
+            let oldest = open.pager().before(older.before.unwrap()).unwrap();
+            assert_eq!(oldest.messages.len(), 10);
+            assert_eq!(oldest.before, None);
+
+            assert_eq!(open.poll().unwrap(), Tail::Messages(Vec::new()));
+            append(&writer, 70, "새 질문");
+            let Tail::Messages(appended) = open.poll().unwrap() else {
+                panic!("reset")
+            };
+            assert_eq!(texts(&appended), ["새 질문"]);
+            assert_eq!(appended[0].id, 70);
+            assert_eq!(open.poll().unwrap(), Tail::Messages(Vec::new()));
+        }
+
+        #[test]
+        fn the_phone_waits_for_an_answer_still_being_written() {
+            let (home, cwd, writer) = database(1);
+            let (mut open, page) = Open::open(home.path(), "pane", source(&cwd)).unwrap();
+            assert_eq!(texts(&page.messages), ["메시지 0"]);
+            let writing = |completed: bool| {
+                let mut time = serde_json::json!({"created": 1790989200001_u64});
+                if completed {
+                    time["completed"] = 1790989200002_u64.into();
+                }
+                serde_json::json!({"time": time, "content": [text_item("쓰는 중", "text")]})
+                    .to_string()
+            };
+            writer
+                .execute(
+                    "INSERT INTO session_message VALUES ('msg_0001', ?1, 'assistant', 1, \
+                     1790989200001, 1790989200001, ?2)",
+                    rusqlite::params![ID, writing(false)],
+                )
+                .unwrap();
+            assert_eq!(open.poll().unwrap(), Tail::Messages(Vec::new()));
+            writer
+                .execute(
+                    "UPDATE session_message SET data = ?1 WHERE id = 'msg_0001'",
+                    [writing(true)],
+                )
+                .unwrap();
+            let Tail::Messages(appended) = open.poll().unwrap() else {
+                panic!("reset")
+            };
+            assert_eq!(texts(&appended), ["쓰는 중"]);
+        }
+
+        #[test]
+        fn the_phone_reads_a_rewound_session_anew_and_refuses_an_old_pager() {
+            let (home, cwd, writer) = database(40);
+            let (mut open, page) = Open::open(home.path(), "pane", source(&cwd)).unwrap();
+            let pager = open.pager();
+            // An OpenCode revert drops the newest messages; new ones follow.
+            writer
+                .execute("DELETE FROM session_message WHERE id >= 'msg_0038'", [])
+                .unwrap();
+            for index in [38, 39] {
+                writer
+                    .execute(
+                        "INSERT INTO session_message VALUES (?1, ?2, 'user', ?3, ?4, ?4, ?5)",
+                        rusqlite::params![
+                            format!("msg_00{index}x"),
+                            ID,
+                            index,
+                            1790989200000_u64 + index as u64,
+                            serde_json::json!({"time": {"created": 1790989200000_u64 + index as u64},
+                                "text": "다시"})
+                            .to_string()
+                        ],
+                    )
+                    .unwrap();
+            }
+            assert_eq!(open.poll().unwrap(), Tail::Reset);
+            assert!(matches!(
+                pager.before(page.before.unwrap()),
+                Err(SessionError::Checkpoint(reason)) if reason == "label_session_read_changed"
+            ));
+        }
+
+        #[test]
+        fn the_phone_shows_only_its_proven_root_session_in_its_checkout() {
+            let (home, cwd, writer) = database(2);
+            writer
+                .execute(
+                    "INSERT INTO session_v2 VALUES ('ses_child', 'prj', ?1, 'slug', ?2, 'sub', \
+                     '2.0.29', 1, 1)",
+                    rusqlite::params![ID, cwd],
+                )
+                .unwrap();
+            let child = Source {
+                identity: SessionIdentity::id("ses_child"),
+                ..source(&cwd)
+            };
+            let refused = |source| match Open::open(home.path(), "pane", source) {
+                Err(SessionError::Checkpoint(reason)) => reason,
+                other => panic!("{other:?}"),
+            };
+            assert_eq!(refused(child), "label_session_not_root");
+            assert_eq!(
+                refused(source(&home.path().display().to_string())),
+                "label_session_cwd_mismatch"
+            );
+
+            let (mut open, _) = Open::open(home.path(), "pane", source(&cwd)).unwrap();
+            writer
+                .execute("UPDATE session_v2 SET directory = '/elsewhere'", [])
+                .unwrap();
+            assert!(matches!(
+                open.poll(),
+                Err(SessionError::Checkpoint(reason)) if reason == "label_session_cwd_mismatch"
+            ));
+        }
+
+        #[test]
+        fn a_database_of_neither_schema_is_refused_with_its_reason() {
+            let (home, cwd, writer) = database(2);
+            writer
+                .execute_batch("ALTER TABLE session_message RENAME TO session_messages;")
+                .unwrap();
+            assert!(matches!(
+                Open::open(home.path(), "pane", source(&cwd)),
+                Err(SessionError::Checkpoint(reason)) if reason == "opencode_db_schema_unknown"
+            ));
+        }
+    }
 }

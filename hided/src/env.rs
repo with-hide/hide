@@ -17,6 +17,7 @@ pub struct EnvKey {
 pub const HERDR_SOCKET_PATH: &str = "HERDR_SOCKET_PATH";
 pub const HERDR_BIN_PATH: &str = "HERDR_BIN_PATH";
 pub const PATH: &str = "PATH";
+pub const SHELL: &str = "SHELL";
 pub const XDG_STATE_HOME: &str = "XDG_STATE_HOME";
 pub const XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
 pub const APPDATA: &str = "APPDATA";
@@ -68,13 +69,19 @@ pub const REGISTRY: &[EnvKey] = &[
         key: HERDR_BIN_PATH,
         required: false,
         format: "absolute path of an executable herdr binary; Herdr sets it in every pane it manages, and a daemon refuses to start on a path that no longer exists",
-        absent_behavior: "The first `herdr` on PATH attaches pane terminals; with neither, no pane terminal can attach and the daemon logs it",
+        absent_behavior: "The pinned Herdr beside the helper build this program runs from (a device's helper, or a core a move put there), else the `herdr` the account's own terminal finds (the login shell's PATH, then PATH, then the usual install folders); with none, no pane terminal can attach and the daemon logs it",
     },
     EnvKey {
         key: PATH,
         required: false,
         format: "the system's executable search path (colon-separated, semicolons on Windows)",
-        absent_behavior: "Only HERDR_BIN_PATH can name the herdr binary",
+        absent_behavior: "Programs are found on the login shell's PATH and the usual install folders alone",
+    },
+    EnvKey {
+        key: SHELL,
+        required: false,
+        format: "macOS and Linux: absolute path of the account's login shell, which launchd and sshd set; not read on Windows",
+        absent_behavior: "No login shell is asked, so herdr is found on PATH and the usual install folders alone, which miss a folder only the account's startup files put on its PATH",
     },
     EnvKey {
         key: PATHEXT,
@@ -216,9 +223,12 @@ pub struct Env {
     /// registration events (`boundary.rs`); read once, never configured.
     pub home: PathBuf,
     pub herdr_socket_path: Option<String>,
-    /// The binary the core spawns for `herdr terminal session control`; the
-    /// core refuses every pane attach without one.
+    /// `HERDR_BIN_PATH` as given; [`Env::herdr_program`] is the herdr a
+    /// daemon runs.
     pub herdr_bin_path: Option<PathBuf>,
+    /// The account's login shell (`SHELL`), asked for the `PATH` a program
+    /// is found on; `None` on Windows, which has none to ask.
+    pub login_shell: Option<PathBuf>,
     pub state_dir: PathBuf,
     /// The folder builds before `~/.hide` kept state in, when `state_dir` is
     /// the default one: `hide connect` moves it there once (PRD
@@ -256,6 +266,32 @@ pub struct Env {
     pub tailscale_bin: Option<PathBuf>,
     /// PATH as the daemon received it, searched for `tailscale` at each check.
     pub search_path: Option<String>,
+}
+
+impl Env {
+    /// The herdr this machine's daemon runs: `HERDR_BIN_PATH` when it is
+    /// set, else the pinned copy this account's helper holds
+    /// (`hide_kit::device_herdr::pinned_for_account`: on a device, and on a
+    /// machine a move put the core on, the Herdr the helper ran, whichever
+    /// build of `hided` asks), else the `herdr` the account's own terminal
+    /// finds (`hide_platform::programs`). An SSH exec and a login item start
+    /// this program with the system's folders alone on `PATH`, which reach
+    /// none of these. Asked where a daemon is about to rely on it, never on
+    /// every command, since the account's search can start its login shell.
+    pub fn herdr_program(&self) -> Option<PathBuf> {
+        static NEVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        self.herdr_bin_path
+            .clone()
+            .or_else(|| hide_kit::device_herdr::pinned_for_account(&self.home))
+            .or_else(|| {
+                hide_platform::programs::find_cli_with(
+                    &self.home,
+                    self.login_shell.as_deref(),
+                    &NEVER,
+                    "herdr",
+                )
+            })
+    }
 }
 
 #[derive(Debug)]
@@ -378,8 +414,15 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
             None
         }
         Some(value) => Some(PathBuf::from(value)),
-        None => read(PATH).and_then(|path| host::find_program(path.as_ref(), "herdr")),
+        None => None,
     };
+    // Windows has no login shell to ask; its processes get the account's
+    // own `Path`. A shell named by a relative path names none, as
+    // `host::default_shell` reads it.
+    let login_shell = read(SHELL)
+        .filter(|_| cfg!(unix))
+        .map(PathBuf::from)
+        .filter(|shell| shell.is_absolute());
     let hide_state_dir = read(HIDE_STATE_DIR);
     if hide_state_dir.as_deref() == Some("") {
         errors.push(EnvError {
@@ -513,6 +556,7 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         home,
         herdr_socket_path,
         herdr_bin_path,
+        login_shell,
         state_dir,
         legacy_state_dir,
         account_state_folder,
@@ -840,42 +884,85 @@ mod tests {
         assert!(env.herdr_bin_path.is_none());
     }
 
+    #[cfg(unix)]
+    fn program(path: &Path, script: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path.to_path_buf()
+    }
+
+    /// A daemon an SSH exec or a login item started has the system's folders
+    /// alone on its `PATH`; the herdr its account installed is found where
+    /// the account's own terminal finds it, its login shell's `PATH`.
+    #[cfg(unix)]
     #[test]
-    fn herdr_bin_path_wins_over_path_lookup() {
+    fn a_herdr_only_the_login_shell_finds_is_the_daemons_herdr() {
         let dir = tempfile::tempdir().unwrap();
-        let on_path = dir
-            .path()
-            .join(if cfg!(windows) { "herdr.exe" } else { "herdr" });
-        std::fs::write(&on_path, b"").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&on_path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        let home = dir.path().join("home");
+        let installed = program(&home.join("installed/bin/herdr"), "exit 0");
+        let shell = program(
+            &dir.path().join("login-shell"),
+            "[ \"$1\" = -ilc ] || exit 64\nPATH=\"$HOME/installed/bin:$PATH\"\nexport PATH\neval \"$2\"",
+        );
         let env = from_map(&[
-            (HOME, "/Users/example"),
-            (
-                "PATH",
-                &std::env::join_paths([Path::new("/nonexistent"), dir.path()])
-                    .unwrap()
-                    .into_string()
-                    .unwrap(),
-            ),
+            (HOME, &home.display().to_string()),
+            (SHELL, &shell.display().to_string()),
+            (PATH, "/usr/bin:/bin:/usr/sbin:/sbin"),
         ])
         .unwrap();
-        assert_eq!(env.herdr_bin_path.as_deref(), Some(on_path.as_path()));
+        assert_eq!(env.herdr_bin_path, None, "nothing named one");
+        assert_eq!(env.herdr_program(), Some(installed));
+    }
+
+    /// The order a daemon takes its herdr in: the one it was handed, then
+    /// the pinned copy the account's helper holds, then the account's own.
+    /// The pinned copy is found by the account's layout, so a `herdr` that
+    /// comes first on the login shell's `PATH` does not stand in for it.
+    #[cfg(unix)]
+    #[test]
+    fn herdr_bin_path_wins_then_the_pinned_copy_then_the_accounts_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let own = program(&home.join("installed/bin/herdr"), "exit 0");
+        let shell = program(
+            &dir.path().join("login-shell"),
+            "[ \"$1\" = -ilc ] || exit 64\nPATH=\"$HOME/installed/bin:$PATH\"\nexport PATH\neval \"$2\"",
+        );
+        let (home_text, shell) = (home.display().to_string(), shell.display().to_string());
+        let env = from_map(&[(HOME, &home_text), (SHELL, &shell)]).unwrap();
+        assert_eq!(env.herdr_program(), Some(own), "no copy arrived yet");
+
+        let pinned = program(
+            &hide_kit::device_herdr::pinned_herdr(&hide_kit::layout::helper_root(&home)),
+            "exit 0",
+        );
+        assert_eq!(env.herdr_program(), Some(pinned));
         let env = from_map(&[
-            (HOME, "/Users/example"),
-            ("PATH", &dir.path().display().to_string()),
-            ("HERDR_BIN_PATH", "/opt/herdr/bin/herdr"),
+            (HOME, &home_text),
+            (SHELL, &shell),
+            (HERDR_BIN_PATH, "/opt/herdr/bin/herdr"),
         ])
         .unwrap();
         assert_eq!(
-            env.herdr_bin_path.as_deref(),
-            Some(Path::new("/opt/herdr/bin/herdr"))
+            env.herdr_program(),
+            Some(PathBuf::from("/opt/herdr/bin/herdr"))
         );
-        let err = from_map(&[(HOME, "/Users/example"), ("HERDR_BIN_PATH", "")]).unwrap_err();
+        let err = from_map(&[(HOME, "/Users/example"), (HERDR_BIN_PATH, "")]).unwrap_err();
         assert_eq!(err[0].key, HERDR_BIN_PATH);
+    }
+
+    /// Windows has no login shell; a relative one names no shell.
+    #[test]
+    fn only_an_absolute_shell_on_unix_is_asked() {
+        let env = from_map(&[(HOME, "/Users/example"), (SHELL, "/bin/zsh")]).unwrap();
+        assert_eq!(
+            env.login_shell,
+            cfg!(unix).then(|| PathBuf::from("/bin/zsh"))
+        );
+        let env = from_map(&[(HOME, "/Users/example"), (SHELL, "zsh")]).unwrap();
+        assert_eq!(env.login_shell, None);
     }
 
     #[test]

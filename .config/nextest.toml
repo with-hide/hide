@@ -1,8 +1,9 @@
 # cargo-nextest, which CI runs the Rust suite with (scripts/verify-cargo.sh
 # nextest). The `ci` profile retries a failed test once: a test that passes the
 # retry is flaky, the run passes, and scripts/ci-flaky-report.py files it from
-# the JUnit report. A test that fails twice fails the lane. The default profile
-# retries nothing, so a flaky test fails where it is written.
+# the JUnit report. A test that fails twice fails the lane. The signed-in agy
+# turn below is the one test it does not retry. The default profile retries
+# nothing, so a flaky test fails where it is written.
 # docs/TESTING.md, "Flaky tests", owns the policy.
 #
 # A nextest older than 0.9.145 on macOS lets a test inherit the output pipe of
@@ -52,9 +53,15 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 # runner in run 38892775919. It gets 240 s, and its own bounds (agy's print
 # timeout, the capture) end inside that, so a slow turn fails with what agy
 # said instead of being ended with nothing reported.
+# It is not retried: a retry spends the key's daily requests again, and once
+# they are spent a retry reports Not measured and passes, which would turn a
+# real first failure into a flaky pass. A passing turn's output is shown, so
+# its Not measured warning reaches the job log even without --no-capture.
 [[profile.ci.overrides]]
 filter = 'binary_id(hide-agent-hooks::it) & test(=agy_binary::a_signed_in_agy_turn_fires_hide_s_hooks)'
 slow-timeout = { period = "60s", terminate-after = 4 }
+retries = 0
+success-output = "immediate"
 
 # The core-move journeys (hided/tests/it/core_move.rs) run the remote-core
 # shape and wait out the move's own bounds (a 30 s link, a 60 s pending

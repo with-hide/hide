@@ -1,7 +1,10 @@
-"""One child-start boundary, with an EOF guardian for external processes."""
+"""One child-start boundary, with an EOF guardian for external processes.
+
+On Windows each child is owned by a job object instead of a guardian process
+(`windows.py`): the same caps, ended and confirmed on every exit path.
+"""
 
 import ctypes
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -17,8 +20,15 @@ import time
 
 if __package__:
     from .process_table import ProcessState, ProcessTable, descendants, group_state, identity_state, marked_descendants, require_complete, snapshot
+    from .system import WINDOWS
 else:
     from process_table import ProcessState, ProcessTable, descendants, group_state, identity_state, marked_descendants, require_complete, snapshot
+    from system import WINDOWS
+
+if WINDOWS:
+    from . import windows
+else:
+    import fcntl
 
 MAX_CHILDREN = 16
 MAX_DESCENDANTS = 128
@@ -31,6 +41,9 @@ COMMAND_SECONDS = 15
 RUN_SECONDS = 30 * 60
 POLL_SECONDS = 0.1
 RSS_CONSECUTIVE_MISS_LIMIT = 3
+# How long a child's end may take to confirm: the guardian's exit on Unix,
+# the job holding no process on Windows.
+END_SECONDS = 4
 
 
 class ProcessError(RuntimeError):
@@ -209,6 +222,11 @@ class OwnedProcesses:
             diagnostics.mkdir(mode=0o700)
         self.cancelled = cancelled or threading.Event()
         self.deadline = time.monotonic() + RUN_SECONDS
+        # Windows: the port every child's job reports a refused limit to, and
+        # each end that was not confirmed, which no later close erases.
+        self.port = None
+        self.jobs = 0
+        self.unconfirmed = []
 
     def spawn(self, argv, *, env, cwd=None, stdin=subprocess.DEVNULL,
               stdout=subprocess.PIPE, stderr=subprocess.PIPE, _guarded=True, deadline=None):
@@ -229,6 +247,9 @@ class OwnedProcesses:
         if len(self.children) >= MAX_CHILDREN:
             raise ProcessError("child_count_over_budget")
         admit()
+        if WINDOWS:
+            return self.spawn_in_job(argv, env=env, cwd=cwd, stdin=stdin, stdout=stdout, stderr=stderr,
+                                     admit=admit)
         reader = writer = None
         diagnostic = ""
         command = argv
@@ -277,29 +298,108 @@ class OwnedProcesses:
             self.receipts[child] = Path(diagnostic)
         return child
 
-    def run(self, argv, *, env, cwd=None, seconds=COMMAND_SECONDS, check=True, deadline=None):
+    def spawn_in_job(self, argv, *, env, cwd, stdin, stdout, stderr, admit):
+        """Windows: the child starts suspended, joins a job of its own, and
+        only then runs, so everything it starts is in the job. The job refuses
+        the process and the memory past the caps, and closing its handle,
+        which no child inherits, ends whatever it still holds."""
+        if self.port is None:
+            self.port = windows.JobPort({
+                windows.JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT: "owned_processes_over_budget:" + json.dumps(
+                    {"descendants": MAX_DESCENDANTS}, separators=(",", ":")),
+                windows.JOB_OBJECT_MSG_JOB_MEMORY_LIMIT: "owned_processes_over_budget:" + json.dumps(
+                    {"memory_bytes": MAX_RSS_BYTES}, separators=(",", ":"))})
+        self.jobs += 1
+        job = windows.Job(self.port.handle, self.jobs, processes=MAX_DESCENDANTS, memory=MAX_RSS_BYTES)
+        self.port.register(job)
+        try:
+            admit()
+            child = subprocess.Popen(argv, env={key: value for key, value in env.items()
+                                                if key != "HIDE_LIVE_CHECK_OWNER"},
+                                     cwd=cwd, stdin=stdin, stdout=stdout, stderr=stderr,
+                                     creationflags=windows.CREATE_SUSPENDED | windows.console_flags())
+        except BaseException:
+            self.port.forget(job)
+            job.close()
+            raise
+        try:
+            job.adopt(child.pid)
+        except BaseException as error:
+            # Suspended, it has run nothing; a job that took it ends it on close.
+            child.kill()
+            try:
+                child.wait(timeout=END_SECONDS)
+            finally:
+                for stream in (child.stdin, child.stdout, child.stderr):
+                    if stream is not None:
+                        stream.close()
+                self.port.forget(job)
+                job.close()
+            raise ProcessError("job_start_failed:" + str(error)[:MAX_FAILURE_REASON]) from error
+        self.children[child] = job
+        return child
+
+    def read_output(self, child, end, output, threads):
+        """Windows: both pipes drained by threads into `output`, as Windows
+        waits on no pipe in a selector; the same cancellation, deadline and
+        byte cap. The caller joins `threads` once the child has ended."""
+        lock, finished, over = threading.Lock(), threading.Event(), threading.Event()
+        open_streams = [2]
+
+        def drain(stream, index):
+            try:
+                while data := os.read(stream.fileno(), 65536):
+                    with lock:
+                        if sum(map(len, output)) + len(data) > MAX_OUTPUT:
+                            over.set()
+                            return
+                        output[index].extend(data)
+            finally:
+                with lock:
+                    open_streams[0] -= 1
+                    if not open_streams[0]:
+                        finished.set()
+        for index, stream in enumerate((child.stdout, child.stderr)):
+            threads.append(threading.Thread(target=drain, args=(stream, index), daemon=True))
+            threads[-1].start()
+        while not finished.wait(POLL_SECONDS):
+            if over.is_set():
+                raise ProcessError("command_output_over_budget")
+            if self.cancelled.is_set():
+                raise ProcessError("run_cancelled")
+            if time.monotonic() >= end:
+                raise ProcessError("command_timeout")
+        if over.is_set():
+            raise ProcessError("command_output_over_budget")
+
+    def run(self, argv, *, env, cwd=None, seconds=COMMAND_SECONDS, check=True, deadline=None,
+            stdin=subprocess.DEVNULL):
         end = min(self.deadline, time.monotonic() + min(COMMAND_SECONDS, seconds),
                   self.deadline if deadline is None else deadline)
-        child = self.spawn(argv, env=env, cwd=cwd, deadline=end)
+        child = self.spawn(argv, env=env, cwd=cwd, deadline=end, stdin=stdin)
         output = [bytearray(), bytearray()]
+        threads = []
         try:
-            with selectors.DefaultSelector() as selector:
-                for index, stream in enumerate((child.stdout, child.stderr)):
-                    os.set_blocking(stream.fileno(), False)
-                    selector.register(stream, selectors.EVENT_READ, index)
-                while selector.get_map():
-                    if self.cancelled.is_set():
-                        raise ProcessError("run_cancelled")
-                    if time.monotonic() >= end:
-                        raise ProcessError("command_timeout")
-                    for key, _ in selector.select(POLL_SECONDS):
-                        data = os.read(key.fileobj.fileno(), 65536)
-                        if not data:
-                            selector.unregister(key.fileobj)
-                        else:
-                            output[key.data].extend(data)
-                            if sum(map(len, output)) > MAX_OUTPUT:
-                                raise ProcessError("command_output_over_budget")
+            if WINDOWS:
+                self.read_output(child, end, output, threads)
+            else:
+                with selectors.DefaultSelector() as selector:
+                    for index, stream in enumerate((child.stdout, child.stderr)):
+                        os.set_blocking(stream.fileno(), False)
+                        selector.register(stream, selectors.EVENT_READ, index)
+                    while selector.get_map():
+                        if self.cancelled.is_set():
+                            raise ProcessError("run_cancelled")
+                        if time.monotonic() >= end:
+                            raise ProcessError("command_timeout")
+                        for key, _ in selector.select(POLL_SECONDS):
+                            data = os.read(key.fileobj.fileno(), 65536)
+                            if not data:
+                                selector.unregister(key.fileobj)
+                            else:
+                                output[key.data].extend(data)
+                                if sum(map(len, output)) > MAX_OUTPUT:
+                                    raise ProcessError("command_output_over_budget")
             code = child.wait(timeout=max(0.01, end - time.monotonic()))
             if check and code:
                 raise ProcessError(f"command_exit_{code}")
@@ -314,10 +414,15 @@ class OwnedProcesses:
                                                    "guardian_orphan_scan_failure:", "guardian_signal_failure:"))]
                     raise type(error)(str(error) + (": " + "; ".join(reasons[:4]) if reasons else "")) from error
             finally:
+                # The ended tree closed the pipes' other ends, so the readers stop.
+                for thread in threads:
+                    thread.join(timeout=2)
                 child.stdout.close()
                 child.stderr.close()
 
     def end(self, child):
+        if WINDOWS:
+            return self.end_job(child)
         writer = self.children.pop(child, None)
         if writer is not None:
             os.close(writer)
@@ -326,7 +431,7 @@ class OwnedProcesses:
                 child.send_signal(signal.SIGCONT)
                 child.terminate()
             try:
-                child.wait(timeout=4)
+                child.wait(timeout=END_SECONDS)
             except subprocess.TimeoutExpired as error:
                 # Killing the guardian here would discard its ownership proof.
                 self.children[child] = None
@@ -343,7 +448,39 @@ class OwnedProcesses:
             except (OSError, ValueError) as error:
                 raise ProcessSafetyError("guardian_cleanup_receipt_missing_or_invalid") from error
 
+    def end_job(self, child):
+        """Windows: ends everything the child's job holds and confirms the job
+        is empty; a job that is not stays owned, and its failure stays on
+        record for attribution_report."""
+        job = self.children.pop(child, None)
+        if job is None:
+            return
+        try:
+            job.terminate()
+            end = time.monotonic() + END_SECONDS
+            while job.active():
+                if time.monotonic() >= end:
+                    raise ProcessSafetyError("cleanup_unconfirmed")
+                time.sleep(0.01)
+            child.wait(timeout=END_SECONDS)
+            self.port.settle(job, END_SECONDS)
+        except (OSError, subprocess.TimeoutExpired, ProcessSafetyError) as error:
+            # Its handle stays open: closing it is still the last resort.
+            self.children[child] = job
+            reason = str(error)[:MAX_FAILURE_REASON]
+            self.unconfirmed.append(reason)
+            if isinstance(error, ProcessSafetyError):
+                raise
+            raise ProcessSafetyError("cleanup_unconfirmed:" + reason) from error
+        self.port.forget(job)
+        job.close()
+        if job.failure:
+            raise ProcessSafetyError(job.failure)
+
     def usage(self):
+        if WINDOWS:
+            # Only the bell check reads it, and it runs on macOS and Linux.
+            raise ProcessError("usage_not_built_for_windows")
         table = snapshot()
         # Group guardians enforce caps; a host-wide partial view is only a
         # sampled resource summary, never an ownership or cleanup verdict.
@@ -366,6 +503,9 @@ class OwnedProcesses:
                 self.end(child)
             except (OSError, ProcessError) as error:
                 failures.append(type(error).__name__)
+        if self.port is not None and not self.children:
+            self.port.close()
+            self.port = None
         if failures:
             raise ProcessError("cleanup_unconfirmed: " + ",".join(failures))
 
@@ -380,6 +520,14 @@ class OwnedProcesses:
     def attribution_report(self):
         # A failed reread cannot reuse earlier complete guardian accounting.
         self.guardian_rss_samples = None
+        if WINDOWS:
+            if self.unconfirmed:
+                raise ProcessError("job_cleanup_unconfirmed:" + json.dumps(self.unconfirmed[:4]))
+            return {"status": "job", "processes": [], "limit": MAX_DESCENDANTS,
+                    "additional_records_omitted": False, "rss_samples": None,
+                    "limitation": "Each child and everything it starts is held by its own job object; "
+                                  "a program Windows starts on its behalf (a service, a COM server, "
+                                  "a scheduled task) is outside it."}
         records = {}
         omitted = False
         rss_missed, rss_max_consecutive = 0, 0

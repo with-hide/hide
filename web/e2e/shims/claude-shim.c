@@ -317,6 +317,7 @@ int main(int argc, char **argv) {
     if (i == 1 && strcmp(argv[i], "-p") == 0 && has_option(argc, argv, "--system-prompt")) return provider(argc, argv);
     if (strcmp(argv[i], "--input-format") == 0) return models();
   }
+  if (getenv("HIDE_E2E_JOURNEY")) return journey(argc, argv);
   if (native_session(argc, argv) != 0) return 1;
   if (factory_question_runner() != 0) return 1;
   const char *log_path = getenv("HIDE_E2E_INPUT_LOG");

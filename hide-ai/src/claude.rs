@@ -202,9 +202,14 @@ impl ClaudeCliBackend {
     }
 
     /// The argument vector a weekly-usage read is started with. `/usage` is
-    /// answered locally, so none of the model-turn flags apply; the one that
-    /// matters is `--no-session-persistence`, which keeps the read out of
-    /// `~/.claude/projects/` and every resume list.
+    /// answered locally, so none of the model-turn flags apply. Two matter:
+    /// `--no-session-persistence` keeps the read out of `~/.claude/projects/`
+    /// and every resume list, and `--setting-sources ''` keeps the operator's
+    /// hooks and plugins from running for it. A session-start hook may leave
+    /// a folder in `~/.claude/session-env/` for every session, which Claude
+    /// Code never removes; measured 2026-10-18 on claude 2.1.302, the read
+    /// left one every five minutes with the settings and none without them,
+    /// and answered the same windows either way.
     pub fn usage_arguments() -> Vec<String> {
         vec![
             "-p".to_owned(),
@@ -212,6 +217,8 @@ impl ClaudeCliBackend {
             "--output-format".to_owned(),
             "json".to_owned(),
             "--no-session-persistence".to_owned(),
+            "--setting-sources".to_owned(),
+            String::new(),
         ]
     }
 
