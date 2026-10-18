@@ -213,6 +213,23 @@ def linux_children_remain():
     raise ProcessError("adopted_child_reap_over_budget")
 
 
+def job_over_budget(job):
+    """Windows: why `job` must end, measured as the Unix guardian measures its
+    group: the resident memory (working set) of its processes summed against
+    MAX_RSS_BYTES. Not the job's own limit on committed memory, which Windows
+    counts every page a process committed, touched or not, so a run within
+    the cap on Linux and macOS would pass it."""
+    try:
+        sizes = job.working_sets()
+    except OSError as error:
+        return "rss_samples_unavailable:" + str(error)[:MAX_FAILURE_REASON]
+    rss = sum(sizes)
+    if rss > MAX_RSS_BYTES:
+        return "owned_processes_over_budget:" + json.dumps(
+            {"descendants": len(sizes), "rss_bytes": rss}, separators=(",", ":"))
+    return None
+
+
 class OwnedProcesses:
     """Guardians end children on pipe EOF, including abrupt owner death.
 
@@ -314,16 +331,15 @@ class OwnedProcesses:
     def spawn_in_job(self, argv, *, env, cwd, stdin, stdout, stderr, admit):
         """Windows: the child starts suspended, joins a job of its own, and
         only then runs, so everything it starts is in the job. The job refuses
-        the process and the memory past the caps, and closing its handle,
-        which no child inherits, ends whatever it still holds."""
+        a process past the cap, the port ends a job whose memory passes it
+        (`job_over_budget`), and closing its handle, which no child inherits,
+        ends whatever it still holds."""
         if self.port is None:
             self.port = windows.JobPort({
                 windows.JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT: "owned_processes_over_budget:" + json.dumps(
-                    {"descendants": MAX_DESCENDANTS}, separators=(",", ":")),
-                windows.JOB_OBJECT_MSG_JOB_MEMORY_LIMIT: "owned_processes_over_budget:" + json.dumps(
-                    {"memory_bytes": MAX_RSS_BYTES}, separators=(",", ":"))})
+                    {"descendants": MAX_DESCENDANTS}, separators=(",", ":"))}, job_over_budget, POLL_SECONDS)
         self.jobs += 1
-        job = windows.Job(self.port.handle, self.jobs, processes=MAX_DESCENDANTS, memory=MAX_RSS_BYTES)
+        job = windows.Job(self.port.handle, self.jobs, processes=MAX_DESCENDANTS)
         self.port.register(job)
         try:
             admit()

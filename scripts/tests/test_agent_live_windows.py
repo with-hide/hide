@@ -123,19 +123,36 @@ class JobOwnership(unittest.TestCase):
                     time.sleep(600)
                 """), env=dict(os.environ), check=False)
 
-    def test_memory_past_the_cap_is_a_named_failure(self):
+    def test_resident_memory_past_the_cap_is_a_named_failure(self):
         cap = 256 * 1024 * 1024
         with patch.object(processes, "MAX_RSS_BYTES", cap):
             self.owner = OwnedProcesses()
-            with self.assertRaisesRegex(ProcessSafetyError, rf'owned_processes_over_budget:\{{"memory_bytes":{cap}\}}'):
+            with self.assertRaises(ProcessSafetyError) as raised:
+                # Every page written, so it is resident, as the Unix guardian counts RSS.
                 self.owner.run(self.python(f"""
                     import time
-                    try:
-                        held = bytearray({2 * cap})
-                    except MemoryError:
-                        pass
+                    held = b"x" * {2 * cap}
                     time.sleep(600)
                 """), env=dict(os.environ), check=False)
+        reason, _, measured = str(raised.exception).partition(":")
+        self.assertEqual(reason, "owned_processes_over_budget")
+        self.assertGreater(json.loads(measured)["rss_bytes"], cap)
+
+    def test_memory_committed_but_never_touched_is_within_the_cap(self):
+        cap = 256 * 1024 * 1024
+        with patch.object(processes, "MAX_RSS_BYTES", cap):
+            self.owner = OwnedProcesses()
+            # Committed and never written: Windows charges it, RSS does not hold it.
+            result = self.owner.run(self.python(f"""
+                import ctypes, time
+                VirtualAlloc = ctypes.windll.kernel32.VirtualAlloc
+                VirtualAlloc.restype = ctypes.c_void_p
+                VirtualAlloc.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_ulong, ctypes.c_ulong]
+                if not VirtualAlloc(None, {2 * cap}, 0x1000, 0x04):  # MEM_COMMIT, PAGE_READWRITE
+                    raise SystemExit("VirtualAlloc failed")
+                time.sleep(1)
+            """), env=dict(os.environ), check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_output_past_the_cap_ends_the_command(self):
         with self.assertRaisesRegex(ProcessError, "command_output_over_budget"):
