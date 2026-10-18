@@ -138,7 +138,8 @@ function BacklogSection({ project, actions, filters, selected }: { project: Work
 
 function ItemRow({ row, project, actions }: { row: BacklogRow; project: Workspace; actions: Actions }) {
   const { t, i18n } = useInterfaceTranslation();
-  const fromMissed = useShellStore((s) => s.rest?.issue_work?.missed_keys?.includes(row.key) ?? false);
+  const fromMissed = useShellStore((s) => s.rest?.issue_work?.missed_keys?.some((item) => item.task_key === row.key
+    && item.device_id === (row.local ? project.device_id : null)) ?? false);
   const language = requireInterfaceLanguage(i18n.language);
   const checkout = project.checkouts.find((checkout) => checkout.task_key === row.key);
   const open = () => useUiStore.getState().setOverview({ panel: { kind: "item", workspaceId: project.id, taskKey: row.key } });
@@ -230,11 +231,15 @@ export function BacklogItemPanel({ panel, projects, actions }: { panel: Extract<
   const project = projects.find(({ workspace }) => workspace.id === panel.workspaceId)?.workspace ?? null;
   const task = project?.tasks?.tasks.find((row) => row.key === panel.taskKey) ?? null;
   const detail = useIssueDetail(actions, project, panel.taskKey);
-  const origin = useShellStore((s) => originOf(s.rest, panel.taskKey));
-  const undo = useShellStore((s) => s.rest?.issue_work?.undo?.task_key === panel.taskKey ? s.rest.issue_work.undo : null);
+  const origin = useShellStore((s) => originOf(s.rest, project, panel.taskKey));
+  const undo = useShellStore((s) => {
+    const result = s.rest?.issue_work?.undo;
+    return result?.workspace_id === project?.id && result?.device_id === project?.device_id
+      && result?.task_key === panel.taskKey ? result : null;
+  });
   const madeByHide = useShellStore((s) => s.rest?.issue_work?.made_keys?.some((key) => key.toLowerCase() === panel.taskKey.toLowerCase()) ?? false);
   const language = requireInterfaceLanguage(i18n.language);
-  useBacklogOrigin(actions, panel.workspaceId, panel.taskKey);
+  useBacklogOrigin(actions, project, panel.taskKey);
   useEffect(() => { if (undo?.phase === "done") useUiStore.getState().setOverview({ panel: null }); }, [undo?.phase]);
   const close = () => useUiStore.getState().setOverview({ panel: null });
   const head = <div className="flex shrink-0 items-center border-b border-border px-lg py-sm"><Button variant="ghost" size="sm" onClick={close} data-item-close="true"><ArrowLeftIcon />{t("backlogView.back")}</Button></div>;

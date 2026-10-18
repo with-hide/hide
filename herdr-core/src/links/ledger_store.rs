@@ -663,17 +663,19 @@ impl LinkStore {
                 }
                 LedgerAnswer::Saved
             }
-            LedgerCall::ReleaseBacklog { backlog_key } => {
+            LedgerCall::ReleaseBacklog { target } => {
+                let backlog_key = target.key();
+                let device = target.local_device();
                 // A typed item's issue was closed: its create no longer
                 // names an issue `되돌리기` may close.
-                if let Some(reference) = crate::tasks::parse_github_key(&backlog_key) {
+                if let BacklogTarget::Github(reference) = &target {
                     tx.execute("UPDATE ledger_backlog SET state='undone' WHERE state='complete' AND lower(repo)=lower(?1) AND number=?2",
                         params![reference.repository,reference.number]).map_err(failed)?;
                 }
-                tx.execute("DELETE FROM ledger_issue_attempts WHERE EXISTS(SELECT 1 FROM ledger_missed m WHERE m.device=ledger_issue_attempts.device AND m.agent=ledger_issue_attempts.agent AND m.id=ledger_issue_attempts.id AND m.missed=ledger_issue_attempts.missed AND m.backlog_key=?1)",
-                    params![backlog_key]).map_err(failed)?;
-                tx.execute("UPDATE ledger_missed SET status=?2,issue_repo=NULL,issue_number=NULL,backlog_key=NULL WHERE backlog_key=?1",
-                    params![backlog_key,encoded(&MissedStatus::Open)?]).map_err(failed)?;
+                tx.execute("DELETE FROM ledger_issue_attempts WHERE EXISTS(SELECT 1 FROM ledger_missed m WHERE m.device=ledger_issue_attempts.device AND m.agent=ledger_issue_attempts.agent AND m.id=ledger_issue_attempts.id AND m.missed=ledger_issue_attempts.missed AND m.backlog_key=?1 AND (?2 IS NULL OR m.device=?2))",
+                    params![backlog_key,device]).map_err(failed)?;
+                tx.execute("UPDATE ledger_missed SET status=?2,issue_repo=NULL,issue_number=NULL,backlog_key=NULL WHERE backlog_key=?1 AND (?3 IS NULL OR device=?3)",
+                    params![backlog_key,encoded(&MissedStatus::Open)?,device]).map_err(failed)?;
                 LedgerAnswer::Saved
             }
             LedgerCall::DismissBacklog { intent } => {
@@ -702,11 +704,12 @@ impl LinkStore {
                 drop(statement);
                 LedgerAnswer::Pending(rows)
             }
-            LedgerCall::BacklogOrigin { backlog_key } => {
+            LedgerCall::BacklogOrigin { target } => {
+                let backlog_key = target.key();
                 let found: Option<(String, String, String)> = tx
                     .query_row(
-                        "SELECT device,agent,id FROM ledger_missed WHERE backlog_key=?1 LIMIT 1",
-                        params![backlog_key],
+                        "SELECT device,agent,id FROM ledger_missed WHERE backlog_key=?1 AND (?2 IS NULL OR device=?2) ORDER BY at DESC,device,agent,id,missed LIMIT 1",
+                        params![backlog_key,target.local_device()],
                         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                     )
                     .optional()
@@ -730,12 +733,17 @@ impl LinkStore {
             }
             LedgerCall::BacklogKeys => {
                 let mut statement = tx
-                    .prepare("SELECT backlog_key FROM ledger_missed WHERE backlog_key IS NOT NULL GROUP BY backlog_key ORDER BY MAX(at) DESC LIMIT ?1")
+                    .prepare("SELECT backlog_key,CASE WHEN substr(backlog_key,1,6)='local:' THEN device ELSE NULL END AS owner_device FROM ledger_missed WHERE backlog_key IS NOT NULL GROUP BY backlog_key,owner_device ORDER BY MAX(at) DESC,backlog_key,owner_device LIMIT ?1")
                     .map_err(failed)?;
                 let missed = statement
-                    .query_map(params![BACKLOG_KEYS_LIMIT as i64], |r| r.get(0))
+                    .query_map(params![BACKLOG_KEYS_LIMIT as i64], |r| {
+                        Ok(BacklogMissedKey {
+                            task_key: r.get(0)?,
+                            device_id: r.get(1)?,
+                        })
+                    })
                     .map_err(failed)?
-                    .collect::<Result<Vec<String>, _>>()
+                    .collect::<Result<Vec<BacklogMissedKey>, _>>()
                     .map_err(failed)?;
                 drop(statement);
                 let mut statement = tx

@@ -536,10 +536,10 @@ export type IssueWork = {
   backlog?: BacklogItem[];
   /** The last `되돌리기`. */
   undo?: BacklogUndo | null;
-  /** Where each item a window shows came from, one per item key (`backlog_origin`); kept while any window shows it. */
+  /** Where each selected workspace/device/item came from (`backlog_origin`); kept while any window shows that owner. */
   origins?: BacklogOrigin[];
-  /** Every item key a missed line made, for the backlog row's flag (B27). */
-  missed_keys?: string[];
+  /** Local flags belong to their device; GitHub repository/number flags have a null device (B27). */
+  missed_keys?: { task_key: string; device_id: string | null }[];
   /** Every GitHub issue key Hide made for the backlog: only these and memos show `되돌리기` (D-21, B31). */
   made_keys?: string[];
   detail: IssueDetail | null;
@@ -569,9 +569,11 @@ export type BacklogItem = {
   at_unix_ms: number;
 };
 
-export type BacklogUndo = { task_key: string; phase: "working" | "done" | "failed"; failure: BacklogFailure | null };
+export type BacklogUndo = { workspace_id: string; device_id: string; task_key: string; phase: "working" | "done" | "failed"; failure: BacklogFailure | null };
 
 export type BacklogOrigin = {
+  workspace_id: string;
+  device_id: string;
   task_key: string;
   phase: "reading" | "ready" | "failed";
   session: WorkSession | null;

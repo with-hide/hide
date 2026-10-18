@@ -28,6 +28,7 @@ import { useErrorSince } from "./WorkspaceDialogs";
 import { fieldLabel } from "./shortcutLabels";
 import { originOf, useBacklogOrigin } from "./backlogOrigin";
 import { useIssueDetail } from "./issueDetails";
+import { remoteRequestId } from "./remote";
 
 export const DEFAULT_SETTINGS: IssueSettings = { ai_worktree_name: true, closes_instruction: true };
 
@@ -126,7 +127,7 @@ export function StartIssueDialog({ actions, workspace, task, onClose }: { action
   const aiNames = settings.ai_worktree_name && hideAiCanAnswer(hideAi);
   const git = workspace.is_git === true;
   const branches = workspace.branches ?? [];
-  const requestId = useMemo(() => `start-${task.key}-${Date.now()}`, [task.key]);
+  const requestId = useMemo(() => JSON.stringify([workspace.device_id, workspace.id, task.key, remoteRequestId()]), [workspace.device_id, workspace.id, task.key]);
   const [name, setName] = useState(() => defaultWorktreeName(task));
   const [edited, setEdited] = useState(false);
   const [base, setBase] = useState(workspace.default_branch && branches.includes(workspace.default_branch) ? workspace.default_branch : (branches[0] ?? ""));
@@ -134,7 +135,7 @@ export function StartIssueDialog({ actions, workspace, task, onClose }: { action
   const [prompt, setPrompt] = useState(() => firstPrompt(task, null, settings.closes_instruction, t));
   const promptEdited = useRef(false);
   const detail = useIssueDetail(actions, workspace, task.key);
-  const origin = useShellStore((s) => originOf(s.rest, task.key));
+  const origin = useShellStore((s) => originOf(s.rest, workspace, task.key));
   const nameAnswer = useShellStore((s) => (s.rest?.issue_work?.name?.request_id === requestId ? s.rest.issue_work.name : null));
   const asked = useRef(false);
   const [request, setRequest] = useState<{ afterId: number; branch: string; at: number } | null>(null);
@@ -145,7 +146,7 @@ export function StartIssueDialog({ actions, workspace, task, onClose }: { action
 
   // The body is read once per dialog; a GitHub issue's comes from `gh`.
   // So is where it came from: a missed line's request and answer join the prompt (B33).
-  useBacklogOrigin(actions, workspace.id, task.key);
+  useBacklogOrigin(actions, workspace, task.key);
   const bodyKnown = detail !== null && detail.phase !== "reading";
   const originKnown = origin !== null && origin.phase !== "reading";
   useEffect(() => {

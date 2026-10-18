@@ -4001,13 +4001,13 @@ pub struct IssueWorkSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub undo: Option<BacklogUndoSnapshot>,
     /// Where each item a backlog panel or a Start dialog shows came from, one
-    /// per item key, kept while any window shows it (B31, B33).
+    /// per workspace/device/item, kept while any window shows it (B31, B33).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub origins: Vec<BacklogOriginSnapshot>,
     /// Every backlog item key a missed line made, newest first, for the
     /// backlog row's flag (B27).
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub missed_keys: Vec<String>,
+    pub missed_keys: Vec<crate::links::ledger::BacklogMissedKey>,
     /// Every GitHub issue key Hide made for the backlog (the quick add, the
     /// backlog's input or `백로그로`), newest first: only these and memos
     /// show `되돌리기` (D-21, B31).
@@ -4081,6 +4081,8 @@ impl From<hide_node_link::gh::GithubFailureCategory> for BacklogFailure {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct BacklogUndoSnapshot {
+    pub workspace_id: String,
+    pub device_id: String,
     pub task_key: String,
     /// `working`, `done` or `failed`.
     pub phase: String,
@@ -4089,6 +4091,8 @@ pub struct BacklogUndoSnapshot {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct BacklogOriginSnapshot {
+    pub workspace_id: String,
+    pub device_id: String,
     pub task_key: String,
     /// `reading`, `ready` or `failed`.
     pub phase: String,
@@ -4102,6 +4106,14 @@ pub struct BacklogOriginSnapshot {
     /// this device and never sent to GitHub (D-21).
     pub request: Option<String>,
     pub answer: Option<String>,
+}
+
+impl BacklogOriginSnapshot {
+    pub fn matches(&self, owner: &crate::links::ledger::BacklogOriginIdentity) -> bool {
+        self.workspace_id == owner.workspace_id
+            && self.device_id == owner.device_id
+            && self.task_key == owner.task_key
+    }
 }
 
 /// The latest GitHub search (`github_search`), matched by the web's own

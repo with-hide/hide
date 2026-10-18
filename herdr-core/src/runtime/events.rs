@@ -1504,8 +1504,8 @@ pub(super) enum Event {
     BacklogRetry(super::backlog::BacklogIntentPayload),
     BacklogDismiss(super::backlog::BacklogIntentPayload),
     BacklogUndo(super::backlog::BacklogItemPayload),
-    BacklogOrigin(super::backlog::BacklogItemPayload),
-    BacklogOriginClose(super::backlog::BacklogKeyPayload),
+    BacklogOrigin(crate::links::ledger::BacklogOriginIdentity),
+    BacklogOriginClose(crate::links::ledger::BacklogOriginIdentity),
     FactoryAction(Box<super::factory::FactoryActionPayload>),
     FactoryTaskOpen(super::factory::FactoryTaskOpenPayload),
     FactoryTaskClose,
@@ -1769,8 +1769,11 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "backlog_retry" => decode!(super::backlog::BacklogIntentPayload, BacklogRetry),
         "backlog_dismiss" => decode!(super::backlog::BacklogIntentPayload, BacklogDismiss),
         "backlog_undo" => decode!(super::backlog::BacklogItemPayload, BacklogUndo),
-        "backlog_origin" => decode!(super::backlog::BacklogItemPayload, BacklogOrigin),
-        "backlog_origin_close" => decode!(super::backlog::BacklogKeyPayload, BacklogOriginClose),
+        "backlog_origin" => decode!(crate::links::ledger::BacklogOriginIdentity, BacklogOrigin),
+        "backlog_origin_close" => decode!(
+            crate::links::ledger::BacklogOriginIdentity,
+            BacklogOriginClose
+        ),
         "factory_action" => serde_json::from_value::<super::factory::FactoryActionPayload>(payload)
             .map(|payload| Event::FactoryAction(Box::new(payload)))
             .map_err(|_| invalid_payload(&kind)),

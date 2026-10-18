@@ -85,6 +85,70 @@ pub struct BacklogOrigin {
     pub missed: MissedWork,
 }
 
+/// The selected item's owner on the wire, across window holds and worker reads.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BacklogOriginIdentity {
+    pub workspace_id: String,
+    pub device_id: String,
+    pub task_key: String,
+}
+
+impl BacklogOriginIdentity {
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, value, limit) in [
+            ("workspace_id", self.workspace_id.as_str(), 256),
+            ("device_id", self.device_id.as_str(), 64),
+            ("task_key", self.task_key.as_str(), 256),
+        ] {
+            if value.is_empty() || value.len() > limit {
+                return Err(format!(
+                    "backlog_origin.{name} must have 1 to {limit} bytes"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Local memo numbers belong to one device and path; GitHub numbers to a repository.
+#[derive(Clone, Debug)]
+pub enum BacklogTarget {
+    Local {
+        device_id: String,
+        path: String,
+        number: u32,
+    },
+    Github(crate::issues::IssueReference),
+}
+
+impl BacklogTarget {
+    pub fn for_project(device: &str, path: &str, key: &str) -> Option<Self> {
+        if let Some((root, number)) = crate::tasks::parse_local_key(key) {
+            return (root == path && !device.is_empty()).then(|| Self::Local {
+                device_id: device.to_owned(),
+                path: root.to_owned(),
+                number,
+            });
+        }
+        crate::tasks::parse_github_key(key).map(Self::Github)
+    }
+
+    pub fn key(&self) -> String {
+        match self {
+            Self::Local { path, number, .. } => crate::tasks::local_key(path, *number),
+            Self::Github(reference) => crate::tasks::github_key(reference),
+        }
+    }
+
+    pub fn local_device(&self) -> Option<&str> {
+        match self {
+            Self::Local { device_id, .. } => Some(device_id),
+            Self::Github(_) => None,
+        }
+    }
+}
+
 /// Short store operations asked by a worker, never waited on by Runtime.
 #[derive(Clone, Debug)]
 pub enum LedgerCall {
@@ -118,7 +182,7 @@ pub enum LedgerCall {
     /// The item was undone: the missed line it came from is open again and
     /// its attempt is forgotten, so the next `백로그로` makes a new item.
     ReleaseBacklog {
-        backlog_key: String,
+        target: BacklogTarget,
     },
     /// The operator cleared a typed item that failed.
     DismissBacklog {
@@ -128,7 +192,7 @@ pub enum LedgerCall {
     PendingBacklog,
     /// The missed line a backlog item came from, if one did.
     BacklogOrigin {
-        backlog_key: String,
+        target: BacklogTarget,
     },
     /// Every backlog item key a missed line made, and every GitHub issue
     /// Hide made for the backlog, each newest first and at most
@@ -147,6 +211,13 @@ pub enum LedgerCall {
 /// far fewer.
 pub const BACKLOG_KEYS_LIMIT: usize = 1024;
 
+/// A Local backlog flag belongs to a device; a GitHub flag is shared by repository/number.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct BacklogMissedKey {
+    pub task_key: String,
+    pub device_id: Option<String>,
+}
+
 #[derive(Debug)]
 pub enum LedgerAnswer {
     Record(Box<SessionRecord>),
@@ -155,7 +226,7 @@ pub enum LedgerAnswer {
     Pending(Vec<PendingBacklog>),
     Origin(Option<Box<BacklogOrigin>>),
     BacklogKeys {
-        missed: Vec<String>,
+        missed: Vec<BacklogMissedKey>,
         made: Vec<String>,
     },
     Made(bool),

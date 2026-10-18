@@ -897,6 +897,7 @@ A GitHub create is made only in the repository the project was connected to when
 
 Open unstarted items are the initial view; status filters can include started and closed items without changing their identity or Start eligibility.
 A GitHub row is `#N`, the title, a flag when it came from missed work, its labels, its age, `↗` (GitHub) and `▷ 시작`; a memo row is `L-N`, the title, the flag, its age and `▷ 시작` (B27).
+Memo flags belong to the memo's device and path/number; GitHub flags remain shared by repository/number.
 When one source cannot be read, its last known rows and failure remain beside the other source's usable rows; an unreadable source is never an empty successful result.
 On a device the core dials every section is the one line `이 기기의 <project>는 이슈를 읽지 않는다`, with no input and no `▷ 시작` (B36).
 
@@ -904,12 +905,15 @@ A row opens the item in wide detail: its title, `#N` or `L-N`, its source, when 
 The wide detail renders the real body as sanitized Markdown with actual metadata and comments, retaining loading, stale and failed states.
 Comments load fifty at a time up to two hundred, with each comment bounded to four thousand characters; truncation remains visible.
 `되돌리기` deletes a memo or closes a GitHub issue and the row leaves the backlog; a missed line it came from opens again with `백로그로 · 무시`, and a close that fails leaves why and `다시 시도` in the panel with the row in place (B32).
+Undoing a memo on one device preserves another device's memo, origin and missed line even when their path and number match.
 The record that names a Hide-made GitHub issue keeps the newest 256 typed items, so an older issue no longer offers `되돌리기`; a refusal from the core (the issue is not one Hide made, or not the project's repository), which sent nothing anywhere, reads `되돌리지 못함` with no `다시 시도`, while Hide's record that could not be read just now (`unavailable`) says so with `다시 시도` (`undoRetryable` in `web/src/overviewBacklog.ts`).
 
 `▷ 시작` opens the Start dialog, which turns an item into work in one step: a worktree named for the item, its base, the agent, and the agent's first prompt.
 The name opens as the issue number and the title's English words (`192-hided-sigterm-handler`, `L-3-...`, or `issue-192` when the title has none), and when Settings > Hide AI > Features allows it the background AI's name replaces it once it answers, unless the operator has typed; `↺ AI 이름으로` brings the AI's name back.
 A name that is already a branch says so, and when a worktree has it the primary button opens that worktree instead.
 The first prompt is filled from the item's body, which the dialog reads when it opens, names the item, and for a GitHub issue asks for a pull request that closes it when Settings > Agents > Starting work says so; for an item that came from missed work it also carries the original request and the answer of that turn, which stay on this device and are never written to GitHub (B33).
+The detail, origin, Start prompt and naming body use the selected workspace and device as well as the item key; a same-path memo or a late read from another device supplies none of their words.
+Closing a panel or Start dialog releases only its owner's origin, including when the connection closes.
 The operator edits the prompt before starting.
 Starting creates the worktree, writes the link into it, starts the agent with the prompt as its first instruction, then brings the new pane's Workspace to the front; a folder project has no worktree, so its agent starts in the folder with the prompt.
 

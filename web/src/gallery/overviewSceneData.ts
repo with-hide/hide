@@ -233,7 +233,7 @@ export function overviewWorld(now: number): OverviewWorld {
   ];
   const issueWork: IssueWork = {
     backlog,
-    missed_keys: [hideKey(161)],
+    missed_keys: [{ task_key: hideKey(161), device_id: null }],
     made_keys: [hideKey(161), hideKey(163)],
     detail: null,
     name: null,

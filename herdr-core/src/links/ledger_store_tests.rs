@@ -2089,7 +2089,10 @@ fn a_memo_from_missed_work_marks_its_line_and_undo_opens_it_again() {
     };
     assert_eq!(
         keys,
-        std::slice::from_ref(&key),
+        [BacklogMissedKey {
+            task_key: key.clone(),
+            device_id: Some(session().device_id)
+        }],
         "the backlog row's flag names the memo"
     );
     assert!(
@@ -2103,7 +2106,7 @@ fn a_memo_from_missed_work_marks_its_line_and_undo_opens_it_again() {
     );
     let LedgerAnswer::Origin(Some(origin)) = store
         .ledger_call(LedgerCall::BacklogOrigin {
-            backlog_key: key.clone(),
+            target: BacklogTarget::for_project(&session().device_id, "/repo", &key).unwrap(),
         })
         .unwrap()
     else {
@@ -2113,7 +2116,9 @@ fn a_memo_from_missed_work_marks_its_line_and_undo_opens_it_again() {
     assert_eq!(origin.missed.text, "문서 갱신");
 
     store
-        .ledger_call(LedgerCall::ReleaseBacklog { backlog_key: key })
+        .ledger_call(LedgerCall::ReleaseBacklog {
+            target: BacklogTarget::for_project(&session().device_id, "/repo", &key).unwrap(),
+        })
         .unwrap();
     let missed = &store.ledger_record(&session()).unwrap().missed[0];
     assert_eq!(missed.status, MissedStatus::Open);
@@ -2238,7 +2243,7 @@ fn only_an_issue_hide_made_is_named_as_made_after_a_restart_until_it_is_undone()
 
     store
         .ledger_call(LedgerCall::ReleaseBacklog {
-            backlog_key: "github:owner/repo#5".into(),
+            target: BacklogTarget::for_project("device-a", "/repo", "github:owner/repo#5").unwrap(),
         })
         .unwrap();
     assert!(
@@ -2279,7 +2284,12 @@ fn undone_typed_items_are_pruned_and_never_fill_the_backlog_ledger() {
             .unwrap();
         store
             .ledger_call(LedgerCall::ReleaseBacklog {
-                backlog_key: format!("github:owner/repo#{number}"),
+                target: BacklogTarget::for_project(
+                    "device-a",
+                    "/repo",
+                    &format!("github:owner/repo#{number}"),
+                )
+                .unwrap(),
             })
             .unwrap();
     }

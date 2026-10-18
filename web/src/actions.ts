@@ -2498,12 +2498,12 @@ export function createActions(send: DispatchFn) {
       dispatch({ schema_version: 2, kind: "backlog_undo", payload: { workspace_id: workspaceId, task_key: taskKey } });
     },
     /** Where an item came from, for its panel (B31). */
-    readBacklogOrigin(workspaceId: string, taskKey: string) {
-      dispatch({ schema_version: 2, kind: "backlog_origin", payload: { workspace_id: workspaceId, task_key: taskKey } });
+    readBacklogOrigin(workspaceId: string, deviceId: string, taskKey: string) {
+      dispatch({ schema_version: 2, kind: "backlog_origin", payload: { workspace_id: workspaceId, device_id: deviceId, task_key: taskKey } });
     },
     /** No screen shows that item's origin any more: the core drops the session text it held for it. */
-    closeBacklogOrigin(taskKey: string) {
-      dispatch({ schema_version: 2, kind: "backlog_origin_close", payload: { task_key: taskKey } });
+    closeBacklogOrigin(workspaceId: string, deviceId: string, taskKey: string) {
+      dispatch({ schema_version: 2, kind: "backlog_origin_close", payload: { workspace_id: workspaceId, device_id: deviceId, task_key: taskKey } });
     },
     /** The projects the Projects tab shows, in its order, for the disk sweep; none when it is hidden (D-15, B53). */
     watchDisk(workspaceIds: readonly string[]) {
