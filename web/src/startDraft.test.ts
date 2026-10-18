@@ -43,4 +43,9 @@ describe("the start panel's draft", () => {
     expect(startFailure("claude: command not found")).toEqual({ message: "claude: command not found" });
     expect(startFailure(null)).toEqual({ key: "workspace.agentNotStarted" });
   });
+
+  it("words a Codex the machine's kit has not read in the operator's language", () => {
+    expect(startFailure("codex_capability_unknown")).toEqual({ key: "workspace.codexCapabilityUnknown" });
+    expect(startFailure("constructor")).toEqual({ message: "constructor" });
+  });
 });

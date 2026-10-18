@@ -12,7 +12,8 @@
 //!
 //! An older Codex has no daemon and refuses the flag, so the flag goes only
 //! where the machine's kit read a Codex that has the daemon setting; a
-//! machine whose kit has not answered yet refuses a start with a next action.
+//! machine whose kit has not answered yet refuses a start with
+//! [`CAPABILITY_UNKNOWN`].
 //!
 //! A transition path: it goes away once openai/codex#48500 runs a daemon's
 //! hooks in each window's environment.
@@ -20,6 +21,11 @@
 use crate::model::KitSnapshot;
 
 pub(crate) const NO_DAEMON: &str = "--no-daemon";
+
+/// The refusal of a Codex start on a machine whose kit has not read its
+/// Codex: a stable code, worded for the operator where it is shown (the
+/// CLI's next action in `hided`, the screen's in the web shell's catalog).
+pub(crate) const CAPABILITY_UNKNOWN: &str = "codex_capability_unknown";
 
 /// What a machine's kit last read about its Codex's shared daemon.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -65,9 +71,16 @@ pub(crate) fn start_arguments(
         return Ok(args);
     }
     match daemon {
-        CodexDaemon::Unknown => Err("Codex 지원 여부를 확인하지 못했습니다. Settings에서 대상 머신의 키트를 다시 확인한 뒤 실행하세요.".to_owned()),
+        CodexDaemon::Unknown => Err(CAPABILITY_UNKNOWN.to_owned()),
         CodexDaemon::Unsupported => Ok(args),
-        CodexDaemon::Present if args.iter().take_while(|arg| arg.as_str() != "--").any(|arg| arg == NO_DAEMON) => Ok(args),
+        CodexDaemon::Present
+            if args
+                .iter()
+                .take_while(|arg| arg.as_str() != "--")
+                .any(|arg| arg == NO_DAEMON) =>
+        {
+            Ok(args)
+        }
         CodexDaemon::Present => Ok(std::iter::once(NO_DAEMON.to_owned()).chain(args).collect()),
     }
 }
@@ -145,10 +158,7 @@ mod tests {
                     CodexDaemon::from_kit(&kit),
                 )
                 .unwrap_err();
-                assert!(
-                    error.contains("Settings") && error.contains("대상 머신"),
-                    "{error}"
-                );
+                assert_eq!(error, CAPABILITY_UNKNOWN);
             }
         }
     }
