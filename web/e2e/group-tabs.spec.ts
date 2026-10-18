@@ -113,7 +113,9 @@ test("terminal start fills the draft slot and duplicate intent delivery creates 
     const original = topology(herdr);
     await createGroup(page, "Terminal work");
     await page.locator("[data-new-agent-tab=true]").click();
-    const held = gate.arm("tab.create");
+    // Hide starts its integrated shell through layout.apply, including a
+    // terminal-only request; tab.create is the raw Herdr shell path.
+    const held = gate.arm("layout.apply");
     await terminal(page).click();
     await held;
     await expect(terminal(page)).toBeDisabled();
@@ -129,7 +131,7 @@ test("terminal start fills the draft slot and duplicate intent delivery creates 
     const created = (await stripTabs(page).getAttribute("data-tab"))!;
     expect(original).not.toContain(created);
     expect(topology(herdr)).toHaveLength(original.length + 1);
-    expect(gate.params("tab.create")).toHaveLength(1);
+    expect(gate.params("layout.apply")).toHaveLength(1);
     await screenshot(page, "group-tabs-terminal-promoted");
   } finally { try { daemon?.stop(); } finally { try { await gate.stop(); } finally { herdr.stop(); } } }
 });
@@ -180,7 +182,7 @@ test("a committed start with its answer lost across restart adopts the original 
     await establishOwner(page);
     const original = topology(herdr);
     await createGroup(page, "Recovery");
-    const held = gate.arm("tab.create");
+    const held = gate.arm("layout.apply");
     await terminal(page).click();
     await held;
     const saved = JSON.parse(fs.readFileSync(path.join(daemon.stateDir, "workspace-views.json"), "utf8")) as { workspaces: { agent_starts: Record<string, { state: string }> }[] };
@@ -197,6 +199,6 @@ test("a committed start with its answer lost across restart adopts the original 
     await expect(stripTabs(page)).toHaveCount(1);
     await quietFor(page, 300, "a restored start must not create a replacement after its original shell was adopted");
     expect(topology(herdr)).toHaveLength(original.length + 1);
-    expect(gate.params("tab.create")).toHaveLength(1);
+    expect(gate.params("layout.apply")).toHaveLength(1);
   } finally { try { daemon?.stop(); } finally { try { await gate.stop(); } finally { herdr.stop(); } } }
 });
