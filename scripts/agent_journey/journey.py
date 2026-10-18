@@ -126,6 +126,10 @@ class Journey:
         as a fork's is."""
         status, reason = verdict
         if status == cells.FAIL and self.quota is not None:
+            # What the agent itself recorded of the turn, where its provider row reads a refusal.
+            kept = refusal_records(self.id, self.paths, self.quota, self.sessions)
+            refusal = self.evidence(f"{name}-refusal", kept) if kept is not None else None
+            evidence = ", ".join(value for value in (evidence, refusal) if value) or None
             spent = spent_quota(self.id, self.paths, self.quota, self.sessions)
             if spent:
                 # Not retried: a retry spends the requests again (docs/TESTING.md, A real agent on CI).
@@ -136,10 +140,7 @@ class Journey:
                 return False
         if status == cells.FAIL:
             screen = self.capture(name, pane)
-            # What the agent itself recorded of the turn, where its provider row reads a refusal.
-            kept = refusal_records(self.id, self.paths, self.quota, self.sessions) if self.quota is not None else None
-            refusal = self.evidence(f"{name}-refusal", kept) if kept is not None else None
-            evidence = ", ".join(value for value in (evidence, screen, refusal) if value) or None
+            evidence = ", ".join(value for value in (evidence, screen) if value) or None
         cells.settle(self.table, self.id, name, status, reason, evidence)
         return status == cells.PASS
 

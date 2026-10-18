@@ -100,15 +100,36 @@ class Gemini(unittest.TestCase):
         self.assertIsNone(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home))
 
 
+    def interactive(self, source="errorreport.go:224", severity="E"):
+        """An interactive agy's log record of the refusal print mode reports as
+        `quota-spent.txt`: the same SDK error under a glog header, its line
+        breaks continuing the record (run 39097738256, Linux, 2026-10-18)."""
+        error = json.loads((FIXTURES / "quota-spent.txt").read_text().strip().removeprefix("AGY_ERROR: "))["short_error"]
+        return f"{severity}1018 04:40:32.771498     766 {source}] {error}"
+
+    def test_an_interactive_agys_logged_refusal_of_a_spent_day_leaves_the_turn_unmeasured(self):
+        transcript = session({"type": "USER_INPUT"})
+        self.log("I1018 04:40:24.229659      50 server.go:1765] Language server version: 1.4.1", self.interactive(),
+                 "I1018 04:40:33.000000      50 server.go:1800] next")
+        self.assertEqual(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home),
+                         ["GenerateRequestsPerDayPerProjectPerModel-FreeTier"])
+        # Only agy's own error report counts: an info record or another source carrying the text does not.
+        for record in (self.interactive(severity="I"), self.interactive(source="executor.go:88")):
+            with self.subTest(record=record[:40]):
+                self.log(record)
+                self.assertIsNone(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home))
+        self.log(self.interactive().replace("Error 429", "Error 503").replace("RESOURCE_EXHAUSTED", "UNAVAILABLE"))
+        self.assertIsNone(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home))
+
     def test_a_failed_turn_keeps_agys_own_error_records_and_none_of_its_content(self):
         transcript = session({"type": "USER_INPUT", "status": "DONE", "content": "an earlier prompt"},
                              {"type": "PLANNER_RESPONSE", "status": "DONE", "content": "an earlier answer"},
                              {"type": "USER_INPUT", "status": "DONE", "content": "the failed prompt"},
                              {"type": "GENERIC", "status": "ERROR", "error": "Error 429", "content": "kept out"})
-        self.log("I1018 server.go:1709] started", "E1018 errorreport.go:224] Error 429")
+        self.log("I1018 04:40:24.229659      50 server.go:1709] started", self.interactive())
         kept = quota.refusal_records("antigravity", [transcript], {"gemini": ROW}, self.home)
         self.assertEqual(kept, {"transcript_steps": [{"type": "GENERIC", "status": "ERROR", "error": "Error 429"}],
-                                "log_errors": [{"log": "cli-1.log", "line": "E1018 errorreport.go:224] Error 429"}]})
+                                "log_errors": [{"log": "cli-1.log", "record": self.interactive()}]})
         self.assertIsNone(quota.refusal_records("claude-code", [transcript], {"gemini": ROW}, self.home))
 
 

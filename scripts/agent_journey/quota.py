@@ -12,6 +12,7 @@ refusal of theirs is a failure.
 
 import json
 from pathlib import Path
+import re
 import sqlite3
 
 from . import opencode_service
@@ -21,6 +22,14 @@ CONTRACT = Path(__file__).resolve().parents[2] / "contracts" / "provider-quota.j
 AGY_ERROR = "AGY_ERROR: "
 # agy's own logs, under the HOME it ran in (the run's disposable one on CI).
 AGY_LOGS = ".gemini/antigravity-cli/log"
+# The first line of a record in agy's log (glog): severity, date, time,
+# thread, then the source file and line; a message's own line breaks
+# continue the record on the lines after it.
+GLOG = re.compile(r"^[IWEF]\d{4} \d\d:\d\d:\d\d\.\d+ +\d+ ([^:\]]+):\d+\] ")
+# The error an interactive agy reports in its log (`errorreport.go`) when a
+# turn fails on the provider: the Gemini SDK's API error, whose code and
+# status the print mode's `AGY_ERROR:` report carries as fields.
+SDK_ERROR = re.compile(r"Error (\d+), Message: .*, Status: ([A-Z_]+), Details: ", re.S)
 
 
 def agy_report(line):
@@ -33,6 +42,31 @@ def agy_report(line):
     except ValueError:
         return None
     return report if isinstance(report, dict) else None
+
+
+def log_records(text):
+    """The records of one agy log, each its first line and the lines its message continues on."""
+    found = []
+    for line in text.splitlines():
+        if GLOG.match(line) or not found:
+            found.append(line)
+        else:
+            found[-1] += "\n" + line
+    return found
+
+
+def agy_reports(record):
+    """The error reports one record of agy's log carries: an `AGY_ERROR:`
+    line's JSON, or an interactive turn's `errorreport.go` error read into
+    the same fields (`error_code`, `status`, `short_error`)."""
+    reports = [report for report in map(agy_report, record.splitlines()) if report]
+    header = GLOG.match(record)
+    if record.startswith("E") and header and header.group(1) == "errorreport.go":
+        message = record[header.end():]
+        sdk = SDK_ERROR.search(message)
+        if sdk:
+            reports.append({"error_code": int(sdk.group(1)), "status": sdk.group(2), "short_error": message})
+    return reports
 
 
 def gemini_quotas(report, row):
@@ -61,8 +95,8 @@ def gemini_spent(paths, row, home):
     after its last `USER_INPUT` in the transcripts Hide's reader read), and
     the newest error report in agy's own logs is a spent day. The log is
     where an interactive agy can leave the `AGY_ERROR:` report its print
-    mode writes to stderr; until one is seen there, a spent day fails the
-    cell like any other refusal."""
+    mode writes to stderr, and where an interactive agy's `errorreport.go`
+    record carries the same error (2026-10-18, run 39097738256)."""
     for path in paths:
         steps = [record.get("type") for record in records(path)]
         last_input = max((index for index, step in enumerate(steps) if step == "USER_INPUT"), default=-1)
@@ -74,7 +108,7 @@ def gemini_spent(paths, row, home):
             lines = log.read_text(errors="replace").splitlines()
         except OSError:
             continue
-        reports = [report for report in map(agy_report, lines) if report]
+        reports = [report for record in log_records("\n".join(lines)) for report in agy_reports(record)]
         if reports:
             return gemini_quotas(reports[-1], row)
     return None
@@ -89,8 +123,8 @@ def agy_records(paths, home):
     """agy's own records of a failed turn, kept as its evidence so the next
     refusal shows where an interactive agy reports it: each step its
     transcripts hold after their last `USER_INPUT` (its type, status and
-    error, never its content), and the error lines (glog `E`) of its newest
-    logs."""
+    error, never its content), and the error records (glog `E`) of its
+    newest logs."""
     steps = []
     for path in paths:
         found = records(path)
@@ -105,8 +139,8 @@ def agy_records(paths, home):
             text = log.read_text(errors="replace")
         except OSError:
             continue
-        lines.extend({"log": log.name, "line": line[:KEPT_RECORD_CHARS]} for line in text.splitlines()
-                     if line.startswith("E") or AGY_ERROR in line)
+        lines.extend({"log": log.name, "record": record[:KEPT_RECORD_CHARS]} for record in log_records(text)
+                     if record.startswith("E") or AGY_ERROR in record)
     return {"transcript_steps": steps[-KEPT_RECORDS:], "log_errors": lines[-KEPT_RECORDS:]}
 
 
