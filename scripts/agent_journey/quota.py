@@ -80,10 +80,42 @@ def gemini_spent(paths, row, home):
     return None
 
 
+# How many of the agent's own error records a failed turn keeps, and how much of each.
+KEPT_RECORDS = 20
+KEPT_RECORD_CHARS = 2000
+
+
+def agy_records(paths, home):
+    """agy's own records of a failed turn, kept as its evidence so the next
+    refusal shows where an interactive agy reports it: each step its
+    transcripts hold after their last `USER_INPUT` (its type, status and
+    error, never its content), and the error lines (glog `E`) of its newest
+    logs."""
+    steps = []
+    for path in paths:
+        found = records(path)
+        last_input = max((index for index, record in enumerate(found) if record.get("type") == "USER_INPUT"), default=-1)
+        steps.extend({"type": record.get("type"), "status": record.get("status"),
+                      "error": str(record["error"])[:KEPT_RECORD_CHARS] if "error" in record else None}
+                     for record in found[last_input + 1:])
+    logs = sorted((home / AGY_LOGS).glob("*.log"), key=lambda log: log.stat().st_mtime)[-3:] if home else []
+    lines = []
+    for log in logs:
+        try:
+            text = log.read_text(errors="replace")
+        except OSError:
+            continue
+        lines.extend({"log": log.name, "line": line[:KEPT_RECORD_CHARS]} for line in text.splitlines()
+                     if line.startswith("E") or AGY_ERROR in line)
+    return {"transcript_steps": steps[-KEPT_RECORDS:], "log_errors": lines[-KEPT_RECORDS:]}
+
+
 # Provider -> reader(session paths, row, the agent's HOME): the spent quota
 # ids when the turn that failed got no model answer and ended on the provider
 # refusing quotas the row names, each above 0; otherwise None.
 READERS = {"gemini": gemini_spent}
+# Provider -> the agent's own records of a failed turn (session paths, HOME).
+RECORDS = {"gemini": agy_records}
 
 
 def contract(path=CONTRACT):
@@ -113,6 +145,12 @@ def spent_quota(agent, paths, rows, home=None):
     if name not in READERS:
         raise ValueError(f"provider_quota_reader_missing: {name} names {agent}, and the journey cannot read its refusals")
     return READERS[name](paths, rows[name], home)
+
+
+def refusal_records(agent, paths, rows, home=None):
+    """The agent's own records of a failed turn its provider row reads, or None."""
+    name = next((name for name, row in rows.items() if agent in row["agents"]), None)
+    return RECORDS[name](paths, home) if name in RECORDS else None
 
 
 def records(path):

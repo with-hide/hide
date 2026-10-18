@@ -100,6 +100,18 @@ class Gemini(unittest.TestCase):
         self.assertIsNone(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home))
 
 
+    def test_a_failed_turn_keeps_agys_own_error_records_and_none_of_its_content(self):
+        transcript = session({"type": "USER_INPUT", "status": "DONE", "content": "an earlier prompt"},
+                             {"type": "PLANNER_RESPONSE", "status": "DONE", "content": "an earlier answer"},
+                             {"type": "USER_INPUT", "status": "DONE", "content": "the failed prompt"},
+                             {"type": "GENERIC", "status": "ERROR", "error": "Error 429", "content": "kept out"})
+        self.log("I1018 server.go:1709] started", "E1018 errorreport.go:224] Error 429")
+        kept = quota.refusal_records("antigravity", [transcript], {"gemini": ROW}, self.home)
+        self.assertEqual(kept, {"transcript_steps": [{"type": "GENERIC", "status": "ERROR", "error": "Error 429"}],
+                                "log_errors": [{"log": "cli-1.log", "line": "E1018 errorreport.go:224] Error 429"}]})
+        self.assertIsNone(quota.refusal_records("claude-code", [transcript], {"gemini": ROW}, self.home))
+
+
 class Requests(unittest.TestCase):
     def test_claude_counts_responses_by_message_id(self):
         path = session({"type": "assistant", "message": {"id": "a"}}, {"type": "assistant", "message": {"id": "a"}},

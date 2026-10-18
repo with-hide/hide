@@ -19,7 +19,7 @@ from agent_live_check.system import git, same_path
 
 from . import cells, fork, kit, memory, title, usage
 from .ci import redact
-from .quota import model_requests, spent_quota
+from .quota import model_requests, refusal_records, spent_quota
 
 SPAWN_SECONDS = 150
 TURN_SECONDS = 180
@@ -136,7 +136,10 @@ class Journey:
                 return False
         if status == cells.FAIL:
             screen = self.capture(name, pane)
-            evidence = ", ".join(value for value in (evidence, screen) if value) or None
+            # What the agent itself recorded of the turn, where its provider row reads a refusal.
+            kept = refusal_records(self.id, self.paths, self.quota, self.sessions) if self.quota is not None else None
+            refusal = self.evidence(f"{name}-refusal", kept) if kept is not None else None
+            evidence = ", ".join(value for value in (evidence, screen, refusal) if value) or None
         cells.settle(self.table, self.id, name, status, reason, evidence)
         return status == cells.PASS
 
