@@ -3,7 +3,19 @@
 const EXIT_WITHIN: std::time::Duration = std::time::Duration::from_secs(1);
 
 fn main() {
-    // Taken before anything else, as every cooperative child takes it: a
+    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    // A pane's entry point becomes its shell in this same process. In
+    // particular it must not acquire a daemon's owner watch or load state.
+    if args.first().is_some_and(|arg| arg == "shell-exec") {
+        match hided::shell_exec::run(&args[1..]) {
+            Ok(never) => match never {},
+            Err(error) => {
+                eprintln!("shell-exec: {error}");
+                std::process::exit(2);
+            }
+        }
+    }
+    // Taken before daemon-role work, as every cooperative child takes it: a
     // starter that passes an owner channel (the web e2e fixture) ends this
     // daemon and what it started by ending itself, even when it is killed.
     // `hide connect` starts the daemon without one, through `spawn_owned`,
@@ -15,7 +27,7 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let result = run();
+    let result = run(&args);
     // Before every exit below, so the records queued last reach the log.
     herdr_core::diagnostics::drain();
     // After `run` has dropped the runtime, and with it the core.
@@ -31,8 +43,7 @@ fn main() {
     }
 }
 
-fn run() -> Result<(), String> {
-    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+fn run(args: &[std::ffi::OsString]) -> Result<(), String> {
     // The node role on a device reads no daemon environment and opens no
     // state folder: it answers its link until the channel closes.
     if args.first().is_some_and(|arg| arg == "node") {
@@ -61,7 +72,7 @@ fn run() -> Result<(), String> {
     if args.first().is_some_and(|arg| arg == "--open-helper") {
         // Only Unix supervises a file opener through this mode.
         #[cfg(unix)]
-        return hide_node::opener::run_opener_helper(&args);
+        return hide_node::opener::run_opener_helper(args);
         #[cfg(not(unix))]
         return Err("--open-helper is the Unix opener supervisor's mode".into());
     }

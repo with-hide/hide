@@ -26,6 +26,7 @@ mod remote_core;
 mod remote_delivery;
 mod responsive_state;
 mod seat;
+mod shell_exec;
 #[cfg(unix)]
 mod support;
 mod terminal_children;

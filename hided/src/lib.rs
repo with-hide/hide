@@ -44,6 +44,7 @@ pub mod relay;
 pub mod screen_event;
 pub mod seat;
 pub mod server;
+pub mod shell_exec;
 pub mod spawn;
 pub mod state_file;
 // The old folder is this Mac's history; no Windows build ever wrote it.
