@@ -1287,6 +1287,7 @@ fn native_fork_current_journey(kind: &'static str) {
         let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let arm_connect = Arc::clone(&armed);
         let old_focus = std::sync::Mutex::new(String::new());
+        let started_name = std::sync::Mutex::new(String::new());
         let old = FakeHerdr::start("pi-fork-retired", move |method, params| match method {
             "pane.focus" | "pane.layout" | "workspace.get" => {
                 focus_answer(method, params, &old_focus).unwrap()
@@ -1321,9 +1322,16 @@ fn native_fork_current_journey(kind: &'static str) {
                 "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w-order",
                 "tab_id":"w-order:t2","focused":false,"agent_status":"unknown","revision":1,
                 "tokens":{"hide_prompt":"1"}}}),
-            "agent.start" => serde_json::json!({"type":"agent_started","argv":[],"agent":{
+            "agent.start" => {
+                *started_name.lock().unwrap() = params["name"].as_str().unwrap().to_owned();
+                serde_json::json!({"type":"agent_started","argv":[],"agent":{
                 "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w-order",
-                "tab_id":"w-order:t2","focused":false,"agent_status":"idle","revision":2}}),
+                "tab_id":"w-order:t2","focused":false,"agent_status":"idle","revision":2}})
+            }
+            "agent.get" => serde_json::json!({"type":"agent_info","agent":{
+                "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w-order",
+                "tab_id":"w-order:t2","name":*started_name.lock().unwrap(),"agent":kind,
+                "interactive_ready":true,"focused":false,"agent_status":"idle","revision":3}}),
             "pane.close" => serde_json::json!({"type":"ok"}),
             other => panic!("unexpected original-server request: {other}"),
         });
@@ -1381,7 +1389,8 @@ fn native_fork_current_journey(kind: &'static str) {
                     "layout.apply",
                     "pane.process_info",
                     "pane.get",
-                    "agent.start"
+                    "agent.start",
+                    "agent.get"
                 ],
                 "during-tab-connect" => vec!["session.snapshot"],
                 _ => vec![
