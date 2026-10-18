@@ -129,7 +129,7 @@ class WriteSandbox:
                           "(allow file-write* " + " ".join(f"(subpath {quote(p)})" for p in allowed) + ")",
                           '(allow file-write* (literal "/dev/null"))',
                           "(deny network-outbound)",
-                          '(allow network-outbound (remote ip "127.0.0.1:*"))',
+                          '(allow network-outbound (remote ip "localhost:*"))',
                           f"(allow network-outbound (remote unix-socket (subpath {quote(self.sockets)})))",
                           f"(allow network-outbound (remote unix-socket (subpath {quote(self.run)})))"])
             for name in (".claude", ".claude.json", ".codex", ".gemini", ".grok", ".omp", ".pi",
@@ -169,9 +169,9 @@ class WriteSandbox:
                   f"try: pathlib.Path({str(forbidden)!r}).write_bytes(b'changed')\n"
                   "except PermissionError: pass\n"
                   "else: sys.exit(31)\n")
-        code, _, _ = owner.run(self.command([sys.executable, "-c", script]), env=env, check=False)
+        code, _, error = owner.run(self.command([sys.executable, "-c", script]), env=env, check=False)
         if code or forbidden.read_bytes() != b"unchanged" or not allowed.is_file():
-            raise ProtectionError("private_home_write_guard_not_enforced")
+            raise ProtectionError("private_home_write_guard_not_enforced: " + error.strip()[:500])
         allowed.unlink()
 
     def verify(self, owner: OwnedProcesses, env: dict, outside: Path) -> None:

@@ -657,12 +657,16 @@ def main(argv=None):
                                        else None)
             for key in ready:
                 agent = next(row for row in report["agents"] if row["id"] == key)
+                legacy = local and not agent.get("private_home", {}).get("enabled", False)
+                if local:
+                    runtime.sandbox = (runtime.journey_sandboxes[0]
+                                       if legacy and hasattr(runtime, "journey_sandboxes") else sandbox)
                 journey = Journey(runtime, daemon, controller, table, rows[key], root, agent, reader,
                                   branch=f"journey/{run_id}-{key}", created=report["created"],
                                   sessions=(ROUTES[rows[key]["herdr_kind"]]["sessions"](operator, runtime.home)
-                                            if local and not fake else runtime.home),
+                                            if legacy else runtime.home),
                                   route=({**route(rows[key]["herdr_kind"], runtime.home),
-                                          **({"fake_env": agent["fake_env"]} if fake else {})} if local and not fake
+                                          **({"fake_env": agent["fake_env"]} if fake else {})} if legacy
                                          else {"args": [], "env": ci.route_names(rows[key]["herdr_kind"], fixture_bin,
                                                                                  agent.get("fake_env"))}),
                                   model=rows[key]["model_flag"] and models.get(key),
@@ -683,7 +687,7 @@ def main(argv=None):
                     if running is not None and len(running) > 1:
                         report.setdefault("product_findings", []).append(
                             f"{len(running)} OpenCode servers of the run ran after Sleep and Wake: {running}")
-                untrusted_reason = (ROUTES[rows[key]["herdr_kind"]]["untrusted"] if local and not fake else
+                untrusted_reason = (ROUTES[rows[key]["herdr_kind"]]["untrusted"] if legacy else
                                     ci.FIXTURE_UNTRUSTED if fixture_bin else None)
                 if untrusted_reason:
                     cells.settle(table, key, "start_untrusted", cells.NOT_MEASURED,
