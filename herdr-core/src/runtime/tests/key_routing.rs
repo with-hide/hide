@@ -93,6 +93,7 @@ fn request_controls(terminals: &RecordedTerminals) -> Vec<TerminalControl> {
 fn open(request: &str) -> TerminalControl {
     TerminalControl::RequestOpen {
         request: request.to_owned(),
+        fork: false,
     }
 }
 

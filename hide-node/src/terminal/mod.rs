@@ -355,7 +355,11 @@ impl Service {
     pub fn close(&self) {
         self.shared.run(|inner, _| {
             inner.closed = true;
+            for (pane, session) in &mut inner.panes {
+                session.hold.discard(pane, "service_closed");
+            }
             inner.panes.clear();
+            inner.requests.close();
         });
         let live = self.shared.children.wait_gone(CLOSE_WITHIN);
         if live > 0 {
@@ -395,18 +399,32 @@ impl TerminalNode for Service {
             typed_at_unix_ms,
             bytes,
         };
-        self.shared.run(|inner, _| match target {
-            KeyTarget::Pane(pane) => inner.write_key(&pane, chunk, true, now),
-            KeyTarget::Request(request) => match inner.requests.route(&request, chunk) {
-                (KeyRoute::Pane(pane), Some(chunk)) => inner.write_key(&pane, chunk, false, now),
-                (KeyRoute::Dropped { limit: true }, _) => {
-                    inner.reports.push(TerminalReport::RequestDiscarded {
-                        request,
-                        reason: "limit".to_owned(),
-                    });
-                }
-                _ => {}
-            },
+        self.shared.run(|inner, _| {
+            let target = match target {
+                KeyTarget::Pane(ref pane) => inner
+                    .requests
+                    .holder(pane)
+                    .map(KeyTarget::Request)
+                    .unwrap_or(target),
+                _ => target,
+            };
+            match target {
+                KeyTarget::Pane(pane) => inner.write_key(&pane, chunk, true, now),
+                KeyTarget::Request(request) => match inner.requests.route(&request, chunk) {
+                    (KeyRoute::Pane(pane), Some(chunk)) => {
+                        inner.write_key(&pane, chunk, false, now)
+                    }
+                    (KeyRoute::Dropped { limit: true }, _) => {
+                        inner.reports.push(TerminalReport::RequestDiscarded {
+                            request,
+                            reason: "limit".to_owned(),
+                        });
+                    }
+                    (KeyRoute::Held, _) => inner.wake_clock = true,
+                    _ => {}
+                },
+            }
+            inner.expire_fork_input(now);
         });
     }
 
@@ -836,6 +854,7 @@ impl Inner {
             }
             TerminalControl::Release { pane, message } => self.release(&pane, message),
             TerminalControl::Forget { pane } => {
+                self.requests.forget(&pane);
                 if let Some(mut entry) = self.panes.remove(&pane) {
                     entry.hold.discard(&pane, "pane_gone");
                 }
@@ -898,8 +917,16 @@ impl Inner {
                     self.panes.entry(pane).or_default().asleep = true;
                 }
             },
-            TerminalControl::RequestOpen { request } => self.requests.open(&request, now),
+            TerminalControl::RequestOpen { request, fork } => {
+                self.requests.open(&request, now);
+                self.requests.set_fork(&request, fork);
+                self.wake_clock = true;
+            }
+            TerminalControl::RequestHold { request, pane } => {
+                self.requests.hold_for(&request, &pane);
+            }
             TerminalControl::RequestResolve { request, pane } => {
+                self.expire_fork_input(now);
                 let held = self.requests.resolve(&request, &pane, now);
                 let held = input::fresh_chunks(&pane, held, now);
                 if held.is_empty() {
@@ -917,7 +944,11 @@ impl Inner {
                 }
             }
             TerminalControl::RequestDiscard { request, reason } => {
-                self.requests.discard(&request, &reason, now)
+                let lost = self.requests.discard(&request, &reason, now);
+                if lost && reason == "unconfirmed" {
+                    self.reports
+                        .push(TerminalReport::RequestDiscarded { request, reason });
+                }
             }
             TerminalControl::AttachmentHold { pane, intent } => {
                 self.attachment = Some(Attachment {
@@ -2141,6 +2172,7 @@ impl Inner {
 
     /// Advances what time alone moves, and answers when it must run next.
     fn tick(&mut self, shared: &Arc<Shared>, now: Instant) -> Option<Instant> {
+        self.expire_fork_input(now);
         let settled = self
             .panes
             .iter()
@@ -2252,9 +2284,18 @@ impl Inner {
         let facts = self.facts.values().map(InputFacts::deadline);
         panes
             .chain(facts)
-            .chain([self.refusals.deadline()])
+            .chain([self.refusals.deadline(), self.requests.deadline()])
             .flatten()
             .min()
+    }
+
+    fn expire_fork_input(&mut self, now: Instant) {
+        for request in self.requests.expire_forks(now) {
+            self.reports.push(TerminalReport::RequestDiscarded {
+                request,
+                reason: "timeout".to_owned(),
+            });
+        }
     }
 }
 
