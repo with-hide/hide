@@ -1501,11 +1501,39 @@ fn the_report_says_whether_the_codex_has_the_daemon_setting() {
         "a read-only status answers it too"
     );
 
-    // A Codex that fails to answer.
+    // A Codex that fails to answer: no answer, and why for the core's log.
     let mut fixture = Fixture::new();
     fake_codex(&mut fixture, "true");
     std::fs::write(fixture.home().join("codex-fails"), "").unwrap();
-    assert_eq!(status(&fixture.target).codex_daemon, None);
+    let report = status(&fixture.target);
+    assert_eq!(report.codex_daemon, None);
+    assert_eq!(
+        report.codex_capability_unread,
+        Some(CodexReadFailure::Exited { code: 1 })
+    );
+}
+
+/// What reaches the core's log is the cause and the exit code alone, and a
+/// read Hide stopped because it is quitting is nothing to log.
+#[test]
+fn an_unread_codex_reports_its_cause_but_not_a_read_stopped_by_quitting() {
+    use hide_agent_hooks::codex_daemon::{ReadFailure, SwitchFailure};
+    assert_eq!(
+        codex_read_failure(ReadFailure::Run(SwitchFailure::Stopped)),
+        None
+    );
+    assert_eq!(
+        codex_read_failure(ReadFailure::Exited { code: Some(134) }),
+        Some(CodexReadFailure::Exited { code: 134 })
+    );
+    assert_eq!(
+        codex_read_failure(ReadFailure::Exited { code: None }),
+        Some(CodexReadFailure::Signaled)
+    );
+    assert_eq!(
+        serde_json::to_value(CodexReadFailure::Exited { code: 134 }).unwrap(),
+        serde_json::json!({"cause": "exited", "code": 134})
+    );
 }
 
 #[test]

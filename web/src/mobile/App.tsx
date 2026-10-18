@@ -221,7 +221,9 @@ const LINE_TONE = { warning: "text-warning", news: "text-foreground", subtle: "t
 function AgentRow({ agent }: { agent: PhoneAgent }) {
   const { t } = useInterfaceTranslation();
   const elapsed = useElapsed(agent.changed_at_unix_ms);
-  const label = [markWords(t, agent), agent.title, agentProductName(agent.agent_kind), agent.place, agent.device_label, elapsed].filter(Boolean).join(", ");
+  // Opening a row on the phone does not wake it, so the desktop's "wakes when opened" is not said here.
+  const words = agent.status_code === "sleeping" && agent.mark === "asleep" ? t("panes.sleep.sleeping") : markWords(t, agent);
+  const label = [words, agent.title, agentProductName(agent.agent_kind), agent.place, agent.device_label, elapsed].filter(Boolean).join(", ");
   return (
     <li className={rowDimmed(agent) ? "opacity-(--opacity-dimmed)" : undefined}>
       <button

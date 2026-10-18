@@ -9,15 +9,17 @@
 // reply are on every detail, whatever its group.
 
 import { AnsiUp } from "ansi_up";
-import { ArrowLeftIcon } from "lucide-react";
+import { ArrowLeftIcon, CircleAlertIcon, MoonIcon } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import { Elapsed } from "../components/elapsed";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { Button } from "../components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
+import { wakingLine } from "../sleep";
+import type { AgentSleep } from "../snapshot";
 import { renderMarkdown } from "./markdown";
 import { AgentHead, DETAIL_INSET, Place } from "./parts";
-import { loadMore, loadOlder, onReplyResult, sendKey, sendReply, setView } from "./connection";
+import { loadMore, loadOlder, onReplyResult, sendKey, sendReply, setView, wakeAgent } from "./connection";
 import {
   MAX_MESSAGES,
   MAX_REPLY_CHARS,
@@ -30,6 +32,8 @@ import {
   rowsProblem,
   type Conversation,
   type ConversationMessage,
+  sleepTarget,
+  type AgentKey,
   type DetailView,
 } from "./protocol";
 import { agentOf, usePhone } from "./store";
@@ -65,6 +69,8 @@ export function Detail({ onBack }: { onBack: () => void }) {
   const showsConversation = detail?.view === "conversation" && conversation !== "none";
   // A pane that left the list is gone for the reply bar too (B28).
   const gone = rows?.state === "gone" || (groups !== null && !agent);
+  // The shell under a sleeping agent is not who the operator was talking to: its state stands in the terminal's place and nothing can be sent.
+  const sleep = agent?.sleep ?? null;
   const rowsNote = !showsConversation && rows ? rowsProblem(rows.state) : null;
   const note = rowsNote ?? (gone && (showsConversation || !rows) ? rowsProblem("gone") : null);
   return (
@@ -78,7 +84,7 @@ export function Detail({ onBack }: { onBack: () => void }) {
               {t("mobile.list")}
             </button>
           </div>
-          {hasConversation && detail ? (
+          {hasConversation && detail && !sleep ? (
             <Tabs value={detail.view} onValueChange={(value) => setView(value as DetailView)} className="shrink-0">
               <TabsList>
                 <TabsTrigger value="conversation" className="h-(--size-touch-target) px-md text-title" data-phone-view="conversation">
@@ -111,7 +117,9 @@ export function Detail({ onBack }: { onBack: () => void }) {
           {noticeText(t, note)}
         </p>
       ) : null}
-      {!showsConversation ? (
+      {sleep && detail ? (
+        <SleepState sleep={sleep} agentKey={detail.key} />
+      ) : !showsConversation ? (
         <Scrollback text={rows?.text ?? ""} more={rows?.more ?? false} lines={rows?.lines ?? 0} loading={!rows} />
       ) : conversation ? (
         <ConversationLog conversation={conversation} />
@@ -120,8 +128,68 @@ export function Detail({ onBack }: { onBack: () => void }) {
           <p className="text-body text-muted-foreground">{t("mobile.loading")}</p>
         </div>
       )}
-      <ReplyBar disabled={gone || !connected} />
+      <ReplyBar disabled={gone || !connected || sleep !== null} />
     </main>
+  );
+}
+
+/**
+ * What the detail shows in place of the terminal while the agent sleeps, in the
+ * desktop pane's words (`SleepBody`): Sleeping with Wake agent, Waking…, or the
+ * resume failure with its reason, Retry and Start new session.
+ */
+function SleepState({ sleep, agentKey }: { sleep: AgentSleep; agentKey: AgentKey }) {
+  const { t } = useInterfaceTranslation();
+  const connected = usePhone((s) => s.connected);
+  const action = usePhone((s) => s.sleepAction);
+  const mine = action?.sleepId === sleepTarget(agentKey) ? action : null;
+  const blocked = !connected || !!mine?.requestId;
+  return (
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-sm bg-background px-lg text-center" data-phone-sleep={sleep.state}>
+      {sleep.state === "failed" ? (
+        <>
+          <CircleAlertIcon aria-hidden="true" className="size-(--size-icon-lg) text-destructive" />
+          <p className="text-title text-foreground">{t("panes.sleep.resumeFailed")}</p>
+          {sleep.reason ? (
+            <p className="max-w-full text-body text-muted-foreground" role="alert">
+              {sleep.reason}
+            </p>
+          ) : null}
+        </>
+      ) : (
+        <>
+          <MoonIcon aria-hidden="true" className="size-(--size-icon-lg) text-muted-foreground" />
+          <p className="text-title text-foreground" role={sleep.state === "waking" ? "status" : undefined}>
+            {sleep.state === "waking" ? t("panes.sleep.waking") : t("panes.sleep.sleeping")}
+          </p>
+          {sleep.state === "waking" ? (
+            <p className="text-body text-muted-foreground">{wakingLine(sleep, Date.now(), t)}</p>
+          ) : sleep.progress ? (
+            <p className="max-w-full truncate text-body text-muted-foreground">{sleep.progress}</p>
+          ) : null}
+        </>
+      )}
+      {sleep.state === "sleeping" ? (
+        <Button className="mt-xs h-(--size-touch-target) px-lg text-title" disabled={blocked} data-phone-wake="wake" onClick={() => wakeAgent(agentKey)}>
+          {t("panes.sleep.wake")}
+        </Button>
+      ) : null}
+      {sleep.state === "failed" ? (
+        <div className="mt-xs flex items-center gap-sm">
+          <Button variant="secondary" className="h-(--size-touch-target) px-lg text-title" disabled={blocked} data-phone-wake="retry" onClick={() => wakeAgent(agentKey)}>
+            {t("common.retry")}
+          </Button>
+          <Button variant="outline" className="h-(--size-touch-target) px-lg text-title" disabled={blocked} data-phone-wake="fresh" onClick={() => wakeAgent(agentKey, true)}>
+            {t("panes.sleep.newSession")}
+          </Button>
+        </div>
+      ) : null}
+      {mine?.error ? (
+        <p role="alert" className="text-body text-destructive" data-phone-wake-error="true">
+          {t("panes.sleep.requestFailed")}
+        </p>
+      ) : null}
+    </div>
   );
 }
 

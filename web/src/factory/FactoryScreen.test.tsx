@@ -487,7 +487,7 @@ it("draws the Task's activity with a failed check's log and a report's unchecked
 });
 
 it("keeps the graph in columns and logs why when the layout worker cannot start (D-08)", async () => {
-  // jsdom has no Worker, so the layered layout refuses the way a failed worker does.
+  // jsdom has no Worker, so the layered layout refuses at once, the way a failed worker does.
   const graphed = factory({
     columns: [{ column: "before", label: "waiting", cards: [card("T-1", "waiting", { column: "before" }), card("T-2", "waiting", { column: "before" })] }],
     graph: { nodes: ["T-1", "T-2"], edges: [["T-1", "T-2"]], unrelated: [] },

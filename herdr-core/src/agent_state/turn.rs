@@ -1395,6 +1395,46 @@ mod row_tests {
         assert_eq!(agent.mark, RowMark::Going);
     }
 
+    /// The phone draws a sleeping pane as the desktop does and refuses its
+    /// input, so the core's own sleep state, its failure reason included,
+    /// reaches the projection whole; an awake row carries none.
+    #[test]
+    fn the_phone_projection_carries_the_sleep_the_core_published() {
+        let mut agent = row();
+        let rest = json!({"navigator": {"agents": [&agent], "workspaces": []}});
+        let phone = super::super::phone::project(&rest, "local");
+        assert_eq!(phone.agents().next().expect("the awake row").sleep, None);
+
+        agent.sleep = Some(crate::model::AgentSleepSnapshot {
+            state: "failed".into(),
+            reason: Some("The conversation file is gone".into()),
+            since_unix_ms: 7,
+            progress: Some("파서를 나눴어요".into()),
+        });
+        derive_from_axes(&mut agent);
+        let rest = json!({"navigator": {"agents": [&agent], "workspaces": []}});
+        let phone = super::super::phone::project(&rest, "local");
+        let sleep = phone
+            .agents()
+            .next()
+            .and_then(|listed| listed.sleep.clone())
+            .expect("the failed wake on the phone");
+        assert_eq!(
+            (
+                sleep.state.as_str(),
+                sleep.reason.as_deref(),
+                sleep.since_unix_ms,
+                sleep.progress.as_deref(),
+            ),
+            (
+                "failed",
+                Some("The conversation file is gone"),
+                7,
+                Some("파서를 나눴어요"),
+            )
+        );
+    }
+
     /// status-marks D-21, B31: a sleeping agent keeps a moon and is counted on
     /// no badge, whatever its turn was.
     #[test]

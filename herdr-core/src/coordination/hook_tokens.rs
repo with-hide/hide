@@ -469,6 +469,7 @@ mod tests {
     fn agent(pane: &str, session: Option<&str>, tokens: &[(&str, &str)]) -> ProjectedAgent {
         ProjectedAgent {
             pane_id: pane.into(),
+            terminal_id: format!("term-{pane}"),
             name: None,
             workspace_id: "w1".into(),
             tab_id: "w1:t1".into(),
@@ -485,6 +486,7 @@ mod tests {
             lineage_session: None,
             state_change_seq: 1,
             completion_seq: None,
+            launch_pending: false,
             tokens: tokens
                 .iter()
                 .map(|(key, value)| ((*key).to_owned(), json!(value)))

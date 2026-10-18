@@ -339,6 +339,24 @@ impl Runtime {
                 "reason": reason,
             }));
         }
+        // Every Codex start on this machine is refused while its Codex is
+        // unread (`codex_launch::CAPABILITY_UNKNOWN`); why goes to the log
+        // when it appears or changes, as the cause and exit code alone.
+        let unread_before = self
+            .kit_states
+            .get(device_id)
+            .and_then(|state| state.codex_capability_unread);
+        if let Some(failure) = report.codex_capability_unread
+            && unread_before != Some(failure)
+        {
+            crate::diagnostic!(serde_json::json!({
+                "component": "kit",
+                "kind": "codex_capability_unread",
+                "device_id": device_id,
+                "agent": "codex",
+                "failure": failure,
+            }));
+        }
         // Only the pass that carried the operator's request answers it; a
         // read that lands before or after keeps what the last one said.
         match &report.codex_daemon_off {

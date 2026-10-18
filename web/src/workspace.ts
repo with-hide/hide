@@ -5,6 +5,7 @@
 // strip); these functions only read them, so they are testable without a
 // page. The View areas' own rules are `viewLayout.ts`.
 
+import { findArea } from "./areaLayout";
 import type { Checkout, DetailSlot, SnapshotRest, StripTab, ViewLayoutSnapshot } from "./snapshot";
 
 export { TOOLS, type Tool } from "./laneTools";
@@ -70,6 +71,8 @@ export type LaneSizes = {
   laneMin: number;
   /** The lane's document width until the operator resizes it. */
   laneIdeal: number;
+  /** The document width a page opened in the lane widens it to (`pageLaneWidth`). */
+  lanePage: number;
   treeMin: number;
   /** The tree column's width until the operator resizes it. */
   treeIdeal: number;
@@ -196,6 +199,21 @@ export function laneLanding(input: { x: number; body: number; frame: LaneFrame; 
 }
 
 /**
+ * The document width to store when a page opens in the lane (PRD
+ * browser-width-zoom D-02, D-21), or null to leave it: a lane narrower than
+ * `lanePage` widens to it, pinned or not, as far as Agent Views keeps its
+ * minimum beside the lane and its tree; it never narrows the lane.
+ */
+export function pageLaneWidth(input: { laneWidth: number | null; tree: number | null; body: number; sizes: LaneSizes }): number | null {
+  const { body, sizes } = input;
+  const stored = Math.max(sizes.laneMin, input.laneWidth ?? sizes.laneIdeal);
+  if (body <= 0 || stored >= sizes.lanePage) return null;
+  const tree = input.tree === null ? 0 : input.tree + sizes.divider;
+  const width = Math.floor(Math.min(sizes.lanePage, body - sizes.divider - tree - sizes.agentMin));
+  return width > stored ? width : null;
+}
+
+/**
  * Where the divider between the tree and the document, dragged to `x`
  * pixels from the lane's left edge, lands: the two trade width, so the lane
  * keeps its width and no terminal resizes; each keeps its minimum. An
@@ -216,6 +234,29 @@ export function workspaceViewOf(rest: SnapshotRest | null): WorkspaceView | null
 /** Herdr tabs: the Agent area's strip, in the core's order. */
 export function agentEntries(checkout: Checkout): StripTab[] {
   return checkout.strip.filter((entry) => entry.kind === "herdr");
+}
+
+/**
+ * The page in front of the active View area, as its Workspace, display and
+ * load stamp, so a page that came forward or loaded again reads as new; null
+ * when a file, a diff, a new tab or nothing is there.
+ */
+function frontPage(view: Pick<WorkspaceView, "device_id" | "path" | "layout"> | null | undefined): string | null {
+  const layout = view?.layout;
+  if (!layout) return null;
+  const area = findArea(layout.root, layout.active_area);
+  const display = area?.displays.find((row) => row.id === area.active);
+  return display?.kind === "browser" && display.url ? `${view.device_id}\u0000${view.path}\u0000${display.id}\u0000${display.load ?? 0}` : null;
+}
+
+/**
+ * Whether a lane call put a page in front (PRD browser-width-zoom D-04): the
+ * active area's front display is a page that was not in front, or loaded
+ * again, before the call. The rail's Files or a reveal leaves it as it was.
+ */
+export function pageCalled(previous: Pick<WorkspaceView, "device_id" | "path" | "layout"> | null | undefined, view: Pick<WorkspaceView, "device_id" | "path" | "layout"> | null | undefined): boolean {
+  const page = frontPage(view);
+  return page !== null && page !== frontPage(previous);
 }
 
 /** What the page has read of the core's lane calls. */

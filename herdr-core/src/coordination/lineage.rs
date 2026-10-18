@@ -727,6 +727,7 @@ mod tests {
     fn agent(record: &AgentRecord, tokens: BTreeMap<String, Value>) -> ProjectedAgent {
         ProjectedAgent {
             pane_id: record.pane.clone(),
+            terminal_id: format!("term-{}", record.pane),
             name: record.name.clone(),
             workspace_id: "fixture".into(),
             tab_id: "fixture:tab".into(),
@@ -740,6 +741,7 @@ mod tests {
             lineage_session: record.actor.session.clone(),
             state_change_seq: 1,
             completion_seq: None,
+            launch_pending: false,
             tokens,
         }
     }

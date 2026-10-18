@@ -2071,6 +2071,107 @@ fn branch_migration_receipt_preserves_core_focus() {
     );
 }
 
+/// A start made from the phone says so on the task slot, and a start with
+/// no such word (⌘N, an issue's Start, a pull request's hand-off) does not.
+#[test]
+fn agent_start_in_checkout_records_whether_it_stays_behind() {
+    let mut runtime = runtime();
+    runtime.ingest_session(Ok(context_payload()));
+    let checkout = runtime.snapshot.navigator.workspaces[0].checkouts[0].clone();
+    let start = |extra: serde_json::Value| {
+        let mut payload = serde_json::json!({"checkout_path": checkout.path, "provider": "claude"});
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": "agent_start_in_checkout",
+            "payload": payload,
+        }))
+        .unwrap()
+    };
+    assert!(runtime.dispatch_json(&start(serde_json::json!({}))));
+    assert!(
+        !runtime
+            .snapshot
+            .task_operation
+            .as_ref()
+            .unwrap()
+            .stays_behind
+    );
+    assert!(runtime.dispatch_json(&start(serde_json::json!({"stay_behind": true}))));
+    assert!(
+        runtime
+            .snapshot
+            .task_operation
+            .as_ref()
+            .unwrap()
+            .stays_behind
+    );
+    assert!(runtime.dispatch_json(&start(serde_json::json!({"stay_behind": false}))));
+    assert!(
+        !runtime
+            .snapshot
+            .task_operation
+            .as_ref()
+            .unwrap()
+            .stays_behind
+    );
+}
+
+/// An agent started from the phone makes its tab and lists it, but the
+/// desktop's keyboard focus, terminal and selected pane stay where the
+/// operator left them; the same start from the desktop takes them.
+#[test]
+fn a_task_that_stays_behind_leaves_the_desktop_focus_where_it_was() {
+    let outcome = || live::WorktreeTaskOutcome {
+        path: "/fixture/repo".into(),
+        pane_id: "new:pane".into(),
+        created_tab_id: None,
+        purpose_error: None,
+        unconfirmed_purpose_token: None,
+        issue_error: None,
+        shell: crate::agent_start::ShellStart::Plain,
+    };
+    for (stays_behind, shown) in [(false, "new:pane"), (true, "existing:pane")] {
+        let mut runtime = runtime();
+        runtime.snapshot.terminal.pane_id = Some("existing:pane".into());
+        runtime.snapshot.focused.surface = Surface::Terminal;
+        runtime.snapshot.focused.pane_id = Some("existing:pane".into());
+        runtime.snapshot.ui_state.selected_pane_id = Some("existing:pane".into());
+        let id = runtime
+            .begin_task_operation(
+                "agent_start",
+                Some("/fixture/repo".into()),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        runtime
+            .snapshot
+            .task_operation
+            .as_mut()
+            .unwrap()
+            .stays_behind = stays_behind;
+
+        assert!(runtime.ingest_task_operation_result(id, Ok(outcome())));
+        let operation = runtime.snapshot.task_operation.as_ref().unwrap();
+        assert_eq!(operation.phase, "ready");
+        assert_eq!(
+            operation.pane_id.as_deref(),
+            Some("new:pane"),
+            "the start's answer names its pane either way"
+        );
+        assert_eq!(runtime.snapshot.terminal.pane_id.as_deref(), Some(shown));
+        assert_eq!(runtime.snapshot.focused.pane_id.as_deref(), Some(shown));
+        assert_eq!(
+            runtime.snapshot.ui_state.selected_pane_id.as_deref(),
+            Some(shown)
+        );
+    }
+}
+
 /// B16 and B19. A created checkout starts collapsed, and a purpose mirror
 /// failure is diagnostic detail on an otherwise ready creation receipt.
 #[test]

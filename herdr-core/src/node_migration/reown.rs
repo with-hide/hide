@@ -21,8 +21,8 @@ use serde_json::{Map, Value};
 
 use super::{
     CORE_STATE, DELIVERY_LEDGER, FACTORY, KEYS, LABELS, LINKS, LOCAL_ISSUES, MARKER_FILE,
-    MARKER_VERSION, Marker, Moves, Refusal, SESSION_SEARCH, WORKSPACE_VIEWS, read_json,
-    read_marker, write,
+    MARKER_VERSION, Marker, Moves, PROJECT_MEMORY, Refusal, SESSION_SEARCH, WORKSPACE_VIEWS,
+    read_json, read_marker, write,
 };
 use crate::node::NodeId;
 
@@ -252,6 +252,13 @@ pub fn reown(staging: &Path, change: &OwnerChange, ids: &IdTable) -> Result<Reow
         outcome.files.push(FACTORY.to_owned());
     }
 
+    let memory = staging.join(PROJECT_MEMORY);
+    if memory.is_file()
+        && reown_memory(&memory, change).map_err(|reason| refuse(&memory, reason))?
+    {
+        outcome.files.push(PROJECT_MEMORY.to_owned());
+    }
+
     let marker = serde_json::to_vec(&Marker {
         version: MARKER_VERSION,
         node: change.new_owner.clone(),
@@ -375,8 +382,8 @@ impl Mapper<'_> {
     }
 
     /// The rows a pattern cannot express: the owner's path-keyed settings
-    /// and the `device_*` maps beside them, the device registrations, the
-    /// labels, the ledger's host scopes and spawn machines, the local issues
+    /// and the `device_*` maps beside them, the Project settings, the device
+    /// registrations, the labels, the ledger's host scopes and spawn machines, the local issues
     /// and the View layouts' tabs.
     fn whole_file(&mut self, file: &str, value: &mut Value) -> Result<(), String> {
         match file {
@@ -397,6 +404,7 @@ impl Mapper<'_> {
                 {
                     recent.retain(|row| row.get("checkout_id").is_some_and(Value::is_string));
                 }
+                self.project_settings(value)?;
                 self.device_registrations(value)
             }
             WORKSPACE_VIEWS => {
@@ -439,6 +447,48 @@ impl Mapper<'_> {
             LOCAL_ISSUES => swap_own(value, "projects", "devices", self.change),
             _ => Ok(()),
         }
+    }
+
+    /// A Project's choices are kept at the digest of the id of the machine
+    /// that holds it and the project's root, and name that id
+    /// (`project_settings::key`). A machine the move gives another id takes
+    /// its records with it: the record names the new id and moves to the
+    /// digest of it, because a core reads a record only at the key its
+    /// device and root make. The old owner's records are the core's own
+    /// choices becoming a device's, the new owner's a device's becoming the
+    /// core's own, and a third machine's stay as they are.
+    fn project_settings(&mut self, value: &mut Value) -> Result<(), String> {
+        let Some(records) = value
+            .as_object_mut()
+            .and_then(|object| object.get_mut("project_settings"))
+        else {
+            return Ok(());
+        };
+        let records = match records {
+            Value::Object(records) => std::mem::take(records),
+            Value::Null => return Ok(()),
+            _ => return Err("project_settings is not a map".to_owned()),
+        };
+        let mut moved = Map::new();
+        for (key, mut record) in records {
+            let device = record.get("device_id").and_then(Value::as_str);
+            let new_key = match device.map(|device| self.map(Moves::Device, device)) {
+                Some(Mapped::To(device)) => {
+                    let Some(root) = record.get("root").and_then(Value::as_str) else {
+                        return Err(format!("/project_settings/{key} names no root"));
+                    };
+                    let new_key = crate::project_settings::key(&device, root);
+                    record["device_id"] = Value::String(device);
+                    new_key
+                }
+                _ => key,
+            };
+            if moved.insert(new_key.clone(), record).is_some() {
+                return Err(format!("two project settings would both be {new_key}"));
+            }
+        }
+        value["project_settings"] = Value::Object(moved);
+        Ok(())
     }
 
     /// A spawn's `machine` is the device its child lives on when that is not
@@ -808,6 +858,33 @@ fn reown_factory(staging: &Path, change: &OwnerChange) -> Result<bool, String> {
         .map_err(|error| error.to_string())
 }
 
+/// Project Memory (PRD core-host-node-move): a Project is stored under the
+/// id of its machine and the digest of that id and its root, and so are the
+/// cards, receipts and cursors that follow it. A machine the move gives
+/// another id takes its Projects with it, by the same re-key the layer-1
+/// conversion makes (`MemoryStore::convert_device`), so a Project's Memory
+/// is the new core's for the same Project and not an empty one beside it.
+/// A store that does not open, or a Project already stored under the id a
+/// move would give, stops the move: the new core would otherwise start a
+/// Memory of its own beside the old one.
+fn reown_memory(path: &Path, change: &OwnerChange) -> Result<bool, String> {
+    let store = crate::runtime::memory::open_memory_store(path)
+        .map_err(|error| format!("Project Memory does not open: {error}"))?;
+    let mut changed = false;
+    for (from, to) in [
+        (&change.new_owner_was, &change.new_owner),
+        (&change.old_owner, &change.old_owner_as),
+    ] {
+        if from != to {
+            let moved = store
+                .convert_device(from, to)
+                .map_err(|error| format!("Project Memory of {from}: {error}"))?;
+            changed |= !moved.is_empty();
+        }
+    }
+    Ok(changed)
+}
+
 /// What a pattern reaches: a value, or the object whose keys it names.
 enum Slot<'a> {
     Value(&'a mut Value),
@@ -1023,6 +1100,60 @@ mod tests {
         crate::device_catalog::checkout_id(device, path)
     }
 
+    /// The id Project Memory and the settings keep a project under.
+    fn device_digest(device: &str, root: &str) -> String {
+        crate::project_settings::key(device, root)
+    }
+
+    /// Each Project of the Memory store with its machine, and the project
+    /// id its receipt cursor names, in id order.
+    fn memory_projects(state: &Path) -> Vec<(String, String, String)> {
+        let connection = rusqlite::Connection::open_with_flags(
+            state.join(PROJECT_MEMORY),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let mut statement = connection
+            .prepare(
+                "SELECT p.id, p.device_id, c.project_id FROM projects p \
+                 JOIN receipt_cursors c ON c.project_id=p.id ORDER BY p.id",
+            )
+            .unwrap();
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    /// A Project's choices as the core saves them, with the protections a
+    /// device's project can carry.
+    fn project_settings(device: &str, root: &str) -> Value {
+        json!({
+            "version": 2, "device_id": device, "root": root,
+            "repository": {"mode": "repository", "repository": "acme/p"},
+            "issue_source": "github", "new_work": "worktree",
+            "base_branch": {"mode": "branch", "branch": "trunk"},
+            "guardrails": {"git_commands": true},
+        })
+    }
+
+    /// The saved choices of the projects `(device, root)`, each at the key
+    /// its device and root make.
+    fn settings_of(projects: &[(&str, &str)]) -> Value {
+        Value::Object(
+            projects
+                .iter()
+                .map(|(device, root)| {
+                    (
+                        crate::project_settings::key(device, root),
+                        project_settings(device, root),
+                    )
+                })
+                .collect(),
+        )
+    }
+
     /// The table the MacBook's core makes before it stops.
     fn forward_ids() -> IdTable {
         let own = own_workspace();
@@ -1183,6 +1314,8 @@ mod tests {
                 "expanded_paths": [M_ROOT],
                 "device_expanded_paths": {ALIAS: [C_ROOT], X: [X_ROOT]},
                 "selected_path": M_ROOT,
+                "operator_tab_names": keyed("tab", json!("review")),
+                "project_settings": settings_of(&[(M, M_ROOT), (ALIAS, C_ROOT), (X, X_ROOT)]),
                 "project_base_branches": {M_ROOT: "main", C_ROOT: "trunk", X_ROOT: "dev"},
                 "project_issue_sources": {M_ROOT: "github", C_ROOT: "local", X_ROOT: "github"},
                 "expanded_inactive_checkout_project_paths": [M_ROOT, C_ROOT, X_ROOT],
@@ -1295,6 +1428,23 @@ mod tests {
             json!({"version": 1, "projects": {M_ROOT: [{"number": 1}]}, "devices": {ALIAS: {C_ROOT: [{"number": 2}]}}}),
         );
         write(MARKER_FILE, json!({"version": 1, "node": M}));
+        let memory = hide_memory::MemoryStore::open(&state.join(PROJECT_MEMORY)).unwrap();
+        for (device, root) in [(M, M_ROOT), (ALIAS, C_ROOT), (X, X_ROOT)] {
+            memory
+                .ensure_project(&device_digest(device, root), Path::new(root), device)
+                .unwrap();
+        }
+        drop(memory);
+        let connection = rusqlite::Connection::open(state.join(PROJECT_MEMORY)).unwrap();
+        for (device, root) in [(M, M_ROOT), (ALIAS, C_ROOT), (X, X_ROOT)] {
+            connection
+                .execute(
+                    "INSERT INTO receipt_cursors VALUES(?1,'claude','s1',0,x'',NULL,1,0)",
+                    [device_digest(device, root)],
+                )
+                .unwrap();
+        }
+        drop(connection);
         let (links, _) = crate::links::store::LinkStore::open(&state.join(LINKS)).unwrap();
         links
             .set_meta(crate::links::worker::LISTED_AT, "100")
@@ -1405,6 +1555,26 @@ mod tests {
             core["device_expanded_paths"],
             json!({M: [M_ROOT], X: [X_ROOT]})
         );
+        // A Project's choices follow their machine to the id it has on the
+        // new core, record and key together, so the new core reads each one
+        // where it looks: the mini's become the core's own, the MacBook's
+        // keep the node id it links in by, a third machine's stay.
+        assert_eq!(
+            core["project_settings"],
+            settings_of(&[(M, M_ROOT), (C, C_ROOT), (X, X_ROOT)])
+        );
+        // Project Memory follows its machine the same way: the mini's
+        // Projects, cards and cursors become the core's own, the MacBook's
+        // keep the node id it links in by.
+        let mut expected: Vec<(String, String, String)> = [(M, M_ROOT), (C, C_ROOT), (X, X_ROOT)]
+            .iter()
+            .map(|(device, root)| {
+                let id = device_digest(device, root);
+                (id.clone(), (*device).to_owned(), id)
+            })
+            .collect();
+        expected.sort();
+        assert_eq!(memory_projects(state), expected);
         // Settings keyed by a project path are read the same on either
         // core, whichever machine holds the project: they stay.
         assert_eq!(core["selected_path"], json!(M_ROOT));
@@ -1648,6 +1818,7 @@ mod tests {
             MARKER_FILE,
         ];
         let original: Vec<Value> = files.iter().map(|file| read(&state.join(file))).collect();
+        let memory = memory_projects(state);
         reown(state, &forward(), &forward_ids()).unwrap();
         // The mini's core takes the MacBook's records into memory and, when it
         // stops for the move back, writes them to `moved` again.
@@ -1678,6 +1849,7 @@ mod tests {
                 "{file}"
             );
         }
+        assert_eq!(memory_projects(state), memory, "Project Memory");
         let links = crate::links::store::LinkStore::open(&state.join(LINKS))
             .unwrap()
             .0;
@@ -1779,6 +1951,44 @@ mod tests {
         assert_eq!(refusal.file, state.join(CORE_STATE));
         assert!(
             refusal.reason.contains("/new_feature_panes/focus"),
+            "{refusal}"
+        );
+        assert_eq!(
+            read(&state.join(MARKER_FILE))["node"],
+            json!(M),
+            "the owner is unchanged"
+        );
+    }
+
+    #[test]
+    fn a_project_setting_that_cannot_be_given_its_new_key_stops_the_move() {
+        let dir = macbook_folder();
+        let state = dir.path();
+        let mut core = read(&state.join(CORE_STATE));
+        core["project_settings"][crate::project_settings::key(ALIAS, C_ROOT)]
+            .as_object_mut()
+            .unwrap()
+            .remove("root");
+        std::fs::write(state.join(CORE_STATE), serde_json::to_vec(&core).unwrap()).unwrap();
+        let refusal = reown(state, &forward(), &forward_ids()).unwrap_err();
+        assert_eq!(refusal.file, state.join(CORE_STATE));
+        assert!(refusal.reason.contains("names no root"), "{refusal}");
+    }
+
+    #[test]
+    fn a_memory_project_the_move_would_land_on_stops_it_and_names_the_store() {
+        let dir = macbook_folder();
+        let state = dir.path();
+        // The core already holds a Project at the id the mini's would take.
+        let store = hide_memory::MemoryStore::open(&state.join(PROJECT_MEMORY)).unwrap();
+        store
+            .ensure_project(&device_digest(C, C_ROOT), Path::new(C_ROOT), C)
+            .unwrap();
+        drop(store);
+        let refusal = reown(state, &forward(), &forward_ids()).unwrap_err();
+        assert_eq!(refusal.file, state.join(PROJECT_MEMORY));
+        assert!(
+            refusal.reason.contains("node_conversion_conflict"),
             "{refusal}"
         );
         assert_eq!(

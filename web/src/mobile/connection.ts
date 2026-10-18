@@ -16,6 +16,7 @@ import {
   refusalOf,
   replyProblem,
   sameKey,
+  sleepTarget,
   type AgentKey,
   type DetailView,
   type PhoneMessage,
@@ -361,13 +362,24 @@ function newRequestId(): string {
   return `${Date.now().toString(36)}-${requestCounter}-${Array.from(random, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
+/** One sleep command at a time; its answer or the timer settles the pending state. */
+function sendSleepCommand(target: string, requestId: string, message: PhoneMessage): void {
+  if (usePhone.getState().sleepAction?.requestId) return;
+  const sent = send(message);
+  patch({ sleepAction: { sleepId: target, requestId: sent ? requestId : null, error: !sent } });
+  if (sent) sleepTimer = window.setTimeout(failPendingSleep, 10_000);
+}
+
 /** A retry keeps the SleepId; a lost answer never triggers an automatic resend. */
 export function actOnSleepingSession(sleepId: string, type: "wake_sleeping_session" | "check_sleeping_session"): void {
-  if (usePhone.getState().sleepAction?.requestId) return;
   const requestId = newRequestId();
-  const sent = send({ type, sleep_id: sleepId, request_id: requestId });
-  patch({ sleepAction: { sleepId, requestId: sent ? requestId : null, error: !sent } });
-  if (sent) sleepTimer = window.setTimeout(failPendingSleep, 10_000);
+  sendSleepCommand(sleepId, requestId, { type, sleep_id: sleepId, request_id: requestId });
+}
+
+/** Wake agent, Retry and Start new session for a pane whose agent sleeps: the desktop's own wake, in the same pane. */
+export function wakeAgent(key: AgentKey, fresh = false): void {
+  const requestId = newRequestId();
+  sendSleepCommand(sleepTarget(key), requestId, { type: "wake_agent", request_id: requestId, device_id: key.device_id, pane_id: key.pane_id, ...(fresh ? { fresh } : {}) });
 }
 
 /** Sends a reply with Enter after it; the caller clears its field only on success (B26, B27). */

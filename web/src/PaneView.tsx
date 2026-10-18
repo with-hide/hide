@@ -19,7 +19,7 @@ import { chordLabel, commandLabel } from "./shortcutLabels";
 import { keySystem } from "./host";
 import { useInterfaceTranslation } from "./i18n/client";
 import { modChord, TERMINAL_COPY, TERMINAL_PASTE } from "./shortcuts";
-import { wakingLine } from "./sleep";
+import { wakeFailureReason, wakingLine } from "./sleep";
 import type { AgentSleep, AgentStatusCode, PaneRow, RowMark, TerminalPane } from "./snapshot";
 import { PaneNoticeBody } from "./PaneNotice";
 import { caughtUp } from "./operatorFocus";
@@ -122,7 +122,7 @@ function SleepBody({ paneId, sleep, actions }: { paneId: string; sleep: AgentSle
           <p className="text-subhead text-foreground">{t("panes.sleep.resumeFailed")}</p>
           {sleep.reason ? (
             <p className="max-w-full text-caption text-muted-foreground" role="alert">
-              {sleep.reason}
+              {wakeFailureReason(sleep, t)}
             </p>
           ) : null}
           <div className="mt-xs flex items-center gap-sm">

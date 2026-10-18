@@ -262,6 +262,7 @@ fn a_fresh_process_role() {
 /// short-lived process start this way, and a `gh` missed there reads as not
 /// installed.
 #[test]
+#[allow(clippy::disallowed_methods)] // env_clear: a login item's or an SSH exec's environment, on Unix
 fn a_fresh_process_runs_what_only_the_login_shell_finds_on_its_first_command() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");

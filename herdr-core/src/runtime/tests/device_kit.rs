@@ -114,6 +114,7 @@ pub(super) fn report(states: &[(ComponentId, ComponentState)]) -> KitReport {
         codex_daemon_on: None,
         codex_daemon_running: None,
         codex_daemon_unreadable: None,
+        codex_capability_unread: None,
         codex_daemon_off: None,
         herdr: None,
     }

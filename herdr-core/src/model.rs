@@ -863,6 +863,9 @@ pub struct KitSnapshot {
     /// The daemon answer the kit could not read, for the log only.
     #[serde(skip)]
     pub codex_daemon_unreadable: Option<String>,
+    /// Why the kit had no answer for `codex_daemon`, for the log only.
+    #[serde(skip)]
+    pub codex_capability_unread: Option<hide_kit::CodexReadFailure>,
     /// How the last turn-off of the shared server ended, until the next one
     /// starts; the pane popover reads it (B30).
     pub codex_daemon_off: Option<CodexDaemonOffSnapshot>,
@@ -1044,6 +1047,7 @@ impl KitSnapshot {
             codex_daemon_on: report.codex_daemon_on,
             codex_daemon_running: report.codex_daemon_running,
             codex_daemon_unreadable: report.codex_daemon_unreadable.clone(),
+            codex_capability_unread: report.codex_capability_unread,
             codex_daemon_off: report
                 .codex_daemon_off
                 .as_ref()
@@ -5311,6 +5315,11 @@ pub struct TaskOperationSnapshot {
     /// task and never another window's or phone's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    /// The task came from a surface that is not the operator's own screen
+    /// (a phone start): its tab is made without taking the screen, the
+    /// keyboard or Herdr's focus. The core's own fact; no shell reads it.
+    #[serde(skip)]
+    pub stays_behind: bool,
 }
 
 /// The one repository clone Add a project started, and how far it got.

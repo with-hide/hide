@@ -1003,6 +1003,20 @@ impl Inner {
         else {
             return not_written(self);
         };
+        // The shell under a sleeping agent is not where a dropped file's path
+        // belongs; the paste waits for the agent, as the typing behind it does.
+        if self
+            .panes
+            .get(&attachment.pane)
+            .is_some_and(|entry| entry.asleep)
+        {
+            crate::diagnostic!(json!({
+                "component": "agent_sleep",
+                "kind": "agent_sleep.attachment_refused",
+                "pane_id": attachment.pane,
+            }));
+            return not_written(self);
+        }
         let Ok(mut bytes) = protocol::decode_base64(paste) else {
             return not_written(self);
         };
@@ -1208,6 +1222,11 @@ impl Inner {
                 format!("Pane {pane} is closing; input was not sent"),
                 now,
             );
+            return;
+        }
+        if entry.asleep {
+            // Bytes a screen answers its terminal with are no more for the
+            // shell under a sleeping agent than a key is.
             return;
         }
         let result = match entry.session.as_ref() {

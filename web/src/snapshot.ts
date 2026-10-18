@@ -222,7 +222,7 @@ export type AgentPullRequest = {
 /** A sleeping agent's state (`AgentSleepSnapshot`): the row and the pane draw it. */
 export type AgentSleep = {
   state: "sleeping" | "waking" | "failed";
-  /** Why the last wake failed, in plain words; set only when `failed`. */
+  /** Why the last wake failed, in plain words or as a start refusal code (`startReason`); set only when `failed`. */
   reason?: string | null;
   /** When it fell asleep, in Unix milliseconds. */
   since_unix_ms: number;
