@@ -45,6 +45,14 @@ pub(crate) struct Observation {
 }
 
 impl Observation {
+    /// The name the agent answers to, apart from where it sits: an agent
+    /// Herdr gave no name is called by its pane id (`actor.name` restates
+    /// the pane), and a pane id is per machine, so it is no name that a
+    /// caller on another machine could mean.
+    pub(crate) fn given_name(&self) -> Option<&str> {
+        (self.actor.name != self.raw_pane_id).then_some(self.actor.name.as_str())
+    }
+
     /// Input hide routed after the last submission, the last start of work
     /// and the input the operator last released: an unsent draft, a prompt
     /// Esc brought back, a recalled input.
@@ -691,7 +699,7 @@ impl Runtime {
                 let pane = qualify(target);
                 let mut matches = self.delivery_observations.values().filter(|observation| {
                     observation.actor.pane_id == pane
-                        || observation.actor.name == *target
+                        || observation.given_name() == Some(target.as_str())
                         || registered
                             .is_some_and(|registered| registered.same_identity(&observation.actor))
                 });
@@ -2643,6 +2651,13 @@ pub(crate) mod tests {
                 });
             let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[{"id":"remote-sender","pane_id":"sender","agent":"claude","agent_status":"working","state_change_seq":1,"lineage_session":"remote-session"}]})).unwrap();
             guard.observe_delivery("device", &payload, Some("fixture-device"), None);
+            // The core's recipient has a name of its own, which is how a
+            // device's agent reaches a pane on another machine.
+            let core: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+                {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
+                {"id":"recipient-agent","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"recipient-session"},
+            ]})).unwrap();
+            guard.observe_delivery(crate::node::TEST_NODE, &core, None, None);
             context = guard
                 .workspace_control_query("device", caller, Query::Info)
                 .unwrap()
@@ -2679,7 +2694,7 @@ pub(crate) mod tests {
                 &context,
                 Some("sender"),
                 Command::Send {
-                    target: "recipient".into(),
+                    target: "recipient-agent".into(),
                     intent: "remote-once".into(),
                     body: "done".into(),
                     kind: "report".into(),
@@ -2700,13 +2715,16 @@ pub(crate) mod tests {
         drop(worker);
     }
 
-    /// A core with its own `w1:p2` and `w1:p9`, and a connected device whose
-    /// agents sit in `w1:p3` (the caller) and in a `w1:p2` of the device's own.
+    /// A core with its own `w1:p2`, `w1:p9` and unnamed `w1:p5`, `w1:p6`, and a
+    /// connected device whose agents sit in `sender` (the caller), a `w1:p2` and
+    /// an unnamed `w1:p5` of its own, and an unnamed `w1:p7`.
     fn two_machines_with_one_pane_id(guard: &mut Runtime) -> (String, String) {
         let local: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
             {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
             {"id":"core-agent","pane_id":"w1:p2","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"core-session"},
             {"id":"core-only","pane_id":"w1:p9","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"core-only-session"},
+            {"id":"w1:p5","pane_id":"w1:p5","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"core-unnamed-session"},
+            {"id":"w1:p6","pane_id":"w1:p6","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"core-unnamed-only-session"},
         ]})).unwrap();
         guard.observe_delivery(crate::node::TEST_NODE, &local, None, None);
         let mut remote = guard.snapshot.navigator.workspaces[0].clone();
@@ -2736,6 +2754,8 @@ pub(crate) mod tests {
         let device: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
             {"id":"device-sender","pane_id":"sender","agent":"claude","agent_status":"working","state_change_seq":1,"lineage_session":"device-sender-session"},
             {"id":"device-agent","pane_id":"w1:p2","agent":"claude","agent_status":"working","state_change_seq":1,"lineage_session":"device-session"},
+            {"id":"w1:p5","pane_id":"w1:p5","agent":"claude","agent_status":"working","state_change_seq":1,"lineage_session":"device-unnamed-session"},
+            {"id":"w1:p7","pane_id":"w1:p7","agent":"claude","agent_status":"working","state_change_seq":1,"lineage_session":"device-unnamed-only-session"},
         ]})).unwrap();
         guard.observe_delivery("device", &device, Some("fixture-device"), None);
         ("sender".to_owned(), "remote:device:pane:sender".to_owned())
@@ -2807,6 +2827,46 @@ pub(crate) mod tests {
         .unwrap();
         assert_eq!(result["recipient"]["device_id"], "device");
 
+        // An agent with no name of its own is called by its pane id, which is
+        // still a pane address: the caller's machine wins when both have it,
+        // and the other machine's agent is not reached when only it has it.
+        let result = prepare(
+            "device",
+            &device_caller,
+            report_to("w1:p5", "unnamed-device"),
+        )
+        .unwrap()
+        .run(Duration::from_secs(5))
+        .unwrap();
+        assert_eq!(result["recipient"]["pane_id"], "remote:device:pane:w1:p5");
+        let result = prepare(
+            crate::node::TEST_NODE,
+            &local_caller,
+            report_to("w1:p5", "unnamed-core"),
+        )
+        .unwrap()
+        .run(Duration::from_secs(5))
+        .unwrap();
+        assert_eq!(result["recipient"]["pane_id"], "w1:p5");
+        assert_eq!(
+            prepare("device", &device_caller, report_to("w1:p6", "core-unnamed"))
+                .err()
+                .as_deref(),
+            Some("target_unavailable"),
+            "the core's unnamed agent is no pane of the device"
+        );
+        assert_eq!(
+            prepare(
+                crate::node::TEST_NODE,
+                &local_caller,
+                report_to("w1:p7", "device-unnamed"),
+            )
+            .err()
+            .as_deref(),
+            Some("target_unavailable"),
+            "the device's unnamed agent is no pane of the core"
+        );
+
         // A number that exists only on the core is no pane of the device, and
         // the refusal is the one a target nobody holds gets.
         for (command, what) in [
@@ -2861,7 +2921,7 @@ pub(crate) mod tests {
             Some("caller_identity_conflict")
         );
         let stored = crate::delivery::ledger::load(&path).unwrap();
-        assert_eq!(stored.letters.len(), 3);
+        assert_eq!(stored.letters.len(), 5);
         drop(worker);
     }
 
