@@ -213,13 +213,15 @@ test("File View tabs use the same shrinking strip and transfer the longest title
       await expect(page.locator("[data-lane-guide]")).toHaveCount(0);
       await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
       // A divider release commits once through the core; observe that final
-      // geometry rather than sampling the optimistic drag's guide frame.
+      // geometry and its reveal together, rather than mixing resize frames.
+      let drawn = await strip(page, "view");
       await expect.poll(async () => {
-        const drawn = await strip(page, "view");
+        drawn = await strip(page, "view");
         const want = expected(drawn.room, names.length);
-        return drawn.tabs.every((tab) => Math.abs(tab.width - (tab.selected ? want.selected[0] : want.others[0])) < 0.5);
+        return drawn.tabs.every((tab) => Math.abs(tab.width - (tab.selected ? want.selected[0] : want.others[0])) < 0.5)
+          && drawn.scrolls === (want.selected[0] + (names.length - 1) * want.others[0] > drawn.room + 0.01)
+          && drawn.selectedInView;
       }).toBe(true);
-      const drawn = await strip(page, "view");
       const want = expected(drawn.room, names.length);
       for (const tab of drawn.tabs) {
         const fit = tab.selected ? want.selected : want.others;
