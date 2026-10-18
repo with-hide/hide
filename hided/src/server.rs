@@ -1285,6 +1285,36 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
     }
 }
 
+/// What a refused `hide factory` command asks of its caller: the codes the
+/// core answers before the engine does. A refusal the engine decides carries
+/// its own next step.
+pub(crate) fn factory_next_action(code: &str) -> &'static str {
+    match code {
+        "factory_local_only" => {
+            "Run the command from an agent on the machine that runs Hide, or on a machine that connects to Hide; a device that Hide connects to cannot use the Factory"
+        }
+        // A timed-out command may still apply: retrying blind can add a
+        // Task twice, so look first.
+        "factory_timeout" => {
+            "The command may still apply; check hide factory status before retrying"
+        }
+        "factory_busy" => "Try again in a moment",
+        "factory_unavailable" => {
+            "Hide's Factory is not running; tell the operator, the reason is in Hide's diagnostic log"
+        }
+        "caller_context_changed" => {
+            "This pane's checkout changed while the command ran; run hide workspace info, then retry"
+        }
+        "ambiguous_checkout" => "Register this checkout once in Hide and retry",
+        "pane_not_connected" | "ambiguous_pane" | "checkout_not_registered" => {
+            crate::pane_auth::refusal_next_action(code)
+        }
+        "link_down" => "Reconnect this device in Hide, then retry",
+        "unregistered" => "Register this device in Hide, then retry",
+        _ => "Retry; if it is refused again, the reason is in Hide's diagnostic log",
+    }
+}
+
 /// What the core knows of a display a `hide browser` command relays to:
 /// whether it is its area's selected View (the only one shown, so the CLI
 /// refuses input to any other before sending it) and `source_url`, the
@@ -1607,14 +1637,8 @@ async fn scoped_client_loop(
                                 ScopedRequest::Factory(command, hint) => {
                                     core.prepare_factory(&cap.context.device_id, &cap.pane_id, &cap.context, hint, command)
                                         .and_then(|prepared| prepared.run(FACTORY_ANSWER_TIMEOUT))
-                                        // A timed-out command may still apply: retrying blind
-                                        // can add a Task twice, so look first.
                                         .map_err(|code| {
-                                            let next = if code == "factory_timeout" {
-                                                "The command may still apply; check hide factory status before retrying"
-                                            } else {
-                                                "Check that Hide is running and retry"
-                                            };
+                                            let next = factory_next_action(&code);
                                             (code, next)
                                         })?
                                 }
@@ -4472,6 +4496,33 @@ mod tests {
             assert_eq!(reason, code);
             assert_ne!(next, delivery_next_action("other"), "{code}");
         }
+    }
+
+    /// An agent on a device Hide connects to is refused the Factory for good,
+    /// so its next step names where the Factory can be reached; every other
+    /// refusal before the engine keeps a step of its own.
+    #[test]
+    fn a_device_refused_the_factory_is_told_where_to_run_it() {
+        let next = factory_next_action("factory_local_only");
+        assert!(next.contains("machine that runs Hide"), "{next}");
+        assert!(!next.contains("is running and retry"), "{next}");
+        let fallback = factory_next_action("other");
+        for code in [
+            "factory_local_only",
+            "factory_timeout",
+            "factory_busy",
+            "factory_unavailable",
+            "caller_context_changed",
+            "ambiguous_checkout",
+            "pane_not_connected",
+            "ambiguous_pane",
+            "checkout_not_registered",
+            "link_down",
+            "unregistered",
+        ] {
+            assert_ne!(factory_next_action(code), fallback, "{code}");
+        }
+        assert!(factory_next_action("factory_timeout").contains("hide factory status"));
     }
 
     /// A caller refused for lacking an agent pane is told where to run the

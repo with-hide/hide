@@ -32,7 +32,7 @@ Closing a Factory keeps its records, and creating a Factory for the same project
 | `hide-agent-hooks` | The session guidance sentence that sends agents to `hide factory add`. |
 
 A command travels as one scoped request.
-`hide factory ...` sends a `factory` request over the pane-capability socket, which needs no open renderer, takes a caller on the core's machine or on a node that dials the core, and refuses a caller on a device the core dials with `factory_local_only`.
+`hide factory ...` sends a `factory` request over the pane-capability socket, which needs no open renderer, takes a caller on the core's machine or on a node that dials the core, and refuses a caller on a device the core dials with `factory_local_only`, whose next step sends the agent to the machine that runs Hide, because retrying from that device never succeeds.
 The request is at most 256 KiB and is answered within 100 seconds.
 The core checks the caller as delivery does, so a moved checkout returns `caller_context_changed`, and queues the command for the engine thread.
 The queue holds 32 commands; a full queue answers `factory_busy` and a missed answer window answers `factory_timeout`.
