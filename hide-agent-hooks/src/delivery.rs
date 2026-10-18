@@ -438,6 +438,24 @@ mod tests {
     }
 
     #[test]
+    fn the_prompt_hook_and_journey_agree_on_the_shared_identity_examples() {
+        let examples: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/bell-prompt-identity.json"))
+                .unwrap();
+        let saved = examples["bell_line"].as_str().unwrap();
+        let expected_digest = examples["digest"].as_str().unwrap();
+        assert_eq!(prompt_digest(saved), expected_digest);
+        for example in examples["cases"].as_array().unwrap() {
+            assert_eq!(
+                matches_prompt_digest(saved, &prompt_digest(example["prompt"].as_str().unwrap())),
+                example["matches"].as_bool().unwrap(),
+                "{}",
+                example["name"]
+            );
+        }
+    }
+
+    #[test]
     fn only_a_complete_payload_carries_its_prompt_digest_and_session() {
         let payload = |prompt: &str| {
             serde_json::to_vec(&serde_json::json!({"session_id":"s","prompt":prompt})).unwrap()

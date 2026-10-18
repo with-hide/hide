@@ -1,0 +1,71 @@
+{
+  "bell_line": "🦉 sender 보고: Read the letter · hide inbox",
+  "digest": "3f63d68bdd634aff6f3857c7c1f1d4e25fe0c6d9c008228bad9b3688f357a8f9",
+  "cases": [
+    {
+      "name": "unchanged",
+      "prompt": "🦉 sender 보고: Read the letter · hide inbox",
+      "matches": true
+    },
+    {
+      "name": "owl omitted",
+      "prompt": "sender 보고: Read the letter · hide inbox",
+      "matches": true
+    },
+    {
+      "name": "old bell",
+      "prompt": "🔔 sender 보고: Read the letter · hide inbox",
+      "matches": true
+    },
+    {
+      "name": "non-BMP inside words",
+      "prompt": "sender 보🐈고: Read the 🦉letter · hide inbox",
+      "matches": true
+    },
+    {
+      "name": "outer whitespace",
+      "prompt": " \tsender 보고: Read the letter · hide inbox\r\n",
+      "matches": true
+    },
+    {
+      "name": "BMP variation selector",
+      "prompt": "sender 보고: Read the letter · hide inbox️",
+      "matches": false
+    },
+    {
+      "name": "BMP upper boundary",
+      "prompt": "sender 보고: Read the letter · hide inbox￿",
+      "matches": false
+    },
+    {
+      "name": "different sentence",
+      "prompt": "sender 보고: Read another letter · hide inbox",
+      "matches": false
+    },
+    {
+      "name": "different Korean text",
+      "prompt": "sender 요청: Read the letter · hide inbox",
+      "matches": false
+    },
+    {
+      "name": "inner whitespace",
+      "prompt": "sender 보고: Read  the letter · hide inbox",
+      "matches": false
+    },
+    {
+      "name": "prefix",
+      "prompt": "Quote: 🦉 sender 보고: Read the letter · hide inbox",
+      "matches": false
+    },
+    {
+      "name": "suffix",
+      "prompt": "🦉 sender 보고: Read the letter · hide inbox then continue",
+      "matches": false
+    },
+    {
+      "name": "empty",
+      "prompt": "",
+      "matches": false
+    }
+  ]
+}
