@@ -123,6 +123,32 @@ class PrivateCLI(unittest.TestCase):
         self.assertFalse(owner.children)
         owner.attribution_report()
 
+    def test_native_install_link_survives_removal_of_temporary_home(self):
+        from agent_journey.cli_cache import Cache
+        from agent_live_check.processes import OwnedProcesses
+        from agent_live_check.protection import private_directory
+        from agent_live_check.runtime import Runtime
+        script = self.checkout / 'scripts/install-agent-clis.py'
+        script.write_text("import pathlib, sys, json\n"
+                          "prefix = pathlib.Path(sys.argv[sys.argv.index('--prefix') + 1])\n"
+                          "payload = prefix / 'home/native-program'\n"
+                          "payload.write_text('fixture executable')\n"
+                          "program = prefix / 'program'\n"
+                          "program.symlink_to(payload)\n"
+                          "(prefix / 'installed.json').write_text(json.dumps({'fixture': str(program)}))\n")
+        private_directory(self.run)
+        owner = OwnedProcesses(diagnostics=self.run / 'process-diagnostics')
+        runtime = Runtime(self.checkout, self.run, self.operator, owner,
+                          herdr_bin=self.checkout / 'target/debug/herdr', private_env=True)
+        self.addCleanup(runtime.close)
+        cache = Cache(self.base / 'cache', 1024 ** 2)
+        self.addCleanup(cache.close)
+        pin = {'version': '1.0.0', 'installer': 'npm'}
+        program = cache.install(runtime, 'fixture', pin, {})
+        self.assertEqual(program.read_text(), 'fixture executable')
+        self.assertFalse((program.parent / 'home').exists())
+        self.assertEqual(cache.program('fixture', pin), program)
+
     def test_unresolvable_claude_link_does_not_expose_its_path(self):
         config = self.operator / '.claude.json'
         config.symlink_to(config)

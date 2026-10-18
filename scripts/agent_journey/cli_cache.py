@@ -131,6 +131,16 @@ class Cache:
         program = Path(data[kind])
         if not program.is_file() or not beneath(program.resolve(), folder):
             raise ProtectionError("journey_cli_install_outside_pin")
+        # A native installer may link its launcher into temporary HOME (Grok
+        # does). Move that executable out before removing the scratch roots.
+        target = program.resolve()
+        scratch = tuple(folder / name for name in ("home", "tmp", "npm-cache"))
+        if any(beneath(target, root) for root in scratch):
+            if any(program.is_relative_to(root) for root in scratch):
+                retained = folder / "retained"
+                private_directory(retained)
+                program = retained / program.name
+            target.replace(program)
         # Download cache and installer HOME are temporary, not one copy per journey.
         for name in ("home", "tmp", "npm-cache"):
             shutil.rmtree(folder / name)
