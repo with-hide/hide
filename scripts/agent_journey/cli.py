@@ -336,7 +336,8 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
         def status(args, launch=launch, environment=environment):
             code, output, _ = owner.run([str(launch), *args], env=environment, check=False)
             return code, output
-        refusal = entry["login"](private, status)
+        # A copy must outlast what is left of the run, whose deadline ends every process in it.
+        refusal = entry["login"](private, status, owner.deadline - time.monotonic())
         if refusal:
             agent["login"] = refusal
             cells.settle_agent(table, key, refusal)

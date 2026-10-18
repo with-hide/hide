@@ -16,6 +16,7 @@ from agent_journey.local import (codex_login_refusal, grok_login_refusal, omp_lo
                                  trust_codex, trust_grok)
 
 CHECKOUT = Path(__file__).resolve().parents[2]
+HOUR = 3600
 
 
 def contract():
@@ -258,26 +259,30 @@ class LocalRoute(unittest.TestCase):
         now = datetime.datetime(2026, 10, 18, tzinfo=datetime.timezone.utc).timestamp()
         with tempfile.TemporaryDirectory() as temporary:
             auth = Path(temporary) / "auth.json"
-            self.assertIn("not logged in", grok_login_refusal(auth, now))
-            self.assertIn("not logged in", pi_login_refusal(auth, now))
+            self.assertIn("not logged in", grok_login_refusal(auth, HOUR, now))
+            self.assertIn("not logged in", pi_login_refusal(auth, HOUR, now))
             iso = lambda hours: datetime.datetime.fromtimestamp(now + hours * 3600, datetime.timezone.utc).isoformat()
             auth.write_text(json.dumps({"https://auth.x.ai::a": {"expires_at": iso(3), "refresh_token": "r"}}))
-            self.assertIsNone(grok_login_refusal(auth, now))
+            self.assertIsNone(grok_login_refusal(auth, HOUR, now))
             auth.write_text(json.dumps({"https://auth.x.ai::a": {"expires_at": iso(0.5)}}))
-            self.assertIn("login near refresh (0.5 h left)", grok_login_refusal(auth, now))
+            self.assertIn("login near refresh (0.5 h left, the run needs 1.0 h)", grok_login_refusal(auth, HOUR, now))
+            # Pi's OpenAI access token lasts an hour: a short run may use it, a long one may not.
+            auth.write_text(json.dumps({"openai": {"type": "oauth", "expires": (now + 0.8 * HOUR) * 1000}}))
+            self.assertIsNone(pi_login_refusal(auth, 0.5 * HOUR, now))
+            self.assertIn("near refresh", pi_login_refusal(auth, 0.7 * HOUR, now))
             auth.write_text(json.dumps({"openai": {"type": "oauth", "expires": (now - 3600) * 1000}}))
-            refusal = pi_login_refusal(auth, now)
+            refusal = pi_login_refusal(auth, HOUR, now)
             self.assertIn("login expired", refusal)
             self.assertIn("run pi once yourself", refusal)
             auth.write_text(json.dumps({"openai": {"type": "oauth", "expires": "soon"}}))
-            self.assertIn("unreadable", pi_login_refusal(auth, now))
+            self.assertIn("unreadable", pi_login_refusal(auth, HOUR, now))
 
     def test_omp_reads_its_login_expiry_from_the_private_database_copy(self):
         import sqlite3
         now = datetime.datetime(2026, 10, 18, tzinfo=datetime.timezone.utc).timestamp()
         with tempfile.TemporaryDirectory() as temporary:
             database = Path(temporary) / "agent.db"
-            self.assertIn("not logged in", omp_login_refusal(database, now))
+            self.assertIn("not logged in", omp_login_refusal(database, HOUR, now))
             connection = sqlite3.connect(database)
             connection.execute("create table auth_credentials (data text, disabled_cause text)")
             connection.execute("insert into auth_credentials values (?, null)", (json.dumps({"expires": (now + 7200) * 1000}),))
@@ -285,8 +290,8 @@ class LocalRoute(unittest.TestCase):
             connection.execute("insert into auth_credentials values (?, 'revoked')", (json.dumps({"expires": 0}),))
             connection.commit()
             connection.close()
-            self.assertIsNone(omp_login_refusal(database, now))
-            self.assertIn("near refresh", omp_login_refusal(database, now + 5400))
+            self.assertIsNone(omp_login_refusal(database, HOUR, now))
+            self.assertIn("near refresh", omp_login_refusal(database, HOUR, now + 5400))
 
     def test_grok_trust_adds_one_entry_for_the_resolved_repository(self):
         import tomllib

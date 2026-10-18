@@ -35,11 +35,14 @@ from . import omp_state, opencode_service
 # would rotate the operator's token (PRD D-32; Codex was seen refreshing every
 # 8 days, which it does not document).
 CODEX_LOGIN_DAYS = 7
-# An OAuth login copy whose access token expires sooner than this is not used,
-# for the same reason: the agent would refresh it inside the copy, and a
-# refresh that rotates the refresh token signs the operator's own agent out.
-# An hour covers a run's bounds.
-OAUTH_MARGIN_SECONDS = 3600
+# An OAuth login copy whose access token expires before the run's deadline,
+# or within this lead of it, is not used, for the same reason: the agent
+# would refresh it inside the copy, and a refresh that rotates the refresh
+# token signs the operator's own agent out. Pi 1.0.4 refreshes five minutes
+# before expiry (DEFAULT_OAUTH_MINIMUM_VALIDITY_MS); the lead doubles that for
+# an agent whose window is not read. A fixed hour refused Pi's OpenAI login
+# always, whose access token lasts one hour.
+REFRESH_LEAD_SECONDS = 10 * 60
 
 ROUTES = {
     "claude": {
@@ -59,7 +62,7 @@ ROUTES = {
         "untrusted": "not measured: it would leave an entry in the operator's shared ~/.claude.json; the CI mode measures it",
         "config": None,
         "copies": [],
-        "login": lambda root, status: claude_login_refusal(*status(["auth", "status"])),
+        "login": lambda root, status, margin: claude_login_refusal(*status(["auth", "status"])),
     },
     "codex": {
         "args": lambda home: [],
@@ -73,7 +76,7 @@ ROUTES = {
         "config": ".codex",
         "copies": [[".codex/auth.json", "auth.json"]],
         "provenance": "A private CODEX_HOME holding a copy of the login (docs/AI_PROVIDERS.md); a refresh stays in the copy.",
-        "login": lambda root, status: codex_login_refusal(root / "auth.json"),
+        "login": lambda root, status, margin: codex_login_refusal(root / "auth.json"),
     },
     "grok": {
         "args": lambda home: [],
@@ -89,7 +92,7 @@ ROUTES = {
         "config": ".grok",
         "copies": [[".grok/auth.json", "auth.json"]],
         "provenance": "A private GROK_HOME holding a copy of the login; a refresh stays in the copy.",
-        "login": lambda root, status: grok_login_refusal(root / "auth.json"),
+        "login": lambda root, status, margin: grok_login_refusal(root / "auth.json", margin),
     },
     "pi": {
         "args": lambda home: [],
@@ -105,7 +108,7 @@ ROUTES = {
         "config": ".pi/agent",
         "copies": [[".pi/agent/auth.json", "auth.json"]],
         "provenance": "A private PI_CODING_AGENT_DIR holding a copy of the login; a refresh stays in the copy.",
-        "login": lambda root, status: pi_login_refusal(root / "auth.json"),
+        "login": lambda root, status, margin: pi_login_refusal(root / "auth.json", margin),
     },
     "omp": {
         "args": lambda home: [],
@@ -123,7 +126,7 @@ ROUTES = {
         # process has it open (agent_live_check/credential_snapshot.py).
         "copies": [[".omp/agent/agent.db", "agent.db"], [".omp/agent/config.yml", "config.yml"]],
         "provenance": "A private PI_CODING_AGENT_DIR holding a snapshot of agent.db and config.yml; a refresh stays in the copy.",
-        "login": lambda root, status: omp_login_refusal(root / "agent.db"),
+        "login": lambda root, status, margin: omp_login_refusal(root / "agent.db", margin),
         # Its run state stays in the operator's ~/.omp (omp_state.py).
         "busy": lambda: omp_state.busy_refusal(omp_state.running()),
         "operator_state": "omp writes ~/.omp/run and ~/.omp/logs in the operator's HOME; the run removes its own part",
@@ -146,7 +149,7 @@ ROUTES = {
         "copies": [[".local/share/opencode/auth.json", "auth.json"]],
         "provenance": "Private XDG folders holding a copy of the login, the operator's model choice and a private "
                       "server port; a refresh stays in the copy.",
-        "login": lambda root, status: opencode_login_refusal(root / "auth.json"),
+        "login": lambda root, status, margin: opencode_login_refusal(root / "auth.json", margin),
     },
     "agy": {
         # agy 1.4.0 has no variable or flag for its configuration folder and
@@ -234,15 +237,15 @@ def claude_login_refusal(code, output):
     return None if not code and logged_in else "not logged in: run claude auth login yourself; the journey never logs in"
 
 
-def expiry_refusal(cli, expiries, now=None):
+def expiry_refusal(cli, expiries, margin, now=None):
     """Why an OAuth login copy whose access tokens expire at `expiries` (Unix
-    seconds) must not be used, or None."""
+    seconds) must not be used by a run that ends within `margin` seconds, or None."""
     if not expiries:
         return f"login expiry unreadable; run {cli} once yourself, then rerun"
     left = min(expiries) - (now if now is not None else time.time())
-    if left >= OAUTH_MARGIN_SECONDS:
+    if left >= margin + REFRESH_LEAD_SECONDS:
         return None
-    state = "expired" if left <= 0 else f"near refresh ({left / 3600:.1f} h left)"
+    state = "expired" if left <= 0 else f"near refresh ({left / 3600:.1f} h left, the run needs {margin / 3600:.1f} h)"
     return (f"login {state}: its copy would refresh inside the run and could sign your own {cli} out; "
             f"run {cli} once yourself (sign in again if it asks), then rerun")
 
@@ -267,23 +270,23 @@ def json_expiries(auth, field, scale):
     return expiries
 
 
-def grok_login_refusal(auth, now=None):
+def grok_login_refusal(auth, margin, now=None):
     """Grok keeps one entry per account, each with an ISO `expires_at`."""
     expiries = json_expiries(auth, "expires_at", 1)
     if expiries is None:
         return "not logged in: run grok login yourself; the journey never logs in"
-    return expiry_refusal("grok", expiries, now)
+    return expiry_refusal("grok", expiries, margin, now)
 
 
-def pi_login_refusal(auth, now=None):
+def pi_login_refusal(auth, margin, now=None):
     """Pi keeps one entry per provider; an OAuth one has `expires` in ms."""
     expiries = json_expiries(auth, "expires", 1000)
     if expiries is None:
         return "not logged in: sign in with /login in pi yourself; the journey never logs in"
-    return expiry_refusal("pi", expiries, now)
+    return expiry_refusal("pi", expiries, margin, now)
 
 
-def opencode_login_refusal(auth, now=None):
+def opencode_login_refusal(auth, margin, now=None):
     """OpenCode keeps one entry per provider: an API key, which never
     refreshes, or an OAuth login with `expires` in ms."""
     if not auth.is_file():
@@ -291,12 +294,12 @@ def opencode_login_refusal(auth, now=None):
     try:
         entries = [entry for entry in json.loads(auth.read_text()).values() if isinstance(entry, dict)]
     except (OSError, ValueError, AttributeError):
-        return expiry_refusal("opencode", [], now)
+        return expiry_refusal("opencode", [], margin, now)
     if not entries:
         return "not logged in: run opencode auth login yourself; the journey never logs in"
     if all(entry.get("type") == "api" for entry in entries):
         return None
-    return expiry_refusal("opencode", json_expiries(auth, "expires", 1000), now)
+    return expiry_refusal("opencode", json_expiries(auth, "expires", 1000), margin, now)
 
 
 def opencode_model(operator, folder):
@@ -312,7 +315,7 @@ def opencode_model(operator, folder):
     write_private(folder / "opencode.json", json.dumps({**keep, "update": "disable"}).encode())
 
 
-def omp_login_refusal(database, now=None):
+def omp_login_refusal(database, margin, now=None):
     """omp keeps each credential as JSON in agent.db, an OAuth one with
     `expires` in ms; read from the run's private copy, never the original."""
     if not database.is_file():
@@ -325,14 +328,14 @@ def omp_login_refusal(database, now=None):
             connection.close()
         values = [json.loads(data).get("expires") for (data,) in rows]
     except (sqlite3.Error, ValueError, AttributeError, TypeError):
-        return expiry_refusal("omp", [], now)
+        return expiry_refusal("omp", [], margin, now)
     if not rows:
         return "not logged in: sign in with /login in omp yourself; the journey never logs in"
     # An API key keeps no expiry and never refreshes.
     expiries = [value / 1000 for value in values if isinstance(value, (int, float))]
     if len(expiries) < len(values) and not expiries:
         return None
-    return expiry_refusal("omp", expiries, now)
+    return expiry_refusal("omp", expiries, margin, now)
 
 
 def codex_login_refusal(auth, now=None):
