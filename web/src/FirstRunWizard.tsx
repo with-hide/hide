@@ -263,6 +263,12 @@ function AgentsStep({ actions, reopened, desktop, primary }: StepProps & { deskt
         <span className="min-w-0 flex-1 text-caption text-muted-foreground">
           {hideAi ? <span data-onboarding-hide-ai={hideAi.id}>{t(hideAiFirstRunKey(hideAi.agent), { agent: hideAi.label })}</span> : null}
         </span>
+        {/* A refused pass may take a terminal and a restart to clear, so the step can be left; the question stays unanswered. */}
+        {refused && !reopened ? (
+          <Button variant="ghost" onClick={() => actions.advanceFirstRun("agents")} data-first-run-refused-close="true">
+            {t("firstRun.notifications.notNow")}
+          </Button>
+        ) : null}
         {/* With no agent read yet there is no choice to send; the next read brings the tiles back. */}
         <MainButton onClick={proceed} disabled={applying || (agents.length === 0 && !unavailable && !refused)} aria-busy={applying} data-onboarding-apply="true">
           {label}

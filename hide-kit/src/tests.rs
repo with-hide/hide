@@ -360,7 +360,7 @@ fn state(report: &KitReport, id: ComponentId) -> ComponentState {
 fn refusal(report: &KitReport, cause: RefusalCause) -> &KitRefusal {
     let refusal = report
         .refused
-        .as_ref()
+        .as_deref()
         .unwrap_or_else(|| panic!("{report:?}"));
     assert_eq!(refusal.cause, cause, "{refusal:?}");
     assert!(
@@ -907,20 +907,53 @@ fn an_apply_waits_for_another_kit_changing_the_same_account() {
     );
 }
 
+/// More registered checkouts than one pass inspects is its own cause: the
+/// operator acts on the list of projects, not on a path.
 #[test]
-fn an_unreadable_record_installs_nothing_missing_on_a_guess() {
-    let fixture = Fixture::new();
-    let record = fixture.home().join(".hide/kit/installed.json");
-    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
-    std::fs::write(&record, "not a record").unwrap();
-
+fn too_many_registered_checkouts_stop_the_pass_as_their_own_cause() {
+    let mut fixture = Fixture::new();
+    fixture.target.retirement_projects =
+        vec![fixture.home().join("project"); retirement_inspection::MAX_ENTRIES + 1];
     let report = apply(&fixture.target, &Scope::automatic());
+    assert_eq!(refusal(&report, RefusalCause::Projects).path, None);
+}
 
-    let cli = report.component(ComponentId::Cli).unwrap();
-    assert_eq!(cli.state, ComponentState::Failed);
-    assert!(cli.reason.as_deref().unwrap().contains("installed.json"));
-    assert!(!fixture.home().join(".local/bin/hide").exists());
-    assert_eq!(std::fs::read_to_string(&record).unwrap(), "not a record");
+/// A cause a newer helper names reads as an unnamed one, so an older core
+/// still takes the rest of its report.
+#[test]
+fn a_refusal_cause_this_build_does_not_know_reads_as_other() {
+    let report: KitReport = serde_json::from_value(json!({
+        "components": [],
+        "refused": {"cause": "a_cause_from_a_newer_build", "detail": "words"},
+    }))
+    .unwrap();
+    assert_eq!(report.refused.unwrap().cause, RefusalCause::Other);
+}
+
+/// Without its record the kit cannot tell which parts are Hide's, and one a
+/// newer build wrote is that build's: the pass stops before changing
+/// anything, and a read says the same, once for the whole machine.
+#[test]
+fn an_unreadable_record_stops_the_pass_before_changing_anything() {
+    for contents in ["not a record", r#"{"format": 99}"#] {
+        let fixture = Fixture::new();
+        let record = fixture.home().join(".hide/kit/installed.json");
+        std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+        std::fs::write(&record, contents).unwrap();
+
+        for report in [
+            apply(&fixture.target, &Scope::automatic()),
+            status(&fixture.target),
+        ] {
+            let refused = refusal(&report, RefusalCause::Record);
+            assert_eq!(
+                refused.path.as_deref(),
+                Some(record.display().to_string().as_str())
+            );
+        }
+        assert!(!fixture.home().join(".local/bin/hide").exists());
+        assert_eq!(std::fs::read_to_string(&record).unwrap(), contents);
+    }
 }
 
 #[cfg(target_os = "macos")]

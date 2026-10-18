@@ -1312,6 +1312,7 @@ fn a_first_pass_that_did_not_run_does_not_decide_the_first_run_choice() {
             cause: hide_kit::RefusalCause::Busy,
             path: None,
             variable: None,
+            stop: None,
             detail: "another Hide was still changing this account's kit".into(),
         }),
     );

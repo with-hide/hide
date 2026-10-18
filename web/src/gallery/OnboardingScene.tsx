@@ -27,6 +27,14 @@ import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
 import { checkout, REFERENCE_FOLDS, workspace } from "./sceneData";
 
 /** Every state the scene draws; each names the step, what is open and what the host answers. */
+
+/** The command a refused pass names on each system to stop the app's background service, as the kit spells it there. */
+const REFUSED_STOP: Record<OnboardingSystem, string> = {
+  mac: "HIDE_STATE_DIR='/Volumes/Team/hide' '/Applications/hide.app/Contents/Resources/hide' stop",
+  linux: "HIDE_STATE_DIR='/srv/team/hide' '/opt/hide/resources/hide' stop",
+  windows: "$env:HIDE_STATE_DIR = 'D:\\hide'; & 'C:\\Users\\me\\.hide\\runtime\\0.4.1\\hide.exe' stop; Remove-Item Env:HIDE_STATE_DIR",
+};
+
 export const ONBOARDING_STATES = [
   "agents",
   "agents-changes",
@@ -208,7 +216,7 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
   const refused = state === "agents-refused" || state === "settings-refused";
   const agents = refused ? [] : kitAgents(state, system).map((agent) => (step === "agents" || agent.availability !== "available" ? agent : { ...agent, enabled: true, chosen: true }));
   const kit = refused
-    ? { agents, components: [], busy: false, refused: { cause: "unsafe", path: system === "windows" ? "D:\\" : system === "linux" ? "/srv/team" : "/Volumes/Team", variable: "HIDE_STATE_DIR" } }
+    ? { agents, components: [], busy: false, refused: { cause: "unsafe", path: system === "windows" ? "D:\\" : system === "linux" ? "/srv/team" : "/Volumes/Team", variable: "HIDE_STATE_DIR", stop: REFUSED_STOP[system] } }
     : { agents, components: [{ id: "cli", label: "hide", state: "off", reason: null, location: system === "windows" ? `${HOME}/.local/bin/hide.cmd` : `${HOME}/.local/bin/hide` }], busy: false };
   return {
     revision: 1,

@@ -23,6 +23,12 @@ pub struct KitRefusal {
     /// unset it to return to `~/.hide/state`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variable: Option<StateVariable>,
+    /// With `variable`, on the machine whose app runs this kit: the command
+    /// that stops Hide's background service there. That service reads the
+    /// variable only when it starts and outlives the app, so a changed
+    /// variable reaches the kit only once it has stopped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop: Option<String>,
     /// The kit's own words, for the log only.
     #[serde(default)]
     pub detail: String,
@@ -41,6 +47,13 @@ pub enum RefusalCause {
     /// Another Hide was changing this account's kit and did not finish in
     /// time.
     Busy,
+    /// More checkouts are registered than one pass inspects, so it cannot
+    /// tell whether ending the old coordination would lose work in one.
+    Projects,
+    /// A cause a newer helper named that this build does not know; the
+    /// screen says only that the pass stopped.
+    #[serde(other)]
+    Other,
 }
 
 impl KitRefusal {
@@ -49,6 +62,7 @@ impl KitRefusal {
             cause,
             path: path.map(|path| path.display().to_string()),
             variable: None,
+            stop: None,
             detail: detail.into(),
         }
     }
@@ -69,6 +83,30 @@ impl KitRefusal {
         }
         self
     }
+
+    /// Names, for a refusal of the state folder `state` a variable chose, the
+    /// command that stops the background service of the app whose `hide` is
+    /// in `kit_dir`: the next launch starts one that reads the variable
+    /// again. It names that folder itself, so it stops the right service
+    /// whether or not the terminal still has the old value.
+    pub fn name_stop(&mut self, kit_dir: &Path, state: &Path) {
+        if self.variable.is_none() {
+            return;
+        }
+        let state = state.display().to_string();
+        let hide = kit_dir.join(format!("hide{}", std::env::consts::EXE_SUFFIX));
+        let hide = hide.display().to_string();
+        let quote = hide_agent_hooks::install::quote_for_shell;
+        self.stop = Some(if cfg!(windows) {
+            format!(
+                "$env:HIDE_STATE_DIR = {}; & {} stop; Remove-Item Env:HIDE_STATE_DIR",
+                quote(&state),
+                quote(&hide)
+            )
+        } else {
+            format!("HIDE_STATE_DIR={} {} stop", quote(&state), quote(&hide))
+        });
+    }
 }
 
 /// A step that is no preflight, such as a retirement step or a record save,
@@ -76,5 +114,49 @@ impl KitRefusal {
 impl From<KitRefusal> for String {
     fn from(refusal: KitRefusal) -> Self {
         refusal.detail
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn the_stop_command_names_the_folder_and_the_app_s_own_hide() {
+        let mut refusal = KitRefusal::unsafe_path(Path::new("/srv/team"), "words")
+            .chosen_by(Some(StateVariable::HideStateDir));
+        refusal.name_stop(
+            Path::new("/opt/hide/resources"),
+            Path::new("/srv/team/o'hide"),
+        );
+        assert_eq!(
+            refusal.stop.as_deref(),
+            Some("HIDE_STATE_DIR='/srv/team/o'\\''hide' '/opt/hide/resources/hide' stop")
+        );
+
+        let mut unchosen = KitRefusal::unsafe_path(Path::new("/srv/team"), "words");
+        unchosen.name_stop(Path::new("/opt/hide/resources"), Path::new("/srv/team"));
+        assert_eq!(
+            unchosen.stop, None,
+            "only a variable is cleared by a restart"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_stop_command_names_the_folder_and_the_app_s_own_hide() {
+        let mut refusal = KitRefusal::unsafe_path(Path::new(r"D:\"), "words")
+            .chosen_by(Some(StateVariable::HideStateDir));
+        refusal.name_stop(
+            Path::new(r"C:\Users\me\.hide\runtime\b"),
+            Path::new(r"D:\o'hide"),
+        );
+        assert_eq!(
+            refusal.stop.as_deref(),
+            Some(
+                r"$env:HIDE_STATE_DIR = 'D:\o''hide'; & 'C:\Users\me\.hide\runtime\b\hide.exe' stop; Remove-Item Env:HIDE_STATE_DIR"
+            )
+        );
     }
 }

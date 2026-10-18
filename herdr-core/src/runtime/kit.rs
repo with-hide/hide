@@ -317,21 +317,18 @@ impl Runtime {
                 "failures": legacy.failures,
             }));
         }
-        let mut changed = self.decide_agent_onboarding(device_id, report);
-        if let Some(update) = &report.herdr {
-            changed |= self.ingest_device_herdr_update(device_id, update);
-        }
         let mut snapshot = KitSnapshot::from_report(report);
         snapshot.busy = self.kit_install_queued(device_id);
-        // The kit's own words go to the log when a refusal appears or changes,
-        // not on every read while Settings is open; the screen gets the line.
-        if let Some(refusal) = &report.refused
+        // A refusal reaches the operator once per change, not on every read
+        // while Settings is open: the kit's own words go to the log, and the
+        // first run opens with it (`decide_agent_onboarding`).
+        let refusal_new = snapshot.refused.is_some()
             && self
                 .kit_states
                 .get(device_id)
                 .and_then(|state| state.refused.as_ref())
-                != snapshot.refused.as_ref()
-        {
+                != snapshot.refused.as_ref();
+        if let Some(refusal) = report.refused.as_ref().filter(|_| refusal_new) {
             crate::diagnostic!(serde_json::json!({
                 "component": "kit",
                 "kind": "kit.refused",
@@ -341,6 +338,10 @@ impl Runtime {
                 "variable": refusal.variable,
                 "detail": refusal.detail,
             }));
+        }
+        let mut changed = self.decide_agent_onboarding(device_id, report, refusal_new);
+        if let Some(update) = &report.herdr {
+            changed |= self.ingest_device_herdr_update(device_id, update);
         }
         // A daemon answer the kit could not read reads as no answer; the log
         // keeps it when it appears or changes, not on every read (B13).
@@ -393,14 +394,22 @@ impl Runtime {
     /// asked and keeps what it has on as the saved choice. A device whose own
     /// record waits, once this Mac has answered, gets that choice sent once
     /// per run by its own detection; before that nothing is installed there.
-    fn decide_agent_onboarding(&mut self, device_id: &str, report: &KitReport) -> bool {
+    fn decide_agent_onboarding(
+        &mut self,
+        device_id: &str,
+        report: &KitReport,
+        refusal_new: bool,
+    ) -> bool {
         use crate::model::AgentOnboarding;
         // A pass that stopped before changing anything says nothing about the
         // record. On a Mac no pass has ever answered for, it is still the
-        // first run: the wizard opens with the refusal, so the operator learns
-        // why nothing was set up and can try again (design principle 13).
+        // first run: the wizard opens with a refusal that is new, so the
+        // operator learns why nothing was set up (design principle 13), and
+        // stays closed once they closed it until the refusal changes or Hide
+        // starts again.
         if report.refused.is_some() {
-            let opened = device_id == self.node.as_str()
+            let opened = refusal_new
+                && device_id == self.node.as_str()
                 && self.snapshot.ui_state.agent_onboarding.is_none()
                 && self.open_first_run();
             if opened {

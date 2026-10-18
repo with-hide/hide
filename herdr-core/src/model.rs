@@ -885,6 +885,9 @@ pub struct KitRefusalSnapshot {
     pub path: Option<String>,
     /// The variable that chose Hide's state folder at fault, by name.
     pub variable: Option<hide_kit::layout::StateVariable>,
+    /// The command that stops this machine's background service, so the
+    /// next launch reads `variable` again.
+    pub stop: Option<String>,
 }
 
 impl From<&hide_kit::KitRefusal> for KitRefusalSnapshot {
@@ -893,6 +896,7 @@ impl From<&hide_kit::KitRefusal> for KitRefusalSnapshot {
             cause: refusal.cause,
             path: refusal.path.clone(),
             variable: refusal.variable,
+            stop: refusal.stop.clone(),
         }
     }
 }
@@ -1078,7 +1082,7 @@ impl KitSnapshot {
                 }),
             checking: false,
             check_failed: None,
-            refused: report.refused.as_ref().map(Into::into),
+            refused: report.refused.as_deref().map(Into::into),
         }
     }
 
@@ -7159,12 +7163,16 @@ mod wire_enum_tests {
             hide_kit::RefusalCause::Unsafe,
             hide_kit::RefusalCause::Record,
             hide_kit::RefusalCause::Busy,
+            hide_kit::RefusalCause::Projects,
+            hide_kit::RefusalCause::Other,
         ];
         for variant in refusal_causes {
             match variant {
                 hide_kit::RefusalCause::Unsafe
                 | hide_kit::RefusalCause::Record
-                | hide_kit::RefusalCause::Busy => {}
+                | hide_kit::RefusalCause::Busy
+                | hide_kit::RefusalCause::Projects
+                | hide_kit::RefusalCause::Other => {}
             }
         }
         assert_wire(&contract, "kit_refusal_cause", &refusal_causes);

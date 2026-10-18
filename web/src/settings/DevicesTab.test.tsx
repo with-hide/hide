@@ -100,6 +100,16 @@ it("says a pass that stopped before changing anything once, naming the folder an
   await running.unmount();
 });
 
+it("says a refusal it cannot name as stopped, with Retry, never an empty line; too many projects is its own line", async () => {
+  const future = await mount(state([remote("mini", { kit: kit([], { refused: { cause: "a_cause_from_a_newer_build", path: null, variable: null } as never }) })]));
+  expect(future.q('[data-kit-refused="mini"]')!.textContent).toBe("✕Hide stopped before changing anything, for a reason this version of Hide can't name. Update Hide, then try again." + "Retry");
+  await future.unmount();
+
+  const projects = await mount(state([remote("mini", { kit: kit([], { refused: { cause: "projects", path: null, variable: null } }) })]));
+  expect(projects.q('[data-kit-refused="mini"]')!.textContent).toContain("More projects are registered than it can check.");
+  await projects.unmount();
+});
+
 it("says in one line when a device's Herdr stays older than Hide's, with the step its cause allows, and nothing once it moved or while it is out of reach (PRD device-herdr-update B3, B8)", async () => {
   const behind = (cause: "cannot_hand_off" | "handoff_failed") => remote("mini", { herdr_behind: { server_version: "0.9.1", version: "0.9.3", cause } });
   const failed = await mount(state([behind("handoff_failed")]));

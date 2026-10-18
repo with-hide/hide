@@ -365,11 +365,20 @@ export function kitRefusalLine(refusal: KitRefusal, t: Translate): string {
   const path = refusal.path ?? "";
   switch (refusal.cause) {
     case "unsafe":
-      return refusal.variable ? t("devices.kitRefused.unsafeVariable", { variable: refusal.variable, path }) : t("devices.kitRefused.unsafe", { path });
+      if (!refusal.variable) return t("devices.kitRefused.unsafe", { path });
+      // The background service outlives the app and reads the variable only when it starts, so this machine's line names how to stop it.
+      return refusal.stop
+        ? t("devices.kitRefused.unsafeVariableStop", { variable: refusal.variable, path, stop: refusal.stop })
+        : t("devices.kitRefused.unsafeVariable", { variable: refusal.variable, path });
     case "record":
-      return refusal.path ? t("devices.kitRefused.record", { path }) : t("devices.kitRefused.recordCount");
+      return t("devices.kitRefused.record", { path });
+    case "projects":
+      return t("devices.kitRefused.projects");
     case "busy":
       return t("devices.kitRefused.busy");
+    default:
+      // A cause a newer machine named that this build does not know.
+      return t("devices.kitRefused.other");
   }
 }
 

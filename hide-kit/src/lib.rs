@@ -212,7 +212,7 @@ pub struct KitReport {
     /// The pass stopped before changing anything, and why; the report then
     /// has no part and no agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub refused: Option<KitRefusal>,
+    pub refused: Option<Box<KitRefusal>>,
 }
 
 impl KitReport {
@@ -224,7 +224,7 @@ impl KitReport {
     /// was judged, so it lists no part and no agent.
     pub fn refused(refusal: KitRefusal) -> Self {
         Self {
-            refused: Some(refusal),
+            refused: Some(Box::new(refusal)),
             ..Self::default()
         }
     }
@@ -559,22 +559,16 @@ pub(crate) fn lock_account(target: &KitTarget) -> Result<AccountLock, KitRefusal
 /// a re-read never lists parts and agents a pass could not install, and the
 /// operator's Try again is answered by the same check.
 pub fn status(target: &KitTarget) -> KitReport {
-    if let Err(refusal) = retirement_preflight(target) {
-        return KitReport::refused(refusal);
-    }
-    let mut record = record::load(&target.home);
+    let mut record = match retirement_preflight(target).and_then(|()| record::load(&target.home)) {
+        Ok(record) => record,
+        Err(refusal) => return KitReport::refused(refusal),
+    };
     // A machine the kit never ran on reads as `apply` will leave it until the
     // operator chooses; nothing is written for that.
-    if let Ok(record) = record.as_mut() {
-        agent_kit::hold_for_onboarding(record);
-    }
-    let held = record.as_ref().is_ok_and(record::Record::awaiting_choice);
-    let recorded = |id| record.as_ref().is_ok_and(|record| record.contains(id));
-    let switched_off = |id| {
-        record
-            .as_ref()
-            .is_ok_and(|record| agent_kit::part_is_off(record, id))
-    };
+    agent_kit::hold_for_onboarding(&mut record);
+    let held = record.awaiting_choice();
+    let recorded = |id| record.contains(id);
+    let switched_off = |id| agent_kit::part_is_off(&record, id);
     let components: Vec<ComponentReport> = ComponentId::ALL
         .into_iter()
         .map(|id| {
@@ -733,10 +727,11 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
         Ok(lock) => lock,
         Err(refusal) => return KitReport::refused(refusal),
     };
-    let loaded = record::load(&target.home);
-    let (mut record, record_failure) = match loaded {
-        Ok(record) => (record, None),
-        Err(reason) => (record::Record::default(), Some(reason)),
+    // Without its record the kit cannot tell which parts are Hide's, so the
+    // pass stops here, before anything below changes (engineering rule 4).
+    let mut record = match record::load(&target.home) {
+        Ok(record) => record,
+        Err(refusal) => return KitReport::refused(refusal),
     };
     let (mut legacy_retirement, retirement_failure) = match coordination_retirement::install(target)
     {
@@ -744,10 +739,7 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
         Err(reason) => (Retirement::default(), Some(reason)),
     };
     let labels_retirement = labels::retire(target);
-    let mut changed = false;
-    if record_failure.is_none() {
-        changed |= agent_kit::hold_for_onboarding(&mut record);
-    }
+    let mut changed = agent_kit::hold_for_onboarding(&mut record);
     if retirement_failure.is_none() && !record.has_retired(HCOORD_PLUGIN_ID) {
         record.mark_retired(HCOORD_PLUGIN_ID);
         changed = true;
@@ -789,7 +781,7 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
             && match &observed {
                 Observed::Stale(_) => true,
                 Observed::Edited(_) => restoring,
-                Observed::Missing => restoring || (!recorded && record_failure.is_none()),
+                Observed::Missing => restoring || !recorded,
                 Observed::Current
                 | Observed::Blocked(_)
                 | Observed::Absent(_)
@@ -811,13 +803,6 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
             }
         } else if undo_now {
             failure = turn_off(id, target).err();
-        } else if turning_off || agent_off {
-            // Nothing of it is in place, so it is already off.
-        } else if matches!(observed, Observed::Missing) && !recorded {
-            // Missing, never recorded, and the record could not be read: the
-            // kit cannot tell whether the operator took it away, so it does
-            // not put it back on a guess (engineering rule 4).
-            failure = record_failure.clone();
         }
         let after = if install_now || undo_now {
             observe(id, target)
@@ -850,7 +835,7 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
         let off = agent_off || agent_kit::part_is_off(&record, id);
         components.push(report(id, target, after, recorded_now, off, failure));
     }
-    let applied = agent_kit::apply(target, scope, &mut record, record_failure.as_ref());
+    let applied = agent_kit::apply(target, scope, &mut record);
     changed |= applied.changed;
     // Whether this pass wrote the entries or found them, Codex trusts Hide's
     // and, when the kit installed it, Herdr's, in one check: Herdr's
@@ -879,7 +864,6 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
         target,
         scope,
         &record,
-        record_failure.as_ref(),
         &applied,
         &agent_kit::part_views(&components),
     );
@@ -889,18 +873,13 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
         .extend(applied.retirement.failures);
     // The part an earlier build recorded for the Codex setting it used to
     // switch is gone; its record entry goes with it.
-    if record_failure.is_none() {
-        changed |= record.forget_piece("codex_per_pane");
-    }
+    changed |= record.forget_piece("codex_per_pane");
     // What the record says after this pass: a machine that was held and not
     // answered still waits, and a save that fails below leaves the file as it
     // was, so the next pass holds again rather than reading a lost hold as an
     // answer.
-    let held_for_onboarding = record_failure.is_none() && record.awaiting_choice();
-    if changed
-        && record_failure.is_none()
-        && let Err(reason) = record::save(&target.home, &record)
-    {
+    let held_for_onboarding = record.awaiting_choice();
+    if changed && let Err(reason) = record::save(&target.home, &record) {
         // The parts are in place; only the memory of having installed them
         // is not, so the next pass reinstalls rather than leaving one out.
         // Each part's row stays as it is.

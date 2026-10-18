@@ -1439,13 +1439,19 @@ export type KitComponent = {
  * names another registered device that reaches the same account there.
  */
 /** What stopped a machine's kit pass before it changed anything (`contracts/snapshot-wire-enums.json`: `kit_refusal_cause`). */
-export type KitRefusalCause = "unsafe" | "record" | "busy";
+export type KitRefusalCause = "unsafe" | "record" | "busy" | "projects" | "other";
 
 /** The variable that chose Hide's state folder (`kit_state_variable`), named so the operator knows what to change or unset. */
 export type KitStateVariable = "HIDE_STATE_DIR" | "XDG_STATE_HOME";
 
 /** A pass that stopped before changing anything; the kit's own words stay in the log. */
-export type KitRefusal = { cause: KitRefusalCause; path: string | null; variable: KitStateVariable | null };
+export type KitRefusal = {
+  cause: KitRefusalCause;
+  path: string | null;
+  variable: KitStateVariable | null;
+  /** With `variable`, on the machine whose app ran the pass: the command that stops its background service, which reads the variable only when it starts. */
+  stop?: string | null;
+};
 
 export type Kit = {
   unavailable: string | null;

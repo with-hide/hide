@@ -267,6 +267,20 @@ it("opens on a first pass that stopped before changing anything, says what stopp
   await unmount();
 });
 
+it("lets a refused first step be left with Not now, which closes it with no choice, and names this Mac's command that stops its background service", async () => {
+  const next = state(true, []);
+  next.rest.ui_state.agent_onboarding = null as never;
+  const stop = "HIDE_STATE_DIR='/Volumes/Team/hide' '/Applications/hide.app/Contents/Resources/hide' stop";
+  Object.assign(next.rest.navigator.devices[0]!.kit, { components: [], refused: { cause: "unsafe", path: "/Volumes/Team", variable: "HIDE_STATE_DIR", stop } });
+  const { events, unmount } = await mount(next);
+  const line = document.querySelector('[data-first-run-refused="unsafe"]')?.textContent ?? "";
+  expect(line).toContain("quit Hide, run this in a terminal, and open Hide again: " + stop);
+  const before = choices(events).length;
+  await act(async () => { (document.querySelector("[data-first-run-refused-close]") as HTMLButtonElement).click(); });
+  expect(choices(events).slice(before)).toEqual([{ schema_version: 2, kind: "first_run_advance", payload: { from: "agents" } }]);
+  await unmount();
+});
+
 it("on a Mac that already allows Hide, opens the notification step on, and its Continue turns the switch on with the step (B16)", async () => {
   const notify = vi.fn();
   vi.stubGlobal("hideHost", { kind: "electron", platform: "darwin", notify, notificationPermission: async () => "granted", onCommand: () => () => undefined, onNotificationOpen: () => () => undefined });

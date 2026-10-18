@@ -154,13 +154,17 @@ fn bundled(
         hide_kit::local_target(kit_dir, &home, &inputs.herdr_socket, Arc::clone(&env.stop));
     target.cli_dir = inputs.cli_dir;
     target.retirement_projects = inputs.projects;
-    match action {
+    let mut report = match action {
         KitAction::Apply | KitAction::Reinstall { .. } => {
-            to_value(hide_kit::apply(&target, &scope_of(action)))
+            hide_kit::apply(&target, &scope_of(action))
         }
-        KitAction::Status => to_value(hide_kit::status(&target)),
-        KitAction::Remove => Err(not_removed()),
+        KitAction::Status => hide_kit::status(&target),
+        KitAction::Remove => return Err(not_removed()),
+    };
+    if let Some(refusal) = report.refused.as_mut() {
+        refusal.name_stop(kit_dir, &hide_kit::layout::state_dir_from_process(&home));
     }
+    to_value(report)
 }
 
 /// A machine that runs Hide itself, as the core or as a node that dials

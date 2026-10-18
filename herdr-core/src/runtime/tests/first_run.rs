@@ -324,6 +324,9 @@ fn try_again_while_the_kit_cannot_run_records_nothing_and_reads_the_agents_again
     }
 }
 
+/// The command the app's own kit names to stop its background service.
+const STOP: &str = "HIDE_STATE_DIR='/srv/shared/hide' '/opt/hide/resources/hide' stop";
+
 /// A pass that stopped before changing anything, here a state folder
 /// `HIDE_STATE_DIR` chose that another account can change, refused by any
 /// system's rule.
@@ -332,7 +335,18 @@ fn refused_pass() -> KitReport {
         cause: hide_kit::RefusalCause::Unsafe,
         path: Some("/srv/shared".to_owned()),
         variable: Some(hide_kit::layout::StateVariable::HideStateDir),
+        stop: Some(STOP.to_owned()),
         detail: "the Hide state override cannot be inspected at /srv/shared".to_owned(),
+    })
+}
+
+fn refused_by(cause: hide_kit::RefusalCause) -> KitReport {
+    KitReport::refused(hide_kit::KitRefusal {
+        cause,
+        path: None,
+        variable: None,
+        stop: None,
+        detail: "the kit's own words".to_owned(),
     })
 }
 
@@ -365,7 +379,7 @@ fn a_refused_first_pass_opens_the_wizard_with_why_and_try_again_runs_the_pass() 
     let kit = local_kit(&runtime);
     assert_eq!(
         kit["refused"],
-        serde_json::json!({"cause": "unsafe", "path": "/srv/shared", "variable": "HIDE_STATE_DIR"}),
+        serde_json::json!({"cause": "unsafe", "path": "/srv/shared", "variable": "HIDE_STATE_DIR", "stop": STOP}),
         "the kit's own words stay in the log"
     );
     assert_eq!(kit["components"], serde_json::json!([]));
@@ -411,6 +425,64 @@ fn a_refused_first_pass_opens_the_wizard_with_why_and_try_again_runs_the_pass() 
         Some(crate::model::AgentOnboarding::Pending)
     );
     assert_eq!(step(&runtime), Some(FirstRunStep::Agents));
+}
+
+/// Whatever stopped the first pass, a new Mac's wizard opens with it.
+#[test]
+fn a_first_pass_refused_for_any_cause_opens_the_wizard() {
+    use hide_kit::RefusalCause::{Busy, Projects, Record};
+    for cause in [Busy, Record, Projects] {
+        let mut runtime = runtime();
+        report_here(&mut runtime, &refused_by(cause));
+        assert_eq!(step(&runtime), Some(FirstRunStep::Agents), "{cause:?}");
+    }
+}
+
+/// Clearing a refusal can take a terminal and a restart, so the operator
+/// may close the wizard; the same refusal read again keeps it closed, a
+/// different one opens it, and the question stays unanswered for the pass
+/// that runs. The agent step never closes this way while a pass can run.
+#[test]
+fn not_now_closes_a_refused_wizard_until_the_refusal_changes() {
+    let mut runtime = runtime();
+    let close = || event("first_run_advance", serde_json::json!({"from": "agents"}));
+    report_here(&mut runtime, &refused_pass());
+    assert!(runtime.dispatch_json(&close()));
+    assert_eq!(step(&runtime), None);
+    assert_eq!(runtime.snapshot().ui_state.agent_onboarding, None);
+
+    report_here(&mut runtime, &refused_pass());
+    assert_eq!(step(&runtime), None, "Settings' re-read reopens nothing");
+
+    report_here(&mut runtime, &refused_by(hide_kit::RefusalCause::Busy));
+    assert_eq!(step(&runtime), Some(FirstRunStep::Agents));
+
+    report_here(&mut runtime, &first_run_pass());
+    assert!(!runtime.dispatch_json(&close()));
+    assert_eq!(step(&runtime), Some(FirstRunStep::Agents));
+}
+
+/// The kit's own words reach the log once per refusal, not on every read
+/// while Settings is open.
+#[test]
+fn a_refusal_is_logged_when_it_appears_or_changes() {
+    let mut runtime = runtime();
+    let ((), records) = crate::diagnostics::capture(|| {
+        for _ in 0..3 {
+            report_here(&mut runtime, &refused_pass());
+        }
+        report_here(&mut runtime, &refused_by(hide_kit::RefusalCause::Busy));
+        report_here(&mut runtime, &refused_by(hide_kit::RefusalCause::Busy));
+    });
+    let causes: Vec<_> = records
+        .iter()
+        .filter(|record| record["kind"] == "kit.refused")
+        .map(|record| record["cause"].clone())
+        .collect();
+    assert_eq!(
+        causes,
+        [serde_json::json!("unsafe"), serde_json::json!("busy")]
+    );
 }
 
 /// An install that was set up before gets no wizard when a later pass is

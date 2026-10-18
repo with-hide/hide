@@ -168,7 +168,7 @@ pub fn preflight(target: &KitTarget) -> Result<(), KitRefusal> {
     }
     if target.retirement_projects.len() > MAX_ENTRIES {
         return Err(KitRefusal::new(
-            RefusalCause::Record,
+            RefusalCause::Projects,
             None,
             "registered checkouts exceed the preflight entry bound; inspect them before retirement",
         ));
@@ -533,6 +533,8 @@ fn project_preflight(project: &Path) -> Result<(), KitRefusal> {
     Ok(())
 }
 
+/// The retirement's state on a machine whose [`preflight`] the caller has
+/// just passed, so it is not inspected a second time.
 pub(crate) fn observe(target: &KitTarget) -> Observed {
     match load(target) {
         Err(refusal) => Observed::Blocked(refusal.into()),
@@ -541,12 +543,9 @@ pub(crate) fn observe(target: &KitTarget) -> Observed {
             Observed::Blocked(progress.failure.unwrap())
         }
         Ok(Some(progress)) => Observed::Stale(format!("retirement resumes at {}", progress.step)),
-        Ok(None) => match preflight(target) {
-            Err(refusal) => Observed::Blocked(refusal.into()),
-            Ok(()) => {
-                Observed::Stale("legacy coordination retirement has not run on this machine".into())
-            }
-        },
+        Ok(None) => {
+            Observed::Stale("legacy coordination retirement has not run on this machine".into())
+        }
     }
 }
 
