@@ -248,6 +248,11 @@ pub struct Ledger {
     pub agents: Vec<crate::coordination::AgentRecord>,
     #[serde(default)]
     pub spawns: Vec<crate::coordination::SpawnRecord>,
+    /// Registrations owed to agents Hide started that have not shown their
+    /// session yet. Left out of the file while there are none, so a ledger
+    /// without a wait reads the same to a build from before them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub identity_waits: Vec<crate::coordination::identity_wait::IdentityWait>,
     /// Changed only when durable spawn placement moves, never by letters or watches.
     #[serde(default)]
     pub spawn_placement_revision: u64,
@@ -268,6 +273,7 @@ impl Default for Ledger {
             watches: Vec::new(),
             agents: Vec::new(),
             spawns: Vec::new(),
+            identity_waits: Vec::new(),
             spawn_placement_revision: 0,
             node_clocks: BTreeMap::new(),
         }
