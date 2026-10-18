@@ -1318,6 +1318,20 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
         node.as_deref(),
         &format!("herdr-core:task:{}:tab", request.id),
     );
+    let at_checkout;
+    let request = if tab_folder(node.as_deref(), request) == request.cwd {
+        request
+    } else {
+        crate::diagnostic!(serde_json::json!({
+            "component": "worktree_control", "kind": "checkout_tab.folder_gone",
+            "task_id": request.id, "cwd": request.cwd,
+        }));
+        at_checkout = CheckoutTabRequest {
+            cwd: request.checkout_path.clone(),
+            ..request.clone()
+        };
+        &at_checkout
+    };
     let result = (|| {
         if let Some(scope) = request.resume_scope.as_ref() {
             target.check_current(request.id)?;
@@ -1374,6 +1388,24 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
         request.id,
         &|| target.check_current(request.id),
     );
+}
+
+/// The folder the tab opens in: its own while that is still a folder on
+/// the machine that runs the tab, else the checkout, so a conversation whose
+/// folder was removed since still resumes. Asked of the node, off the lock.
+fn tab_folder<'a>(
+    node: Option<&dyn crate::node_access::NodeLink>,
+    request: &'a CheckoutTabRequest,
+) -> &'a str {
+    match node {
+        Some(node)
+            if request.cwd != request.checkout_path
+                && !crate::node_access::is_directory(node, &request.cwd) =>
+        {
+            &request.checkout_path
+        }
+        _ => &request.cwd,
+    }
 }
 
 fn task_session_node(
@@ -2254,6 +2286,29 @@ mod tests {
     use std::collections::VecDeque;
     use std::io::{BufRead, BufReader, Write};
     use std::process::Command;
+
+    #[test]
+    fn a_tab_whose_saved_folder_is_gone_opens_at_its_checkout() {
+        let checkout = tempfile::tempdir().unwrap();
+        let inside = checkout.path().join("sub");
+        std::fs::create_dir(&inside).unwrap();
+        let request = |cwd: &std::path::Path| CheckoutTabRequest {
+            id: 1,
+            agent_kind: Some("claude".into()),
+            checkout_path: checkout.path().display().to_string(),
+            label: "resume".into(),
+            host: crate::checkout_owner::TabHost::Workspace("w1".into()),
+            resume_scope: None,
+            resume_reference: None,
+            focus: false,
+            cwd: cwd.display().to_string(),
+        };
+        let node = hide_node::Local::of_process();
+        let kept = request(&inside);
+        assert_eq!(tab_folder(Some(&node), &kept), kept.cwd);
+        let gone = request(&checkout.path().join("removed"));
+        assert_eq!(tab_folder(Some(&node), &gone), gone.checkout_path);
+    }
 
     // The only fake is the external server's newline-delimited protocol.
     struct Server {

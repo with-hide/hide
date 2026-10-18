@@ -33,7 +33,7 @@ export function errorNotice(error: { kind: string; message: string } | null | un
   if (error.kind.startsWith("pane_reopen.")) return { text: error.message, refreshable: false };
   // An archive that closed, saved or deleted nothing says why in one line (PRD session-archive B10, B12, B30).
   const archive = archiveNotice(error.kind);
-  if (archive) return { text: archive, refreshable: error.kind === "archive.status_unknown" || error.kind === "archive.close_unknown" };
+  if (archive) return { text: archive, refreshable: error.kind === "archive.status_unknown" };
   return null;
 }
 

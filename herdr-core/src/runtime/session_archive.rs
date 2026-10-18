@@ -1020,12 +1020,6 @@ impl Runtime {
                     _ => None,
                 };
                 if let Some(next) = next {
-                    // A tab that would not open may have been refused its
-                    // saved folder, which can be gone: the retry opens at
-                    // the checkout.
-                    if matches!(next, Resume::Failed { pane_id: None, .. }) {
-                        member.cwd = None;
-                    }
                     if let Resume::Failed { reason, .. } = &next {
                         crate::diagnostic!(serde_json::json!({
                             "component": "session_archive", "kind": "session_archive.resume_failed",

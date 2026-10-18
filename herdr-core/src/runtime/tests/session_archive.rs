@@ -551,37 +551,6 @@ fn a_partial_close_keeps_what_closed_and_lists_it_once_the_root_is_gone() {
     assert!(runtime.snapshot.navigator.archived_sessions[0].listed);
 }
 
-/// A resume whose tab would not open in the saved folder retries at the
-/// checkout, so a folder removed since the archive cannot fail every retry.
-#[test]
-fn a_resume_whose_tab_did_not_open_forgets_the_saved_folder() {
-    let (mut runtime, id) = archived_tree();
-    let parsed = crate::session_archive::ArchiveId::parse(&id).unwrap();
-    runtime
-        .snapshot
-        .ui_state
-        .session_archive
-        .records
-        .get_mut(&parsed)
-        .unwrap()
-        .members[0]
-        .cwd = Some(format!("{A}/gone"));
-    send(
-        &mut runtime,
-        "archive_resume",
-        serde_json::json!({"archive_id": id}),
-    );
-    let operation = runtime.snapshot.task_operation.clone().expect("a start");
-    runtime.ingest_task_operation_result(operation.id, Err("no such folder".into()));
-    runtime.advance_session_archive();
-    let (_, held) = record(&runtime).unwrap();
-    assert!(matches!(
-        held.members[0].resume,
-        Resume::Failed { pane_id: None, .. }
-    ));
-    assert_eq!(held.members[0].cwd, None);
-}
-
 /// B34: a close a restart left unknown is settled only from a fresh read of
 /// a machine Hide can reach; before that, every pane would look closed.
 #[test]
@@ -620,6 +589,60 @@ fn a_status_check_waits_for_a_fresh_read_before_it_calls_a_pane_closed() {
         serde_json::json!({"archive_id": id}),
     );
     assert_eq!(record(&runtime).unwrap().1.phase, ArchivePhase::Archived);
+}
+
+/// A device that is connected and whose panes were read but whose session
+/// has not loaded is not a fresh read: its panes would all look closed.
+#[test]
+fn a_status_check_waits_for_a_devices_session_to_load() {
+    use super::agent_sleep::delivery_panes;
+    let (mut runtime, id) = archived_tree();
+    let parsed = crate::session_archive::ArchiveId::parse(&id).unwrap();
+    {
+        let held = runtime
+            .snapshot
+            .ui_state
+            .session_archive
+            .records
+            .get_mut(&parsed)
+            .unwrap();
+        held.phase = ArchivePhase::CloseUnknown;
+        held.members[1].machine = "mini".into();
+    }
+    let node = runtime.node.as_str().to_owned();
+    runtime.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::Ledger::default()));
+    runtime.observe_delivery(&node, &delivery_panes(Vec::new()), Some("scope"), None);
+    runtime.delivery_panes.insert(
+        "mini".into(),
+        crate::coordination::PaneRead {
+            host_scope: None,
+            floor: None,
+            panes: Some(Default::default()),
+        },
+    );
+    runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
+        target_id: "mini".into(),
+        state: "connected".into(),
+        message: None,
+        herdr_version: None,
+        session: None,
+        files: RemoteFileListSnapshot::idle(),
+        catalog: Default::default(),
+        unreachable_since_unix_ms: None,
+    });
+    send(
+        &mut runtime,
+        "archive_check",
+        serde_json::json!({"archive_id": id}),
+    );
+    assert_eq!(
+        error_kind(&runtime).as_deref(),
+        Some("archive.device_disconnected")
+    );
+    assert_eq!(
+        record(&runtime).unwrap().1.phase,
+        ArchivePhase::CloseUnknown
+    );
 }
 
 /// A resumed child whose new pane closes before the delivery store sees it
