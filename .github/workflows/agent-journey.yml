@@ -143,11 +143,12 @@ jobs:
         id: herdr
         timeout-minutes: 5
         run: echo "bin=$(zsh scripts/fetch-herdr-runtime.sh --platform "$HERDR_PLATFORM")" >> "$GITHUB_OUTPUT"
-      - name: Build the Claude and Codex stand-ins
+      - name: Build the Claude and Codex stand-ins and the controller's spawn provider
         run: |
-          mkdir -p "$RUNNER_TEMP/journey-shims"
+          mkdir -p "$RUNNER_TEMP/journey-shims" "$RUNNER_TEMP/journey-controller"
           cc -O1 -o "$RUNNER_TEMP/journey-shims/claude" web/e2e/shims/claude-shim.c
           cp "$RUNNER_TEMP/journey-shims/claude" "$RUNNER_TEMP/journey-shims/codex"
+          cc -O2 -o "$RUNNER_TEMP/journey-controller/claude" web/e2e/shims/spawn-provider.c
       - name: The journey on the stand-ins
         id: journey
         # Above the journey's own cap for two agents (21 minutes, cli.py).
@@ -155,7 +156,8 @@ jobs:
         run: |
           set +e
           python3 scripts/agent-journey-check.py --mode ci \
-            --fixture-bin "$RUNNER_TEMP/journey-shims" --herdr-bin "${{ steps.herdr.outputs.bin }}" --run-dir "$RUN_DIR"
+            --fixture-bin "$RUNNER_TEMP/journey-shims" --controller-provider "$RUNNER_TEMP/journey-controller/claude" \
+            --herdr-bin "${{ steps.herdr.outputs.bin }}" --run-dir "$RUN_DIR"
           echo "exit=$?" >> "$GITHUB_OUTPUT"
       - name: The lane's verdict
         run: python3 scripts/agent-journey-lane.py "$RUN_DIR/report.json" --lane fixture
@@ -255,11 +257,26 @@ jobs:
             bin=$(zsh scripts/fetch-herdr-runtime.sh --platform "$HERDR_PLATFORM")
           fi
           echo "bin=$bin" >> "$GITHUB_OUTPUT"
+      - name: Build the controller's spawn provider
+        # Before the run, as the stand-ins are: a Windows link can outlast the
+        # run's 15-second command cap.
+        id: controller
+        run: |
+          provider="$RUNNER_TEMP/journey-controller/claude"
+          mkdir -p "${provider%/*}"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            provider+=.exe
+            clang -O2 -o "$provider" web/e2e/shims/spawn-provider.c
+          else
+            cc -O2 -o "$provider" web/e2e/shims/spawn-provider.c
+          fi
+          echo "provider=$provider" >> "$GITHUB_OUTPUT"
       - name: The journey against the fake model
         timeout-minutes: 75
         run: |
           set +e
           "$PYTHON" scripts/agent-journey-check.py --mode ci --fake-model --agents claude-code,codex,grok,opencode,pi,omp,antigravity \
+            --controller-provider "${{ steps.controller.outputs.provider }}" \
             --herdr-bin "${{ steps.herdr.outputs.bin }}" --run-dir "$RUN_DIR"
           echo "journey exit $?"
       - name: The lane's verdict
@@ -392,6 +409,21 @@ jobs:
             bin=$(zsh scripts/fetch-herdr-runtime.sh --platform "$HERDR_PLATFORM")
           fi
           echo "bin=$bin" >> "$GITHUB_OUTPUT"
+      - name: Build the controller's spawn provider
+        # Before the run, as the stand-ins are: a Windows link can outlast the
+        # run's 15-second command cap.
+        if: ${{ steps.agents.outputs.kinds != '' }}
+        id: controller
+        run: |
+          provider="$RUNNER_TEMP/journey-controller/claude"
+          mkdir -p "${provider%/*}"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            provider+=.exe
+            clang -O2 -o "$provider" web/e2e/shims/spawn-provider.c
+          else
+            cc -O2 -o "$provider" web/e2e/shims/spawn-provider.c
+          fi
+          echo "provider=$provider" >> "$GITHUB_OUTPUT"
       - name: The journey, signed in with the CI keys
         # The keys reach only this step; the journey keeps each one under the
         # run's probe, which its cleanup removes, and the report names them only.
@@ -412,6 +444,7 @@ jobs:
           args=(--model antigravity=gemini-3.8-flash-medium)
           [[ -n "$AGY_UNMEASURED" ]] && args+=(--unmeasured "antigravity=$AGY_UNMEASURED")
           "$PYTHON" scripts/agent-journey-check.py --mode ci "${args[@]}" \
+            --controller-provider "${{ steps.controller.outputs.provider }}" \
             --herdr-bin "${{ steps.herdr.outputs.bin }}" --run-dir "$RUN_DIR"
           echo "journey exit $?"
       - name: The lane's verdict

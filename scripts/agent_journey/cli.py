@@ -70,6 +70,9 @@ def parser():
     value.add_argument("--herdr-bin", type=Path, help="Previously fetched pinned Herdr; bytes are checked")
     value.add_argument("--fixture-bin", type=Path,
                        help="CI only: folder holding the compiled claude and codex stand-ins (web/e2e/shims)")
+    value.add_argument("--controller-provider", type=Path,
+                       help="The controller's spawn provider (web/e2e/shims/spawn-provider.c) already built; "
+                            "by default the run builds it")
     value.add_argument("--unmeasured", action="append", default=[], metavar="ID=REASON",
                        help="Leaves a selected agent unstarted, its cells not measured for REASON (a lane's quota rotation)")
     value.add_argument("--fake-model", action="store_true",
@@ -428,6 +431,8 @@ def main(argv=None):
     if local and sys.platform != "darwin":
         refuse("local_mode_runs_on_macos_only: it needs sandbox-exec and the keychain logins; the CI layer measures other systems")
     fixture_bin = args.fixture_bin.resolve() if args.fixture_bin else None
+    if args.controller_provider and not args.controller_provider.is_file():
+        refuse(f"controller_provider_missing: {args.controller_provider}")
     contract = load_contract(checkout)
     # A signed-in CI run reads which refusals leave a turn unmeasured before
     # it spends a request; a missing or misshapen contract stops it here.
@@ -561,7 +566,7 @@ def main(argv=None):
                     ci.fixture_config(runtime, rows[key]["herdr_kind"])
                     for name, reason in ci.FIXTURE_UNIMITATED.items():
                         cells.settle(table, key, name, cells.NOT_MEASURED, reason)
-            controller = Controller(runtime)
+            controller = Controller(runtime, args.controller_provider.resolve() if args.controller_provider else None)
             report["controller"] = controller.start()
             # Before any agent starts, so each start's guidance carries it.
             card = report["memory"] = (memory.seed(runtime, daemon, root, card_writer, token())
