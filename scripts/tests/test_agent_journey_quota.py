@@ -2,12 +2,13 @@
 
 import json
 from pathlib import Path
+import sqlite3
 import sys
 import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from agent_journey import quota
+from agent_journey import opencode_service, quota
 from agent_journey.quota import model_requests, spent_quota
 
 
@@ -124,6 +125,19 @@ class Requests(unittest.TestCase):
         self.assertEqual(model_requests("omp", [pi]), 2)
         agy = session({"type": "USER_INPUT"}, {"type": "PLANNER_RESPONSE"}, {"type": "SYSTEM_MESSAGE"}, {"type": "PLANNER_RESPONSE"})
         self.assertEqual(model_requests("agy", [agy]), 2)
+
+    def test_opencode_counts_the_assistant_messages_of_its_own_session(self):
+        with tempfile.TemporaryDirectory() as home:
+            database = Path(home) / opencode_service.DATA / "opencode.db"
+            database.parent.mkdir(parents=True)
+            with sqlite3.connect(database) as connection:
+                connection.execute("CREATE TABLE session_message (id TEXT, session_id TEXT, type TEXT)")
+                connection.executemany("INSERT INTO session_message VALUES (?, ?, ?)", [
+                    ("m1", "ses_a", "user"), ("m2", "ses_a", "assistant"), ("m3", "ses_a", "assistant"),
+                    ("m4", "ses_a", "idle"), ("m5", "ses_b", "assistant")])
+            connection.close()
+            self.assertEqual(model_requests("opencode", ["opencode/ses_a"], home), 2)
+            self.assertEqual(model_requests("opencode", ["opencode/ses_a", "opencode/ses_b"], home), 3)
 
     def test_codex_counts_token_count_events(self):
         path = session(*([{"type": "event_msg", "payload": {"type": "token_count"}}] * 3),

@@ -609,7 +609,7 @@ class Journey:
 
     def requests(self):
         """Model requests the run's sessions of this agent made."""
-        return model_requests(self.kind, self.paths)
+        return model_requests(self.kind, self.paths, self.sessions)
 
     def herdr_view(self, worktree):
         """What Herdr holds for a refused spawn: its workspaces and the

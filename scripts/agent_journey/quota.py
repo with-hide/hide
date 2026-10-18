@@ -12,6 +12,9 @@ refusal of theirs is a failure.
 
 import json
 from pathlib import Path
+import sqlite3
+
+from . import opencode_service
 
 CONTRACT = Path(__file__).resolve().parents[2] / "contracts" / "provider-quota.json"
 
@@ -131,7 +134,22 @@ def records(path):
     return found
 
 
-def model_requests(kind, paths):
+def opencode_responses(home, path):
+    """The assistant messages OpenCode 2 stored for the session `path` names
+    (`opencode/<id>`, as Hide's reader names it), one per model response,
+    read from its database under the probe's home."""
+    database = Path(home) / opencode_service.DATA / "opencode.db"
+    if not database.is_file():
+        return 0
+    connection = sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True, timeout=5)
+    try:
+        return connection.execute("SELECT count(*) FROM session_message WHERE session_id = ? AND type = 'assistant'",
+                                  (path.removeprefix("opencode/"),)).fetchone()[0]
+    finally:
+        connection.close()
+
+
+def model_requests(kind, paths, home=None):
     """Model requests an agent's sessions made: Claude Code writes one
     assistant record per response, several for one response sharing its
     message id, and a forked session repeats the responses it copied under
@@ -139,7 +157,10 @@ def model_requests(kind, paths):
     count event per response, and a forked rollout repeats none of its
     source's; Grok counts its model calls on each prompt's `turn_completed`
     usage, each prompt once across `paths`; Pi and omp write one assistant
-    message per response; agy one `PLANNER_RESPONSE` step."""
+    message per response; agy one `PLANNER_RESPONSE` step; OpenCode one
+    assistant message per response in its database under `home`."""
+    if kind == "opencode":
+        return sum(opencode_responses(home, path) for path in paths)
     if kind == "grok":
         calls = {}
         for path in paths:
