@@ -4128,6 +4128,18 @@ impl Runtime {
                                 .iter()
                                 .any(|checkout| checkout.path == path)
                     });
+                crate::diagnostic!(serde_json::json!({
+                    "component": "agent_start",
+                    "kind": "start.focus_disposition",
+                    "task_id": id,
+                    "pane_id": pane_id,
+                    "connection_generation": self.live_generation,
+                    "should_focus": should_focus,
+                    "waiting_for_catalog": waits_for_local_catalog,
+                    "local_checkout_owner": device.is_none().then(|| self.owner_workspace_of_path(&path)).flatten(),
+                    "focused_checkout_id": self.snapshot.navigator.focused_checkout_id,
+                    "selected_pane_id": self.snapshot.focused.pane_id,
+                }));
                 if should_focus && let Some(device) = device.as_deref() {
                     self.queue_start_focus(id, pane_id.clone());
                     self.follow_start(Some(device));
