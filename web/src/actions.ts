@@ -77,7 +77,7 @@ import type { FactoryCommand } from "./factory/commands";
 import { FACTORY_OPEN } from "./factory/launch";
 import { SECRETARY_PROMPT, paneListed } from "./factory/secretary";
 import type { DispatchFn } from "./ws";
-import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, newTabPolicy } from "./viewFocus";
+import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
 import { focusTerminal } from "./terminals";
 import { zoomViewer } from "./viewers/viewerZoom";
 import { submitDrop, type CapturedDrop } from "./explorerDrop";

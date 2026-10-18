@@ -46,6 +46,55 @@ describe("which pages the keyboard follows", () => {
   });
 });
 
+describe("Find while an agent answers its own search request", () => {
+  it.each([false, true])("follows the answer only while the keyboard stays at its origin (moved: %s)", async (moved) => {
+    const { act, createElement } = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const { FindBar } = await import("./Overlays");
+    const { TooltipProvider } = await import("./components/ui/tooltip");
+    const { installKeyboardOwner, keyboardCommandOwner, keyboardOwner, noteKeyboardOwner } = await import("./viewFocus");
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    useUiStore.setState({ overlay: null, agentFindRequest: null, screen: { kind: "workspace" } });
+    useShellStore.setState({ rest: { navigator: { agents: [{ pane_id: "pane-1", own_find: true }] } } as never, focusedPaneId: "pane-1", find: null });
+    document.body.innerHTML = '<div data-workspace-screen="c"><div data-pane-view="pane-1"><textarea></textarea></div><div data-view-area-id="a1"><input data-document /></div></div><button role="menu">Find</button><div data-find-host></div>';
+    const remove = installKeyboardOwner();
+    const root = createRoot(document.querySelector("[data-find-host]")!);
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    try {
+      act(() => root.render(createElement(TooltipProvider, null, createElement(FindBar, { actions }))));
+      document.querySelector("textarea")!.focus();
+      // A menu borrows focus; its command still belongs to the pane.
+      document.querySelector<HTMLButtonElement>('[role="menu"]')!.focus();
+      expect(keyboardCommandOwner()).toEqual({ kind: "pane", workspace: "c", paneId: "pane-1" });
+      expect(keyboardOwner()).toEqual({ kind: "none" });
+      act(() => actions.openFind());
+      const pending = useUiStore.getState().agentFindRequest!;
+      expect(sent).toEqual([{ schema_version: 2, kind: "pane_find_open", payload: { pane_id: "pane-1", request_id: pending.id } }]);
+      expect(document.querySelector("[data-find-bar]")).toBeNull();
+      const documentInput = document.querySelector<HTMLInputElement>("[data-document]")!;
+      if (moved) documentInput.focus();
+      act(() => useShellStore.setState({ find: { pane_id: "pane-1", term: "", index: 0, total: 0, opened: { request_id: pending.id, route: "bar" } } as never }));
+      expect(useUiStore.getState().agentFindRequest).toBeNull();
+      if (moved) {
+        expect(document.querySelector("[data-find-bar]")).toBeNull();
+        expect(document.activeElement).toBe(documentInput);
+      } else {
+        expect(document.querySelector("[data-find-bar] input")).not.toBeNull();
+        expect(document.activeElement).toBe(document.querySelector("[data-find-bar] input"));
+      }
+    } finally {
+      act(() => root.unmount());
+      remove();
+      noteKeyboardOwner({ kind: "none" });
+      document.body.innerHTML = "";
+      useUiStore.setState({ overlay: null, agentFindRequest: null });
+      useShellStore.setState({ rest: null, focusedPaneId: null, find: null });
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 // The MacBook's window after the core moved to the Mac mini: its own checkout
 // is in the node's session, and the path a pane prints is the MacBook's.
 describe("a terminal link to a file of this window's own checkout", () => {
