@@ -826,6 +826,65 @@ fn a_wait_for_context_starts_over_when_summaries_come_back() {
     assert_eq!(harness.backend.calls(), 0);
 }
 
+/// A turn that works again after its end found no context starts its wait
+/// over when it stops, even when its start was already asked.
+#[test]
+fn a_wait_for_context_starts_over_when_the_turn_works_again() {
+    let harness = Harness::new();
+    let (mut worker, woken, store, _client) = cold_ledger_worker(&harness);
+    let mut turns = vec![("user", "배포 스크립트 고쳐줘"), ("assistant", "고치는 중")];
+    let path = harness.session("a", "native-a", &turns);
+    harness.backend.begin("배포 스크립트 수정 작업");
+    observe(&mut worker, &agent(&path, "working", 3));
+    settle(&mut worker, &woken);
+    assert_eq!(harness.backend.calls(), 1, "the start was asked");
+    turns.push(("assistant", "잠시 멈춤"));
+    harness.session("a", "native-a", &turns);
+    observe(&mut worker, &agent(&path, "idle", 4));
+    settle(&mut worker, &woken);
+    turns.push(("assistant", "다시 고치는 중"));
+    harness.session("a", "native-a", &turns);
+    observe(&mut worker, &agent(&path, "working", 5));
+    settle(&mut worker, &woken);
+    let later = Instant::now() + Duration::from_secs(40);
+    turns.push(("assistant", "고쳤습니다"));
+    harness.session("a", "native-a", &turns);
+    let live = HashSet::from(["w1:p1".to_owned()]);
+    let ((), records) = crate::diagnostics::capture(|| {
+        worker.observe(&[agent(&path, "idle", 6)], Some(&live), later, 2_000);
+        worker.tick(later);
+        // The stop is read and its end found waiting at `later`, forty
+        // seconds after the first miss.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !worker.settled() {
+            assert!(Instant::now() < deadline, "the worker did not settle");
+            let _ = woken.recv_timeout(Duration::from_millis(200));
+            worker.drain(later, unix_now_ms());
+        }
+        worker.tick(later + Duration::from_secs(10));
+    });
+    assert!(
+        !records
+            .iter()
+            .any(|record| record["kind"] == "analysis.context_unavailable"),
+        "{records:?}"
+    );
+    assert!(
+        store.target(LOCAL_TARGET)["w1:p1"]
+            .analysis_turn_end
+            .is_none()
+    );
+    let ((), records) = crate::diagnostics::capture(|| {
+        worker.tick(later + Duration::from_secs(31));
+    });
+    assert!(
+        records
+            .iter()
+            .any(|record| record["kind"] == "analysis.context_unavailable"),
+        "{records:?}"
+    );
+}
+
 /// A worker whose ledger client has no context for any session yet.
 fn cold_ledger_worker(
     harness: &Harness,

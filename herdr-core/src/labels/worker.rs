@@ -541,6 +541,11 @@ impl LabelWorker {
                         pane.needs_read |= reference_token.is_some();
                         pane.follow_up_armed = status == "working";
                     }
+                    // The turn works again: its end, when it comes, waits
+                    // for its context afresh.
+                    if status == "working" {
+                        pane.context_wait = None;
+                    }
                     pane.agent = agent;
                     pane.status = status;
                     pane.reference = observed.reference.clone();
@@ -1415,9 +1420,6 @@ impl LabelWorker {
             pane.next_analysis_at = None;
             return false;
         };
-        if phase == AnalysisPhase::TurnStart {
-            pane.context_wait = None;
-        }
         // The turn ended while its start was held: the end is due now.
         if phase == AnalysisPhase::TurnEnd
             && let Some((_, due)) = pane.start_held.take()
