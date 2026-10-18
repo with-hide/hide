@@ -687,6 +687,14 @@ impl Runtime {
         }
     }
 
+    /// A user visit remains newer even after returning to the original empty
+    /// group or draft, which needs no Herdr focus turn of its own.
+    pub(super) fn supersede_group_start_navigation(&mut self) {
+        if let Some(active) = self.group_start.as_mut() {
+            active.global_focus = None;
+        }
+    }
+
     /// A targeted start keeps its selected slot. A global start may open its
     /// checkout if no intervening selection superseded the original press.
     pub(super) fn group_start_should_focus(&self, task: u64) -> bool {

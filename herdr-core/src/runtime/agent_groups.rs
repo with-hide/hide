@@ -89,6 +89,7 @@ impl Runtime {
         };
         let view = store.views.entry(&key.0, &key.1);
         let before = view.clone();
+        let selects = !matches!(payload.action, Action::Rename { .. });
         let stamp = unix_milliseconds();
         let result = (|| -> Result<(), GroupError> {
             match payload.action {
@@ -174,6 +175,9 @@ impl Runtime {
         if changed {
             self.persist_workspace_views();
         }
+        if selects {
+            self.supersede_group_start_navigation();
+        }
         self.show_agent_workspace_tab(&key, live);
         true
     }
@@ -234,6 +238,7 @@ impl Runtime {
             tab,
         });
         self.persist_workspace_views();
+        self.supersede_group_start_navigation();
         self.show_agent_workspace_tab(key, live);
         true
     }
@@ -304,6 +309,7 @@ impl Runtime {
         view.invalidate_agent_group_undo();
         self.consume_recent_closed(&key);
         self.persist_workspace_views();
+        self.supersede_group_start_navigation();
         self.show_agent_workspace_tab(&workspace, None);
         true
     }

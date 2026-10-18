@@ -2638,6 +2638,9 @@ impl Runtime {
         if supersedes_memory && self.snapshot.status.last_error.is_none() {
             self.supersede_memory_navigation();
         }
+        if (chooses_workspace || supersedes_memory) && self.snapshot.status.last_error.is_none() {
+            self.supersede_group_start_navigation();
+        }
         // A committed visit to another tab wakes what sleeps there (PRD
         // agent-sleep B12); a refused one moved nothing.
         if chooses_workspace && self.snapshot.status.last_error.is_none() {

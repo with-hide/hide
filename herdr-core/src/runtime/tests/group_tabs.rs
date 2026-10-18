@@ -31,6 +31,42 @@ fn a_global_start_can_open_another_checkout_until_a_selection_supersedes_it() {
     assert!(!runtime.group_start_should_focus(task));
 }
 
+#[test]
+fn a_global_start_stays_behind_after_an_empty_selection_round_trip() {
+    for draft in [false, true] {
+        let (mut runtime, _) = setup();
+        let other = create(&mut runtime, "other-group", "Other");
+        let origin = create(&mut runtime, "origin-group", "Origin");
+        if draft {
+            group(
+                &mut runtime,
+                "origin-draft",
+                json!({"action":"new_tab", "group_id":origin}),
+            );
+        }
+        let task = runtime
+            .begin_task_operation("agent_start", None, None, None, None)
+            .unwrap();
+        runtime
+            .prepare_group_start(
+                task,
+                (crate::node::TEST_NODE, "/another-checkout"),
+                None,
+                Some("global"),
+                None,
+                false,
+            )
+            .unwrap();
+        assert!(runtime.group_start_should_focus(task));
+        select(&mut runtime, "visit-other", Some(&other));
+        select(&mut runtime, "return-origin", Some(&origin));
+        assert!(
+            !runtime.group_start_should_focus(task),
+            "an intervening selection stays newer after returning to the original empty screen"
+        );
+    }
+}
+
 fn setup() -> (Runtime, String) {
     let (runtime, checkout) = tab_order_runtime(PATH);
     let mut runtime = with_new_views(runtime, "named-group-tabs");

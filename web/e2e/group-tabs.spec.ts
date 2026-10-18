@@ -4,12 +4,13 @@ import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { herdrHasFocus, startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { herdrGate } from "./herdr-gate";
 import { herdrTabs } from "./failure-dump";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot } from "./wire";
 import { quietFor } from "./wait";
+import { chord } from "./chords";
 
 test.describe.configure({ timeout: 150_000 });
 test.use({ actionTimeout: 15_000 });
@@ -138,6 +139,57 @@ test("terminal start fills the draft slot and duplicate intent delivery creates 
     expect(gate.params("layout.apply")).toHaveLength(1);
     await screenshot(page, "group-tabs-terminal-promoted");
   } finally { try { daemon?.stop(); } finally { try { await gate.stop(); } finally { herdr.stop(); } } }
+});
+
+test("a late global start stays behind after returning to an empty group or draft", async ({ page }) => {
+  for (const draft of [false, true]) {
+    const herdr = await startHerdr({ agents: false });
+    const gate = await herdrGate(herdr);
+    let daemon: Daemon | null = null;
+    try {
+      const beta = path.join(herdr.root, "beta");
+      fs.mkdirSync(beta);
+      herdr.run(["workspace", "create", "--cwd", beta, "--label", "beta", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
+      daemon = await startHided(herdr, "group-global-selection", undefined, { HERDR_SOCKET_PATH: gate.socket });
+      await open(page, daemon);
+      await createGroup(page, "Other");
+      const origin = await createGroup(page, "Origin");
+      if (draft) await page.locator("[data-new-agent-tab=true]").click();
+      const originalDraft = await blank(page).getAttribute("data-agent-tab-start");
+
+      await page.keyboard.press(chord("search"));
+      await page.locator('[data-palette="Search"] [data-palette-input]').fill("Start an agent");
+      await page.locator('[data-palette-row="command:start-agent"]').click();
+      const panel = page.locator("[data-start-panel]");
+      await panel.locator("[data-start-target]").click();
+      await page.locator('[data-start-target-option$="/beta"]').click();
+      await panel.locator("[data-start-text]").fill("selection-round-trip");
+      const held = gate.arm("layout.apply");
+      await panel.locator("[data-start-submit]").click();
+      await held;
+      await chooseGroup(page, "Other");
+      await chooseGroup(page, "Origin");
+      await gate.release();
+
+      // The real CLI must start, but this later visit retains the screen and
+      // Herdr focus even though its final group/draft equals the origin.
+      let started: string | undefined;
+      await expect.poll(() => {
+        const panes = herdr.run(["pane", "list"]) as { result: { panes: { pane_id: string }[] } };
+        started = panes.result.panes.find(({ pane_id }) => {
+          const info = herdr.run(["pane", "process-info", "--pane", pane_id]) as { result: { process_info: { foreground_processes: { argv?: string[] | null }[] } } };
+          return info.result.process_info.foreground_processes.some((process) => process.argv?.includes("selection-round-trip"));
+        })?.pane_id;
+        return started;
+      }, { timeout: 30_000 }).toBeTruthy();
+      await quietFor(page, 300, "a completed global start cannot undo a newer empty selection");
+      await expect(selector(page)).toHaveAttribute("data-agent-group-selector", origin);
+      await expect(blank(page)).toHaveAttribute("data-agent-tab-start", originalDraft!);
+      await expect(page.locator("[data-pane-view]")).toHaveCount(0);
+      expect(herdrHasFocus(herdr, started!)).toBe(false);
+      await screenshot(page, draft ? "group-tabs-global-keeps-draft" : "group-tabs-global-keeps-empty");
+    } finally { try { daemon?.stop(); } finally { try { await gate.stop(); } finally { herdr.stop(); } } }
+  }
 });
 
 test("adding an agent keeps the live tab and its existing pane, with the chosen model and prompt", async ({ page }) => {

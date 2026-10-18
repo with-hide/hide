@@ -55,8 +55,10 @@ function useStartAnswer() {
       const ui = useUiStore.getState();
       // A watched task reports the agent's own start after the panel is gone (the notice bar).
       if (answer.agentPhase) ui.setWatchedTask(answer.taskId);
-      // The pane is opened as an agent row opens it, so a device's pane moves rail, sidebar and center together.
-      if (answer.paneId) ui.setFocusWhenListed(answer.paneId);
+      // An agent start's core result owns selection and ordered Herdr focus.
+      // Opening it again here would undo a newer visit made while it waited.
+      // Worktree creation retains its separate open-when-listed flow.
+      if (answer.paneId && requestKind === "worktree_create") ui.setFocusWhenListed(answer.paneId);
       if (answer.agentPhase === "failed") panel.fail(startFailure(answer.agentMessage));
       else panel.finish(answer.agentPhase === "starting" ? answer.taskId : null);
       return true;
