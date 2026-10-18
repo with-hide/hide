@@ -1174,7 +1174,9 @@ impl Inner {
                 .and_then(|entry| entry.session.as_ref())
                 .filter(|session| session.mode == Mode::Control)
             {
-                let _ = Self::write_session_chunk(session, chunk);
+                if let Err(refused) = Self::write_session_chunk(session, chunk) {
+                    self.error(pane, "terminal.write_failed", refused.message(pane));
+                }
             } else {
                 permit.finish(Ok(()));
             }
