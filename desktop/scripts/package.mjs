@@ -236,7 +236,9 @@ const [outputDir] = await packager({
   platform,
   arch,
   overwrite: true,
-  asar: true,
+  // The packager's own default (native modules unpacked), plus the status page: with the shipped
+  // fuses `loadFile` cannot read a file inside the archive (`src/main/statusPage.ts`).
+  asar: { unpack: "**/{.**,**}/**/*.node", unpackDir: "dist/static" },
   prune: true,
   extraResource,
   // Only the bundles and the status page ship; sources, tests and tooling do not.
