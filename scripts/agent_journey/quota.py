@@ -90,7 +90,17 @@ def gemini_quotas(report, row):
     return quotas or None
 
 
-def gemini_spent(paths, row, home):
+def logs_since(home, since):
+    """agy's own logs under `home` written at or after `since` (Unix
+    seconds), oldest first: an older one is another run's, whose refusal says
+    nothing of this turn."""
+    if not home:
+        return []
+    written = [(log.stat().st_mtime, log) for log in (home / AGY_LOGS).glob("*.log")]
+    return [log for mtime, log in sorted(written) if mtime >= since]
+
+
+def gemini_spent(paths, row, home, since):
     """agy's turn that failed got no model answer (no `PLANNER_RESPONSE`
     after its last `USER_INPUT` in the transcripts Hide's reader read), and
     the newest error report in agy's own logs is a spent day. The log is
@@ -102,8 +112,7 @@ def gemini_spent(paths, row, home):
         last_input = max((index for index, step in enumerate(steps) if step == "USER_INPUT"), default=-1)
         if "PLANNER_RESPONSE" in steps[last_input + 1:]:
             return None
-    logs = sorted((home / AGY_LOGS).glob("*.log"), key=lambda log: log.stat().st_mtime) if home else []
-    for log in reversed(logs):
+    for log in reversed(logs_since(home, since)):
         try:
             lines = log.read_text(errors="replace").splitlines()
         except OSError:
@@ -119,7 +128,7 @@ KEPT_RECORDS = 20
 KEPT_RECORD_CHARS = 2000
 
 
-def agy_records(paths, home):
+def agy_records(paths, home, since):
     """agy's own records of a failed turn, kept as its evidence so the next
     refusal shows where an interactive agy reports it: each step its
     transcripts hold after their last `USER_INPUT` (its type, status and
@@ -132,7 +141,7 @@ def agy_records(paths, home):
         steps.extend({"type": record.get("type"), "status": record.get("status"),
                       "error": str(record["error"])[:KEPT_RECORD_CHARS] if "error" in record else None}
                      for record in found[last_input + 1:])
-    logs = sorted((home / AGY_LOGS).glob("*.log"), key=lambda log: log.stat().st_mtime)[-3:] if home else []
+    logs = logs_since(home, since)[-3:]
     lines = []
     for log in logs:
         try:
@@ -144,11 +153,12 @@ def agy_records(paths, home):
     return {"transcript_steps": steps[-KEPT_RECORDS:], "log_errors": lines[-KEPT_RECORDS:]}
 
 
-# Provider -> reader(session paths, row, the agent's HOME): the spent quota
+# Provider -> reader(session paths, row, the agent's HOME, when its journey
+# began): the spent quota
 # ids when the turn that failed got no model answer and ended on the provider
 # refusing quotas the row names, each above 0; otherwise None.
 READERS = {"gemini": gemini_spent}
-# Provider -> the agent's own records of a failed turn (session paths, HOME).
+# Provider -> the agent's own records of a failed turn (session paths, HOME, when its journey began).
 RECORDS = {"gemini": agy_records}
 
 
@@ -171,20 +181,20 @@ def contract(path=CONTRACT):
     return rows
 
 
-def spent_quota(agent, paths, rows, home=None):
+def spent_quota(agent, paths, rows, home, since):
     """The spent quota ids that leave the agent's failed turn unmeasured, or None."""
     name = next((name for name, row in rows.items() if agent in row["agents"]), None)
     if name is None:
         return None
     if name not in READERS:
         raise ValueError(f"provider_quota_reader_missing: {name} names {agent}, and the journey cannot read its refusals")
-    return READERS[name](paths, rows[name], home)
+    return READERS[name](paths, rows[name], home, since)
 
 
-def refusal_records(agent, paths, rows, home=None):
+def refusal_records(agent, paths, rows, home, since):
     """The agent's own records of a failed turn its provider row reads, or None."""
     name = next((name for name, row in rows.items() if agent in row["agents"]), None)
-    return RECORDS[name](paths, home) if name in RECORDS else None
+    return RECORDS[name](paths, home, since) if name in RECORDS else None
 
 
 def records(path):

@@ -51,13 +51,13 @@ class Quota(unittest.TestCase):
         # A per-minute limit and a spent plan in Claude's and Codex's own records.
         limited = session({"type": "assistant", "isApiErrorMessage": True, "error": "rate_limit"},
                           {"type": "event_msg", "payload": {"type": "error", "codex_error_info": "usage_limit_exceeded"}})
-        self.assertIsNone(spent_quota("claude-code", [limited], rows))
-        self.assertIsNone(spent_quota("codex", [limited], rows))
+        self.assertIsNone(spent_quota("claude-code", [limited], rows, None, 0))
+        self.assertIsNone(spent_quota("codex", [limited], rows, None, 0))
 
     def test_a_row_the_journey_cannot_read_is_an_error_not_a_pass(self):
         rows = quota.contract(contract_file({"anthropic": {**ROW, "agents": ["claude-code"]}}))
         with self.assertRaisesRegex(ValueError, "reader_missing"):
-            spent_quota("claude-code", [session({"type": "x"})], rows)
+            spent_quota("claude-code", [session({"type": "x"})], rows, None, 0)
 
     def test_the_repository_contract_has_the_shape_the_journey_reads(self):
         self.assertTrue(quota.contract())
@@ -82,23 +82,35 @@ class Gemini(unittest.TestCase):
         spent = (FIXTURES / "quota-spent.txt").read_text().strip()
         transcript = session({"type": "USER_INPUT"})
         self.log("I1018 agent started", spent)
-        self.assertEqual(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home),
+        self.assertEqual(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home, 0),
                          ["GenerateRequestsPerDayPerProjectPerModel-FreeTier"])
         # A turn the model answered, then ran out, is a failure.
         answered = session({"type": "USER_INPUT"}, {"type": "PLANNER_RESPONSE"})
-        self.assertIsNone(spent_quota("antigravity", [answered], {"gemini": ROW}, self.home))
+        self.assertIsNone(spent_quota("antigravity", [answered], {"gemini": ROW}, self.home, 0))
 
     def test_a_quota_of_zero_another_quota_or_no_report_is_a_failure(self):
         transcript = session({"type": "USER_INPUT"})
         self.log((FIXTURES / "quota-zero.txt").read_text().strip())
-        self.assertIsNone(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home))
+        self.assertIsNone(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home, 0))
         other = (FIXTURES / "quota-spent.txt").read_text().strip().replace(
             "GenerateRequestsPerDayPerProjectPerModel-FreeTier", "GenerateContentInputTokensPerModelPerMinute-FreeTier")
         self.log(other)
-        self.assertIsNone(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home))
+        self.assertIsNone(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home, 0))
         self.log("E1018 errorreport.go:224] error getting token source")
-        self.assertIsNone(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home))
+        self.assertIsNone(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home, 0))
 
+
+    def test_a_refusal_logged_before_the_journey_began_classifies_nothing(self):
+        # An earlier run in the same HOME left a spent day; this turn failed otherwise.
+        self.log((FIXTURES / "quota-spent.txt").read_text().strip())
+        log = self.home / quota.AGY_LOGS / "cli-1.log"
+        written = log.stat().st_mtime
+        transcript = session({"type": "USER_INPUT"})
+        self.assertIsNone(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home, written + 1))
+        self.assertEqual(quota.refusal_records("antigravity", [transcript], {"gemini": ROW}, self.home, written + 1),
+                         {"transcript_steps": [], "log_errors": []})
+        self.assertEqual(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home, written),
+                         ["GenerateRequestsPerDayPerProjectPerModel-FreeTier"])
 
     def interactive(self, source="errorreport.go:224", severity="E"):
         """The first of the two records an interactive agy logged for a spent
@@ -111,15 +123,15 @@ class Gemini(unittest.TestCase):
         recorded = (FIXTURES / "quota-spent-interactive.log").read_text().rstrip("\n")
         self.log("I1018 05:03:54.229659      50 server.go:1765] Language server version: 1.4.1", recorded,
                  "I1018 05:03:55.000000      50 server.go:1800] next")
-        self.assertEqual(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home),
+        self.assertEqual(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home, 0),
                          ["GenerateRequestsPerDayPerProjectPerModel-FreeTier"])
         # Only agy's own error report counts: an info record or another source carrying the text does not.
         for record in (self.interactive(severity="I"), self.interactive(source="executor.go:88")):
             with self.subTest(record=record[:40]):
                 self.log(record)
-                self.assertIsNone(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home))
+                self.assertIsNone(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home, 0))
         self.log(self.interactive().replace("Error 429", "Error 503").replace("RESOURCE_EXHAUSTED", "UNAVAILABLE"))
-        self.assertIsNone(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home))
+        self.assertIsNone(spent_quota("antigravity", [transcript], {"gemini": ROW}, self.home, 0))
 
     def test_a_failed_turn_keeps_agys_own_error_records_and_none_of_its_content(self):
         transcript = session({"type": "USER_INPUT", "status": "DONE", "content": "an earlier prompt"},
@@ -127,10 +139,10 @@ class Gemini(unittest.TestCase):
                              {"type": "USER_INPUT", "status": "DONE", "content": "the failed prompt"},
                              {"type": "GENERIC", "status": "ERROR", "error": "Error 429", "content": "kept out"})
         self.log("I1018 04:40:24.229659      50 server.go:1709] started", self.interactive())
-        kept = quota.refusal_records("antigravity", [transcript], {"gemini": ROW}, self.home)
+        kept = quota.refusal_records("antigravity", [transcript], {"gemini": ROW}, self.home, 0)
         self.assertEqual(kept, {"transcript_steps": [{"type": "GENERIC", "status": "ERROR", "error": "Error 429"}],
                                 "log_errors": [{"log": "cli-1.log", "record": self.interactive()}]})
-        self.assertIsNone(quota.refusal_records("claude-code", [transcript], {"gemini": ROW}, self.home))
+        self.assertIsNone(quota.refusal_records("claude-code", [transcript], {"gemini": ROW}, self.home, 0))
 
 
 class Requests(unittest.TestCase):

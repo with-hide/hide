@@ -83,6 +83,9 @@ class Journey:
         # where the lane classifies them (CI login, which passes the rows of
         # contracts/provider-quota.json), a spent daily quota.
         self.paths, self.quota = [], quota
+        # When this agent's journey began: its provider's own logs older than
+        # that are another run's, and never classify this run's failure.
+        self.since = time.time()
         # What the mode adds to the agent: arguments it passes, and the
         # environment it sets, recorded beside the spawn's own arguments.
         self.route = route
@@ -127,10 +130,10 @@ class Journey:
         status, reason = verdict
         if status == cells.FAIL and self.quota is not None:
             # What the agent itself recorded of the turn, where its provider row reads a refusal.
-            kept = refusal_records(self.id, self.paths, self.quota, self.sessions)
+            kept = refusal_records(self.id, self.paths, self.quota, self.sessions, self.since)
             refusal = self.evidence(f"{name}-refusal", kept) if kept is not None else None
             evidence = ", ".join(value for value in (evidence, refusal) if value) or None
-            spent = spent_quota(self.id, self.paths, self.quota, self.sessions)
+            spent = spent_quota(self.id, self.paths, self.quota, self.sessions, self.since)
             if spent:
                 # Not retried: a retry spends the requests again (docs/TESTING.md, A real agent on CI).
                 self.record["quota"] = spent
