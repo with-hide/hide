@@ -989,12 +989,12 @@ mod tests {
                 "state": state, "reason": null, "since_unix_ms": 1, "progress": null,
             });
         }
-        super::super::projection::project(&json!({"navigator": {"agents": [agent]}}), "local")
+        super::super::projection::project(&json!({"navigator": {"agents": [agent]}}), "test-node")
     }
 
     fn pane() -> AgentKey {
         AgentKey {
-            device_id: "local".to_owned(),
+            device_id: "test-node".to_owned(),
             pane_id: "w1:p1".to_owned(),
         }
     }
@@ -1023,7 +1023,7 @@ mod tests {
         });
         let message = |request_id: &str, body: Value| {
             let mut message = json!({
-                "type": "input", "request_id": request_id, "device_id": "local", "pane_id": "w1:p1",
+                "type": "input", "request_id": request_id, "device_id": "test-node", "pane_id": "w1:p1",
             });
             message
                 .as_object_mut()
@@ -1071,7 +1071,7 @@ mod tests {
     fn a_phone_wakes_only_a_sleeping_or_failed_pane_and_may_ask_for_a_new_session() {
         let message = |extra: Value| {
             let mut message = json!({
-                "type": "wake_agent", "request_id": "request-1", "device_id": "local", "pane_id": "w1:p1",
+                "type": "wake_agent", "request_id": "request-1", "device_id": "test-node", "pane_id": "w1:p1",
             });
             message
                 .as_object_mut()
@@ -1117,7 +1117,7 @@ mod tests {
 
         // The phone names a pane the list holds and nothing else.
         let other = AgentKey {
-            device_id: "local".to_owned(),
+            device_id: "test-node".to_owned(),
             pane_id: "w1:p9".to_owned(),
         };
         assert_eq!(wake_action(&message(json!({})), &sleeping, &other), None);
