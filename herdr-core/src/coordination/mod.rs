@@ -3,6 +3,7 @@
 
 mod executor;
 pub(crate) mod hook_tokens;
+pub(crate) mod identity_wait;
 pub(crate) mod lineage;
 pub(crate) mod naming;
 pub(crate) mod started;
@@ -370,6 +371,11 @@ pub(crate) enum Mutation {
     Complete {
         id: String,
     },
+    /// The agent Herdr took a start of has not shown its session yet: the
+    /// registration waits for it (`identity_wait`).
+    AwaitIdentity {
+        wait: identity_wait::IdentityWait,
+    },
 }
 
 impl AgentRecord {
@@ -646,6 +652,27 @@ pub(crate) fn validate_records(ledger: &Ledger) -> Result<(), String> {
                 record.mode != SpawnMode::Handoff
                     || task.target.as_deref().is_some_and(|target| !key(target))
             })
+        {
+            return Err("ledger_unavailable".into());
+        }
+    }
+    if ledger.identity_waits.len() > identity_wait::LIMIT {
+        return Err("capacity".into());
+    }
+    for wait in &ledger.identity_waits {
+        if !ids.insert(wait.id.as_str())
+            || !wait.id.starts_with("wait-")
+            || ![&wait.id, &wait.machine, &wait.pane, &wait.name, &wait.kind]
+                .into_iter()
+                .all(|s| key(s))
+            || !match &wait.owed {
+                identity_wait::Owed::Spawn { spawn } => {
+                    ledger.spawns.iter().any(|record| &record.id == spawn)
+                }
+                identity_wait::Owed::Fork { origin } => {
+                    ledger.agents.iter().any(|record| &record.id == origin)
+                }
+            }
         {
             return Err("ledger_unavailable".into());
         }
@@ -1038,6 +1065,7 @@ pub(crate) fn apply(
             spawn.auto_watch_id = auto_watch_id;
             Ok(json!(spawn))
         }
+        Mutation::AwaitIdentity { wait } => identity_wait::reserve(ledger, caller, wait),
     }
 }
 

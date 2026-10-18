@@ -1250,6 +1250,10 @@ mod tests {
                     {"repo": C_ROOT, "path": C_ROOT, "requested_path": C_ROOT, "pane": "w2:p2", "machine": ALIAS},
                     {"repo": X_ROOT, "path": X_ROOT, "requested_path": X_ROOT, "pane": "w3:p2", "machine": X},
                 ],
+                "identity_waits": ([M, ALIAS, X].iter().enumerate().map(|(index, machine)| json!({
+                    "id": format!("wait-{index}"), "machine": machine, "pane": format!("w{}:p3", index + 1),
+                    "name": format!("fork-{index}"), "kind": "codex", "owed": {"for": "fork", "origin": "agent-1"},
+                }))).collect::<Vec<_>>(),
                 "node_clocks": {
                     ALIAS: {"connected_ms": 600_000, "since": null},
                     X: {"connected_ms": 60_000, "since": null},
@@ -1429,6 +1433,13 @@ mod tests {
         assert_eq!(ledger["spawns"][0]["machine"], json!(M));
         assert!(ledger["spawns"][1].get("machine").is_none());
         assert_eq!(ledger["spawns"][2]["machine"], json!(X));
+        // A wait still names the machine whose writer judges it, and its pane
+        // stays that machine's own.
+        let waits = &ledger["identity_waits"];
+        assert_eq!(waits[0]["machine"], json!(M));
+        assert_eq!(waits[1]["machine"], json!(C));
+        assert_eq!(waits[2]["machine"], json!(X));
+        assert_eq!(waits[1]["pane"], json!("w2:p3"));
         assert_eq!(ledger["letters"][0]["body"], json!("from mini to studio"));
         let labels = read(&state.join(LABELS));
         assert_eq!(labels["targets"], json!({C: {"w2:p1": {"owner": "mini"}}}));
