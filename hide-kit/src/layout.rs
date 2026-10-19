@@ -25,6 +25,12 @@ pub fn hide_home(home: &Path) -> PathBuf {
     home.join(HIDE_HOME)
 }
 
+/// A disable-only switch, also written by cross-platform test fixtures.
+/// Unlike `fixture_home`, this grants no test or service-control authority.
+pub fn product_analytics_disabled(home: &Path) -> PathBuf {
+    hide_home(home).join("product-analytics-disabled")
+}
+
 /// Pinned CLIs shared by local keyless journey runs, never operator executables.
 pub fn journey_cli_cache(home: &Path) -> PathBuf {
     hide_home(home).join("cache/journey-clis")
@@ -163,6 +169,13 @@ pub fn links_store(state_dir: &Path) -> PathBuf {
 
 /// Usage events and retained daily totals, owned by the core's usage worker.
 pub const USAGE_STORE: &str = "usage.sqlite3";
+
+/// Random product statistics identity, unrelated to host or account identity.
+pub const PRODUCT_ANALYTICS_ID: &str = "product-analytics-id";
+
+pub fn product_analytics_id(state_dir: &Path) -> PathBuf {
+    state_dir.join(PRODUCT_ANALYTICS_ID)
+}
 
 pub fn usage_store(state_dir: &Path) -> PathBuf {
     state_dir.join(USAGE_STORE)

@@ -6,6 +6,25 @@ Read it in full before changing anything under `herdr-core/`, `hided/`, `web/` o
 [AGENTS.md](../AGENTS.md) keeps the short form of the ownership split; this is the long form with the reasons.
 The code is the executable authority: `herdr-core/src/` for the core, `hided/src/` for the daemon that hosts it, `web/src/` for the shell, `desktop/src/main/` for the desktop host, and the tests beside each.
 
+## Product usage statistics
+
+The core owns the persisted `ui_state.product_analytics_enabled` choice, default true; Settings changes it with `product_analytics_set`, and generic UI saves cannot overwrite it.
+The web shell emits `product_analytics_connected` once after its first snapshot per page lifetime, without recounting WebSocket reconnects.
+The router's content-free `AiUsageSink::started` callback runs immediately before each actual backend invocation, including retries and fallbacks; joined duplicate requests, admission refusals and calls cancelled before invocation add none.
+This counts invocations, not successful answers or billed calls, and is separate from the local usage ledger.
+`herdr-core/src/product_analytics.rs` admits only `hide_connected` and `hide_ai_called` and accepts no caller-supplied properties.
+The daemon's `product_analytics` worker sends those event names, a random installation UUID, an event UUID and timestamp to PostHog US over TLS; the only properties are `distinct_id`, `$process_person_profile: false`, `$geoip_disable: true` and `$ip: null`.
+No prompt, response, conversation, code, path, file name, provider, model, token count, account identity, device name or local usage ledger enters that transport.
+The private `product-analytics-id` file under the core state directory holds the random UUID; it derives from neither the account nor hardware, and remains stable across restarts and moves with the core's state.
+The server necessarily observes the connection's source IP; project-side Discard client IP data complements the event flags, and this design does not assert that the events are legally anonymous or that opt-out is sufficient in every jurisdiction.
+The owning operator must disclose the purpose, data fields, US destination and opt-out in the product's privacy notice, and assess prior consent where applicable.
+One worker waits on a condition variable, retains at most 128 events in memory, sends one at a time with a five-second global HTTP timeout and no redirects, retries or disk spool, and drops pending events on opt-out or shutdown.
+Its owner joins it outside `Mutex<Runtime>`; transport failure, a full queue or an invalid identity produces a content-free diagnostic and cannot block a provider request or turn into a user alert.
+An already-started send may finish after opt-out; nothing observed while disabled is retained or replayed on re-enable.
+The worker is enabled from persisted state before AI workers start; an absent build token, a privileged device fixture HOME or a HOME carrying `~/.hide/product-analytics-disabled` starts no transport.
+All browser/desktop and package smoke fixture homes write that disable-only marker on every system; it grants no fixture service-control authority.
+See [the build input](BUILD.md#product-analytics-build-input) and [Settings](UI_BEHAVIOR.md#privacy); transport tests use a real loopback HTTP peer, router tests distinguish invocations from retries and cancellation, and the Settings journey restarts the daemon after an opt-out.
+
 ## State placement and publication
 
 The front Workspace's Git header is ephemeral core state (`runtime/checkout_git.rs`), projected only into that device/path's `workspace_view.git`, never persisted or inferred from visibility-gated Changes rows.

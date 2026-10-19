@@ -703,7 +703,7 @@ fn owner_loop(
         .to_path_buf();
     own_node = own_node
         .keeping_worktree_facts_in(hide_kit::layout::worktree_facts(&state_dir))
-        .keeping_feedback_in(state_dir);
+        .keeping_feedback_in(state_dir.clone());
     if let Some(socket) = options.herdr_socket_path.as_deref() {
         own_node = own_node.with_herdr_socket(std::path::PathBuf::from(socket));
     }
@@ -745,13 +745,27 @@ fn owner_loop(
     )
     .with_pane_events(panes)
     .with_terminals(Arc::clone(&terminals) as Arc<dyn DeviceSink>);
-    let Some(core) = Core::create(
+    let analytics = crate::env::product_analytics_token().and_then(|token| {
+        match crate::product_analytics::Worker::start(home.as_deref(), &state_dir, token) {
+            Ok(worker) => worker,
+            Err(reason) => {
+                herdr_core::diagnostic!(
+                    serde_json::json!({ "component": "product_analytics", "kind": reason })
+                );
+                None
+            }
+        }
+    });
+    let Some(core) = Core::create_with_product_analytics(
         options,
         std::sync::Arc::new(own_node),
         own_herdr,
         std::sync::Arc::new(devices),
         terminals,
         terminal_reports,
+        analytics.as_ref().map(|worker| {
+            Arc::clone(&worker.client) as Arc<dyn herdr_core::product_analytics::Sink>
+        }),
     ) else {
         let _ = ready.send(Err(
             "herdr-core create failed (check schema_version and paths)".to_owned(),

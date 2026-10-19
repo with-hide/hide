@@ -5,7 +5,7 @@
 // shows as pending until the snapshot says it landed. The sheet is the shell:
 // each page is its own module under `settings/`.
 
-import { BellIcon, GaugeIcon, BotIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, SlidersHorizontalIcon, SmartphoneIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
+import { BellIcon, GaugeIcon, BotIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, ShieldIcon, SlidersHorizontalIcon, SmartphoneIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
 import { GithubIcon } from "./components/github-icon";
 import { useState } from "react";
 import type { Actions } from "./actions";
@@ -26,6 +26,7 @@ import { HideAiTab } from "./settings/HideAiTab";
 import { UsageTab } from "./settings/UsageTab";
 import { NotificationsTab } from "./settings/NotificationsTab";
 import { ShortcutsTab } from "./settings/ShortcutsTab";
+import { PrivacyTab } from "./settings/PrivacyTab";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { ProjectSettingsSheet } from "./ProjectSettingsSheet";
@@ -47,6 +48,7 @@ const TAB_ICONS: Record<SettingsTab, LucideIcon> = {
   mobile: SmartphoneIcon,
   github: GithubIcon,
   about: InfoIcon,
+  privacy: ShieldIcon,
 };
 
 function SettingsSheet({ actions }: { actions: Actions }) {
@@ -78,7 +80,7 @@ function SettingsSheet({ actions }: { actions: Actions }) {
           <nav className="flex min-h-0 w-(--size-settings-nav-w) shrink-0 flex-col overflow-hidden border-r border-border bg-sidebar px-sm pb-md pt-sm">
             <DialogTitle className="shrink-0 px-sm pb-xs text-title font-semibold">{t("common.settings")}</DialogTitle>
             <TabsList aria-label={t("settings.section")} className="min-h-0 w-full flex-1 flex-col items-stretch gap-xxs rounded-none bg-transparent p-none">
-              <div className="flex min-h-0 flex-1 flex-col gap-xxs overflow-y-auto" data-settings-page-list="true">
+              <div className="flex min-h-0 flex-1 scroll-py-xxs flex-col gap-xxs overflow-y-auto pb-xxs" data-settings-page-list="true">
                 {SETTINGS_GROUPS.map((group) => (
                   <div key={group.id} className="flex shrink-0 flex-col gap-xxs" data-settings-nav-group={group.id}>
                     <div className="truncate px-sm pb-xs pt-xs text-micro font-medium text-muted-foreground">{groupName(group.id)}</div>
@@ -90,6 +92,7 @@ function SettingsSheet({ actions }: { actions: Actions }) {
               </div>
               <div className="flex shrink-0 flex-col pt-xs">
                 <NavItem tab="about" label={t("settings.tabs.about")} />
+                <NavItem tab="privacy" label={t("settings.tabs.privacy")} />
               </div>
             </TabsList>
           </nav>
@@ -112,7 +115,7 @@ function SettingsSheet({ actions }: { actions: Actions }) {
                 </Button>
               </Hint>
             </header>
-            {/* The page scrolls independently; large text can also scroll the page list above its fixed About row. */}
+            {/* The page scrolls independently; large text can also scroll the page list above its fixed footer rows. */}
             <TabsContent value={tab} className="min-h-0 overflow-auto px-xl pb-xl focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" data-settings-page={tab}>
               {tab === "general" ? <GeneralTab actions={actions} /> : null}
               {tab === "notifications" ? <NotificationsTab actions={actions} /> : null}
@@ -124,6 +127,7 @@ function SettingsSheet({ actions }: { actions: Actions }) {
               {tab === "mobile" ? <MobileTab actions={actions} /> : null}
               {tab === "github" ? <GithubTab actions={actions} /> : null}
               {tab === "about" ? <AboutTab /> : null}
+              {tab === "privacy" ? <PrivacyTab actions={actions} /> : null}
             </TabsContent>
           </div>
         </Tabs>

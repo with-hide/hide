@@ -66,6 +66,7 @@ pub const MOVES_WITH_CORE: &[&str] = &[
     DELIVERY_LEDGER,
     LINKS,
     hide_kit::layout::USAGE_STORE,
+    hide_kit::layout::PRODUCT_ANALYTICS_ID,
     LOCAL_ISSUES,
     PROJECT_MEMORY,
     SESSION_SEARCH,
@@ -781,6 +782,7 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
 /// Workspace bridges, logs, and this conversion's own files. A file in the
 /// folder that is neither here nor in `KEYS` fails the contract test.
 pub const UNBOUND: &[&str] = &[
+    hide_kit::layout::PRODUCT_ANALYTICS_ID,
     "hided.json",
     "hided.lock",
     "connect.lock",
@@ -1881,6 +1883,7 @@ mod tests {
         "agent_logo_mode",
         "color_theme",
         "interface_language",
+        "product_analytics_enabled",
         "usage",
         "agent_onboarding",
         "agent_onboarding_agents",

@@ -141,6 +141,8 @@ struct StoredUiState {
     first_run_choices: crate::model::FirstRunChoices,
     #[serde(default)]
     desktop_notifications: bool,
+    #[serde(default = "default_panel_visible")]
+    product_analytics_enabled: bool,
     /// Absent in a store from before the split: keep the old shared choice.
     #[serde(default)]
     desktop_notifications_done: Option<bool>,
@@ -485,6 +487,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             first_run: stored.first_run,
             first_run_choices: stored.first_run_choices,
             desktop_notifications: stored.desktop_notifications,
+            product_analytics_enabled: stored.product_analytics_enabled,
             desktop_notifications_done: stored
                 .desktop_notifications_done
                 .unwrap_or(stored.desktop_notifications),
@@ -655,6 +658,7 @@ pub fn save(
         first_run: state.first_run,
         first_run_choices: state.first_run_choices.clone(),
         desktop_notifications: state.desktop_notifications,
+        product_analytics_enabled: state.product_analytics_enabled,
         desktop_notifications_done: Some(state.desktop_notifications_done),
         screen_intros_seen: state.screen_intros_seen.clone(),
         sidebar_width: state.sidebar_width,

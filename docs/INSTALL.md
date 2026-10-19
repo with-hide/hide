@@ -350,6 +350,9 @@ Everything Hide owns on a machine is under `~/.hide`:
 | `~/.hide/shell-integration` | The zsh and bash startup files a tab Hide makes for an agent starts its shell with, which read your own startup files and then mark the first prompt; one folder per build, another build's removed once unused for an hour |
 
 Every folder Hide makes there is private to your account (0700; on Windows an access list naming only your account).
+When a build has product statistics configured, the state folder also holds `product-analytics-id`, a private random installation UUID unrelated to account or hardware identity.
+Settings > Privacy turns usage statistics off; [product usage statistics](ARCHITECTURE.md#product-usage-statistics) lists the exact fields sent to PostHog US and the shutdown boundary.
+Creating `~/.hide/product-analytics-disabled` before startup prevents the external worker from starting, independently of the saved setting; test fixtures use the same disable-only switch.
 The daemon makes its state folder private each time it starts: a folder of your account that an earlier build left open, as a device's helper left `~/.hide/state` at 0755, is closed and the log records `state.made_private`; a state folder that is a link or belongs to another account is refused, no daemon starts on it, and `hide connect` answers `start_failed` naming the folder.
 
 Outside it stay only what another program reads at a place it chose: each agent's hook entry, plugin, extension and skill stub ([agent-hooks.md](agent-hooks.md#what-is-written-and-where)), the `hide` link in `~/.local/bin` (`hide.cmd` and its junction on Windows), and on Windows the Start menu entry and notification registration.

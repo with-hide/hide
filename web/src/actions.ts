@@ -1299,6 +1299,9 @@ export function createActions(send: DispatchFn) {
     },
 
     /** Needs You, with an optional Done choice for the reopened wizard's Not now. */
+    setProductAnalytics(enabled: boolean) {
+      dispatch({ schema_version: 2, kind: "product_analytics_set", payload: { enabled } });
+    },
     setDesktopNotifications(enabled: boolean, doneEnabled?: boolean) {
       dispatch({ schema_version: 2, kind: "desktop_notifications_set", payload: doneEnabled === undefined ? { enabled } : { enabled, done_enabled: doneEnabled } });
     },

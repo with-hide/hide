@@ -2186,9 +2186,9 @@ All pages use the four interface languages, existing settings rows, system contr
 
 Settings opens as one modal, from ⌘,, the sidebar's gear and the desktop menu's Settings…, about 880 wide (`--size-settings-sheet-w`) and as wide and tall as the window allows with the window inset (`--size-settings-sheet-window-inset`) clear on every side (PRD settings-left-nav B1, B13).
 Its left is a list of pages and its right the chosen page; the list keeps its width (`--size-settings-nav-w`) and its place while only the page scrolls, down to the smallest window, 720×480 (B12, B13).
-The list reads, top to bottom: the group name `App` with General, Notifications, Usage, Devices and Shortcuts, the group name the core's machine goes by (`This Mac`, as the sidebar calls it, and its name on a window of a machine whose core runs elsewhere, since Hide AI, Mobile and GitHub are the core's machine's) with Agents, Hide AI, Mobile and GitHub, and About apart at the list's foot (B2).
+The list reads, top to bottom: the group name `App` with General, Notifications, Usage, Devices and Shortcuts, the group name the core's machine goes by (`This Mac`, as the sidebar calls it, and its name on a window of a machine whose core runs elsewhere, since Hide AI, Mobile and GitHub are the core's machine's) with Agents, Hide AI, Mobile and GitHub, and About followed by Privacy apart at the list's foot (B2).
 Its top inset uses `spacing-sm` and group labels use `spacing-xs` above and below, so the additional Usage page fits at 720×480 with the default Interface text without shrinking row targets.
-When larger Interface text makes the list overflow, its grouped pages scroll independently while About stays pinned at the foot; every page remains reachable by pointer or keyboard, and scrolling either the list or the page does not move the other.
+When Interface text makes the list overflow, its grouped pages scroll independently while About and Privacy stay pinned at the foot; every page remains reachable by pointer or keyboard, and scrolling either the list or the page does not move the other.
 Each page has its mark and its name, the names are the same in every language, and a group name is a label, never a page.
 The chosen page has the selection fill; Up and Down move through the list and show each page as they go, Home and End reach its ends, and Tab leaves the list for the close button (and a remote device's chip before it) and then the page, which takes focus itself with a ring so the keyboard can scroll it before reaching its first control (B3).
 A page has its title and no description line (B4).
@@ -2198,7 +2198,8 @@ Settings opens on General unless the way in names a page: Explorer's and a devic
 
 ### General
 
-General is Appearance alone: one group with Language, Color theme, Mode, Accent and Interface text; Accent shows its swatches and no hex value, and Interface text carries one note that the sidebar keeps its own sizes (PRD settings-left-nav B5; hide-color-theme B1).
+General has the Appearance group.
+Appearance contains Language, Color theme, Mode, Accent and Interface text; Accent shows its swatches and no hex value, and Interface text carries one note that the sidebar keeps its own sizes (PRD settings-left-nav B5; hide-color-theme B1).
 Color theme chooses the palette every window draws in, Hide or Neutral, as a segmented toggle like Mode's, each name led by a small swatch of its brand color, the same in Light and Dark (Hide the owl mark's blue-grey, Neutral a grey), and no color code; it waits for a live connection, as Language does.
 Hide is the landing page's Owl Field palette and the default, including for an install that never chose; Neutral is the grey chrome.
 Both have their own sixteen terminal colors, each readable at 4.5:1 on its background, and the choice changes the sidebar, tabs, pane headers, terminals, editors, sheets and popovers at once, keeping a terminal's content, scroll position, half-typed line and selection.
@@ -2207,6 +2208,14 @@ The status marks' colours (the warning badge, the working ring, the green and th
 Mode is the former Theme row unchanged: System, Light or Dark, each color theme having both.
 The choice is the core's, one for every window attached to it, and survives a restart of the app or of hided; the first paint, the desktop window before the page draws and the host status page are Hide Dark, and a paired phone draws the operator's color theme in its own light or dark.
 A stored value this build does not know opens Hide with only the `ui_state.color_theme_unknown` diagnostic.
+
+### Privacy
+
+Privacy is the last Settings tab and holds Send usage statistics, enabled by default and disabled while disconnected.
+Its short note says that connection and AI call counts are collected and that conversations and code are not sent.
+The core persists the choice, shares it between windows and preserves it against stale generic UI saves.
+Turning it off discards waiting events and prevents new ones; a request already in flight may finish, and turning it back on never replays disabled events.
+Product analytics has no autocapture, session recording, person profiles or location enrichment; [the architecture contract](ARCHITECTURE.md#product-usage-statistics) owns the PostHog US destination, exact wire fields and worker limits.
 
 ### Notifications
 

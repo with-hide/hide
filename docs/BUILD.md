@@ -153,6 +153,16 @@ The Windows/Linux package smoke uses an isolated HOME and Herdr socket to check 
 It then uses a second complete package fixture with an executable overlay that changes the daemon hash, proving replacement, refreshed command and hook paths, same-build reuse and standalone refusal.
 All test daemons and temporary files are cleaned up on failure as well as success.
 
+## Product analytics build input
+
+`HIDE_POSTHOG_PROJECT_TOKEN` is an optional public ingestion token embedded into hided at build time, validated by `hided/build.rs` and listed in `hided/src/env.rs` and `hided/.env.example`.
+It must start with `phc_`, contain only ASCII letters, digits or underscores, and have 20 to 128 bytes; invalid values fail the build without printing the value.
+An absent or empty value produces a build with no external analytics transport.
+The disable-only `~/.hide/product-analytics-disabled` marker suppresses transport even in a configured build; shared browser/desktop fixtures and package smoke homes write it on every system, without granting the privileged device fixture's service-control rights.
+`package.yml` supplies the repository Actions variable of the same name on every packaging system; a personal PostHog API key must never be used.
+Local builders export the variable before the build; the example file is not auto-loaded, and the running binary does not read a runtime override.
+See [product usage statistics](ARCHITECTURE.md#product-usage-statistics) for the events and privacy boundary.
+
 ## The desktop app
 
 `desktop/` is a pnpm workspace member; `pnpm install` at the root installs it with the web shell.
@@ -238,6 +248,32 @@ pnpm --dir desktop package
 Apple usually answers within minutes; the run leaves no archive unless Apple accepts the app and Gatekeeper accepts the app expanded from the archive as notarized.
 `xcrun notarytool history` lists past submissions and `xcrun notarytool log <submission id>` says why one was refused, each with `--key`, `--key-id` and `--issuer` given the same three values.
 The command installs nothing; [The Installed App Is The Operator's](../AGENTS.md#the-installed-app-is-the-operators) governs replacing `/Applications/hide.app` with what it built.
+
+## Unsigned release candidates
+
+`release-candidate.yml` is a manual preparation workflow on protected `main`.
+It creates no tag or release and reads no signing credential.
+Its four required string inputs are `public_sha` (a full lowercase commit SHA), `tag` (`vX.Y.Z` or `vX.Y.Z-rc.N`), `verification_run_id` (the successful `pr.yml` push/main run of that exact source), and `build_order` (a positive decimal integer no larger than 9007199254740991).
+The source must already be an ancestor of main; a branch, fork, PR run, incomplete run or different source is refused before building or using provider keys.
+The workflow revision is main's dispatch revision and may differ from the source revision it builds.
+
+The workflow reuses `package.yml` for unsigned Linux and Windows installers, including their installation, packaged-window and update checks.
+It runs the full existing `agent-journey.yml` on the same source, with stand-ins, fake and signed-in lanes on all three systems and agy signed in on Linux only, under the journey's existing missing-key and quota policy.
+The reusable workflows' optional `source-sha` defaults to the caller commit, and `package.yml`'s optional `build-order` defaults to its existing history-based ordering, so existing callers keep their behavior.
+An explicit order allows separately prepared packages of one numeric version to share one build identity.
+The operator assigns a strictly increasing order within that numeric version, including release-candidate to stable transitions; a private-only change takes a new patch version.
+
+Only after packaging and the full journey succeed does the workflow upload `hide-release-candidate`, containing only `candidate.json`:
+
+```json
+{"schema":1,"repository":"with-hide/hide","public_sha":"<source SHA>","tag":"vX.Y.Z","build_order":"<decimal>","verification_run_id":"<decimal>","workflow_sha":"<workflow SHA>","run_id":"<decimal>","run_attempt":1}
+```
+
+The installer artifacts keep the names `hide-package-linux` and `hide-package-windows`; candidate artifacts expire after seven days.
+All receipt fields describe public facts, with IDs and order as decimal strings and `schema` and `run_attempt` as integers.
+A consumer verifies the successful manual main run, its trusted workflow revision, current attempt, matching receipt and artifact inventory before consuming it; a receipt alone proves neither GitHub origin nor that a package is signed.
+Run evidence and reports remain workflow artifacts, separate from distributable files.
+This preparation path does not change the active tag-triggered publisher or release approval procedure below.
 
 ## Release asset gate
 

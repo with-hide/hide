@@ -6,6 +6,8 @@ A document's location or an old PRD citation does not make it current authority.
 
 ## Current sources of truth
 
+Product usage statistics: [wire, ownership and privacy](ARCHITECTURE.md#product-usage-statistics), [Settings](UI_BEHAVIOR.md#privacy), [build input](BUILD.md#product-analytics-build-input); owners are `hided/src/product_analytics.rs`, `herdr-core/src/product_analytics.rs`, the AI router, and `web/e2e/product-analytics.spec.ts`.
+
 | Question | Read | Executable authority or enforcement |
 | --- | --- | --- |
 | Working rules, routing, and the invariants that hold everywhere | [AGENTS.md](../AGENTS.md) | `herdr-core/`, `hided/`, `web/`, `desktop/`, relevant local rules |
@@ -48,6 +50,7 @@ A document's location or an old PRD citation does not make it current authority.
 | Install, update, bundle contents | [INSTALL.md](INSTALL.md) | `desktop/scripts/package.mjs`, `desktop/scripts/smoke-package.mjs`, `.github/workflows/release.yml`, `.github/workflows/package.yml`, `desktop/resources/` |
 | What each system (macOS, Windows, Linux) supports, the one record of every per-system gap and how each cell is proved | [INSTALL.md: What each system supports](INSTALL.md#what-each-system-supports) | `hide-platform/`, `desktop/src/main/`, `hide-agent-hooks/tests/it/{windows_hook_command,windows_scripts}.rs`, `.github/workflows/{pr,os-contract,package,nightly}.yml` |
 | macOS Developer ID signing and notarization: what expires, replacing the certificate or the notary key, a local signed build | [BUILD.md: Developer ID signing](BUILD.md#developer-id-signing) | `desktop/scripts/macos-signing.mjs`, `desktop/resources/entitlements/`, `.github/workflows/package.yml`, the `release` environment |
+| Unsigned release candidates, exact public source verification and the public candidate receipt | [BUILD.md: Unsigned release candidates](BUILD.md#unsigned-release-candidates) | `.github/workflows/release-candidate.yml`, `scripts/release-candidate.mjs`, `scripts/tests/test_release_candidate.py`, `scripts/tests/release-candidate.test.mjs` |
 | Which local build is running | [dev-runtime.md](dev-runtime.md) | Bundle identity, `hided/src/env.rs`, `desktop/src/main/{cli,env}.ts`, actual process/window |
 | Performance and rendering verification | [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md), [whole-app audit coverage](PERFORMANCE_TESTING.md#whole-app-audit-coverage) | Regression tests, measurement tools, isolated run evidence |
 | Browser displays: checkout-scoped `hide browser open` and `connect`, CDP gateway ownership, local and remote page routes, the Explorer entrypoint, the `file:` address boundary, the desktop app's pages and their lifetime, overlays | [BROWSER_DISPLAYS.md](BROWSER_DISPLAYS.md) | `herdr-core/src/runtime/{view_areas,workspace_control,workspace_view,session,device_catalog,projects}.rs`, `hided/src/{browser_cli,browser_control,browser_routes,file_url,workspace_cli}.rs`, `web/src/{BrowserDisplay.tsx,browserViews.ts}`, `desktop/src/main/{browser,browserCdp,browserSync,host}.ts`, `desktop/e2e/{browser,browser-cdp,remote-workspace}.spec.ts` |

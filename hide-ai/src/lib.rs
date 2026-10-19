@@ -444,6 +444,10 @@ pub struct ModelTokens {
 /// joined another's flight is one execution and is told once. Implementations
 /// queue and return: the router calls this on the request's own thread.
 pub trait AiUsageSink: Send + Sync + fmt::Debug {
+    /// One backend execution, including retries and fallbacks, after admission.
+    /// No request or response content crosses this callback.
+    fn started(&self) {}
+
     /// `models` is empty for an attempt that was submitted and reported no
     /// usage (a timeout, a lost connection, a cancel or an unusable answer
     /// after the prompt went out, a provider whose usage is not read): an
