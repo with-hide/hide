@@ -5,11 +5,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { SlotSessionRecord } from "./SessionRecord";
+import { SessionRecord, SlotSessionRecord } from "./SessionRecord";
 import type { AgentRow, MissedWork, SessionRecord as RecordValue, SnapshotRest, WorkOutput, WorkRequest, WorkSession, WorkTask } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { legacyAgentRow } from "../test/legacyAgentRow";
+import { REFERENCE_FOLDS, sidebarScene } from "./gallery/sceneData";
 
 const savedShell = useShellStore.getState();
 const savedUi = useUiStore.getState();
@@ -17,6 +18,7 @@ afterEach(() => {
   useShellStore.setState(savedShell, true);
   useUiStore.setState(savedUi, true);
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   document.body.innerHTML = "";
 });
 
@@ -39,19 +41,24 @@ const BASE: RecordValue = {
   children: [child],
 };
 
-async function mount(record: RecordValue | null, options: { summaries?: boolean } = {}) {
+async function mount(record: RecordValue | null, options: { summaries?: boolean; rest?: SnapshotRest; overview?: boolean } = {}) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   initializeInterfaceI18n("en");
   const rest = { navigator: { devices: [{ id: "local", kind: "local" }] }, status: { background_ai: { provider: "claude", providers: [], unavailable_reason: null, enabled: options.summaries !== false, chosen: true, agent_summary: options.summaries !== false } } } as unknown as SnapshotRest;
-  useShellStore.setState({ rest, sessionRecord: record ? { session: SESSION, loading: false, failure: null, record } : null });
+  useShellStore.setState({ rest: options.rest ?? rest, sessionRecord: record ? { session: SESSION, loading: false, failure: null, record } : null });
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   const sent: { kind: string; payload: unknown }[] = [];
   const actions = createActions((event) => { sent.push(event as { kind: string; payload: unknown }); return true; });
-  await act(async () => root.render(<TooltipProvider><SlotSessionRecord actions={actions} target={SESSION} /></TooltipProvider>));
-  return { container, sent, unmount: async () => { await act(async () => root.unmount()); } };
+  const showTrail = async (trail: readonly WorkSession[] = []) => {
+    await act(async () => root.render(<TooltipProvider>{options.overview
+      ? <SessionRecord actions={actions} target={SESSION} frame={{ kind: "overview", trail, onTrail: () => undefined, onRead: () => undefined, onLeave: () => undefined }} />
+      : <SlotSessionRecord actions={actions} target={SESSION} />}</TooltipProvider>));
+  };
+  await showTrail();
+  return { container, sent, showTrail, unmount: async () => { await act(async () => root.unmount()); } };
 }
 
 const text = (element: Element | null | undefined) => element?.textContent ?? "";
@@ -148,6 +155,22 @@ it("shows only open findings and keeps handled findings out of the card", async 
   try { expect(handled.container.querySelector("[data-missed-work]")).toBeNull(); } finally { await handled.unmount(); }
 });
 
+it("keeps local YYYY-MM-DD day boundaries when the four-turn fold splits a day", async () => {
+  // Approved date grouping: a year boundary and a folded partial day retain their dates.
+  const at = (day: number, hour: number, minute: number) => new Date(2026, 11, day, hour, minute).getTime();
+  const requests = [at(30, 12, 0), at(31, 12, 0), at(31, 23, 59), at(32, 0, 0), at(32, 0, 1), at(32, 0, 2)].map((at_unix_ms, i) => ({ ...request(i, `original request ${i}`, []), at_unix_ms }));
+  const view = await mount({ ...BASE, requests: [...requests].reverse() }, { summaries: false });
+  try {
+    expect(text(view.container.querySelector("[data-record-raw-request] time"))).toBe("2027-01-01 00:02");
+    await tab(view.container, "Request history");
+    const days = () => Array.from(view.container.querySelectorAll("[data-record-date]")).map(text);
+    expect(days()).toEqual(["2026-12-31", "2027-01-01"]);
+    expect(Array.from(view.container.querySelectorAll("[data-record-request] time")).map(text)).toEqual(["23:59", "00:00", "00:01", "00:02"]);
+    await act(async () => view.container.querySelector<HTMLButtonElement>("[data-record-words-earlier]")!.click());
+    expect(days()).toEqual(["2026-12-30", "2026-12-31", "2027-01-01"]);
+  } finally { await view.unmount(); }
+});
+
 it("opens request history near the top, preserves full text, and expands the newest four to the full history", async () => {
   const requests = Array.from({ length: 6 }, (_, index) => request(index + 1, `request ${index + 1}\nmore`, []));
   const { container, unmount } = await mount({ ...BASE, requests });
@@ -177,10 +200,11 @@ it("opens request history near the top, preserves full text, and expands the new
 });
 
 it("shows an unjudged request while working without inventing a task", async () => {
-  const unjudged = { ...BASE, requests: [...BASE.requests, request(4, "Install and measure again", [], "operator", false)] };
+  const unjudged = { ...BASE, requests: [...BASE.requests, { ...request(4, "Install and measure again", [], "operator", false), at_unix_ms: new Date(2027, 0, 1, 0, 2).getTime() }] };
   const working = await mount({ ...unjudged, state: "working" });
   try {
-    expect(text(working.container.querySelector("[data-record-latest-request]"))).toBe("Awaiting summaryInstall and measure again");
+    expect(text(working.container.querySelector("[data-record-latest-request]"))).toContain("Install and measure again");
+    expect(text(working.container.querySelector("[data-record-latest-request] time"))).toBe("2027-01-01 00:02");
     expect(working.container.querySelectorAll("[data-record-task]")).toHaveLength(2);
   } finally { await working.unmount(); }
   const idle = await mount({ ...unjudged, state: "idle" });
@@ -283,4 +307,113 @@ it("does not call a child done while its task is unfinished, and hides saved END
   try { expect(text(normal.container.querySelector("[data-record-child-state]"))).toBe("Not done"); } finally { await normal.unmount(); }
   const off = await mount({ ...record, children: [{ ...record.children[0]!, last_end: "question" }] }, { summaries: false });
   try { expect(text(off.container.querySelector("[data-record-child-state]"))).not.toMatch(/Done|Question|Blocked/); } finally { await off.unmount(); }
+});
+
+
+it("holds one restore in flight and keeps a late launch failure on the record for retry", async () => {
+  const { rest } = sidebarScene("reference", REFERENCE_FOLDS, AT);
+  const checkout = rest.navigator!.workspaces!.find(row => row.id === "hide")!.checkouts[0]!;
+  useShellStore.setState({ connection: "live", agents: [] });
+  useUiStore.setState({ overviewOpen: true, focusWhenListed: null });
+  const view = await mount({ ...BASE, cwd: checkout.path, path: "/fixture/conversation.jsonl" }, { rest, overview: true });
+  try {
+    const restore = () => view.container.querySelector<HTMLButtonElement>('[data-record-restore-button]')!;
+    await act(async () => { restore().click(); restore().click(); });
+    const starts = () => view.sent.filter(event => event.kind === "agent_start_in_checkout");
+    expect(starts()).toHaveLength(1);
+    expect(useUiStore.getState().overviewOpen).toBe(true);
+    expect(restore().disabled).toBe(true);
+    expect(text(restore())).toBe("Restoring…");
+    const requestId = (starts()[0]!.payload as { request_id: string }).request_id;
+    const operation = { id: 42, kind: "agent_start" as const, phase: "ready" as const, repository_root: checkout.path, branch: null, base_branch: null, path: checkout.path, pane_id: "resumed", agent_kind: "claude", message: null, agent_phase: "starting", agent_message: null, request_id: requestId };
+    await act(async () => useShellStore.setState({ rest: { ...rest, task_operation: operation } }));
+    expect(restore().disabled).toBe(true);
+    const failed = { ...operation, agent_phase: "failed", agent_message: "agent_not_found" };
+    await act(async () => useShellStore.setState({ rest: { ...rest, task_operation: failed } }));
+    expect(restore().disabled).toBe(false);
+    expect(text(view.container.querySelector('[role="alert"]'))).toContain("Retry");
+    expect(useUiStore.getState().focusWhenListed).not.toBe("resumed");
+    const retry = Array.from(view.container.querySelectorAll<HTMLButtonElement>('button')).find(button => text(button) === "Retry")!;
+    await act(async () => retry.click());
+    expect(starts()).toHaveLength(2);
+    expect((starts()[1]!.payload as { request_id: string }).request_id).toBe(requestId);
+    expect(view.container.querySelector('[role="alert"]')).toBeNull();
+    expect(restore().disabled).toBe(true);
+    await act(async () => useShellStore.setState({ rest: { ...rest, task_operation: failed, status: { ...rest.status, last_error: { kind: "fixture_refusal", retryable: true, occurred_at: AT, request_id: "another-request", message: "Unrelated refusal" } } } }));
+    expect(restore().disabled).toBe(true);
+    expect(view.container.querySelector('[role="alert"]')).toBeNull();
+    await act(async () => useShellStore.setState({ rest: { ...rest, task_operation: { ...operation, agent_phase: "unknown" } } }));
+    expect(restore().disabled).toBe(false);
+    expect(text(restore())).toBe("Check start status");
+    expect(useUiStore.getState().focusWhenListed).toBeNull();
+    expect(useUiStore.getState().overviewOpen).toBe(true);
+    await act(async () => restore().click());
+    expect(starts()[2]!.payload).toEqual({ ...(starts()[0]!.payload as object), confirm_only: true });
+    expect(restore().disabled).toBe(true);
+    await act(async () => useShellStore.setState({ rest: { ...rest, task_operation: { ...operation, agent_phase: "started" } } }));
+    expect(useUiStore.getState().focusWhenListed).toBe("resumed");
+  } finally { await view.unmount(); }
+});
+
+it("checks the same restore after a timeout instead of launching another intent", async () => {
+  const { rest } = sidebarScene("reference", REFERENCE_FOLDS, AT);
+  const checkout = rest.navigator!.workspaces!.find(row => row.id === "hide")!.checkouts[0]!;
+  useShellStore.setState({ connection: "live", agents: [] });
+  const view = await mount({ ...BASE, cwd: checkout.path, path: "/fixture/conversation.jsonl" }, { rest });
+  try {
+    vi.useFakeTimers();
+    const restore = () => view.container.querySelector<HTMLButtonElement>('[data-record-restore-button]')!;
+    await act(async () => restore().click());
+    await act(async () => vi.advanceTimersByTime(90_000));
+    expect(restore().disabled).toBe(false);
+    expect(text(restore())).toBe("Check start status");
+    await act(async () => restore().click());
+    const starts = () => view.sent.filter(event => event.kind === "agent_start_in_checkout");
+    expect(starts()).toHaveLength(2);
+    expect(starts()[1]!.payload).toEqual({ ...(starts()[0]!.payload as object), confirm_only: true });
+    const requestId = (starts()[0]!.payload as { request_id: string }).request_id;
+    await act(async () => useShellStore.setState({ rest: { ...rest, status: { ...rest.status, last_error: { kind: "agent_start.confirmation_unavailable", retryable: true, occurred_at: AT, request_id: requestId, message: "The saved receipt is unavailable" } } } }));
+    expect(text(restore())).toBe("Check start status");
+    expect(restore().disabled).toBe(false);
+    expect(text(view.container.querySelector('[role="alert"]'))).toBe("The saved receipt is unavailable");
+    await act(async () => restore().click());
+    expect(starts()).toHaveLength(3);
+    expect(starts()[2]!.payload).toEqual(starts()[1]!.payload);
+  } finally { await view.unmount(); }
+});
+
+it("keeps a parent's failed restore out of a child opened in the Overview record", async () => {
+  const { rest } = sidebarScene("reference", REFERENCE_FOLDS, AT);
+  const checkout = rest.navigator!.workspaces!.find(row => row.id === "hide")!.checkouts[0]!;
+  useShellStore.setState({ connection: "live", agents: [] });
+  const view = await mount({ ...BASE, cwd: checkout.path, path: "/fixture/root.jsonl", children: [{ ...child, cwd: checkout.path, path: "/fixture/child.jsonl" }] }, { rest, overview: true });
+  try {
+    const restore = () => view.container.querySelector<HTMLButtonElement>('[data-record-restore-button]')!;
+    await act(async () => restore().click());
+    const starts = () => view.sent.filter(event => event.kind === "agent_start_in_checkout");
+    const requestId = (starts()[0]!.payload as { request_id: string }).request_id;
+    await act(async () => useShellStore.setState({ rest: { ...rest, status: { ...rest.status, last_error: { kind: "fixture_refusal", retryable: true, occurred_at: AT, request_id: requestId, message: "Root restore refused" } } } }));
+    expect(text(view.container.querySelector('[role="alert"]'))).toContain("Root restore refused");
+    await view.showTrail([CHILD]);
+    expect(view.container.querySelector('[role="alert"]')).toBeNull();
+    expect(restore().disabled).toBe(false);
+    await act(async () => restore().click());
+    expect(starts()[1]!.payload).toMatchObject({ provider: "codex", resume_session_id: "child", resume_session_path: "/fixture/child.jsonl" });
+    expect((starts()[1]!.payload as { request_id: string }).request_id).not.toBe(requestId);
+  } finally { await view.unmount(); }
+});
+
+it("does not restore a removed nested checkout in its still registered parent folder", async () => {
+  const { rest } = sidebarScene("reference", REFERENCE_FOLDS, AT);
+  const project = rest.navigator!.workspaces!.find(row => row.id === "hide")!;
+  const parent = project.checkouts[0]!;
+  const removed = { ...parent, id: "removed", path: `${parent.path}/removed`, label: "Removed", exists: false };
+  project.checkouts.push(removed);
+  useShellStore.setState({ connection: "live", agents: [] });
+  const view = await mount({ ...BASE, cwd: `${removed.path}/web`, path: "/fixture/conversation.jsonl" }, { rest });
+  try {
+    expect(view.container.querySelector<HTMLButtonElement>('[data-record-restore-button]')!.disabled).toBe(true);
+    expect(text(view.container.querySelector('[data-record-restore-unavailable]'))).toContain("worktree was cleaned up");
+    expect(text(view.container.querySelector('[data-record-checkout="removed"]'))).toContain("Removed");
+  } finally { await view.unmount(); }
 });

@@ -500,7 +500,7 @@ function TimeSlot({ agent, record, menu }: { agent: AgentRow; record: (() => voi
   const hidden = open ? "opacity-0" : "group-hover/task:opacity-0 group-focus-within/task:opacity-0 hoverless:opacity-0";
   return (
     <span className="grid shrink-0 items-center justify-items-end" onClick={(event) => event.stopPropagation()}>
-      <Elapsed since={agent.state.request_since} className={cn("pointer-events-none col-start-1 row-start-1 text-micro text-muted-foreground tabular-nums", hidden)} />
+      <Elapsed since={agent.last_prompt_at_unix_ms} data-agent-elapsed="true" className={cn("pointer-events-none col-start-1 row-start-1 text-micro text-muted-foreground tabular-nums", hidden)} />
       <span className={cn("col-start-1 row-start-1 flex items-center gap-xxs", shown)}>
         {record ? (
           <Hint label={t("taskLens.menu.record")} shortcut="Space">

@@ -1087,6 +1087,7 @@ impl LabelWorker {
             }));
             record.reset_analysis();
             verdicts_forgotten = true;
+            changed = true;
         }
         if record.proven_reference.as_deref() != Some(reference) {
             record.proven_reference = Some(reference.to_owned());

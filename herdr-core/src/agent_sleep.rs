@@ -701,6 +701,7 @@ mod tests {
             user_turn: None,
             status_word_visible: true,
             changed_at_unix_ms: Some(1_788_871_000_000),
+            last_prompt_at_unix_ms: None,
             last_activity: "1788871000000".to_owned(),
             state_change_seq: Some(4),
             session_id: Some("session-a".to_owned()),

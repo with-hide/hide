@@ -1324,10 +1324,14 @@ pub struct SidebarAgentSnapshot {
     /// still concern the operator.
     pub status_word_visible: bool,
     /// When the core last saw this agent change state, in epoch
-    /// milliseconds; `None` before the core has observed it. The shell turns
-    /// it into the elapsed time on its own one-second clock, so time passing
-    /// never republishes the snapshot (PRD labels-in-hided D-07).
+    /// milliseconds; `None` before the core has observed it. Retained for
+    /// state ordering, independently of the latest prompt.
     pub changed_at_unix_ms: Option<u64>,
+    /// Latest actual native request in this proven session, in epoch
+    /// milliseconds. Unknown or undated requests supply no display time.
+    /// The shell derives elapsed time on its shared clock, without snapshots.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_prompt_at_unix_ms: Option<u64>,
     /// The ordering key: `changed_at_unix_ms` as thirteen digits when the
     /// core has it, otherwise Herdr's state change sequence zero-padded.
     pub last_activity: String,

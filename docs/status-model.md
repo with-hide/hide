@@ -785,6 +785,11 @@ The workspace inspector uses the canonical representative agent and disconnected
 
 ## Task identity
 
+Project and Task session rows project a separate `last_prompt_at_unix_ms` from the latest dated actual request in the proven native session, whether sent by the operator or another agent.
+Missing or zero timestamps draw no elapsed time; status changes and daemon restarts never manufacture one.
+The existing `changed_at_unix_ms`, ordering, unread, waiting and escalation clocks keep their state semantics.
+The label worker's restart, rewritten-transcript and helper regressions in `labels/tests.rs`, and `web/e2e/prompt-elapsed.spec.ts`, cover this boundary.
+
 The core publishes one `identity_label` per agent, and every surface calls the agent by it: the sidebar row, the pane header, the ⌘K search row, the ⌃Tab Recent Panels row, the lineage chips, the Overview agent line and the request view.
 The provider fallback reads the shared adapter's sidebar label or canonical Herdr kind after common alias normalization, preserving a raw unknown kind and `Agent` for no kind.
 `sidebar.rs` chooses the first nonempty, sanitized value in one order for every agent:

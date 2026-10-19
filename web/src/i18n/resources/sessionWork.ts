@@ -1,6 +1,11 @@
 import type { Catalogs } from "../schema";
 
 const words = {
+  "recordCard.restore": ["Restore session", "세션 복구하기", "セッションを復元", "恢复会话"],
+  "recordCard.restoring": ["Restoring…", "복구하는 중…", "復元中…", "正在恢复…"],
+  "links.resumeUnknown": ["The restore result is not confirmed yet. Check its status.", "복구 결과를 아직 확인하지 못했습니다. 상태를 확인해 주세요.", "復元結果をまだ確認できません。状態を確認してください。", "尚未确认恢复结果。请检查状态。"],
+  "recordCard.paneOpen": ["Pane open", "pane 열림", "pane 開いています", "pane 已打开"],
+  "recordCard.paneClosed": ["Pane closed", "pane 닫힘", "pane 閉じています", "pane 已关闭"],
   "recordCard.prs": ["PR", "PR", "PR", "PR"],
   "recordCard.results": ["PR · Issues", "PR · 이슈", "PR・Issue", "PR · 议题"],
   "recordCard.github": ["View on GitHub", "GitHub에서 보기", "GitHubで見る", "在 GitHub 查看"],

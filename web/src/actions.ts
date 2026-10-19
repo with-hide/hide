@@ -1491,7 +1491,7 @@ export function createActions(send: DispatchFn) {
       resumeSessionId?: string;
       resumeSessionPath?: string;
     }) {
-      if (!request.tabTarget && request.requestId) beginOpening({ startRequestId: request.requestId });
+      if (!request.tabTarget && request.requestId && !request.resumeSessionId) beginOpening({ startRequestId: request.requestId });
       dispatch({
         schema_version: 2,
         kind: "agent_start_in_checkout",

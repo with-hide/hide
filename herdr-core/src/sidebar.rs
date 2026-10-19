@@ -691,6 +691,15 @@ fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, Str
             .and_then(|facts| facts.user_turn.clone()),
         status_word_visible: true,
         changed_at_unix_ms: agent.changed_at_unix_ms,
+        last_prompt_at_unix_ms: agent.facts.as_ref().and_then(|facts| {
+            facts
+                .operator_request
+                .iter()
+                .chain(facts.other_request.iter())
+                .map(|request| request.at_unix_ms)
+                .filter(|at| *at > 0)
+                .max()
+        }),
         last_activity,
         state_change_seq: agent.state_change_seq,
         session_id: agent
@@ -913,6 +922,47 @@ mod tests {
         };
         assert_eq!(changed_at("measured"), Some(Some(1_700_000_000_000)));
         assert_eq!(changed_at("unmeasured"), Some(None));
+    }
+
+    #[test]
+    fn prompt_elapsed_uses_the_latest_dated_request_without_moving_state_time() {
+        use crate::labels::facts::{Request, Requester};
+        let request = |at_unix_ms, requester| Request {
+            text: "a native request".to_owned(),
+            cut: false,
+            images: 0,
+            at_unix_ms,
+            requester,
+            first: false,
+        };
+        for (operator, other, expected) in [
+            (None, None, None),
+            (Some(0), None, None),
+            (None, Some(0), None),
+            (Some(100), None, Some(100)),
+            (None, Some(200), Some(200)),
+            (Some(300), Some(200), Some(300)),
+            (Some(100), Some(400), Some(400)),
+            (Some(100), Some(0), Some(100)),
+        ] {
+            let mut agent = payload(json!([{
+                "pane_id":"p", "agent":"claude", "agent_status":"working",
+                "state_change_seq":7, "changed_at_unix_ms":999
+            }]))
+            .agents
+            .remove(0);
+            let baseline = project_agent(agent.clone()).unwrap();
+            agent.facts = Some(crate::request_view::RowFacts {
+                operator_request: operator.map(|at| request(at, Requester::Operator)),
+                other_request: other.map(|at| request(at, Requester::Agent)),
+                ..Default::default()
+            });
+            let row = project_agent(agent).unwrap();
+            assert_eq!(row.last_prompt_at_unix_ms, expected);
+            assert_eq!(row.changed_at_unix_ms, Some(999));
+            assert_eq!(row.last_activity, baseline.last_activity);
+            assert_eq!(row.state_change_seq, baseline.state_change_seq);
+        }
     }
 
     #[test]
