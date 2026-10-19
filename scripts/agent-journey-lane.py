@@ -5,7 +5,7 @@ Usage: agent-journey-lane.py <report.json> --lane fixture|login|fake
 
 The fixture lane passes only when every cell the stand-ins imitate passed for
 each agent they imitate, and the fake lane (the real CLIs answered by the
-journey's fake model) only when every built cell passed for those agents, so
+journey's fake model) only when every declared cell passed for every registered agent, so
 it can take the stand-ins' place. Each lane fails on a failed cell, an isolation, setup or
 cleanup failure (the journey's exit 2), or a request budget overrun; the login
 and fake lanes also fail when an agent is refused its login, its CLI
@@ -23,8 +23,10 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from agent_journey.cells import BUILT_CELLS  # noqa: E402
+from agent_journey.cells import CELLS  # noqa: E402
 from agent_journey.ci import FIXTURE_AGENTS, FIXTURE_CELLS  # noqa: E402
+from agent_journey.contract import active_rows, load_contract  # noqa: E402
+from agent_live_check.protection import ProtectionError  # noqa: E402
 
 LANES = {"fixture": "fixture", "fake": "fake_model"}
 
@@ -40,8 +42,10 @@ def annotation(level, title, *lines):
     return f"::{level} title={escaped(title).replace(':', '%3A').replace(',', '%2C')}::" + "%0A".join(map(escaped, lines))
 
 
-def judge(report, lane):
+def judge(report, lane, contract=None):
     """(passed, annotations) for one report."""
+    if not isinstance(report, dict) or not isinstance(report.get("table"), dict):
+        return False, [annotation("error", "agent journey", "the report has no journey table")]
     notes, passed = [], True
     for name, field in LANES.items():
         if (lane == name) != bool(report.get(field)):
@@ -63,25 +67,36 @@ def judge(report, lane):
         notes.append(annotation("error", "agent journey budget", failure))
     table = report.get("table", {})
     for agent, cells in table.items():
+        if not isinstance(cells, dict):
+            return False, [annotation("error", f"agent journey {agent}", "the row is not a cell table")]
         for name, cell in cells.items():
+            if (not isinstance(cell, dict) or not isinstance(cell.get("status"), str)
+                    or not isinstance(cell.get("reason"), str)):
+                return False, [annotation("error", f"agent journey {agent}", f"{name}: no status and reason")]
             if cell["status"] == "fail":
                 passed = False
                 notes.append(annotation("error", f"agent journey {agent}", f"{name}: {cell['reason']}"))
-    # The agents a keyless lane stands for are read by name, so a report
-    # without one of their rows fails rather than passing on the rest.
-    for agent in FIXTURE_AGENTS if lane in ("fixture", "fake") else ():
-        cells = table.get(agent)
-        if cells is None:
+    # Use this checkout's independently generated declaration, never a list
+    # of successes or selected agents supplied by the report itself.
+    contract = load_contract(Path(__file__).resolve().parents[1]) if contract is None else contract
+    required = [row for row in active_rows(contract) if lane != "fixture" or row["id"] in FIXTURE_AGENTS]
+    for row in required:
+        agent = row["id"]
+        if agent not in table:
             passed = False
             notes.append(annotation("error", f"agent journey {agent}", f"the report has no {agent} row"))
             continue
-        for name in FIXTURE_CELLS if lane == "fixture" else BUILT_CELLS:
+        cells = table[agent]
+        for name in FIXTURE_CELLS if lane == "fixture" else CELLS:
             cell = cells.get(name, {"status": "absent", "reason": ""})
-            if cell["status"] != "pass":
+            expected = "pass" if row["cells"][name] else "N/A"
+            status = cell.get("status")
+            allowed_unmeasured = lane == "login" and expected == "pass" and status == "not measured" and cell.get("reason")
+            if status != expected and not allowed_unmeasured:
                 passed = False
                 notes.append(annotation("error", f"agent journey {agent}", f"{name} is {cell['status']}, "
                                         + ("a stand-in passes it" if lane == "fixture" else
-                                           "the fake model lane stands in for the stand-in only when it passes")
+                                           f"the {lane} lane requires {expected} from the adapter declaration")
                                         + f": {cell['reason']}"))
     for agent in report.get("agents", []):
         if lane in ("login", "fake") and agent.get("login"):
@@ -120,10 +135,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         report = json.loads(args.report.read_text())
-    except (OSError, ValueError) as error:
+        passed, notes = judge(report, args.lane)
+    except (OSError, ValueError, ProtectionError) as error:
         print(annotation("error", "agent journey", f"no readable report at {args.report}: {error}"))
         return 1
-    passed, notes = judge(report, args.lane)
     print("\n".join(notes))
     return 0 if passed else 1
 

@@ -38,15 +38,15 @@ case "$1 $2" in
 esac
 "#;
 
-struct Machine {
+pub(super) struct Machine {
     _dir: tempfile::TempDir,
-    home: PathBuf,
-    helper: PathBuf,
+    pub(super) home: PathBuf,
+    pub(super) helper: PathBuf,
     calls: PathBuf,
 }
 
 impl Machine {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         let home = root.join("home");
@@ -73,7 +73,13 @@ impl Machine {
         self.run_as("opencode", operation, input, in_pane)
     }
 
-    fn run_as(&self, agent: &str, operation: &str, input: &Value, in_pane: bool) -> Value {
+    pub(super) fn run_as(
+        &self,
+        agent: &str,
+        operation: &str,
+        input: &Value,
+        in_pane: bool,
+    ) -> Value {
         self.run_bytes_as(agent, operation, input.to_string().as_bytes(), in_pane)
     }
 
@@ -82,33 +88,66 @@ impl Machine {
     }
 
     fn run_bytes_as(&self, agent: &str, operation: &str, input: &[u8], in_pane: bool) -> Value {
-        let mut command = Command::new(&self.helper);
+        let output = self.run_command(
+            Command::new(&self.helper).args([agent, operation]),
+            input,
+            in_pane,
+        );
+        serde_json::from_slice(&output).unwrap()
+    }
+
+    pub(super) fn run_installed(&self, installed: &str, input: &Value) {
+        let output = self.run_command(
+            Command::new("/bin/sh").args(["-c", installed]),
+            input.to_string().as_bytes(),
+            true,
+        );
+        assert!(
+            output.is_empty(),
+            "Post must not replace the original result"
+        );
+    }
+
+    pub(super) fn take_observation(&self) -> Value {
+        let path = self.home.parent().unwrap().join("observation");
+        let bytes = std::fs::read(&path).expect("declared observation must reach admission");
+        std::fs::remove_file(path).unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    fn run_command(&self, command: &mut Command, input: &[u8], in_pane: bool) -> Vec<u8> {
         command
-            .args([agent, operation])
             .env(hide_platform::host::HOME_VARIABLE, &self.home)
             .env("PATH", "/usr/bin:/bin")
-            .env("HERDR_SOCKET_PATH", self.home.join("no-herdr.sock"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
         for (key, _) in std::env::vars_os() {
             let name = key.to_string_lossy();
-            if ["HERDR_PANE_ID", "HERDR_ENV", "HIDE_", "HCOORD_"]
+            if ["HERDR_", "HIDE_", "HCOORD_", "CURSOR_", "OPENCODE", "GROK_"]
                 .iter()
                 .any(|prefix| name.starts_with(prefix))
             {
                 command.env_remove(key);
             }
         }
+        command.env("HERDR_SOCKET_PATH", self.home.join("no-herdr.sock"));
         if in_pane {
             command.env("HERDR_PANE_ID", PANE).env("HERDR_ENV", "1");
         }
         // Every operation ends within its own deadline, which is what bounds this wait.
-        let mut child = command.spawn().unwrap();
-        child.stdin.take().unwrap().write_all(input).unwrap();
-        let output = child.wait_with_output().unwrap();
-        assert!(output.status.success(), "{operation} exits 0");
-        serde_json::from_slice(&output.stdout).unwrap()
+        let mut child = hide_platform::process::OwnedChild::spawn(command).unwrap();
+        let mut stdin = child.take_stdin().unwrap();
+        stdin.write_all(input).unwrap();
+        drop(stdin);
+        let output = child
+            .capture_until(
+                std::time::Instant::now() + std::time::Duration::from_secs(10),
+                64 * 1024,
+            )
+            .unwrap();
+        assert!(output.status.success(), "helper exits 0");
+        output.stdout
     }
 
     fn calls(&self) -> Vec<String> {

@@ -267,7 +267,7 @@ jobs:
         run: sudo apt-get install -y --no-install-recommends zsh
       - name: Install the pinned agent CLIs
         timeout-minutes: 10
-        run: '"$PYTHON" scripts/install-agent-clis.py claude codex grok opencode pi omp agy'
+        run: '"$PYTHON" scripts/install-agent-clis.py --all'
       - name: Build hided, hide, the hooks and Hide's conversation reader
         timeout-minutes: 25
         run: |
@@ -303,7 +303,7 @@ jobs:
         timeout-minutes: 85
         run: |
           set +e
-          "$PYTHON" scripts/agent-journey-check.py --mode ci --fake-model --agents claude-code,codex,grok,opencode,pi,omp,antigravity \
+          "$PYTHON" scripts/agent-journey-check.py --mode ci --fake-model \
             --controller-provider "${{ steps.controller.outputs.provider }}" \
             --herdr-bin "${{ steps.herdr.outputs.bin }}" --run-dir "$RUN_DIR"
           echo "journey exit $?"

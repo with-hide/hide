@@ -1,0 +1,5 @@
+{
+  "claude-code": { "events": { "SessionStart": "SessionStart", "UserPromptSubmit": "UserPromptSubmit" }, "grouped": true, "memory_flag": true },
+  "codex": { "events": { "SessionStart": "SessionStart", "UserPromptSubmit": "UserPromptSubmit" }, "grouped": true, "memory_flag": true },
+  "antigravity": { "events": { "SessionStart": "SessionStart", "PreInvocation": "UserPromptSubmit" }, "grouped": false, "memory_flag": false }
+}

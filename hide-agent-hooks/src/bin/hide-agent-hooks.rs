@@ -179,13 +179,13 @@ fn run_observation_hook(arguments: &[String], started: Instant) {
     let Some(runtime) = argument_value("--runtime", arguments) else {
         return;
     };
-    if !matches!(
-        runtime.as_str(),
-        "claude-code" | "codex" | "grok" | "antigravity"
-    ) {
+    let Some(adapter) = hide_agent_adapter::adapter(&runtime) else {
         return;
-    }
-    if runtime == "claude-code"
+    };
+    let hide_agent_adapter::ObservationSupport::Native(dialect) = adapter.observation else {
+        return;
+    };
+    if dialect == hide_agent_adapter::HookDialect::ClaudeCode
         && hide_agent_hooks::runtime::ForeignOrigin::detect(|name| std::env::var_os(name)).is_some()
     {
         return;
@@ -210,9 +210,11 @@ fn run_observation_hook(arguments: &[String], started: Instant) {
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0);
     let failure = argument_value("--event", arguments).as_deref() == Some("PostToolUseFailure");
-    if let Some(observed) = observation::native(&runtime, &payload, false, failure, now, &|name| {
-        std::env::var(name).ok()
-    }) {
+    if let Some(observed) =
+        observation::native(adapter.id, &payload, false, failure, now, &|name| {
+            std::env::var(name).ok()
+        })
+    {
         observation::send(
             &home,
             &observed,

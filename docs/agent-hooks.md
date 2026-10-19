@@ -586,11 +586,27 @@ Prove it on the real agent first, before any code, and pin what you measure with
 Add the declaration in `hide-agent-adapter/src/declarations.rs`, keeping its canonical id stable across records, hook commands and device reports.
 Aliases belong on that row: every caller uses the same borrowed, case-insensitive lookup, including surrounding-whitespace normalization.
 Select hook and installation dialects implemented by `hide-agent-hooks`, session formats implemented by `hide-session`, and launch, find and usage dialects in their existing owners; the leaf crate contains data and typed selectors only.
-Declare prompt intake, spawn refusal, subagent counts, Memory and bell eligibility independently.
+Declare prompt intake, spawn refusal, subagent counts, Memory, bell eligibility and passive tool-result observation independently.
+`guidance`, `memory` and `titles` are required `Capability` declarations: choose `Support::Supported` with the typed route or reader, or `Support::Unsupported(CapabilityAbsence)` with a reason, repository evidence reference and what would close the gap.
+The shared `Support` sum type also serves usage declarations; no optional field silently decides that a feature is absent.
+Here `memory` means automatic injection into the model's context, independently of storing, extracting or searching Memory cards.
+`ContextRoute` distinguishes a native hook, a guidance hook whose output reaches the model, and a plugin's prompt event; the latter carries the start guidance and Memory index on the first prompt rather than a native `SessionStart`.
+The independent context matrix and installed-command fixtures reject a different agent's route or title reader, discarded context, missing evidence and missing native start/prompt commands or Memory invocation flags.
+Plugin host suites check first and later prompt delivery, and the generated-contract drift checks preserve the Settings and journey projections.
+The journey export refuses a startable guidance-only declaration until a probe for that combination is implemented: today's combined probe proves injection through a private Memory-card token, so it cannot silently mark guidance-only support `N/A` or attest Memory support.
+The Settings `Feature::Titles` still describes readable session features; `titles` selects the native-title reader used before a background label is available, and is a separate decision.
+The required `observation` field selects `ObservationSupport::Native(HookDialect)` or `ObservationSupport::Plugin(PluginDialect)`, or `Unsupported` with a meaningful reason.
+For native support, add a payload, the required Post events and independent neutral metadata expectations to `hide-agent-hooks/tests/fixtures/observation-native.json`.
+The shared `adapter_contract` suite checks those events in the installed configuration and the fixture output, then executes the supported native and plugin routes through the built helper on Unix.
+Each installed plugin also runs its existing host suite regardless of its observation declaration; a declaration never substitutes for the native result handler or its original-result preservation checks.
 A bell target requires a prompt hook and measured menu behavior on the pinned, isolated Herdr; adding prompt intake alone never enables its bell.
 Add independent hook and session samples, or an explicit absence reason when that format is unsupported, in `hide-agent-adapter/tests/fixtures/support.json`, and add the logo or monogram to its manifest.
 Add the owner's dialect tests and feature-gate cases, including aliases, without changing the pre-migration hook-byte fixtures.
 Generate `contracts/agent-adapters.json` with the `export_web_contract` example as described in [contracts/README.md](../contracts/README.md#agent-adapters).
+Generate `contracts/agent-journey.json` with `export_journey_contract` too.
+Add the CLI pin and the local-isolation, CI-login and fake-model routes; `scripts/tests/test_agent_journey_contract.py` rejects a registered agent missing any of them.
+Every active adapter automatically participates in the full fake-model journey without a second agent list, and the lane rejects any missing row or declared cell that did not pass, including title and usage; see [VERIFICATION.md: The CI lanes](VERIFICATION.md#the-ci-lanes).
+Choose automatic or operator-named title measurement explicitly for a new session format; the exhaustive match in `hide-agent-adapter/src/journey.rs` prevents an unknown format from inheriting automatic-title behavior.
 The leaf contract tests reject missing samples, links, logos, inconsistent capability combinations and generated-contract drift, and the existing feature and isolated-Herdr e2e suites must still pass.
 
 ### What the kit puts down
@@ -976,6 +992,7 @@ Which session a receipt is signed for and what the core answers are `hide-memory
 ## Passive direct prompt observations
 
 The Post adapter recognizes a bounded, single canonical `herdr agent prompt <target> <text>` call and reads its terminal provider result without rewriting the command or result.
+The shared adapter's required observation declaration gates native and plugin dispatch; hook installation and provider payload parsing remain owned here.
 Claude Code and Grok register Post and failure events, Codex registers Post only, OpenCode 1 reads after results and terminal error parts, OpenCode 2 reads completed/error after events, and Pi/omp read tool results with the actual native session ID.
 Antigravity registers Post but its documented event has no stdout or result, so it retains a weak conversation-step correlation and an unavailable result.
 Ordinary shell results are filtered locally before any observation transport starts; command-hook runtimes still pay the native Post helper startup.

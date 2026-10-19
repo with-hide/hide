@@ -12,7 +12,8 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
-from agent_journey import cells, ci, cli  # noqa: E402
+from agent_journey import ci, cli  # noqa: E402
+from agent_journey.contract import active_rows  # noqa: E402
 from agent_live_check.processes import TEARDOWN_SECONDS  # noqa: E402
 WORKFLOWS = (".github/workflows/agent-journey.yml", ".github/workflows/agent-clis.yml")
 
@@ -38,13 +39,21 @@ class JourneyCap(unittest.TestCase):
             with self.subTest(step=step["name"]):
                 named = re.search(r"--agents (\S+)", step["run"])
                 fixture = "--fixture-bin" in step["run"]
-                # With no --agents, a run measures every built agent, the stand-ins only theirs.
+                # With no --agents, a run measures every registered agent, the stand-ins only theirs.
                 agents = (len(named.group(1).split(",")) if named else
-                          len(ci.FIXTURE_AGENTS) if fixture else len(cells.BUILT_AGENTS))
+                          len(ci.FIXTURE_AGENTS) if fixture else len(active_rows(cli.load_contract(ROOT))))
                 keyless = fixture or "--fake-model" in step["run"]
                 # The OpenCode stop's teardown window, then the runtime close's.
                 needed = cli.run_seconds(keyless, agents) + 2 * TEARDOWN_SECONDS
                 self.assertLessEqual(needed, step["timeout-minutes"] * 60)
+
+    def test_the_full_fake_journey_has_no_hand_written_agent_selection(self):
+        jobs = yaml.safe_load((ROOT / WORKFLOWS[0]).read_text())["jobs"]
+        steps = [step for job in jobs.values() for step in job["steps"]]
+        fake = next(step["run"] for step in steps if "--fake-model" in step.get("run", ""))
+        self.assertNotIn("--agents", fake)
+        installer = [step["run"] for step in steps if "install-agent-clis.py --all" in step.get("run", "")]
+        self.assertEqual(len(installer), 1)
 
 
 if __name__ == "__main__":

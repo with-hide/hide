@@ -355,6 +355,11 @@ pub fn native(
     now: u64,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Option<DirectObservation> {
+    use hide_agent_adapter::{HookDialect, ObservationSupport};
+    let adapter = hide_agent_adapter::adapter(runtime)?;
+    let ObservationSupport::Native(dialect) = adapter.observation else {
+        return None;
+    };
     if truncated {
         return None;
     }
@@ -378,7 +383,7 @@ pub fn native(
             return None;
         }
     }
-    let agy = runtime == "antigravity";
+    let agy = dialect == HookDialect::Antigravity;
     let tool = if agy {
         input["toolCall"]["name"].as_str()
     } else {
@@ -409,10 +414,10 @@ pub fn native(
         field("tool_use_id", "toolUseId").and_then(Value::as_str)?
     };
     let response = field("tool_response", "toolResult");
-    let grok = runtime == "grok";
+    let grok = dialect == HookDialect::Grok;
     observe(
         ToolResult {
-            runtime_id: runtime,
+            runtime_id: adapter.id,
             session_id: session,
             call_id,
             command,
