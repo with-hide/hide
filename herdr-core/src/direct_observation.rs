@@ -182,17 +182,34 @@ impl PreparedObservation {
     }
 
     pub(crate) fn prove_sender(&self) -> Result<(), String> {
-        self.fresh(&self.sender)?;
+        let (_, native) = self.fresh(&self.sender)?;
+        let native = native.ok_or("observation_native_unavailable")?;
+        if hide_agent_adapter::canonical_kind(&native.agent)
+            != hide_agent_adapter::canonical_kind(&self.sender.actor.kind)
+        {
+            return Err("observation_sender_session_changed".into());
+        }
+        // Native identity is a server fact, independent of whether this
+        // runtime stores a transcript file (OpenCode uses a database).
+        if native.kind == "id" {
+            return if native.value == self.observation.session_id {
+                Ok(())
+            } else {
+                Err("observation_sender_session_changed".into())
+            };
+        }
         let reference = self
             .sender
             .reference
             .as_ref()
             .ok_or("observation_native_unavailable")?;
-        if reference.reference_kind == "id" {
-            if reference.reference_value != self.observation.session_id {
-                return Err("observation_sender_session_changed".into());
-            }
-        } else {
+        if native.kind != "path"
+            || reference.reference_kind != native.kind
+            || reference.reference_value != native.value
+        {
+            return Err("observation_sender_session_changed".into());
+        }
+        {
             // A file/path is not a native session id. The existing bounded
             // native reader must independently prove the event's exact id.
             let mut request = reference.clone();

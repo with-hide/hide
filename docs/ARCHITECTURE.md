@@ -1063,6 +1063,8 @@ It answers through hided's own core without a renderer, scoped by default to the
 The same link worker persists passive direct-input facts in the version-5 `direct_observations` table, separate from the delivery and session-work records.
 The admission owner supplies an authenticated sender and an independently verified recipient, each by exact device, pane and native-session digest, together with a server/session source and native tool-call key.
 Tool stdout alone does not attest a recipient; an incomplete result stays a private uncertain fact and publishes no confirmed edge.
+Sender native IDs are checked against the fresh server answer independently of transcript-file eligibility, so database-backed sessions retain the same exact-ID proof.
+A path reference must still match that fresh answer and pass the existing bounded native reader's exact-session check.
 Deduplication uses source server/session, exact sender identity and call key; duplicate terminal events do not increase the count, and a later proven endpoint may complete the same call without changing its original time.
 A conflicting proven recipient is refused rather than assigned to a pane's current occupant.
 Only submission facts with both proven endpoints enter the separate `overview_graph.direct_inputs` projection, which contains hashed identifiers, endpoints and timestamps, never command text, prompt bodies, private reasons or call keys.

@@ -235,18 +235,32 @@ mod tests {
     }
 
     fn lifecycle(recipient_terminal: &str) -> crate::sidebar::SessionSnapshotPayload {
+        lifecycle_for_kind(recipient_terminal, "codex")
+    }
+
+    fn lifecycle_for_kind(
+        recipient_terminal: &str,
+        kind: &str,
+    ) -> crate::sidebar::SessionSnapshotPayload {
         serde_json::from_value(json!({"agents":[
-            {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,
+            {"id":"sender","pane_id":"sender","agent":kind,"agent_status":"working","state_change_seq":1,
              "lineage_session":crate::wire::session_digest("sender-native"),
-             "agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":"sender-native"}},
-            {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,
+             "agent_session":{"source":format!("herdr:{kind}"),"agent":kind,"kind":"id","value":"sender-native"}},
+            {"id":"recipient","pane_id":"recipient","agent":kind,"agent_status":"working","state_change_seq":1,
              "lineage_session":crate::wire::session_digest("recipient-native"),
-             "agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":"recipient-native"}}
+             "agent_session":{"source":format!("herdr:{kind}"),"agent":kind,"kind":"id","value":"recipient-native"}}
         ],"panes":[{"pane_id":"sender","terminal_id":"terminal-sender"},
             {"pane_id":"recipient","terminal_id":recipient_terminal}]})).unwrap()
     }
 
     fn server(recipient_terminal: &'static str) -> crate::fake_herdr::FakeHerdr {
+        server_for_kind(recipient_terminal, "codex")
+    }
+
+    fn server_for_kind(
+        recipient_terminal: &'static str,
+        kind: &'static str,
+    ) -> crate::fake_herdr::FakeHerdr {
         crate::fake_herdr::FakeHerdr::start("direct-observation", move |method, params| {
             assert_eq!(method, "agent.get");
             let pane = params["target"].as_str().unwrap();
@@ -256,9 +270,9 @@ mod tests {
                 other => panic!("unexpected target {other}"),
             };
             json!({"type":"agent_info","agent":{"pane_id":pane,"tab_id":"tab","workspace_id":"workspace",
-                "terminal_id":terminal,"agent":"codex","agent_status":"working","state_change_seq":1,
+                "terminal_id":terminal,"agent":kind,"agent_status":"working","state_change_seq":1,
                 "focused":false,"revision":1,
-                "agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":native}}})
+                "agent_session":{"source":format!("herdr:{kind}"),"agent":kind,"kind":"id","value":native}}})
         })
     }
 
@@ -327,6 +341,37 @@ mod tests {
         let herdr = server("terminal-recipient");
         let runtime = setup(root.path(), &herdr);
         let mut event = observation();
+        event.session_id = "different-child-native".into();
+        assert_eq!(
+            prepare(&runtime, event)
+                .unwrap()
+                .prove_sender()
+                .unwrap_err(),
+            "observation_sender_session_changed"
+        );
+    }
+
+    #[test]
+    fn server_native_id_proves_opencode_without_a_transcript_file() {
+        let root = tempfile::tempdir().unwrap();
+        let herdr = server_for_kind("terminal-recipient", "opencode");
+        let runtime = setup(root.path(), &herdr);
+        {
+            let mut guard = runtime.lock().unwrap();
+            guard.observe_delivery(
+                crate::node::TEST_NODE,
+                &lifecycle_for_kind("terminal-recipient", "opencode"),
+                Some("fixture-server"),
+                None,
+            );
+            assert!(guard.delivery_observations["sender"].session.is_none());
+        }
+        let mut event = observation();
+        event.runtime_id = "opencode".into();
+        prepare(&runtime, event.clone())
+            .unwrap()
+            .prove_sender()
+            .unwrap();
         event.session_id = "different-child-native".into();
         assert_eq!(
             prepare(&runtime, event)
