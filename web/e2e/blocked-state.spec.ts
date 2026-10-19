@@ -4,7 +4,7 @@
 // word leading the sentence.
 import { expect, test, type Page } from "@playwright/test";
 import { herdrGate } from "./herdr-gate";
-import { elsewhereTab, finishFixtureTurn, labelAgent, setFixtureLifecycle, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { elsewhereTab, finishFixtureTurn, herdrHasFocus, labelAgent, setFixtureLifecycle, startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 
 test.describe.configure({ timeout: 150_000 });
@@ -99,8 +99,12 @@ test("a read block stays read when Herdr marks its tab seen after the operator m
     expect(gate.params("pane.focus").map((params) => params.pane_id)).toEqual([blocked]);
 
     await gate.release();
-    await afterNextHerdrChange(herdr, page, unfinished);
+    // The gate saw Herdr's first answer, not the core's queued focus finish.
+    // A lifecycle event can overtake it; wait for Herdr's actual focus before
+    // asking for the change that fences its seen bookkeeping.
+    await expect.poll(() => herdrHasFocus(herdr, unfinished)).toBe(true);
     expect(gate.params("pane.focus").map((params) => params.pane_id)).toContain(unfinished);
+    await afterNextHerdrChange(herdr, page, unfinished);
     await expectRead(page, blocked, "error");
   } finally {
     daemon?.stop();
