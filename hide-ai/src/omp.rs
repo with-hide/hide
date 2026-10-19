@@ -85,15 +85,20 @@ impl OmpSdkBackend {
         }
         let request = PrivateFile::create("request.json", &body.to_string())
             .map_err(|_| unavailable("omp_request_file_failed"))?;
+        let mut args = vec!["--no-env-file".into(), "--no-install".into()];
+        // Bun watches the owner even when a crash skips Rust destructors.
+        // Windows already ties OwnedChild to a kill-on-close job.
+        #[cfg(unix)]
+        args.push("--no-orphans".into());
+        args.extend([
+            bridge.path().to_string_lossy().into_owned(),
+            package.to_string_lossy().into_owned(),
+            request.path().to_string_lossy().into_owned(),
+        ]);
         let run = runner::run(
             &Spec {
                 binary: &runtime,
-                args: &[
-                    "--no-env-file".into(),
-                    bridge.path().to_string_lossy().into_owned(),
-                    package.to_string_lossy().into_owned(),
-                    request.path().to_string_lossy().into_owned(),
-                ],
+                args: &args,
                 cwd: request.dir(),
                 stdin: None,
                 environment: Environment::Login,

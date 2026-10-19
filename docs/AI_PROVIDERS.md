@@ -195,12 +195,20 @@ The Rust API also accepts explicit package and runtime paths.
 Missing SDK/runtime, package identity, mismatched dependency versions, inaccessible public exports and incompatible runtime all return actionable `ProviderUnavailable` reasons.
 
 `hide-ai/src/omp.rs` starts the private `omp_bridge.mjs` through the existing owned runner for each probe or turn.
-It imports the installation's public `@oh-my-pi/pi-ai`, `@oh-my-pi/pi-ai/auth-broker/discover`, `@oh-my-pi/pi-catalog/models` and `@oh-my-pi/pi-utils/logger` exports after checking their package identities and matching versions.
+It imports the installation's public `@oh-my-pi/pi-ai`, `@oh-my-pi/pi-ai/auth-broker/discover`, `@oh-my-pi/pi-catalog/models` and `@oh-my-pi/pi-utils/{logger,env,dirs}` exports after checking their package identities and matching versions.
 It never imports the coding-agent harness, a user model module, settings loader or extension registry.
 `discoverAuthStorage` and `storage.keys.getWithCredential` own login discovery, refresh and authorization; Hide does not parse, export, copy or log credentials.
 The child receives the platform's restricted login environment, so this boundary supports OMP's default profile and stored login, not inherited API-key or custom-profile environment variables.
 Auth config values beginning with `!` are refused rather than executed; custom credential commands, model aliases, extension providers and `models.yml` overrides are outside this contract.
+The public SDK's native addon loader remains part of the trusted user installation, not an operating-system sandbox.
+Compiled-mode and native-directory dotenv overrides are refused before the eager native root import; normal official native loading and its platform cache remain SDK-owned.
 SDK usage/ranking probes and file/console logging are disabled.
+Raw SDK request debugging is forced off before imports, including when home/profile dotenv files enable it.
+After the SDK resolves the initial opaque credential, its public directory API moves diagnostic state to an existing private file root, so the OS refuses request-dump writes, including HTTP 200 streams containing 400/413 errors.
+The opened auth store retains its own source; no credential is repacked or exported.
+The private root makes the SDK's installation-ID lookup use its in-memory random fallback; ordinary protocol session identifiers and OS/CPU headers remain SDK-owned.
+Synthetic fixtures do not establish paid-service acceptance of those changing installation identifiers or broker-backed refresh behavior.
+The bridge fails before inference if the private SDK root cannot resolve to that file, for example when Windows home and temporary files are on different volumes.
 The SDK may maintain its own credential state; Hide writes no OMP conversation or session.
 
 Model discovery uses the bundled chat/tiny catalog for providers with a concrete configured credential source, filtered to `anthropic-messages`, `openai-completions`, `openai-responses` and `openai-codex-responses`.
@@ -209,7 +217,12 @@ The list is `Fixed`, not an assertion of the account's model entitlements; `Read
 No credential means `NeedsLogin` and no model request.
 The default model is `anthropic/claude-haiku-4-5`; choose a listed model for a different provider's login.
 
-The feature owns the whole system prompt and input, with only the shared JSON-schema instruction added to the system prompt.
+The feature supplies its system prompt and input unchanged, with only the shared JSON-schema instruction added to the system prompt.
+The official transport's fixed protocol framing is preserved; it is not an agent harness or permission to add ambient instructions.
+For Anthropic OAuth, upstream `buildAnthropicSystemBlocks` prepends the fixed Claude Code identity and a billing header before the feature system block.
+The billing version fingerprint uses SDK constants and characters of the already supplied user input, and its attestation hashes the outgoing request body.
+The bridge removes the ambient version override before inference and never overrides the catalog's `injectClaudeCodeInstruction` compatibility setting.
+The sources are the pinned [Anthropic transport](https://github.com/can1357/oh-my-pi/blob/v18.12.2/packages/ai/src/providers/anthropic.ts) and [fingerprint constants](https://github.com/can1357/oh-my-pi/blob/v18.12.2/packages/ai/src/providers/claude-code-fingerprint.ts); the contract permits only this transport framing and unchanged feature content, with no user/project instructions, context, personal data or tools added.
 The bridge submits one message and an empty tool list directly to `completeSimple`, with no project/personal context discovery, MCP, tools, session harness or auxiliary model work.
 WebSocket transport and hidden inference retries are disabled; the fetch boundary aborts after the first HTTP refusal or transport error and refuses a second send.
 HTTP 401/403, 429, other 4xx and 5xx become the existing authentication, quota, rejection and transient variants; a lost response after submission is `CompletionUnknown`, never silently replayed.
@@ -218,6 +231,8 @@ Usage remains one unknown call, never totals counted from duplicate stream event
 
 System and input travel in a private temporary request file, never process arguments.
 The runner owns cancellation, deadline, process-tree cleanup and bounded stdout/stderr; request files are removed on every return.
+Bun's Unix parent-death watch and the platform's Windows kill-on-close job end the bridge if its owner crashes.
+An abrupt owner exit skips temporary-file destructors; private files can remain until the system cleans its temporary directory.
 Requests are capped at 1 MiB and inference response bytes at 8 MiB.
 The `omp-contract` CI lane runs both real SDK versions, synthetic stored credentials and a substituted localhost catalog on macOS, Linux and Windows; it proves the SDK boundary, not a paid service login or the operator's installation.
 

@@ -1,11 +1,13 @@
 // One request in an owned Bun child. Only public OMP library exports are used;
 // importing the coding-agent entry point would initialize its ambient harness.
 import { readFile, realpath, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
+import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 
 const versions = ["18.7.0", "18.12.2"];
 const apis = new Set(["anthropic-messages", "openai-completions", "openai-responses", "openai-codex-responses"]);
+const entries = new Map();
 class BridgeFailure extends Error {
   constructor(code, reason) { super(reason); this.code = code; }
 }
@@ -33,6 +35,7 @@ async function exported(name, root, version) {
     try { meta = await manifest(parent); } catch { continue; }
     if (meta.name !== name.split("/").slice(0, 2).join("/")) continue;
     if (meta.version !== version) fail("unavailable", "omp_sdk_dependency_version_mismatch");
+    entries.set(name, entry);
     return import(pathToFileURL(entry).href);
   }
   fail("unavailable", "omp_sdk_export_identity_invalid");
@@ -46,14 +49,27 @@ try {
   if (typeof meta.engines?.bun !== "string" || !Bun.semver.satisfies(Bun.version, meta.engines.bun))
     fail("unavailable", "omp_bun_does_not_meet_package_engines");
   const request = JSON.parse(await readFile(requestPath, "utf8"));
+  // pi-utils also loads home/profile dotenv files. Nonempty values prevent
+  // those files from enabling raw header/body dumps during SDK initialization.
+  for (const name of ["PI_REQ_DEBUG", "OMP_REQ_DEBUG"]) process.env[name] = "0";
   const logging = await exported("@oh-my-pi/pi-utils/logger", root, meta.version);
   logging.setTransports({ file: false, console: false });
+  // Initialize the public dotenv loader before the SDK's eager native root
+  // import, then refuse overrides that would select ambient native code.
+  await exported("@oh-my-pi/pi-utils/env", root, meta.version);
+  if (["PI_COMPILED", "OMP_COMPILED", "PI_NATIVES_DIR", "OMP_NATIVES_DIR"].some(name => process.env[name]))
+    fail("unavailable", "omp_native_loader_overrides_not_supported_use_official_npm_defaults");
   const ai = await exported("@oh-my-pi/pi-ai", root, meta.version);
   const auth = await exported("@oh-my-pi/pi-ai/auth-broker/discover", root, meta.version);
   const catalog = await exported("@oh-my-pi/pi-catalog/models", root, meta.version);
+  const dirs = await exported("@oh-my-pi/pi-utils/dirs", root, meta.version);
   if (typeof ai.completeSimple !== "function" || typeof auth.discoverAuthStorage !== "function" ||
-      typeof catalog.getBundledModels !== "function" || typeof catalog.getBundledProviders !== "function")
+      typeof catalog.getBundledModels !== "function" || typeof catalog.getBundledProviders !== "function" ||
+      typeof dirs.setAgentDir !== "function" || typeof dirs.getLogsDir !== "function")
     fail("unavailable", "omp_sdk_exports_incompatible");
+  if (await realpath(Bun.resolveSync("@oh-my-pi/pi-utils/dirs", dirname(entries.get("@oh-my-pi/pi-ai")))) !==
+      entries.get("@oh-my-pi/pi-utils/dirs"))
+    fail("unavailable", "omp_sdk_duplicate_utils_not_supported");
   // Auth discovery belongs to OMP. No credential is parsed, copied or returned
   // by this bridge. Command-backed auth configuration is explicitly refused.
   storage = await auth.discoverAuthStorage({
@@ -83,7 +99,25 @@ try {
     deadlineSignal = AbortSignal.timeout(request.deadline_ms);
     const transport = new AbortController();
     const signal = AbortSignal.any([deadlineSignal, transport.signal]);
+    const credential = await storage.keys.getWithCredential(model.provider, undefined, {
+      modelId: model.id, baseUrl: model.baseUrl, signal,
+    });
+    if (!credential) fail("auth", "omp_login_required");
+    // SDK error formatting unconditionally dumps some rejected requests.
+    // After auth is resolved, use its public directory API to make every
+    // diagnostic path descend through our existing private request FILE.
+    // The OS refuses these writes, including on streamed 400/413 errors.
+    process.env.PI_CONFIG_DIR = relative(homedir(), requestPath);
+    process.env.OMP_CONFIG_DIR = process.env.PI_CONFIG_DIR;
+    for (const name of ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "PI_AI_CLAUDE_CODE_VERSION", "OMP_AI_CLAUDE_CODE_VERSION"])
+      delete process.env[name];
+    dirs.setAgentDir(requestPath);
+    if (typeof dirs.getConfigRootDir !== "function" ||
+        await realpath(dirs.getConfigRootDir()) !== await realpath(requestPath) ||
+        await realpath(dirname(dirs.getLogsDir())) !== await realpath(requestPath))
+      fail("unavailable", "omp_private_sdk_state_unavailable_use_same_volume_for_home_and_temp");
     let sends = 0;
+    let credentialUses = 0;
     const result = await ai.completeSimple(model, {
       systemPrompt: request.system,
       messages: [{ role: "user", content: request.input, timestamp: 0 }],
@@ -91,10 +125,7 @@ try {
     }, {
       // Resolve only the initial credential. SDK auth retries cannot refresh
       // or rotate a failed inference into another charged attempt.
-      apiKey: ({ error, signal }) => error ? Promise.resolve(undefined) :
-        storage.keys.getWithCredential(model.provider, undefined, {
-          modelId: model.id, baseUrl: model.baseUrl, signal,
-        }),
+      apiKey: ({ error }) => Promise.resolve(error || credentialUses++ ? undefined : credential),
       signal,
       disableReasoning: true,
       loopGuard: { enabled: false },

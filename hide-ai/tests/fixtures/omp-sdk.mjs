@@ -16,6 +16,7 @@ const { getBundledModels } = await load("@oh-my-pi/pi-catalog/models");
 await mkdir(dirname(getAgentDbPath()), { recursive: true });
 const auth = await AuthStorage.create(getAgentDbPath());
 await auth.credentials.set("openai", { type: "api_key", key: "synthetic-local-only", source: "login" });
+await auth.credentials.set("anthropic", { type: "oauth", access: "sk-ant-oat01-synthetic-local-only", refresh: "synthetic-refresh-never-used", expires: Date.now() + 24 * 60 * 60 * 1000 });
 await auth.close();
 
 const record = join(fixture, "requests.jsonl");
@@ -24,6 +25,7 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
   await writeFile(record, JSON.stringify(body) + "\n", { flag: "a" });
   console.log(JSON.stringify({ submitted: body.model }));
   if (body.model === "hang") return new Promise(() => {});
+  if (body.model.startsWith("stream-http")) return new Response(`event: error\ndata: ${JSON.stringify({type:"error",error:{type:"invalid_request_error",message:`HTTP ${body.model.slice(11)} synthetic`}})}\n\n`, { headers: { "content-type": "text/event-stream" } });
   if (body.model === "terminal-error") return new Response('data: {"error":{"message":"synthetic terminal error","type":"api_error"}}\n\n', { headers: { "content-type": "text/event-stream" } });
   if (body.model === "oversize") return new Response("x".repeat(8 * 1024 * 1024 + 1), { headers: { "content-type": "text/event-stream" } });
   if (body.model.startsWith("http")) return Response.json({ error: { message: "synthetic refusal" } }, { status: Number(body.model.slice(4)) });
@@ -77,13 +79,14 @@ const catalog = join(root, "node_modules/@oh-my-pi/pi-catalog");
 await mkdir(catalog);
 await writeFile(join(catalog, "package.json"), JSON.stringify({ name: "@oh-my-pi/pi-catalog", version: meta.version, type: "module", exports: { "./models": "./models.mjs" } }));
 const base = { ...getBundledModels("openai").find(m => !m.kind || m.kind === "chat"), provider: "openai", api: "openai-completions", reasoning: false, baseUrl: `${server.url}v1` };
-const ids = ["ok", "bad-json", "bad-schema", "http400", "http401", "http429", "http500", "hang", "terminal-error", "oversize"];
+const ids = ["ok", "bad-json", "bad-schema", "http400", "http413", "http401", "http429", "http500", "hang", "terminal-error", "oversize"];
 const models = ids.map(id => ({ ...base, id, name: id }));
 models.push({ ...base, id: "image-must-not-be-listed", kind: "image" });
-for (const [id, api] of [["api-anthropic", "anthropic-messages"], ["api-responses", "openai-responses"], ["api-codex", "openai-codex-responses"]]) models.push({ ...base, id, api });
+for (const [id, api] of [["api-anthropic", "anthropic-messages"], ["api-responses", "openai-responses"], ["api-codex", "openai-codex-responses"], ["stream-http400", "anthropic-messages"], ["stream-http413", "anthropic-messages"]]) models.push({ ...base, id, api, provider: api === "anthropic-messages" ? "anthropic" : "openai" });
 await writeFile(join(catalog, "models.mjs"), `import { appendFileSync } from "node:fs";
 appendFileSync(${JSON.stringify(join(fixture, "children.jsonl"))}, JSON.stringify({pid:process.pid,cwd:process.cwd(),argv:process.argv})+"\\n");
-export const getBundledProviders = () => ["openai"]; export const getBundledModels = () => ${JSON.stringify(models)};`);
+const models = ${JSON.stringify(models)};
+export const getBundledProviders = () => ["openai", "anthropic"]; export const getBundledModels = provider => models.filter(model => model.provider === provider);`);
 console.log(JSON.stringify({ root, record, port: server.port, db: getAgentDbPath() }));
 // stdin EOF is the fixture owner's deterministic shutdown signal.
 await Bun.stdin.text();
