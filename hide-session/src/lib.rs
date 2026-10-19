@@ -284,12 +284,13 @@ pub enum Agent {
 }
 
 impl Agent {
-    /// The session formats actually declared by this build, independent of
-    /// whether its launch, hooks or other features are enabled.
+    /// The readable session formats, including retained history for retired
+    /// agents, independent of active launch, hook or provider support.
     pub fn supported() -> impl Iterator<Item = Self> {
         hide_agent_adapter::ADAPTERS
             .iter()
             .filter_map(|row| row.session.map(Self::from_format))
+            .chain(std::iter::once(Self::Cursor))
     }
 
     pub const fn format(self) -> hide_agent_adapter::SessionFormat {
