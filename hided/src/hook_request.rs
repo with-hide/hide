@@ -129,7 +129,7 @@ fn observation_answer(
 ) -> Result<Value, Failure> {
     let deadline = Instant::now() + hide_node_link::panes::OBSERVATION_SEND_BUDGET;
     let result = cap
-        .question_guard_terminal()
+        .pane_terminal()
         .ok_or("observation_agent_pane_required".to_owned())
         .and_then(|terminal| {
             core.prepare_direct_observation(

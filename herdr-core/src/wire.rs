@@ -1611,6 +1611,7 @@ pub(crate) fn agent_state(value: Value) -> Result<AgentState, String> {
 /// Fresh delivery guard, converted here rather than exposing generated types.
 pub(crate) struct DeliveryAgent {
     pub pane_id: String,
+    pub terminal_id: String,
     pub name: String,
     pub kind: Option<String>,
     pub session: Option<String>,
@@ -1653,6 +1654,7 @@ pub(crate) fn delivery_agent(value: Value) -> Result<DeliveryAgent, String> {
         res::ResponseResult::AgentInfo { agent } => Ok(DeliveryAgent {
             name: agent.name.unwrap_or_else(|| agent.pane_id.clone()),
             pane_id: agent.pane_id,
+            terminal_id: agent.terminal_id,
             kind: agent.agent,
             session: agent
                 .agent_session
