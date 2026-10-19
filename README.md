@@ -25,36 +25,43 @@
 </p>
 
 <p align="center">
-  <img src="site/assets/hide-workspace.webp" alt="The hide window: two agents that need an answer raised above the project tree, Claude Code and Codex side by side, and every session listed by group on the right.">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="site/assets/shots/hero-light.webp">
+    <img src="site/assets/shots/hero-dark.webp" alt="The hide window. Two agents that need an answer are raised above the project tree. A lead splitting the work and the agent asking to merge two pull requests run side by side, and the PRs tool lists the two ready to merge above the ones agents are still working on.">
+  </picture>
 </p>
 
 Your team runs several coding agents at once, and someone has to watch them.
-hide keeps every agent in one view, lets them hand work to each other, and keeps them going after you close the laptop.
+hide lets them work as one team: they start helpers, watch them and write to each other.
+It keeps the team in one view and keeps it going after you close the laptop.
 You get the decisions; the rest stays out of the way.
 
-It works with the agent CLIs you already signed in to: **Claude Code, Codex, OpenCode, Grok, Pi, omp and Antigravity**.
+It works with the agent CLIs you already signed in to: **Claude Code, Codex, Antigravity, OpenCode, Grok, Pi and omp**.
 No new API key, no hosted service.
 
 ## Features
 
-### Only what needs you comes up
+### Agents start, watch and write to each other
 
-Hide AI reads what each agent did and gives it a title and a one-line summary.
-Agents sort themselves into four groups, **Needs You, Done, Working and Seen**, and the ones waiting on you sit on top of every screen.
-Hide AI runs on the agent CLI you already use.
-
-### Agents hand work to each other
-
-A lead starts workers, a worker starts a helper, and they write to each other in letters.
+A lead starts workers, a worker starts a helper, on this machine or another, and they write to each other in letters.
 Mix vendors freely: one agent writes, another checks.
 A child runs in its own tab and reports to its parent, not to you, and the tree shows who started whom on every machine.
+The agent that started a child watches it: it hears within a minute when the child stops on a question, and after 20 quiet minutes when it stalls.
+Claude Code and Codex can end a turn and wait; the letter they wait for wakes them.
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: light)" srcset="site/assets/shots/agents-light.webp">
-    <img src="site/assets/shots/agents-dark.webp" alt="A lead agent, Claude Code, open in a pane. Its header shows one child asking and its pull requests, and a popover lists the helpers it started. The sidebar tree beside it shows the lead with Codex workers and an OpenCode helper under them.">
+    <img src="site/assets/shots/agents-dark.webp" alt="The hide window with the lead's tree open. The sidebar shows the lead with Codex workers and OpenCode helpers under it, and a popover from the lead's pane lists the helpers it started, one of them asking.">
   </picture>
 </p>
+
+### Only what needs you comes up
+
+Hide AI reads what each agent did and gives it a title and a one-line summary.
+Agents sort themselves into four groups, **Needs You, Unread, Working and Seen**, and the ones waiting on you sit on top of every screen.
+Hide AI runs on the agent CLI you already use.
+Each task keeps a record of what it is doing now and what you asked, ticked off as it goes.
 
 ### One core, any screen
 
@@ -65,7 +72,7 @@ Add any machine by its SSH alias and its agents join the same groups, and pair y
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: light)" srcset="site/assets/shots/core-light.webp">
-    <img src="site/assets/shots/core-dark.webp" alt="Settings in hide. Devices lists the core machine, a laptop that dials in and a server, all connected. Mobile shows Tailscale ready and one paired phone.">
+    <img src="site/assets/shots/core-dark.webp" alt="Settings in hide. Devices lists the core machine, a laptop that dials in and a Linux server, all connected. Mobile shows Tailscale ready and one paired phone.">
   </picture>
 </p>
 
@@ -73,9 +80,15 @@ Add any machine by its SSH alias and its agents join the same groups, and pair y
 
 - **Real terminals.** Agents run in Herdr panes with their real layout, scrollback and focus, drawn in place.
 - **Files beside the work.** A path an agent names opens next to it, in an editor with a VS Code style Explorer.
-- **Diffs and pull requests.** Each checkout's changes are one click from its tab, with its pull requests in the Work tool.
+- **Diffs and pull requests.** Each checkout's changes are one click from its tab, and the PRs tool sorts pull requests by who acts next.
 - **A browser your agents can drive.** `hide browser open <url>` shows a page beside the agent, which can click, fill and screenshot it.
 - **Keyboard first.** `⌘K` goes to any agent, session, issue or pull request, and `⌘P` opens any file.
+
+### Around the agents
+
+- **Project Memory.** What one session decided reaches the next agent, and a card that disagrees with your docs comes to you as a question.
+- **Backlog.** GitHub issues and local notes sit in one list; starting one opens a worktree, an agent and its first prompt.
+- **Pull requests.** The ones waiting on you come first, and one click hands a pull request to an agent.
 
 > [!NOTE]
 > **Software Factory is coming.** Queue issues with clear requirements; workers take them in order, verify and merge them, and bring back only what needs a person.

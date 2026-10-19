@@ -197,6 +197,10 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
+        Self::with_usage_gate(None)
+    }
+
+    fn with_usage_gate(usage_gate: Option<Arc<hide_ai::UsageLimits>>) -> Self {
         let backend = Scripted::new();
         let router_backend: Arc<dyn AiBackend> = backend.clone();
         let analyzer = LabelAnalyzer::spawn_with(
@@ -210,6 +214,7 @@ impl Harness {
                     RouterConfig {
                         priority: vec![ProviderId::CLAUDE],
                         max_transient_attempts: 1,
+                        usage_gate: usage_gate.clone(),
                         ..RouterConfig::default()
                     },
                     Arc::new(NoopLogSink),
@@ -366,13 +371,23 @@ fn unix_now_ms() -> u64 {
 
 /// Takes results until nothing is read or analyzed.
 fn settle(worker: &mut LabelWorker, woken: &Receiver<()>) {
+    settle_with_clock(worker, woken, Instant::now);
+}
+
+fn settle_with_clock(
+    worker: &mut LabelWorker,
+    woken: &Receiver<()>,
+    clock: impl Fn() -> Instant,
+) -> bool {
     let deadline = Instant::now() + Duration::from_secs(20);
+    let mut changed = false;
     while !worker.settled() {
         let left = deadline.saturating_duration_since(Instant::now());
         assert!(!left.is_zero(), "the worker did not settle");
         let _ = woken.recv_timeout(left.min(Duration::from_millis(200)));
-        worker.drain(Instant::now(), unix_now_ms());
+        changed |= worker.drain(clock(), unix_now_ms());
     }
+    changed
 }
 
 fn drain_until(
@@ -3160,6 +3175,158 @@ fn a_blocked_turn_ends_when_the_agent_works_again() {
     let running = shown_facts(&worker, &working);
     assert_eq!(running.as_ref().and_then(|facts| facts.end), None);
     assert!(!shown(&worker, &working).is_some_and(|label| label.blocked));
+}
+
+/// task-line-restoration B6/B8: quota clears the current judgment, then the
+/// existing provider deadline can restore that same turn on every projection.
+#[test]
+fn a_usage_limited_turn_clears_its_line_and_recovers_when_the_provider_wait_ends() {
+    fn request_row(
+        worker: &LabelWorker,
+        agent: &ObservedAgent,
+    ) -> crate::model::SidebarAgentSnapshot {
+        let mut rows = [shown_row(worker, agent)];
+        crate::request_view::apply(
+            &mut rows,
+            |_| None,
+            &crate::model::GithubSnapshot::default(),
+            &mut Default::default(),
+            1_000,
+        );
+        crate::agent_state::turn::rederive(&mut rows[0]);
+        rows.into_iter().next().unwrap()
+    }
+
+    let limits = Arc::new(hide_ai::UsageLimits::new());
+    let harness = Harness::with_usage_gate(Some(Arc::clone(&limits)));
+    let store = harness.store();
+    let (mut worker, woken, _) = harness.worker(Arc::clone(&store));
+    let path = harness.session("a", "native-a", &[("user", "검증 결과를 정리해줘")]);
+    harness.backend.begin("검증 결과 정리 작업");
+    let working = agent(&path, "working", 1);
+    observe(&mut worker, &working);
+    settle(&mut worker, &woken);
+    assert_eq!(
+        request_row(&worker, &working).state.session.line.as_deref(),
+        Some("검증 결과 정리 작업 진행")
+    );
+    store.flush();
+
+    harness.session(
+        "a",
+        "native-a",
+        &[
+            ("user", "검증 결과를 정리해줘"),
+            ("assistant", "검증을 마쳤습니다"),
+        ],
+    );
+    // With no reported reset, the existing recovery interval is ten minutes.
+    let wait = Duration::from_secs(600);
+    let reading = |used_percent| {
+        std::collections::BTreeMap::from([(
+            ProviderId::CLAUDE,
+            hide_ai::UsageReading {
+                used_percent,
+                resets_at_unix_ms: None,
+            },
+        )])
+    };
+    limits.set(hide_ai::UsageLimit::Percent(90), &reading(95.0));
+    let stopped = agent(&path, "done", 2);
+    let failed_at = Instant::now();
+    observe(&mut worker, &stopped);
+    assert!(
+        settle_with_clock(&mut worker, &woken, || failed_at),
+        "clearing a shown judgment must publish"
+    );
+    let failed = request_row(&worker, &stopped);
+    assert_eq!(failed.identity_label, "검증 결과 정리 작업");
+    assert_eq!(failed.progress, None);
+    assert_eq!(failed.request.as_ref().unwrap().line, None);
+    assert_eq!(failed.state.session.line, None);
+    assert_eq!(shown_facts(&worker, &stopped).unwrap().end, None);
+    let phone =
+        crate::agent_state::phone::project(&json!({"navigator":{"agents":[failed]}}), LOCAL_TARGET);
+    assert!(phone.agents().next().unwrap().line.is_none());
+    store.flush();
+    let saved = harness.store().target(LOCAL_TARGET);
+    assert_eq!(saved["w1:p1"].line, "");
+    assert_eq!(saved["w1:p1"].end, None);
+    assert!(
+        saved["w1:p1"].facts.reply.is_some(),
+        "native facts survive an unavailable judgment"
+    );
+
+    harness.backend.answers.lock().unwrap().push_back(json!({
+        "goal": null, "goal_update": "keep", "line": "검증 결과를 정리했습니다", "end": "done",
+        "work":{"task":{"kind":"none"},"missed":[],"resolved":[],"output_task_id":null},
+    }));
+    // The account can answer again, but the worker still owes the deadline.
+    limits.set(hide_ai::UsageLimit::Percent(90), &reading(0.0));
+    let before_due = failed_at + wait - Duration::from_nanos(1);
+    worker.tick(before_due);
+    settle_with_clock(&mut worker, &woken, || before_due);
+    assert_eq!(
+        harness.backend.calls(),
+        1,
+        "no request before the provider's deadline"
+    );
+    assert_eq!(request_row(&worker, &stopped).state.session.line, None);
+
+    let due = failed_at + wait;
+    worker.tick(due);
+    assert!(
+        settle_with_clock(&mut worker, &woken, || due),
+        "the restored line must publish without a new turn"
+    );
+    let restored = request_row(&worker, &stopped);
+    assert_eq!(restored.identity_label, "검증 결과 정리 작업");
+    assert_eq!(
+        restored.request.as_ref().unwrap().line.as_deref(),
+        Some("검증 결과를 정리했습니다")
+    );
+    assert_eq!(
+        restored.state.session.line.as_deref(),
+        Some("검증 결과를 정리했습니다")
+    );
+    assert_eq!(
+        shown_facts(&worker, &stopped).unwrap().end,
+        Some(super::analysis::LabelEnd::Done)
+    );
+    let phone = crate::agent_state::phone::project(
+        &json!({"navigator":{"agents":[restored]}}),
+        LOCAL_TARGET,
+    );
+    assert_eq!(
+        phone.agents().next().unwrap().line.as_ref().unwrap().text,
+        "검증 결과를 정리했습니다"
+    );
+    worker.tick(due + wait);
+    settle_with_clock(&mut worker, &woken, || due + wait);
+    assert_eq!(
+        harness.backend.calls(),
+        2,
+        "a settled turn is not asked again"
+    );
+
+    drop(worker);
+    store.flush();
+    let (mut restarted, woken, _) = harness.worker(harness.store());
+    observe(&mut restarted, &stopped);
+    settle(&mut restarted, &woken);
+    assert_eq!(
+        request_row(&restarted, &stopped)
+            .state
+            .session
+            .line
+            .as_deref(),
+        Some("검증 결과를 정리했습니다")
+    );
+    assert_eq!(
+        harness.backend.calls(),
+        2,
+        "restart reuses the recovered judgment"
+    );
 }
 
 /// D-33, B20: a turn's end that ran out of time is asked once more; a second

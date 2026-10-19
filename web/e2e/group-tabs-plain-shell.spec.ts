@@ -12,7 +12,7 @@ import { herdrGate } from "./herdr-gate";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureLoginShellPath } from "./platform-fixture";
 import { quietFor } from "./wait";
-import { enterWorkspace } from "./wire";
+import { enterWorkspace, sendEvent } from "./wire";
 
 test.describe.configure({ timeout: 150_000 });
 test.use({ actionTimeout: 15_000 });
@@ -181,9 +181,11 @@ for (const scenario of [
       });
       const tab = (await stripTabs(page).getAttribute("data-tab"))!;
       const originalTabs = topology(herdr);
-      await page.locator(`[data-add-agent="${tab}"]`).click();
+      // D-01 removes Add agent. Exercise the preserved start lifecycle
+      // through its public event instead of inventing another UI entry.
+      const group = await selector(page).getAttribute("data-agent-group-selector");
       const prompt = "Plain shell added agent prompt";
-      await startClaude(page, prompt);
+      await sendEvent(page, daemon, "agent_start_in_checkout", { checkout_path: path.join(herdr.root, "fixture"), provider: "claude", model: "opus", prompt, request_id: "start-plain-add", target: { group_id: group, area_id: "a1", tab_id: tab, add_pane: true } });
       await expect(page.locator("[data-pane-view]")).toHaveCount(2);
       await expect(page.locator(`[data-pane-view="${pane}"]`)).toBeVisible();
       await expect(stripTabs(page)).toHaveAttribute("data-tab", tab);

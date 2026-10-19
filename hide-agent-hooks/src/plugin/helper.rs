@@ -151,7 +151,12 @@ pub fn run(agent: &str, operation: Option<&str>, started: Instant) {
         Some("prompt") => prompt(&home, &agent, input, started + PROMPT_BUDGET),
         Some("confirm") => confirm(&home, input, started + CONFIRM_BUDGET),
         Some("tool") => tool(&home, &agent, input, started + TOOL_BUDGET),
-        Some("observation") => observation(&home, &agent, &input, started),
+        Some("observation")
+            if agent.adapter.observation
+                == hide_agent_adapter::ObservationSupport::Plugin(agent.dialect) =>
+        {
+            observation(&home, &agent, &input, started)
+        }
         Some("letters") if agent.adapter.tool_letters.is_some() => {
             letters(&home, input, started + LETTERS_BUDGET)
         }

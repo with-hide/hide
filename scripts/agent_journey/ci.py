@@ -65,7 +65,7 @@ FIXTURE_ONLY = "a stand-in imitates Claude Code and Codex only; the fake model l
 # keyless lane measures them once it runs the pinned CLIs on a fake model.
 FIXTURE_UNIMITATED = {cell: "the C stand-in does not imitate it; the signed-in lane measures it"
                       for cell in ("guidance_memory", "fork", "title", "usage")}
-FIXTURE_CELLS = tuple(name for name in cells.BUILT_CELLS
+FIXTURE_CELLS = tuple(name for name in cells.CELLS
                       if name != "start_untrusted" and name not in FIXTURE_UNIMITATED)
 
 # What a fixture stand-in cannot show, said in its report (PRD B27).

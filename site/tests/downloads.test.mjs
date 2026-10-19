@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateRelease } from "../downloads.js";
+import { heroOffer, validateRelease } from "../downloads.js";
 
 // The installers a release carries (PRD auto-update D-35), each with its checksum.
 const base = "https://github.com/with-hide/hide/releases";
@@ -115,4 +115,23 @@ test("malformed API data fails closed; unrelated assets do not replace required 
   const release = publicRelease();
   release.assets.push({ name: "source-code.zip", size: 0 });
   assert.equal(validateRelease(release).status, "ready");
+});
+
+test("the hero offers the one macOS or Windows installer with its checksum and notes, unless the processor rules it out", () => {
+  const ready = validateRelease(publicRelease());
+  const mac = heroOffer(ready, "macos", "");
+  assert.equal(mac.label, "Download for macOS");
+  assert.equal(mac.detail, "Apple Silicon · macOS 14 or later");
+  assert.equal(mac.url, `${base}/download/v1.2.3/${filenames[0]}`);
+  assert.equal(mac.checksumUrl, `${base}/download/v1.2.3/${filenames[0]}.sha256`);
+  assert.equal(mac.releaseUrl, `${base}/tag/v1.2.3`);
+  assert.equal(heroOffer(ready, "macos", "arm").url, mac.url);
+  assert.equal(heroOffer(ready, "windows", "").url, `${base}/download/v1.2.3/${filenames[1]}`);
+  assert.equal(heroOffer(ready, "macos", "x86"), null);
+  assert.equal(heroOffer(ready, "windows", "arm"), null);
+  assert.equal(heroOffer(ready, "linux", "x86"), null);
+  assert.equal(heroOffer(ready, "", ""), null);
+  for (const state of [{ status: "loading" }, { status: "error" }, validateRelease({ ...publicRelease(), prerelease: true })]) {
+    assert.equal(heroOffer(state, "macos", ""), null);
+  }
 });

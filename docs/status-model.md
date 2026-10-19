@@ -229,6 +229,9 @@ Regression owners: `a_turn_end_is_not_a_stop_until_its_session_read_lands`, `a_r
 ## Where each axis comes from
 
 Activity and completion come only from Herdr's `agent_status` and `completion_seq`: `working` is Working, `idle` and `done` are stopped, `done` or `idle` with a `completion_seq` reports a completion, and any other value reads as unknown rather than idle.
+An agent-list transport failure makes the retained telemetry unconfirmed while the topology stream remains connected.
+Until a successful agent list or bootstrap snapshot confirms it again, the agent keeps its identity and task title but has Unknown activity, no completion or current demand, and requires a status check before closing.
+An identical successful list restores the confirmed state; a topology event alone does not confirm the entire agent list.
 No pane token is read for either.
 Demand has these sources:
 

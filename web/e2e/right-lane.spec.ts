@@ -114,7 +114,7 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
     await expect(railTool(page, "files")).toHaveAttribute("aria-pressed", "true");
-    await expect(page.locator("[data-lane-header]")).toContainText("Files");
+    await expect(page.locator("[data-lane-header] [data-lane-tree-toggle]")).toBeVisible();
     await screenshot(page, "right-lane-overlay");
 
     // The divider at the overlay's left edge widens the lane by what it is
@@ -150,7 +150,7 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     await page.mouse.up();
     await expect.poll(async () => Math.abs((await widened()) - (laneBox.width + 60))).toBeLessThanOrEqual(1);
     await railTool(page, "files").click();
-    await expect(page.locator("[data-lane-header]")).toContainText("Files");
+    await expect(page.locator("[data-lane-header] [data-lane-tree-toggle]")).toBeVisible();
     await expect.poll(widened).toBe(wide);
     await expect(pane(page, lane.herdr.panes[0]!)).toBeVisible();
     expect(resizes(lane)).toBe(before);
@@ -188,15 +188,22 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
   }
 });
 
-test("the rail draws one divider between the Project's tools and the checkout's, and each header says its scope behind an icon (D-37, B54)", async ({ page }) => {
+test("the rail draws one divider between the Project's tools and the checkout's, and Files starts with Explorer while other headers keep their scope icons (D-37, B54, tab-file-toolbar D-02/D-03)", async ({ page }) => {
   test.setTimeout(120_000);
   const lane = await startLane(page, "lane-scope");
   try {
     // One short rule where the Project's tools end and the checkout's begin.
     const rail = await page.locator("[data-tool-rail] > [data-lane-tool], [data-tool-rail] > [data-tool-rail-divider]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-lane-tool") ?? "divider"));
     expect(rail).toEqual(["memory", "prs", "divider", "files", "changes"]);
-    // The header reads `name · scope` as text, with the icon as decoration only.
-    for (const [tool, name, icon] of [["memory", "Memory", "folder"], ["prs", "PRs", "folder"], ["files", "Files", "git-branch"], ["changes", "Changes", "git-branch"]] as const) {
+    // PRD tab-file-toolbar D-02/D-03: only Files omits its title/scope.
+    await showTool(page, "files");
+    const filesHeader = page.locator("[data-lane-header]");
+    await expect(filesHeader.locator("[data-lane-scope], svg.lucide-git-branch")).toHaveCount(0);
+    await expect(filesHeader).toHaveText("Explorer");
+    await expect(filesHeader.getByRole("button").first()).toHaveAttribute("data-lane-tree-toggle");
+    await expect(filesHeader.getByRole("button")).toHaveCount(4);
+    // Other tools still read `name · scope`, with decoration only.
+    for (const [tool, name, icon] of [["memory", "Memory", "folder"], ["prs", "PRs", "folder"], ["changes", "Changes", "git-branch"]] as const) {
       await showTool(page, tool);
       const header = page.locator("[data-lane-header]");
       const scope = header.locator("[data-lane-scope]");

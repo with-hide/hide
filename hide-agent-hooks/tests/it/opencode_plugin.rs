@@ -85,8 +85,7 @@ fn stand_in(dir: &Path) -> PathBuf {
 }
 
 #[cfg(unix)]
-#[test]
-fn the_plugin_behaves_as_opencode_runs_it() {
+pub(super) fn the_plugin_behaves_as_opencode_runs_it() {
     let dir = tempfile::tempdir().unwrap();
     let helper = stand_in(dir.path());
     // `.mjs`: Node reads the plugin as the ES module OpenCode loads.
@@ -107,8 +106,7 @@ fn the_plugin_behaves_as_opencode_runs_it() {
 }
 
 #[cfg(unix)]
-#[test]
-fn the_plugin_behaves_as_opencode_2_runs_it() {
+pub(super) fn the_plugin_behaves_as_opencode_2_runs_it() {
     let dir = tempfile::tempdir().unwrap();
     let helper = stand_in(dir.path());
     let plugin = dir.path().join("hide.mjs");

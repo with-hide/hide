@@ -122,7 +122,13 @@ pub(crate) fn fetch_agents(
         json!({}),
         SYNC_REQUEST_TIMEOUT,
     )
-    .map_err(session_error_from_api)?;
+    .map_err(|error| match error {
+        // A server refusal is an answered query, not a delayed transport.
+        ApiError::Remote { code, message } => {
+            SessionFetchError::Stale(format!("agent.list refused ({code}): {message}"))
+        }
+        error => session_error_from_api(error),
+    })?;
     wire::agents_response(result)
 }
 

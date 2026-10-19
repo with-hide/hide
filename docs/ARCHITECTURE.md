@@ -94,6 +94,15 @@ The shell dispatches typed JSON events in and receives snapshot and delta frames
 The event sync coordinator (`session_sync/coordinator.rs`) delegates Herdr snapshot and subscription lifecycle to `session_sync/subscription.rs`, opens `events.subscribe` first and reads `session.snapshot` second, applies the topology events that follow, and refreshes agent telemetry with `agent.list` once per second.
 The thread that applies Herdr's events never blocks on anything else (PRD instant-pane-topology D-13): `agent.list`, a new pane's `pane.get`, a workspace's `workspace.get` and the `agent.get` of a start Herdr holds open each open a connection, so they run on one sync-read worker (`session_sync/sync_reads.rs`) with one read of each kind in flight and the answer returned as a coordinator message fenced by subscription generation; `lsof` and the Codex usage request run on their readers' `BackgroundRead` threads, and the label store writes `labels.json` on its own thread.
 Their output and intervals are what they were before the move.
+An `agent.list` transport failure invalidates telemetry, not the independent topology subscription: the coordinator retains its replica, connection generation and terminal attachments, and the existing single agent-read worker asks again on its ordinary schedule.
+The replica keeps native values for comparison but publishes activity and completion as unconfirmed; labels cannot turn that retained telemetry into a current demand, and the existing Unknown activity requires a status check before a destructive close.
+Delivery retains identity and input clocks while withholding bells and watch status; an unchanged recovery cannot consume a draft or create a new unread completion.
+The coordinator retains one last accepted native projection, replaced on publication and cleared at a new subscription generation, so a new pane awaiting its cwd cannot hold freshness invalidation of the existing panes.
+That fallback retains the accepted topology and cwd stand-ins, consumes no pending arrivals, and stays unconfirmed until the held projection can publish.
+Only the first failure changes the projection or logs `agent_refresh.failed`; repeated failures publish nothing.
+A successful list, including one identical to the retained native values, confirms telemetry again and publishes that transition on the same subscription.
+Events continue to update topology while telemetry is unconfirmed; a malformed answer, incompatible protocol or invalid projection still rebuilds through the normal subscription recovery, as does the event stream itself ending.
+No user mutation is retried by this read recovery.
 Agent labels are made by the core itself and shown only for the session they were proven for; see Agent labels in the core under hided and the WebSocket boundary, and [status-model.md](status-model.md#task-identity) for how they reach a row.
 Tab names use core focus and the same agent row as the sidebar; process names arrive through a coordinator-owned off-lock `pane.process_info` reader on each host's connector.
 Its single worker reads at most the five attached tabs' focused panes, on focus or agent-state changes or a 30-second recheck, rejects obsolete generations, and publishes only changed names.
@@ -1278,7 +1287,13 @@ Behavior the schema does not state: the pinned Herdr leaves an `agent.start` `la
 
 `hide-agent-adapter` is the data-only leaf shared by the hook helper, session readers, kit, core, daemon and device helper.
 One static row per supported agent declares its canonical id and aliases, labels, programs, skill location, installation and hook dialects, session format, launch/find/usage selectors, links and logo id.
-Prompt intake, spawn refusal, subagent counts, Memory and bell eligibility are independent fields: gaining a prompt hook does not make an agent a bell target or make its session readable.
+Prompt intake, spawn refusal, subagent counts, Memory, bell eligibility and passive tool-result observation are independent fields: gaining a prompt hook does not make an agent a bell target or make its session readable.
+Every row must choose a native or plugin observation dialect, or explicitly declare observation unsupported with a reason.
+Guidance, automatic Memory injection and native titles also require an explicit supported route or reader, or an absence with its reason, repository evidence and closure condition, using the same `Support` sum type as usage.
+Automatic Memory injection is distinct from the shared Memory store, extraction and search; an installed hook alone does not prove its output reaches the model.
+Context routes distinguish native hooks, guidance hooks and plugin prompt delivery, with independent support and installed-host contracts checking the declaration against the implementation.
+The hook helper dispatches observations from that declaration; the shared hook contract checks installed native Post events against native fixtures and expected neutral metadata, and exercises every supported route through the built helper on Unix.
+Installed plugin rows run their existing host suites independently of observation support, preserving the other plugin contracts.
 The common lookup trims borrowed input and compares ids and aliases without case, allocation, I/O, a lock or a cache.
 Every start normalizes a known kind to its Herdr name at the shared wire boundary; captured unknown kinds retain their original bytes and gain no capability.
 Lifecycle identity checks normalize known kinds while keeping their existing unknown-kind comparisons, and bell identity keeps unknown spellings exact along with pane, name, native session, readiness and sequence checks.

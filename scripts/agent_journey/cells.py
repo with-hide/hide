@@ -12,17 +12,11 @@ PASS, FAIL, NOT_MEASURED, NA, EXCLUDED, PENDING = "pass", "fail", "not measured"
 # The contract's cell names in table order (contracts/agent-journey.json).
 CELLS = ("start", "start_untrusted", "reply", "integration", "guidance_memory", "letter",
          "sleep_wake", "resume", "fork", "title", "usage")
-# What this cycle measures (PRD agent-journey-check D-20); every other declared
-# cell reads "not built in this cycle" until a later change builds it.
-BUILT_AGENTS = ("claude-code", "codex", "grok", "opencode", "pi", "omp", "antigravity")
-BUILT_CELLS = ("start", "start_untrusted", "reply", "integration", "guidance_memory", "letter", "sleep_wake",
-               "resume", "fork", "title", "usage")
 # A cell that cannot be measured until another one passed: a fork, a title
 # and usage need a conversation with an answer in it.
 PREREQUISITE = {"reply": "start", "integration": "start", "guidance_memory": "start", "letter": "start",
                 "sleep_wake": "start", "resume": "sleep_wake", "fork": "reply", "title": "reply", "usage": "reply"}
 
-NOT_BUILT = "not built in this cycle"
 # Agents the operator took out of the journey (PRD D-45): every cell reads
 # excluded with the reason, never fail or not measured, and counts nowhere.
 EXCLUDED_AGENTS = {"cursor": "operator decision 2026-10-17"}
@@ -34,7 +28,7 @@ def cell(status, reason, evidence=None):
 
 
 def plan(contract, selected):
-    """The whole table before anything runs: N/A, unselected and unbuilt cells are final."""
+    """Every registered adapter participates; undeclared and unselected cells are final."""
     table = {}
     for row in contract:
         cells = {}
@@ -45,8 +39,6 @@ def plan(contract, selected):
                 cells[name] = cell(NA, "not declared by the adapter")
             elif row["id"] not in selected:
                 cells[name] = cell(NOT_MEASURED, "not selected (--agents)")
-            elif row["id"] not in BUILT_AGENTS or name not in BUILT_CELLS:
-                cells[name] = cell(NOT_MEASURED, NOT_BUILT)
             else:
                 cells[name] = cell(PENDING, "")
         table[row["id"]] = cells
