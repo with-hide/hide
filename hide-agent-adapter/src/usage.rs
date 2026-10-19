@@ -5,9 +5,30 @@ pub const SHIPPED_USAGE_LAYER: u8 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "support", content = "detail", rename_all = "snake_case")]
-pub enum Support<S> {
+pub enum Support<S, A = Absence> {
     Supported(S),
-    Unsupported(Absence),
+    Unsupported(A),
+}
+
+impl<S: Copy, A: Copy> Support<S, A> {
+    /// Presence and fallback queries also used by existing optional-capability callers.
+    pub const fn is_some(self) -> bool {
+        matches!(self, Self::Supported(_))
+    }
+
+    pub const fn supported(self) -> Option<S> {
+        match self {
+            Self::Supported(value) => Some(value),
+            Self::Unsupported(_) => None,
+        }
+    }
+
+    pub const fn or(self, fallback: Option<S>) -> Option<S> {
+        match self {
+            Self::Supported(value) => Some(value),
+            Self::Unsupported(_) => fallback,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

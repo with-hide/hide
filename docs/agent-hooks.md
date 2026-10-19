@@ -587,6 +587,12 @@ Add the declaration in `hide-agent-adapter/src/declarations.rs`, keeping its can
 Aliases belong on that row: every caller uses the same borrowed, case-insensitive lookup, including surrounding-whitespace normalization.
 Select hook and installation dialects implemented by `hide-agent-hooks`, session formats implemented by `hide-session`, and launch, find and usage dialects in their existing owners; the leaf crate contains data and typed selectors only.
 Declare prompt intake, spawn refusal, subagent counts, Memory, bell eligibility and passive tool-result observation independently.
+`guidance`, `memory` and `titles` are required `Capability` declarations: choose `Support::Supported` with the typed route or reader, or `Support::Unsupported(CapabilityAbsence)` with a reason, repository evidence reference and what would close the gap.
+The shared `Support` sum type also serves usage declarations; no optional field silently decides that a feature is absent.
+Here `memory` means automatic injection into the model's context, independently of storing, extracting or searching Memory cards.
+`ContextRoute` distinguishes a native hook, a guidance hook whose output reaches the model, and a plugin's prompt event; the latter carries the start guidance and Memory index on the first prompt rather than a native `SessionStart`.
+The independent context matrix and installed-command fixtures reject a different agent's route or title reader, discarded context, missing evidence and missing native start/prompt commands or Memory invocation flags.
+Plugin host suites check first and later prompt delivery, and the generated-contract drift checks preserve the Settings and journey projections.
 The required `observation` field selects `ObservationSupport::Native(HookDialect)` or `ObservationSupport::Plugin(PluginDialect)`, or `Unsupported` with a meaningful reason.
 For native support, add a payload, the required Post events and independent neutral metadata expectations to `hide-agent-hooks/tests/fixtures/observation-native.json`.
 The shared `adapter_contract` suite checks those events in the installed configuration and the fixture output, then executes the supported native and plugin routes through the built helper on Unix.

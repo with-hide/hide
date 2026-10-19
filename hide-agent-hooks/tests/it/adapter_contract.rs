@@ -34,6 +34,63 @@ fn native_fixtures() -> Value {
     serde_json::from_str(include_str!("../fixtures/observation-native.json")).unwrap()
 }
 
+/// Native hosts' installed start/prompt commands must retain the context
+/// route they promise. Plugin hosts exercise first/later prompt context in
+/// `every_installed_plugin_runs_its_host_contract` below.
+#[test]
+fn declared_native_context_has_installed_start_and_prompt_commands() {
+    use hide_agent_adapter::{ContextRoute, usage::Support};
+    let fixtures: Value =
+        serde_json::from_str(include_str!("../fixtures/context-native.json")).unwrap();
+    for row in ADAPTERS {
+        for support in [row.guidance, row.memory] {
+            match support {
+                Support::Supported(ContextRoute::NativeHook(_) | ContextRoute::GuidanceHook(_)) => {
+                }
+                Support::Supported(ContextRoute::PluginPrompt(_)) | Support::Unsupported(_) => {
+                    continue;
+                }
+            }
+            let fixture = &fixtures[row.id];
+            let home = tempfile::tempdir().unwrap();
+            let document = native_document(row, home.path(), &home.path().join("hide-agent-hooks"));
+            let events = document
+                .get("hooks")
+                .or_else(|| document.get("hide"))
+                .unwrap();
+            for (event, helper_event) in fixture["events"]
+                .as_object()
+                .expect("missing native context fixture")
+            {
+                let helper_event = helper_event.as_str().unwrap();
+                let entry = &events[event][0];
+                let handler = if fixture["grouped"].as_bool().unwrap() {
+                    &entry["hooks"][0]
+                } else {
+                    entry
+                };
+                let command = handler["command"]
+                    .as_str()
+                    .expect("missing installed context command");
+                assert!(
+                    command.contains(&format!(
+                        "hook --runtime {} --event {helper_event} ",
+                        row.id
+                    )),
+                    "{} {event}: {command}",
+                    row.id
+                );
+                assert_eq!(
+                    command.contains("--memory-injection"),
+                    fixture["memory_flag"].as_bool().unwrap(),
+                    "{} {event}: Memory invocation drift",
+                    row.id
+                );
+            }
+        }
+    }
+}
+
 fn event_command<'a>(document: &'a Value, event: &str, tool: &str) -> &'a str {
     let events = document
         .get("hooks")

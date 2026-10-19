@@ -1279,6 +1279,9 @@ Behavior the schema does not state: the pinned Herdr leaves an `agent.start` `la
 One static row per supported agent declares its canonical id and aliases, labels, programs, skill location, installation and hook dialects, session format, launch/find/usage selectors, links and logo id.
 Prompt intake, spawn refusal, subagent counts, Memory, bell eligibility and passive tool-result observation are independent fields: gaining a prompt hook does not make an agent a bell target or make its session readable.
 Every row must choose a native or plugin observation dialect, or explicitly declare observation unsupported with a reason.
+Guidance, automatic Memory injection and native titles also require an explicit supported route or reader, or an absence with its reason, repository evidence and closure condition, using the same `Support` sum type as usage.
+Automatic Memory injection is distinct from the shared Memory store, extraction and search; an installed hook alone does not prove its output reaches the model.
+Context routes distinguish native hooks, guidance hooks and plugin prompt delivery, with independent support and installed-host contracts checking the declaration against the implementation.
 The hook helper dispatches observations from that declaration; the shared hook contract checks installed native Post events against native fixtures and expected neutral metadata, and exercises every supported route through the built helper on Unix.
 Installed plugin rows run their existing host suites independently of observation support, preserving the other plugin contracts.
 The common lookup trims borrowed input and compares ids and aliases without case, allocation, I/O, a lock or a cache.

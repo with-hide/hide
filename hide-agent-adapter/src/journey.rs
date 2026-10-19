@@ -200,6 +200,7 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
         });
         let title = row
             .titles
+            .supported()
             .filter(|_| cells.title)
             .map(|format| match format {
                 super::SessionFormat::Pi => JourneyTitle::Named("/name"),
