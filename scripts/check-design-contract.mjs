@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {execFileSync, spawnSync} from 'node:child_process';
 
-const commands = ['check-pen.mjs', 'check-pen-gallery.mjs', 'check-web-tokens.mjs', 'check-token-contrast.mjs', 'check-hide-screens.mjs', 'check-agent-logos.mjs'];
+const commands = ['check-web-tokens.mjs', 'check-token-contrast.mjs', 'check-agent-logos.mjs'];
 function run(root) {
   for (const command of commands) {
     const result = spawnSync(process.execPath, [path.join(root, 'scripts', command)], {cwd: root, stdio: 'inherit'});
@@ -23,9 +23,7 @@ try {
     const entries = execFileSync('git', ['ls-files', '--stage', '-z'], {cwd: root, encoding: 'utf8'}).split('\0').filter(Boolean);
     for (const entry of entries) {
       const tab = entry.indexOf('\t'), [mode, object, stage] = entry.slice(0, tab).split(' '), file = entry.slice(tab + 1);
-      const input = file === 'design/hide-ui.lib.pen'
-        || file === 'design/hide-screens.pen'
-        || file === 'design/tokens.json'
+      const input = file === 'design/tokens.json'
         || file === 'contracts/agent-adapters.json'
         || file === 'hide-kit/src/agents.rs'
         || file === 'hide-ai/src/registry.rs'

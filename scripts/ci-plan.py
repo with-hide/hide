@@ -148,12 +148,11 @@ READERS = (
     ("docs/AI_PROVIDERS.md", {"rust"}, {"hide-agent-adapter"}),
     ("web/src/assets/agents/manifest.json", {"rust"}, {"hide-agent-adapter"}),
     # The contracts a test holds the code to; the code does not read them.
-    # herdr-core's memory_hook test and hide-agent-adapter's contract test
-    # read the WebSocket schema. The web shell's types are generated from it
+    # herdr-core's memory_hook test reads the WebSocket schema. The web shell's types are generated from it
     # by hand (`gen:types`) and committed, so no web lane reads it.
-    ("contracts/hided-ws.schema.json", {"rust"}, {"herdr-core", "hide-agent-adapter"}),
+    ("contracts/hided-ws.schema.json", {"rust"}, {"herdr-core"}),
     # herdr-core's `model::wire_enum_tests`, and web/src/userTurn.test.ts,
-    # prMark.test.ts and factory/labels.test.ts.
+    # prMark.test.ts.
     ("contracts/snapshot-wire-enums.json", {"rust", "checks"}, {"herdr-core"}),
     # hide-agent-adapter's contract test; web/src/agentAdapters.ts imports it
     # into the shell, which plans what a web shell file plans.

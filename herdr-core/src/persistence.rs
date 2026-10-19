@@ -210,9 +210,6 @@ struct StoredUiState {
     /// loads empty. More entries than the limit (a hand edit) are cut to it.
     #[serde(default)]
     recent_pane_ids: Vec<String>,
-    /// Absent in a store written before the Factory secretary existed.
-    #[serde(default)]
-    factory_secretary_pane: Option<String>,
     /// Absent in a store written before Rename was recorded, which loads
     /// empty: no tab named before then counts as the operator's until it is
     /// renamed again. More entries than the limit (a hand edit) are cut to it.
@@ -534,7 +531,6 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
                 recent.truncate(crate::model::RECENT_PANE_LIMIT);
                 recent
             },
-            factory_secretary_pane: stored.factory_secretary_pane,
             operator_tab_names: stored
                 .operator_tab_names
                 .into_iter()
@@ -677,7 +673,6 @@ pub fn save(
         session_archive: state.session_archive.clone(),
         recent_checkouts: state.recent_checkouts.clone(),
         recent_pane_ids: state.recent_pane_ids.clone(),
-        factory_secretary_pane: state.factory_secretary_pane.clone(),
         operator_tab_names: state.operator_tab_names.clone(),
     };
     let bytes = serde_json::to_vec_pretty(&stored)

@@ -72,10 +72,7 @@ import { homeOpening } from "./hideAiOrigin";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { useShellStore } from "./store";
-import { FACTORY_ENTRY, useUiStore, type FactoryPlace, type MainView, type OverviewPlace, type PendingClose } from "./ui";
-import type { FactoryCommand } from "./factory/commands";
-import { FACTORY_OPEN } from "./factory/launch";
-import { SECRETARY_PROMPT, paneListed } from "./factory/secretary";
+import { useUiStore, type MainView, type OverviewPlace, type PendingClose } from "./ui";
 import type { DispatchFn } from "./ws";
 import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
 import { focusTerminal } from "./terminals";
@@ -141,12 +138,7 @@ export function createActions(send: DispatchFn) {
   const diagnostic = (message: string) => useShellStore.getState().noteDiagnostic(message);
   const ui = () => useUiStore.getState();
 
-  /** A new secretary in this machine's Home (B23); its pane is recorded when the start answers (`useSecretaryStart`). */
-  const startSecretary = (provider: "claude" | "codex") => {
-    const requestId = remoteRequestId();
-    ui().setSecretaryStart({ phase: "start", requestId });
-    dispatch({ schema_version: 2, kind: "agent_start_in_checkout", payload: { home: true, provider, prompt: SECRETARY_PROMPT, request_id: requestId } });
-  };
+
 
   /** Remembers what was asked to come forward; `CenterScreen` shows it once it is in front. */
   const beginOpening = (target: OpenTarget) => {
@@ -1499,7 +1491,7 @@ export function createActions(send: DispatchFn) {
       resumeSessionId?: string;
       resumeSessionPath?: string;
     }) {
-      if (!request.tabTarget && request.requestId) beginOpening({ startRequestId: request.requestId });
+      if (!request.tabTarget && request.requestId && !request.resumeSessionId) beginOpening({ startRequestId: request.requestId });
       dispatch({
         schema_version: 2,
         kind: "agent_start_in_checkout",
@@ -2420,56 +2412,6 @@ export function createActions(send: DispatchFn) {
     },
 
     /**
-     * Opens the Factory screen (PRD software-factory-ui B1, B2): on 내 차례,
-     * or where `place` says; it is a page, so an Overview layer closes.
-     */
-    openFactory(place?: Partial<FactoryPlace>) {
-      // Until the Factory opens nothing reaches its screen (`factory/launch.ts`).
-      if (!FACTORY_OPEN) return;
-      const state = ui();
-      // Behind Settings or a dialog the Factory waits, as the Overview does. A
-      // panel's Escape layer does not hold it: the palette has closed itself
-      // before it asks, and the page replaces the panel.
-      if (state.overlay !== "none" && (state.overlay !== "search" || state.searchOver !== "none")) return;
-      if (state.workspaceDialog || state.pendingClose || state.pendingTrash) return;
-      if (state.overlay === "search") state.closeOverlay();
-      const current = state.screen?.kind === "factory" ? state.screen.place : FACTORY_ENTRY;
-      state.setScreen({ kind: "factory", place: { ...(place ? { ...FACTORY_ENTRY, factory: current.factory } : current), ...place } });
-    },
-
-    /**
-     * One screen action (B10, B19, B22): the stage-1 command, which the engine
-     * runs as the operator with the screen as relay. The answer lands in the
-     * `factory` section's `actions` under the returned request id.
-     */
-    factoryAction(command: FactoryCommand): string {
-      const requestId = remoteRequestId();
-      dispatch({ schema_version: 2, kind: "factory_action", payload: { request_id: requestId, command } });
-      return requestId;
-    },
-
-    /**
-     * 비서에게 묻기 and the sidebar's 비서 row (B23): the secretary the core
-     * remembers while its pane is listed, else a new one in this machine's
-     * Home, started with the first open Factory's default runtime.
-     */
-    openSecretary() {
-      const pane = rest()?.ui_state?.factory_secretary_pane ?? null;
-      if (pane && paneListed(rest(), pane)) return this.openAgent(pane);
-      if (ui().secretaryStart) return;
-      const factory = useShellStore.getState().factory?.summary?.factories.find((view) => !view.closed) ?? null;
-      if (!factory) return startSecretary("claude");
-      ui().setSecretaryStart({ phase: "config", requestId: this.factoryAction({ verb: "config", project: factory.project, set: [] }) });
-    },
-
-    /** Records the pane a secretary start answered with, so the next press goes to it. */
-    factorySecretarySet(paneId: string) {
-      dispatch({ schema_version: 2, kind: "factory_secretary_set", payload: { pane_id: paneId } });
-    },
-
-    startSecretary,
-
-    /**
      * A session's record (PRD sidebar-task-lens D-44, B15, B17): in the
      * lane's 보기 slot, where the core starts its read, or in the Overview's
      * panel when no Workspace is in front. The keyboard stays where it is.
@@ -2575,15 +2517,6 @@ export function createActions(send: DispatchFn) {
     openRecordedOutput(output: import("./snapshot").WorkOutput) {
       if (output.kind === "pr") this.openSessionPullRequest({ workspace_id: null, number: output.number, url: output.url });
       else this.openRecordedIssue(output.source, output.repository, output.number);
-    },
-
-    /** Asks the engine for a Task page's detail; it follows the engine in `factory_task` until closed. */
-    factoryTaskOpen(factory: string, task: string) {
-      dispatch({ schema_version: 2, kind: "factory_task_open", payload: { factory, task } });
-    },
-
-    factoryTaskClose() {
-      dispatch({ schema_version: 2, kind: "factory_task_close", payload: {} });
     },
 
     toggleTool,

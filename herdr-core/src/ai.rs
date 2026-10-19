@@ -471,19 +471,6 @@ pub(crate) fn memory_add_router(
     )
 }
 
-/// The Software Factory's own router (PRD software-factory D-13, D-44): the
-/// operator's provider choice with one request in flight, separate from the
-/// label and Project Memory routers so its queue never takes their budget.
-/// Like the Start dialog's worktree name it is not judged by the usage limit
-/// (PRD hide-ai-usage-limit D-03): an operator or a Factory is waiting on it.
-pub(crate) fn factory_router(
-    node: &Arc<dyn NodeLink>,
-    settings: &AiSettings,
-    usage: &Arc<dyn AiUsageSink>,
-) -> AiRouter {
-    waited_router(node, settings, usage)
-}
-
 /// A router for work the operator waits on, such as the Start dialog's
 /// worktree name: the provider order with no usage limit, so it answers
 /// however much of the week is spent (PRD hide-ai-usage-limit D-03, B6).

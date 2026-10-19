@@ -3,7 +3,7 @@
 // D-07): the top row names the device over the rail and the sidebar and
 // carries a Workspace's path and icons; under it the Search row opens the ⌘K
 // palette with the chord as bound, the Overview row opens All projects, the
-// Factory row is a Soon chip until the Factory opens, and no Home row is left;
+// free app has no Factory entry, and no Home row is left;
 // a browser tab offers no Add project; the footer's Help menu opens the
 // shortcut sheet, copies the diagnostics, opens the new-issue page and names
 // the version. Captured in Dark and Light.
@@ -66,13 +66,8 @@ test("the Search row and the Overview row under the device, with no Home row and
     await page.keyboard.press("Enter");
     await expect(palette.locator("[data-palette-input]")).toBeFocused();
     await page.keyboard.press("Escape");
-    // Until the Factory opens (src/factory/launch.ts) its row is the name and a Soon chip that opens nothing, and
-    // ⇧⌘F, its old chord, opens no screen: the palette's chord pressed after it shows the press was handled.
-    const soon = page.locator("[data-sidebar-factory-soon]");
-    await expect(soon).toContainText("Factory");
-    await expect(soon).toContainText("Soon");
-    await expect(soon.locator("button")).toHaveCount(0);
-    await expect(page.locator("[data-sidebar-factory]")).toHaveCount(0);
+    // The free app has no Factory entry or screen.
+    await expect(page.locator("[data-sidebar-factory], [data-sidebar-factory-soon]")).toHaveCount(0);
     await page.keyboard.press(mod("KeyF", { shift: true }));
     await page.keyboard.press(chord("search"));
     await expect(palette.locator("[data-palette-input]")).toBeFocused();

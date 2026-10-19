@@ -21,7 +21,6 @@ mod display_text;
 pub mod domain;
 mod effects;
 mod environment;
-pub mod factory;
 #[cfg(test)]
 mod fake_herdr;
 mod files;

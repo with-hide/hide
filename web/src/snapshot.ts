@@ -122,8 +122,10 @@ export type AgentRow = {
   message?: string | null;
   /** Native unanswered question/plan, bounded and session/state-proven by the core. */
   user_turn?: UserTurnFact;
-  /** When the core last saw this agent change state (epoch ms); the shell counts the elapsed time from it. `null` before the core observed it. */
+  /** When the core last saw this agent change state (epoch ms), retained for state ordering. */
   changed_at_unix_ms: number | null;
+  /** Latest actual native request in the proven session (epoch ms). Absent when unknown; never fall back to state observation time. */
+  last_prompt_at_unix_ms?: number | null;
   /** The core's ordering key: `changed_at_unix_ms` as thirteen digits, else Herdr's state sequence zero-padded, so it sorts as text. */
   last_activity?: string;
   emphasized: boolean;
@@ -1997,8 +1999,6 @@ export type SnapshotRest = {
     sleeping_sessions?: SleepingSession[];
     /** Newest archived first (D-09). */
     archived_sessions?: ArchivedSession[];
-    /** Panes a Factory runs its workers in, which offer no Archive session (D-25). */
-    factory_worker_panes?: string[];
     devices?: Device[];
     focused_device_id?: string | null;
   };
@@ -2085,8 +2085,6 @@ export type SnapshotRest = {
     recent_checkouts?: RecentCheckout[];
     /** The terminal panes the keyboard has been in, newest first, up to fifty: the Agent cycle's order (issue 301). */
     recent_pane_ids?: string[];
-    /** The Home agent pane started as the Factory secretary (PRD software-factory-ui B23). */
-    factory_secretary_pane?: string | null;
     [key: string]: unknown;
   };
   status?: {

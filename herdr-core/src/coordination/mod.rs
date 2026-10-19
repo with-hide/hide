@@ -1351,7 +1351,7 @@ fn allocate(ledger: &mut Ledger, prefix: &str) -> Result<String, String> {
 
 #[cfg(test)]
 pub(crate) use executor::{SPAWN, SPAWN_TURN};
-pub(crate) use executor::{WokenWorker, link_fork, register_code_owned, register_woken, run};
+pub(crate) use executor::{link_fork, register_code_owned, run};
 
 #[cfg(test)]
 mod tests {
@@ -1720,42 +1720,6 @@ mod tests {
         assert_eq!(
             here(&ledger, &child_actor).err(),
             Some("ambiguous_participant")
-        );
-    }
-
-    #[test]
-    fn only_a_factory_registers_under_a_factory_name() {
-        let mut ledger = Ledger::default();
-        // A pane named or placed like a Factory is refused.
-        let named = record("factory:f-1", "native-impostor", None);
-        let caller = named.actor.clone();
-        assert_eq!(
-            register_as(&mut ledger, named, &caller).unwrap_err(),
-            "reserved_name"
-        );
-        let mut placed = record("pane-1", "native-pane", None);
-        placed.name = Some("factory:f-1".into());
-        let caller = placed.actor.clone();
-        assert_eq!(
-            register_as(&mut ledger, placed, &caller).unwrap_err(),
-            "reserved_name"
-        );
-        // A pane cannot register the Factory's own record either.
-        let factory = Actor::factory("f-1", crate::node::TEST_NODE);
-        let mut owned = record("factory:f-1", "factory:f-1", None);
-        owned.actor = factory.clone();
-        let pane = record("pane-2", "native-pane-2", None).actor;
-        assert_eq!(
-            register_as(&mut ledger, owned.clone(), &pane).unwrap_err(),
-            "reserved_name"
-        );
-        // The Factory registers itself, and its worker as its child.
-        let id = register(&mut ledger, owned, &factory);
-        let worker = record("worker-pane", "native-worker", Some(id.clone()));
-        let child = register(&mut ledger, worker, &factory);
-        assert_eq!(
-            ledger.agents.iter().find(|r| r.id == child).unwrap().parent,
-            Some(id)
         );
     }
 

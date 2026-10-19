@@ -5,6 +5,9 @@ import type { AgentGroup } from "./agentLayout";
 /** One tab's segment of a checkout's agent list; `glyph` is set when its tab holds two or more recognized agents or the operator named it. */
 export type SidebarTabGroup = { tab: Tab | null; rows: BoardRow[]; count: number; glyph: boolean };
 
+/** One collection of a checkout's agent tree: the core's own group, its drawn tab segments and its draft ids. */
+export type SidebarCollection = { group: AgentGroup; segments: SidebarTabGroup[]; drafts: string[] };
+
 /** A tab on the strip the operator named through Rename is kept when its last agent leaves, so it stays a segment of its checkout with no rows; a spawn's name does not keep it. */
 function namedOnStrip(tab: Tab): boolean {
   return tab.id !== null && tab.sidebar !== undefined && tab.sidebar.named_by_operator && !tab.delegated;
@@ -32,7 +35,7 @@ export function sidebarTabGroups(checkout: Checkout, device: string, rows: reado
 }
 
 /** Keep each lineage subtree in its root tab's collection, including hidden delegated tabs. */
-export function sidebarNamedGroups(checkout: Checkout, segments: readonly SidebarTabGroup[]): { group: AgentGroup; segments: SidebarTabGroup[]; drafts: string[] }[] {
+export function sidebarNamedGroups(checkout: Checkout, segments: readonly SidebarTabGroup[]): SidebarCollection[] {
   const collections = checkout.agent_groups;
   if (!collections) return [];
   return collections.groups.map((group) => {

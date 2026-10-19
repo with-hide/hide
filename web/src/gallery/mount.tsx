@@ -12,7 +12,6 @@ import { ViewFeedbackScene, viewFeedbackSceneParams } from "./ViewFeedbackScene"
 import { sceneParams, SidebarScene } from "./SidebarScene";
 import { AreaFocusScene } from "./AreaFocusScene";
 import { OnboardingScene, onboardingSceneParams } from "./OnboardingScene";
-import { FactoryScene, factorySceneParams } from "./FactoryScene";
 import { SessionWorkflowScene } from "./SessionWorkflowScene";
 import { CoreMoveScene, coreMoveSceneParams } from "./CoreMoveScene";
 import { NodeProjectScene, nodeProjectSceneParams } from "./NodeProjectScene";
@@ -111,11 +110,6 @@ export function mountGallery(root: Root) {
       // No StrictMode here: its simulated unmount runs the lane record's
       // leave, which closes the record a production build keeps open.
       root.render(<OverviewScene {...overviewSceneParams(params)} />);
-      return;
-    }
-    if (scene === "factory") {
-      document.title = "hide · Factory scene";
-      root.render(<StrictMode><FactoryScene {...factorySceneParams(params)} /></StrictMode>);
       return;
     }
     if (scene === "core-move" || scene === "core-move-window") {

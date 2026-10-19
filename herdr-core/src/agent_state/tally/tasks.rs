@@ -175,15 +175,14 @@ impl<'a> Forest<'a> {
         result
     }
 
-    /// Every project's tasks and every device's. A root a Factory card
-    /// holds as its worker is the Factory's, not a task (B7).
-    pub(super) fn publish(&self, workers: &HashSet<String>) -> Published {
+    /// Every project's tasks and every device's.
+    pub(super) fn publish(&self) -> Published {
         let mut result = Published::default();
         for root in self
             .order
             .iter()
             .copied()
-            .filter(|id| self.parent(id).is_none() && !workers.contains(*id))
+            .filter(|id| self.parent(id).is_none())
         {
             let place = &self.places[root];
             if place.project.is_home {

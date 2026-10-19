@@ -1718,55 +1718,6 @@ fn a_child_asking_its_stopped_parent_by_letter_leaves_neither_row_waiting() {
 // code-owned recipient has no row whose progress Hide can see, and an agent
 // on a device that is not connected shows a state that may no longer hold,
 // so a letter to either holds no reply wait, taken in or not.
-#[test]
-fn a_letter_to_a_factory_or_to_a_disconnected_device_holds_no_reply_wait() {
-    let mut runtime = runtime();
-    let mut ledger = crate::delivery::ledger::Ledger::default();
-    let root = letter_actor(&runtime, "w1:p1");
-    let id = ask(&mut ledger, &root, &letter_actor(&runtime, "w1:p2"));
-    ledger.letters[0].recipient = crate::delivery::Actor::factory("f1", &runtime.node.to_string());
-    runtime.publish_delivery(Arc::new(ledger.clone()), false);
-    ingest_lineage(&mut runtime, &[("w1:p1", None, "done", "")]);
-    assert_eq!(agent_row(&runtime, "w1:p1").wait, None);
-    take_in(&mut ledger, &id);
-    // The step reaches the rows through the ledger's publication alone.
-    runtime.publish_delivery(Arc::new(ledger), false);
-    assert_eq!(agent_row(&runtime, "w1:p1").wait, None);
-    let _ = std::fs::remove_file(&runtime.state_path);
-
-    let mut runtime = cross_machine_runtime();
-    let stop = |rows: &mut Vec<SidebarAgentSnapshot>| {
-        for row in rows {
-            row.activity = "stopped".into();
-        }
-    };
-    stop(&mut runtime.snapshot.navigator.agents);
-    stop(
-        &mut runtime.snapshot.status.remote[0]
-            .session
-            .as_mut()
-            .unwrap()
-            .agents,
-    );
-    let mut ledger = crate::delivery::ledger::Ledger::default();
-    let mut device_parent = letter_actor(&runtime, "remote:mini:pane:remote-parent");
-    device_parent.device_id = "mini".into();
-    ask(
-        &mut ledger,
-        &letter_actor(&runtime, "local-parent"),
-        &device_parent,
-    );
-    // The step reaches the rows through the ledger's publication alone.
-    runtime.publish_delivery(Arc::new(ledger), false);
-    assert_eq!(
-        local_lineage_agent(&runtime, "local-parent").wait,
-        Some(crate::model::AgentWait::Reply),
-        "a connected device takes the letter in"
-    );
-    runtime.snapshot.status.remote[0].state = "disconnected".into();
-    runtime.refresh_agent_lineage();
-    assert_eq!(local_lineage_agent(&runtime, "local-parent").wait, None);
-}
 
 // PRD B3, B4, B7, D-05, D-12: the badge sums every live descendant, not the
 // direct children only; a merely ready child and an unknown one add nothing.

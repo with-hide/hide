@@ -281,6 +281,10 @@ impl SessionFacts {
     pub(crate) fn forget_offsets(&mut self) {
         self.verdicts.clear();
         self.first_request_offset = None;
+        // A sender category may have disappeared from the rewritten file.
+        // Rebuild both from the reread rather than retaining a removed prompt.
+        self.operator_request = None;
+        self.other_request = None;
     }
 
     /// What a row draws from these facts, to tell whether a read moved it.

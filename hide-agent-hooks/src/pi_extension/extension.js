@@ -482,11 +482,6 @@ async function onTool(state, event, ctx) {
   } else if (FILE_TOOLS.has(tool)) {
     if (!guardrailsOn(state)) return null;
     request = { tool, args: fileArgs(event?.input), cwd: ctx?.cwd };
-  } else if (tool === "ask" && AGENT === "omp" && !state.guardOnly) {
-    // The core knows the pane by the root session Herdr's integration reports, also for a subagent's call.
-    const session = root(ctx) ? sessionFile(ctx) : shared.rootSession;
-    if (!session) return null;
-    request = { session_id: session, tool };
   } else {
     return null;
   }

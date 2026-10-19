@@ -69,7 +69,6 @@ On `SessionStart`, the helper writes one runtime JSON envelope whose `hookSpecif
 A card whose promotion merged into the repository keeps its index line but points at its file (`m3 Tests run with nextest -> docs/TESTING.md`) or its pull request, and is never given in full (B10, B12).
 The instruction explains supervised delegation (`hide agent spawn --parent here …`, with an automatic watch) and independent operator handoff (`hide agent spawn …`, without parent or automatic watch); both preserve focus and record origin.
 It also says that `--machine <device id>`, used from the machine that runs Hide, starts the agent on a connected device (an agent on a device is refused with `machine_not_permitted`), where the id is the `device_id` `hide workspace info` shows and the `machine` `hide agent list` shows for agents there, and that `--repo` and `--path` are then that device's paths.
-It also tells the agent to run `hide factory add` to put work into a Factory instead of adding a GitHub label (see [factory.md](factory.md)).
 The same envelope adds Workspace commands only after `hide workspace info --hook` confirms a renderer-connected Workspace for the caller and report its actual capabilities.
 The probe does not need a pane id: the daemon binds a caller inside a Herdr pane to that pane, and any other local caller, such as a tool shell or hook inside Codex's shared app-server daemon or a plain terminal, to the registered checkout holding its cwd (`docs/ARCHITECTURE.md`, the Workspace CLI).
 The guidance names that checkout path, so a session can read which Workspace its commands reach.
@@ -298,21 +297,10 @@ The same worker reads once at startup and after a successful install; ordinary r
 Diagnosis and installation are serialized, so a pre-install answer cannot overtake a later install, and neither read makes the session coordinator wait.
 Shutdown stops admission, closes the fixed node to end its current call and joins the worker; a retiring answer is not published.
 
-## Native questions from Factory workers
+## Native questions
 
-The same `PreToolUse` helper refuses Claude Code's `AskUserQuestion` and `ExitPlanMode`, and Codex's `request_user_input` and `request_user_input_async`, only after the core proves the caller is the current Task-held Factory worker.
-The model receives a deny reason directing it to `hide factory ask`; an operator-started session and every other pane retain their native question UI.
-OpenCode's `question` tool and omp's `ask` are refused the same way through Hide's plugin and extension ([OpenCode: Hide's plugin](#opencode-hides-plugin), [Pi and omp: Hide's extension](#pi-and-omp-hides-extension)).
-Pinned Codex 0.160.1 was exercised with a trusted Bash positive control and a genuine plan-mode `request_user_input`: both reached PreToolUse and the question's native tool result and model reply carried the denial.
-Codex 0.162.1's `request_user_input_async` was exercised the same way in an isolated `CODEX_HOME`: a hook that denied it reached the model as the tool result "Tool call blocked by PreToolUse hook", so the redirect holds for the async tool too.
-The ordinary launch mode remains unchanged.
-
-`hide workspace factory-question-guard --session <native-id> --runtime <runtime>` uses the authenticated pane-scoped route, a bounded fresh native identity read and the already-open Factory's current Task worker.
-Environment, display name, cwd, descendants and a historical registration alone confer no worker authority.
-An ended registration retained across cancel/revive counts only when its accepted spawn still joins the current independently attested native execution.
-Missing identity, an unopened Factory, a changed connection, overload, timeout or any other unavailable proof allows the tool call and records a bounded diagnostic.
-Factory workers run on the core's machine and on the nodes that dial the core; a caller on a device the core dials cannot borrow a worker identity, while a device running its own Factory uses the same local route.
-This read starts no Factory, judgment, tick or store write and publishes no snapshot.
+Agent question tools keep their native UI.
+This release has no Factory question guard or private command route.
 
 ## The spawn guard
 
@@ -370,7 +358,7 @@ The record is written before the entry and taken back when the entry could not b
 An entry that is already there is the operator's: Hide writes nothing and records nothing, so removing the worktree leaves it.
 Removing a worktree Hide made takes out the entries Hide added for it, for each agent, and switching an agent off, or removing the machine from Hide, takes out every entry Hide added for that agent; an entry the operator added, before Hide or after it, stays, and so does what else the agent keeps under the same folder (Claude Code's project settings, a Codex project's other keys).
 The removal runs once the folder is gone, so it finds the entry by the key Hide recorded, compared as the system compares folders: the folder's parent resolved, and on Windows without case and with either separator, so Git's `C:/x` finds Codex's `c:\x`.
-A worktree removed outside Hide (by hand, or by a Factory cleanup that found the folder already gone) leaves its entries until the next trust Hide records for that agent, which takes out every entry of Hide's whose folder is gone in the same write.
+A worktree removed outside Hide (by hand) leaves its entries until the next trust Hide records for that agent, which takes out every entry of Hide's whose folder is gone in the same write.
 Codex's entries are taken out through its app-server too; with no Codex left to ask, they and Hide's record of them stay until a pass that finds one, and nothing reads them meanwhile.
 
 Every change holds one account lock per agent, and a change waits for it as long as the change holding it can take: one Codex app-server session's whole bound (`codex_trust::SESSION_BOUND`, 21 s) and a second, so a second start while Codex records the first one's trust waits instead of failing.
@@ -467,7 +455,7 @@ Inside one it uses three hooks, each calling `hide-agent-hooks opencode <start|p
 - `event` confirms letters once `message.part.updated` reports Hide's part stored, and counts subagents: a `session.created` with a parent is a child, `session.status` busy and idle move it between working and done, and a root that goes idle while a child still runs in the background keeps it counted (OpenCode's `session.status` list is read then).
   The counts go to the pane's counter file and to Herdr as the Claude Code and Codex hooks report theirs.
 - `tool.execute.after` asks, for the pane's root session at every result except while letters it handed over wait for their receipt, for the letters due while the agent works (`letters`, which runs `hide inbox --hook --session <id> --tool`), appends them to the tool's `output` inside `<system-reminder>`, and confirms them through `event` once `message.part.updated` reports that session's completed tool part stored with the letters still in its output; a part stored without them leaves the letters pending in Hide for the next ask ([docs/delivery.md: Letters while the agent works](delivery.md#letters-while-the-agent-works)); nothing due, a failed helper and a child session leave the result as it is.
-- `tool.execute.before` sends a `bash` call whose command mentions `herdr` or `HERDR_BIN_PATH` to the spawn guard and every `question` call to the Factory question guard (runtime `opencode`), and throws the deny reason; OpenCode hands a thrown error to the model as the tool's error, so the model reads the same reason Claude Code's model does.
+- `tool.execute.before` sends a `bash` call whose command mentions `herdr` or `HERDR_BIN_PATH` to the spawn guard, and throws the deny reason; OpenCode hands a thrown error to the model as the tool's error, so the model reads the same reason Claude Code's model does.
   While some project of the machine has a protection on, every `bash` call and the file tools `read`, `edit`, `write`, `apply_patch` and `multiedit` go to the helper too, with only the arguments that name a file (`filePath`, a patch's `*** ` lines), for the [project guardrails](#project-guardrails).
   The plugin reads the policy file again only when its modification time or size changes, so a machine with every protection off starts no helper for them (PRD agent-guardrails B27).
   Any other tool call never reaches the helper.
@@ -492,7 +480,7 @@ OpenCode 2 runs one instance of the server half per project folder and sends a p
 - A root session's prompt asks the terminal attached to it, or any terminal now showing it (the prompt that opens a session reaches the plugin before the terminal's route is read again), and writes the answer, the guidance on the session's first prompt, Memory and the letters due, as one synthetic message (`session.synthetic`) inside `<system-reminder>`, which OpenCode admits ahead of the prompt and the operator's screen leaves out; its letters are confirmed once `session.inbox.delivered` names that message.
   A confirmation still on its way is waited for first, within the prompt's budget, and an answer carrying a letter Hide already took writes the guidance alone, so a letter is not written twice; a letter whose confirmation failed stays pending in Hide and comes with a later prompt, as in 1.x.
 - An attached root's completed tool result asks for the letters due while it works, appends them to the result's content, and confirms them once `session.tool.success` reports the result stored with them; a result stored without them leaves them pending in Hide, as in 1.x.
-- A tool call asks the attached terminal for the spawn guard (a `shell` call whose command mentions `herdr` or `HERDR_BIN_PATH`), the Factory question guard (`question`, asked as its root session's) and, while some project has a protection on, the [project guardrails](#project-guardrails) for `shell`, `read`, `edit`, `write` and `patch` (only `path` and a patch's `*** ` lines); the deny reason is thrown, as in 1.x.
+- A tool call asks the attached terminal for the spawn guard (a `shell` call whose command mentions `herdr` or `HERDR_BIN_PATH`), while some project has a protection on, the [project guardrails](#project-guardrails) for `shell`, `read`, `edit`, `write` and `patch` (only `path` and a patch's `*** ` lines); the deny reason is thrown, as in 1.x.
   A `shell` call's relative `workdir` is resolved against the session's folder, where OpenCode runs it (1.x's against its project folder too), never the shared server's own.
   A session whose line OpenCode does not tell within 300 ms is taken as its own root, as 1.x takes it, and any terminal showing its root is asked.
   With no terminal attached, or none answering in time, the server half runs the guardrails alone (`guard_only`), with the pane variables it inherited removed, so a protected project stays protected in `opencode run` and outside Herdr; the spawn and question guards then let the call run, as a timed-out helper does in 1.x, and the miss reaches the helper's diagnostic with the next call.
@@ -525,7 +513,7 @@ The agent's own folder (`~/.pi/agent`, `~/.omp/agent`) is never created, and onl
 The extension does nothing outside a Herdr pane (no `HERDR_ENV=1`, `HERDR_PANE_ID` and `HERDR_SOCKET_PATH`), in an agent started from another Pi's or omp's shell (`PI_SESSION_ID`, `OMPCODE=1`, which those hosts set for every shell they start), or with no helper at its path; like OpenCode's plugin it does not ask whether a Hide daemon owns that Herdr, and the helper answers `{}` when none does.
 Its guidance and letters go only to the pane's own agent, the host's TUI (`ctx.mode` `tui`): both hosts' RPC modes report a UI too but draw nothing in the pane, and another program there may start one, so they, print runs, unsaved sessions and omp's subagents, which run in the same process with their own binding of the module, get none.
 The spawn guard holds for every session in the pane, and omp's `ask` guard for the pane's TUI session and its subagents.
-It names the session by its file, as Herdr's integration does, which a deep checkout makes longer than 250 bytes; the helper, the CLI and the daemon take a session of up to 4096 bytes for a letter pull and a Factory question (`hide_agent_hooks::delivery::SESSION_LIMIT`), and an agent registration keeps the same ([delivery.md: Agent registration and spawning](delivery.md#agent-registration-and-spawning)).
+It names the session by its file, as Herdr's integration does, which a deep checkout makes longer than 250 bytes; the helper, the CLI and the daemon take a session of up to 4096 bytes for a letter pull (`hide_agent_hooks::delivery::SESSION_LIMIT`), and an agent registration keeps the same ([delivery.md: Agent registration and spawning](delivery.md#agent-registration-and-spawning)).
 Each handler calls `hide-agent-hooks <pi|omp> <start|prompt|confirm|tool|subagents>` with one JSON object on stdin, which carries the extension's version, and one answered on stdout; the helper always exits 0, a failure answers `{}`, and a version this build does not write also answers `{}`, so a file another build left does nothing until the kit replaces it.
 
 - `session_start` and `session_switch` read the session guidance once, as OpenCode's plugin does at load; a read that failed is asked again by the next prompt.
@@ -536,9 +524,8 @@ Each handler calls `hide-agent-hooks <pi|omp> <start|prompt|confirm|tool|subagen
 - `message_end` confirms the letters once the host has written Hide's message and then the reply after it, and only for the attempt it wrote; a turn that ends before any reply leaves them pending for the next prompt or `hide inbox`, and a confirmation Hide did not take is made again when the letter rides the next prompt.
   A tool result's letters (`toolCallId`) join the written list when the host finishes that message with Hide's text still in its `content` and are confirmed by the reply that follows, since a later `message_end` handler may replace the result; a result finished without the text leaves them pending in Hide for the next ask.
 - `tool_result` asks, for the pane's own agent at every result except while letters it handed over wait for their receipt, for the letters due while it works (`letters`, which runs `hide inbox --hook --session <file> --tool`) and adds them to the result's `content` as one more text block inside `<system-reminder>`, keeping a tool's `structuredContent` ([docs/delivery.md: Letters while the agent works](delivery.md#letters-while-the-agent-works)); nothing due, a failed or late helper, a print run, an unsaved session and a subagent leave the result as it is.
-- `tool_call` sends a `bash` call whose command mentions `herdr` or `HERDR_BIN_PATH` to the spawn guard and, in omp, every `ask` call to the Factory question guard (runtime `omp`, with the pane's root session also for a subagent's call), and returns `{block: true, reason}`, which the host hands to the model as the tool's result.
+- `tool_call` sends a `bash` call whose command mentions `herdr` or `HERDR_BIN_PATH` to the spawn guard, and returns `{block: true, reason}`, which the host hands to the model as the tool's result.
   While some project of the machine has a protection on, every `bash` call and the `read`, `edit` and `write` tools (their `path`) go to the helper too, gated on the policy file as OpenCode's plugin is, for the [project guardrails](#project-guardrails).
-  Pi has no question tool, so its Factory question is the Hide command's alone.
 - In omp, `before_subagent_spawn` counts a subagent as working from its dispatch (its spawn key is the subagent's id), and that subagent's own `agent_start` and `agent_end` move it between working and done; the counts go to Herdr as the other hooks report theirs, zero when the session starts and again at each turn's end.
 
 The budgets, the cap of eight running helpers and the `plugin` diagnostic cause are OpenCode's plugin's; the `plugin` cause also records a prompt whose host gave no usable session id for Memory.
@@ -595,7 +582,6 @@ Aliases belong on that row: every caller uses the same borrowed, case-insensitiv
 Select hook and installation dialects implemented by `hide-agent-hooks`, session formats implemented by `hide-session`, and launch, find and usage dialects in their existing owners; the leaf crate contains data and typed selectors only.
 Declare prompt intake, spawn refusal, subagent counts, Memory and bell eligibility independently.
 A bell target requires a prompt hook and measured menu behavior on the pinned, isolated Herdr; adding prompt intake alone never enables its bell.
-Declare the six Factory capabilities explicitly as available, unavailable or unconfirmed; declaring a slot does not implement a question guard, parse structured questions or change Factory's runtime selection.
 Add independent hook and session samples, or an explicit absence reason when that format is unsupported, in `hide-agent-adapter/tests/fixtures/support.json`, and add the logo or monogram to its manifest.
 Add the owner's dialect tests and feature-gate cases, including aliases, without changing the pre-migration hook-byte fixtures.
 Generate `contracts/agent-adapters.json` with the `export_web_contract` example as described in [contracts/README.md](../contracts/README.md#agent-adapters).
@@ -619,7 +605,7 @@ Two pieces are written per agent into the agent's own files, and nothing else; a
   These entries capture the installing daemon's state route; an earlier owned entry is replaced by the next pass.
   Antigravity retains the encoded Windows command introduced in version 7 across its Go-to-cmd boundary.
   Version 4 prepares Cursor's Windows payload before starting the helper; the next pass replaces version 3's lazy PowerShell pipe too.
-  Where the session start adds context (Cursor), its output is the worktree-purpose instruction, including the sentence that points at `hide factory add`, one fixed line that points at `hide browser help`, and the live Workspace guidance when the daemon answers, in the field the agent documents.
+  Where the session start adds context (Cursor), its output is the worktree-purpose instruction, one fixed line that points at `hide browser help`, and the live Workspace guidance when the daemon answers, in the field the agent documents.
   It prints no Memory index, because a Memory receipt is read back only from a session Hide reads it from: Claude Code's, Codex's, Pi's and omp's files and OpenCode's database.
   A second delivery of the same session prints the same guidance: the output is a pure function of the daemon's answer, and a test runs the hook twice and compares.
   The other events carry the spawn guard, and Grok's subagent count ([Grok's and Cursor's own hooks](#groks-and-cursors-own-hooks)).
@@ -695,7 +681,6 @@ A subagent start adds one working, a subagent stop moves one from working to don
 Grok's `Stop` from inside a subagent leaves the count alone, and the main session's `Stop` sets working to the number of `subagent` entries in `backgroundTasks`, so a background subagent stays counted past the turn and its own `SubagentStop` ends it (D-06); a payload that is cut off or unreadable leaves the count alone.
 The core judges a Grok or Cursor pane instrumented by that agent's hook piece in the kit (`herdr_core::agent_hooks::kit_hook_status` for the agent's `HookDialect`, as for OpenCode's plugin), not by a Claude Code or Codex component.
 
-Grok's question tools `ask_user_question` and `exit_plan_mode` are in its `PreToolUse` matcher, but the hook routes them to the Factory question guard ([Native questions from Factory workers](#native-questions-from-factory-workers)) only for an agent whose `direct_ask` the adapter table declares, and Grok's stays Unconfirmed until a live Grok shows `PreToolUse` firing for them; until then Grok's questions stay native.
 
 `hide-agent-hooks/tests/it/grok_cursor_hooks.rs` runs the built helper with each agent's documented payloads beside a stand-in `hide` and a stand-in Herdr socket, and asserts the answers, the counts Herdr is told (none for Cursor), and a single count when Grok runs all three of Hide's hooks for one subagent.
 

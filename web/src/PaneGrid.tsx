@@ -81,8 +81,8 @@ const EMPTY_TRANSPORTS: TerminalPane[] = [];
 /**
  * A selected SSH device's visible tab (PRD S5 B19). Herdr reports a remote
  * tab's geometry as each pane's rectangle rather than the split tree, so the
- * panes are placed where it says. There is no divider: a remote pane's size
- * is its host's, as in the native shell. A zoomed tab draws the pane Herdr
+ * panes are placed where it says. Hairlines mark internal edges, without a
+ * resize handle: a remote pane's size is its host's. A zoomed tab draws the pane Herdr
  * zoomed, its focused one, over the whole canvas.
  */
 export function RemotePaneCanvas({
@@ -134,6 +134,8 @@ export function RemotePaneCanvas({
             ) : (
               <div className="h-full bg-background" data-pane-missing={frame.pane_id} />
             )}
+            {frame.x > 0 ? <PaneBoundary vertical /> : null}
+            {frame.y > 0 ? <PaneBoundary vertical={false} /> : null}
           </div>
         );
       })}
@@ -221,9 +223,22 @@ function SplitView({ node, ...props }: { node: Extract<LayoutNode, { type: "spli
       </div>
       <div className="relative min-h-0 min-w-0">
         <LayoutView node={node.second} {...props} />
+        <PaneBoundary vertical={vertical} />
       </div>
       <Divider node={node} dispatch={props.actions.dispatch} />
     </div>
+  );
+}
+
+/** One leading edge, painted over content without taking space or pointer input.
+ * Focus outlines keep their higher layer; only one side owns a shared edge. */
+function PaneBoundary({ vertical }: { vertical: boolean }) {
+  return (
+    <div
+      aria-hidden="true"
+      data-pane-boundary={vertical ? "vertical" : "horizontal"}
+      className={cn("pointer-events-none absolute left-0 top-0 bg-border", vertical ? "h-full w-(--size-hairline)" : "h-(--size-hairline) w-full")}
+    />
   );
 }
 

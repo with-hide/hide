@@ -6,7 +6,7 @@
 //! same private diagnostic the other hooks use.
 //!
 //! The operations reuse the Claude Code and Codex hook's parts: the letter
-//! intake (`delivery`), the spawn guard and the Factory question guard
+//! intake (`delivery`), the spawn guard
 //! (`spawn_guard`), the pane counts (`counters`, `report`) and Project Memory
 //! (`memory`). What differs is only the transport: these agents have no
 //! command hook, so the script hands over the facts a hook payload would
@@ -16,11 +16,11 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use hide_agent_adapter::{AgentAdapter, Capability, PluginDialect};
+use hide_agent_adapter::{AgentAdapter, PluginDialect};
 use hide_agent_hooks::delivery::{self, Intake, Prompt};
 use hide_agent_hooks::memory::{self, HookMemoryOutcome, MemoryRequest, memory_context_until};
 use hide_agent_hooks::runtime::HookEvent;
-use hide_agent_hooks::spawn_guard::{self as guard, QuestionDecision, Registration};
+use hide_agent_hooks::spawn_guard::{self as guard, Registration};
 use hide_agent_hooks::{counters, guardrails, guidance, report};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -73,7 +73,7 @@ struct Input {
 }
 
 /// The agent a script speaks for: its adapter row and the runtime id the
-/// guard log, the Factory guard and Memory know it by.
+/// guard log and Memory know it by.
 struct Agent {
     adapter: &'static AgentAdapter,
     dialect: PluginDialect,
@@ -116,12 +116,6 @@ impl Agent {
                 .clone()
                 .filter(|id| delivery::valid_session(id)),
         }
-    }
-
-    /// Whether `tool` is the agent's own question tool, which a Factory worker
-    /// is refused.
-    fn question_tool(&self, tool: &str) -> bool {
-        matches!(self.adapter.factory.direct_ask, Capability::Available(ask) if ask.tools.contains(&tool))
     }
 }
 
@@ -315,8 +309,7 @@ fn confirm(home: &Path, input: Input, deadline: Instant) -> Value {
 }
 
 /// The project's guardrails for a shell or file tool, the spawn guard for
-/// the shell (`bash`, OpenCode 2's `shell`) and the Factory guard for the
-/// agent's question tool (OpenCode's `question`, omp's `ask`): `deny`
+/// the shell (`bash`, OpenCode 2's `shell`): `deny`
 /// carries the reason the script refuses with, and every other outcome lets
 /// the call run, as the Claude Code and Codex guards do.
 fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
@@ -347,22 +340,6 @@ fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
         return json!({});
     };
     match input.tool.as_deref() {
-        Some(name) if agent.question_tool(name) => {
-            let Some(session) = session(&input) else {
-                return json!({});
-            };
-            match guard::question_decision(&program, runtime, &session, deadline) {
-                QuestionDecision::Worker => {
-                    guard::record_question_refusal(home, runtime, &pane, name);
-                    json!({ "deny": guard::QUESTION_REASON })
-                }
-                QuestionDecision::Allow => json!({}),
-                QuestionDecision::Unreachable(cause) => {
-                    guard::unreachable(home, runtime, cause);
-                    json!({})
-                }
-            }
-        }
         Some("bash" | "shell") => {
             let Some(command) = input.command.as_deref() else {
                 return json!({});

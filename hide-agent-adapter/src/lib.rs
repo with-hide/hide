@@ -493,30 +493,6 @@ impl HerdrIntegration {
     }
 }
 
-/// These are facts for later Factory consumers, not switches activating them.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Capability<T> {
-    Available(T),
-    Unavailable,
-    Unconfirmed,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectAsk {
-    pub tools: &'static [&'static str],
-    pub denial: HookDialect,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FactoryCapabilities {
-    pub direct_ask: Capability<DirectAsk>,
-    pub user_turn: Capability<SessionFormat>,
-    pub turn_end_and_answer: Capability<SessionFormat>,
-    pub startup_guidance: Capability<HookInstall>,
-    pub resume: Capability<LaunchDialect>,
-    pub next_prompt_letters: Capability<HookDialect>,
-}
-
 /// A submission hook may observe a prompt even when its output is discarded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PromptHook {
@@ -564,7 +540,6 @@ pub struct AgentAdapter {
     pub install_url: &'static str,
     pub logo_id: &'static str,
     pub terminal_click: bool,
-    pub factory: FactoryCapabilities,
 }
 
 /// Herdr spellings, canonical ids and case variants share this one boundary.
@@ -588,14 +563,6 @@ pub fn canonical_kind(value: &str) -> &str {
 pub fn start_kind(value: &str) -> Option<&'static str> {
     let row = adapter(value)?;
     row.start.map(|_| row.herdr.name)
-}
-
-/// The Herdr kind of the agent whose hook asks, under its canonical id
-/// `runtime`, whether to refuse a direct question tool in a Factory worker
-/// pane; `None` for an agent with no such tool Hide can refuse.
-pub fn direct_ask_kind(runtime: &str) -> Option<&'static str> {
-    let row = ADAPTERS.iter().find(|row| row.id == runtime)?;
-    matches!(row.factory.direct_ask, Capability::Available(_)).then_some(row.herdr.name)
 }
 
 const fn start_count() -> usize {

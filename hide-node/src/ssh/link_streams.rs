@@ -680,7 +680,6 @@ mod tests {
                     opened_roots: None,
                     worktree_facts: None,
                     browser,
-                    factory: false,
                     kit: hide_host::serve::KitPlace::Standalone,
                 },
             );

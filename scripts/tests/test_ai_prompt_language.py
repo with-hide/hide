@@ -71,15 +71,15 @@ class AiPromptLanguage(unittest.TestCase):
 
     def test_a_listed_prompt_source_that_is_gone_fails(self):
         root, check = self.tree({'herdr-core/src/label.rs': REQUEST.format(system='Name the goal.')})
-        check.PROMPT_ONLY = {'hide-factory/src/judgment.rs': 'gone'}
+        check.PROMPT_ONLY = {'hide-kit/src/missing_prompt.rs': 'gone'}
         self.assertEqual(check.main(), 1)
 
     def test_an_excused_file_fails_on_a_new_finding(self):
         text = REQUEST.format(system='Name the goal.') + 'fn tail() -> &\'static str { "읽으세요" }\n'
-        root, check = self.tree({'herdr-core/src/factory.rs': text})
-        check.NOT_PROMPTS = {'herdr-core/src/factory.rs': (1, 'a worker prompt')}
+        root, check = self.tree({'herdr-core/src/fixture.rs': text})
+        check.NOT_PROMPTS = {'herdr-core/src/fixture.rs': (1, 'a worker prompt')}
         self.assertEqual(check.main(), 0)
-        (root / 'herdr-core/src/factory.rs').write_text(text + 'fn more() -> &\'static str { "in Korean" }\n')
+        (root / 'herdr-core/src/fixture.rs').write_text(text + 'fn more() -> &\'static str { "in Korean" }\n')
         self.assertEqual(check.main(), 1)
 
     def test_the_repository_prompts_pass(self):
