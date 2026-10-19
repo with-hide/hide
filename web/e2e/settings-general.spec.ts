@@ -203,6 +203,9 @@ test("General and About read without sideways scrolling in Korean and English, l
       await expect(sheet.locator("[data-theme-choice]")).toHaveAttribute("data-theme-choice", theme);
       await expect.poll(overflow).toBeLessThanOrEqual(0);
       await screenshot(page, `settings-general-${language}-${theme}-narrow`);
+      await sheet.locator('[data-settings-tab="privacy"]').click();
+      await expect.poll(overflow).toBeLessThanOrEqual(0);
+      await screenshot(page, `settings-privacy-${language}-${theme}-narrow`);
       await sheet.locator('[data-settings-tab="about"]').click();
       if (!(await details.evaluate((node) => (node as HTMLDetailsElement).open))) await details.locator("summary").click();
       await expect.poll(overflow).toBeLessThanOrEqual(0);
@@ -243,6 +246,9 @@ test("General and About read without sideways scrolling in Korean and English, l
         expect((await about.boundingBox())!.y).toBe(foot);
         if (name !== "privacy") await page.keyboard.press("ArrowDown");
       }
+      await expect(sheet.locator("[data-product-analytics]")).toBeInViewport({ ratio: 1 });
+      await expect.poll(overflow).toBeLessThanOrEqual(0);
+      await screenshot(page, `settings-privacy-${language}-${theme}-maximum-text`);
       await sheet.locator('[data-settings-tab="about"]').click();
       if (!(await details.evaluate(node => (node as HTMLDetailsElement).open))) await details.locator("summary").click();
       const listScroll = await pages.evaluate(node => node.scrollTop);

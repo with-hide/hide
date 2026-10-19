@@ -80,7 +80,7 @@ function SettingsSheet({ actions }: { actions: Actions }) {
           <nav className="flex min-h-0 w-(--size-settings-nav-w) shrink-0 flex-col overflow-hidden border-r border-border bg-sidebar px-sm pb-md pt-sm">
             <DialogTitle className="shrink-0 px-sm pb-xs text-title font-semibold">{t("common.settings")}</DialogTitle>
             <TabsList aria-label={t("settings.section")} className="min-h-0 w-full flex-1 flex-col items-stretch gap-xxs rounded-none bg-transparent p-none">
-              <div className="flex min-h-0 flex-1 flex-col gap-xxs overflow-y-auto" data-settings-page-list="true">
+              <div className="flex min-h-0 flex-1 scroll-py-xxs flex-col gap-xxs overflow-y-auto pb-xxs" data-settings-page-list="true">
                 {SETTINGS_GROUPS.map((group) => (
                   <div key={group.id} className="flex shrink-0 flex-col gap-xxs" data-settings-nav-group={group.id}>
                     <div className="truncate px-sm pb-xs pt-xs text-micro font-medium text-muted-foreground">{groupName(group.id)}</div>
