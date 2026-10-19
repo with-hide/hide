@@ -636,14 +636,14 @@ The shared `hide-browser` stub stays while any live enabled agent reads it, and 
 Cursor also loads Claude Code's hooks from `~/.claude/settings.json` (and the project's `.claude/settings*.json`) when "Include Third-Party Plugins, Skills, and Other Configs" is on, which is its default, and merges them with its own at the lowest priority without removing a duplicate ([third-party hooks](https://cursor.com/docs/reference/third-party-hooks)).
 So on a machine where Claude Code is on in Hide a Cursor session would also run Hide's instrumented Claude Code hook (the pane counters and reports as `claude-code`, Memory), which is not what a Cursor session is.
 The compatibility exclusion remains after retirement: `hide-agent-hooks hook --runtime claude-code` prints nothing and counts nothing when `CURSOR_VERSION` is in its environment, the variable Cursor documents as set for every hook it runs.
-Cursor's page on third-party hooks does not say whether those get the variable, so this rests on the documented one; a session where it is missing would run both hooks, which print different fields and count only for `claude-code`.
+Cursor's page on third-party hooks does not say whether those get the variable, so this exclusion rests on the documented one; a session where it is missing cannot be identified as foreign through that variable.
 Grok runs `~/.claude/settings.json` and `~/.cursor/hooks.json` beside its own hook files, so inside Grok (`GROK_HOOK_EVENT`, which Grok sets for every hook it runs and for nothing else; `GROK_SESSION_ID` can also reach a Claude Code started from a Grok shell, which keeps counting) Hide's Claude Code hook and Hide's Cursor entries end without a word or a count, and Hide's Grok file is the one that counts and refuses (PRD grok-cursor-hooks D-05).
 Grok's session start is passive, so the guidance Claude Code's hook printed there never reached the model and nothing is lost.
 OpenCode can run the hooks in `~/.claude/settings.json` too, through an operator's bridge plugin; it has Hide's own plugin, so Claude Code's hook ends silently as a whole there, as it does in Cursor, and nothing is counted or delivered twice (PRD opencode-plugin D-10).
 What Claude Code's hook never does inside another agent's session is take or confirm letters: a letter is addressed to the pane's own session and is confirmed once that session has seen it, so a hook that runs inside another agent's session would take the letter and confirm it to nobody who reads it (PRD settings-cleanup D-25).
 `hide_agent_hooks::runtime::ForeignOrigin` finds such a session by what its agent sets for the processes it starts: `CURSOR_VERSION` for Cursor, `OPENCODE` or `OPENCODE_PID` for OpenCode, and `GROK_HOOK_EVENT` or `GROK_SESSION_ID` for Grok (for letters; only `GROK_HOOK_EVENT` silences the hook).
 `hide-agent-hooks/tests/it/letter_origin.rs` runs the built helper beside a stand-in `hide` that answers `inbox` with one letter and records its calls, once outside and once inside each of them.
-On Windows both agents run the hook's command as PowerShell, so Hide writes a PowerShell form for each ([Installing](#installing)).
+On Windows active command hooks run through PowerShell, so Hide writes that form for Grok ([Installing](#installing)); retired Cursor layouts are read only for cleanup.
 
 ### Grok's own hooks
 
@@ -680,10 +680,10 @@ An older active entry reads Outdated until the kit replaces it with the captured
 The bell line names `hide inbox` for a session still running older hook entries.
 Grok 1.0.62 keeps the loaded entries after the file changes; `/hooks`, then `r`, reloads them without restarting the session (measured with separate command tags before and after reload in an isolated session).
 
-Legacy Cursor entries read output that is not a valid answer from `preToolUse` and `subagentStart` as a refusal even when the hook exits 0, and only the CLI's own code, not its documentation, says empty output proceeds, so for those two events (`subagentStart` only from a `@2` entry an earlier build installed and the next pass has not yet removed) every path that does not refuse prints `{"permission":"allow"}`: outside a pane or a registered checkout, an unreadable payload, a daemon that is down or slow, a panic, and a failed owner handshake before anything else runs (D-04).
+An old Cursor entry reaches no active adapter and exits successfully without output, daemon calls or pane reports.
+Its recorded layout stays only so retirement can remove Hide-owned entries without changing operator entries.
 Grok fails open on everything but a refusal, so its hook prints nothing on those paths, as Claude Code's does.
 A failure goes to the guard's log, never to the agent (B5).
-Cursor CLI 2026.10.01 reads a refusal on two paths: its local tool path (every shell call) shows the agent `user_message`, or "<tool> blocked by preToolUse hook" when there is none, and gives it `additional_context`, while only a `preToolUse` step the agent server asks for passes `agent_message` on; the reason is written to all three so it reaches the agent whichever path ran (issue 910, read from the installed CLI bundle).
 
 The count is the same per-pane record and the same `pane.report_metadata` report as Claude Code's (above), changed under an exclusive lock on `~/.hide/agent-hooks/panes.lock` (private to the account), so subagents started in parallel are all counted; a report that finds the record changed by another event while it was sent sends the record again, so Herdr ends on the latest count, and a lock not taken within one second is written down as the pane's last report failure.
 A subagent start adds one working, a subagent stop moves one from working to done.
@@ -692,7 +692,8 @@ The core judges a Grok pane instrumented by that agent's hook piece in the kit (
 
 Grok's question tools `ask_user_question` and `exit_plan_mode` are in its `PreToolUse` matcher, but the hook routes them to the Factory question guard ([Native questions from Factory workers](#native-questions-from-factory-workers)) only for an agent whose `direct_ask` the adapter table declares, and Grok's stays Unconfirmed until a live Grok shows `PreToolUse` firing for them; until then Grok's questions stay native.
 
-`hide-agent-hooks/tests/it/grok_cursor_hooks.rs` runs the built helper with each agent's documented payloads beside a stand-in `hide` and a stand-in Herdr socket, and asserts the answers, the counts Herdr is told (none for Cursor), and a single count when Grok runs all three of Hide's hooks for one subagent.
+`hide-agent-hooks/tests/it/grok_cursor_hooks.rs` runs the built helper with Grok's documented payloads and historical Cursor payloads beside a stand-in `hide` and a stand-in Herdr socket.
+It asserts Grok's answers and counts, retired Cursor's silence and lack of daemon calls or counts, and a single count when Grok runs all three of Hide's hooks for one subagent.
 
 The record `~/.hide/kit/installed.json` keeps the operator's choice per agent (`agents`) and the pieces Hide installed (`hook:<agent>`, `skill:<folder>`, `herdr:<agent>`), and an older build ignores them.
 With no choice on record Claude Code and Codex are on, as they have been since their hooks became part of the kit, and every other agent is off.
