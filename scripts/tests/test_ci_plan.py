@@ -15,7 +15,7 @@ CRATES = ci.cargo_crates(ROOT)
 EVERY_PACKAGE = sorted(crate["name"] for crate in CRATES.values())
 # The lanes that take a macOS runner; every other check on macOS is a job of
 # `nightly.yml`.
-MACOS_LANES = {"os-contract-macos", "desktop-e2e", "package"}
+MACOS_LANES = {"os-contract-macos", "desktop-e2e", "package", "omp-contract"}
 # Every lane but `package`: what a push, the nightly and an unclassified path plan.
 FULL = [lane for lane in ci.LANES if lane not in ("package", "agent-clis")]
 # A full plan with a package input: `agent-clis` is planned by its own paths only.
@@ -562,7 +562,7 @@ def runner_jobs(block):
     if "uses: ./.github/workflows/desktop-e2e.yml" in block:
         # Each shard builds in place.
         return int(re.search(r"\n      shards: (\d+)", block).group(1))
-    if any(f"uses: ./.github/workflows/{name}.yml" in block for name in ("os-contract", "agy-contract", "agent-clis")):
+    if any(f"uses: ./.github/workflows/{name}.yml" in block for name in ("os-contract", "agy-contract", "omp-contract", "agent-clis")):
         return len(json.loads(re.search(r"systems: '(\[[^']*\])'", block).group(1)))
     if "uses: ./.github/workflows/agent-journey.yml" in block:
         # The stand-ins run on each system but Windows, and Windows has its forms job.
@@ -582,7 +582,7 @@ class Workflows(unittest.TestCase):
         for lane, block in pr_jobs().items():
             for called in re.findall(r"uses: \./(\.github/workflows/[a-z0-9-]+\.yml)", block):
                 callers.setdefault(called, set()).add(lane)
-        self.assertEqual(len(callers), 8)
+        self.assertEqual(len(callers), 9)
         for workflow, lanes in callers.items():
             with self.subTest(workflow=workflow):
                 result = plan(workflow)
@@ -663,7 +663,7 @@ class Workflows(unittest.TestCase):
         # added, then the agent CLIs' Linux and Windows installs, which only a
         # pin change plans; a job beyond these is a new decision, made with
         # this number.
-        self.assertLessEqual(most, 29, "a run starts more jobs than the e2e shards, the agent journey and the CLI pins need")
+        self.assertLessEqual(most, 32, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 
