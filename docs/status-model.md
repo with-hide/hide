@@ -241,6 +241,7 @@ A hook total alone never holds a parent's wait.
 Totals may be partially known: each absent total stays unknown, and an observed zero is zero.
 
 Each observation says `unsupported`, `unknown`, `current`, `stale` or `lost`; a current observation names its `hooks` or `session` source and value.
+The snapshot's work kinds, execution states, observation states and sources are pinned in `contracts/snapshot-wire-enums.json`, checked against Rust serialization and the web's accepted types.
 Unsupported means no implemented collector, unknown means no proven observation, stale means a read belongs to a different Herdr state, and lost means the native execution set could no longer be followed.
 No absent, stale or lost record set is a confirmed empty set or proof of running work.
 The native session reference must match before the overlay lays any execution fact, so replacing the session never transfers its predecessor's records.
