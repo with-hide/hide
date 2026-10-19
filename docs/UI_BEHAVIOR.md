@@ -775,6 +775,7 @@ Every To ask row expands from its title, reason or empty space, or its single di
 Checkboxes, links and action buttons perform only their own actions.
 An ordinary question opens its current body, cited files and sources below its action buttons, while a document disagreement opens Compare content.
 A progress row opens a two-line body preview aligned with its title and status; a single card does not repeat its title, while a batch labels each preview with its card number and title.
+The progress row keeps medium inset spacing around its header and preview, with a small gap above the expanded body, so its content stays clear of the hover surface and bottom rule.
 PR and agent actions appear once, in the status line, and an expanded row also exposes its known agent there when the collapsed status does not need that link.
 Merged promotions leave To ask and become document pointers; closed-unmerged promotions leave To ask as ordinary cards and are not suggested again at that revision.
 A promotion row whose agent is alive is also in Needs You while the operator has something to do (`PR #n 리뷰` or `CI 실패`), and choosing that row opens this tab with it open (Work Hide AI does for a home); the row here still shows the progress, the pull request and the agent link whether or not it is in Needs You.

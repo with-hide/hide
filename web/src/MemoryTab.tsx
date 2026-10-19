@@ -243,11 +243,11 @@ function Questions({ project, actions, busy }: { project: ProjectMemory; actions
 
 /** A native button behind the read view makes the whole row one disclosure,
  * while sibling controls keep their own pointer and keyboard actions. */
-function AskRow({ number, expanded, onToggle, children }: { number: number; expanded: boolean; onToggle: () => void; children: ReactNode }) {
+function AskRow({ number, expanded, onToggle, children, className }: { number: number; expanded: boolean; onToggle: () => void; children: ReactNode; className?: string }) {
   const { t } = useInterfaceTranslation();
   return <div className="relative min-w-0">
     <button type="button" className="absolute inset-0 rounded-xs outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" aria-label={t(expanded ? "memory.collapse" : "memory.expand", { card: cardName(number) })} aria-expanded={expanded} onClick={onToggle} data-memory-row-toggle={number} />
-    <div className="pointer-events-none relative grid min-w-0 grid-cols-[auto_1fr] gap-x-sm gap-y-xs py-sm">{children}</div>
+    <div className={cn("pointer-events-none relative grid min-w-0 grid-cols-[auto_1fr] gap-x-sm gap-y-xs py-sm", className)}>{children}</div>
   </div>;
 }
 
@@ -265,7 +265,7 @@ function ProgressRow({ group, pull, agents, project, actions }: { group: MemoryP
   const status = memoryProgressStatus(group, pull, agent);
   const reason = [t(status.key), promotion?.github_failure && promotion.github_failure !== "no_github_remote" ? t(`memory.github.${promotion.github_failure}`) : null].filter(Boolean).join(" · ");
   return <div className="min-w-0 border-b border-border" data-memory-card={first.number} data-memory-progress="true" data-memory-pr-group={group.pr ?? undefined}>
-    <AskRow number={first.number} expanded={expanded} onToggle={() => actions.memoryExpand(project.workspace_id, expanded ? null : first.number)}>
+    <AskRow number={first.number} expanded={expanded} onToggle={() => actions.memoryExpand(project.workspace_id, expanded ? null : first.number)} className="px-md py-md">
       <PrMark className="mt-xxs" state={pull?.state ?? "pending"} compact />
       <div className="flex min-w-0 items-center gap-sm">
         <span className="min-w-0 flex-1 truncate text-body" title={first.title}>{first.title}</span>
@@ -280,7 +280,7 @@ function ProgressRow({ group, pull, agents, project, actions }: { group: MemoryP
         {(status.agentLink || expanded) && pane ? <button type="button" className="pointer-events-auto ml-auto shrink-0 text-subtle-foreground hover:text-foreground" aria-label={t("memory.progress.openAgent")} onClick={() => actions.openAgent(pane)} data-memory-agent={first.number}>{t("memory.progress.agent")}</button> : null}
       </div>
     </AskRow>
-    {expanded ? <div className="grid min-w-0 grid-cols-[auto_1fr] gap-x-sm pt-xs pb-sm" data-memory-progress-detail={first.number}>
+    {expanded ? <div className="grid min-w-0 grid-cols-[auto_1fr] gap-x-sm px-md pt-sm pb-md" data-memory-progress-detail={first.number}>
       <span aria-hidden="true" className="size-(--size-pr-icon)" />
       <div className="flex min-w-0 flex-col gap-sm">
         {group.cards.map((row) => <div key={row.number} className="min-w-0" data-memory-preview={row.number}>
