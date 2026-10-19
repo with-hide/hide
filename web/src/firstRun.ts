@@ -6,10 +6,17 @@ import { AGENT_ADAPTERS } from "./agentAdapters";
 import type { ProviderKind } from "./agentPicker";
 import type { NotificationPermission } from "./host";
 import { hookPart, type AgentPart } from "./settings/agentRows";
-import { FIRST_RUN_VERSION, type AiProvider, type FirstRunStep, type Kit, type KitAgent, type KitPiece, type SnapshotRest } from "./snapshot";
+import { FIRST_RUN_VERSION, type AiProvider, type FirstRunStep, type HerdrProfiles, type Kit, type KitAgent, type KitPiece, type SnapshotRest } from "./snapshot";
 
-/** The steps a wizard shows in order: the desktop app's three, a browser tab's first alone (D-14, B26). */
+/** The desktop route includes saved devices; a browser tab has its first step alone. */
 export type WizardStep = Exclude<FirstRunStep, "done">;
+
+/** Failed or unread discovery has its own retry step; an observed empty list skips it. */
+export function wizardSteps(profiles: HerdrProfiles | undefined): readonly WizardStep[] {
+  return profiles?.state === "ready" && profiles.profiles.length === 0
+    ? ["agents", "notifications", "project"]
+    : ["agents", "devices", "notifications", "project"];
+}
 
 /**
  * The step the first-run wizard shows, or null when it does not show: a Mac

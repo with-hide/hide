@@ -399,10 +399,11 @@ test("@platform a migrated session with an unknown original repository can retai
       return { session: label?.native_session_id, goal: label?.goal, end: label?.end };
     }, { message: "completed native label reached disk before migration restart", timeout: 30_000 })
       .toEqual({ session: identity, goal: FIRST_GOAL, end: "done" });
-    // Emulate the version 2 store while this owned daemon is stopped.
+    // Emulate the version 2 store while this owned daemon is stopped,
+    // removing every later table, including passive observations (version 5).
     daemon = await daemon.restart((stateDir) => {
       const db = new DatabaseSync(path.join(stateDir, "links.sqlite3"));
-      try { db.exec("DROP TABLE ledger_session_origins; DROP TABLE ledger_project_connections; DROP TABLE ledger_backlog; DROP TABLE retention_aliases; ALTER TABLE ledger_missed DROP COLUMN backlog_key; PRAGMA user_version=2;"); }
+      try { db.exec("DROP TABLE ledger_session_origins; DROP TABLE ledger_project_connections; DROP TABLE ledger_backlog; DROP TABLE retention_aliases; DROP TABLE direct_observations; ALTER TABLE ledger_missed DROP COLUMN backlog_key; PRAGMA user_version=2;"); }
       finally { db.close(); }
     });
     await page.goto("about:blank");

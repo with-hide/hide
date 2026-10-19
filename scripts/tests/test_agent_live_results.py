@@ -106,12 +106,32 @@ class MeasurementResults(unittest.TestCase):
         checkout = Path(__file__).resolve().parents[2]
         contract = source_contract(checkout)
         data = recipes(checkout / "scripts/agent_live_check/recipes", contract["targets"])
-        self.assertEqual(set(data), {"claude-code", "codex", "grok", "opencode", "pi", "omp", "cursor", "antigravity"})
+        self.assertEqual(set(data), {"claude-code", "codex", "grok", "opencode", "pi", "omp", "antigravity"})
         for recipe in data.values():
             self.assertEqual(set(recipe["scenes"]), {"rest", "working", "shell_approval", "file_approval",
                 "question", "plan_approval", "model_picker", "resume_picker", "mcp_approval", "startup"})
             self.assertEqual(recipe["scenes"]["model_picker"]["send"], "/model")
             self.assertEqual(recipe["scenes"]["resume_picker"]["send"], "/resume")
+
+    def test_missing_or_retired_recipes_refuse_the_active_inventory(self):
+        checkout = Path(__file__).resolve().parents[2]
+        declared = source_contract(checkout)["targets"]
+        directory = checkout / "scripts/agent_live_check/recipes"
+        with tempfile.TemporaryDirectory() as temporary:
+            copied = Path(temporary)
+            for source in directory.glob("*.json"):
+                (copied / source.name).write_bytes(source.read_bytes())
+            codex = copied / "codex.json"
+            content = codex.read_bytes()
+            codex.unlink()
+            with self.assertRaisesRegex(ProtectionError, "recipe_adapter_coverage_mismatch"):
+                recipes(copied, declared)
+            codex.write_bytes(content)
+            retired = json.loads(content)
+            retired["id"] = "cursor"
+            (copied / "cursor.json").write_text(json.dumps(retired))
+            with self.assertRaisesRegex(ProtectionError, "recipe_adapter_coverage_mismatch"):
+                recipes(copied, declared)
 
     def test_unsafe_selection_approval_resume_settings_and_draft_dominate_unknown(self):
         for effect in ("selection", "approval", "resumed_session", "settings_write", "unsent_draft"):

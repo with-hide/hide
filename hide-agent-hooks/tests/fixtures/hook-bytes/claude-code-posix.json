@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime claude-code --event Stop --memory-injection --source hide-subagents@8; fi",
+            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime claude-code --event Stop --memory-injection --source hide-subagents@10; fi",
             "timeout": 8
           }
         ]
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime claude-code --event SessionStart --memory-injection --source hide-subagents@8; fi",
+            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime claude-code --event SessionStart --memory-injection --source hide-subagents@10; fi",
             "timeout": 8
           }
         ]
@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime claude-code --event UserPromptSubmit --memory-injection --source hide-subagents@8; fi",
+            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime claude-code --event UserPromptSubmit --memory-injection --source hide-subagents@10; fi",
             "timeout": 8
           }
         ]
@@ -49,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime claude-code --event SubagentStart --memory-injection --source hide-subagents@8; fi",
+            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime claude-code --event SubagentStart --memory-injection --source hide-subagents@10; fi",
             "timeout": 8
           }
         ]
@@ -60,7 +60,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime claude-code --event SubagentStop --memory-injection --source hide-subagents@8; fi",
+            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime claude-code --event SubagentStop --memory-injection --source hide-subagents@10; fi",
             "timeout": 8
           }
         ]
@@ -71,11 +71,35 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime claude-code --event PreToolUse --source hide-subagents@8; fi",
+            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime claude-code --event PreToolUse --source hide-subagents@10; fi",
             "timeout": 8
           }
         ],
         "matcher": "Bash|AskUserQuestion|ExitPlanMode|Edit|Write|MultiEdit|NotebookEdit|Read"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime claude-code --event PostToolUse --source hide-subagents@10; fi",
+            "timeout": 8
+          }
+        ],
+        "matcher": "Bash|PowerShell"
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime claude-code --event PostToolUseFailure --source hide-subagents@10; fi",
+            "timeout": 8
+          }
+        ],
+        "matcher": "Bash|PowerShell"
       }
     ]
   }

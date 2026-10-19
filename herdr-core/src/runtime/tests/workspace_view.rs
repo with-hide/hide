@@ -1341,6 +1341,7 @@ fn removing_a_device_forgets_its_workspace_views() {
                 ssh_alias: "studio".to_owned(),
             },
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         });
     let store = runtime.workspace_views.as_mut().unwrap();

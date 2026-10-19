@@ -99,7 +99,12 @@ fn serve(
     let mut command = command(executable, home);
     command.args(["node", "serve"]);
     let mut child = if guarded {
-        OwnedChild::spawn_guarded(command, deadline).unwrap()
+        OwnedChild::spawn_guarded(command, deadline).unwrap_or_else(|error| {
+            panic!(
+                "guarded helper startup/acknowledgement failed before protocol requests after {:?}: {error:?}",
+                started.elapsed()
+            )
+        })
     } else {
         OwnedChild::spawn(&mut command).unwrap()
     };
@@ -212,9 +217,9 @@ fn serve_preserves_kit_protocol_alongside_activity() {
     let build = home_path.join("fixture-helper/0123456789abcdef");
     fs::create_dir_all(&build).unwrap();
     let helper = build.join(Path::new(HELPER).file_name().unwrap());
-    // Materialize independent bytes: an APFS clone of a debug executable can
-    // stall before main on its first execution. This
-    // fixture tests the helper protocol, not cloned-file launch latency.
+    // Materialize independent bytes as the installer does, rather than an
+    // APFS clone. First-execution validation still belongs to setup, before
+    // the protocol deadline; byte copying alone does not make the file ready.
     let mut source = fs::File::open(HELPER).unwrap();
     let mut destination = fs::File::create(&helper).unwrap();
     std::io::copy(&mut source, &mut destination).unwrap();
@@ -222,6 +227,7 @@ fn serve_preserves_kit_protocol_alongside_activity() {
         .set_permissions(source.metadata().unwrap().permissions())
         .unwrap();
     drop(destination);
+    crate::stand_ins::ready_with_args(&helper, &["node", "--version"]);
     let reinstall = json!({"op":"kit", "action":{
         "kind":"reinstall", "components":["cli"], "agents_on":["pi"], "agents_off":["cursor"]
     }, "cli_dir":"relative-refused", "herdr_socket":null});

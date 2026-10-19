@@ -200,12 +200,28 @@ On Windows, agy's command starts one Windows PowerShell process between its exis
 This shell runs only for that event; it adds no resident worker, timer, retained state, pending queue or notification, and leaves the helper's input and deadlines unchanged.
 agy owns the command's existing eight-second timeout; this wrapper adds no separate descendant-cancellation guarantee.
 Measure its cold call and warmed caller-side p50, p95 and maximum against a cmd command that actually runs the same helper, reporting the old escaped command's skipped helper separately rather than counting that skipped work as a working baseline.
-Claude Code and Codex pay nothing at a tool: their letters are typed by the doorbell, on its own thread, as at rest.
+Claude Code and Codex start no tool-letter helper: their letters are typed by the doorbell, on its own thread, as at rest.
+Their passive Post helper cost is recorded separately below.
 Nothing here keeps state, runs a timer or publishes; the retained data is the throttled delivery diagnostic.
 
 Measure it at the command boundary as the spawn guard is measured: the helper's `letters` operation with its JSON on stdin, and the hook with each agent's documented tool payload, against a real daemon that holds no letter for the pane, wall time per call from the caller's side with the first calls discarded as warm-up, p50 and p95, the load average before and after; that is the cost per tool call, since every call asks.
 The PRD that landed it set no bar (D-12); the figures measured on macOS are in the pull request that landed it, and a later change to this path reports its own.
 Regression owners are `hide-agent-hooks/tests/opencode/plugin.test.mjs` and `tests/pi-extension/extension.test.mjs` (no ask while a handover waits for its receipt, a late helper leaves the result unchanged) and `tests/it/grok_cursor_hooks.rs` (nothing asked outside a pane or without a session).
+
+## Passive Post observations
+
+Claude Code, Codex, Grok and Antigravity add one native helper start per selected shell Post event; their ordinary result pays the bounded input read and local JSON/command filter, with no observation CLI child.
+OpenCode 1/2 and Pi/omp filter the actual shell command inside the existing result handler before starting an observation helper.
+Only a recognized direct prompt candidate starts one owned sibling `hide observation --hook`, carrying at most 8 KiB of typed metadata within a 1.2-second send budget.
+The helper transiently bounds command text to 64 KiB and result text to 128 KiB, discards both after parsing, and never resends the original prompt.
+No observation adds a Pre RPC, spool, timer, polling thread or detached process.
+Plugin/extension helpers share the existing eight-child admission cap, 1.5-second outer budget and shutdown cleanup; saturated helpers report a bounded lost diagnostic and preserve the tool result.
+Native hooks share the 256 KiB input cap and 500 ms input deadline, and always print no permission or replacement result.
+The existing proof-bound daemon admission owns freshness and endpoint validation, and the existing links worker owns metadata storage; their queue, TTL and storage limits are described with the admission implementation.
+No runtime mutex is acquired by this parser and it publishes no notification itself.
+Measure ordinary Post startup, the existing ordinary Pre path and a matched candidate separately through their installed `sh -c` command, with the same payload size, process baseline, warm-up exclusions and caller-side p50/p95 methodology above.
+A stand-in observation CLI measures local parsing and owned child transport only, not native provider scheduling or real proof admission.
+Regression owners are `observation.rs` and the OpenCode and Pi/omp result fixtures; native provider event emission remains a separate observed result.
 
 ## The guardrails on a pre-tool call
 

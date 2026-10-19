@@ -1374,7 +1374,7 @@ mod tests {
     #[test]
     fn a_tool_event_hands_a_working_agent_letters_only_when_its_adapter_takes_them() {
         let wait = super::super::doorbell::MID_TURN_WAIT_MS;
-        for kind in ["opencode", "pi", "omp", "grok", "cursor", "antigravity"] {
+        for kind in ["opencode", "pi", "omp", "grok", "antigravity"] {
             assert!(tool_letters(kind), "{kind}");
             let mut ledger = Ledger::default();
             let mut recipient = actor("recipient");
@@ -1418,7 +1418,7 @@ mod tests {
             ledger.letters[1].created_at_unix_ms = 0;
             assert!(pull(&ledger, Some(1000), 61 * 60_000).is_empty(), "{kind}");
         }
-        for kind in ["claude", "codex", "gemini", "future-agent"] {
+        for kind in ["claude", "codex", "gemini", "cursor", "future-agent"] {
             assert!(!tool_letters(kind), "{kind}");
             let mut ledger = Ledger::default();
             let mut recipient = actor("recipient");

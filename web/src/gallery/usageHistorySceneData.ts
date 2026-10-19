@@ -26,7 +26,7 @@ function hideAiDay(sessions: UsageAmount, index: number, state: string): UsageHi
 }
 
 export function ledgerScene(node: NodeUsage, state: string): NodeUsage {
-  if (state === "empty") return { ...node, history: null, agents: node.agents.map((row) => ({ ...row, consumption: row.agent === "cursor" ? { state: "unsupported" } : { state: "unavailable", cause: "no_records", last_checked_at_ms: 1 } })) };
+  if (state === "empty") return { ...node, history: null, agents: node.agents.map((row) => ({ ...row, consumption: { state: "unavailable", cause: "no_records", last_checked_at_ms: 1 } })) };
   const reading = state === "backfill";
   const days = state === "sparse" ? 9 : state === "year" ? 365 : 37;
   const first = Date.UTC(2026, 9, 12) - (days - 1) * 86400000;

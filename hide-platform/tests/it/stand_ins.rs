@@ -1,8 +1,8 @@
 //! Programs a test runs against a product deadline, ready before the
 //! deadline starts (issues 813 and 824). Built only into tests: hide-platform's
-//! integration tests, and by `#[path]` hide-agent-hooks' unit and integration
-//! tests and hide-kit's unit tests, so a change here plans every crate that
-//! runs it.
+//! integration tests, and by `#[path]` hided's integration tests,
+//! hide-agent-hooks' unit and integration tests and hide-kit's unit tests, so
+//! a change here plans every crate that runs it.
 //!
 //! macOS checks a file the first time it is started, once per file, and the
 //! checks of every process on the machine wait in one line: on 2026-10-09 at
@@ -156,7 +156,7 @@ pub fn place(program: &Path, at: &Path) {
         std::fs::set_permissions(at, std::fs::metadata(program).unwrap().permissions()).unwrap();
         // This file belongs to its fixture and is removed with it. Do not
         // remember its identity after deletion or grow the shared-file cache.
-        start_once(at);
+        start_once(at, &["--help"]);
         return;
     }
     match std::fs::hard_link(program, at) {
@@ -204,17 +204,24 @@ fn is_mach_o(program: &Path) -> bool {
 /// interpreter may refuse a `HOME` it does not know, which costs nothing,
 /// because the check is of the file and is paid as it starts.
 pub fn ready(program: &Path) {
+    ready_with_args(program, &["--help"]);
+}
+
+/// Like `ready`, with the program's known one-shot arguments instead of
+/// `--help`. The invocation must exit without starting a resident service;
+/// for example, hided uses `node --version` because `--help` starts its daemon.
+pub fn ready_with_args(program: &Path, args: &[&str]) {
     let id = hide_platform::fs::identity::file_id(program).unwrap();
     let mut started = READY.lock().unwrap_or_else(PoisonError::into_inner);
     if started.contains(&id) {
         return;
     }
-    start_once(program);
+    start_once(program, args);
     started.insert(id);
 }
 
 #[allow(clippy::disallowed_methods)] // env_clear: a Unix stand-in's first start gets no variable but PATH and its home
-fn start_once(program: &Path) {
+fn start_once(program: &Path, args: &[&str]) {
     let scratch = tempfile::tempdir().unwrap();
     let deadline = Instant::now() + READY_GUARD;
     loop {
@@ -224,7 +231,7 @@ fn start_once(program: &Path) {
             .env_clear()
             .env("PATH", std::env::var_os("PATH").unwrap_or_default());
         command
-            .arg("--help")
+            .args(args)
             .env(
                 hide_platform::host::HOME_VARIABLE,
                 scratch.path().join("home"),
@@ -236,8 +243,8 @@ fn start_once(program: &Path) {
             Ok(mut child) => {
                 let output = child.capture_until(deadline, 1).unwrap_or_else(|error| {
                     panic!(
-                        "{} did not end its first start, which runs it with `--help` and must end \
-                         at once (a body that keeps running exits on that argument first): {error:?}",
+                        "{} did not end its first start with {args:?}, which must be a one-shot \
+                         invocation: {error:?}",
                         program.display()
                     )
                 });

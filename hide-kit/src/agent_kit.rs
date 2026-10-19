@@ -1198,8 +1198,9 @@ pub(crate) fn remove_herdr(target: &KitTarget, record: &Record) -> Vec<(String, 
         .iter()
         .filter(|adapter| record.contains_piece(&herdr_code(adapter)))
         .collect();
+    let retired = retired_agents::remove_herdr(target, record);
     if owned.is_empty() {
-        return Vec::new();
+        return retired;
     }
     let statuses = Statuses::probe(target);
     owned
@@ -1223,6 +1224,7 @@ pub(crate) fn remove_herdr(target: &KitTarget, record: &Record) -> Vec<(String, 
             };
             (herdr_code(adapter), outcome)
         })
+        .chain(retired)
         .collect()
 }
 

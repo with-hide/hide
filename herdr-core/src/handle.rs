@@ -513,6 +513,33 @@ impl Core {
         lock_recover(&self.runtime).prepare_memory(device, caller, expected, command)
     }
 
+    #[allow(clippy::too_many_arguments)] // identity facts and deadline cross the authenticated boundary intact
+    pub fn prepare_direct_observation(
+        &self,
+        device: &str,
+        caller: &str,
+        expected: &crate::workspace_control::Context,
+        terminal: &str,
+        observation: hide_agent_hooks::observation::DirectObservation,
+        deadline: std::time::Instant,
+    ) -> Result<crate::direct_observation::PreparedObservation, String> {
+        if !check_owner_thread(self, "observation.prepare") || std::time::Instant::now() >= deadline
+        {
+            return Err("observation_expired".into());
+        }
+        let runtime = self.runtime.try_lock().map_err(|_| "observation_busy")?;
+        let mut prepared = runtime.prepare_direct_observation(
+            device,
+            caller,
+            expected,
+            terminal,
+            observation,
+            deadline,
+        )?;
+        prepared.runtime = std::sync::Arc::downgrade(&self.runtime);
+        Ok(prepared)
+    }
+
     pub fn prepare_delivery_human(&self) -> Result<crate::delivery::worker::PreparedHuman, String> {
         if !check_owner_thread(self, "delivery.human.prepare") {
             return Err("delivery_unavailable".into());

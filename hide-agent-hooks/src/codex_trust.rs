@@ -43,7 +43,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::install::{codex_command, hook_matcher};
-use crate::runtime::{AgentRuntime, HookEvent};
+use crate::runtime::AgentRuntime;
+#[cfg(test)]
+use crate::runtime::HookEvent;
 
 /// How long Codex gets. It answers each call in well under a second; these
 /// are the bounds for one that does not.
@@ -247,8 +249,8 @@ fn expected_entries<'a>(
     herdr: &[HookEntry],
 ) -> Vec<Expected> {
     let helper = helper.into();
-    HookEvent::ALL
-        .into_iter()
+    AgentRuntime::Codex
+        .events()
         .map(|event| Expected {
             event: wire_event_name(event.name()),
             handler_type: COMMAND_HANDLER.to_owned(),
@@ -1240,8 +1242,8 @@ mod tests {
 
     #[test]
     fn event_names_follow_the_wire_spelling() {
-        let names: Vec<_> = HookEvent::ALL
-            .into_iter()
+        let names: Vec<_> = AgentRuntime::Codex
+            .events()
             .map(|event| wire_event_name(event.name()))
             .collect();
         assert_eq!(
@@ -1252,7 +1254,8 @@ mod tests {
                 "subagentStart",
                 "subagentStop",
                 "stop",
-                "preToolUse"
+                "preToolUse",
+                "postToolUse"
             ]
         );
     }
@@ -1317,7 +1320,7 @@ mod tests {
 
     #[test]
     fn each_event_matches_only_its_own_command() {
-        for event in HookEvent::ALL {
+        for event in AgentRuntime::Codex.events() {
             let mut hook = listed(
                 &wire_event_name(event.name()),
                 &hide_command(event),

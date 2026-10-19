@@ -182,6 +182,7 @@ fn device_runtime(herdr: &FakeHerdr, machine: &Machine) -> SharedRuntime {
                 ssh_alias: DEVICE.to_owned(),
             },
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         });
     runtime.device_hosts.insert(

@@ -21,7 +21,7 @@ import {
 } from "./server.js";
 
 const ROUTE_POLL_MS = 250;
-const OPERATIONS = new Set(["prompt", "tool", "letters", "confirm"]);
+const OPERATIONS = new Set(["prompt", "tool", "letters", "confirm", "observation"]);
 
 /**
  * The root session above a child: up the children this half saw start, then as OpenCode's own sessions know it, so

@@ -101,11 +101,11 @@ describe("project guardrails", () => {
     const names = unguardedAgents([
       agent("claude-code", "Claude Code"),
       agent("codex", "Codex", { hook: { state: "failed", reason: "Codex has not trusted Hide's hook", location: null } }),
-      agent("cursor", "Cursor", { enabled: false }),
-      agent("grok", "Grok", { availability: "not_installed", enabled: false, chosen: false }),
+      agent("grok", "Grok", { enabled: false }),
+      agent("omp", "omp", { availability: "not_installed", enabled: false, chosen: false }),
       agent("pi", "Pi", { availability: "unsupported_system" }),
     ]).map((row) => row.id);
-    expect(names).toEqual(["codex", "cursor"]);
+    expect(names).toEqual(["codex", "grok"]);
   });
 
   it("names the GitHub repository a Git project is connected to: the confirmed one, else the detected one, never a folder's", () => {

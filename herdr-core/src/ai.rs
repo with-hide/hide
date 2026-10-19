@@ -928,7 +928,7 @@ mod tests {
         assert!(!missing.installed);
 
         let unsupported = project(
-            ProviderId::CURSOR,
+            ProviderId::OPENCODE,
             Some(&status(
                 Availability::Unsupported {
                     reason: "cannot_guarantee_read_only".to_owned(),
@@ -962,7 +962,7 @@ mod tests {
         );
         let row = |found: Option<&BTreeSet<ProviderId>>| {
             project(
-                ProviderId::CURSOR,
+                ProviderId::OPENCODE,
                 Some(&unsupported),
                 None,
                 &models(),
@@ -970,7 +970,7 @@ mod tests {
                 found,
             )
         };
-        let found: BTreeSet<ProviderId> = [ProviderId::CURSOR].into();
+        let found: BTreeSet<ProviderId> = [ProviderId::OPENCODE].into();
         let missing: BTreeSet<ProviderId> = [ProviderId::CODEX].into();
 
         let on_this_mac = row(Some(&found));
@@ -989,23 +989,17 @@ mod tests {
         );
     }
 
-    /// Gemini CLI has no sign-in check, so its row says so: `ready` there
-    /// means only that the program was found.
     #[test]
-    fn only_an_agent_with_no_sign_in_check_reports_its_login_unchecked() {
+    fn every_current_provider_reports_that_it_checks_sign_in() {
         let ready = status(Availability::Ready, true);
         for provider in hide_ai::PROVIDERS {
             let row = project(*provider, Some(&ready), None, &models(), true, None);
-            assert_eq!(
-                row.login_checked,
-                *provider != ProviderId::GEMINI,
+            assert!(row.login_checked, "{provider}");
+            assert!(
+                BackgroundAiProviderSnapshot::unread(*provider).login_checked,
                 "{provider}"
             );
         }
-        assert!(
-            !BackgroundAiProviderSnapshot::unread(ProviderId::GEMINI).login_checked,
-            "the row before any read already says it"
-        );
     }
 
     #[test]
@@ -1062,8 +1056,9 @@ mod tests {
         assert_eq!(offered.models_unavailable_reason, None);
         assert!(!offered.models_fixed);
 
+        // A compatible older node can still return a fixed catalog.
         let fixed = project(
-            ProviderId::GEMINI,
+            ProviderId::GROK,
             Some(&ready),
             Some(&ModelCatalog::Fixed(vec!["pro".to_owned()])),
             &models(),

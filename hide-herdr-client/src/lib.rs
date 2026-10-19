@@ -39,6 +39,14 @@ pub trait ApiStream: Read + Write + Send {
 
 pub trait ApiConnector: Send + Sync {
     fn connect(&self) -> Result<Box<dyn ApiStream>, ApiError>;
+
+    /// Establishes a stream within this absolute deadline. The default
+    /// refuses instead of falling back to a potentially unbounded connect.
+    fn connect_until(&self, _deadline: Instant) -> Result<Box<dyn ApiStream>, ApiError> {
+        Err(ApiError::Transport(
+            "this transport cannot enforce a connection deadline".to_owned(),
+        ))
+    }
 }
 
 /// Reaches Herdr's socket API over the local stream the platform has: a Unix
@@ -57,6 +65,12 @@ impl LocalSocketConnector {
 }
 
 impl ApiConnector for LocalSocketConnector {
+    fn connect_until(&self, deadline: Instant) -> Result<Box<dyn ApiStream>, ApiError> {
+        LocalStream::connect_until(&self.socket_path, deadline)
+            .map(|stream| Box::new(stream) as Box<dyn ApiStream>)
+            .map_err(|error| ApiError::Transport(format!("deadline-bound connect failed: {error}")))
+    }
+
     fn connect(&self) -> Result<Box<dyn ApiStream>, ApiError> {
         let stream = LocalStream::connect(&self.socket_path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
@@ -304,6 +318,27 @@ pub fn request_small_response_until(
     params: Value,
     deadline: Instant,
 ) -> Result<Value, ApiError> {
+    request_small_response_at_deadline(connector, method, params, deadline, false)
+}
+
+/// A small request whose connection, write and read share one absolute
+/// deadline. Unsupported transports refuse without starting a connection.
+pub fn request_small_response_strict_until(
+    connector: &dyn ApiConnector,
+    method: &str,
+    params: Value,
+    deadline: Instant,
+) -> Result<Value, ApiError> {
+    request_small_response_at_deadline(connector, method, params, deadline, true)
+}
+
+fn request_small_response_at_deadline(
+    connector: &dyn ApiConnector,
+    method: &str,
+    params: Value,
+    deadline: Instant,
+    strict_connect: bool,
+) -> Result<Value, ApiError> {
     let remaining = || {
         deadline
             .checked_duration_since(Instant::now())
@@ -312,9 +347,32 @@ pub fn request_small_response_until(
     };
     remaining()?;
     let request_id = format!("herdr-core:{method}");
-    let mut stream = connector.connect()?;
-    stream.set_write_timeout(Some(remaining()?))?;
-    write_request(stream.as_mut(), &request_id, method, params)?;
+    let mut stream = if strict_connect {
+        connector.connect_until(deadline)?
+    } else {
+        connector.connect()?
+    };
+    let mut request = serde_json::to_vec(&json!({"id":request_id,"method":method,"params":params}))
+        .map_err(|error| ApiError::Malformed(format!("request could not be encoded: {error}")))?;
+    request.push(b'\n');
+    let mut pending = request.as_slice();
+    while !pending.is_empty() {
+        stream.set_write_timeout(Some(remaining()?))?;
+        match stream.write(pending) {
+            Ok(0) => {
+                return Err(ApiError::Transport(
+                    "request write made no progress".to_owned(),
+                ));
+            }
+            Ok(written) => pending = &pending[written..],
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                return Err(ApiError::Transport(format!(
+                    "request could not be written: {error}"
+                )));
+            }
+        }
+    }
     let line = stream.read_line_with_timeout(remaining()?)?;
     remaining()?;
     response_result(decode_response(&line)?, &request_id)
@@ -545,6 +603,60 @@ mod tests {
             Instant::now(),
         );
         assert!(matches!(answer, Err(ApiError::Transport(reason)) if reason.contains("deadline")));
+    }
+
+    #[test]
+    fn a_strict_request_refuses_an_unbounded_connector_without_using_it() {
+        struct Unbounded;
+        impl ApiConnector for Unbounded {
+            fn connect(&self) -> Result<Box<dyn ApiStream>, ApiError> {
+                panic!("strict request must not call unbounded connect");
+            }
+        }
+        let answer = request_small_response_strict_until(
+            &Unbounded,
+            "agent.get",
+            json!({"target":"pane"}),
+            Instant::now() + Duration::from_secs(1),
+        );
+        assert!(
+            matches!(answer, Err(ApiError::Transport(reason)) if reason.contains("connection deadline"))
+        );
+    }
+
+    #[test]
+    fn a_strict_request_passes_its_original_deadline_and_does_not_write_after_expiry() {
+        struct Delayed {
+            deadline: Instant,
+            outgoing: Arc<Mutex<Vec<u8>>>,
+        }
+        impl ApiConnector for Delayed {
+            fn connect(&self) -> Result<Box<dyn ApiStream>, ApiError> {
+                panic!("strict request must use connect_until");
+            }
+            fn connect_until(&self, deadline: Instant) -> Result<Box<dyn ApiStream>, ApiError> {
+                assert_eq!(deadline, self.deadline);
+                let (_hold, release) = std::sync::mpsc::channel::<()>();
+                let _ = release.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+                Ok(Box::new(FixtureStream {
+                    incoming: Cursor::new(Vec::new()),
+                    outgoing: Arc::clone(&self.outgoing),
+                }))
+            }
+        }
+        let deadline = Instant::now() + Duration::from_millis(20);
+        let outgoing = Arc::new(Mutex::new(Vec::new()));
+        let answer = request_small_response_strict_until(
+            &Delayed {
+                deadline,
+                outgoing: Arc::clone(&outgoing),
+            },
+            "agent.get",
+            json!({"target":"pane"}),
+            deadline,
+        );
+        assert!(matches!(answer, Err(ApiError::Transport(reason)) if reason.contains("deadline")));
+        assert!(outgoing.lock().unwrap().is_empty());
     }
 
     #[test]

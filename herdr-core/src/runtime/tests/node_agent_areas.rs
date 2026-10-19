@@ -207,6 +207,7 @@ fn device_in_front(
             label: "MacBook".to_owned(),
             origin,
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         });
     runtime.snapshot.status.remote.push(connected_status(NODE));

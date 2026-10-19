@@ -24,7 +24,7 @@ use std::time::Duration;
 #[path = "ledger_store.rs"]
 mod ledger;
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 const SCHEMA: &str = "
 CREATE TABLE projects(key TEXT PRIMARY KEY, device TEXT NOT NULL, root TEXT NOT NULL,
@@ -169,6 +169,109 @@ pub struct LocalFiles<'a> {
 }
 
 impl LinkStore {
+    /// Called only by the existing links writer, never under Runtime's mutex.
+    pub fn apply_direct_observation(
+        &mut self,
+        fact: &super::observation::DirectFact,
+        now: u64,
+    ) -> Result<bool, String> {
+        use super::observation::{DirectFact, DirectOutcome, EVENT_LIMIT, TOTAL_BYTE_LIMIT};
+        fact.validate(now)?;
+        let id = fact.id();
+        let tx = self.connection.transaction().map_err(failed)?;
+        tx.execute(
+            "DELETE FROM direct_observations WHERE at<=?1",
+            [now.saturating_sub(super::observation::RETENTION_MS) as i64],
+        )
+        .map_err(failed)?;
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT fact FROM direct_observations WHERE id=?1",
+                [&id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(failed)?;
+        let mut next = fact.clone();
+        if let Some(previous) = previous.as_deref() {
+            let held: DirectFact =
+                serde_json::from_str(previous).map_err(|_| "direct_observation_value_invalid")?;
+            if held.recipient.is_some()
+                && next.recipient.is_some()
+                && held.recipient != next.recipient
+            {
+                return Err("direct_observation_identity_conflict".into());
+            }
+            next.at_unix_ms = held.at_unix_ms.min(next.at_unix_ms);
+            // Preserve a complete submission, but never combine separate incomplete
+            // callbacks into evidence that neither callback independently supplied.
+            if held.outcome == DirectOutcome::Submitted && held.recipient.is_some() {
+                next.outcome = held.outcome;
+                next.recipient = held.recipient;
+            }
+            if next.outcome == DirectOutcome::Submitted && next.recipient.is_some() {
+                next.reason = None;
+            }
+        }
+        next.validate(now)?;
+        let encoded = next.encoded()?;
+        if previous.as_deref() == Some(encoded.as_str()) {
+            tx.commit().map_err(failed)?;
+            return Ok(false);
+        }
+        let (count, bytes): (usize, usize) = tx
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(bytes),0) FROM direct_observations",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(failed)?;
+        if count + usize::from(previous.is_none()) > EVENT_LIMIT
+            || bytes.saturating_sub(previous.as_ref().map_or(0, String::len)) + encoded.len()
+                > TOTAL_BYTE_LIMIT
+        {
+            return Err("direct_observation_store_capacity".into());
+        }
+        tx.execute("INSERT INTO direct_observations VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET at=excluded.at,bytes=excluded.bytes,fact=excluded.fact", params![id,next.at_unix_ms as i64,encoded.len() as i64,encoded]).map_err(failed)?;
+        tx.commit().map_err(failed)?;
+        Ok(true)
+    }
+
+    /// The bounded retained metadata; no command or prompt field exists in its schema.
+    pub fn direct_observations(
+        &self,
+        now: u64,
+    ) -> Result<Vec<super::observation::DirectFact>, String> {
+        let mut statement = self.connection.prepare_cached("SELECT fact FROM direct_observations WHERE at>?1 ORDER BY at DESC,id DESC LIMIT ?2").map_err(failed)?;
+        let encoded = statement
+            .query_map(
+                params![
+                    now.saturating_sub(super::observation::RETENTION_MS) as i64,
+                    super::observation::EVENT_LIMIT as i64
+                ],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(failed)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(failed)?;
+        encoded
+            .into_iter()
+            .map(|value| {
+                serde_json::from_str(&value).map_err(|_| "direct_observation_value_invalid".into())
+            })
+            .collect()
+    }
+
+    pub fn prune_direct_observations(&mut self, now: u64) -> Result<(), String> {
+        self.connection
+            .execute(
+                "DELETE FROM direct_observations WHERE at<=?1",
+                [now.saturating_sub(super::observation::RETENTION_MS) as i64],
+            )
+            .map_err(failed)?;
+        Ok(())
+    }
+
     /// Moves whenever a row of the file changes, through this connection or
     /// another, so a reader can tell that an answer it derived still stands.
     pub fn revision(&self) -> Result<(u64, i64), String> {
@@ -2048,10 +2151,24 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
         } else {
             ""
         };
+        let aliases = if version < 4 {
+            RETENTION_ALIAS_SCHEMA
+        } else {
+            ""
+        };
+        let backlog = if version < 4 {
+            ledger::BACKLOG_SCHEMA
+        } else {
+            ""
+        };
+        let observations = if version < 5 {
+            super::observation::SCHEMA
+        } else {
+            ""
+        };
         connection
             .execute_batch(&format!(
-                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {} {RETENTION_ALIAS_SCHEMA} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;",
-                ledger::BACKLOG_SCHEMA
+                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {observations} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|error| {
                 let _ = connection.execute_batch("ROLLBACK");

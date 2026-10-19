@@ -26,6 +26,15 @@ type ReleaseSourceAnswer =
     Result<(herdr_core::ReleaseSource, serde_json::Value), herdr_core::MoveSourceRefusal>;
 
 enum Command {
+    ObservationPrepare {
+        device_id: String,
+        pane_id: String,
+        expected: Context,
+        terminal: String,
+        observation: hide_node_link::panes::DirectObservation,
+        deadline: std::time::Instant,
+        reply: Sender<Result<herdr_core::direct_observation::PreparedObservation, String>>,
+    },
     DeliveryHuman {
         reply: Sender<Result<herdr_core::delivery::worker::PreparedHuman, String>>,
     },
@@ -162,6 +171,34 @@ struct Running {
 }
 
 impl CoreHandle {
+    pub fn prepare_direct_observation(
+        &self,
+        device: &str,
+        pane: &str,
+        expected: &Context,
+        terminal: String,
+        observation: hide_node_link::panes::DirectObservation,
+        deadline: std::time::Instant,
+    ) -> Result<herdr_core::direct_observation::PreparedObservation, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::ObservationPrepare {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                expected: expected.clone(),
+                terminal,
+                observation,
+                deadline,
+                reply,
+            })
+            .map_err(|_| "observation_unavailable")?;
+        let left = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .ok_or("observation_expired")?;
+        result
+            .recv_timeout(left)
+            .map_err(|_| "observation_expired")?
+    }
     /// The machine the core runs on.
     pub fn node(&self) -> &herdr_core::node::NodeId {
         &self.node
@@ -693,6 +730,13 @@ fn owner_loop(
             .ok()
             .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)),
     )
+    .with_herdr_program(
+        options
+            .herdr_bin_path
+            .as_ref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("herdr")),
+    )
     .with_helper_root(
         options
             .host_helper_root
@@ -738,6 +782,24 @@ fn owner_loop(
     let mut _held_roots = hide_node::HeldRoots::default();
     while let Ok(command) = commands.recv() {
         match command {
+            Command::ObservationPrepare {
+                device_id,
+                pane_id,
+                expected,
+                terminal,
+                observation,
+                deadline,
+                reply,
+            } => {
+                let _ = reply.send(core.prepare_direct_observation(
+                    &device_id,
+                    &pane_id,
+                    &expected,
+                    &terminal,
+                    observation,
+                    deadline,
+                ));
+            }
             Command::DeliveryHuman { reply } => {
                 let _ = reply.send(core.prepare_delivery_human());
             }

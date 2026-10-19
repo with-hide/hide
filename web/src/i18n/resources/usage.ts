@@ -91,7 +91,6 @@ export const usageEnglish = {
   "usage.reason.notBuilt": "Hide doesn’t read {{agent}}’s weekly limit yet.",
   "usage.reason.account": "No limit of its own; it counts toward the account it signs in with.",
   "usage.reason.opencode": "Go plan limits need an OpenCode API key, which Hide doesn’t hold.",
-  "usage.reason.cursor": "Not supported: its limits need Cursor’s stored sign-in.",
   "usage.signedOut": "Signed out · run {{command}} to sign in",
   "usage.notInstalled": "{{command}} is not installed"
 } as const;
@@ -186,7 +185,6 @@ const ko: Catalog<typeof usageEnglish> = {
   "usage.reason.notBuilt": "Hide는 아직 {{agent}}의 주간 한도를 읽지 않습니다.",
   "usage.reason.account": "자체 한도가 없으며 로그인한 계정의 사용량에 합산됩니다.",
   "usage.reason.opencode": "Go 플랜 한도에는 OpenCode API 키가 필요하며, Hide는 이 키를 보관하지 않습니다.",
-  "usage.reason.cursor": "미지원: 한도를 읽으려면 Cursor에 저장된 로그인 정보가 필요합니다.",
   "usage.signedOut": "로그아웃됨 · {{command}}를 실행해 로그인하세요",
   "usage.notInstalled": "{{command}}가 설치되어 있지 않습니다"
 };
@@ -281,7 +279,6 @@ const ja: Catalog<typeof usageEnglish> = {
   "usage.reason.notBuilt": "Hideはまだ{{agent}}の週間上限を読み取れません。",
   "usage.reason.account": "独自の上限はなく、ログインしたアカウントの使用量に加算されます。",
   "usage.reason.opencode": "Goプランの上限にはOpenCode APIキーが必要ですが、Hideは保持しません。",
-  "usage.reason.cursor": "未対応：上限の読み取りにはCursorに保存されたログイン情報が必要です。",
   "usage.signedOut": "ログアウト中 · {{command}}を実行してログインしてください",
   "usage.notInstalled": "{{command}}がインストールされていません"
 };
@@ -376,7 +373,6 @@ const zhCN: Catalog<typeof usageEnglish> = {
   "usage.reason.notBuilt": "Hide尚未读取{{agent}}的每周限额。",
   "usage.reason.account": "没有独立限额，用量计入登录的账户。",
   "usage.reason.opencode": "Go套餐限额需要OpenCode API密钥，Hide不持有该密钥。",
-  "usage.reason.cursor": "不支持：读取限额需要Cursor保存的登录信息。",
   "usage.signedOut": "已退出登录 · 运行{{command}}登录",
   "usage.notInstalled": "未安装{{command}}"
 };

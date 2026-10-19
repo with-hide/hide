@@ -25,7 +25,7 @@ function useRevealNode(id: string) {
 
 export type ProjectNode = Node<{ group: GraphProject; frameless: boolean; highlight: (id: string | null, focus: boolean) => void; toggle: (id: string) => void }, "project">;
 export type SessionNode = Node<{ row: GraphAgent; root: boolean; progress: WorkProgress | null; context: boolean; highlighted: boolean; quietCount: number; folded: boolean; fold: (id: string) => void; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target: HTMLElement) => void }, "session">;
-export type LetterEdge = Edge<{ bundle: Communication; label: string; emphasized: boolean; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target?: HTMLElement) => void }, "letters">;
+export type LetterEdge = Edge<{ bundle: Communication; label: string; emphasized: boolean; paired: boolean; laneOffset: number; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target?: HTMLElement) => void }, "letters">;
 
 /** Handles are invisible routing anchors; no connection can be edited. */
 function Ports() {
@@ -79,17 +79,31 @@ export function SessionGraphNode({ id, data, selected }: NodeProps<SessionNode>)
 
 export function CommunicationGraphEdge(props: EdgeProps<LetterEdge>) {
   const { t } = useInterfaceTranslation();
-  const [path, x, y] = getBezierPath(props);
+  let [path, x, y] = getBezierPath(props);
   const bundle = props.data?.bundle;
   if (!bundle) return null;
+  const offset = props.data?.laneOffset ?? 0;
+  if (offset !== 0) {
+    // Keep the actual handles and arrows, separating the curve's midpoint only.
+    // A fixed screen-side lane also works when the two kinds run in opposite directions.
+    const reach = Math.max(Math.abs(props.targetX - props.sourceX) / 2, Math.abs(props.targetY - props.sourceY) / 4, Math.abs(offset));
+    const startX = props.sourceX + (props.sourcePosition === Position.Left ? -reach : reach);
+    const endX = props.targetX + (props.targetPosition === Position.Right ? reach : -reach);
+    const startY = props.sourceY + offset * 4 / 3;
+    const endY = props.targetY + offset * 4 / 3;
+    path = `M ${props.sourceX},${props.sourceY} C ${startX},${startY} ${endX},${endY} ${props.targetX},${props.targetY}`;
+    x = (props.sourceX + 3 * startX + 3 * endX + props.targetX) / 8;
+    y = (props.sourceY + props.targetY) / 2 + offset;
+  }
   return <>
     <BaseEdge id={props.id} path={path} interactionWidth={20} style={props.style} markerEnd={props.markerEnd} markerStart={props.markerStart} />
-    <EdgeLabelRenderer><button type="button" className="og-letter-label nodrag nopan" data-emphasized={props.data?.emphasized} onPointerEnter={() => props.data?.highlight(props.id, false)} onPointerLeave={() => props.data?.highlight(null, false)} onFocus={() => props.data?.highlight(props.id, true)} onBlur={() => props.data?.highlight(null, true)} style={{ transform: `translate(-50%, -50%) translate(${x}px, ${y}px)` }} aria-pressed={props.selected} aria-label={props.data?.label} onClick={(event) => props.data?.choose(bundle.id, event.currentTarget)}>{bundle.directions.length > 1 ? "↔" : "→"} {t("overviewGraph.letters", { count: bundle.count })}</button></EdgeLabelRenderer>
+    <EdgeLabelRenderer><button type="button" className="og-letter-label nodrag nopan" data-kind={bundle.kind} data-paired={props.data?.paired} data-emphasized={props.data?.emphasized} onPointerEnter={() => props.data?.highlight(props.id, false)} onPointerLeave={() => props.data?.highlight(null, false)} onFocus={() => props.data?.highlight(props.id, true)} onBlur={() => props.data?.highlight(null, true)} style={{ transform: `translate(-50%, -50%) translate(${x}px, ${y}px)` }} aria-pressed={props.selected} aria-label={props.data?.label} onClick={(event) => props.data?.choose(bundle.id, event.currentTarget)}>{bundle.directions.length > 1 ? "↔" : "→"} {t(bundle.kind === "herdr_direct" ? "overviewGraph.directInputs" : "overviewGraph.letters", { count: bundle.count })}</button></EdgeLabelRenderer>
   </>;
 }
 
 export function letterKind(t: TFunction<"translation">, kind: string): string {
   switch (kind) {
+    case "herdr_direct": return t("overviewGraph.directKind");
     case "request": return t("overviewGraph.kind.request");
     case "block": return t("overviewGraph.kind.block");
     case "report": return t("overviewGraph.kind.report");
