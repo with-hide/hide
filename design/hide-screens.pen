@@ -184996,7 +184996,7 @@
                     {
                       "type": "frame",
                       "id": "ov-work-l-content",
-                      "name": "Work graph",
+                      "name": "Work graph focus",
                       "children": [
                         {
                           "type": "frame",
@@ -185006,22 +185006,12 @@
                             {
                               "type": "text",
                               "id": "ov-work-l-content-title",
-                              "name": "작업",
-                              "content": "작업",
+                              "name": "작업 그래프",
+                              "content": "작업 그래프",
                               "fill": "$--foreground",
                               "fontFamily": "$--font-ui",
                               "fontSize": "$--text-headline",
                               "fontWeight": "600"
-                            },
-                            {
-                              "type": "text",
-                              "id": "ov-work-l-content-count",
-                              "name": "세션 14",
-                              "content": "세션 14",
-                              "fill": "$--muted-foreground",
-                              "fontFamily": "$--font-ui",
-                              "fontSize": "$--text-caption",
-                              "fontWeight": "400"
                             },
                             {
                               "type": "frame",
@@ -185032,31 +185022,28 @@
                               "height": 1
                             },
                             {
-                              "id": "ov-work-l-content-fit",
+                              "id": "ov-work-l-content-collapse",
                               "type": "ref",
                               "ref": "hideui:btn-m",
-                              "name": "화면에 맞추기",
-                              "fill": "$--background",
-                              "stroke": "$--border",
-                              "strokeWidth": "$--size-hairline",
-                              "strokeAlignment": "inner",
+                              "name": "모두 접기",
+                              "fill": "#00000000",
                               "descendants": {
                                 "hideui:btn-ic": {
                                   "fill": "$--primary-foreground",
                                   "enabled": false
                                 },
                                 "hideui:btn-lb": {
-                                  "fill": "$--foreground",
-                                  "content": "화면에 맞추기"
+                                  "fill": "$--subtle-foreground",
+                                  "content": "모두 접기"
                                 }
                               }
                             },
                             {
-                              "id": "ov-work-l-content-letters",
+                              "id": "ov-work-l-content-graph",
                               "type": "ref",
                               "ref": "hideui:btn-m",
-                              "name": "편지",
-                              "fill": "$--background",
+                              "name": "그래프",
+                              "fill": "$--secondary",
                               "stroke": "$--border",
                               "strokeWidth": "$--size-hairline",
                               "strokeAlignment": "inner",
@@ -185066,8 +185053,25 @@
                                   "enabled": false
                                 },
                                 "hideui:btn-lb": {
-                                  "fill": "$--foreground",
-                                  "content": "편지"
+                                  "fill": "$--subtle-foreground",
+                                  "content": "그래프"
+                                }
+                              }
+                            },
+                            {
+                              "id": "ov-work-l-content-list",
+                              "type": "ref",
+                              "ref": "hideui:btn-m",
+                              "name": "세션 목록",
+                              "fill": "#00000000",
+                              "descendants": {
+                                "hideui:btn-ic": {
+                                  "fill": "$--primary-foreground",
+                                  "enabled": false
+                                },
+                                "hideui:btn-lb": {
+                                  "fill": "$--subtle-foreground",
+                                  "content": "세션 목록"
                                 }
                               }
                             }
@@ -185079,8 +185083,159 @@
                         },
                         {
                           "type": "frame",
+                          "id": "ov-work-l-content-filters",
+                          "name": "Filters",
+                          "children": [
+                            {
+                              "id": "ov-work-l-content-filters-0",
+                              "type": "ref",
+                              "ref": "hideui:btn-m",
+                              "name": "전체 10",
+                              "fill": "$--background",
+                              "stroke": "$--border",
+                              "strokeWidth": "$--size-hairline",
+                              "strokeAlignment": "inner",
+                              "descendants": {
+                                "hideui:btn-ic": {
+                                  "fill": "$--primary-foreground",
+                                  "enabled": false
+                                },
+                                "hideui:btn-lb": {
+                                  "fill": "$--foreground",
+                                  "content": "전체 10"
+                                }
+                              }
+                            },
+                            {
+                              "id": "ov-work-l-content-filters-1",
+                              "type": "ref",
+                              "ref": "hideui:btn-m",
+                              "name": "내 차례 2",
+                              "fill": "$--background",
+                              "stroke": "$--border",
+                              "strokeWidth": "$--size-hairline",
+                              "strokeAlignment": "inner",
+                              "descendants": {
+                                "hideui:btn-ic": {
+                                  "fill": "$--primary-foreground",
+                                  "enabled": false
+                                },
+                                "hideui:btn-lb": {
+                                  "fill": "$--foreground",
+                                  "content": "내 차례 2"
+                                }
+                              }
+                            },
+                            {
+                              "id": "ov-work-l-content-filters-2",
+                              "type": "ref",
+                              "ref": "hideui:btn-m",
+                              "name": "작업 중 5",
+                              "fill": "$--background",
+                              "stroke": "$--border",
+                              "strokeWidth": "$--size-hairline",
+                              "strokeAlignment": "inner",
+                              "descendants": {
+                                "hideui:btn-ic": {
+                                  "fill": "$--primary-foreground",
+                                  "enabled": false
+                                },
+                                "hideui:btn-lb": {
+                                  "fill": "$--foreground",
+                                  "content": "작업 중 5"
+                                }
+                              }
+                            },
+                            {
+                              "id": "ov-work-l-content-filters-3",
+                              "type": "ref",
+                              "ref": "hideui:btn-m",
+                              "name": "안 읽은 결과 2",
+                              "fill": "$--background",
+                              "stroke": "$--border",
+                              "strokeWidth": "$--size-hairline",
+                              "strokeAlignment": "inner",
+                              "descendants": {
+                                "hideui:btn-ic": {
+                                  "fill": "$--primary-foreground",
+                                  "enabled": false
+                                },
+                                "hideui:btn-lb": {
+                                  "fill": "$--foreground",
+                                  "content": "안 읽은 결과 2"
+                                }
+                              }
+                            },
+                            {
+                              "id": "ov-work-l-content-filters-4",
+                              "type": "ref",
+                              "ref": "hideui:btn-m",
+                              "name": "☐ 쉬는 세션 포함",
+                              "fill": "$--background",
+                              "stroke": "$--border",
+                              "strokeWidth": "$--size-hairline",
+                              "strokeAlignment": "inner",
+                              "descendants": {
+                                "hideui:btn-ic": {
+                                  "fill": "$--primary-foreground",
+                                  "enabled": false
+                                },
+                                "hideui:btn-lb": {
+                                  "fill": "$--foreground",
+                                  "content": "☐ 쉬는 세션 포함"
+                                }
+                              }
+                            },
+                            {
+                              "id": "ov-work-l-content-filters-5",
+                              "type": "ref",
+                              "ref": "hideui:btn-m",
+                              "name": "☑ 편지 관계",
+                              "fill": "$--background",
+                              "stroke": "$--border",
+                              "strokeWidth": "$--size-hairline",
+                              "strokeAlignment": "inner",
+                              "descendants": {
+                                "hideui:btn-ic": {
+                                  "fill": "$--primary-foreground",
+                                  "enabled": false
+                                },
+                                "hideui:btn-lb": {
+                                  "fill": "$--foreground",
+                                  "content": "☑ 편지 관계"
+                                }
+                              }
+                            }
+                          ],
+                          "layout": "horizontal",
+                          "gap": 8,
+                          "alignItems": "center",
+                          "width": "fill_container"
+                        },
+                        {
+                          "type": "text",
+                          "id": "ov-work-l-content-omitted",
+                          "name": "▸ 접힌 프로젝트 2개 · 쉬는 세션뿐인 프로젝트 ",
+                          "content": "▸ 접힌 프로젝트 2개 · 쉬는 세션뿐인 프로젝트 / 세션 없음",
+                          "fill": "$--muted-foreground",
+                          "fontFamily": "$--font-ui",
+                          "fontSize": "$--text-caption",
+                          "fontWeight": "400"
+                        },
+                        {
+                          "type": "text",
+                          "id": "ov-work-l-content-legend",
+                          "name": "실선: 부모와 자식 · 점선: 편지 · 관련 노드에",
+                          "content": "실선: 부모와 자식 · 점선: 편지 · 관련 노드에 머물 때만 편지 건수 표시",
+                          "fill": "$--muted-foreground",
+                          "fontFamily": "$--font-ui",
+                          "fontSize": "$--text-caption",
+                          "fontWeight": "400"
+                        },
+                        {
+                          "type": "frame",
                           "id": "ov-work-l-content-groups",
-                          "name": "Compound project groups",
+                          "name": "Compound project groups at readable zoom",
                           "children": [
                             {
                               "type": "frame",
@@ -185090,8 +185245,8 @@
                                 {
                                   "type": "text",
                                   "id": "ov-work-l-content-hide-title",
-                                  "name": "hide · 세션 11",
-                                  "content": "hide · 세션 11",
+                                  "name": "hide · 세션 7",
+                                  "content": "hide · 세션 7",
                                   "fill": "$--foreground",
                                   "fontFamily": "$--font-ui",
                                   "fontSize": "$--text-body",
@@ -185108,14 +185263,62 @@
                                       "name": "사이드바 가독성 개선",
                                       "children": [
                                         {
-                                          "type": "text",
-                                          "id": "ov-work-l-content-root-mark",
-                                          "name": "◌",
-                                          "content": "◌",
-                                          "fill": "$--agent-working",
-                                          "fontFamily": "$--font-ui",
-                                          "fontSize": "$--text-headline",
-                                          "fontWeight": "400"
+                                          "type": "frame",
+                                          "id": "ov-work-l-content-root-orb",
+                                          "name": "Circular provider node",
+                                          "children": [
+                                            {
+                                              "type": "frame",
+                                              "id": "ov-work-l-content-root-provider",
+                                              "name": "Claude Code logo",
+                                              "children": [],
+                                              "width": 36.4,
+                                              "height": 36.4,
+                                              "fill": {
+                                                "type": "image",
+                                                "enabled": true,
+                                                "url": "../web/src/assets/agent-claude.png",
+                                                "mode": "fit"
+                                              }
+                                            },
+                                            {
+                                              "type": "frame",
+                                              "id": "ov-work-l-content-root-status",
+                                              "name": "Status mark",
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "ov-work-l-content-root-status-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "strokeAlignment": "center",
+                                                  "opacity": 0.55
+                                                }
+                                              ],
+                                              "width": 12,
+                                              "height": 12,
+                                              "layout": "horizontal",
+                                              "justifyContent": "center",
+                                              "alignItems": "center",
+                                              "layoutPosition": "absolute",
+                                              "x": 44,
+                                              "y": 44
+                                            }
+                                          ],
+                                          "width": 56,
+                                          "height": 56,
+                                          "cornerRadius": 28,
+                                          "fill": "$--secondary",
+                                          "stroke": "$--primary",
+                                          "strokeWidth": 1,
+                                          "layout": "horizontal",
+                                          "alignItems": "center",
+                                          "justifyContent": "center"
                                         },
                                         {
                                           "type": "text",
@@ -185129,9 +185332,9 @@
                                         },
                                         {
                                           "type": "text",
-                                          "id": "ov-work-l-content-root-state",
-                                          "name": "작업 중",
-                                          "content": "작업 중",
+                                          "id": "ov-work-l-content-root-agent",
+                                          "name": "Claude Code · model-a",
+                                          "content": "Claude Code · model-a",
                                           "fill": "$--muted-foreground",
                                           "fontFamily": "$--font-ui",
                                           "fontSize": "$--text-caption",
@@ -185139,9 +185342,19 @@
                                         },
                                         {
                                           "type": "text",
-                                          "id": "ov-work-l-content-root-agent",
-                                          "name": "Claude Code",
-                                          "content": "Claude Code",
+                                          "id": "ov-work-l-content-root-state",
+                                          "name": "확인함",
+                                          "content": "확인함",
+                                          "fill": "$--muted-foreground",
+                                          "fontFamily": "$--font-ui",
+                                          "fontSize": "$--text-caption",
+                                          "fontWeight": "400"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "ov-work-l-content-root-context",
+                                          "name": "상위 세션 문맥",
+                                          "content": "상위 세션 문맥",
                                           "fill": "$--muted-foreground",
                                           "fontFamily": "$--font-ui",
                                           "fontSize": "$--text-caption",
@@ -185149,13 +185362,10 @@
                                         }
                                       ],
                                       "layout": "vertical",
-                                      "gap": 12,
+                                      "gap": 8,
                                       "width": 188,
-                                      "padding": 12,
-                                      "cornerRadius": "$--radius-sm",
-                                      "fill": "$--card",
-                                      "stroke": "$--border",
-                                      "strokeWidth": 1
+                                      "alignItems": "center",
+                                      "opacity": 0.5
                                     },
                                     {
                                       "type": "text",
@@ -185178,14 +185388,61 @@
                                           "name": "컴포넌트 구조 정리",
                                           "children": [
                                             {
-                                              "type": "text",
-                                              "id": "ov-work-l-content-c1-mark",
-                                              "name": "◌",
-                                              "content": "◌",
-                                              "fill": "$--agent-working",
-                                              "fontFamily": "$--font-ui",
-                                              "fontSize": "$--text-headline",
-                                              "fontWeight": "400"
+                                              "type": "frame",
+                                              "id": "ov-work-l-content-c1-orb",
+                                              "name": "Circular provider node",
+                                              "children": [
+                                                {
+                                                  "type": "frame",
+                                                  "id": "ov-work-l-content-c1-provider",
+                                                  "name": "Codex logo",
+                                                  "children": [],
+                                                  "width": 23.400000000000002,
+                                                  "height": 23.400000000000002,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "enabled": true,
+                                                    "url": "../web/src/assets/agent-codex.png",
+                                                    "mode": "fit"
+                                                  }
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "ov-work-l-content-c1-status",
+                                                  "name": "Status mark",
+                                                  "children": [
+                                                    {
+                                                      "type": "ellipse",
+                                                      "id": "ov-work-l-content-c1-status-arc",
+                                                      "name": "In progress",
+                                                      "enabled": true,
+                                                      "width": 10,
+                                                      "height": 10,
+                                                      "fill": "$--agent-working",
+                                                      "innerRadius": 0.62,
+                                                      "startAngle": 90,
+                                                      "sweepAngle": -270
+                                                    }
+                                                  ],
+                                                  "width": 12,
+                                                  "height": 12,
+                                                  "layout": "horizontal",
+                                                  "justifyContent": "center",
+                                                  "alignItems": "center",
+                                                  "layoutPosition": "absolute",
+                                                  "x": 24,
+                                                  "y": 24
+                                                }
+                                              ],
+                                              "width": 36,
+                                              "height": 36,
+                                              "cornerRadius": 18,
+                                              "fill": "$--secondary",
+                                              "stroke": "$--border",
+                                              "strokeWidth": 1,
+                                              "layout": "horizontal",
+                                              "alignItems": "center",
+                                              "justifyContent": "center"
                                             },
                                             {
                                               "type": "text",
@@ -185195,7 +185452,17 @@
                                               "fill": "$--foreground",
                                               "fontFamily": "$--font-ui",
                                               "fontSize": "$--text-body",
-                                              "fontWeight": "600"
+                                              "fontWeight": "500"
+                                            },
+                                            {
+                                              "type": "text",
+                                              "id": "ov-work-l-content-c1-agent",
+                                              "name": "Codex · model-c",
+                                              "content": "Codex · model-c",
+                                              "fill": "$--muted-foreground",
+                                              "fontFamily": "$--font-ui",
+                                              "fontSize": "$--text-caption",
+                                              "fontWeight": "400"
                                             },
                                             {
                                               "type": "text",
@@ -185206,26 +185473,13 @@
                                               "fontFamily": "$--font-ui",
                                               "fontSize": "$--text-caption",
                                               "fontWeight": "400"
-                                            },
-                                            {
-                                              "type": "text",
-                                              "id": "ov-work-l-content-c1-agent",
-                                              "name": "Codex",
-                                              "content": "Codex",
-                                              "fill": "$--muted-foreground",
-                                              "fontFamily": "$--font-ui",
-                                              "fontSize": "$--text-caption",
-                                              "fontWeight": "400"
                                             }
                                           ],
                                           "layout": "vertical",
-                                          "gap": 12,
+                                          "gap": 8,
                                           "width": 152,
-                                          "padding": 12,
-                                          "cornerRadius": "$--radius-sm",
-                                          "fill": "$--card",
-                                          "stroke": "$--border",
-                                          "strokeWidth": 1
+                                          "alignItems": "center",
+                                          "opacity": 1
                                         },
                                         {
                                           "type": "frame",
@@ -185233,14 +185487,58 @@
                                           "name": "한글 가독성 확인",
                                           "children": [
                                             {
-                                              "type": "text",
-                                              "id": "ov-work-l-content-c2-mark",
-                                              "name": "◌",
-                                              "content": "◌",
-                                              "fill": "$--agent-working",
-                                              "fontFamily": "$--font-ui",
-                                              "fontSize": "$--text-headline",
-                                              "fontWeight": "400"
+                                              "type": "frame",
+                                              "id": "ov-work-l-content-c2-orb",
+                                              "name": "Circular provider node",
+                                              "children": [
+                                                {
+                                                  "type": "frame",
+                                                  "id": "ov-work-l-content-c2-provider",
+                                                  "name": "Codex logo",
+                                                  "children": [],
+                                                  "width": 23.400000000000002,
+                                                  "height": 23.400000000000002,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "enabled": true,
+                                                    "url": "../web/src/assets/agent-codex.png",
+                                                    "mode": "fit"
+                                                  }
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "ov-work-l-content-c2-status",
+                                                  "name": "Status mark",
+                                                  "children": [
+                                                    {
+                                                      "type": "ellipse",
+                                                      "id": "ov-work-l-content-c2-status-dot",
+                                                      "name": "Unread",
+                                                      "enabled": true,
+                                                      "width": 7,
+                                                      "height": 7,
+                                                      "fill": "$--success"
+                                                    }
+                                                  ],
+                                                  "width": 12,
+                                                  "height": 12,
+                                                  "layout": "horizontal",
+                                                  "justifyContent": "center",
+                                                  "alignItems": "center",
+                                                  "layoutPosition": "absolute",
+                                                  "x": 24,
+                                                  "y": 24
+                                                }
+                                              ],
+                                              "width": 36,
+                                              "height": 36,
+                                              "cornerRadius": 18,
+                                              "fill": "$--secondary",
+                                              "stroke": "$--border",
+                                              "strokeWidth": 1,
+                                              "layout": "horizontal",
+                                              "alignItems": "center",
+                                              "justifyContent": "center"
                                             },
                                             {
                                               "type": "text",
@@ -185250,7 +185548,17 @@
                                               "fill": "$--foreground",
                                               "fontFamily": "$--font-ui",
                                               "fontSize": "$--text-body",
-                                              "fontWeight": "600"
+                                              "fontWeight": "500"
+                                            },
+                                            {
+                                              "type": "text",
+                                              "id": "ov-work-l-content-c2-agent",
+                                              "name": "Codex · model-c",
+                                              "content": "Codex · model-c",
+                                              "fill": "$--muted-foreground",
+                                              "fontFamily": "$--font-ui",
+                                              "fontSize": "$--text-caption",
+                                              "fontWeight": "400"
                                             },
                                             {
                                               "type": "text",
@@ -185261,26 +185569,13 @@
                                               "fontFamily": "$--font-ui",
                                               "fontSize": "$--text-caption",
                                               "fontWeight": "400"
-                                            },
-                                            {
-                                              "type": "text",
-                                              "id": "ov-work-l-content-c2-agent",
-                                              "name": "Codex",
-                                              "content": "Codex",
-                                              "fill": "$--muted-foreground",
-                                              "fontFamily": "$--font-ui",
-                                              "fontSize": "$--text-caption",
-                                              "fontWeight": "400"
                                             }
                                           ],
                                           "layout": "vertical",
-                                          "gap": 12,
+                                          "gap": 8,
                                           "width": 152,
-                                          "padding": 12,
-                                          "cornerRadius": "$--radius-sm",
-                                          "fill": "$--card",
-                                          "stroke": "$--border",
-                                          "strokeWidth": 1
+                                          "alignItems": "center",
+                                          "opacity": 1
                                         }
                                       ],
                                       "layout": "vertical",
@@ -185292,30 +185587,20 @@
                                   "gap": 24,
                                   "alignItems": "center",
                                   "width": "fill_container"
-                                },
-                                {
-                                  "type": "text",
-                                  "id": "ov-work-l-content-metadata",
-                                  "name": "실제 편지 메타데이터 · 진행 2 · 요청 1",
-                                  "content": "실제 편지 메타데이터 · 진행 2 · 요청 1",
-                                  "fill": "$--muted-foreground",
-                                  "fontFamily": "$--font-ui",
-                                  "fontSize": "$--text-caption",
-                                  "fontWeight": "400"
                                 }
                               ],
                               "layout": "vertical",
                               "gap": 24,
                               "width": "fill_container",
                               "padding": 24,
-                              "cornerRadius": "$--radius-md",
+                              "cornerRadius": "$--radius-xl",
                               "stroke": "$--border",
                               "strokeWidth": 1
                             },
                             {
                               "type": "frame",
                               "id": "ov-work-l-content-collapsed",
-                              "name": "Collapsed projects",
+                              "name": "Collapsed active projects",
                               "children": [
                                 {
                                   "type": "frame",
@@ -185343,8 +185628,8 @@
                                     {
                                       "type": "text",
                                       "id": "ov-work-l-content-pc-0",
-                                      "name": "세션 1",
-                                      "content": "세션 1",
+                                      "name": "세션 2",
+                                      "content": "세션 2",
                                       "fill": "$--muted-foreground",
                                       "fontFamily": "$--font-ui",
                                       "fontSize": "$--text-caption",
@@ -185366,7 +185651,7 @@
                                   "alignItems": "center",
                                   "width": "fill_container",
                                   "padding": 16,
-                                  "cornerRadius": "$--radius-sm",
+                                  "cornerRadius": "$--radius-xl",
                                   "stroke": "$--border",
                                   "strokeWidth": 1
                                 },
@@ -185419,60 +185704,7 @@
                                   "alignItems": "center",
                                   "width": "fill_container",
                                   "padding": 16,
-                                  "cornerRadius": "$--radius-sm",
-                                  "stroke": "$--border",
-                                  "strokeWidth": 1
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "ov-work-l-content-project-2",
-                                  "name": "team-notes",
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "ov-work-l-content-pn-2",
-                                      "name": "team-notes",
-                                      "content": "team-notes",
-                                      "fill": "$--foreground",
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": "$--text-body",
-                                      "fontWeight": "600"
-                                    },
-                                    {
-                                      "type": "frame",
-                                      "id": "ov-work-l-content-ps-2",
-                                      "name": "Spacer",
-                                      "children": [],
-                                      "width": "fill_container",
-                                      "height": 1
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "ov-work-l-content-pc-2",
-                                      "name": "세션 0",
-                                      "content": "세션 0",
-                                      "fill": "$--muted-foreground",
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": "$--text-caption",
-                                      "fontWeight": "400"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "ov-work-l-content-pe-2",
-                                      "name": "›",
-                                      "content": "›",
-                                      "fill": "$--subtle-foreground",
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": "$--text-body",
-                                      "fontWeight": "400"
-                                    }
-                                  ],
-                                  "layout": "horizontal",
-                                  "gap": 8,
-                                  "alignItems": "center",
-                                  "width": "fill_container",
-                                  "padding": 16,
-                                  "cornerRadius": "$--radius-sm",
+                                  "cornerRadius": "$--radius-xl",
                                   "stroke": "$--border",
                                   "strokeWidth": 1
                                 }
@@ -185489,9 +185721,9 @@
                         },
                         {
                           "type": "text",
-                          "id": "ov-work-l-content-limits",
-                          "name": "최근 1일 · 편지 최대 2,000개 · 화면 최대",
-                          "content": "최근 1일 · 편지 최대 2,000개 · 화면 최대 400개 노드",
+                          "id": "ov-work-l-content-selection",
+                          "name": "선택한 세션 상세는 오른쪽에 · 좁은 화면은 기존 ",
+                          "content": "선택한 세션 상세는 오른쪽에 · 좁은 화면은 기존 패널 · Escape로 닫기",
                           "fill": "$--muted-foreground",
                           "fontFamily": "$--font-ui",
                           "fontSize": "$--text-caption",
@@ -190873,7 +191105,7 @@
                     {
                       "type": "frame",
                       "id": "ov-work-d-content",
-                      "name": "Work graph",
+                      "name": "Work graph focus",
                       "children": [
                         {
                           "type": "frame",
@@ -190883,22 +191115,12 @@
                             {
                               "type": "text",
                               "id": "ov-work-d-content-title",
-                              "name": "작업",
-                              "content": "작업",
+                              "name": "작업 그래프",
+                              "content": "작업 그래프",
                               "fill": "$--foreground",
                               "fontFamily": "$--font-ui",
                               "fontSize": "$--text-headline",
                               "fontWeight": "600"
-                            },
-                            {
-                              "type": "text",
-                              "id": "ov-work-d-content-count",
-                              "name": "세션 14",
-                              "content": "세션 14",
-                              "fill": "$--muted-foreground",
-                              "fontFamily": "$--font-ui",
-                              "fontSize": "$--text-caption",
-                              "fontWeight": "400"
                             },
                             {
                               "type": "frame",
@@ -190909,31 +191131,28 @@
                               "height": 1
                             },
                             {
-                              "id": "ov-work-d-content-fit",
+                              "id": "ov-work-d-content-collapse",
                               "type": "ref",
                               "ref": "hideui:btn-m",
-                              "name": "화면에 맞추기",
-                              "fill": "$--background",
-                              "stroke": "$--border",
-                              "strokeWidth": "$--size-hairline",
-                              "strokeAlignment": "inner",
+                              "name": "모두 접기",
+                              "fill": "#00000000",
                               "descendants": {
                                 "hideui:btn-ic": {
                                   "fill": "$--primary-foreground",
                                   "enabled": false
                                 },
                                 "hideui:btn-lb": {
-                                  "fill": "$--foreground",
-                                  "content": "화면에 맞추기"
+                                  "fill": "$--subtle-foreground",
+                                  "content": "모두 접기"
                                 }
                               }
                             },
                             {
-                              "id": "ov-work-d-content-letters",
+                              "id": "ov-work-d-content-graph",
                               "type": "ref",
                               "ref": "hideui:btn-m",
-                              "name": "편지",
-                              "fill": "$--background",
+                              "name": "그래프",
+                              "fill": "$--secondary",
                               "stroke": "$--border",
                               "strokeWidth": "$--size-hairline",
                               "strokeAlignment": "inner",
@@ -190943,8 +191162,25 @@
                                   "enabled": false
                                 },
                                 "hideui:btn-lb": {
-                                  "fill": "$--foreground",
-                                  "content": "편지"
+                                  "fill": "$--subtle-foreground",
+                                  "content": "그래프"
+                                }
+                              }
+                            },
+                            {
+                              "id": "ov-work-d-content-list",
+                              "type": "ref",
+                              "ref": "hideui:btn-m",
+                              "name": "세션 목록",
+                              "fill": "#00000000",
+                              "descendants": {
+                                "hideui:btn-ic": {
+                                  "fill": "$--primary-foreground",
+                                  "enabled": false
+                                },
+                                "hideui:btn-lb": {
+                                  "fill": "$--subtle-foreground",
+                                  "content": "세션 목록"
                                 }
                               }
                             }
@@ -190956,8 +191192,159 @@
                         },
                         {
                           "type": "frame",
+                          "id": "ov-work-d-content-filters",
+                          "name": "Filters",
+                          "children": [
+                            {
+                              "id": "ov-work-d-content-filters-0",
+                              "type": "ref",
+                              "ref": "hideui:btn-m",
+                              "name": "전체 10",
+                              "fill": "$--background",
+                              "stroke": "$--border",
+                              "strokeWidth": "$--size-hairline",
+                              "strokeAlignment": "inner",
+                              "descendants": {
+                                "hideui:btn-ic": {
+                                  "fill": "$--primary-foreground",
+                                  "enabled": false
+                                },
+                                "hideui:btn-lb": {
+                                  "fill": "$--foreground",
+                                  "content": "전체 10"
+                                }
+                              }
+                            },
+                            {
+                              "id": "ov-work-d-content-filters-1",
+                              "type": "ref",
+                              "ref": "hideui:btn-m",
+                              "name": "내 차례 2",
+                              "fill": "$--background",
+                              "stroke": "$--border",
+                              "strokeWidth": "$--size-hairline",
+                              "strokeAlignment": "inner",
+                              "descendants": {
+                                "hideui:btn-ic": {
+                                  "fill": "$--primary-foreground",
+                                  "enabled": false
+                                },
+                                "hideui:btn-lb": {
+                                  "fill": "$--foreground",
+                                  "content": "내 차례 2"
+                                }
+                              }
+                            },
+                            {
+                              "id": "ov-work-d-content-filters-2",
+                              "type": "ref",
+                              "ref": "hideui:btn-m",
+                              "name": "작업 중 5",
+                              "fill": "$--background",
+                              "stroke": "$--border",
+                              "strokeWidth": "$--size-hairline",
+                              "strokeAlignment": "inner",
+                              "descendants": {
+                                "hideui:btn-ic": {
+                                  "fill": "$--primary-foreground",
+                                  "enabled": false
+                                },
+                                "hideui:btn-lb": {
+                                  "fill": "$--foreground",
+                                  "content": "작업 중 5"
+                                }
+                              }
+                            },
+                            {
+                              "id": "ov-work-d-content-filters-3",
+                              "type": "ref",
+                              "ref": "hideui:btn-m",
+                              "name": "안 읽은 결과 2",
+                              "fill": "$--background",
+                              "stroke": "$--border",
+                              "strokeWidth": "$--size-hairline",
+                              "strokeAlignment": "inner",
+                              "descendants": {
+                                "hideui:btn-ic": {
+                                  "fill": "$--primary-foreground",
+                                  "enabled": false
+                                },
+                                "hideui:btn-lb": {
+                                  "fill": "$--foreground",
+                                  "content": "안 읽은 결과 2"
+                                }
+                              }
+                            },
+                            {
+                              "id": "ov-work-d-content-filters-4",
+                              "type": "ref",
+                              "ref": "hideui:btn-m",
+                              "name": "☐ 쉬는 세션 포함",
+                              "fill": "$--background",
+                              "stroke": "$--border",
+                              "strokeWidth": "$--size-hairline",
+                              "strokeAlignment": "inner",
+                              "descendants": {
+                                "hideui:btn-ic": {
+                                  "fill": "$--primary-foreground",
+                                  "enabled": false
+                                },
+                                "hideui:btn-lb": {
+                                  "fill": "$--foreground",
+                                  "content": "☐ 쉬는 세션 포함"
+                                }
+                              }
+                            },
+                            {
+                              "id": "ov-work-d-content-filters-5",
+                              "type": "ref",
+                              "ref": "hideui:btn-m",
+                              "name": "☑ 편지 관계",
+                              "fill": "$--background",
+                              "stroke": "$--border",
+                              "strokeWidth": "$--size-hairline",
+                              "strokeAlignment": "inner",
+                              "descendants": {
+                                "hideui:btn-ic": {
+                                  "fill": "$--primary-foreground",
+                                  "enabled": false
+                                },
+                                "hideui:btn-lb": {
+                                  "fill": "$--foreground",
+                                  "content": "☑ 편지 관계"
+                                }
+                              }
+                            }
+                          ],
+                          "layout": "horizontal",
+                          "gap": 8,
+                          "alignItems": "center",
+                          "width": "fill_container"
+                        },
+                        {
+                          "type": "text",
+                          "id": "ov-work-d-content-omitted",
+                          "name": "▸ 접힌 프로젝트 2개 · 쉬는 세션뿐인 프로젝트 ",
+                          "content": "▸ 접힌 프로젝트 2개 · 쉬는 세션뿐인 프로젝트 / 세션 없음",
+                          "fill": "$--muted-foreground",
+                          "fontFamily": "$--font-ui",
+                          "fontSize": "$--text-caption",
+                          "fontWeight": "400"
+                        },
+                        {
+                          "type": "text",
+                          "id": "ov-work-d-content-legend",
+                          "name": "실선: 부모와 자식 · 점선: 편지 · 관련 노드에",
+                          "content": "실선: 부모와 자식 · 점선: 편지 · 관련 노드에 머물 때만 편지 건수 표시",
+                          "fill": "$--muted-foreground",
+                          "fontFamily": "$--font-ui",
+                          "fontSize": "$--text-caption",
+                          "fontWeight": "400"
+                        },
+                        {
+                          "type": "frame",
                           "id": "ov-work-d-content-groups",
-                          "name": "Compound project groups",
+                          "name": "Compound project groups at readable zoom",
                           "children": [
                             {
                               "type": "frame",
@@ -190967,8 +191354,8 @@
                                 {
                                   "type": "text",
                                   "id": "ov-work-d-content-hide-title",
-                                  "name": "hide · 세션 11",
-                                  "content": "hide · 세션 11",
+                                  "name": "hide · 세션 7",
+                                  "content": "hide · 세션 7",
                                   "fill": "$--foreground",
                                   "fontFamily": "$--font-ui",
                                   "fontSize": "$--text-body",
@@ -190985,14 +191372,62 @@
                                       "name": "사이드바 가독성 개선",
                                       "children": [
                                         {
-                                          "type": "text",
-                                          "id": "ov-work-d-content-root-mark",
-                                          "name": "◌",
-                                          "content": "◌",
-                                          "fill": "$--agent-working",
-                                          "fontFamily": "$--font-ui",
-                                          "fontSize": "$--text-headline",
-                                          "fontWeight": "400"
+                                          "type": "frame",
+                                          "id": "ov-work-d-content-root-orb",
+                                          "name": "Circular provider node",
+                                          "children": [
+                                            {
+                                              "type": "frame",
+                                              "id": "ov-work-d-content-root-provider",
+                                              "name": "Claude Code logo",
+                                              "children": [],
+                                              "width": 36.4,
+                                              "height": 36.4,
+                                              "fill": {
+                                                "type": "image",
+                                                "enabled": true,
+                                                "url": "../web/src/assets/agent-claude.png",
+                                                "mode": "fit"
+                                              }
+                                            },
+                                            {
+                                              "type": "frame",
+                                              "id": "ov-work-d-content-root-status",
+                                              "name": "Status mark",
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "ov-work-d-content-root-status-quiet",
+                                                  "name": "Quiet",
+                                                  "enabled": true,
+                                                  "width": 6.8,
+                                                  "height": 6.8,
+                                                  "fill": [],
+                                                  "stroke": "$--muted-foreground",
+                                                  "strokeWidth": 1.3,
+                                                  "strokeAlignment": "center",
+                                                  "opacity": 0.55
+                                                }
+                                              ],
+                                              "width": 12,
+                                              "height": 12,
+                                              "layout": "horizontal",
+                                              "justifyContent": "center",
+                                              "alignItems": "center",
+                                              "layoutPosition": "absolute",
+                                              "x": 44,
+                                              "y": 44
+                                            }
+                                          ],
+                                          "width": 56,
+                                          "height": 56,
+                                          "cornerRadius": 28,
+                                          "fill": "$--secondary",
+                                          "stroke": "$--primary",
+                                          "strokeWidth": 1,
+                                          "layout": "horizontal",
+                                          "alignItems": "center",
+                                          "justifyContent": "center"
                                         },
                                         {
                                           "type": "text",
@@ -191006,9 +191441,9 @@
                                         },
                                         {
                                           "type": "text",
-                                          "id": "ov-work-d-content-root-state",
-                                          "name": "작업 중",
-                                          "content": "작업 중",
+                                          "id": "ov-work-d-content-root-agent",
+                                          "name": "Claude Code · model-a",
+                                          "content": "Claude Code · model-a",
                                           "fill": "$--muted-foreground",
                                           "fontFamily": "$--font-ui",
                                           "fontSize": "$--text-caption",
@@ -191016,9 +191451,19 @@
                                         },
                                         {
                                           "type": "text",
-                                          "id": "ov-work-d-content-root-agent",
-                                          "name": "Claude Code",
-                                          "content": "Claude Code",
+                                          "id": "ov-work-d-content-root-state",
+                                          "name": "확인함",
+                                          "content": "확인함",
+                                          "fill": "$--muted-foreground",
+                                          "fontFamily": "$--font-ui",
+                                          "fontSize": "$--text-caption",
+                                          "fontWeight": "400"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "ov-work-d-content-root-context",
+                                          "name": "상위 세션 문맥",
+                                          "content": "상위 세션 문맥",
                                           "fill": "$--muted-foreground",
                                           "fontFamily": "$--font-ui",
                                           "fontSize": "$--text-caption",
@@ -191026,13 +191471,10 @@
                                         }
                                       ],
                                       "layout": "vertical",
-                                      "gap": 12,
+                                      "gap": 8,
                                       "width": 188,
-                                      "padding": 12,
-                                      "cornerRadius": "$--radius-sm",
-                                      "fill": "$--card",
-                                      "stroke": "$--border",
-                                      "strokeWidth": 1
+                                      "alignItems": "center",
+                                      "opacity": 0.5
                                     },
                                     {
                                       "type": "text",
@@ -191055,14 +191497,61 @@
                                           "name": "컴포넌트 구조 정리",
                                           "children": [
                                             {
-                                              "type": "text",
-                                              "id": "ov-work-d-content-c1-mark",
-                                              "name": "◌",
-                                              "content": "◌",
-                                              "fill": "$--agent-working",
-                                              "fontFamily": "$--font-ui",
-                                              "fontSize": "$--text-headline",
-                                              "fontWeight": "400"
+                                              "type": "frame",
+                                              "id": "ov-work-d-content-c1-orb",
+                                              "name": "Circular provider node",
+                                              "children": [
+                                                {
+                                                  "type": "frame",
+                                                  "id": "ov-work-d-content-c1-provider",
+                                                  "name": "Codex logo",
+                                                  "children": [],
+                                                  "width": 23.400000000000002,
+                                                  "height": 23.400000000000002,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "enabled": true,
+                                                    "url": "../web/src/assets/agent-codex.png",
+                                                    "mode": "fit"
+                                                  }
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "ov-work-d-content-c1-status",
+                                                  "name": "Status mark",
+                                                  "children": [
+                                                    {
+                                                      "type": "ellipse",
+                                                      "id": "ov-work-d-content-c1-status-arc",
+                                                      "name": "In progress",
+                                                      "enabled": true,
+                                                      "width": 10,
+                                                      "height": 10,
+                                                      "fill": "$--agent-working",
+                                                      "innerRadius": 0.62,
+                                                      "startAngle": 90,
+                                                      "sweepAngle": -270
+                                                    }
+                                                  ],
+                                                  "width": 12,
+                                                  "height": 12,
+                                                  "layout": "horizontal",
+                                                  "justifyContent": "center",
+                                                  "alignItems": "center",
+                                                  "layoutPosition": "absolute",
+                                                  "x": 24,
+                                                  "y": 24
+                                                }
+                                              ],
+                                              "width": 36,
+                                              "height": 36,
+                                              "cornerRadius": 18,
+                                              "fill": "$--secondary",
+                                              "stroke": "$--border",
+                                              "strokeWidth": 1,
+                                              "layout": "horizontal",
+                                              "alignItems": "center",
+                                              "justifyContent": "center"
                                             },
                                             {
                                               "type": "text",
@@ -191072,7 +191561,17 @@
                                               "fill": "$--foreground",
                                               "fontFamily": "$--font-ui",
                                               "fontSize": "$--text-body",
-                                              "fontWeight": "600"
+                                              "fontWeight": "500"
+                                            },
+                                            {
+                                              "type": "text",
+                                              "id": "ov-work-d-content-c1-agent",
+                                              "name": "Codex · model-c",
+                                              "content": "Codex · model-c",
+                                              "fill": "$--muted-foreground",
+                                              "fontFamily": "$--font-ui",
+                                              "fontSize": "$--text-caption",
+                                              "fontWeight": "400"
                                             },
                                             {
                                               "type": "text",
@@ -191083,26 +191582,13 @@
                                               "fontFamily": "$--font-ui",
                                               "fontSize": "$--text-caption",
                                               "fontWeight": "400"
-                                            },
-                                            {
-                                              "type": "text",
-                                              "id": "ov-work-d-content-c1-agent",
-                                              "name": "Codex",
-                                              "content": "Codex",
-                                              "fill": "$--muted-foreground",
-                                              "fontFamily": "$--font-ui",
-                                              "fontSize": "$--text-caption",
-                                              "fontWeight": "400"
                                             }
                                           ],
                                           "layout": "vertical",
-                                          "gap": 12,
+                                          "gap": 8,
                                           "width": 152,
-                                          "padding": 12,
-                                          "cornerRadius": "$--radius-sm",
-                                          "fill": "$--card",
-                                          "stroke": "$--border",
-                                          "strokeWidth": 1
+                                          "alignItems": "center",
+                                          "opacity": 1
                                         },
                                         {
                                           "type": "frame",
@@ -191110,14 +191596,58 @@
                                           "name": "한글 가독성 확인",
                                           "children": [
                                             {
-                                              "type": "text",
-                                              "id": "ov-work-d-content-c2-mark",
-                                              "name": "◌",
-                                              "content": "◌",
-                                              "fill": "$--agent-working",
-                                              "fontFamily": "$--font-ui",
-                                              "fontSize": "$--text-headline",
-                                              "fontWeight": "400"
+                                              "type": "frame",
+                                              "id": "ov-work-d-content-c2-orb",
+                                              "name": "Circular provider node",
+                                              "children": [
+                                                {
+                                                  "type": "frame",
+                                                  "id": "ov-work-d-content-c2-provider",
+                                                  "name": "Codex logo",
+                                                  "children": [],
+                                                  "width": 23.400000000000002,
+                                                  "height": 23.400000000000002,
+                                                  "fill": {
+                                                    "type": "image",
+                                                    "enabled": true,
+                                                    "url": "../web/src/assets/agent-codex.png",
+                                                    "mode": "fit"
+                                                  }
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "ov-work-d-content-c2-status",
+                                                  "name": "Status mark",
+                                                  "children": [
+                                                    {
+                                                      "type": "ellipse",
+                                                      "id": "ov-work-d-content-c2-status-dot",
+                                                      "name": "Unread",
+                                                      "enabled": true,
+                                                      "width": 7,
+                                                      "height": 7,
+                                                      "fill": "$--success"
+                                                    }
+                                                  ],
+                                                  "width": 12,
+                                                  "height": 12,
+                                                  "layout": "horizontal",
+                                                  "justifyContent": "center",
+                                                  "alignItems": "center",
+                                                  "layoutPosition": "absolute",
+                                                  "x": 24,
+                                                  "y": 24
+                                                }
+                                              ],
+                                              "width": 36,
+                                              "height": 36,
+                                              "cornerRadius": 18,
+                                              "fill": "$--secondary",
+                                              "stroke": "$--border",
+                                              "strokeWidth": 1,
+                                              "layout": "horizontal",
+                                              "alignItems": "center",
+                                              "justifyContent": "center"
                                             },
                                             {
                                               "type": "text",
@@ -191127,7 +191657,17 @@
                                               "fill": "$--foreground",
                                               "fontFamily": "$--font-ui",
                                               "fontSize": "$--text-body",
-                                              "fontWeight": "600"
+                                              "fontWeight": "500"
+                                            },
+                                            {
+                                              "type": "text",
+                                              "id": "ov-work-d-content-c2-agent",
+                                              "name": "Codex · model-c",
+                                              "content": "Codex · model-c",
+                                              "fill": "$--muted-foreground",
+                                              "fontFamily": "$--font-ui",
+                                              "fontSize": "$--text-caption",
+                                              "fontWeight": "400"
                                             },
                                             {
                                               "type": "text",
@@ -191138,26 +191678,13 @@
                                               "fontFamily": "$--font-ui",
                                               "fontSize": "$--text-caption",
                                               "fontWeight": "400"
-                                            },
-                                            {
-                                              "type": "text",
-                                              "id": "ov-work-d-content-c2-agent",
-                                              "name": "Codex",
-                                              "content": "Codex",
-                                              "fill": "$--muted-foreground",
-                                              "fontFamily": "$--font-ui",
-                                              "fontSize": "$--text-caption",
-                                              "fontWeight": "400"
                                             }
                                           ],
                                           "layout": "vertical",
-                                          "gap": 12,
+                                          "gap": 8,
                                           "width": 152,
-                                          "padding": 12,
-                                          "cornerRadius": "$--radius-sm",
-                                          "fill": "$--card",
-                                          "stroke": "$--border",
-                                          "strokeWidth": 1
+                                          "alignItems": "center",
+                                          "opacity": 1
                                         }
                                       ],
                                       "layout": "vertical",
@@ -191169,30 +191696,20 @@
                                   "gap": 24,
                                   "alignItems": "center",
                                   "width": "fill_container"
-                                },
-                                {
-                                  "type": "text",
-                                  "id": "ov-work-d-content-metadata",
-                                  "name": "실제 편지 메타데이터 · 진행 2 · 요청 1",
-                                  "content": "실제 편지 메타데이터 · 진행 2 · 요청 1",
-                                  "fill": "$--muted-foreground",
-                                  "fontFamily": "$--font-ui",
-                                  "fontSize": "$--text-caption",
-                                  "fontWeight": "400"
                                 }
                               ],
                               "layout": "vertical",
                               "gap": 24,
                               "width": "fill_container",
                               "padding": 24,
-                              "cornerRadius": "$--radius-md",
+                              "cornerRadius": "$--radius-xl",
                               "stroke": "$--border",
                               "strokeWidth": 1
                             },
                             {
                               "type": "frame",
                               "id": "ov-work-d-content-collapsed",
-                              "name": "Collapsed projects",
+                              "name": "Collapsed active projects",
                               "children": [
                                 {
                                   "type": "frame",
@@ -191220,8 +191737,8 @@
                                     {
                                       "type": "text",
                                       "id": "ov-work-d-content-pc-0",
-                                      "name": "세션 1",
-                                      "content": "세션 1",
+                                      "name": "세션 2",
+                                      "content": "세션 2",
                                       "fill": "$--muted-foreground",
                                       "fontFamily": "$--font-ui",
                                       "fontSize": "$--text-caption",
@@ -191243,7 +191760,7 @@
                                   "alignItems": "center",
                                   "width": "fill_container",
                                   "padding": 16,
-                                  "cornerRadius": "$--radius-sm",
+                                  "cornerRadius": "$--radius-xl",
                                   "stroke": "$--border",
                                   "strokeWidth": 1
                                 },
@@ -191296,60 +191813,7 @@
                                   "alignItems": "center",
                                   "width": "fill_container",
                                   "padding": 16,
-                                  "cornerRadius": "$--radius-sm",
-                                  "stroke": "$--border",
-                                  "strokeWidth": 1
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "ov-work-d-content-project-2",
-                                  "name": "team-notes",
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "ov-work-d-content-pn-2",
-                                      "name": "team-notes",
-                                      "content": "team-notes",
-                                      "fill": "$--foreground",
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": "$--text-body",
-                                      "fontWeight": "600"
-                                    },
-                                    {
-                                      "type": "frame",
-                                      "id": "ov-work-d-content-ps-2",
-                                      "name": "Spacer",
-                                      "children": [],
-                                      "width": "fill_container",
-                                      "height": 1
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "ov-work-d-content-pc-2",
-                                      "name": "세션 0",
-                                      "content": "세션 0",
-                                      "fill": "$--muted-foreground",
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": "$--text-caption",
-                                      "fontWeight": "400"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "ov-work-d-content-pe-2",
-                                      "name": "›",
-                                      "content": "›",
-                                      "fill": "$--subtle-foreground",
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": "$--text-body",
-                                      "fontWeight": "400"
-                                    }
-                                  ],
-                                  "layout": "horizontal",
-                                  "gap": 8,
-                                  "alignItems": "center",
-                                  "width": "fill_container",
-                                  "padding": 16,
-                                  "cornerRadius": "$--radius-sm",
+                                  "cornerRadius": "$--radius-xl",
                                   "stroke": "$--border",
                                   "strokeWidth": 1
                                 }
@@ -191366,9 +191830,9 @@
                         },
                         {
                           "type": "text",
-                          "id": "ov-work-d-content-limits",
-                          "name": "최근 1일 · 편지 최대 2,000개 · 화면 최대",
-                          "content": "최근 1일 · 편지 최대 2,000개 · 화면 최대 400개 노드",
+                          "id": "ov-work-d-content-selection",
+                          "name": "선택한 세션 상세는 오른쪽에 · 좁은 화면은 기존 ",
+                          "content": "선택한 세션 상세는 오른쪽에 · 좁은 화면은 기존 패널 · Escape로 닫기",
                           "fill": "$--muted-foreground",
                           "fontFamily": "$--font-ui",
                           "fontSize": "$--text-caption",

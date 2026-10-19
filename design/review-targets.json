@@ -2135,5 +2135,67 @@
       "Compare structure and density with the fixed approved HTML; the Pen sheets document the product and do not replace that authority.",
       "Check long mixed Korean and English titles, narrow windows, larger text, focus return and source scope. Native behavior and actual topology require separate evidence."
     ]
+  },
+  "overview-focus": {
+    "description": "Mark-based Overview focus, circular provider nodes and explicit selection.",
+    "file": "design/hide-screens.pen",
+    "sheet": "screen-overview",
+    "scene": "overview",
+    "language": "ko",
+    "selector": "[data-overview-graph]",
+    "readySelector": "[data-graph-phase=ready]",
+    "measurement": "web/e2e/overview-focus-geometry.mjs",
+    "frames": [
+      {
+        "node": "ov-work-l",
+        "theme": "light",
+        "width": 1441,
+        "scale": 1,
+        "content": "reference",
+        "state": "focus"
+      },
+      {
+        "node": "ov-work-d",
+        "theme": "dark",
+        "width": 1441,
+        "scale": 1,
+        "content": "reference",
+        "state": "focus"
+      }
+    ],
+    "conditions": {
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "widths": [
+        1441,
+        640
+      ],
+      "contents": [
+        "reference",
+        "long",
+        "many",
+        "resting"
+      ],
+      "scales": [
+        1,
+        1.3
+      ]
+    },
+    "states": {
+      "focus": "Default focus with resting context, Seen demand, unknown and resting projects"
+    },
+    "urlStates": [
+      "focus"
+    ],
+    "rules": {
+      "noOverlap": true,
+      "noSidewaysOverflow": true
+    },
+    "judgment": [
+      "Do circular logos, root rings, dashed delegation and status marks retain the existing graph identity?",
+      "Are Korean filters and explicit selection legible at narrow widths and large text? Native input is separate evidence."
+    ]
   }
 }

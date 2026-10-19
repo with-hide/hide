@@ -881,13 +881,28 @@ The Overview reads the same tasks for the Projects tab's `지금` counts and the
 ### Work
 
 Web owners are `web/src/overviewGraphModel.ts`, `web/src/OverviewGraph.tsx`, `web/src/overviewGraphNodes.tsx` and `web/src/dependencyLayout.ts`.
-Work offers graph and list views over real live agents, grouped by project and explicit parentage, with state counts and local group folds.
+Work offers graph and list views over real live agents, grouped by project and explicit parentage, with local group folds.
+Both views share All, My turn, Working and Unread results, with counts from canonical marks: `turn`, `going|waiting` and `done|unread`.
+Include resting starts off and excludes only `quiet|asleep`; Seen demands and sleeping raised asks still marked `turn`, and `unknown`, remain available.
+The list orders My turn, Working, Unread results, unknown and resting, retaining fifty-row pagination.
+An excluded ancestor stays dim as relationship context without increasing match counts.
+Only branches whose every descendant rests offer a reversible subtree fold; a descendant becoming active releases that fold.
+Projects without matches move into a disclosure naming resting-only, no-session and filtered reasons, with a route to show each project and its resting sessions.
+One-project scope draws no outer group border or duplicate heading.
+A filtered-empty view offers Show all sessions, distinct from no current sessions and layout failure.
 Each agent shows its canonical task identity, agent, state and actual current progress; a model is shown only when the current launch proves it.
 Edges distinguish delegation from retained deliveries, whose graph metadata is direction, kind, time and count; no letter subject or body reaches this projection.
 An unresolved endpoint is never joined by a similar name or pane number.
 Group folds aggregate the facts of their members and never invent progress or an inferred relationship.
 The list is paged at fifty rows and stays usable when graph layout fails; the graph offers Retry beside that failure.
-Graph focus, pan, zoom, folding and hover stay local to the mounted view.
+The existing circular provider logos, StatusMark, root and child sizes, rings, delegation dashes, identity and progress stay intact.
+Initial zoom is readable without fitting every project; pan, zoom and explicit Fit graph expose the rest.
+Hover and keyboard focus emphasize relationships and never open details.
+Click, Enter or Space selects one session and opens its details beside the graph, using the existing overlay panel below the Overview breakpoint.
+Escape closes details first; changing filter or scope clears a selection that no longer matches.
+Letters start on as faint directional dashes, with count labels visible only for related hover, focus or selection; their labels remain keyboard reachable.
+Mail visibility, hover, focus and selection do not enter the layout key or change node coordinates.
+Graph filters, selection, pan, zoom and folding stay local to the mounted view; filters survive graph/list and scope changes while Work remains mounted.
 Reduced motion removes decorative movement, and closing the view ends its layout work and listeners.
 
 ### A record beside the tabs

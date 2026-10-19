@@ -40,7 +40,7 @@ it.each([
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   initializeInterfaceI18n("en");
   const pane = device === "local" ? "p1" : "remote:mini:pane:p1";
-  const agent = legacyAgentRow({ id: pane, pane_id: pane, device_id: device, identity_label: "Current work", agent_kind: "claude", session_id: "native-current" });
+  const agent = legacyAgentRow({ id: pane, pane_id: pane, device_id: device, identity_label: "Current work", agent_kind: "claude", session_id: "native-current", group: "working", activity: "working" });
   const checkout: Checkout = { id: "checkout", workspace_id: "project", label: "main", path: "/fixture/project", branch: "main", purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, tabs: [], active_tab_id: null, next_tab_label: "Tab 1", strip: [], agent_scope: emptyScope() };
   const workspace: Workspace = { id: "project", label: "Project", device_id: device, path: "/fixture/project", registered: true, temporary: false, pinned: false, checkouts: [checkout], inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: { ...emptyScope(), members: [{ pane_id: pane, project_id: "project", checkout_id: checkout.id }] } };
   const project: BoardProject = { workspace, agents: [agent], device: device === "local" ? null : "Mini" };

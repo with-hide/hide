@@ -7,7 +7,7 @@ type Dimensions = { rootWidth: number; rootHeight: number; childWidth: number; c
 export type GraphLayout = { key: string; phase: "loading" | "ready" | "failed"; placement: CompoundPlacement | null };
 
 /** Geometry comes from the same numeric authority as the rest of Overview. */
-function dimensions(element: HTMLElement): Dimensions {
+function dimensions(element: HTMLElement, scale: number): Dimensions {
   const style = getComputedStyle(element);
   const read = (name: string) => {
     const value = Number.parseFloat(style.getPropertyValue(`--size-overview-graph-${name}`));
@@ -16,25 +16,39 @@ function dimensions(element: HTMLElement): Dimensions {
   };
   const gap = read("gap");
   return {
-    rootWidth: read("root-width"), rootHeight: read("root-height"),
-    childWidth: read("child-width"), childHeight: read("child-height"),
+    rootWidth: read("root-width") * scale, rootHeight: read("root-height") * scale,
+    childWidth: read("child-width") * scale, childHeight: read("child-height") * scale,
     groupWidth: read("group-width"), groupHeight: read("group-height"),
     spacing: { betweenLayers: gap, betweenNodes: gap, padding: read("padding"), header: read("header"), groups: read("project-gap") },
   };
 }
 
-/** One topology owns one request. Status and correspondence refreshes only redraw existing places. */
+/** Appearance writes the interface scale on the root; release its observer with the graph. */
+function useGraphScale(): number {
+  const read = () => Math.max(1, Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--interface-scale")) || 1);
+  const [scale, setScale] = useState(read);
+  useEffect(() => {
+    const observer = new MutationObserver(() => setScale(read()));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["style"] });
+    setScale(read());
+    return () => observer.disconnect();
+  }, []);
+  return scale;
+}
+
+/** Topology and text geometry own requests. Status and correspondence only redraw existing places. */
 export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObject<HTMLDivElement | null>, retry: number) {
   const latest = useRef(model);
   latest.current = model;
   const [layout, setLayout] = useState<GraphLayout>({ key: "", phase: "loading", placement: null });
-  const key = model.structure;
+  const scale = useGraphScale();
+  const key = `${model.structure}:${scale}`;
   useEffect(() => {
     const controller = new AbortController();
     setLayout((previous) => ({ key, phase: "loading", placement: previous.placement }));
     async function run() {
       if (!host.current) throw new Error("overview graph has no layout host");
-      const size = dimensions(host.current);
+      const size = dimensions(host.current, scale);
       const input = latest.current;
       const groups: CompoundGroup[] = input.projects.map((group) => {
         const members = new Set(group.agents.map((row) => row.id));
@@ -47,7 +61,7 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
           edges: input.lineage.filter((edge) => members.has(edge.from) && members.has(edge.to)),
         };
       });
-      const placement = await placeCompoundWithin(groups, size.spacing, controller.signal);
+      const placement = await placeCompoundWithin(groups, { ...size.spacing, header: input.singleProject ? 0 : size.spacing.header }, controller.signal);
       if (!controller.signal.aborted) setLayout({ key, phase: "ready", placement });
     }
     void run().catch((error: unknown) => {
@@ -56,7 +70,7 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
       setLayout({ key, phase: "failed", placement: null });
     });
     return () => controller.abort();
-  }, [key, host, retry]);
+  }, [key, host, retry, scale]);
   return layout.key === key ? layout : { key, phase: "loading" as const, placement: layout.placement };
 }
 
