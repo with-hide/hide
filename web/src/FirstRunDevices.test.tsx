@@ -32,6 +32,21 @@ async function mount(profiles: HerdrProfiles, devices: string[] = []) {
 }
 const button = (name: string) => document.querySelector<HTMLButtonElement>(`[data-first-run-${name}]`)!;
 
+it("continues without connecting when the operator leaves every saved profile unchecked", async () => {
+  const view = await mount({ state: "ready", error: null, truncated: false, profiles: [profile("one")] });
+  try {
+    const checkbox = document.querySelector<HTMLButtonElement>("#herdr-profile-one")!;
+    await act(async () => checkbox.click());
+    await act(async () => checkbox.click());
+    expect(checkbox.getAttribute("data-state")).toBe("unchecked");
+    await act(async () => button("device-connect").click());
+    expect(view.next).toHaveBeenCalledOnce();
+    expect(view.events.some((event) => event.kind === "herdr_profile_connect")).toBe(false);
+  } finally {
+    await view.unmount();
+  }
+});
+
 it("requires a selection and explicit Connect, and never selects a disabled or already-added profile", async () => {
   const view = await mount({ state: "ready", error: null, truncated: false, profiles: [profile("one"), profile("off", { enabled: false, problem: "disabled" }), profile("old", { added_as: "Already here", device_id: "existing", connect_state: "added" })] });
   expect(view.events).toEqual([]);

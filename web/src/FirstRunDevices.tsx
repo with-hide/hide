@@ -114,7 +114,7 @@ export function FirstRunDevices({ actions, primary, onBack, onNext }: {
       <DialogFooter>
         <Button variant="ghost" onClick={onBack} data-first-run-back="true">{t("firstRun.back")}</Button>
         <Button variant="ghost" onClick={onNext} disabled={busy} data-first-run-device-skip="true">{t("firstRun.notifications.notNow")}</Button>
-        {!reading && !failed ? <Button disabled={busy} onClick={() => targets.length > 0 ? connect() : onNext} data-first-run-device-connect="true">{busy ? t("firstRun.devices.connecting") : targets.length > 0 ? t("firstRun.devices.connect", { count: targets.length }) : t("firstRun.agents.continue")}</Button> : null}
+        {!reading && !failed ? <Button disabled={busy} onClick={() => targets.length > 0 ? connect() : onNext()} data-first-run-device-connect="true">{busy ? t("firstRun.devices.connecting") : targets.length > 0 ? t("firstRun.devices.connect", { count: targets.length }) : t("firstRun.agents.continue")}</Button> : null}
       </DialogFooter>
     </>
   );
