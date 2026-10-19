@@ -588,7 +588,15 @@ fn the_snapshot_carries_the_choice_the_providers_and_their_models() {
             .iter()
             .map(|provider| provider.id.as_str())
             .collect::<Vec<_>>(),
-        vec!["claude", "codex", "grok", "opencode", "pi", "antigravity"],
+        vec![
+            "claude",
+            "codex",
+            "grok",
+            "opencode",
+            "pi",
+            "omp",
+            "antigravity"
+        ],
         "every registered provider is a row, in the registry order"
     );
     assert!(
