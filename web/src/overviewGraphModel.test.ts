@@ -143,12 +143,24 @@ describe("current sessions in the Overview graph", () => {
     expect(graph.agents).toHaveLength(400);
     const many = Array.from({ length: 401 }, (_, i) => project(`project${i}`, [agent(`pane${i}`)]));
     const bounded = overviewGraphModel(many, undefined, new Set(), null);
-    expect(bounded.projects).toHaveLength(400);
+    // Every admitted center retains one member/access position within 400 nodes.
+    expect(bounded.projects).toHaveLength(200);
     expect(bounded.agents).toHaveLength(401);
     expect(bounded.limited).toBe(true);
     const counts = overviewProjectGraphCounts(many, undefined);
     expect(counts.size).toBe(401);
     expect(counts.get(graphProjectId(many[400]!))).toEqual({ total: 1, roots: 1, children: 0 });
+  });
+
+  it("does not let one open project consume another summary's selection position", () => {
+    const a = project("a", Array.from({ length: 390 }, (_, i) => agent(`a${i}`)));
+    const b = project("b", Array.from({ length: 40 }, (_, i) => agent(`b${i}`)));
+    const all = overviewGraphModel([a, b], undefined, new Set([graphProjectId(a)]), null);
+    const selected = all.agents.find((row) => row.agent.pane_id === "b39")!.id;
+    const chosen = overviewGraphModel([a, b], undefined, new Set([graphProjectId(a)]), null, { focus: "all", includeResting: false, selected });
+    expect(chosen.visible.some((row) => row.id === selected)).toBe(true);
+    expect(chosen.structure).toBe(all.structure);
+    expect(chosen.projects.length + chosen.visible.length).toBeLessThanOrEqual(400);
   });
 
   it("protects the entry session before applying the 400-node graph budget", () => {

@@ -25,7 +25,7 @@ const PRIORITY: Record<GraphActivity, number> = { turn: 0, working: 1, results: 
 export type Communication = { kind: "letters" | "herdr_direct"; id: string; source: string; target: string; count: number; latest: number; kinds: Record<string, number>; directions: { from: string; to: string; count: number }[] };
 export type OverviewGraphModel = {
   projects: GraphProject[]; agents: GraphAgent[]; allAgents: GraphAgent[]; visible: GraphAgent[];
-  context: ReadonlySet<string>; quietBranches: ReadonlyMap<string, number>; folded: ReadonlySet<string>;
+  context: ReadonlySet<string>; roots: ReadonlySet<string>; quietBranches: ReadonlyMap<string, number>; folded: ReadonlySet<string>;
   omitted: { id: string; project: BoardProject; count: number; reason: "empty" | "resting" | "filtered" }[];
   counts: Record<GraphFocus, number>;
   lineage: { from: string; to: string; count: number }[]; communication: Communication[];
@@ -179,23 +179,35 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
   // Centers share the 400-node budget with their representatives. Counts/list stay uncapped.
   const pinned = new Set(options.pinned ?? []);
   const priority = [...all].sort((a, b) => Number(b.agents.some((row) => pinned.has(row.id))) - Number(a.agents.some((row) => pinned.has(row.id))) || a.id.localeCompare(b.id));
-  const groups: GraphProject[] = priority.slice(0, LAYOUT_NODE_LIMIT - Number(priority.some((group) => group.agents.some((row) => pinned.has(row.id))))).map((group) => ({ ...group, shown: [], revealSlot: null, revealed: null }));
-  let room = LAYOUT_NODE_LIMIT - groups.length;
+  // Admit complete center + access-slot pairs first. A greedy expanded project
+  // must not consume the one position another summarized project needs.
+  const groups: GraphProject[] = [];
+  let minimum = 0;
+  for (const group of priority) {
+    if (minimum + 2 > LAYOUT_NODE_LIMIT) break;
+    groups.push({ ...group, shown: [], revealSlot: null, revealed: null });
+    minimum += 2;
+  }
+  let room = LAYOUT_NODE_LIMIT - minimum;
   let hidden = all.length - groups.length;
   for (const group of groups) {
     const projectedParents = lineageParents(group.agents);
     group.roots = group.agents.filter((row) => !projectedParents.has(row.id)).length;
-    if (group.expanded && group.agents.length > room) group.expanded = false;
     const protectedRows = group.agents.filter((row) => pinned.has(row.id));
-    const candidates = group.expanded ? group.agents : [...protectedRows, ...group.agents.filter((row) => !pinned.has(row.id))].slice(0, 6);
-    // One reserved position lets a list selection appear without repacking the map.
-    const reserve = group.agents.length > candidates.length && room > 1 ? 1 : 0;
-    group.shown = candidates.slice(0, room - reserve);
-    group.revealSlot = reserve ? `${group.id}:reveal` : null;
-    group.revealed = reserve ? group.agents.find((row) => row.id === options.selected && !group.shown.some((shown) => shown.id === row.id)) ?? null : null;
-    room -= group.shown.length + reserve;
-    if (group.expanded && group.shown.length < group.agents.length) group.expanded = false;
-    // A representative summary is normal, a refused explicit expansion is a limit.
+    const ordered = [...protectedRows, ...group.agents.filter((row) => !pinned.has(row.id))];
+    // One admission position is already reserved above. An open project needs
+    // no reveal slot, while every summary can reveal any of its list rows.
+    if (group.expanded && group.agents.length > room + 1) group.expanded = false;
+    if (group.expanded || group.agents.length === 1) {
+      group.shown = ordered.slice(0, room + 1);
+      room -= group.shown.length - 1;
+    } else {
+      group.shown = ordered.slice(0, Math.min(6, room));
+      room -= group.shown.length;
+      group.revealSlot = `${group.id}:reveal`;
+      group.revealed = group.agents.find((row) => row.id === options.selected && !group.shown.some((shown) => shown.id === row.id))
+        ?? protectedRows.find((row) => !group.shown.some((shown) => shown.id === row.id)) ?? null;
+    }
     if (expanded.has(group.id) && !group.expanded) hidden += group.agents.length - group.shown.length;
   }
   groups.sort((a, b) => a.id.localeCompare(b.id));
@@ -240,13 +252,13 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
     else bundle.directions.push({ from, to, count: 1 });
   }
   // Labels, status, model, letters, clocks and selection deliberately do not participate.
-  const structure = JSON.stringify([groups.map((group) => [group.id, group.expanded, group.shown.map((row) => row.id), group.revealSlot])]);
+  const structure = JSON.stringify([groups.map((group) => [group.id, group.expanded, group.shown.map((row) => [row.id, parents.has(row.id)]), group.revealSlot])]);
   const communication = [...bundles.values()];
   for (const bundle of communication) if (bundle.directions.length === 1) {
     bundle.source = bundle.directions[0]!.from;
     bundle.target = bundle.directions[0]!.to;
   }
-  return { projects: groups, agents, allAgents, visible, context, quietBranches, folded, omitted, counts, lineage, communication, limited: hidden > 0, hidden, singleProject: projectId !== null, structure };
+  return { projects: groups, agents, allAgents, visible, context, roots: new Set(allAgents.filter((row) => !parents.has(row.id)).map((row) => row.id)), quietBranches, folded, omitted, counts, lineage, communication, limited: hidden > 0, hidden, singleProject: projectId !== null, structure };
 }
 
 /** The most recently visited checkout's project opens first, then the core's activity order. */

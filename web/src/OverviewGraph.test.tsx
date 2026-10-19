@@ -36,7 +36,8 @@ it.each([
   { front: "local", device: "mini", modal: false }, { front: "local", device: "mini", modal: true },
   { front: "mini", device: "local", modal: false }, { front: "mini", device: "local", modal: true },
   { front: "mini", device: "mini", modal: false }, { front: "mini", device: "mini", modal: true },
-])("opens a $device session from Overview with $front in front (modal=$modal)", async ({ front, device, modal }) => {
+  { front: "local", device: "local", modal: false, overflow: true },
+])("opens a $device session from Overview with $front in front (modal=$modal, overflow=$overflow)", async ({ front, device, modal, overflow = false }: { front: string; device: string; modal: boolean; overflow?: boolean }) => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   initializeInterfaceI18n("en");
   const pane = device === "local" ? "p1" : "remote:mini:pane:p1";
@@ -44,8 +45,14 @@ it.each([
   const checkout: Checkout = { id: "checkout", workspace_id: "project", label: "main", path: "/fixture/project", branch: "main", purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, tabs: [], active_tab_id: null, next_tab_label: "Tab 1", strip: [], agent_scope: emptyScope() };
   const workspace: Workspace = { id: "project", label: "Project", device_id: device, path: "/fixture/project", registered: true, temporary: false, pinned: false, checkouts: [checkout], inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: { ...emptyScope(), members: [{ pane_id: pane, project_id: "project", checkout_id: checkout.id }] } };
   const project: BoardProject = { workspace, agents: [agent], device: device === "local" ? null : "Mini" };
-  const rest = { navigator: { devices: [{ id: "local", kind: "local" }, { id: "mini", kind: "remote" }], workspaces: [workspace], focused_device_id: front }, status: { remote: [{ target_id: "mini", state: "connected" }] } } as unknown as SnapshotRest;
-  useShellStore.setState({ rest, agents: [agent], connection: "live", linkSummaries: null });
+  const projects = overflow ? Array.from({ length: 401 }, (_, index): BoardProject => {
+    const id = `project-${String(index).padStart(3, "0")}`;
+    const paneId = `pane-${index}`;
+    const row = { ...agent, id: paneId, pane_id: paneId, identity_label: `Session ${index}`, session_id: `native-${index}` };
+    return { ...project, agents: [row], workspace: { ...workspace, id, label: id, checkouts: [{ ...checkout, workspace_id: id }], agent_scope: { ...emptyScope(), members: [{ pane_id: paneId, project_id: id, checkout_id: checkout.id }] } } };
+  }) : [project];
+  const rest = { navigator: { devices: [{ id: "local", kind: "local" }, { id: "mini", kind: "remote" }], workspaces: [workspace], focused_device_id: front }, status: { remote: [{ target_id: "mini", state: "connected" }] }, overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: [{ device_id: device, pane_id: pane, session_digest: "confirmed-current", launch_model: null }] } } as unknown as SnapshotRest;
+  useShellStore.setState({ rest, agents: projects.flatMap((project) => project.agents), focusedPaneId: overflow ? null : pane, connection: "live", linkSummaries: null });
   useUiStore.getState().setOverview({ projectId: null, panel: null });
   useUiStore.setState({ overviewOpen: modal, opening: null, screen: modal ? { kind: "workspace" } : { kind: "main", deviceId: front } });
   const events: Parameters<DispatchFn>[0][] = [];
@@ -54,7 +61,23 @@ it.each([
   document.body.append(container);
   const root = createRoot(container);
   try {
-    await act(async () => root.render(<TooltipProvider><OverviewGraph projects={[project]} deviceId={device} actions={actions} /></TooltipProvider>));
+    await act(async () => root.render(<TooltipProvider><OverviewGraph projects={projects} deviceId={device} actions={actions} /></TooltipProvider>));
+    // B4/D09: a matching confirmed entry highlights without opening a panel.
+    expect(container.querySelector("[data-graph-preview]")).toBeNull();
+    expect(container.querySelector("[data-graph-session-list] > button")?.getAttribute("aria-pressed")).toBe(String(!overflow && front === device));
+    if (overflow) {
+      const search = container.querySelector<HTMLInputElement>("[data-graph-session-list] input")!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search, "Session 400");
+        search.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => container.querySelector<HTMLButtonElement>("[data-graph-session-list] > button")!.click());
+      expect(useUiStore.getState().overview.projectId).toBe("project-400");
+      expect(container.querySelector("[data-graph-preview]")?.textContent).toContain("Session 400");
+      expect(container.querySelector("[data-graph-session-list] > button")?.getAttribute("aria-pressed")).toBe("true");
+      expect(events).toHaveLength(0);
+      return;
+    }
     await act(async () => container.querySelector<HTMLButtonElement>("[data-graph-session-list] button")!.click());
     const open = [...container.querySelectorAll<HTMLButtonElement>("[data-graph-preview] button")].find((button) => button.textContent === "Open session")!;
     expect(open).toBeDefined();

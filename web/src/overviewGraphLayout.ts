@@ -55,7 +55,7 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
         return {
           id: group.id, width: size.groupWidth, height: size.groupHeight,
           children: [...group.shown.map((row) => {
-            const root = !input.lineage.some((edge) => edge.to === row.id);
+            const root = input.roots.has(row.id);
             return { id: row.id, width: root ? size.rootWidth : size.childWidth, height: root ? size.rootHeight : size.childHeight };
           }), ...(group.revealSlot ? [{ id: group.revealSlot, width: size.rootWidth, height: size.rootHeight }] : [])],
           edges: input.lineage.filter((edge) => members.has(edge.from) && members.has(edge.to)),

@@ -38,10 +38,17 @@ export function OverviewGraph(props: Props) {
   const projectId = useUiStore((state) => state.overview.projectId);
   const [focus, setFocus] = useState<GraphFocus>("all");
   const [includeResting, setIncludeResting] = useState(false);
-  return <ReactFlowProvider key={`${props.deviceId}:${projectId ?? "all"}`}><WorkGraph {...props} projectId={projectId} focus={focus} setFocus={setFocus} includeResting={includeResting} setIncludeResting={setIncludeResting} /></ReactFlowProvider>;
+  const [scopedSelection, setScopedSelection] = useState<{ deviceId: string; projectId: string; sessionId: string } | null>(null);
+  const revealProjectSession = (row: GraphAgent) => {
+    setScopedSelection({ deviceId: props.deviceId, projectId: row.project.id, sessionId: row.id });
+    useUiStore.getState().setOverview({ projectId: row.project.id });
+  };
+  const initialSelection = scopedSelection?.deviceId === props.deviceId && scopedSelection.projectId === projectId ? scopedSelection.sessionId : null;
+  useEffect(() => { if (initialSelection) setScopedSelection(null); }, [initialSelection]);
+  return <ReactFlowProvider key={`${props.deviceId}:${projectId ?? "all"}`}><WorkGraph {...props} projectId={projectId} focus={focus} setFocus={setFocus} includeResting={includeResting} setIncludeResting={setIncludeResting} initialSelection={initialSelection} revealProjectSession={revealProjectSession} /></ReactFlowProvider>;
 }
 
-function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus, setFocus, includeResting, setIncludeResting }: Props & { projectId: string | null; focus: GraphFocus; setFocus: (focus: GraphFocus) => void; includeResting: boolean; setIncludeResting: (value: boolean) => void }) {
+function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus, setFocus, includeResting, setIncludeResting, initialSelection, revealProjectSession }: Props & { projectId: string | null; focus: GraphFocus; setFocus: (focus: GraphFocus) => void; includeResting: boolean; setIncludeResting: (value: boolean) => void; initialSelection: string | null; revealProjectSession: (row: GraphAgent) => void }) {
   const { t } = useInterfaceTranslation();
   const rest = useShellStore((state) => state.rest);
   const summaries = useShellStore((state) => state.linkSummaries);
@@ -62,14 +69,14 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     const proof = store.rest.overview_graph?.sessions.find((row) => row.pane_id === pane && row.device_id === deviceId);
     return row?.session_id && proof ? { id: graphSessionId(deviceId, pane, proof.session_digest), native: row.session_id } : null;
   });
-  const [highlightedSession, setHighlightedSession] = useState<string | null>(entry?.id ?? null);
+  const [highlightedSession, setHighlightedSession] = useState<string | null>(initialSelection ?? entry?.id ?? null);
   const [projectQuery, setProjectQuery] = useState("");
   const [offsets, setOffsets] = useState<Map<string, { x: number; y: number }>>(() => new Map());
   const [motion, setMotion] = useState(true);
   const [playback, setPlayback] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [mode, setMode] = useState<"graph" | "list">("graph");
-  const [selection, setSelection] = useState<Selection>(null);
+  const [selection, setSelection] = useState<Selection>(initialSelection ? { kind: "session", id: initialSelection } : null);
   const [hovered, setHovered] = useState<string | null>(null);
   const [focused, setFocused] = useState<string | null>(null);
   const [mail, setMail] = useState(true);
@@ -97,9 +104,13 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     void flow.setCenter(box.x + box.width / 2 + (offset?.x ?? 0), box.y + box.height / 2 + (offset?.y ?? 0), { zoom: 0.8, duration: 0 });
   }, [flow, layout.placement, offsets]);
   const restoreCamera = useCallback(() => {
-    const group = current?.projectId ?? model.projects[0]?.id;
-    if (group) centerProject(group);
-  }, [current?.projectId, model.projects, centerProject]);
+    const group = current ? layout.placement?.groups.get(current.projectId) : undefined;
+    const point = current ? layout.placement?.nodes.get(current.id) : undefined;
+    if (current && group && point && layout.size) {
+      void flow.setCenter(group.x + point.x + (offsets.get(current.projectId)?.x ?? 0) + (offsets.get(current.id)?.x ?? 0) + layout.size.rootWidth / 2,
+        group.y + point.y + (offsets.get(current.projectId)?.y ?? 0) + (offsets.get(current.id)?.y ?? 0) + layout.size.rootHeight / 2, { zoom: 0.8, duration: 0 });
+    } else if (model.projects[0]) centerProject(model.projects[0].id);
+  }, [current, model.projects, centerProject, layout.placement, layout.size, offsets, flow]);
   useEffect(() => {
     if (cameraInitialized.current || !nodesInitialized || layout.phase !== "ready") return;
     cameraInitialized.current = true;
@@ -126,7 +137,13 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   }, []);
   const highlight = useCallback((id: string | null, keyboard: boolean) => { if (keyboard) setFocused(id); else setHovered(id); }, []);
   const fold = useCallback((id: string) => setFolded((previous) => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; }), []);
-  const chooseSession = useCallback((id: string, target?: HTMLElement) => { rememberOpener(target); setHighlightedSession(id); setSelection({ kind: "session", id }); setPlayback((value) => value + 1); }, [rememberOpener]);
+  const chooseSession = useCallback((id: string, target?: HTMLElement) => {
+    const row = model.agents.find((row) => row.id === id);
+    // An omitted project's uncapped list row has a deterministic route back to a graph.
+    // Scope navigation is explicit user selection and does not move the existing map.
+    if (row && !model.projects.some((group) => group.id === row.projectId)) { revealProjectSession(row); return; }
+    rememberOpener(target); setHighlightedSession(id); setSelection({ kind: "session", id }); setPlayback((value) => value + 1);
+  }, [rememberOpener, model.agents, model.projects, revealProjectSession]);
   const highlightLetter = useCallback((id: string | null, keyboard: boolean) => { if (keyboard) setEdgeFocus(id); else setEdgeHover(id); }, []);
   const chooseLetters = useCallback((id: string, target?: HTMLElement) => { rememberOpener(target); setSelection({ kind: id.startsWith("lineage:") ? "lineage" : "letters", id }); setPlayback((value) => value + 1); }, [rememberOpener]);
   const lineageBundle = selection?.kind === "lineage" ? model.lineage.find((edge) => `lineage:${edge.from}:${edge.to}` === selection.id) : undefined;
@@ -143,9 +160,11 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   useEffect(() => {
     if (highlightedSession && (!model.agents.some((row) => row.id === highlightedSession) || highlightedSession === entry?.id && !current)) setHighlightedSession(null);
   }, [highlightedSession, model.agents, entry?.id, current]);
-  const activeSession = selection?.kind === "session" ? selection.id : highlightedSession;
+  const activeSession = selection?.kind === "session" ? selection.id : selection ? null : highlightedSession;
   const emphasized = (id: string) => id === hovered || id === focused || id === activeSession;
   const related = new Set([hovered, focused, activeSession]);
+  if (bundle) { related.add(bundle.source); related.add(bundle.target); }
+  if (lineageBundle) { related.add(lineageBundle.from); related.add(lineageBundle.to); }
   for (const edge of [...model.lineage.map((edge) => ({ from: edge.from, to: edge.to })), ...model.communication.map((edge) => ({ from: edge.source, to: edge.target }))]) if (emphasized(edge.from) || emphasized(edge.to)) { related.add(edge.from); related.add(edge.to); }
   const openRecord = onOpenRecord ?? actions.openSessionRecord;
   const progressFor = (row: GraphAgent) => { const session = sessionOfAgentOn(row.agent, row.deviceId); return session ? progress.get(workKey(session)) ?? null : null; };
@@ -157,14 +176,14 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     for (const group of model.projects) {
       const box = placed.groups.get(group.id);
       if (!box) continue;
-      const project: ProjectNode = { id: group.id, type: "project", position: { x: box.x + (offsets.get(group.id)?.x ?? 0), y: box.y + (offsets.get(group.id)?.y ?? 0) }, width: box.width, height: box.height, measured: { width: box.width, height: box.height }, style: { width: box.width, height: box.height }, data: { group, toggle, current: current?.projectId === group.id, highlighted: related.has(group.id), highlight }, dragHandle: ".og-project-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 0 };
+      const project: ProjectNode = { id: group.id, type: "project", position: { x: box.x + (offsets.get(group.id)?.x ?? 0), y: box.y + (offsets.get(group.id)?.y ?? 0) }, width: box.width, height: box.height, measured: { width: box.width, height: box.height }, style: { width: box.width, height: box.height }, data: { group, toggle, current: current?.projectId === group.id, highlighted: related.has(group.id), highlight }, dragHandle: ".og-project-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 1 };
       nodes.push(project);
     }
     for (const row of model.visible) {
       const revealSlot = model.projects.find((group) => group.id === row.projectId)?.revealSlot;
       const point = placed.nodes.get(row.id) ?? (revealSlot ? placed.nodes.get(revealSlot) : undefined);
       if (!point) continue;
-      const root = !model.lineage.some((edge) => edge.to === row.id);
+      const root = model.roots.has(row.id);
       // The layout owns these fixed dimensions. Retaining them also preserves React Flow's
       // measured handle bounds when hover/focus replaces a controlled node object.
       const measured = { width: root ? size.rootWidth : size.childWidth, height: root ? size.rootHeight : size.childHeight };
@@ -173,10 +192,11 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     }
   }
   const names = new Map([...model.projects.map((group): [string, string] => [group.id, group.project.workspace.label]), ...model.allAgents.map((row): [string, string] => [row.id, row.agent.identity_label])]);
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
   const positionOf = (id: string) => {
-    const node = nodes.find((node) => node.id === id);
+    const node = nodesById.get(id);
     if (!node) return { x: 0, y: 0 };
-    const parent = node.parentId ? nodes.find((row) => row.id === node.parentId) : null;
+    const parent = node.parentId ? nodesById.get(node.parentId) : null;
     return { x: node.position.x + (parent?.position.x ?? 0) + (node.width ?? 0) / 2, y: node.position.y + (parent?.position.y ?? 0) };
   };
   const activeEdge = selection?.kind !== "session" ? selection?.id : null;
@@ -193,7 +213,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     const label = `${t("overviewGraph.lineage")}: ${names.get(edge.from)} → ${names.get(edge.to)}`;
     return { id, source: edge.from, target: edge.to, ...handles(edge.from, edge.to), type: "letters", className: `og-lineage${edgeClass(active)}`, ariaLabel: label,
       data: { lineage: edge, label, playback, emphasized: active, paired: false, laneOffset: 0, highlight: highlightLetter, choose: chooseLetters },
-      markerEnd: { ...arrow, color: "var(--primary)" }, selected: activeEdge === id, focusable: false, selectable: false, zIndex: 1 };
+      markerEnd: { ...arrow, color: "var(--primary)" }, selected: activeEdge === id, focusable: false, selectable: false, zIndex: 0 };
   });
   const pairKey = (edge: Communication) => JSON.stringify([edge.source, edge.target].sort());
   const directPairs = new Set(model.communication.filter((edge) => edge.kind === "herdr_direct").map(pairKey));
@@ -203,7 +223,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     const label = `${names.get(edge.source)} ${edge.directions.length > 1 ? "↔" : "→"} ${names.get(edge.target)}: ${t(edge.kind === "herdr_direct" ? "overviewGraph.directInputs" : "overviewGraph.letters", { count: edge.count })}`;
     const paired = directPairs.has(pairKey(edge)) && letterPairs.has(pairKey(edge));
     const laneOffset = (size?.spacing.betweenNodes ?? 0) * (edge.kind === "herdr_direct" ? -1 : 1);
-    return { id: edge.id, source: edge.source, target: edge.target, ...handles(edge.source, edge.target), type: "letters", className: `og-communication${edge.kind === "herdr_direct" ? " og-direct-input" : ""}${edgeClass(active)}`, ariaLabel: label, data: { bundle: edge, label, playback, emphasized: active, paired, laneOffset, highlight: highlightLetter, choose: chooseLetters }, markerEnd: edge.kind === "herdr_direct" ? { ...arrow, color: "var(--primary)" } : arrow, markerStart: edge.directions.length > 1 ? (edge.kind === "herdr_direct" ? { ...arrow, color: "var(--primary)" } : arrow) : undefined, selected: selection?.kind === "letters" && selection.id === edge.id, focusable: false, selectable: false, zIndex: 3 };
+    return { id: edge.id, source: edge.source, target: edge.target, ...handles(edge.source, edge.target), type: "letters", className: `og-communication${edge.kind === "herdr_direct" ? " og-direct-input" : ""}${edgeClass(active)}`, ariaLabel: label, data: { bundle: edge, label, playback, emphasized: active, paired, laneOffset, highlight: highlightLetter, choose: chooseLetters }, markerEnd: edge.kind === "herdr_direct" ? { ...arrow, color: "var(--primary)" } : arrow, markerStart: edge.directions.length > 1 ? (edge.kind === "herdr_direct" ? { ...arrow, color: "var(--primary)" } : arrow) : undefined, selected: selection?.kind === "letters" && selection.id === edge.id, focusable: false, selectable: false, zIndex: 0 };
   }));
   const moveNodes = (changes: NodeChange[]) => {
     const moves = changes.filter((change) => change.type === "position" && change.position);
@@ -242,7 +262,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     {model.agents.length > 0 && layout.phase === "failed" && mode === "graph" ? <div className="og-notice" role="status"><span>{t("overviewGraph.failed")}</span><Button variant="outline" size="sm" onClick={() => setRetry((value) => value + 1)}>{t("overviewGraph.retry")}</Button></div> : null}
     {model.agents.length === 0 ? <div className="og-empty"><p>{t(model.allAgents.length > 0 ? "overviewGraph.filteredEmpty" : "overviewGraph.empty")}</p>{model.allAgents.length > 0 ? <Button variant="outline" size="sm" onClick={() => { setFocus("all"); setIncludeResting(true); }}>{t("overviewGraph.resetFilters")}</Button> : null}<Button variant="outline" size="sm" onClick={() => actions.openStartPanel(projectId ?? undefined)}>{t("overviewGraph.newAgent")}</Button></div> : null}
     {model.agents.length > 0 ? <div className="og-stage">
-      <div className="og-canvas">{!showList ? <ReactFlow colorMode={theme} nodes={nodes} edges={visibleEdges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES} nodesDraggable onNodesChange={moveNodes} nodesConnectable={false} nodesFocusable={false} edgesFocusable={false} elementsSelectable={false} deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null} panOnDrag panOnScroll zoomOnScroll defaultViewport={{ x: 24, y: 24, zoom: 1 }} minZoom={0.12} maxZoom={2} onPaneClick={() => { close(); setHighlightedSession(null); }} onEdgeMouseEnter={(_, edge) => setEdgeHover(edge.id)} onEdgeMouseLeave={() => setEdgeHover(null)} onEdgeClick={(_, edge) => { chooseLetters(edge.id); }} ariaLabelConfig={{ "node.a11yDescription.default": t("overviewGraph.nodeHelp"), "node.a11yDescription.keyboardDisabled": t("overviewGraph.nodeHelp"), "edge.a11yDescription.default": t("overviewGraph.edgeHelp") }}>
+      <div className="og-canvas">{!showList ? <ReactFlow zIndexMode="manual" colorMode={theme} nodes={nodes} edges={visibleEdges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES} nodesDraggable onNodesChange={moveNodes} nodesConnectable={false} nodesFocusable={false} edgesFocusable={false} elementsSelectable={false} deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null} panOnDrag panOnScroll zoomOnScroll defaultViewport={{ x: 24, y: 24, zoom: 1 }} minZoom={0.12} maxZoom={2} onPaneClick={() => { close(); setHighlightedSession(null); }} onEdgeMouseEnter={(_, edge) => setEdgeHover(edge.id)} onEdgeMouseLeave={() => setEdgeHover(null)} onEdgeClick={(_, edge) => { chooseLetters(edge.id); }} ariaLabelConfig={{ "node.a11yDescription.default": t("overviewGraph.nodeHelp"), "node.a11yDescription.keyboardDisabled": t("overviewGraph.nodeHelp"), "edge.a11yDescription.default": t("overviewGraph.edgeHelp") }}>
         <div className="og-zoom nopan nodrag"><Hint label={t("overviewGraph.zoomOut")}><Button variant="ghost" size="icon-sm" onClick={() => void zoomOut({ duration: 0 })}><MinusIcon /></Button></Hint><Hint label={t("overviewGraph.zoomIn")}><Button variant="ghost" size="icon-sm" onClick={() => void zoomIn({ duration: 0 })}><PlusIcon /></Button></Hint><Hint label={t("overviewGraph.fit")}><Button variant="ghost" size="icon-sm" onClick={() => void fitView({ padding: 0.08, duration: 0, maxZoom: 1 })}><MaximizeIcon /></Button></Hint><Hint label={t("overviewGraph.currentPane")}><Button variant="ghost" size="icon-sm" disabled={!current} onClick={() => { if (current) { setHighlightedSession(current.id); const node = nodes.find((node) => node.id === current.id); if (node) { const point = positionOf(node.id); void flow.setCenter(point.x, point.y + (node.height ?? 0) / 2, { zoom: 1, duration: 0 }); } else centerProject(current.projectId); } }}><LocateFixedIcon /></Button></Hint><Hint label={t("overviewGraph.resetLayout")}><Button variant="ghost" size="icon-sm" onClick={() => { setOffsets(new Map()); cameraInitialized.current = false; }}><RotateCcwIcon /></Button></Hint></div>
       </ReactFlow> : <SessionList key={`${focus}:${includeResting}`} rows={model.agents} selected={activeSession} choose={chooseSession} />}</div>
       <aside className="og-navigator" aria-label={t("overviewGraph.projects")}>

@@ -912,6 +912,7 @@ Projects without matches move into a disclosure naming sleeping-only, no-session
 Projects form a radial map: each center shows the actual project name, matching-session count and state totals, with sessions around it rather than inside a large enclosing box.
 One-project scope retains its center and offers All projects to return.
 A collapsed project keeps up to six stable-ID representatives and a remaining-session count; an oversized expansion stays summarized within the shared 400-node budget.
+Each admitted center reserves an access position for a hidden selected member, and selecting a session whose project is outside that budget opens its project scope with that session selected.
 Project search compares real names and counts and moves the camera to that center; the paged session list searches every matching session, including those outside the graph budget.
 A hidden selected session uses a reserved radial position without moving other nodes.
 When the confirmed focused device, pane and native session have a graph proof at entry, that exact session is highlighted without opening details; pane reuse cannot inherit the initial selection.

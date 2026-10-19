@@ -100,6 +100,7 @@ export function CommunicationGraphEdge(props: EdgeProps<LetterEdge>) {
   return <>
     <path className="og-edge-underlay" d={path} fill="none" />
     <BaseEdge key={props.data.playback} id={props.id} path={path} interactionWidth={20} style={props.style} markerEnd={props.markerEnd} markerStart={props.markerStart} />
+    <path key={`flow:${props.data.playback}`} className="og-flow-tracer" d={path} fill="none" />
     <EdgeLabelRenderer><button type="button" className="og-letter-label nodrag nopan" data-kind={bundle?.kind ?? "lineage"} data-paired={props.data?.paired} data-emphasized={props.data?.emphasized} onPointerEnter={() => props.data?.highlight(props.id, false)} onPointerLeave={() => props.data?.highlight(null, false)} onFocus={() => props.data?.highlight(props.id, true)} onBlur={() => props.data?.highlight(null, true)} style={{ transform: `translate(-50%, -50%) translate(${x}px, ${y}px)` }} aria-pressed={props.selected} aria-label={props.data?.label} onClick={(event) => props.data?.choose(props.id, event.currentTarget)}>{bundle && bundle.directions.length > 1 ? "↔" : "→"} {bundle ? t(bundle.kind === "herdr_direct" ? "overviewGraph.directInputs" : "overviewGraph.letters", { count: bundle.count }) : t("overviewGraph.delegations", { count: props.data.lineage?.count ?? 1 })}</button></EdgeLabelRenderer>
   </>;
 }
