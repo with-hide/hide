@@ -15,13 +15,13 @@ export type ArchiveOffer = { kind: "hidden" } | { kind: "offered"; unavailable: 
 const HIDDEN: ArchiveOffer = { kind: "hidden" };
 
 /**
- * A plain shell has no row; a Hide AI agent and a Factory worker belong to
- * their homes (B2). A delegated child goes with its root (B4), a device that
+ * A plain shell has no row; a Hide AI agent belongs to
+ * its home (B2). A delegated child goes with its root (B4), a device that
  * is gone cannot close it (B13), and a conversation Hide has not seen cannot
  * be resumed (B3).
  */
 export function archiveOffer(rest: SnapshotRest | null, agent: AgentRow | undefined, t: TFunction<"translation"> = translate): ArchiveOffer {
-  if (!agent || agent.hide_ai || rest?.navigator?.factory_worker_panes?.includes(agent.pane_id)) return HIDDEN;
+  if (!agent || agent.hide_ai) return HIDDEN;
   if (agent.delegated || agent.lineage_parent_pane_id) return { kind: "offered", unavailable: t("archive.unavailable.delegated") };
   const device = agent.device_id ?? localDeviceId(rest);
   if (device !== localDeviceId(rest) && !deviceConnected(rest, device)) {

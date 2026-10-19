@@ -19,7 +19,6 @@ pub mod device;
 pub mod disk;
 pub mod document;
 pub mod error;
-pub mod factory;
 pub mod feedback;
 pub mod gh;
 pub mod git;

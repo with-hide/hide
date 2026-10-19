@@ -211,14 +211,14 @@ static int run_as_codex(const char *argv0) {
 
 #include "live-check.h"
 
-// A Factory question fixture needs the existing owned-command runner's native
+// An agent pane fixture needs the existing owned-command runner's native
 // session report and sentinel command. Provider/auth/model requests above keep
 // using this shim; only an explicitly configured interactive pane hands off.
-static int factory_question_runner(void) {
+static int agent_pane_runner(void) {
   const char *root = getenv("HIDE_E2E_ROOT");
   if (!root) return 0;
   char filename[4096], runner[4096];
-  if (snprintf(filename, sizeof filename, "%s/factory-question-runner.config", root) >= (int)sizeof filename) return 1;
+  if (snprintf(filename, sizeof filename, "%s/agent-pane-runner.config", root) >= (int)sizeof filename) return 1;
   FILE *file = fopen(filename, "rb");
   if (!file) return errno == ENOENT ? 0 : 1;
   size_t count = fread(runner, 1, sizeof runner - 1, file);
@@ -335,7 +335,7 @@ int main(int argc, char **argv) {
   }
   if (getenv("HIDE_E2E_JOURNEY")) return journey(argc, argv);
   if (native_session(argc, argv) != 0) return 1;
-  if (factory_question_runner() != 0) return 1;
+  if (agent_pane_runner() != 0) return 1;
   const char *log_path = getenv("HIDE_E2E_INPUT_LOG");
   int flags = O_WRONLY | O_CREAT | O_APPEND;
 #ifdef _WIN32

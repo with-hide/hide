@@ -4,17 +4,11 @@ import type { MessageKey } from "./i18n/catalogs";
 import { useInterfaceTranslation } from "./i18n/client";
 import { BriefcaseBusinessIcon, ChevronDownIcon, ChevronRightIcon, CornerUpLeftIcon, EllipsisIcon, FolderIcon, Loader2Icon, PanelsTopLeftIcon, PinIcon, PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { StatusMark } from "./components/status-mark";
-import { markTone } from "./agentRow";
 import { drawnInTree, hideAiCheckoutOf, originLine } from "./hideAiOrigin";
-import { useFactoryTurnCount } from "./factory/hooks";
-import { FACTORY_OPEN } from "./factory/launch";
-import { REQUEST_ANSWER_TIMEOUT_MS } from "./factory/request";
-import { paneListed } from "./factory/secretary";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
 import { EntryContextMenu, EntryDropdown } from "./components/entry-menu";
-import { SidebarHeader, type DeviceMenu, type FactoryProjectRow } from "./components/sidebar-header";
+import { SidebarHeader, type DeviceMenu } from "./components/sidebar-header";
 import { GithubIcon } from "./components/github-icon";
 import { Hint } from "./components/ui/tooltip";
 import { CHECKOUT_KIND_ICON } from "./components/checkout-icon";
@@ -94,17 +88,10 @@ export function Sidebar({ actions }: { actions: Actions }) {
   const rail = useShellStore((s) => railShown(s.rest));
   const body = useShellStore((s) => sidebarBody(s.rest));
   const lens = useShellStore((s) => s.rest?.ui_state?.sidebar_lens ?? "projects");
-  useSecretaryStart(actions);
   // The switch has no chord of its own until the operator binds one (issue 170).
   const overviewChord = useShellStore((s) => commandLabel("overview", s.rest?.ui_state));
   const overviewCount = useOverviewCount();
   const overviewSelected = useUiStore((s) => s.overviewOpen || s.screen?.kind === "main");
-  const factoryChord = useShellStore((s) => commandLabel("factory_open", s.rest?.ui_state));
-  const factoryCount = useFactoryTurnCount();
-  const factoryPlace = useUiStore((s) => (!s.overviewOpen && s.screen?.kind === "factory" ? s.screen.place.factory : undefined));
-  const factorySelected = factoryPlace === null;
-  const factoryProjects = useFactoryProjects(actions, factoryPlace);
-  const secretary = useSecretaryRow(actions);
   const storedWidth = useShellStore((s) => s.rest?.ui_state?.sidebar_width ?? null);
   const columns = useSidebarColumns();
   // A drag draws the nav alone at the width under the pointer, over the
@@ -159,7 +146,6 @@ export function Sidebar({ actions }: { actions: Actions }) {
           <SidebarHeader
             compact={(preview ?? storedWidth ?? tokenPx("--size-sidebar-ideal")) < tokenPx("--size-sidebar-ideal")}
             overview={{ selected: overviewSelected, count: overviewCount, chord: overviewChord || null, onOpen: () => actions.openOverviewEntry() }}
-            factory={FACTORY_OPEN ? { selected: factorySelected, count: factoryCount, chord: factoryChord || null, onOpen: () => openFactoryAt(actions, null), projects: factoryProjects, secretary } : "soon"}
             searchChord={commandLabel("search") || null}
             onSearch={() => actions.openSearch()}
           />
@@ -250,94 +236,6 @@ export function useDeviceTitle(actions: Actions): { title: { name: string; note:
     };
   }, [devices, frontId, remoteStatus, actions, t]);
   return { title, deviceMenu };
-}
-
-/** Opens the Factory where it was, filtered to one Factory or to all of them. */
-function openFactoryAt(actions: Actions, factory: string | null) {
-  actions.openFactory();
-  useUiStore.getState().setFactoryPlace(factory === null ? { factory } : { factory, task: null, column: null });
-}
-
-/**
- * The Factories under the Factory row (PRD factory-observer B34): each
- * project's 내 차례 number and pause, opening the Factory filtered to it.
- */
-function useFactoryProjects(actions: Actions, place: string | null | undefined): FactoryProjectRow[] {
-  const summary = useShellStore((s) => s.factory?.summary ?? null);
-  return useMemo(() => {
-    const open = (summary?.factories ?? []).filter((view) => !view.closed);
-    return open.map((view) => ({
-      id: view.id,
-      name: view.project_name,
-      count: view.my_turn,
-      paused: view.paused,
-      selected: place === view.id,
-      onOpen: () => openFactoryAt(actions, view.id),
-    }));
-  }, [summary, place, actions]);
-}
-
-/**
- * The secretary's row (PRD software-factory-ui B23), once a Factory exists:
- * its agent's status mark while the core still lists its pane.
- */
-function useSecretaryRow(actions: Actions) {
-  const exists = useShellStore((s) => s.factory?.summary?.factories.some((view) => !view.closed) ?? false);
-  const pane = useShellStore((s) => s.rest?.ui_state?.factory_secretary_pane ?? null);
-  const agent = useShellStore((s) => (pane ? (s.rest?.navigator?.agents ?? []).find((row) => row.pane_id === pane) ?? null : null));
-  return useMemo(() => {
-    if (!exists) return null;
-    return { status: agent ? <StatusMark mark={agent.mark} className={markTone(agent)} data-secretary-status={agent.status_code} /> : null, onOpen: () => actions.openSecretary() };
-  }, [exists, agent, actions]);
-}
-
-/**
- * Carries a secretary start through (B23): the Factory's default runtime
- * once its config answers, then the Home agent's pane, which the core keeps
- * as the secretary once a tab lists it, and the page opens. A refused or
- * unanswered step ends the start without starting anything, into the
- * diagnostic log, and the next press tries again.
- */
-function useSecretaryStart(actions: Actions) {
-  const start = useUiStore((s) => s.secretaryStart);
-  const answer = useShellStore((s) => (start?.phase === "config" ? (s.factory?.actions.find((row) => row.request_id === start.requestId)?.answer ?? null) : null));
-  const operation = useShellStore((s) => s.rest?.task_operation);
-  const error = useShellStore((s) => s.rest?.status?.last_error);
-  const listed = useShellStore((s) => (start?.phase === "listing" ? paneListed(s.rest, start.paneId) : false));
-  useEffect(() => {
-    if (start === null) return undefined;
-    const timer = window.setTimeout(() => {
-      if (useUiStore.getState().secretaryStart !== start) return;
-      useUiStore.getState().setSecretaryStart(null);
-      useShellStore.getState().noteDiagnostic(`factory secretary: no answer while ${start.phase}`);
-    }, REQUEST_ANSWER_TIMEOUT_MS);
-    return () => window.clearTimeout(timer);
-  }, [start]);
-  useEffect(() => {
-    if (start?.phase !== "config" || answer === null) return;
-    if (!answer.ok) {
-      useUiStore.getState().setSecretaryStart(null);
-      useShellStore.getState().noteDiagnostic(`factory secretary: config refused (${answer.reason ?? "no reason"})`);
-      return;
-    }
-    const runtime = (answer as { config?: { default_runtime?: string } }).config?.default_runtime;
-    actions.startSecretary(runtime === "codex" ? "codex" : "claude");
-  }, [start, answer, actions]);
-  useEffect(() => {
-    if (start?.phase !== "start") return;
-    const ui = useUiStore.getState();
-    if (operation?.request_id === start.requestId && operation.pane_id && operation.phase !== "failed") {
-      ui.setSecretaryStart({ phase: "listing", paneId: operation.pane_id });
-      ui.setFocusWhenListed(operation.pane_id);
-      return;
-    }
-    if (error?.request_id === start.requestId || (operation?.request_id === start.requestId && operation.phase === "failed")) ui.setSecretaryStart(null);
-  }, [start, operation, error, actions]);
-  useEffect(() => {
-    if (start?.phase !== "listing" || !listed) return;
-    useUiStore.getState().setSecretaryStart(null);
-    actions.factorySecretarySet(start.paneId);
-  }, [start, listed, actions]);
 }
 
 function tokenPx(name: string): number {

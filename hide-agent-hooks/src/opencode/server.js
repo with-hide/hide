@@ -1,7 +1,7 @@
 // Hide's OpenCode 2 plugin, its server half, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // OpenCode 2 runs one server for every terminal attached to it, so this half is never any pane's: what needs the
-// pane (letters, guidance, Memory, the spawn and Factory guards, subagent counts) is asked of the TUI half, `tui.js`
+// pane (letters, guidance, Memory, the spawn guard, subagent counts) is asked of the TUI half, `tui.js`
 // beside it, which runs in the terminal that shows the session. Without one it only guards a protected project.
 
 import { spawn } from "node:child_process";
@@ -413,7 +413,7 @@ async function onPrompt(state, ctx, registration, event) {
 
 /**
  * The guards for one tool call: the terminal showing the session runs every one (the project's guardrails, the
- * spawn guard, the Factory worker's question guard); with none, or none answering, this half runs the guardrails
+ * spawn guard); with none, or none answering, this half runs the guardrails
  * alone, outside any pane. The refusal's reason, or null.
  */
 async function onTool(state, ctx, registration, event) {
@@ -427,8 +427,6 @@ async function onTool(state, ctx, registration, event) {
     request = { tool, command, cwd: workingFolder(input.workdir, directory) };
   } else if (FILE_TOOLS.has(tool)) {
     request = { tool, args: fileArgs(input), cwd: directory };
-  } else if (tool === "question") {
-    request = { tool };
   } else {
     return null;
   }
@@ -436,19 +434,18 @@ async function onTool(state, ctx, registration, event) {
   // terminal showing that session's root is then asked.
   const known = await rootOf(state, ctx, event.sessionID);
   const root = known ?? event.sessionID;
-  const guarded = tool !== "question" && policyOn();
+  const guarded = policyOn();
   // A shell call that can start an agent through Herdr is the spawn guard's.
   const launch = tool === "shell" && (request.command.includes("herdr") || request.command.includes("HERDR_BIN_PATH"));
   // The terminal is asked for what only a pane can judge, and then judges the guardrails too; a missing or
-  // unreadable policy is judged there, where the helper records why. A question no terminal answered in time lets
-  // the call run, as a timed-out helper does in the 1.x plugin, and reaches the diagnostic.
-  if ((known === undefined || terminalOf(state, root)) && (tool === "question" || launch || guarded !== false)) {
+  // unreadable policy is judged there, where the helper records why.
+  if ((known === undefined || terminalOf(state, root)) && (launch || guarded !== false)) {
     // The core knows the pane by the root session Herdr's integration reports, also for a subagent's call.
-    const session_id = tool === "question" ? root : event.sessionID;
+    const session_id = event.sessionID;
     const answer = await ask(state, registration, root, "tool", { ...request, session_id }, TOOL_BUDGET_MS, known === undefined);
     if (answer !== null) return typeof answer.deny === "string" && answer.deny ? answer.deny : null;
   }
-  if (!guarded || tool === "question") return null;
+  if (!guarded) return null;
   const answer = await helper(state, "tool", { ...request, session_id: event.sessionID, guard_only: true }, TOOL_BUDGET_MS, serverEnv());
   return typeof answer?.deny === "string" && answer.deny ? answer.deny : null;
 }

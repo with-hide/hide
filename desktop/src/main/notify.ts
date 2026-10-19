@@ -1,7 +1,6 @@
 /**
- * The shell's system notifications: the Factory's (PRD factory-observer
- * D-50), an item that newly became the operator's turn or a main that broke,
- * and an agent's (PRD first-run-onboarding D-10), a root agent that newly
+ * The shell's system notifications (PRD first-run-onboarding D-10):
+ * a root agent that newly
  * needs the operator or finished; the host shows them while the app runs.
  * Clicking one brings the window forward and hands its id back to the shell,
  * which opens what it names. Herdr's own notification cannot carry where a
@@ -22,7 +21,7 @@ export const WITHDRAW_LIMIT = 64;
 /**
  * `unlessFocused`: an agent's notification (PRD first-run-onboarding D-10)
  * is not shown while a Hide window has the keyboard, since the operator is
- * already looking; the Factory's and the test notification always show.
+ * already looking; the test notification always shows.
  */
 export type NotifyRequest = { id: string; title: string; body: string; unlessFocused: boolean };
 

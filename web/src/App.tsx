@@ -12,8 +12,6 @@ import { configureFileBytes } from "./fileBytes";
 import { installKeyboard, observeRecent, reconcileHeldCycle } from "./keyboard";
 import { noteOperatorPointer, observeInputRequests } from "./keyTarget";
 import { OverviewModal, OverviewPage } from "./Overview";
-import { FactoryScreen } from "./factory/FactoryScreen";
-import { useFactoryNotifications } from "./factory/notify";
 import { AgentCloseNotice, ConfirmClose, ConfirmTrash, CycleOverlay, NoticeBar } from "./Overlays";
 import { ConfirmArchive, ConfirmArchiveDelete } from "./ArchiveDialogs";
 import { QuickAdd } from "./QuickAdd";
@@ -54,7 +52,6 @@ export function App() {
   const dispatchRef = useRef<DispatchFn>(noop);
   const actions: Actions = useMemo(() => createActions((event) => dispatchRef.current(event)), []);
   useUsageWindowHint(actions);
-  useFactoryNotifications(actions);
   useAgentNotifications(actions);
   useGithubLook(actions);
   // Open in VS Code is offered only where the desktop app found it (D-14).
@@ -394,7 +391,6 @@ function CenterScreen({ actions }: { actions: Actions }) {
       </div>
     );
   }
-  if (screen.kind === "factory") return <FactoryScreen actions={actions} />;
   if (screen.kind === "workspace" && front && hasView) return <WorkspaceScreen actions={actions} />;
   return <OverviewPage actions={actions} />;
 }

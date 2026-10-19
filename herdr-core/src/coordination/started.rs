@@ -352,24 +352,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_factory_workers_spawn_is_not_hide_ais() {
-        let mut ledger = Ledger::default();
-        let factory = Actor::factory("fixture", NODE);
-        let origin = register(&mut ledger, &factory);
-        spawn(
-            &mut ledger,
-            &factory,
-            &origin,
-            true,
-            None,
-            "factory-801",
-            here("p1"),
-        )
-        .unwrap();
-        assert_eq!(hide_started(&ledger), HideStarted::default());
-    }
-
-    #[test]
     fn an_ended_agent_leaves_its_checkout_in_place() {
         let mut ledger =
             hide_started_ledger(NODE, "hide-memory-m43", memory_task("m43"), here("p43"));

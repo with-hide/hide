@@ -15,8 +15,7 @@ pub(super) fn claim(ledger: &mut Ledger, now: u64) -> Vec<HumanNotice> {
         let Some(warning) = &letter.watch_warning else {
             continue;
         };
-        // A Factory observer stops the quiet worker itself and puts it in
-        // the person's inbox, which replaces this alert.
+        // Code-owned observers handle their own escalation.
         if letter.recipient.code_owned()
             || warning.ordinal != 1
             || now.saturating_sub(letter.created_at_unix_ms) < super::SECOND_WARNING_MS

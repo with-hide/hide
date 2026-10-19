@@ -1997,8 +1997,6 @@ export type SnapshotRest = {
     sleeping_sessions?: SleepingSession[];
     /** Newest archived first (D-09). */
     archived_sessions?: ArchivedSession[];
-    /** Panes a Factory runs its workers in, which offer no Archive session (D-25). */
-    factory_worker_panes?: string[];
     devices?: Device[];
     focused_device_id?: string | null;
   };
@@ -2085,8 +2083,6 @@ export type SnapshotRest = {
     recent_checkouts?: RecentCheckout[];
     /** The terminal panes the keyboard has been in, newest first, up to fifty: the Agent cycle's order (issue 301). */
     recent_pane_ids?: string[];
-    /** The Home agent pane started as the Factory secretary (PRD software-factory-ui B23). */
-    factory_secretary_pane?: string | null;
     [key: string]: unknown;
   };
   status?: {

@@ -1646,6 +1646,51 @@ pub fn registered(root: &Path) -> Result<Vec<Registered>, String> {
     registered_until(root, Instant::now() + GIT_DEADLINE)
 }
 
+/// Retires a background task's checkout. A completed task keeps its branch;
+/// an explicitly discarded task drops it after removing its own checkout.
+pub fn retire_owned(
+    root: &Path,
+    checkout: &Path,
+    branch: &str,
+    discard: bool,
+) -> Result<(), String> {
+    let checked = git(root, &["check-ref-format", "--branch", branch])?;
+    if checked.trim() != branch || branch.starts_with('-') {
+        return Err("Invalid task branch. Review the task checkout before retrying.".into());
+    }
+    let rows = registered(root)?;
+    if let Some((index, row)) = rows
+        .iter()
+        .enumerate()
+        .find(|(_, row)| Path::new(&row.path) == checkout)
+    {
+        if index == 0 || row.branch.as_deref() != Some(branch) {
+            return Err("The task checkout changed. Review it before retiring it.".into());
+        }
+    } else if checkout.try_exists().map_err(|error| error.to_string())? {
+        return Err(
+            "The task folder is no longer a registered checkout. Review it before retrying.".into(),
+        );
+    }
+    remove_worktree(root, checkout, discard)?;
+    if discard {
+        let branches = git(
+            root,
+            &[
+                "branch",
+                "--list",
+                "--format=%(refname:short)",
+                "--",
+                branch,
+            ],
+        )?;
+        if branches.lines().any(|name| name == branch) {
+            git(root, &["branch", "-D", "--", branch])?;
+        }
+    }
+    Ok(())
+}
+
 fn registered_until(root: &Path, until: Instant) -> Result<Vec<Registered>, String> {
     let text = git_until(root, &["worktree", "list", "--porcelain", "-z"], until)?;
     let mut rows = Vec::new();
@@ -2512,6 +2557,38 @@ mod holder_scan_tests {
 #[cfg(test)]
 mod measure_tests {
     use super::*;
+
+    #[test]
+    fn retiring_a_completed_task_keeps_its_branch_and_refuses_dirty_work() {
+        let fixture = Fixture::new(&["task"]);
+        let checkout = fixture.linked("task");
+        std::fs::write(checkout.join("draft.txt"), "keep this work").unwrap();
+        assert!(retire_owned(&fixture.root, &checkout, "task", false).is_err());
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("draft.txt")).unwrap(),
+            "keep this work"
+        );
+        std::fs::remove_file(checkout.join("draft.txt")).unwrap();
+        retire_owned(&fixture.root, &checkout, "task", false).unwrap();
+        assert!(!checkout.exists());
+        assert!(git(&fixture.root, &["rev-parse", "--verify", "refs/heads/task"]).is_ok());
+        retire_owned(&fixture.root, &checkout, "task", false).unwrap();
+    }
+
+    #[test]
+    fn discarding_a_task_removes_only_its_confirmed_checkout_and_branch() {
+        let fixture = Fixture::new(&["task", "other"]);
+        let checkout = fixture.linked("task");
+        std::fs::write(checkout.join("draft.txt"), "unfinished").unwrap();
+        assert!(retire_owned(&fixture.root, &checkout, "other", true).is_err());
+        assert!(retire_owned(&fixture.root, &fixture.root, "main", true).is_err());
+        assert!(checkout.join("draft.txt").is_file());
+        retire_owned(&fixture.root, &checkout, "task", true).unwrap();
+        assert!(!checkout.exists());
+        assert!(git(&fixture.root, &["rev-parse", "--verify", "refs/heads/task"]).is_err());
+        assert!(fixture.linked("other").is_dir());
+        retire_owned(&fixture.root, &checkout, "task", true).unwrap();
+    }
 
     /// A worktree git lists but disk does not have reports `missing` and no
     /// counts, so an absent checkout never reads as a clean one.
