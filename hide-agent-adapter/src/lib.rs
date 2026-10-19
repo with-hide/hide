@@ -114,6 +114,16 @@ pub enum HookInstall {
     None,
 }
 
+/// Passive tool-result observation is an independent, required decision.
+/// The hook owner implements the selected dialect; unsupported agents must
+/// explain why no result can be observed rather than silently omitting it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObservationSupport {
+    Native(HookDialect),
+    Plugin(PluginDialect),
+    Unsupported { reason: &'static str },
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionFormat {
     Claude,
@@ -514,6 +524,7 @@ pub struct AgentAdapter {
     pub executables: &'static [&'static str],
     pub skill_location: SkillLocation,
     pub hook: HookInstall,
+    pub observation: ObservationSupport,
     pub herdr: HerdrIntegration,
     pub default_on: bool,
     pub prompt_hook: Option<PromptHook>,

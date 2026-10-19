@@ -37,7 +37,7 @@ fn each_extension_keeps_its_pinned_bytes() {
 const HELPER: &str = "#!/bin/sh\nexec node \"$HIDE_EXTENSION_STAND_IN\" \"$@\"\n";
 
 #[cfg(unix)]
-fn behaves_as_the_host_runs_it(file: &PluginFile, agent: &str) {
+pub(super) fn behaves_as_the_host_runs_it(file: &PluginFile, agent: &str) {
     let dir = tempfile::tempdir().unwrap();
     let helper = dir.path().join("hide-agent-hooks");
     // Started once before the test, so the helper's budgets are not spent in
@@ -84,14 +84,4 @@ fn behaves_as_the_host_runs_it(file: &PluginFile, agent: &str) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-}
-
-/// One host after the other: `cargo test` runs the binary's tests on
-/// parallel threads, and two Node runs at once crowd the hook tests whose
-/// deadline is half a second.
-#[cfg(unix)]
-#[test]
-fn the_extension_behaves_as_pi_and_omp_run_it() {
-    behaves_as_the_host_runs_it(&PI, "pi");
-    behaves_as_the_host_runs_it(&OMP, "omp");
 }

@@ -25,6 +25,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         executables: &["claude"],
         skill_location: SkillLocation::Claude,
         hook: HookInstall::Runtime(HookDialect::ClaudeCode),
+        observation: ObservationSupport::Native(HookDialect::ClaudeCode),
         herdr: HerdrIntegration {
             name: "claude",
             target: "claude",
@@ -93,6 +94,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         executables: &["codex"],
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Runtime(HookDialect::Codex),
+        observation: ObservationSupport::Native(HookDialect::Codex),
         herdr: HerdrIntegration {
             name: "codex",
             target: "codex",
@@ -160,6 +162,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         executables: &["grok"],
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Guidance(GuidanceDialect::Grok),
+        observation: ObservationSupport::Native(HookDialect::Grok),
         herdr: HerdrIntegration {
             name: "grok",
             target: "grok",
@@ -238,6 +241,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         executables: &["opencode"],
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Plugin(PluginDialect::OpenCode),
+        observation: ObservationSupport::Plugin(PluginDialect::OpenCode),
         herdr: HerdrIntegration {
             name: "opencode",
             target: "opencode",
@@ -319,6 +323,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         executables: &["pi"],
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Plugin(PluginDialect::Pi),
+        observation: ObservationSupport::Plugin(PluginDialect::Pi),
         herdr: HerdrIntegration {
             name: "pi",
             target: "pi",
@@ -404,6 +409,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         executables: &["omp"],
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Plugin(PluginDialect::Omp),
+        observation: ObservationSupport::Plugin(PluginDialect::Omp),
         herdr: HerdrIntegration {
             name: "omp",
             target: "omp",
@@ -485,6 +491,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         executables: &["agy"],
         skill_location: SkillLocation::Antigravity,
         hook: HookInstall::Guidance(GuidanceDialect::Antigravity),
+        observation: ObservationSupport::Native(HookDialect::Antigravity),
         herdr: HerdrIntegration {
             name: "agy",
             target: "antigravity-cli",
@@ -573,6 +580,9 @@ pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
     executables: &["cursor-agent"],
     skill_location: SkillLocation::Shared,
     hook: HookInstall::None,
+    observation: ObservationSupport::Unsupported {
+        reason: "Cursor is retired; historical hooks perform no observation.",
+    },
     herdr: HerdrIntegration {
         name: "cursor",
         target: "cursor",
