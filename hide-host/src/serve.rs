@@ -1011,6 +1011,7 @@ pub fn handle_with_progress(
             })
         }
         Call::Project { path } => to_value(project_facts(&path)?),
+        Call::CheckoutGit { path } => to_value(worktrees::checkout_git(&absolute(&path)?)?),
         Call::Worktrees {
             path,
             bases,

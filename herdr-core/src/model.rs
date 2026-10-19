@@ -238,6 +238,9 @@ impl<T: Serialize> Serialize for Edited<T> {
 pub struct WorkspaceViewSnapshot {
     pub device_id: String,
     pub path: String,
+    /// The active checkout only, read by its own node independently of Changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) git: Option<crate::checkout_git::Header>,
     /// The tool the lane shows, or null while it is closed. An unpinned
     /// lane is drawn over the agents only once a call opened it (D-02).
     pub tool: Option<crate::workspace_views::Tool>,

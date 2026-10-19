@@ -354,7 +354,7 @@ impl Runtime {
     /// for once when the view first needs it; a helper that failed is not
     /// asked again on every refresh, and the view says why until the
     /// operator's next action retries it.
-    fn changes_channel(
+    pub(super) fn changes_channel(
         &mut self,
         device_id: &str,
     ) -> Result<Arc<dyn crate::node_access::NodeLink>, String> {

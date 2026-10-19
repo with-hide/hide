@@ -8,6 +8,7 @@ mod agent_start;
 pub mod agent_state;
 mod ai;
 mod changes;
+mod checkout_git;
 mod checkout_owner;
 mod codex_launch;
 mod composer_store;

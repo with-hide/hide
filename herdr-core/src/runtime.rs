@@ -12,6 +12,7 @@ mod agent_sleep;
 mod agents;
 mod attachments;
 mod backlog;
+mod checkout_git;
 mod checks_wait;
 mod clone;
 mod control_lane;
@@ -1192,6 +1193,7 @@ pub struct Runtime {
     last_host_generation: u64,
     /// The device and folder `snapshot.changes` was read for.
     changes_published_key: Option<crate::changes::ChangesKey>,
+    checkout_header: checkout_git::State,
     /// Each device's session as its Herdr reported it, before its projects
     /// are grouped from the helper's facts (`device_catalog`).
     device_raw_sessions: HashMap<String, RemoteSessionSnapshot>,
@@ -2078,6 +2080,7 @@ impl Runtime {
             device_host_retries: HashMap::new(),
             last_host_generation: 0,
             changes_published_key: None,
+            checkout_header: checkout_git::State::default(),
             device_raw_sessions: HashMap::new(),
             device_facts: HashMap::new(),
             device_recent_tabs: HashMap::new(),
