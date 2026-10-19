@@ -40,6 +40,7 @@ mod owned_task;
 pub mod pane_auth;
 mod pane_sizes;
 pub mod placement;
+mod product_analytics;
 pub mod relay;
 pub mod screen_event;
 pub mod seat;

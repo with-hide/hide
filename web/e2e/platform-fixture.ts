@@ -63,6 +63,10 @@ export function inheritedFixtureEnv(): Record<string, string> {
 
 /** Move native home lookups and CLI credential discovery together. */
 export function fixtureHomeEnv(home: string): Record<string, string> {
+  // Disable-only marker: works on every OS and with the shipped build token.
+  // It grants none of the privileged device fixture's service-control rights.
+  fs.mkdirSync(path.join(home, ".hide"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".hide", "product-analytics-disabled"), "");
   const windows: Record<string, string> = process.platform === "win32" ? {
     USERPROFILE: home,
     APPDATA: path.join(home, "AppData", "Roaming"),

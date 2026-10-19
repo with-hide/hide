@@ -2282,7 +2282,12 @@ Settings opens on General unless the way in names a page: Explorer's and a devic
 
 ### General
 
-General is Appearance alone: one group with Language, Color theme, Mode, Accent and Interface text; Accent shows its swatches and no hex value, and Interface text carries one note that the sidebar keeps its own sizes (PRD settings-left-nav B5; hide-color-theme B1).
+General has Appearance and Privacy groups.
+Appearance contains Language, Color theme, Mode, Accent and Interface text; Accent shows its swatches and no hex value, and Interface text carries one note that the sidebar keeps its own sizes (PRD settings-left-nav B5; hide-color-theme B1).
+Privacy offers Send usage statistics, enabled by default and disabled while disconnected; its note discloses the random installation ID, time, Hide connections and Hide AI invocations sent to PostHog in the US, and excludes conversation content, code and file names.
+The core persists the choice, shares it between windows and preserves it against stale generic UI saves.
+Turning it off discards waiting events and prevents new ones; a request already in flight may finish, and turning it back on never replays disabled events.
+Product analytics has no autocapture, session recording, person profiles or location enrichment; [the architecture contract](ARCHITECTURE.md#product-usage-statistics) owns the wire fields and worker limits.
 Color theme chooses the palette every window draws in, Hide or Neutral, as a segmented toggle like Mode's, each name led by a small swatch of its brand color, the same in Light and Dark (Hide the owl mark's blue-grey, Neutral a grey), and no color code; it waits for a live connection, as Language does.
 Hide is the landing page's Owl Field palette and the default, including for an install that never chose; Neutral is the grey chrome.
 Both have their own sixteen terminal colors, each readable at 4.5:1 on its background, and the choice changes the sidebar, tabs, pane headers, terminals, editors, sheets and popovers at once, keeping a terminal's content, scroll position, half-typed line and selection.

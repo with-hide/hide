@@ -151,6 +151,16 @@ The Windows/Linux package smoke uses an isolated HOME and Herdr socket to check 
 It then uses a second complete package fixture with an executable overlay that changes the daemon hash, proving replacement, refreshed command and hook paths, same-build reuse and standalone refusal.
 All test daemons and temporary files are cleaned up on failure as well as success.
 
+## Product analytics build input
+
+`HIDE_POSTHOG_PROJECT_TOKEN` is an optional public ingestion token embedded into hided at build time, validated by `hided/build.rs` and listed in `hided/src/env.rs` and `hided/.env.example`.
+It must start with `phc_`, contain only ASCII letters, digits or underscores, and have 20 to 128 bytes; invalid values fail the build without printing the value.
+An absent or empty value produces a build with no external analytics transport.
+The disable-only `~/.hide/product-analytics-disabled` marker suppresses transport even in a configured build; shared browser/desktop fixtures and package smoke homes write it on every system, without granting the privileged device fixture's service-control rights.
+`package.yml` supplies the repository Actions variable of the same name on every packaging system; a personal PostHog API key must never be used.
+Local builders export the variable before the build; the example file is not auto-loaded, and the running binary does not read a runtime override.
+See [product usage statistics](ARCHITECTURE.md#product-usage-statistics) for the events and privacy boundary.
+
 ## The desktop app
 
 `desktop/` is a pnpm workspace member; `pnpm install` at the root installs it with the web shell.

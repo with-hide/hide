@@ -1,7 +1,7 @@
 // Settings' list and its General, GitHub and About pages on an isolated
 // pinned Herdr and hided (PRD settings-cleanup B1-B6, B23, B24;
 // settings-left-nav B2-B5, B8, B9, B12, B13): the list in its groups, General's
-// Appearance alone, the GitHub row, About with its closed Details, the real
+// Appearance and Privacy, the GitHub row, About with its closed Details, the real
 // Herdr version and protocol of a healthy connection, and the settings that
 // moved into Agents and Hide AI.
 
@@ -53,9 +53,10 @@ test("Settings lists its pages in two groups with About apart, and About shows t
     await expect(sheet.locator("[data-settings-page-title]")).toHaveText("Shortcuts");
     await sheet.locator('[data-settings-tab="general"]').click();
 
-    // B5: General is Appearance alone: language, theme, accent and interface text, with no hex value beside the accent.
+    // General includes Appearance and the explicit product analytics control.
     const appearance = sheet.locator('[data-settings-group="appearance"]');
-    await expect(sheet.locator("[data-settings-page] [data-settings-group]")).toHaveCount(1);
+    await expect(sheet.locator("[data-settings-page] [data-settings-group]")).toHaveCount(2);
+    await expect(sheet.locator("[data-product-analytics]")).toBeChecked();
     await expect(appearance.locator("[data-interface-language]")).toBeVisible();
     await expect(appearance.locator("[data-theme-choice]")).toBeVisible();
     await expect(appearance.locator("[data-accent]")).toHaveCount(4);

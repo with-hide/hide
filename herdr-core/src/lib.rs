@@ -53,6 +53,7 @@ mod pane_reopen;
 mod persistence;
 pub mod pet;
 mod ports;
+pub mod product_analytics;
 mod project_context;
 mod project_settings;
 mod reader;

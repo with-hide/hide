@@ -15,6 +15,7 @@ use std::process::Command;
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     build_identity(&manifest);
+    product_analytics_config();
     let dist = manifest.join("../web/dist");
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("ui_embed.rs");
     println!("cargo:rerun-if-changed=build.rs");
@@ -144,4 +145,29 @@ fn head_commit(manifest: &Path) -> Option<String> {
         watch("packed-refs");
     }
     Some(commit)
+}
+
+/// Optional build input: a public, write-only PostHog project token.
+/// Absent or empty means no transport, including contributor and test builds.
+/// Values live in the build environment, never source or diagnostics.
+fn product_analytics_config() {
+    const KEY: &str = "HIDE_POSTHOG_PROJECT_TOKEN";
+    println!("cargo:rerun-if-env-changed={KEY}");
+    let token = match env::var(KEY) {
+        Ok(value) if value.is_empty() => value,
+        Ok(value) => {
+            assert!(
+                value.starts_with("phc_")
+                    && (20..=128).contains(&value.len())
+                    && value
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_'),
+                "HIDE_POSTHOG_PROJECT_TOKEN must be a public project token"
+            );
+            value
+        }
+        Err(env::VarError::NotPresent) => String::new(),
+        Err(_) => panic!("HIDE_POSTHOG_PROJECT_TOKEN is not valid UTF-8"),
+    };
+    println!("cargo:rustc-env={KEY}={token}");
 }

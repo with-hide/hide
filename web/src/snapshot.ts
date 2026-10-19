@@ -2064,6 +2064,7 @@ export type SnapshotRest = {
     first_run?: FirstRun | null;
     /** Settings > Notifications' Notify me when an agent needs me (D-21); the desktop app shows agent notifications only while it is on. */
     desktop_notifications?: boolean;
+    product_analytics_enabled?: boolean;
     desktop_notifications_done?: boolean;
     usage?: UsagePreferences;
     /** The screens whose one-line introduction was shown (B43). */

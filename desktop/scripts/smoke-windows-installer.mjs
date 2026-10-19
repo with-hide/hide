@@ -70,6 +70,8 @@ function appsEntries() {
 const scratch = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "hide-installer-")));
 const home = path.join(scratch, "home");
 fs.mkdirSync(home);
+fs.mkdirSync(path.join(home, ".hide"));
+fs.writeFileSync(path.join(home, ".hide", "product-analytics-disabled"), "");
 const isolated = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(HERDR_|HIDE_)/i.test(key)));
 Object.assign(isolated, {
   HOME: home,

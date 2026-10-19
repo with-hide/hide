@@ -73,6 +73,8 @@ permissions:
 jobs:
   package:
     name: package (${{ matrix.system }})
+    env:
+      HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
     runs-on: ${{ matrix.runner }}
     # Nothing is cached: release artifacts share nothing with the debug
     # caches main keeps, so every run is a cold release build.
@@ -274,6 +276,8 @@ jobs:
 
   macos-package:
     name: package (macos)
+    env:
+      HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
     if: ${{ inputs.include-macos }}
     runs-on: macos-15
     # Notarization waits on Apple, which takes minutes and now and then longer.
