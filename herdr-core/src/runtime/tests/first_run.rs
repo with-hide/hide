@@ -775,6 +775,69 @@ fn back_preserves_choices_and_never_queues_an_install_or_changes_notifications()
 }
 
 #[test]
+fn setup_url_drafts_never_publish_or_restore_credentials_and_keep_clean_urls() {
+    let folder = scratch_dir("herdr-core-first-run-url-draft-");
+    let path = folder.path().join("state.json");
+    let mut runtime = runtime_at(&path);
+    report_here(&mut runtime, &first_run_pass());
+    for url in [
+        "https://example.test/team/repo.git",
+        "example.test:team/repo.git",
+        "file:///work/repo.git",
+        "https://alice:draft-password@example.test/team/repo.git",
+        "https://draft-token@example.test/team/repo.git",
+        "https://example.test/team/repo.git?token=draft-token",
+        "https://example.test/team/repo.git#draft-token",
+        "git@example.test:team/repo.git",
+        "https://alice:draft-password@",
+        "draft-password",
+    ] {
+        runtime.dispatch_json(&event("first_run_draft", serde_json::json!({
+            "project_form": {"view": "clone", "url": url, "parent": "~/work"}
+        })));
+        let clean = matches!(url, "https://example.test/team/repo.git" | "example.test:team/repo.git" | "file:///work/repo.git");
+        let expected = if clean { url } else { "" };
+        let snapshot = serde_json::to_value(runtime.snapshot()).unwrap();
+        assert_eq!(snapshot["ui_state"]["first_run_choices"]["project_form"]["url"], expected);
+        drop(runtime);
+        let stored = std::fs::read_to_string(&path).unwrap();
+        assert!(!stored.contains("draft-password") && !stored.contains("draft-token"));
+        runtime = runtime_at(&path);
+        assert_eq!(runtime.snapshot.ui_state.first_run_choices.project_form.url, expected);
+    }
+
+    // A store from before this boundary is sanitized before the first snapshot.
+    drop(runtime);
+    let mut legacy: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    legacy["first_run_choices"]["project_form"]["url"] = serde_json::json!("https://alice:draft-password@example.test/repo.git?token=draft-token");
+    std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let restarted = runtime_at(&path);
+    let published = serde_json::to_string(restarted.snapshot()).unwrap();
+    assert!(!published.contains("draft-password") && !published.contains("draft-token"));
+    assert!(restarted.snapshot.ui_state.first_run_choices.project_form.url.is_empty());
+}
+
+#[test]
+fn finishing_setup_clears_the_project_draft_before_saving() {
+    let folder = scratch_dir("herdr-core-first-run-finished-draft-");
+    let path = folder.path().join("state.json");
+    let mut runtime = runtime_at(&path);
+    runtime.snapshot.ui_state.first_run = Some(FirstRun { version: crate::model::FIRST_RUN_VERSION, step: FirstRunStep::Project });
+    runtime.dispatch_json(&event("first_run_draft", serde_json::json!({
+        "project_device": "build", "project_path": "~/work/repo",
+        "project_form": {"view": "clone", "url": "https://example.test/repo.git", "parent": "~/work", "name": "repo"}
+    })));
+    runtime.dispatch_json(&event("first_run_advance", serde_json::json!({"from": "project"})));
+    drop(runtime);
+    let restarted = runtime_at(&path);
+    let choices = &restarted.snapshot.ui_state.first_run_choices;
+    assert_eq!(step(&restarted), Some(FirstRunStep::Done));
+    assert_eq!(choices.project_device, None);
+    assert!(choices.project_path.is_empty());
+    assert_eq!(choices.project_form, crate::model::FirstRunProjectForm::default());
+}
+
+#[test]
 fn only_a_successful_empty_discovery_skips_devices_and_back_follows_that_route() {
     let mut runtime = runtime();
     runtime.snapshot.ui_state.first_run = Some(FirstRun { version: crate::model::FIRST_RUN_VERSION, step: FirstRunStep::Devices });

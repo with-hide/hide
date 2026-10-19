@@ -118,6 +118,12 @@ impl Runtime {
     }
 
     fn move_first_run(&mut self, from: FirstRunStep, to: FirstRunStep) -> bool {
+        if to == FirstRunStep::Done {
+            let choices = &mut self.snapshot.ui_state.first_run_choices;
+            choices.project_device = None;
+            choices.project_path.clear();
+            choices.project_form = Default::default();
+        }
         self.snapshot.ui_state.first_run = Some(FirstRun {
             version: FIRST_RUN_VERSION,
             step: to,

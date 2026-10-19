@@ -1705,6 +1705,8 @@ On a machine whose kit has never run, the first-run wizard opens over the shell:
 The progress bar names the actual route, with three steps after a successful empty profile discovery and four while saved profiles are present or their discovery is loading or failed.
 Each step after Agents has Back; Back changes the core-owned step alone and never repeats an installation, reconnect, permission request or test notification.
 The core saves the agent selection, checked device profiles, project machine and path alongside progress, so returning or reloading retains explicitly disabled agents and the earlier notification choice.
+Only complete clone URLs without user information, queries or fragments are saved as setup drafts; other clone input stays in the open form and is still passed unchanged to Git when Clone is pressed.
+Finishing setup clears its project draft.
 Nothing but each step's own buttons moves it: Escape, a click outside and a close button do nothing, and the step on screen is the core's (`ui_state.first_run`), so quitting, reloading or a failed save reopens the step not yet finished, and the wizard never returns once its last step is done or skipped (B5, B6).
 Each step's main button sits at the footer's right with its keycap, `⌘↵` (`Ctrl+Enter` off macOS), which presses it from anywhere in the step; Enter on the step itself presses it too, while tiles, links and buttons keep their own keys; while macOS blocks Hide with the switch off that button is `Turn on notifications` (B40).
 The agents step is the first-run agent choice (Settings: each machine's install kit, below); the core moves the wizard on once this Mac's kit pass for it has landed with every chosen agent in place.

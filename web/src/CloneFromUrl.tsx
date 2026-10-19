@@ -14,7 +14,7 @@ import { ArrowLeftIcon, FolderOpenIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Trans } from "react-i18next";
 import type { Actions } from "./actions";
-import { defaultProjectParent, folderLabel, parseCloneUrl, refusalText, trimFolder } from "./addProject";
+import { cloneUrlDraft, defaultProjectParent, folderLabel, parseCloneUrl, refusalText, trimFolder } from "./addProject";
 import { Note, Status } from "./components/settings-rows";
 import { Button } from "./components/ui/button";
 import { DialogBody, DialogDescription, DialogHeader, DialogTitle } from "./components/ui/dialog";
@@ -123,7 +123,7 @@ export function CloneFromUrl({ actions, registrations, pickParent, onBack, draft
             autoCorrect="off"
             aria-invalid={url.trim() !== "" && !parsed.ok}
             data-clone-url="true"
-            onChange={(event) => { setUrl(event.target.value); onDraft?.({ url: event.target.value }); }}
+            onChange={(event) => { setUrl(event.target.value); onDraft?.({ url: cloneUrlDraft(event.target.value) }); }}
             onKeyDown={(event) => {
               if (event.nativeEvent.isComposing || event.key !== "Enter") return;
               event.preventDefault();

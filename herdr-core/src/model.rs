@@ -2848,9 +2848,38 @@ pub struct FirstRunChoices {
 #[serde(default)]
 pub struct FirstRunProjectForm {
     pub view: String,
+    #[serde(deserialize_with = "deserialize_first_run_url", serialize_with = "serialize_first_run_url")]
     pub url: String,
     pub parent: String,
     pub name: String,
+}
+
+/// Setup drafts are shared snapshots and durable preferences, never Git's
+/// credential-bearing input. Incomplete URLs stay local to the open form too.
+pub(crate) fn first_run_draft_url(raw: &str) -> String {
+    let value = raw.trim();
+    if value.len() > 4096 || value.contains(['?', '#'])
+        || hide_node_link::clone::CloneSource::parse(value).is_err()
+    {
+        return String::new();
+    }
+    let authority = if let Some((_, rest)) = value.split_once("://") {
+        rest.split('/').next().unwrap_or_default()
+    } else {
+        value.split(':').next().unwrap_or_default()
+    };
+    if authority.contains('@') {
+        return String::new();
+    }
+    value.to_owned()
+}
+
+fn deserialize_first_run_url<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    String::deserialize(deserializer).map(|value| first_run_draft_url(&value))
+}
+
+fn serialize_first_run_url<S: serde::Serializer>(value: &str, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&first_run_draft_url(value))
 }
 
 /// A screen whose one-line introduction shows on the first visit only

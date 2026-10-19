@@ -90,6 +90,32 @@ it("opens a remote project's first agent from that device's kit, regardless of l
   await unmount();
 });
 
+it("keeps a credentialed clone URL in the open form and sends it only for explicit Clone", async () => {
+  window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
+  const next = state(false, AGENTS);
+  Object.assign(next.rest.navigator.devices[0]!, { kind: "local" });
+  Object.assign(next.rest.ui_state, {
+    first_run: { version: 1, step: "project" },
+    first_run_choices: { project_form: { view: "clone", url: "https://example.test/repo.git", parent: "~/work" } },
+  });
+  Object.assign(next, { cloneTarget: { parent: "~/work", name: "repo", path: "~/work/repo", reason: null } });
+  const { events, unmount } = await mount(next);
+  const input = document.querySelector<HTMLInputElement>("[data-clone-url]")!;
+  const raw = "https://alice:private-token@example.test/repo.git";
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, raw);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(input.value).toBe(raw);
+  const drafts = events.filter((event) => event.kind === "first_run_draft");
+  expect(drafts.at(-1)?.payload).toMatchObject({ project_form: { url: "" } });
+  expect(JSON.stringify(drafts)).not.toContain("private-token");
+  expect(events.some((event) => event.kind === "clone_repository")).toBe(false);
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-clone-submit]")!.click());
+  expect(events.find((event) => event.kind === "clone_repository")?.payload).toEqual({ url: raw, parent: "~/work", name: "repo" });
+  await unmount();
+});
+
 async function mount(next: ReturnType<typeof state>) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
