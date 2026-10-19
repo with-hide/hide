@@ -2156,6 +2156,11 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
         } else {
             ""
         };
+        let backlog = if version < 4 {
+            ledger::BACKLOG_SCHEMA
+        } else {
+            ""
+        };
         let observations = if version < 5 {
             super::observation::SCHEMA
         } else {
@@ -2163,8 +2168,7 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
         };
         connection
             .execute_batch(&format!(
-                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {} {aliases} {observations} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;",
-                ledger::BACKLOG_SCHEMA
+                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {observations} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|error| {
                 let _ = connection.execute_batch("ROLLBACK");

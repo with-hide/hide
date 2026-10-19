@@ -1316,7 +1316,9 @@ fn direct_observation_schema_migrates_existing_v4_without_recreating_retention_a
     let state = tempfile::tempdir().unwrap();
     let path = state.path().join("links.sqlite3");
     let (store, _) = LinkStore::open(&path).unwrap();
-    store.connection.execute_batch("DROP TABLE direct_observations; PRAGMA user_version=4; INSERT INTO retention_aliases VALUES('old-project','new-project');").unwrap();
+    store.connection.execute_batch("DROP TABLE direct_observations; PRAGMA user_version=4;
+        INSERT INTO retention_aliases VALUES('old-project','new-project');
+        INSERT INTO ledger_backlog VALUES('backlog-1','local','old-project','fixture-workspace','fixture/repo','Preserved backlog',1,'creating',NULL,NULL);").unwrap();
     drop(store);
     let (store, opened) = LinkStore::open(&path).unwrap();
     assert_eq!(opened, Opened::Existing);
@@ -1331,5 +1333,16 @@ fn direct_observation_schema_migrates_existing_v4_without_recreating_retention_a
             )
             .unwrap(),
         "new-project"
+    );
+    assert_eq!(
+        store
+            .connection
+            .query_row(
+                "SELECT title FROM ledger_backlog WHERE intent='backlog-1'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "Preserved backlog"
     );
 }
