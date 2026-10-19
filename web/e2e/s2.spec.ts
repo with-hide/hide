@@ -307,6 +307,12 @@ test("âŒ˜D splits the focused pane, a divider drag sends one resize_pane, and âŒ
     const { sent } = flow;
     await splitShell(page, flow);
     await expect(page.locator("[data-split]")).toHaveCount(2);
+    const boundaries = page.locator("[data-pane-boundary]");
+    await expect(boundaries).toHaveCount(2);
+    for (const line of await boundaries.all()) {
+      const geometry = await line.evaluate((el) => ({ width: el.getBoundingClientRect().width, pointerEvents: getComputedStyle(el).pointerEvents }));
+      expect(geometry).toEqual({ width: 1, pointerEvents: "none" });
+    }
     await screenshot(page, "s2-two-splits");
 
     // A divider drag sends one resize_pane on release and the grid follows Herdr.
@@ -527,9 +533,11 @@ test("of three panes the focused one is outlined, and zoom hides the other two b
     // Of three panes, the one holding the keyboard is outlined, and only it.
     await expect(page.locator("[data-pane-focus-outline]")).toHaveCount(1);
     await expect(shellPane.locator("[data-pane-focus-outline]")).toBeVisible();
+    await expect(page.locator("[data-pane-boundary]")).toHaveCount(2);
 
     await page.keyboard.press(chord("toggle_zoom"));
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-zoomed", "true");
+    await expect(page.locator("[data-pane-boundary]")).toHaveCount(0);
     await expect.poll(() => sent.get("toggle_zoom")).toBe(1);
     // Zoom keeps the input perimeter and names the two panes it hides.
     await expect(page.locator("[data-pane-zoom]")).toHaveAttribute("data-pane-zoom", "2");
@@ -538,6 +546,7 @@ test("of three panes the focused one is outlined, and zoom hides the other two b
     await screenshot(page, "s2-zoom-chip");
     await page.locator("[data-pane-zoom]").click();
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-zoomed", "false");
+    await expect(page.locator("[data-pane-boundary]")).toHaveCount(2);
     await expect.poll(() => sent.get("toggle_zoom")).toBe(2);
     await expect(page.locator('[data-pane-zoom]:not([data-pane-zoom="false"])')).toHaveCount(0);
   } finally {
