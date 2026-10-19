@@ -208,6 +208,25 @@ impl LazyClient {
 struct LazyApiConnector(Arc<LazyClient>);
 
 impl ApiConnector for LazyApiConnector {
+    fn connect_until(
+        &self,
+        deadline: std::time::Instant,
+    ) -> Result<Box<dyn hide_herdr_client::ApiStream>, ApiError> {
+        // A proof cannot spend its short budget resolving account files or
+        // starting a runtime. The session owner initializes this transport.
+        self.0
+            .initialized
+            .get()
+            .and_then(|result| result.as_ref().ok())
+            .ok_or_else(|| {
+                ApiError::Transport(
+                    "SSH transport is not initialized for a deadline-bound request".to_owned(),
+                )
+            })?
+            .herdr_api_connector()
+            .connect_until(deadline)
+    }
+
     fn connect(&self) -> Result<Box<dyn hide_herdr_client::ApiStream>, ApiError> {
         self.0
             .resolve()
@@ -314,6 +333,10 @@ mod tests {
         assert!(device.cached_herdr_version().is_none());
         assert!(device.cached_herdr_socket().is_none());
         let connector = device.herdr_api_connector();
+        let proof = connector.connect_until(std::time::Instant::now() + Duration::from_secs(1));
+        assert!(
+            matches!(proof, Err(ApiError::Transport(reason)) if reason.contains("not initialized"))
+        );
         let error = match connector.connect() {
             Err(error) => error,
             Ok(_) => panic!("unreadable configuration must refuse before SSH"),

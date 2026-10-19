@@ -1072,7 +1072,8 @@ The worker admits at most 512 pending ledger and observation updates combined, e
 The observation table is capped at 2,000 events and 16 MiB of encoded metadata inside the existing 64 MiB SQLite cap, retains facts for 30 days, and rejects a new fact that would cross a cap.
 Expiry is checked on the existing worker's wake, without a graph subscription or observation poller; the worker's ordinary 15-second wait is the maximum quiet cleanup interval.
 SQLite work and validation run off the Runtime mutex and session-sync input path; completed facts enter Runtime through the existing sink and notify only when the confirmed graph projection changes.
-The existing link-worker owner drains queued observation writes for at most two seconds on shutdown plus at most one already-started two-second SQLite operation, diagnoses anything undrained, and joins outside the Runtime mutex.
+The existing link-worker owner fixes the observation drain deadline at the shutdown request, checks stop between normal transactions, drains only within those two seconds plus at most one already-started two-second SQLite operation, diagnoses anything undrained, and joins outside the Runtime mutex.
+An ordinary observation batch also yields after the existing 20 ms worker turn or sixteen writes, whichever comes first.
 
 ### Session work records
 
@@ -1712,6 +1713,8 @@ A complete no-wait tool result may propose the captured native recipient on that
 The existing delivery projection retains a local first-seen fence while native identity, terminal and server scope remain continuous, and the event must fall after that fence and within 60 seconds, with future timestamps refused.
 That fence is the receipt time of authoritative lifecycle facts, not the command's start time; the hook's timestamp and captured result remain an unsigned report from code inside the proven sender, so this is server-reported input submission rather than authenticated recipient or model intake.
 Proof uses one absolute 1.2 second execution budget after caller authentication and enters the existing bounded links mailbox only after a final memory-only identity and context recheck.
+Its fresh Herdr reads require a connector that enforces that same absolute deadline for connection establishment; unsupported transports refuse, while local streams use the platform deadline and SSH uses only an initialized transport's cached socket and existing authenticated session, with the session-slot wait and channel open sharing one timer.
+Passive proof never starts SSH configuration/key reads or a new authentication attempt, and expiry drops the pending channel-open future on the caller's worker.
 Queue acceptance does not promise durable storage or a graph edge; uncertain, interrupted, truncated, missing or uncorrelated results retain private reason metadata without a confirmed edge.
 Antigravity's native `GENERIC` transcript step has result text but no tool or call identity, and the existing conversation reader projects only sightings from it; conversation-step correlation stays unresolved with `antigravity_result_correlation_unavailable` rather than attributing a nearby result to a tool.
 The caller selects one live route before sending, refuses ambiguous node bridges before sending to any, and never retries a sent request through another transport.
@@ -2516,6 +2519,7 @@ A request while one runs joins it, a dropped runtime stops the children, and the
 Saved Herdr machines use a separate configuration read (`herdr_profiles_list`, `runtime/herdr_profiles.rs`, `DeviceConnector::herdr_profiles`): one cancelable worker runs only the pinned CLI's `machine list --json`, with a five-second child deadline and a 64 KiB output bound, and publishes at most 32 profiles.
 The original profile id, target, session and enabled state remain together in `status.herdr_profiles`; discovery runs no SSH command, status probe, authentication or reconnect, and an unreadable list is a failed read rather than an empty list.
 Configuration-only target resolution reads the account's SSH configuration once with the same 16-file, 256 KiB-per-file and four-level include bounds, compares up to 64 existing registrations, and compares the resulting user, hostname and port together with the Herdr session, never the label.
+Each configuration file opens through the platform's nonblocking regular-file helper, which refuses a pipe, device, directory or symbolic link at the opened name even if it changes during the open; bounded chunks and include processing check one three-second read budget.
 Literal hostnames, `user@host`, SSH URIs and IPv6 destinations need no Host entry; a configuration requiring Match or a proxy route the connector cannot apply remains unavailable instead of silently selecting another route.
 `herdr_profile_connect` carries only a discovered profile id and explicit helper-installation consent; the core imports the original target and session into the existing device registry, reuses a canonical endpoint/session already registered, and keeps different sessions on one endpoint distinct.
 Disabled profiles remain visible and cannot connect, and refusal and connection attempts remain associated with the selected profile.

@@ -104,6 +104,7 @@ pub enum PanelAnswer {
 #[derive(Default)]
 struct Mailbox {
     stop: bool,
+    direct_shutdown_deadline: Option<Instant>,
     projects: Option<Arc<Vec<ProjectFacts>>>,
     panes: Option<Arc<Vec<PaneFact>>>,
     parents: Option<Arc<Vec<ParentFact>>>,
@@ -159,6 +160,19 @@ struct ContextCache {
 }
 
 impl LinkClient {
+    fn request_stop(&self, now: Instant) {
+        self.post(|mailbox| {
+            mailbox.stop = true;
+            mailbox
+                .direct_shutdown_deadline
+                .get_or_insert(now + observation::SHUTDOWN_DRAIN);
+        });
+    }
+
+    fn stopping(&self) -> bool {
+        self.0.0.lock().map_or(true, |mailbox| mailbox.stop)
+    }
+
     /// Admission is bounded in memory. SQLite and publication belong to the worker.
     pub fn observe(&self, fact: DirectFact) -> Result<(), String> {
         fact.validate(now_ms())?;
@@ -407,7 +421,7 @@ pub struct LinkWorker {
 
 impl Drop for LinkWorker {
     fn drop(&mut self) {
-        self.client.post(|mailbox| mailbox.stop = true);
+        self.client.request_stop(Instant::now());
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
@@ -617,13 +631,47 @@ fn open_store(path: &Path) -> Result<LinkStore, String> {
     Ok(store)
 }
 
+/// Yield between SQLite operations, including when shutdown arrives during a write.
+/// The clock and write boundary let the regression order shutdown without waiting on a timer.
+fn direct_observation_turn(
+    client: &LinkClient,
+    state: &mut State,
+    mut now: impl FnMut() -> Instant,
+    mut write: impl FnMut(&DirectFact) -> Result<bool, String>,
+) -> bool {
+    let deadline = now() + TURN;
+    for _ in 0..16 {
+        if client.stopping() {
+            return true;
+        }
+        if now() >= deadline {
+            break;
+        }
+        let Some(pending) = state.direct.pop_front() else {
+            break;
+        };
+        if now().saturating_duration_since(pending.queued) >= observation::PENDING_DEADLINE {
+            log_direct("direct_observation_pending_expired", &pending.fact);
+        } else {
+            match write(&pending.fact) {
+                Ok(changed) => state.direct_dirty |= changed,
+                Err(code) => log_direct(&code, &pending.fact),
+            }
+        }
+        if let Ok(mut mailbox) = client.0.0.lock() {
+            mailbox.direct_pending = mailbox.direct_pending.saturating_sub(1);
+        }
+    }
+    client.stopping()
+}
+
 fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink) {
     // A store that cannot open (busy, a newer schema, a full disk) is tried
     // again every listing period; until then a panel says why.
     let mut store = open_store(&paths.store);
     let mut opened_at = Instant::now();
     let mut state = State::new();
-    loop {
+    'work: loop {
         let (lock, wake) = &*client.0;
         let Ok(mut mailbox) = lock.lock() else { return };
         let wait = if store.is_ok() {
@@ -654,8 +702,10 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
         }
         if mailbox.stop {
             state.direct.extend(std::mem::take(&mut mailbox.direct));
+            let deadline = mailbox
+                .direct_shutdown_deadline
+                .expect("the worker owner sets a deadline when requesting stop");
             drop(mailbox);
-            let deadline = Instant::now() + observation::SHUTDOWN_DRAIN;
             if let Ok(store) = store.as_mut() {
                 while Instant::now() < deadline {
                     let Some(pending) = state.direct.pop_front() else {
@@ -792,21 +842,10 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
             }
             sink.deleted(request, result);
         }
-        for _ in 0..16 {
-            let Some(pending) = state.direct.pop_front() else {
-                break;
-            };
-            if pending.queued.elapsed() >= observation::PENDING_DEADLINE {
-                log_direct("direct_observation_pending_expired", &pending.fact);
-            } else {
-                match store.apply_direct_observation(&pending.fact, now_ms()) {
-                    Ok(changed) => state.direct_dirty |= changed,
-                    Err(code) => log_direct(&code, &pending.fact),
-                }
-            }
-            if let Ok(mut mailbox) = client.0.0.lock() {
-                mailbox.direct_pending = mailbox.direct_pending.saturating_sub(1);
-            }
+        if direct_observation_turn(client, &mut state, Instant::now, |fact| {
+            store.apply_direct_observation(fact, now_ms())
+        }) {
+            continue 'work;
         }
         let now = now_ms();
         let expired = state.direct_facts.as_ref().is_some_and(|facts| {
@@ -1794,6 +1833,64 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     const CREATED: u64 = 1_790_000_000_000;
+
+    #[test]
+    fn observation_stop_during_commit_starts_no_second_write_or_new_drain_budget() {
+        use crate::links::observation::DirectOutcome;
+        use crate::model::GraphParty;
+        use std::cell::Cell;
+
+        let directory = tempfile::tempdir().unwrap();
+        let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+        let client = LinkClient::open_mailbox_for_test();
+        let at = now_ms();
+        for index in 0..16 {
+            client
+                .observe(DirectFact {
+                    source_server: "local-server".into(),
+                    call_key: format!("call-{index}"),
+                    sender: GraphParty {
+                        device_id: "local".into(),
+                        pane_id: "sender".into(),
+                        session: "a".repeat(64),
+                    },
+                    recipient: None,
+                    at_unix_ms: at,
+                    outcome: DirectOutcome::Unknown,
+                    reason: None,
+                })
+                .unwrap();
+        }
+        let mut state = State::new();
+        state.direct = std::mem::take(&mut client.0.0.lock().unwrap().direct);
+        let stopped_at = Instant::now();
+        let clock = Cell::new(stopped_at);
+        let mut writes = 0;
+        let stopped = direct_observation_turn(
+            &client,
+            &mut state,
+            || clock.get(),
+            |fact| {
+                let answer = store.apply_direct_observation(fact, at);
+                writes += 1;
+                // Order shutdown inside the real write boundary without a busy timeout or sleep.
+                client.request_stop(stopped_at);
+                clock.set(stopped_at + observation::SHUTDOWN_DRAIN);
+                answer
+            },
+        );
+        assert!(stopped);
+        assert_eq!(writes, 1);
+        assert_eq!(store.direct_observations(at).unwrap().len(), 1);
+        assert_eq!(state.direct.len(), 15);
+        client.request_stop(clock.get());
+        assert_eq!(
+            client.0.0.lock().unwrap().direct_shutdown_deadline,
+            Some(clock.get())
+        );
+        let pending = state.direct.front().unwrap().fact.clone();
+        assert_eq!(client.observe(pending), Err("links_worker_closed".into()));
+    }
 
     #[test]
     fn a_leaf_change_refreshes_the_cached_root_at_the_supported_depth_limit() {

@@ -185,22 +185,34 @@ fn removing_devices_retires_only_their_pane_reads_and_rejects_late_publications(
     }
 }
 
-/// An alias the SSH config does not know is the first thing that can go
-/// wrong, and the row has to say so rather than spin on "connecting".
+/// The session worker reports unreadable SSH configuration on the device
+/// row. A literal hostname does not have to be declared as an SSH alias.
 #[test]
-fn an_unknown_ssh_alias_is_reported_on_the_device_row() {
-    let mut runtime = runtime_with_home();
+fn unreadable_ssh_configuration_is_reported_on_the_device_row() {
+    let shared = remote_runtime_with_unreadable_config();
+    let mut runtime = shared.lock().unwrap();
     assert!(register_device(
         &mut runtime,
         "nowhere",
         "hide-test-alias-that-does-not-exist"
     ));
+    drop(runtime);
+    wait(&shared, "SSH configuration failure", |runtime| {
+        runtime
+            .snapshot()
+            .status
+            .remote
+            .iter()
+            .any(|status| status.target_id == "nowhere" && status.state == "unreachable")
+    });
+    let runtime = shared.lock().unwrap();
     let row = device(&runtime, "nowhere");
     assert_eq!(row.state, "unavailable");
     let message = row.message.clone().expect("failure reason");
     assert!(
-        message.starts_with("SSH alias hide-test-alias-that-does-not-exist could not be read"),
-        "the row names the alias and the fix: {message}"
+        message.contains("SSH target hide-test-alias-that-does-not-exist could not be resolved")
+            && message.contains("not a regular file"),
+        "the row names the target and the configuration failure: {message}"
     );
     assert_eq!(runtime.snapshot().status.remote[0].state, "unreachable");
     assert_eq!(diagnostic_count(&runtime, "device.registered"), 1);
@@ -272,12 +284,29 @@ pub(super) fn runtime_with_home() -> Runtime {
     runtime
 }
 
+/// A real worker resolves private configuration that fails before any SSH
+/// connection can start. Keeping the path a directory is deterministic on
+/// every supported system.
+fn remote_runtime_with_unreadable_config() -> SharedRuntime {
+    let shared = SharedRuntime::new(runtime_with_home());
+    let mut runtime = shared.lock().unwrap();
+    let home = runtime.home_path.as_ref().expect("fixture home");
+    std::fs::create_dir_all(home.join(".ssh/config")).unwrap();
+    runtime.worker_context = Some(RuntimeWorkerContext {
+        runtime: shared.weak(),
+        notifier: crate::handle::ChangeNotifier::noop(),
+    });
+    drop(runtime);
+    shared
+}
+
 /// PRD core-host-node-move amendment 3: a core waiting for its move's link
 /// keeps the registration it is given but dials nobody; releasing the hold
 /// dials every registration.
 #[test]
 fn a_pending_core_dials_no_device_until_its_link_commits() {
-    let mut runtime = runtime_with_home();
+    let shared = remote_runtime_with_unreadable_config();
+    let mut runtime = shared.lock().unwrap();
     runtime.hold_effects();
     assert!(register_device(&mut runtime, "studio", "studio-host"));
     assert_eq!(runtime.snapshot().ui_state.device_registrations.len(), 1);
@@ -286,32 +315,47 @@ fn a_pending_core_dials_no_device_until_its_link_commits() {
         "no connection is attempted"
     );
     assert!(runtime.release_effects());
+    drop(runtime);
+    wait(&shared, "released device connection attempt", |runtime| {
+        runtime
+            .snapshot()
+            .status
+            .remote
+            .iter()
+            .any(|status| status.target_id == "studio" && status.state == "unreachable")
+    });
+    let runtime = shared.lock().unwrap();
     let attempt = device(&runtime, "studio").message.clone().expect("reason");
     assert!(
-        attempt.starts_with("SSH alias studio-host could not be read"),
+        attempt.contains("SSH target studio-host could not be resolved")
+            && attempt.contains("not a regular file"),
         "{attempt}"
     );
 }
 
-/// Retry is a new attempt, not a repaint of the last answer: fixing the SSH
-/// config and retrying moves the row past the alias failure it showed.
+/// Retry resolves configuration again instead of replaying the cached
+/// failure. Both fixture failures happen before any network connection.
 #[test]
 fn retrying_a_device_makes_a_new_connection_attempt() {
-    let mut runtime = runtime_with_home();
+    let shared = remote_runtime_with_unreadable_config();
+    let mut runtime = shared.lock().unwrap();
     assert!(register_device(&mut runtime, "studio", "studio-host"));
+    drop(runtime);
+    wait(&shared, "first configuration failure", |runtime| {
+        runtime
+            .snapshot()
+            .status
+            .remote
+            .iter()
+            .any(|status| status.target_id == "studio" && status.state == "unreachable")
+    });
+    let mut runtime = shared.lock().unwrap();
     let first = device(&runtime, "studio").message.clone().expect("reason");
-    assert!(
-        first.starts_with("SSH alias studio-host could not be read"),
-        "{first}"
-    );
+    assert!(first.contains("not a regular file"), "{first}");
 
     let home = runtime.home_path.clone().expect("fixture home");
-    std::fs::create_dir_all(home.join(".ssh")).unwrap();
-    std::fs::write(
-        home.join(".ssh/config"),
-        "Host studio-host\n  HostName 127.0.0.1\n  User fixture\n",
-    )
-    .unwrap();
+    std::fs::remove_dir(home.join(".ssh/config")).unwrap();
+    std::fs::write(home.join(".ssh/config"), "Match all\n").unwrap();
     let retry = serde_json::to_vec(&serde_json::json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "retry_connect",
@@ -319,12 +363,18 @@ fn retrying_a_device_makes_a_new_connection_attempt() {
     }))
     .unwrap();
     assert!(runtime.dispatch_json(&retry));
-
+    drop(runtime);
+    wait(&shared, "retry configuration failure", |runtime| {
+        device(runtime, "studio")
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("SSH Match rules"))
+    });
+    let runtime = shared.lock().unwrap();
     let second = device(&runtime, "studio").message.clone().expect("reason");
     assert_ne!(second, first, "the row reports the new attempt");
     assert_eq!(diagnostic_count(&runtime, "device.retry"), 1);
     assert_eq!(runtime.snapshot().status.remote.len(), 1);
-    let _ = std::fs::remove_dir_all(home);
 }
 
 #[test]

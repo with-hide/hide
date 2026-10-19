@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use hide_node_link::device::{HerdrProfile, HerdrProfileListing};
 use hide_platform::process::{RUN_OUTPUT_CAP, restrict_to_login_environment, run_to_end};
@@ -16,6 +16,7 @@ const MAX_FIELD_BYTES: usize = 2048;
 const DISCOVERY_DEADLINE: Duration = Duration::from_secs(5);
 const MAX_CONFIG_FILES: usize = 16;
 const MAX_CONFIG_BYTES: usize = 256 * 1024;
+const CONFIG_DEADLINE: Duration = Duration::from_secs(3);
 
 pub(super) fn list(
     program: &Path,
@@ -196,24 +197,49 @@ pub(super) fn ssh_config(path: &Path) -> Result<String, String> {
         count: &mut usize,
         depth: usize,
         output: &mut String,
+        deadline: Instant,
     ) -> Result<(), String> {
+        let expired = || "SSH configuration read deadline expired".to_owned();
+        if Instant::now() >= deadline {
+            return Err(expired());
+        }
         if *count >= MAX_CONFIG_FILES || depth > 4 {
             return Err("SSH configuration exceeds the include limit".to_owned());
         }
-        let file = match std::fs::File::open(path) {
+        // The platform helper opens nonblocking and verifies the opened
+        // handle. A FIFO or a swapped path cannot block before validation.
+        let mut file = match hide_platform::fs::open_regular(path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(format!("SSH configuration could not be read: {error}")),
         };
-        let mut contents = String::new();
-        file.take((MAX_CONFIG_BYTES + 1) as u64)
-            .read_to_string(&mut contents)
-            .map_err(|error| error.to_string())?;
-        if contents.len() > MAX_CONFIG_BYTES {
+        if file.metadata().map_err(|error| error.to_string())?.len() > MAX_CONFIG_BYTES as u64 {
             return Err("SSH configuration exceeds the file size limit".to_owned());
         }
+        let mut bytes = Vec::new();
+        let mut chunk = [0; 8192];
+        loop {
+            if Instant::now() >= deadline {
+                return Err(expired());
+            }
+            let remaining = (MAX_CONFIG_BYTES + 1 - bytes.len()).min(chunk.len());
+            let read = file
+                .read(&mut chunk[..remaining])
+                .map_err(|error| error.to_string())?;
+            bytes.extend_from_slice(&chunk[..read]);
+            if bytes.len() > MAX_CONFIG_BYTES {
+                return Err("SSH configuration exceeds the file size limit".to_owned());
+            }
+            if read == 0 {
+                break;
+            }
+        }
+        let contents = String::from_utf8(bytes).map_err(|error| error.to_string())?;
         *count += 1;
         for line in contents.lines() {
+            if Instant::now() >= deadline {
+                return Err(expired());
+            }
             let Some((key, arguments)) = super::hosts::split_line(line) else {
                 output.push('\n');
                 continue;
@@ -226,7 +252,7 @@ pub(super) fn ssh_config(path: &Path) -> Result<String, String> {
                         found: Default::default(),
                     };
                     for included in reader.expand_include(&argument) {
-                        read(&included, home, count, depth + 1, output)?;
+                        read(&included, home, count, depth + 1, output, deadline)?;
                     }
                 }
             } else if key.eq_ignore_ascii_case("match") {
@@ -245,7 +271,14 @@ pub(super) fn ssh_config(path: &Path) -> Result<String, String> {
         .and_then(Path::parent)
         .ok_or_else(|| "SSH configuration has no account home".to_owned())?;
     let mut output = String::new();
-    read(path, home, &mut 0, 0, &mut output)?;
+    read(
+        path,
+        home,
+        &mut 0,
+        0,
+        &mut output,
+        Instant::now() + CONFIG_DEADLINE,
+    )?;
     Ok(output)
 }
 
@@ -253,6 +286,44 @@ pub(super) fn ssh_config(path: &Path) -> Result<String, String> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn configuration_reads_refuse_non_regular_and_oversized_files() {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".ssh/config");
+        std::fs::create_dir_all(&config).unwrap();
+        assert!(
+            ssh_config(&config)
+                .unwrap_err()
+                .contains("not a regular file")
+        );
+        std::fs::remove_dir(&config).unwrap();
+        std::fs::write(&config, vec![b' '; MAX_CONFIG_BYTES + 1]).unwrap();
+        assert!(ssh_config(&config).unwrap_err().contains("file size limit"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configuration_and_included_pipes_are_refused_without_opening_a_reader() {
+        use std::os::unix::ffi::OsStrExt;
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".ssh/config");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let pipe = std::ffi::CString::new(config.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(pipe.as_ptr(), 0o600) }, 0);
+        assert!(
+            ssh_config(&config)
+                .unwrap_err()
+                .contains("not a regular file")
+        );
+        std::fs::rename(&config, config.with_file_name("pipe")).unwrap();
+        std::fs::write(&config, "Include pipe\n").unwrap();
+        assert!(
+            ssh_config(&config)
+                .unwrap_err()
+                .contains("not a regular file")
+        );
+    }
 
     #[test]
     fn saved_configuration_preserves_target_session_and_disabled_profiles() {

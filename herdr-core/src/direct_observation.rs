@@ -158,7 +158,7 @@ impl PreparedObservation {
         String,
     > {
         self.remaining()?;
-        let value = hide_herdr_client::request_small_response_until(
+        let value = hide_herdr_client::request_small_response_strict_until(
             self.connector.as_ref(),
             "agent.get",
             crate::wire::agent_target_params(&endpoint.raw_pane)?,

@@ -851,6 +851,41 @@ async fn bounded_ssh_operation<T>(
 }
 
 impl RusshApiConnection {
+    fn open_stream_until(
+        &self,
+        socket_path: String,
+        deadline: std::time::Instant,
+    ) -> Result<russh::ChannelStream<Msg>, ApiError> {
+        let client = &self.client;
+        client.runtime.block_on(async {
+            tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
+                // Only an existing session can serve passive proof. Dialing
+                // could synchronously read account keys/known_hosts, which
+                // an async timer cannot interrupt.
+                let session = client
+                    .connection
+                    .session
+                    .lock()
+                    .await
+                    .as_ref()
+                    .filter(|session| !session.is_closed())
+                    .cloned()
+                    .ok_or_else(|| {
+                        ApiError::Transport(
+                            "SSH session is unavailable for a deadline-bound request".to_owned(),
+                        )
+                    })?;
+                session
+                    .channel_open_direct_streamlocal(socket_path)
+                    .await
+                    .map(|channel| channel.into_stream())
+                    .map_err(|error| ApiError::Transport(error.to_string()))
+            })
+            .await
+            .map_err(|_| ApiError::Transport("SSH connection deadline expired".to_owned()))?
+        })
+    }
+
     fn open_stream(&self, socket_path: &str) -> Result<russh::ChannelStream<Msg>, ApiError> {
         let client = &self.client;
         client.runtime.block_on(async {
@@ -1059,6 +1094,27 @@ impl Drop for RusshApiStream {
 }
 
 impl ApiConnector for RusshApiConnector {
+    fn connect_until(&self, deadline: std::time::Instant) -> Result<Box<dyn ApiStream>, ApiError> {
+        let socket_path = self
+            .connection
+            .client
+            .cached_herdr_socket()
+            .ok_or_else(|| {
+                ApiError::Transport(
+                    "Herdr socket is unavailable for a deadline-bound request".to_owned(),
+                )
+            })?;
+        let stream = self.connection.open_stream_until(socket_path, deadline)?;
+        Ok(Box::new(RusshApiStream {
+            runtime: Arc::clone(&self.connection.client.runtime),
+            _connection: Arc::clone(&self.connection),
+            stream: Some(stream),
+            stopped: Arc::new(AtomicBool::new(false)),
+            read_timeout: Mutex::new(None),
+            write_timeout: Mutex::new(None),
+        }))
+    }
+
     fn connect(&self) -> Result<Box<dyn ApiStream>, ApiError> {
         let socket_path = self
             .connection
@@ -2427,6 +2483,37 @@ mod tests {
             Result<(), russh::Error>,
         >()));
         assert_eq!(result.unwrap_err(), "SSH operation timed out");
+    }
+
+    #[test]
+    fn a_proof_connection_wait_ends_at_its_deadline_without_dialing() {
+        let client = RusshRemoteClient::new(host()).unwrap();
+        let connection = Arc::clone(&client.connection);
+        let (locked, ready) = std::sync::mpsc::channel();
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+        let holding = client.runtime.spawn(async move {
+            let _held = connection.session.lock().await;
+            locked.send(()).unwrap();
+            // A broken deadline still lets the fixture finish and fail.
+            let _ = tokio::time::timeout(Duration::from_secs(1), released).await;
+        });
+        ready.recv_timeout(Duration::from_secs(1)).unwrap();
+        let connector = client.herdr_api_connector();
+        let answer = connector.connection.open_stream_until(
+            "/fixture/herdr.sock".to_owned(),
+            Instant::now() + Duration::from_millis(20),
+        );
+        let _ = release.send(());
+        client.runtime.block_on(holding).unwrap();
+        assert!(
+            matches!(answer, Err(ApiError::Transport(reason)) if reason.contains("deadline expired"))
+        );
+        assert!(
+            client
+                .runtime
+                .block_on(client.connection.session.lock())
+                .is_none()
+        );
     }
 
     fn host() -> SshAlias {
