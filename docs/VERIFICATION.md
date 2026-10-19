@@ -341,6 +341,8 @@ It is the check a release runs on the Mac before its tag ([CONTRIBUTING.md: Rele
 ### What it proves
 
 Each agent is started only through `hide agent spawn --parent here` from a controller pane, in its own branch, worktree and tab of the measured repository, and each step is judged from what Hide itself reports: the daemon's snapshot rows, `hide request show`, Herdr's `agent list` and Hide's own conversation reader (`hide_session::read_conversation`, built as the `journey_conversation` example).
+When a model is selected, both `start` and `start_untrusted` pass it as the product's `--model MODEL` before `--`, so the product retains that launch choice for Wake, Fork and reopen.
+Only the native prompt arguments follow `--`; omitting the model leaves the product's default choice.
 Every prompt asks only for a fresh token (`Reply with exactly <token>`), so a model never chooses an action.
 The measured repository is a shared clone (`git clone --shared`) of this checkout's commit, on `main`, at `projects/measured` in the candidate's HOME, added as a project the way Add project adds one, and the journey starts its agents only once the navigator lists it as a registered Git project.
 An operator starts agents in a project they added inside their HOME, and Hide adds none outside it (`outside_home`); a Wake after a Sleep that closed the pane (Grok, Pi, omp, OpenCode) finds the agent's checkout among that project's, so a repository outside the candidate's HOME left those Wakes with no checkout to open.
