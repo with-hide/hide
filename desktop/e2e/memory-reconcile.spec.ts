@@ -69,7 +69,7 @@ test("Memory compares sources, limits a batch and groups a confirmed PR", async 
     await expect(tab.locator('[data-memory-select="3"]')).toBeDisabled();
     await tab.locator('[data-memory-pr-group="72"] [data-memory-row-toggle="9"]').click();
     await expect(tab.locator('[data-memory-progress-detail="9"] [data-memory-preview]')).toHaveCount(2);
-    await tab.locator('[data-memory-progress-detail="9"] [data-memory-open-pr="72"]').click();
+    await tab.locator('[data-memory-pr-group="72"] [data-memory-open-pr="72"]').click();
     // The PR button asks the core for the PR's card (PRD work-tab-pr-lens B20): this
     // fixture lists PR 72, so its card opens in the lane's 보기 slot (PRD
     // sidebar-task-lens B14), and no Overview opens.
