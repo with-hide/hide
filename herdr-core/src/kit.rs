@@ -96,6 +96,7 @@ impl KitPump {
                             action: action_of(&job),
                             cli_dir: LOCAL_CLI_DIR.to_owned(),
                             herdr_socket: herdr_socket.clone(),
+                            preserve_herdr_server: false,
                             retirement_projects,
                         };
                         let report =
@@ -276,6 +277,7 @@ fn call_device(call: &DeviceKitCall) -> DeviceKitAnswer {
         action,
         cli_dir: call.cli_dir.clone(),
         herdr_socket: call.herdr_socket.clone(),
+        preserve_herdr_server: call.preserve_herdr_server,
         retirement_projects: call.retirement_projects.clone(),
     };
     if removing {

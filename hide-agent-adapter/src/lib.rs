@@ -20,13 +20,16 @@ pub enum AgentId {
     OpenCode,
     Pi,
     Omp,
-    Cursor,
     Antigravity,
+    Cursor,
 }
 
 impl AgentId {
     pub const fn adapter(self) -> &'static AgentAdapter {
-        &ADAPTERS[self as usize]
+        match self {
+            Self::Cursor => &declarations::RETIRED_CURSOR,
+            _ => &ADAPTERS[self as usize],
+        }
     }
 }
 
@@ -34,7 +37,7 @@ impl AgentId {
 /// names the shell call and session, and how a refusal is written. Claude
 /// Code's and Codex's six-event hook, a script file of Hide's in the agent's
 /// own folder (OpenCode's plugin, Pi's and omp's extension), which calls the
-/// same helper, and Grok's and Cursor's own hook files.
+/// same helper, and Grok's own hook file. Cursor's dialect remains for legacy cleanup.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum HookDialect {
     ClaudeCode,
@@ -48,12 +51,11 @@ pub enum HookDialect {
 }
 
 impl HookDialect {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 7] = [
         Self::ClaudeCode,
         Self::Codex,
         Self::OpenCode,
         Self::Grok,
-        Self::Cursor,
         Self::Pi,
         Self::Omp,
         Self::Antigravity,
@@ -243,7 +245,7 @@ impl LaunchDialect {
 
     /// How the CLI takes a model and a reasoning effort at launch; `{}` is
     /// replaced by the value. This is the one rule every start and restart
-    /// follows (the start surfaces, `hide agent spawn`, a Factory worker, and
+    /// follows (the start surfaces, `hide agent spawn`, and
     /// a wake, fork or reopen of any of them), so a model or effort an agent
     /// does not declare is refused wherever it is asked for. Verified against
     /// Claude Code 2.1 and Codex 0.160, agy 1.4.0's model (`--model`, listed

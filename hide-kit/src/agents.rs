@@ -14,7 +14,7 @@
 //!   ([`SkillDir`]); the folder is shared by every agent that reads it, so
 //!   the stub stays while any of them is on;
 //! - a hook: Claude Code and Codex keep their kit parts
-//!   ([`HookSupport::Part`]); Cursor and Grok, whose documented command hooks
+//!   ([`HookSupport::Part`]); Grok, whose documented command hooks
 //!   can refuse a shell call and report subagents, get Hide's hook file of
 //!   the basic tier ([`HookSupport::Guidance`]); and OpenCode, Pi and omp get
 //!   a script file of Hide's in their own folder ([`HookSupport::Plugin`]);
@@ -106,7 +106,7 @@ pub enum HookSupport {
     /// Claude Code and Codex: the six-event hook that is also one kit part.
     Part(ComponentId),
     /// Hide's hook for an agent of the basic tier with documented command
-    /// hooks: the spawn guard, the subagent count and, for Cursor, the session
+    /// hooks: the spawn guard, the subagent count and the session
     /// guidance (`hide_agent_hooks::guidance`).
     Guidance(GuidanceAgent),
     /// A script file of Hide's own in the agent's plugin or extension folder
@@ -127,9 +127,8 @@ pub struct AgentAdapter {
     pub label: &'static str,
     /// The program names the vendor's install documentation gives the CLI;
     /// the agent is installed on a machine when one of them is found
-    /// ([`Detection`]). A folder the agent creates does not count: an editor
-    /// makes `~/.cursor` without the `cursor-agent` CLI, and a CLI that was
-    /// removed leaves its folder behind.
+    /// ([`Detection`]). A folder the agent creates does not count: a CLI that
+    /// was removed leaves its folder behind.
     pub executables: &'static [&'static str],
     /// The folder the agent reads skills from.
     pub skill_dir: SkillDir,

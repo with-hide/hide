@@ -1,4 +1,4 @@
-//! The one-time retirement of the fourteen agents Hide stopped supporting
+//! The one-time retirement of the fifteen agents Hide stopped supporting
 //! (PRD settings-cleanup D-06, and Gemini CLI once the support list became
 //! the agents the pinned Herdr ships an integration for): only what the kit's
 //! record names and what carries Hide's marker is taken, and a second pass
@@ -54,6 +54,96 @@ fn qwen_as_an_earlier_build_left_it(fixture: &Fixture) {
 
 fn record(fixture: &Fixture) -> String {
     std::fs::read_to_string(fixture.home().join(".hide/kit/installed.json")).unwrap()
+}
+
+fn cursor_as_an_earlier_build_left_it(fixture: &Fixture) {
+    fixture.operator_installed("cursor", "current");
+    write(
+        &fixture.home().join(".cursor/hooks.json"),
+        r#"{"version":1,"hooks":{"sessionStart":[{"command":"/opt/other/start.sh"},{"command":"/kit/hide-agent-hooks hook --runtime cursor --event SessionStart --source hide-guidance@7"}],"preToolUse":[{"command":"/kit/hide-agent-hooks hook --runtime cursor --event PreToolUse --source hide-guidance@7"}]}}"#,
+    );
+    write(
+        &fixture.home().join(".agents/skills/hide-browser/SKILL.md"),
+        &skill_text(),
+    );
+    write(
+        &fixture.home().join(".hide/kit/installed.json"),
+        r#"{"format":1,"installed":["hook:cursor","skill:agents","herdr:cursor"],"agents":{"cursor":true}}"#,
+    );
+}
+
+// B31: a removed adapter must not strand ownership in the kit's ledger.
+#[test]
+fn cursor_retirement_removes_owned_integrations_and_preserves_operator_hooks() {
+    let fixture = Fixture::new();
+    cursor_as_an_earlier_build_left_it(&fixture);
+    let report = apply(&fixture.target, &Scope::automatic());
+    assert!(report.agents.iter().all(|agent| agent.id != "cursor"));
+    assert!(report.legacy_retirement.failures.is_empty(), "{report:?}");
+    assert_eq!(fixture.integration("cursor"), "none");
+    let hooks = std::fs::read_to_string(fixture.home().join(".cursor/hooks.json")).unwrap();
+    assert!(hooks.contains("/opt/other/start.sh"));
+    assert!(!hooks.contains("hide-guidance"));
+    assert!(!record(&fixture).contains("cursor"));
+    let before = fixture.integration_changes();
+    let next = apply(&fixture.target, &Scope::automatic());
+    assert!(next.legacy_retirement.is_empty(), "{next:?}");
+    assert_eq!(fixture.integration_changes(), before);
+}
+
+#[test]
+fn failed_cursor_uninstall_keeps_ownership_until_a_later_pass_succeeds() {
+    let fixture = Fixture::new();
+    cursor_as_an_earlier_build_left_it(&fixture);
+    write(&fixture.home().join("herdr-uninstall-fails"), "fail");
+    let report = apply(&fixture.target, &Scope::automatic());
+    assert!(
+        report
+            .legacy_retirement
+            .failures
+            .iter()
+            .any(|reason| reason.starts_with("Cursor Herdr integration:")),
+        "{report:?}"
+    );
+    assert!(record(&fixture).contains("herdr:cursor"));
+    assert_eq!(fixture.integration("cursor"), "current");
+    std::fs::remove_file(fixture.home().join("herdr-uninstall-fails")).unwrap();
+    let retry = apply(&fixture.target, &Scope::automatic());
+    assert!(retry.legacy_retirement.failures.is_empty(), "{retry:?}");
+    assert_eq!(fixture.integration("cursor"), "none");
+    assert!(!record(&fixture).contains("cursor"));
+}
+
+#[test]
+fn cursor_retirement_keeps_the_shared_skill_for_a_live_reader() {
+    let fixture = Fixture::new();
+    cursor_as_an_earlier_build_left_it(&fixture);
+    std::fs::create_dir_all(fixture.home().join(".codex")).unwrap();
+    executable(&fixture.home().join(".local/bin/codex"), "#!/bin/sh\n");
+    let report = apply(&fixture.target, &Scope::agents(["codex"], []));
+    assert!(report.legacy_retirement.failures.is_empty(), "{report:?}");
+    assert!(
+        fixture
+            .home()
+            .join(".agents/skills/hide-browser/SKILL.md")
+            .is_file()
+    );
+    assert!(record(&fixture).contains("skill:agents"));
+}
+
+#[test]
+fn unrecorded_cursor_integration_is_the_operators_and_stays() {
+    let fixture = Fixture::new();
+    fixture.operator_installed("cursor", "current");
+    let report = apply(&fixture.target, &Scope::agents(["cursor"], []));
+    assert!(report.agents.iter().all(|agent| agent.id != "cursor"));
+    assert_eq!(fixture.integration("cursor"), "current");
+    assert!(
+        fixture
+            .integration_changes()
+            .iter()
+            .all(|call| !call.ends_with(" cursor"))
+    );
 }
 
 #[test]

@@ -1,4 +1,4 @@
-// hide-opencode-server@3 sha256=3631a4f9de90295796803959c8b747afe5946fc9993fb50f40cba1050237cd27
+// hide-opencode-server@4 sha256=a97053c5554a9de02eb99213935a006f1ff0fb4359464b48ae02b6006f0468d1
 // Hide's OpenCode 2 plugin, its server half, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // OpenCode 2 runs one server for every terminal attached to it, so this half is never any pane's: what needs the
@@ -457,6 +457,7 @@ async function onTool(state, ctx, registration, event) {
  * whose letters wait for their receipt asks nothing: those are not written twice.
  */
 async function onToolResult(state, ctx, registration, event) {
+  await observeTool(state, ctx, registration, event);
   const sessionID = event?.sessionID;
   const key = toolKey(sessionID, event?.id);
   if (!key || event.status !== "completed" || !Array.isArray(event.result?.content)) return;
@@ -470,6 +471,24 @@ async function onToolResult(state, ctx, registration, event) {
   const text = reminder(answer.context);
   event.result = { ...event.result, content: [...event.result.content, { type: "text", text }] };
   if (letters.length > 0) holdReceipt(state, key, { root: sessionID, letters, text });
+}
+
+/** The shared server has no pane credential. Only the terminal already
+ * attached to the actual session's root may run the observation helper. */
+async function observeTool(state, ctx, registration, event) {
+  const command = event?.input?.command;
+  if (event?.tool !== "shell" || typeof command !== "string" || !(command.includes("herdr") || command.includes("HERDR_BIN_PATH"))) return;
+  if (!['completed', 'error'].includes(event.status) || typeof event.sessionID !== "string" || typeof event.id !== "string") return;
+  if (Buffer.byteLength(command, "utf8") > 64 * 1024) { state.lost += 1; return; }
+  const known = await rootOf(state, ctx, event.sessionID);
+  const root = known ?? event.sessionID;
+  const content = event.result?.content;
+  const truncated = Array.isArray(content) && (content.length > 16 || content.reduce((sum, part) => sum + (typeof part?.text === "string" ? Buffer.byteLength(part.text, "utf8") : 0), 0) > 128 * 1024);
+  const result = !truncated && Array.isArray(content) && content.every((part) => part?.type === "text" && typeof part.text === "string") ? { content: content.filter((part) => part?.type === "text").map((part) => ({ type: "text", text: part.text })) } : null;
+  await ask(state, registration, root, "observation", {
+    session_id: event.sessionID,
+    observation: { command, call_id: event.id, result, truncated, failed: event.status === "error" },
+  }, 1500, known === undefined);
 }
 
 /** OpenCode's events: a session's line, and the writes Hide's letters wait for. */

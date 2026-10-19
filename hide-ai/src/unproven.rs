@@ -1,7 +1,7 @@
 //! The agents Hide AI can name but cannot yet use, and why.
 //!
 //! A background call may read a transcript and answer; it must never change a
-//! file or run a command (D-15, B35). Cursor's agent runs every tool in print
+//! file or run a command (D-15, B35). A provider that runs tools in print
 //! mode with no switch that turns them off, and OpenCode's default agent has
 //! every tool; neither documents a flag or an environment variable that makes
 //! the call read-only. Until one is proven against the real CLI the backend is
@@ -60,7 +60,7 @@ mod tests {
 
     #[test]
     fn a_request_to_an_unproven_agent_is_refused_before_anything_runs() {
-        let backend = UnprovenReadOnlyBackend::new(ProviderId::CURSOR);
+        let backend = UnprovenReadOnlyBackend::new(ProviderId::OPENCODE);
         let request = AiRequest {
             feature_id: "test".into(),
             request_id: RequestId("r".to_owned()),
@@ -79,6 +79,6 @@ mod tests {
             backend.execute(&request, &CancelToken::new()).unwrap_err(),
             AiError::Unsupported("cannot_guarantee_read_only".to_owned())
         );
-        assert_eq!(backend.id(), ProviderId::CURSOR);
+        assert_eq!(backend.id(), ProviderId::OPENCODE);
     }
 }

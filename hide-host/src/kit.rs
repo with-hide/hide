@@ -46,6 +46,11 @@ pub use hide_kit::is_build_name;
 /// recording failed handoffs, it answers what it found and did.
 pub type HerdrUpdater = fn(pinned: &Path, socket: &Path, record: &Path) -> HerdrUpdate;
 
+struct HerdrPolicy {
+    preserve_server: bool,
+    updater: Option<HerdrUpdater>,
+}
+
 static HERDR_UPDATER: std::sync::OnceLock<HerdrUpdater> = std::sync::OnceLock::new();
 
 /// Installs the node's Herdr updater; the helper's process does this once
@@ -63,8 +68,15 @@ pub fn handle(
     cli_dir: &str,
     herdr_socket: Option<&str>,
     retirement_projects: &[String],
+    preserve_herdr_server: bool,
     env: &Env,
 ) -> HostResult<Value> {
+    if preserve_herdr_server && herdr_socket.is_none() {
+        return Err(HostError::new(
+            ErrorCode::Unsupported,
+            "The saved Herdr session has no resolved socket; reconnect that profile first",
+        ));
+    }
     match &env.kit {
         KitPlace::Installed => {}
         KitPlace::Build { root, version } => {
@@ -129,6 +141,10 @@ pub fn handle(
         herdr_socket,
         retirement_projects,
         Arc::clone(&env.stop),
+        HerdrPolicy {
+            preserve_server: preserve_herdr_server,
+            updater: HERDR_UPDATER.get().copied(),
+        },
     )
 }
 
@@ -280,7 +296,18 @@ pub fn run(
     herdr_socket: Option<&str>,
     stop: Arc<AtomicBool>,
 ) -> HostResult<Value> {
-    run_for_projects(placement, action, cli_dir, herdr_socket, &[], stop)
+    run_for_projects(
+        placement,
+        action,
+        cli_dir,
+        herdr_socket,
+        &[],
+        stop,
+        HerdrPolicy {
+            preserve_server: false,
+            updater: HERDR_UPDATER.get().copied(),
+        },
+    )
 }
 
 fn run_for_projects(
@@ -290,6 +317,7 @@ fn run_for_projects(
     herdr_socket: Option<&str>,
     retirement_projects: &[String],
     stop: Arc<AtomicBool>,
+    herdr_policy: HerdrPolicy,
 ) -> HostResult<Value> {
     let home = &placement.home;
     let Inputs {
@@ -317,7 +345,12 @@ fn run_for_projects(
             remove_other_builds(&placement.root, &placement.version);
             let pinned = point_herdr(&placement.root, &placement.version);
             let mut report = hide_kit::apply(&target(), &scope_of(action));
-            if let (Some(pinned), Some(update)) = (pinned.as_deref(), HERDR_UPDATER.get()) {
+            if let (Some(pinned), Some(update)) = (
+                pinned.as_deref(),
+                herdr_policy
+                    .updater
+                    .filter(|_| !herdr_policy.preserve_server),
+            ) {
                 let record =
                     device_herdr::herdr_dir(&placement.root).join(device_herdr::HANDOFF_RECORD);
                 report.herdr = Some(Box::new(update(pinned, &herdr_socket, &record)));
@@ -636,6 +669,83 @@ fn remove_herdr(root: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The external server updater records an attempted handoff. The kit
+    /// itself runs against private files and a raised cancellation flag.
+    #[test]
+    fn saved_session_apply_and_reinstall_leave_the_selected_server_untouched() {
+        fn updater(_pinned: &Path, _socket: &Path, record: &Path) -> HerdrUpdate {
+            std::fs::write(record, "handoff attempted").unwrap();
+            HerdrUpdate::Current {
+                version: "fixture".to_owned(),
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let placement = placed(dir.path(), "aaaaaaaaaaaaaaaa");
+        let copy = device_herdr::herdr_dir(&placement.root).join("bbbbbbbbbbbbbbbb");
+        std::fs::create_dir_all(&copy).unwrap();
+        std::fs::write(copy.join(device_herdr::HERDR_PROGRAM), "private fixture").unwrap();
+        std::fs::write(
+            placement
+                .root
+                .join(&placement.version)
+                .join(device_herdr::HERDR_PIN),
+            "bbbbbbbbbbbbbbbb\n",
+        )
+        .unwrap();
+        let record = device_herdr::herdr_dir(&placement.root).join(device_herdr::HANDOFF_RECORD);
+        for action in [
+            KitAction::Apply,
+            KitAction::Reinstall {
+                components: Vec::new(),
+                agents_on: Vec::new(),
+                agents_off: Vec::new(),
+                codex_daemon_off: false,
+            },
+        ] {
+            let value = run_for_projects(
+                &placement,
+                action,
+                "~/.local/bin",
+                Some("~/review.sock"),
+                &[],
+                Arc::new(AtomicBool::new(true)),
+                HerdrPolicy {
+                    preserve_server: true,
+                    updater: Some(updater),
+                },
+            )
+            .unwrap();
+            let report: hide_kit::KitReport = serde_json::from_value(value).unwrap();
+            assert!(report.herdr.is_none());
+            assert!(
+                !record.exists(),
+                "saved-session consent does not permit a server handoff"
+            );
+        }
+        let value = run_for_projects(
+            &placement,
+            KitAction::Apply,
+            "~/.local/bin",
+            Some("~/default.sock"),
+            &[],
+            Arc::new(AtomicBool::new(true)),
+            HerdrPolicy {
+                preserve_server: false,
+                updater: Some(updater),
+            },
+        )
+        .unwrap();
+        let report: hide_kit::KitReport = serde_json::from_value(value).unwrap();
+        assert!(matches!(
+            report.herdr.as_deref(),
+            Some(HerdrUpdate::Current { .. })
+        ));
+        assert_eq!(
+            std::fs::read_to_string(record).unwrap(),
+            "handoff attempted"
+        );
+    }
 
     fn placed(dir: &Path, version: &str) -> Placement {
         let root = dir.join("host-helper");

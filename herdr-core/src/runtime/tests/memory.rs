@@ -732,6 +732,7 @@ fn a_registered_device_project_keeps_its_memory_scope_while_the_link_is_down() {
                 ssh_alias: "mini-host".into(),
             },
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         });
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {

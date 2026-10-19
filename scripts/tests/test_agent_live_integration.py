@@ -56,7 +56,7 @@ class IntegrationEvidence(unittest.TestCase):
                 # not attest that a real CLI loaded an integration.
                 relative = {"claude": ".claude", "codex": ".codex", "pi": ".pi/agent",
                             "omp": ".omp/agent", "opencode": ".config/opencode",
-                            "cursor": ".cursor", "grok": ".grok", "agy": ".gemini/config"}[kind]
+                            "grok": ".grok", "agy": ".gemini/config"}[kind]
                 target = {"agy": "antigravity-cli"}.get(kind, kind)
                 marked = {"agy": "antigravity_cli"}.get(kind, kind)
                 def installer(args, *, env, cwd):
@@ -71,7 +71,7 @@ class IntegrationEvidence(unittest.TestCase):
                     if kind == "opencode":
                         write_private(root / "fixture-tui", (
                             "// HERDR_INTEGRATION_ID=opencode-tui\n// HERDR_INTEGRATION_VERSION=18\n").encode())
-                    if kind in ("claude", "cursor", "agy"):
+                    if kind in ("claude", "agy"):
                         write_private(root / ("settings.json" if kind == "claude" else "hooks.json"), b"{}")
                 native = [None]
                 runtime = SimpleNamespace(probe=probe, fixture_bin=None,
@@ -86,12 +86,11 @@ class IntegrationEvidence(unittest.TestCase):
                 self.assertIsNone(first["loaded_version"])
                 native[0] = {"agent_session": {"source": "herdr:" + marked, "kind": "id", "value": "native"}}
                 later = observe(runtime, "owned", recipe, plan)
-                if kind in ("cursor", "agy"):
+                if kind == "agy":
                     cwd = probe / "project"
                     private_directory(cwd)
                     project_args(plan, recipe, cwd)
-                    hooks = ".cursor/hooks.json" if kind == "cursor" else ".agents/hooks.json"
-                    self.assertEqual(json.loads((cwd / hooks).read_text()), {})
+                    self.assertEqual(json.loads((cwd / ".agents/hooks.json").read_text()), {})
                     self.assertIsNone(later["loaded_version"], "project hooks cannot exclude global ambiguity")
                 elif kind == "opencode":
                     self.assertIsNone(later["loaded_version"], "native source does not identify alternative frontend versions")

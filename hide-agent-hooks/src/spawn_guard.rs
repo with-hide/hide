@@ -269,6 +269,10 @@ fn simple_commands(text: &str) -> Vec<Vec<String>> {
 pub(crate) struct ShellLine {
     pub commands: Vec<Vec<String>>,
     pub targets: Vec<(usize, String)>,
+    /// A single static invocation, with no shell control, expansion or I/O
+    /// redirection. Observation uses this stricter claim; guards still read
+    /// all commands, as before.
+    pub plain: bool,
 }
 
 pub(crate) fn shell_line(text: &str) -> ShellLine {
@@ -293,6 +297,7 @@ struct Lexer {
     /// A quote, backtick or `$(` that the text ended inside. A shell reads such
     /// a line as a syntax error and runs none of it, so nothing in it is a launch.
     unclosed: bool,
+    plain: bool,
 }
 
 impl Lexer {
@@ -310,6 +315,7 @@ impl Lexer {
             heredoc_next: None,
             heredocs: Vec::new(),
             unclosed: false,
+            plain: true,
         }
     }
 
@@ -323,8 +329,12 @@ impl Lexer {
                 '\\' => self.backslash(),
                 '\'' => self.single_quoted(),
                 '"' => self.double_quoted(),
-                '`' => self.backtick(),
+                '`' => {
+                    self.plain = false;
+                    self.backtick();
+                }
                 '$' if self.peek(1) == Some('(') => {
+                    self.plain = false;
                     self.word.push('$');
                     self.in_word = true;
                     self.at += 1;
@@ -335,12 +345,17 @@ impl Lexer {
                     self.at += 1;
                 }
                 '\n' => {
+                    self.plain = false;
                     self.end_command();
                     self.at += 1;
                     self.heredoc_bodies();
                 }
-                '#' if !self.in_word => self.comment(),
+                '#' if !self.in_word => {
+                    self.plain = false;
+                    self.comment();
+                }
                 ';' | '|' | '(' | ')' => {
+                    self.plain = false;
                     self.end_command();
                     self.at += 1;
                     // `&&`-style doubling of the same character is one operator.
@@ -348,9 +363,18 @@ impl Lexer {
                         self.at += 1;
                     }
                 }
-                '&' => self.ampersand(),
-                '<' | '>' => self.redirection(c),
+                '&' => {
+                    self.plain = false;
+                    self.ampersand();
+                }
+                '<' | '>' => {
+                    self.plain = false;
+                    self.redirection(c);
+                }
                 other => {
+                    if matches!(other, '$' | '*' | '?' | '[' | ']' | '{' | '}') {
+                        self.plain = false;
+                    }
                     self.word.push(other);
                     self.in_word = true;
                     self.at += 1;
@@ -362,11 +386,13 @@ impl Lexer {
             return ShellLine {
                 commands: Vec::new(),
                 targets: Vec::new(),
+                plain: false,
             };
         }
         ShellLine {
             commands: self.commands,
             targets: self.targets,
+            plain: self.plain,
         }
     }
 
@@ -446,12 +472,19 @@ impl Lexer {
                     }
                 }
                 '$' if self.peek(1) == Some('(') => {
+                    self.plain = false;
                     self.word.push('$');
                     self.at += 1;
                     self.parenthesized();
                 }
-                '`' => self.backtick(),
+                '`' => {
+                    self.plain = false;
+                    self.backtick();
+                }
                 other => {
+                    if other == '$' {
+                        self.plain = false;
+                    }
                     self.word.push(other);
                     self.at += 1;
                 }

@@ -20,6 +20,10 @@ describe("the remembered selection (B29)", () => {
     expect(rememberedSelection(undefined)).toEqual({ kind: "claude", model: null });
     expect(rememberedSelection({ kind: null, models: {} })).toEqual({ kind: "claude", model: null });
   });
+
+  it("opens a supported kind after Cursor was retired without discarding other remembered models", () => {
+    expect(rememberedSelection({ kind: "cursor", models: { claude: "opus", cursor: "old" } })).toEqual({ kind: "claude", model: "opus" });
+  });
 });
 
 describe("switching the kind (B27)", () => {
@@ -84,7 +88,7 @@ describe("the model a start sends", () => {
   it("is none for an agent whose start takes no model, even one remembered for it", () => {
     expect(takesModel("opencode")).toBe(false);
     expect(modelToSend({ kind: "opencode", model: "remembered" })).toBeNull();
-    for (const kind of ["claude", "codex", "grok", "pi", "omp", "cursor", "agy"] as const) expect(takesModel(kind)).toBe(true);
+    for (const kind of ["claude", "codex", "grok", "pi", "omp", "agy"] as const) expect(takesModel(kind)).toBe(true);
   });
 });
 

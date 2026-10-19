@@ -3,11 +3,21 @@ use serde::Serialize;
 
 pub const GRAPH_LETTER_LIMIT: usize = 2_000;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GraphParty {
     pub device_id: String,
     pub pane_id: String,
     pub session: String,
+}
+
+/// An independently proven Herdr input submission, not a letter or model receipt.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct GraphDirectInput {
+    pub id: String,
+    pub sender: GraphParty,
+    pub recipient: GraphParty,
+    pub at_unix_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -36,6 +46,7 @@ pub struct OverviewGraphSnapshot {
     pub truncated: bool,
     pub retention_ms: u64,
     pub letters: Vec<GraphLetter>,
+    pub direct_inputs: Vec<GraphDirectInput>,
     pub sessions: Vec<GraphSession>,
 }
 
@@ -48,12 +59,38 @@ impl Default for OverviewGraphSnapshot {
             truncated: false,
             retention_ms: crate::delivery::RETENTION_MS,
             letters: Vec::new(),
+            direct_inputs: Vec::new(),
             sessions: Vec::new(),
         }
     }
 }
 
 impl OverviewGraphSnapshot {
+    /// Both input pages are newest first. Share one budget across relationship kinds.
+    pub(crate) fn with_direct_inputs(mut self, mut inputs: Vec<GraphDirectInput>) -> Self {
+        let total = self.letters.len() + inputs.len();
+        let (mut letters, mut direct) = (0, 0);
+        for _ in 0..GRAPH_LETTER_LIMIT.min(total) {
+            let take_letter = match (self.letters.get(letters), inputs.get(direct)) {
+                (Some(letter), Some(input)) => {
+                    (letter.at_unix_ms, &letter.id) >= (input.at_unix_ms, &input.id)
+                }
+                (Some(_), None) => true,
+                _ => false,
+            };
+            if take_letter {
+                letters += 1;
+            } else {
+                direct += 1;
+            }
+        }
+        self.truncated |= total > GRAPH_LETTER_LIMIT;
+        self.letters.truncate(letters);
+        inputs.truncate(direct);
+        self.direct_inputs = inputs;
+        self
+    }
+
     /// Delivery intake/watch transitions do not change the graph's immutable letter facts.
     /// Compare borrowed inputs and the retained count before sorting or cloning the bounded page.
     pub(crate) fn matches_ledger(
@@ -210,5 +247,42 @@ mod tests {
         assert!(!graph.matches_ledger(&before, &after, crate::delivery::RETENTION_MS + 1));
         after.letters[0].recipient.session = Some("replacement-session".into());
         assert!(!graph.matches_ledger(&before, &after, 3));
+    }
+
+    #[test]
+    fn letters_and_direct_inputs_share_the_newest_metadata_budget() {
+        let ledger = Ledger {
+            letters: (0..2_000).map(|id| letter(id, id)).collect(),
+            ..Ledger::default()
+        };
+        let input = GraphDirectInput {
+            id: "direct".into(),
+            sender: GraphParty {
+                device_id: "device-a".into(),
+                pane_id: "pane-a".into(),
+                session: "digest-a".into(),
+            },
+            recipient: GraphParty {
+                device_id: "device-b".into(),
+                pane_id: "pane-b".into(),
+                session: "digest-b".into(),
+            },
+            at_unix_ms: 2_000,
+        };
+        let graph =
+            OverviewGraphSnapshot::from_ledger(&ledger, 2_000).with_direct_inputs(vec![input]);
+        assert_eq!(
+            graph.letters.len() + graph.direct_inputs.len(),
+            GRAPH_LETTER_LIMIT
+        );
+        assert_eq!(graph.direct_inputs.len(), 1);
+        assert_eq!(graph.letters.len(), 1_999);
+        assert!(!graph.letters.iter().any(|letter| letter.id == "letter-0"));
+        assert!(graph.truncated);
+        assert!(graph.matches_ledger(&ledger, &ledger, 2_000));
+        // Rebuilding from retained sources restores a letter displaced by an input.
+        let graph = OverviewGraphSnapshot::from_ledger(&ledger, 2_001).with_direct_inputs(vec![]);
+        assert_eq!(graph.letters.len(), GRAPH_LETTER_LIMIT);
+        assert!(!graph.truncated);
     }
 }

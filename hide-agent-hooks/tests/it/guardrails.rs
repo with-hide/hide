@@ -122,7 +122,7 @@ fn a_protected_file_is_refused_in_each_runtimes_shape_and_its_example_runs() {
     );
     assert!(claude_reason(&run).unwrap().contains("Guard files"));
 
-    // Cursor: an edit arrives as Write, and the refusal is Cursor's deny.
+    // Retired Cursor entries stay silent even when a protected file is named.
     let cursor = json!({
         "conversation_id": "c1", "generation_id": "g1", "hook_event_name": "preToolUse",
         "cursor_version": "2026.10.14", "workspace_roots": [machine.checkout],
@@ -136,14 +136,8 @@ fn a_protected_file_is_refused_in_each_runtimes_shape_and_its_example_runs() {
         Some(PANE),
         &[("CURSOR_VERSION", "2026.10.14")],
     );
-    let answer: Value = serde_json::from_str(run.stdout.trim()).expect(&run.stdout);
-    assert_eq!(answer["permission"], "deny", "{answer}");
-    assert!(
-        answer["agent_message"]
-            .as_str()
-            .unwrap()
-            .contains("Guard files")
-    );
+    assert!(run.status_ok, "{run:?}");
+    assert!(run.stdout.is_empty() && run.stderr.is_empty(), "{run:?}");
 
     // Grok: search_replace with file_path.
     let grok = json!({
@@ -165,9 +159,23 @@ fn a_protected_file_is_refused_in_each_runtimes_shape_and_its_example_runs() {
     );
     assert!(run.stdout.contains("Guard files"), "{run:?}");
 
+    let mut example_payload: Value = serde_json::from_str(&grok).unwrap();
+    example_payload["toolInput"]["file_path"] = json!(example);
+    let run = machine.run_event(
+        "grok",
+        "PreToolUse",
+        &example_payload.to_string(),
+        Some(PANE),
+        &[
+            ("GROK_HOOK_EVENT", "pre_tool_use"),
+            ("GROK_SESSION_ID", "grok-session"),
+        ],
+    );
+    assert!(run.status_ok && run.stdout.is_empty(), "{run:?}");
+
     // Each refusal is logged with its rule and runtime, never the path.
     let refused = log(&machine);
-    assert_eq!(refused.len(), 6, "{refused:?}");
+    assert_eq!(refused.len(), 5, "{refused:?}");
     assert!(
         refused
             .iter()

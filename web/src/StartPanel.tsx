@@ -18,7 +18,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { notSignedIn } from "./firstRun";
 import { Status } from "./components/settings-rows";
 import { Input } from "./components/ui/input";
-import { catalogWorkspaces } from "./snapshot";
+import { catalogWorkspaces, localDeviceId } from "./snapshot";
 import { projectBaseBranch } from "./projectSettings";
 import { branchProblem } from "./workspaceManage";
 
@@ -239,8 +239,8 @@ function StartPanel({ actions }: { actions: Actions }) {
           onChange={setSelection}
           disabled={working}
           kindNote={
-            // The chosen agent would start signed out (B23).
-            notSignedIn(selection.kind, rest?.status?.background_ai?.providers) ? (
+            // The provider probe describes the core machine, never a remote target's login (B23, B37).
+            target?.deviceId === localDeviceId(rest) && notSignedIn(selection.kind, rest?.status?.background_ai?.providers) ? (
               <span className="flex shrink-0 items-center [&>span]:text-caption" data-start-not-signed-in={selection.kind}>
                 <Status tone="warn">{t("firstRun.tile.notSignedIn")}</Status>
               </span>

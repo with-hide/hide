@@ -12,7 +12,7 @@ fn root() -> PathBuf {
 }
 
 #[test]
-fn declarations_match_independent_support_samples_and_all_six_factory_facts() {
+fn declarations_match_independent_support_samples() {
     let fixtures: Vec<Value> =
         serde_json::from_str(include_str!("../fixtures/support.json")).unwrap();
     assert_eq!(
@@ -323,15 +323,7 @@ fn a_launch_choice_reaches_each_agent_only_as_its_declared_options_take_it() {
         model: model.map(str::to_owned),
         effort: effort.map(str::to_owned),
     };
-    let takes_model = [
-        "claude-code",
-        "codex",
-        "grok",
-        "pi",
-        "omp",
-        "cursor",
-        "antigravity",
-    ];
+    let takes_model = ["claude-code", "codex", "grok", "pi", "omp", "antigravity"];
     for row in ADAPTERS.iter().filter(|row| row.start.is_some()) {
         let dialect = row.start.unwrap();
         assert_eq!(
@@ -380,4 +372,15 @@ fn a_launch_choice_reaches_each_agent_only_as_its_declared_options_take_it() {
             .unwrap(),
         ["--model", "gpt-6-luna", "-c", "model_reasoning_effort=low"]
     );
+}
+
+// B31 removes new support while the typed historical descriptor stays available.
+#[test]
+fn cursor_is_retired_from_active_support_and_launches() {
+    use hide_agent_adapter::{AgentId, SessionFormat, start_kind};
+    assert!(adapter("cursor").is_none());
+    assert!(start_kind("cursor").is_none());
+    assert!(ADAPTERS.iter().all(|row| row.id != "cursor"));
+    assert_eq!(SessionFormat::Cursor.adapter().id, "cursor");
+    assert_eq!(AgentId::Antigravity.adapter().id, "antigravity");
 }

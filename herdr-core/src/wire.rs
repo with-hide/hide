@@ -1611,6 +1611,7 @@ pub(crate) fn agent_state(value: Value) -> Result<AgentState, String> {
 /// Fresh delivery guard, converted here rather than exposing generated types.
 pub(crate) struct DeliveryAgent {
     pub pane_id: String,
+    pub terminal_id: String,
     pub name: String,
     pub kind: Option<String>,
     pub session: Option<String>,
@@ -1653,6 +1654,7 @@ pub(crate) fn delivery_agent(value: Value) -> Result<DeliveryAgent, String> {
         res::ResponseResult::AgentInfo { agent } => Ok(DeliveryAgent {
             name: agent.name.unwrap_or_else(|| agent.pane_id.clone()),
             pane_id: agent.pane_id,
+            terminal_id: agent.terminal_id,
             kind: agent.agent,
             session: agent
                 .agent_session
@@ -1663,6 +1665,31 @@ pub(crate) fn delivery_agent(value: Value) -> Result<DeliveryAgent, String> {
         }),
         _ => Err("delivery_agent_format".into()),
     }
+}
+
+/// Exact native reference of a pane re-read on its already-proven server.
+/// This does not resolve a past target by name or prove model intake.
+pub(crate) fn direct_observation_agent(
+    value: Value,
+) -> Result<
+    (
+        DeliveryAgent,
+        Option<hide_agent_hooks::observation::ObservationNativeSession>,
+    ),
+    String,
+> {
+    let native = match response(value.clone(), "observation_agent_format")? {
+        res::ResponseResult::AgentInfo { agent } => agent.agent_session.map(|session| {
+            hide_agent_hooks::observation::ObservationNativeSession {
+                source: session.source,
+                agent: session.agent,
+                kind: session.kind.to_string(),
+                value: session.value,
+            }
+        }),
+        _ => return Err("observation_agent_format".into()),
+    };
+    Ok((delivery_agent(value)?, native))
 }
 
 pub(crate) fn delivery_prompt_params(pane: &str, text: &str) -> Result<Value, String> {

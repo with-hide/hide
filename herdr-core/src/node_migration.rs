@@ -1888,6 +1888,7 @@ mod tests {
         "agent_onboarding",
         "agent_onboarding_agents",
         "first_run",
+        "first_run_choices",
         "desktop_notifications",
         "desktop_notifications_done",
         "screen_intros_seen",

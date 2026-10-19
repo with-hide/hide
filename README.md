@@ -32,7 +32,7 @@ Your team runs several coding agents at once, and someone has to watch them.
 hide keeps every agent in one view, lets them hand work to each other, and keeps them going after you close the laptop.
 You get the decisions; the rest stays out of the way.
 
-It works with the agent CLIs you already signed in to: **Claude Code, Codex, OpenCode, Cursor, Grok, Pi and omp**.
+It works with the agent CLIs you already signed in to: **Claude Code, Codex, OpenCode, Grok, Pi, omp and Antigravity**.
 No new API key, no hosted service.
 
 ## Features

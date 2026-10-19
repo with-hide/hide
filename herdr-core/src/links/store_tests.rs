@@ -1239,3 +1239,110 @@ fn an_archived_session_without_a_line_expires_by_its_projects_history_from_its_a
             .is_empty()
     );
 }
+
+// PRD onboarding communication B26-B29: use real SQLite, no daemon or tool calls.
+#[test]
+fn direct_observation_retention_and_count_cap_preserve_exact_session_and_server_identity() {
+    use crate::links::observation::{DirectFact, DirectOutcome, EVENT_LIMIT, RETENTION_MS};
+    use crate::model::GraphParty;
+    let connection = Connection::open_in_memory().unwrap();
+    migrate(&connection).unwrap_or_else(|_| panic!("fixture migration failed"));
+    let mut store = LinkStore {
+        connection,
+        lineage: None,
+    };
+    let fact = DirectFact {
+        source_server: "device-local/server-one/session-named".into(),
+        call_key: "call".into(),
+        sender: GraphParty {
+            device_id: "local".into(),
+            pane_id: "pane-a".into(),
+            session: "a".repeat(64),
+        },
+        recipient: Some(GraphParty {
+            device_id: "remote".into(),
+            pane_id: "remote:device:pane:b".into(),
+            session: "b".repeat(64),
+        }),
+        at_unix_ms: T0,
+        outcome: DirectOutcome::Submitted,
+        reason: None,
+    };
+    for index in 0..EVENT_LIMIT {
+        let mut next = fact.clone();
+        next.call_key = format!("call-{index}");
+        assert!(store.apply_direct_observation(&next, T0).unwrap());
+    }
+    assert_eq!(
+        store.apply_direct_observation(&fact, T0),
+        Err("direct_observation_store_capacity".into())
+    );
+    assert_eq!(store.direct_observations(T0).unwrap().len(), EVENT_LIMIT);
+    assert_eq!(
+        store
+            .direct_observations(T0 + RETENTION_MS - 1)
+            .unwrap()
+            .len(),
+        EVENT_LIMIT
+    );
+    assert!(
+        store
+            .direct_observations(T0 + RETENTION_MS)
+            .unwrap()
+            .is_empty()
+    );
+    store.prune_direct_observations(T0 + RETENTION_MS).unwrap();
+    let mut next = fact.clone();
+    next.at_unix_ms += RETENTION_MS;
+    store
+        .apply_direct_observation(&next, next.at_unix_ms)
+        .unwrap();
+    for changed in ["server", "session", "device"] {
+        let mut distinct = next.clone();
+        match changed {
+            "server" => distinct.source_server = "device-local/server-two/session-named".into(),
+            "session" => distinct.sender.session = "c".repeat(64),
+            _ => distinct.sender.device_id = "other-device".into(),
+        }
+        store
+            .apply_direct_observation(&distinct, distinct.at_unix_ms)
+            .unwrap();
+    }
+    assert_eq!(store.direct_observations(next.at_unix_ms).unwrap().len(), 4);
+}
+
+#[test]
+fn direct_observation_schema_migrates_existing_v4_without_recreating_retention_aliases() {
+    let state = tempfile::tempdir().unwrap();
+    let path = state.path().join("links.sqlite3");
+    let (store, _) = LinkStore::open(&path).unwrap();
+    store.connection.execute_batch("DROP TABLE direct_observations; PRAGMA user_version=4;
+        INSERT INTO retention_aliases VALUES('old-project','new-project');
+        INSERT INTO ledger_backlog VALUES('backlog-1','local','old-project','fixture-workspace','fixture/repo','Preserved backlog',1,'creating',NULL,NULL);").unwrap();
+    drop(store);
+    let (store, opened) = LinkStore::open(&path).unwrap();
+    assert_eq!(opened, Opened::Existing);
+    assert!(store.direct_observations(T0).unwrap().is_empty());
+    assert_eq!(
+        store
+            .connection
+            .query_row(
+                "SELECT new FROM retention_aliases WHERE old='old-project'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "new-project"
+    );
+    assert_eq!(
+        store
+            .connection
+            .query_row(
+                "SELECT title FROM ledger_backlog WHERE intent='backlog-1'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "Preserved backlog"
+    );
+}

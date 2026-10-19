@@ -22,7 +22,7 @@ export function graphActivity(agent: AgentRow): GraphActivity {
   }
 }
 const PRIORITY: Record<GraphActivity, number> = { turn: 0, working: 1, results: 2, unknown: 3, idle: 4, resting: 5 };
-export type Communication = { id: string; source: string; target: string; count: number; latest: number; kinds: Record<string, number>; directions: { from: string; to: string; count: number }[] };
+export type Communication = { kind: "letters" | "herdr_direct"; id: string; source: string; target: string; count: number; latest: number; kinds: Record<string, number>; directions: { from: string; to: string; count: number }[] };
 export type OverviewGraphModel = {
   projects: GraphProject[]; agents: GraphAgent[]; allAgents: GraphAgent[]; visible: GraphAgent[];
   context: ReadonlySet<string>; quietBranches: ReadonlyMap<string, number>; folded: ReadonlySet<string>;
@@ -198,14 +198,19 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
     return parent && visibleIds.has(parent.id) ? [{ from: parent.id, to: row.id }] : [];
   }).sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
   const bundles = new Map<string, Communication>();
-  for (const letter of metadata?.available ? metadata.letters.slice(0, metadata.limit) : []) {
+  const limit = Math.max(0, Math.min(2000, metadata?.limit ?? 2000));
+  const records = [
+    ...(metadata?.available ? metadata.letters.slice(0, Math.min(2000, metadata.limit)).map((letter) => ({ ...letter, type: "letters" as const })) : []),
+    ...(metadata?.direct_inputs ?? []).slice(0, 2000).map((input) => ({ ...input, kind: "herdr_direct", type: "herdr_direct" as const })),
+  ].sort((a, b) => b.at_unix_ms - a.at_unix_ms || b.id.localeCompare(a.id)).slice(0, limit);
+  for (const letter of records) {
     const from = endpoint.get(partyKey(letter.sender));
     const to = endpoint.get(partyKey(letter.recipient));
     if (!from || !to || from === to) continue;
     const [source, target] = [from, to].sort() as [string, string];
-    const key = `letters:${JSON.stringify([source, target])}`;
+    const key = `${letter.type}:${JSON.stringify([source, target])}`;
     let bundle = bundles.get(key);
-    if (!bundle) { bundle = { id: key, source, target, count: 0, latest: 0, kinds: {}, directions: [] }; bundles.set(key, bundle); }
+    if (!bundle) { bundle = { kind: letter.type, id: key, source, target, count: 0, latest: 0, kinds: {}, directions: [] }; bundles.set(key, bundle); }
     bundle.count += 1;
     bundle.latest = Math.max(bundle.latest, letter.at_unix_ms);
     bundle.kinds[letter.kind] = (bundle.kinds[letter.kind] ?? 0) + 1;

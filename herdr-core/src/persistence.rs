@@ -138,6 +138,8 @@ struct StoredUiState {
     #[serde(default)]
     first_run: Option<crate::model::FirstRun>,
     #[serde(default)]
+    first_run_choices: crate::model::FirstRunChoices,
+    #[serde(default)]
     desktop_notifications: bool,
     #[serde(default = "default_panel_visible")]
     product_analytics_enabled: bool,
@@ -483,6 +485,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             agent_onboarding: stored.agent_onboarding,
             agent_onboarding_agents: stored.agent_onboarding_agents,
             first_run: stored.first_run,
+            first_run_choices: stored.first_run_choices,
             desktop_notifications: stored.desktop_notifications,
             product_analytics_enabled: stored.product_analytics_enabled,
             desktop_notifications_done: stored
@@ -653,6 +656,7 @@ pub fn save(
         agent_onboarding: state.agent_onboarding,
         agent_onboarding_agents: state.agent_onboarding_agents.clone(),
         first_run: state.first_run,
+        first_run_choices: state.first_run_choices.clone(),
         desktop_notifications: state.desktop_notifications,
         product_analytics_enabled: state.product_analytics_enabled,
         desktop_notifications_done: Some(state.desktop_notifications_done),

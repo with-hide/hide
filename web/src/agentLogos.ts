@@ -28,8 +28,8 @@ export function agentLogo(id: string): string | null {
  * The agent a Herdr kind names, with its logo, for the mark on a pane, tab or
  * row; `logo` is null for an agent with no bundled mark, which draws the
  * monogram of `label` (design 10). Null for a plain shell and for a kind Hide
- * does not support, which draw the neutral mark: a logo bundled for another
- * reason (Hide AI's Gemini CLI) does not make its name an agent.
+ * does not support, which draw the neutral mark: a retained history logo
+ * does not make its name an active agent.
  */
 export function agentMarkOf(kind: string | null | undefined): { id: string; logo: string | null; label: string; plated: boolean } | null {
   const adapter = agentAdapter(kind ?? "");

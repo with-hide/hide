@@ -5,6 +5,9 @@
 //! travel the same link as a stream, so a device pane needs no other
 //! connection to the core.
 
+pub use hide_agent_hooks::observation::{
+    DirectObservation, ITEM_LIMIT as OBSERVATION_ITEM_LIMIT, SEND_BUDGET as OBSERVATION_SEND_BUDGET,
+};
 use serde::{Deserialize, Serialize};
 
 /// Recovery advice shared by local and device pane refusals.
@@ -63,6 +66,10 @@ pub enum PullPoint {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HookCommand {
     WorkspaceInfo {},
+    /// Metadata-only passive observation; never dispatches input or letters.
+    Observation {
+        observation: DirectObservation,
+    },
     LetterPull {
         prompt_digest: Option<String>,
         session: Option<String>,

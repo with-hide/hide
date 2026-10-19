@@ -5,6 +5,8 @@
 // (design principle 10: never render a logo the system cannot source). A logo
 // may also belong to a Hide AI provider's agent (hide-ai/src/registry.rs), which
 // the Hide AI tab draws although the kit does not list that agent.
+// A retired agent may keep its logo for stored history when the manifest
+// explicitly marks it history_only and explains the retained reader.
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -19,13 +21,18 @@ const providerAgents = [...fs.readFileSync(path.join(root, 'hide-ai/src/registry
 if (providerAgents.length === 0) throw new Error('no provider agent ids read from hide-ai/src/registry.rs');
 const problems = [];
 const claimed = new Map();
-const claim = (id, how) => {
-  if (!adapters.includes(id) && !providerAgents.includes(id)) problems.push(`${id} (${how}) is neither an adapter in contracts/agent-adapters.json nor a provider agent in hide-ai/src/registry.rs`);
+const claim = (id, how, entry) => {
+  const active = adapters.includes(id) || providerAgents.includes(id);
+  const historyOnly = entry.history_only === true;
+  if ('history_only' in entry && !historyOnly) problems.push(`${id}: history_only is either true or absent`);
+  if (historyOnly && active) problems.push(`${id}: an active adapter or provider cannot be history_only`);
+  if (historyOnly && !entry.note?.trim()) problems.push(`${id}: history_only needs a note identifying the retained reader`);
+  if (!active && !historyOnly) problems.push(`${id} (${how}) is neither an adapter in contracts/agent-adapters.json, a provider agent in hide-ai/src/registry.rs, nor declared history_only`);
   if (claimed.has(id)) problems.push(`${id} is both ${claimed.get(id)} and ${how}`);
   claimed.set(id, how);
 };
 for (const logo of manifest.logos) {
-  claim(logo.id, 'bundled');
+  claim(logo.id, 'bundled', logo);
   if (!/^https:\/\/\S+$/.test(logo.source_url ?? '')) problems.push(`${logo.id}: no https source_url`);
   if (!logo.license?.trim()) problems.push(`${logo.id}: no license note`);
   if (!logo.modification?.trim()) problems.push(`${logo.id}: no modification note`);
@@ -37,11 +44,11 @@ for (const logo of manifest.logos) {
   if (!LOGO_FORMATS.some(format => logo.file === `${logo.id}.${format}`)) problems.push(`${logo.id}: ${logo.file} must be named ${LOGO_FORMATS.map(format => `${logo.id}.${format}`).join(' or ')}, the names agentLogos.ts reads the agent from`);
 }
 for (const entry of manifest.existing) {
-  claim(entry.id, 'existing');
+  claim(entry.id, 'existing', entry);
   if (!fs.existsSync(path.resolve(dir, entry.file))) problems.push(`${entry.id}: ${entry.file} is missing`);
 }
 for (const entry of manifest.monogram) {
-  claim(entry.id, 'monogram');
+  claim(entry.id, 'monogram', entry);
   if (!entry.reason?.trim()) problems.push(`${entry.id}: a monogram needs its reason`);
 }
 for (const id of adapters) if (!claimed.has(id)) problems.push(`${id} has neither a logo nor a monogram entry`);

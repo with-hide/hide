@@ -714,6 +714,8 @@ mod tests {
                 session: Some("session".into()),
             },
             raw_pane_id: "pane".into(),
+            observed_since_unix_ms: 0,
+            terminal_id: None,
             status: "idle".into(),
             state_change_seq: Some(7),
             status_changed_at_unix_ms: NOW - 60_000,

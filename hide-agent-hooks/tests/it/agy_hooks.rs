@@ -24,7 +24,7 @@ const SUBAGENT: &str = "7956974a-cd2e-41c0-bd3b-4c12822badd5";
 const START: &str = "herdr agent start probe --kind claude --pane w1:p9";
 
 /// The stand-in `hide`: the checkout is registered, the pane has one letter
-/// and is a Factory worker, and every other call (Memory, the Workspace) is
+/// and every other call (Memory, the Workspace) is
 /// not answered.
 const FAKE_HIDE: &str = r#"#!/bin/sh
 [ "$1" = --help ] && exit 0
@@ -33,7 +33,6 @@ case "$1 $2" in
   "workspace bootstrap") echo '{"ok":true,"reference":"/x"}' ;;
   "inbox --hook") echo '{"ok":true,"result":{"context":"LETTER-FOR-THIS-PANE","ids":["letter-1"]}}' ;;
   "inbox --confirm") echo '{"ok":true,"result":{"confirmed":["letter-1"]}}' ;;
-  "workspace factory-question-guard") echo '{"type":"workspace_result","ok":true,"result":{"deny":true}}' ;;
   *) exit 1 ;;
 esac
 "#;

@@ -587,6 +587,7 @@ fn retrying_a_device_keeps_its_panes_in_their_checkouts() {
                 ssh_alias: TARGET.to_owned(),
             },
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         });
     runtime
@@ -652,6 +653,7 @@ fn catalog_device_runtime(workspaces: Vec<WorkspaceSnapshot>) -> (Runtime, tempf
                 ssh_alias: TARGET.to_owned(),
             },
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         });
     runtime
@@ -1361,6 +1363,7 @@ fn removing_a_device_forgets_its_projects_tabs_and_folders_and_keeps_this_machin
                 ssh_alias: TARGET.to_owned(),
             },
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         });
     let registration = |id: &str, device: &str| crate::model::WorkspaceRegistration {
@@ -1905,6 +1908,7 @@ fn a_device_agent_pane_is_judged_against_its_own_kit() {
                 ssh_alias: TARGET.to_owned(),
             },
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: Some(consent),
         });
     // Allowed, but the first read of its kit failed: the cause is unknown,

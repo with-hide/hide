@@ -189,11 +189,12 @@ impl Runtime {
                     let home_path = self.home_path.as_ref().ok_or_else(|| {
                         "HOME is unavailable, so the SSH config cannot be resolved".to_owned()
                     })?;
-                    let transport = self.devices.transport(
+                    let transport = self.devices.transport_session(
                         home_path,
                         &device_id,
                         &ssh_alias,
                         registration.herdr_socket_path.clone(),
+                        registration.herdr_session.clone(),
                     )?;
                     (DeviceReach::Dialed(transport), None)
                 }

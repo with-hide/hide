@@ -24,6 +24,23 @@ const HERDR = { HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1", HERDR_SOCKET_PATH: "/tmp
 const sample = (name) => structuredClone(SAMPLES[name]);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+test("post observation preserves the tool result and carries its actual native identity", async () => {
+  answer({ observation: {} });
+  const hooks = await plugin();
+  const result = { output: '{"id":"cli:agent:prompt","result":{"type":"agent_prompted"}}', metadata: {} };
+  const original = structuredClone(result);
+  await hooks["tool.execute.after"]({ tool: "bash", sessionID: "ses_child", callID: "raw-call", args: { command: "herdr agent prompt worker hi" } }, result);
+  assert.deepEqual(result, original);
+  const [observation] = await until("observation");
+  assert.equal(observation.input.session_id, "ses_child");
+  assert.equal(observation.input.observation.call_id, "raw-call");
+  assert.equal(observation.input.observation.result, original.output);
+  await hooks.event({ event: { type: "message.part.updated", properties: { part: { type: "tool", tool: "bash", sessionID: "ses_child", callID: "failed-call", state: { status: "error", input: { command: "herdr agent prompt worker hi" } } } } } });
+  const failed = (await until("observation", 2)).find((item) => item.input.observation.call_id === "failed-call");
+  assert.equal(failed.input.observation.failed, true);
+  assert.equal(failed.input.observation.result, null);
+});
+
 /** Writes the guardrails policy the core would publish, with `rules` on the fixture project, or removes it. */
 function policy(rules) {
   const file = path.join(homedir(), ".hide", "agent-hooks", "guardrails.json");

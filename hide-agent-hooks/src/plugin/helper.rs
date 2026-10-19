@@ -70,6 +70,9 @@ struct Input {
     /// is an agent started in another agent's shell, which a pane variable
     /// it inherited does not make the pane's own (PRD agent-guardrails B22).
     guard_only: bool,
+    /// Transient Post input, consumed by the same owned helper. Never stored
+    /// in the metadata admission request.
+    observation: Option<Value>,
 }
 
 /// The agent a script speaks for: its adapter row and the runtime id the
@@ -148,6 +151,7 @@ pub fn run(agent: &str, operation: Option<&str>, started: Instant) {
         Some("prompt") => prompt(&home, &agent, input, started + PROMPT_BUDGET),
         Some("confirm") => confirm(&home, input, started + CONFIRM_BUDGET),
         Some("tool") => tool(&home, &agent, input, started + TOOL_BUDGET),
+        Some("observation") => observation(&home, &agent, &input, started),
         Some("letters") if agent.adapter.tool_letters.is_some() => {
             letters(&home, input, started + LETTERS_BUDGET)
         }
@@ -157,6 +161,49 @@ pub fn run(agent: &str, operation: Option<&str>, started: Instant) {
         _ => json!({}),
     };
     answer(&output);
+}
+
+fn observation(home: &Path, agent: &Agent, input: &Input, started: Instant) -> Value {
+    use hide_agent_hooks::observation::{self, ObservationCorrelation, ToolResult};
+    let Some(post) = input.observation.as_ref() else {
+        return json!({});
+    };
+    if input.guard_only {
+        return json!({});
+    }
+    let Some(command) = post["command"].as_str() else {
+        return json!({});
+    };
+    let Some(session) = input.session_id.as_deref() else {
+        return json!({});
+    };
+    let Some(call_id) = post["call_id"].as_str() else {
+        return json!({});
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let parsed = observation::observe(
+        ToolResult {
+            runtime_id: agent.runtime(),
+            session_id: session,
+            call_id,
+            command,
+            correlation_kind: ObservationCorrelation::ToolCall,
+            result: post.get("result"),
+            failed: post["failed"] == true,
+            interrupted: post["interrupted"] == true,
+            truncated: post["truncated"] == true,
+            asynchronous: post["asynchronous"] == true,
+        },
+        now,
+        &|name| std::env::var(name).ok(),
+    );
+    let accepted = parsed
+        .as_ref()
+        .is_some_and(|parsed| observation::send(home, parsed, started + observation::SEND_BUDGET));
+    json!({ "observed": accepted })
 }
 
 fn answer(value: &Value) {

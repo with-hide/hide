@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { addProjectHosts, alreadyRegistered, defaultProjectParent, hostWays, initialHost, parseCloneUrl, projectNameProblem, projectPath, refusalText, trimFolder } from "./addProject";
+import { addProjectHosts, alreadyRegistered, cloneUrlDraft, defaultProjectParent, hostWays, initialHost, parseCloneUrl, projectNameProblem, projectPath, refusalText, trimFolder } from "./addProject";
 import type { Device, WorkspaceRegistration } from "./snapshot";
 
 const { t } = initializeInterfaceI18n("en");
@@ -80,6 +80,15 @@ describe("Add a project", () => {
   it("refuses what Git would not clone or would read as something else", () => {
     for (const url of ["", "http://example.com/r.git", "git://example.com/r.git", "ext::sh -c id", "ext::true", "-uhttps://x/y", "https://github.com", "https://github.com/", "/home/me/repo", "repo", "git@github.com:", "git@github.com:.git", "file://relative/r"]) {
       expect(parseCloneUrl(url).ok, url).toBe(false);
+    }
+  });
+
+  it("saves only complete clone URL drafts without user information, queries or fragments", () => {
+    for (const raw of ["https://alice:password@example.test/repo.git", "https://token@example.test/repo.git", "https://example.test/repo.git?token=secret", "https://example.test/repo.git#secret", "git@example.test:repo.git", "https://alice:password@", "unfinished-secret"]) {
+      expect(cloneUrlDraft(raw), raw).toBe("");
+    }
+    for (const raw of ["https://example.test/team/repo.git", "example.test:team/repo.git", "file:///work/repo.git"]) {
+      expect(cloneUrlDraft(` ${raw} `)).toBe(raw);
     }
   });
 
