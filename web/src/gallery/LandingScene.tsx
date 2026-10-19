@@ -2,7 +2,7 @@
 // the Hide AI section): the shell's own window, Sidebar, Memory tool and
 // Settings tabs over the invented story of the page's one-night timeline
 // (`landingSceneData.ts`). One shot fills one document, because the stores a
-// scene seeds are the app's singletons; `scripts/capture-site-shots.mjs`
+// scene seeds are the app's singletons; separately maintained capture tooling
 // photographs each in both themes.
 //
 //   hero       the whole window: the sidebar, a lead and the agent asking to merge side by side, and the PRs tool
