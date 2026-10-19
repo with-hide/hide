@@ -1871,6 +1871,7 @@ Working has no mark on the rail, since it is no reason to switch device; the 태
 A mark's digits are `--status-foreground`, white in Light and near-black in Dark.
 The counts come from the device's published `agent_scope` values; the browser does not rederive them.
 A device that is not connected dims its glyph and wears a `×` at the bottom-right, with no mark, since its last counts are not current; selected, its sidebar shows only its name, `연결 안 됨` and `다시 연결`, which retries the connection in place, and never the tree it last reported.
+A delayed or failed agent-state query alone leaves the connected device, its tree and terminals available; retained agent activity uses the existing Unknown state until a successful query confirms it, without a disconnected message or a new alert.
 Selecting a device tile sends `focus_device`, and the sidebar becomes that device's single project and session list; no row there names the device.
 Every tile is a button reached with Tab and chosen with Enter or Space, named for assistive technology by the device, its connection and each count it marks (`mini, 연결 안 됨`, `This Mac, Needs You 2, Done 1`).
 `기기 추가` opens Settings › Devices with the Add device dialog in front, as the hidden rail's `기기 추가…` and the Add a project dialog's host list do.

@@ -342,6 +342,7 @@ fn same_target(left: &WatchWork, right: &WatchWork) -> bool {
         && left_observed.session == right_observed.session
         && left_observed.host_scope == right_observed.host_scope
         && left_observed.status == right_observed.status
+        && left_observed.telemetry_stale == right_observed.telemetry_stale
         && left_observed.state_change_seq == right_observed.state_change_seq
         && left_observed.status_changed_at_unix_ms == right_observed.status_changed_at_unix_ms
         && match (&left.source.link, &right.source.link) {
@@ -1172,6 +1173,7 @@ mod tests {
             observed_since_unix_ms: 0,
             terminal_id: None,
             status: "idle".into(),
+            telemetry_stale: false,
             state_change_seq: Some(1),
             status_changed_at_unix_ms: 1,
             last_input_at_unix_ms: 0,
