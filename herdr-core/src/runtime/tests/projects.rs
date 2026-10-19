@@ -3382,6 +3382,7 @@ fn a_task_agent_start_reports_apart_from_the_creation_it_follows() {
 
     // The pane is not in this runtime's navigator, so the retry says so and
     // starts nothing.
+    runtime.snapshot.task_operation.as_mut().unwrap().request_id = Some("restore-session".into());
     let retry = serde_json::to_vec(&serde_json::json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "task_agent_retry",
@@ -3397,6 +3398,15 @@ fn a_task_agent_start_reports_apart_from_the_creation_it_follows() {
             .as_ref()
             .map(|error| error.kind.as_str()),
         Some("task_operation.agent_retry_pane_gone")
+    );
+    assert_eq!(
+        runtime
+            .snapshot()
+            .status
+            .last_error
+            .as_ref()
+            .and_then(|error| error.request_id.as_deref()),
+        Some("restore-session")
     );
     assert_eq!(
         runtime

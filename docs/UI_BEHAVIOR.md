@@ -1098,7 +1098,13 @@ A pane head's agent-tree button and a started backlog item (from ⌘K, a Factory
 A 태스크 row's record button or Space, and an agent pane head's status mark, logo and title, open the record in the 보기 slot ([Pane header lineage and ownership](#pane-header-lineage-and-ownership)); pressing the title again while the slot shows that record turns the lane back to its tool.
 The Overview's panel draws the same record under its own head ([A record beside the tabs](#a-record-beside-the-tabs)); the two differ only in that frame, and a window reads one record at a time (PRD overview-device-tasks D-07, B17).
 The record starts with its title and agent logo, then `<device> · <agent product> · <project> · ⌂ <checkout>`; long titles and paths stay within the lane.
-Its native status and elapsed time share a quiet row with `터미널 열기` (or `답하러 가기` while asking); there is no coloured action box.
+Its native status and elapsed time share a quiet row with a `pane 열림` or `pane 닫힘` chip; there is no coloured action box.
+An open pane offers `터미널로 이동` even after its work ends, or `답하러 가기` while asking.
+A closed pane offers `세션 복구하기`, using the existing native-session resume in a new pane in the registered checkout containing its original working folder on its device.
+A missing conversation path, unsupported agent, disconnected device or missing checkout disables restore and states why beside the action.
+A restore in flight shows `복구하는 중…` and accepts no second click; a failed start shows an inline reason with Retry, and a successful start focuses the resumed pane.
+The record remains open until the resumed pane is confirmed; a timeout or an unknown launch result offers `시작 결과 확인`, which checks the original request instead of starting another pane, and Retry after a confirmed failure keeps that request's identity and destination.
+Archived sessions keep their existing tree-aware `이어가기` action.
 `요청한 작업` follows, with the completed count over the total only when judged tasks exist.
 Tasks stay first-asked first, using the existing checkbox and task verdict; working and completed tasks also name their state.
 Each task shows the full original request and its timestamp underneath, rather than hiding the request in a tooltip.
@@ -1114,6 +1120,8 @@ Only this session's open findings appear here; a child's findings remain in that
 Each finding offers `백로그 추가` and `넘기기`, retaining the public-repository notice, repository identity checks, retry policy and idempotent creation contract.
 Creating replaces the controls with progress; a failure keeps the reason and retry, and a handled item leaves the open list.
 A device whose core keeps no backlog offers only `넘기기`.
+The latest raw request shows its local `YYYY-MM-DD HH:mm` timestamp.
+Request history groups visible requests under local `YYYY-MM-DD` date headings, keeping `HH:mm` at each row.
 Request history keeps the full saved text, author (`나`, the parent title or `부모`) and timestamp, oldest first, with the newest four shown and earlier requests behind `이전 N턴`.
 `함께 진행한 세션` is a separate flat list, five initially with a way to show more, rather than being nested under an inferred parent task.
 Each row shows status, agent logo and product name, wrapping title and its own PR and open-finding counts; a large result set never becomes a horizontal strip of marks.

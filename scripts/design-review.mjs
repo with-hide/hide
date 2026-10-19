@@ -318,6 +318,10 @@ async function enterState(page, state, target) {
     await page.evaluate(() => document.fonts.ready);
   }
   if (state === 'edge' && target.scene === 'pane-header') await page.locator('[data-pane-header-case="popover"] [data-pane-tree]').click();
+  if (target.scene === 'session-record' && state.startsWith('restore')) {
+    await page.getByRole('tab', {name: /요청 기록|Request history|依頼履歴|请求记录/}).click();
+    if (state === 'restore-pending' || state === 'restore-failed' || state === 'restore-unknown') await page.locator('[data-record-restore-button]').click();
+  }
   // The Observer frames that show a disclosure or a menu open.
   if (state === 'obs-direct') {
     await page.locator('[data-factory-settings-group="advanced"] > summary').click();
