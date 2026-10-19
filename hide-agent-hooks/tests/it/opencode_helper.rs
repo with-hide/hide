@@ -24,6 +24,9 @@ case "$1 $2" in
   "inbox --hook") echo '{"ok":true,"result":{"context":"LETTER-FOR-THIS-PANE","ids":["letter-1"],"remaining":0}}' ;;
   "inbox --confirm") echo '{"ok":true,"result":{"confirmed":["letter-1"]}}' ;;
   "workspace bootstrap") echo '{"ok":true}' ;;
+  "observation --hook")
+    cat > "${HOME%/*}/observation"
+    echo '{"ok":true,"result":{"observed":true}}' ;;
   "workspace factory-question-guard") echo '{"type":"workspace_result","ok":true,"result":{"deny":true}}' ;;
   "workspace memory")
     cat > "${HOME%/*}/memory-prompt-$4"
@@ -116,6 +119,34 @@ impl Machine {
             .map(str::to_owned)
             .collect()
     }
+}
+
+#[test]
+fn a_complete_opencode_native_result_reaches_admission_as_metadata() {
+    let machine = Machine::new();
+    let server = json!({"id":"cli:agent:prompt", "result":{"type":"agent_prompted",
+        "agent":{"pane_id":"w1:p2", "terminal_id":"term-target",
+            "agent_session":{"agent":"pi", "source":"herdr:pi", "kind":"path", "value":"/fixture/pi-session.jsonl"}}}});
+    let result = machine.run(
+        "observation",
+        &json!({"session_id":"ses_native",
+        "observation":{"command":"herdr agent prompt w1:p2 private-body", "call_id":"call-native",
+            "result":{"content":[{"type":"text", "text":format!("{server}\n")}]},
+            "truncated":false, "failed":false}}),
+        true,
+    );
+    assert_eq!(result["observed"], true);
+    let bytes = std::fs::read(machine.home.parent().unwrap().join("observation")).unwrap();
+    let fact: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(fact["runtime_id"], "opencode");
+    assert_eq!(fact["session_id"], "ses_native");
+    assert_eq!(fact["call_id"], "call-native");
+    assert_eq!(fact["reason"], "complete");
+    assert_eq!(
+        fact["target"]["native_session"]["value"],
+        "/fixture/pi-session.jsonl"
+    );
+    assert!(!String::from_utf8(bytes).unwrap().contains("private-body"));
 }
 
 #[test]

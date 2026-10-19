@@ -179,7 +179,11 @@ pub fn observe(
     } else if call.asynchronous {
         ObservationReason::AsyncUnconfirmed
     } else {
-        let parsed = call.result.and_then(herdr_answer);
+        let raw_output = call
+            .result
+            .filter(|_| call.runtime_id == "grok")
+            .and_then(grok_raw_output);
+        let parsed = raw_output.as_ref().or(call.result).and_then(herdr_answer);
         match parsed {
             Some(answer) if answer.get("error").is_some() => {
                 // Only the exact server validation refusal proves no input.
@@ -284,6 +288,24 @@ fn herdr_answer(value: &Value) -> Option<Value> {
     herdr_answer(&answer)
 }
 
+/// Grok's Bash result retains raw bytes separately from its decorated
+/// model-facing output. Require the reported full byte count and valid UTF-8;
+/// never strip an `exit:` prefix or read the output-file fallback.
+fn grok_raw_output(response: &Value) -> Option<Value> {
+    if response["type"] != "Bash" {
+        return None;
+    }
+    let output = response["output"].as_array()?;
+    if output.len() > RESULT_LIMIT || response["total_bytes"].as_u64()? != output.len() as u64 {
+        return None;
+    }
+    let bytes = output
+        .iter()
+        .map(|value| u8::try_from(value.as_u64()?).ok())
+        .collect::<Option<Vec<_>>>()?;
+    String::from_utf8(bytes).ok().map(Value::String)
+}
+
 /// Native command-hook payloads. Post has the actual executed input, so no
 /// Pre spool, target query, detached helper or transcript scan is needed.
 pub fn native(
@@ -300,7 +322,15 @@ pub fn native(
     let input: Value = serde_json::from_slice(payload).ok()?;
     let field = |snake: &str, camel: &str| input.get(snake).or_else(|| input.get(camel));
     // Conflicting aliases are not resolved by guessing which session owns it.
-    for (snake, camel) in [("session_id", "sessionId"), ("tool_use_id", "toolUseId")] {
+    for (snake, camel) in [
+        ("session_id", "sessionId"),
+        ("tool_use_id", "toolUseId"),
+        ("tool_name", "toolName"),
+        ("tool_input", "toolInput"),
+        ("tool_response", "toolResult"),
+        ("tool_input_truncated", "toolInputTruncated"),
+        ("tool_result_truncated", "toolResultTruncated"),
+    ] {
         if input
             .get(snake)
             .zip(input.get(camel))
@@ -340,6 +370,7 @@ pub fn native(
         field("tool_use_id", "toolUseId").and_then(Value::as_str)?
     };
     let response = field("tool_response", "toolResult");
+    let grok = runtime == "grok";
     observe(
         ToolResult {
             runtime_id: runtime,
@@ -362,11 +393,18 @@ pub fn native(
                             .iter()
                             .any(|key| v[*key].as_i64().is_some_and(|code| code != 0))
                 }),
-            interrupted: input["is_interrupt"] == true,
+            interrupted: input["is_interrupt"] == true
+                || (grok
+                    && response.is_some_and(|v| {
+                        v["timed_out"] == true
+                            || v.get("signal").is_some_and(|signal| !signal.is_null())
+                    })),
             truncated: field("tool_input_truncated", "toolInputTruncated")
                 .is_some_and(|v| v == true)
-                || field("tool_result_truncated", "toolResultTruncated").is_some_and(|v| v == true),
+                || field("tool_result_truncated", "toolResultTruncated").is_some_and(|v| v == true)
+                || (grok && response.is_some_and(|v| v["truncated"] == true)),
             asynchronous: tool_input["run_in_background"] == true
+                || (grok && input["isBackgrounded"] == true)
                 || response.is_some_and(|v| {
                     v["status"] == "async_launched"
                         || v.get("shell_id").is_some()
@@ -555,6 +593,116 @@ mod tests {
             assert_eq!(fact.status, status);
             assert!(fact.target.is_none());
         }
+    }
+
+    fn grok_payload() -> Value {
+        // Grok 1.0.52's actual Post envelope has raw output bytes and a
+        // separate decorated output_for_prompt; only raw bytes are evidence.
+        let output = format!("{}\n", answer());
+        let response = json!({"type":"Bash", "output":output.as_bytes(),
+            "output_for_prompt":format!("exit: 0\n{output}"), "exit_code":0,
+            "total_bytes":output.len(), "truncated":false, "timed_out":false,
+            "signal":null});
+        json!({"sessionId":"native", "session_id":"native",
+            "toolUseId":"call", "tool_use_id":"call",
+            "toolName":"run_terminal_command", "tool_name":"run_terminal_command",
+            "toolInput":{"command":"herdr agent prompt worker hi"},
+            "tool_input":{"command":"herdr agent prompt worker hi"},
+            "toolResult":response, "tool_response":response,
+            "toolInputTruncated":false, "toolResultTruncated":false,
+            "isBackgrounded":false})
+    }
+
+    #[test]
+    fn grok_native_byte_output_preserves_complete_server_metadata() {
+        let payload = grok_payload();
+        let fact = native(
+            "grok",
+            &serde_json::to_vec(&payload).unwrap(),
+            false,
+            false,
+            1,
+            &|_| None,
+        )
+        .unwrap();
+        assert_eq!(fact.reason, ObservationReason::Complete);
+        assert_eq!(
+            fact.target.unwrap().native_session.unwrap().value,
+            "recipient-native"
+        );
+    }
+
+    #[test]
+    fn grok_raw_output_requires_complete_foreground_bytes() {
+        for (field, value, reason) in [
+            ("truncated", json!(true), ObservationReason::ResultTruncated),
+            ("timed_out", json!(true), ObservationReason::Interrupted),
+            ("signal", json!(15), ObservationReason::Interrupted),
+            ("exit_code", json!(1), ObservationReason::ToolError),
+            ("total_bytes", json!(1), ObservationReason::ResultMissing),
+            ("output", json!([256]), ObservationReason::ResultMissing),
+            ("output", json!([255]), ObservationReason::ResultMissing),
+            ("output", json!(null), ObservationReason::ResultMissing),
+        ] {
+            let mut payload = grok_payload();
+            for alias in ["toolResult", "tool_response"] {
+                payload[alias][field] = value.clone();
+                if field == "output" {
+                    payload[alias]["total_bytes"] = json!(1);
+                }
+            }
+            let fact = native(
+                "grok",
+                &serde_json::to_vec(&payload).unwrap(),
+                false,
+                false,
+                1,
+                &|_| None,
+            )
+            .unwrap();
+            assert_eq!(fact.reason, reason, "{field}: {value}");
+            assert!(fact.target.is_none(), "{field}: {value}");
+        }
+        let mut payload = grok_payload();
+        payload["isBackgrounded"] = json!(true);
+        let fact = native(
+            "grok",
+            &serde_json::to_vec(&payload).unwrap(),
+            false,
+            false,
+            1,
+            &|_| None,
+        )
+        .unwrap();
+        assert_eq!(fact.reason, ObservationReason::AsyncUnconfirmed);
+        assert!(fact.target.is_none());
+        let mut payload = grok_payload();
+        payload["toolResult"]["truncated"] = json!(true);
+        assert!(
+            native(
+                "grok",
+                &serde_json::to_vec(&payload).unwrap(),
+                false,
+                false,
+                1,
+                &|_| None
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn opencode_native_content_output_preserves_complete_server_metadata() {
+        // OpenCode 2.0.29's captured completed shell callback is normalized
+        // to text content, without modifying the server's complete output.
+        let result = json!({"content":[{"type":"text", "text":format!("{}\n", answer())}]});
+        let mut input = call("herdr agent prompt worker hi", &result);
+        input.runtime_id = "opencode";
+        input.session_id = "ses_native";
+        let fact = observe(input, 1, &|_| None).unwrap();
+        assert_eq!(fact.reason, ObservationReason::Complete);
+        assert_eq!(fact.session_id, "ses_native");
+        assert_eq!(fact.target.unwrap().pane_id, "w1:p2");
     }
 
     #[test]
