@@ -147,6 +147,7 @@ mod tests {
             other => (other, "none"),
         };
         SidebarAgentSnapshot {
+            telemetry_stale: false,
             close_session: None,
             state: Default::default(),
             resolved: None,

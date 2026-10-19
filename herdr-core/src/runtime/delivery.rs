@@ -25,6 +25,8 @@ pub(crate) struct Observation {
     pub observed_since_unix_ms: u64,
     pub terminal_id: Option<String>,
     pub status: String,
+    /// Keep identity and input clocks while a read is delayed, but admit no bell.
+    pub telemetry_stale: bool,
     pub state_change_seq: Option<u64>,
     pub status_changed_at_unix_ms: u64,
     /// The last input hide routed to this pane: a key, a paste, a phone
@@ -199,6 +201,7 @@ impl Runtime {
                 observed_since_unix_ms,
                 terminal_id,
                 status: status.to_owned(),
+                telemetry_stale: agent.telemetry_stale,
                 state_change_seq: agent.state_change_seq,
                 status_changed_at_unix_ms: changed_at,
                 // A pane hide has not seen before has no key it knows of, so
@@ -1156,7 +1159,8 @@ impl Runtime {
                 let current = self.delivery_observations.get(&watch.target.pane_id);
                 let observation = current
                     .filter(|observation| {
-                        watch.target.require_native_identity().is_ok()
+                        !observation.telemetry_stale
+                            && watch.target.require_native_identity().is_ok()
                             && observation.actor.require_native_identity().is_ok()
                             && observation.actor.same_identity(&watch.target)
                     })
@@ -1680,6 +1684,58 @@ pub(crate) mod tests {
     fn written(runtime: &mut Runtime) -> (bool, bool, bool) {
         let (input, submit, working) = clocks(runtime, "recipient", true);
         (input > 0, submit > 0, working > 0)
+    }
+
+    #[test]
+    fn a_delayed_agent_read_keeps_drafts_and_holds_bells_through_equal_recovery() {
+        use crate::delivery::doorbell::{Hold, Patience, judge};
+        for status in ["idle", "working", "done"] {
+            let root = tempfile::tempdir().unwrap();
+            let (runtime, parent, recipient, _) = fixture(root.path());
+            let mut guard = runtime.lock().unwrap();
+            let mut ledger = Ledger::default();
+            crate::delivery::watch::start(&mut ledger, &parent, &recipient.actor, 1).unwrap();
+            guard.publish_delivery(Arc::new(ledger), false);
+            observe_recipient_status(&mut guard, status, 2);
+            clocks(&mut guard, "recipient", true);
+            crate::runtime::tests::typed_into(&mut guard, "recipient", false);
+            let before = clocks(&mut guard, "recipient", false);
+            let mut payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+                {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":status,
+                 "state_change_seq":2,"lineage_session":"recipient-session"}
+            ]}))
+            .unwrap();
+            payload.agents[0].telemetry_stale = true;
+            guard.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+            assert_eq!(clocks(&mut guard, "recipient", false), before);
+            let work = guard.delivery_watch_work();
+            assert_eq!(work.len(), 1);
+            assert!(
+                work[0].observation.is_none(),
+                "watch cannot confirm retained telemetry"
+            );
+            assert!(!work[0].gone, "a delayed read is no proof of absence");
+            let patience = Patience {
+                arrived_at_unix_ms: 0,
+                now: true,
+            };
+            assert_eq!(
+                judge(&observed(&guard, "recipient"), patience, u64::MAX),
+                Err(Hold::Status)
+            );
+            crate::runtime::tests::typed_into(&mut guard, "recipient", false);
+            let during = clocks(&mut guard, "recipient", false);
+            assert!(during.0 > 0);
+            payload.agents[0].telemetry_stale = false;
+            guard.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+            read_nothing_waits(guard.delivery_observations.get_mut("recipient").unwrap());
+            assert_eq!(clocks(&mut guard, "recipient", false), during);
+            assert_eq!(
+                judge(&observed(&guard, "recipient"), patience, u64::MAX),
+                Err(Hold::Draft),
+                "{status}"
+            );
+        }
     }
 
     #[test]

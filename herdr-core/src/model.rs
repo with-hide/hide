@@ -1213,6 +1213,9 @@ fn is_zero_u32(value: &u32) -> bool {
 /// rule 4).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SidebarAgentSnapshot {
+    /// A delayed telemetry read leaves the last confirmed read fingerprint intact.
+    #[serde(skip)]
+    pub(crate) telemetry_stale: bool,
     /// Raw Herdr session bound to destructive close approval, never a label fallback.
     #[serde(skip_serializing)]
     pub close_session: Option<crate::sidebar::SessionAgentSessionPayload>,

@@ -284,6 +284,10 @@ struct CatalogState {
     /// to publish even when it changes no cwd; a publish that ran clears it
     /// (PRD grid-ahead-of-herdr D-12).
     held_for_cwd: bool,
+    /// One last accepted topology per coordinator. A new pane's cwd must
+    /// not hold freshness invalidation of panes already on screen.
+    accepted: Option<ProjectionState>,
+    accepted_stale: bool,
     /// The cwd the last publish showed for each pane whose own cwd Herdr
     /// had not confirmed, a sibling's standing in. An answer that leaves the
     /// pane at a different cwd than the screen shows has to publish even

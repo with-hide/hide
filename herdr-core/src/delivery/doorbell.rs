@@ -177,6 +177,9 @@ impl Patience {
 /// either was consumed by it, a menu answer for one), and the pane still hosts
 /// the session the letter was written for.
 pub(crate) fn judge(observation: &Observation, patience: Patience, now: u64) -> Result<(), Hold> {
+    if observation.telemetry_stale {
+        return Err(Hold::Status);
+    }
     if !bell_target(&observation.actor.kind) {
         return Err(Hold::Kind);
     }
@@ -717,6 +720,7 @@ mod tests {
             observed_since_unix_ms: 0,
             terminal_id: None,
             status: "idle".into(),
+            telemetry_stale: false,
             state_change_seq: Some(7),
             status_changed_at_unix_ms: NOW - 60_000,
             last_input_at_unix_ms: NOW - 60_000,
