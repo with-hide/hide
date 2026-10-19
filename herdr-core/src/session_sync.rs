@@ -412,12 +412,12 @@ pub(crate) use coordinator::agent_tick_needs_publish;
 pub(crate) use coordinator::spawn;
 pub(crate) use projection::{
     ProjectedAgent, ProjectedPane, ProjectedTab, ProjectedWorkspace, ProjectedWorktree,
-    ProjectionState, non_blank, project_snapshot,
+    ProjectionState, project_snapshot,
 };
-pub(crate) use replica::remote_pane_id;
-pub(crate) use replica::{ApplyMode, PaneMove, ReplicaEvent, SessionReplica, SubscriptionLine};
 #[cfg(test)]
-pub(crate) use replica::{SNAPSHOT_FIELDS_THE_REPLICA_READS, remote_tab_id};
+pub(crate) use replica::SNAPSHOT_FIELDS_THE_REPLICA_READS;
+pub(crate) use replica::{ApplyMode, PaneMove, ReplicaEvent, SessionReplica, SubscriptionLine};
+pub(crate) use replica::{remote_pane_id, remote_tab_id};
 #[cfg(test)]
 pub(crate) use subscription::connect_failure_from_api;
 pub(crate) use subscription::{

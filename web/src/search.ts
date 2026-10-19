@@ -85,7 +85,7 @@ export type SearchEntry = {
   depth?: number;
   tag?: "here" | "parent";
   /** The commands ⌘K keeps. */
-  command?: "start_agent" | "open_url" | "factory_open";
+  command?: "start_agent" | "open_url";
   /** A GitHub search result: its row is opened on GitHub, never in Hide. */
   external?: boolean;
   /** A Recent row of a device that is not connected: drawn dimmed, found by arrows, and ↵ does nothing (PRD cmdk-recent D-11). */
@@ -94,7 +94,7 @@ export type SearchEntry = {
 
 /** Local work-record results have their own group and never replace Agents. */
 export function sessionEntries(answer: SessionWorkSearch | null, query: string): SearchEntry[] {
-  if (!answer || answer.query !== query || answer.loading || answer.failure) return [];
+  if (!answer || answer.options?.request_id || answer.query !== query || answer.loading || answer.failure) return [];
   return answer.results.map((hit) => ({ id:`session:${workKey(hit.session)}`,title:hit.title,subtitle:hit.matched,place:hit.cwd ?? undefined,kind:"session",group:SESSIONS_GROUP,agentKind:hit.session.agent,deviceId:hit.session.device_id,session:hit.session }));
 }
 
@@ -129,18 +129,6 @@ function startAgentEntry(t: TFunction<"translation">): SearchEntry {
     kind: "command",
     group: COMMANDS_GROUP,
     command: "start_agent",
-  };
-}
-
-/** `Open Factory` opens the Factory screen on 내 차례 (PRD software-factory-ui B2); the palette lists it beside the snapshot's rows. */
-export function factoryEntry(t: TFunction<"translation">): SearchEntry {
-  return {
-    id: "command:factory-open",
-    title: t("commands.factory_open"),
-    subtitle: t("search.factoryOpenSubtitle"),
-    kind: "command",
-    group: COMMANDS_GROUP,
-    command: "factory_open",
   };
 }
 

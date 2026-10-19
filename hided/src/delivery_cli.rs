@@ -4,7 +4,7 @@ use herdr_core::delivery::{BODY_LIMIT, Command, HOOK_LETTERS};
 
 use crate::env::{self, Env};
 
-pub const USAGE: &str = "hide request send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now]\nhide request reply <id> --intent <key> --body <text>\nhide request ack|cancel|show <id>\nhide inbox [--hook [--prompt-digest <sha256>] [--session <id>] [--tool]]\nhide watch start <target> [--observer <id>] [--actor <id>]\nhide watch assign <watch-or-target-id> --observer <id> [--actor <id>] [--expected-generation <n>] [--approval <text>]\nhide watch stop <id>\nhide watch list\nDelivery commands require a running daemon and a current agent pane; they do not require an open renderer.";
+pub const USAGE: &str = "hide request send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now]\nhide request reply <id> --intent <key> --body <text>\nhide request ack|cancel|show <id>\nhide inbox [--hook [--prompt-digest <sha256>] [--session <id>] [--tool|--turn-end]]\nhide watch start <target> [--observer <id>] [--actor <id>]\nhide watch assign <watch-or-target-id> --observer <id> [--actor <id>] [--expected-generation <n>] [--approval <text>]\nhide watch stop <id>\nhide watch list\nDelivery commands require a running daemon and a current agent pane; they do not require an open renderer.";
 
 pub fn parse<'a>(
     topic: &str,
@@ -17,10 +17,15 @@ pub fn parse<'a>(
             Some("--hook") => {
                 let mut prompt_digest = None;
                 let mut session = None;
-                let mut tool = false;
+                let mut point = hide_node_link::panes::PullPoint::Prompt;
                 while let Some(flag) = args.next() {
                     match flag.as_str() {
-                        "--tool" if !tool => tool = true,
+                        "--tool" if point == hide_node_link::panes::PullPoint::Prompt => {
+                            point = hide_node_link::panes::PullPoint::Tool
+                        }
+                        "--turn-end" if point == hide_node_link::panes::PullPoint::Prompt => {
+                            point = hide_node_link::panes::PullPoint::TurnEnd
+                        }
                         "--prompt-digest" if prompt_digest.is_none() => {
                             prompt_digest = Some(
                                 args.next()
@@ -43,13 +48,13 @@ pub fn parse<'a>(
                     }
                 }
                 // A tool event's ask names its session.
-                if tool && session.is_none() {
+                if point != hide_node_link::panes::PullPoint::Prompt && session.is_none() {
                     return Err(USAGE.into());
                 }
                 Ok(Command::Pull {
                     prompt_digest,
                     session,
-                    tool,
+                    point,
                 })
             }
             Some("--confirm") => {
@@ -184,7 +189,7 @@ pub fn run(env: &Env, command: Command) -> Result<(), String> {
         if let Command::Pull {
             prompt_digest,
             session,
-            tool,
+            point,
         } = &command
         {
             return crate::workspace_cli::request_hook(
@@ -192,7 +197,7 @@ pub fn run(env: &Env, command: Command) -> Result<(), String> {
                 hide_node_link::panes::HookCommand::LetterPull {
                     prompt_digest: prompt_digest.clone(),
                     session: session.clone(),
-                    tool: *tool,
+                    point: *point,
                 },
             );
         }
@@ -239,7 +244,7 @@ mod tests {
             Command::Pull {
                 prompt_digest: None,
                 session: None,
-                tool: false,
+                point: hide_node_link::panes::PullPoint::Prompt,
             }
         );
         assert_eq!(
@@ -247,7 +252,7 @@ mod tests {
             Command::Pull {
                 prompt_digest: Some(digest.clone()),
                 session: None,
-                tool: false,
+                point: hide_node_link::panes::PullPoint::Prompt,
             }
         );
         assert_eq!(
@@ -263,7 +268,7 @@ mod tests {
             Command::Pull {
                 prompt_digest: Some(digest.clone()),
                 session: Some("abc".into()),
-                tool: false,
+                point: hide_node_link::panes::PullPoint::Prompt,
             }
         );
         assert_eq!(
@@ -271,10 +276,30 @@ mod tests {
             Command::Pull {
                 prompt_digest: None,
                 session: Some("abc".into()),
-                tool: true
+                point: hide_node_link::panes::PullPoint::Tool
             }
         );
         assert!(parse_line(&["inbox", "--hook", "--tool"]).is_err());
+        assert_eq!(
+            parse_line(&["inbox", "--hook", "--session", "abc", "--turn-end"]).unwrap(),
+            Command::Pull {
+                prompt_digest: None,
+                session: Some("abc".into()),
+                point: hide_node_link::panes::PullPoint::TurnEnd,
+            }
+        );
+        assert!(parse_line(&["inbox", "--hook", "--turn-end"]).is_err());
+        assert!(
+            parse_line(&[
+                "inbox",
+                "--hook",
+                "--session",
+                "abc",
+                "--tool",
+                "--turn-end"
+            ])
+            .is_err()
+        );
         assert!(parse_line(&["inbox", "--hook", "--session", "abc", "--tool", "--tool"]).is_err());
         assert!(parse_line(&["inbox", "--hook", "--prompt-digest", &digest, "--tool"]).is_err());
         assert!(parse_line(&["inbox", "--hook", "--prompt-digest", &digest, "extra"]).is_err());

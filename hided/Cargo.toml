@@ -15,7 +15,6 @@ path = "src/bin/hide.rs"
 [dependencies]
 hide-agent-adapter = { path = "../hide-agent-adapter" }
 herdr-core = { path = "../herdr-core" }
-hide-factory = { path = "../hide-factory" }
 hide-host = { path = "../hide-host" }
 hide-node = { path = "../hide-node" }
 hide-node-link = { path = "../hide-node-link" }
@@ -27,6 +26,7 @@ axum = { version = "=0.8.9", features = ["ws"] }
 tokio = { version = "=1.53.2", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
+jiff = { version = "=0.2.38", default-features = false, features = ["std"] }
 hex = "=0.4.3"
 getrandom = "=0.2.16"
 libc = "=0.2.190"

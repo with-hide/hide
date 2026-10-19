@@ -189,6 +189,7 @@ mod tests {
             user_turn: None,
             status_word_visible: true,
             changed_at_unix_ms: None,
+            last_prompt_at_unix_ms: None,
             last_activity: "0000000000001".to_owned(),
             state_change_seq: None,
             session_id: None,

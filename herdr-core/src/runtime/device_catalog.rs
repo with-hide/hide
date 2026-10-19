@@ -130,6 +130,7 @@ impl Runtime {
                 now,
             );
         }
+        self.project_catalog_agent_groups(&mut session.workspaces);
         session
     }
 
@@ -208,7 +209,7 @@ impl Runtime {
         if changed {
             self.refresh_agent_sessions();
             self.reconcile_node_agent_topology(target);
-            self.prune_device_view_bookmarks(target);
+            self.prune_device_view_callers(target);
             self.repoint_device_editor_tabs(target);
             // A device Workspace in front waited for its catalog to bring
             // its View tabs back.
@@ -232,7 +233,7 @@ impl Runtime {
 
     /// Only an answered catalog can prove that an empty registered checkout
     /// has no tabs: while grouping is unresolved it is a placeholder.
-    pub(super) fn prune_device_view_bookmarks(&mut self, target: &str) {
+    pub(super) fn prune_device_view_callers(&mut self, target: &str) {
         let empty_authoritative = self.device_catalog_ready(target);
         let Some(session) = self
             .snapshot
@@ -264,7 +265,7 @@ impl Runtime {
         let mut pruned = false;
         for (key, tabs) in &listed {
             let tabs: Vec<&str> = tabs.iter().map(String::as_str).collect();
-            pruned |= self.prune_view_bookmarks(key, &tabs);
+            pruned |= self.prune_view_callers(key, &tabs);
         }
         if pruned {
             self.persist_workspace_views();

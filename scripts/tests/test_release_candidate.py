@@ -1,0 +1,89 @@
+"""Unsigned candidates must test one pinned public source before exposing proof.
+
+The contract is docs/BUILD.md, Unsigned release candidates. GitHub owns the
+workflow interpreter; these checks guard the security-relevant configuration
+that cannot be exercised by a local receipt test.
+"""
+from pathlib import Path
+import os
+import subprocess
+import tempfile
+import unittest
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[2]
+WORKFLOWS = ROOT / ".github/workflows"
+
+
+class ReleaseCandidate(unittest.TestCase):
+    def test_receipt_accepts_only_verified_public_source_and_valid_identity(self):
+        result = subprocess.run(
+            ["node", "--test", "scripts/tests/release-candidate.test.mjs"],
+            cwd=ROOT, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_package_version_steps_write_the_selected_order_and_keep_debug_defaults(self):
+        jobs = yaml.safe_load((WORKFLOWS / "package.yml").read_text())["jobs"]
+        runs = ROOT / "agents/runs/release-candidate-tests"
+        runs.mkdir(parents=True, exist_ok=True)
+        for name, job in jobs.items():
+            command = next(step["run"] for step in job["steps"] if step.get("name") == "Name the version")
+            for version, order, expected in [
+                ("v1.2.3-rc.1", "501", "HIDE_VERSION=1.2.3-rc.1\nHIDE_BUILD_ORDER=501\n"),
+                ("0.0.0-pr.1", "", "HIDE_VERSION=0.0.0-pr.1\nHIDE_BUILD_ORDER=0\n"),
+                ("v1.2.3", "9007199254740992", None),
+            ]:
+                with self.subTest(system=name, order=order), tempfile.TemporaryDirectory(dir=runs) as temp:
+                    output = Path(temp) / "github-env"
+                    result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", command], cwd=ROOT,
+                                            env={**os.environ, "LC_ALL": "en_US.UTF-8", "REQUESTED": version,
+                                                 "REQUESTED_ORDER": order, "GITHUB_ENV": str(output)},
+                                            capture_output=True, text=True, timeout=10)
+                    if expected is None:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertNotIn("HIDE_BUILD_ORDER", output.read_text())
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(output.read_text(), expected)
+
+    def test_candidate_is_manual_read_only_and_has_no_signing_secrets(self):
+        workflow = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())
+        self.assertEqual(set(workflow[True]), {"workflow_dispatch"})
+        self.assertEqual(set(workflow[True]["workflow_dispatch"]["inputs"]),
+                         {"public_sha", "tag", "verification_run_id", "build_order"})
+        for permissions in [workflow["permissions"], *[
+            job["permissions"] for job in workflow["jobs"].values() if "permissions" in job
+        ]]:
+            self.assertTrue(set(permissions) <= {"contents", "actions"})
+            self.assertEqual(set(permissions.values()), {"read"})
+        packages = workflow["jobs"]["packages"]
+        self.assertFalse(packages["with"]["include-macos"])
+        self.assertEqual(packages["with"]["macos-signing"], "adhoc")
+        self.assertNotIn("secrets", packages)
+
+    def test_receipt_waits_for_packages_and_full_journey_of_the_same_commit(self):
+        jobs = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())["jobs"]
+        receipt = jobs["receipt"]
+        self.assertEqual(set(receipt["needs"]), {"validate", "packages", "agent-journey"})
+        self.assertNotIn("if", receipt)  # default success(), never always()
+        for job in [jobs["packages"], jobs["agent-journey"]]:
+            self.assertEqual(job["needs"], "validate")
+            self.assertEqual(job["with"]["source-sha"], "${{ inputs.public_sha }}")
+        self.assertEqual(jobs["packages"]["with"]["build-order"], "${{ inputs.build_order }}")
+        journey = jobs["agent-journey"]["with"]
+        self.assertEqual(journey["systems"], '["linux","macos","windows"]')
+        self.assertTrue(journey["live"])
+        self.assertTrue(journey["fake"])
+        self.assertEqual(journey["agy"], "linux")
+        for filename in ["package.yml", "agent-journey.yml"]:
+            workflow = yaml.safe_load((WORKFLOWS / filename).read_text())
+            for job in workflow["jobs"].values():
+                for step in job.get("steps", []):
+                    if step.get("uses", "").startswith("actions/checkout@"):
+                        self.assertEqual(step["with"]["ref"], "${{ inputs.source-sha || github.sha }}")
+
+
+if __name__ == "__main__":
+    unittest.main()

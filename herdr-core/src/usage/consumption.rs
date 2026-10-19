@@ -33,6 +33,8 @@ pub struct Surface {
 pub struct History {
     pub popover: Surface,
     pub year: Surface,
+    pub models: Vec<query::ModelDay>,
+    pub models_limited: bool,
 }
 
 fn shared<S: Serializer, T: Serialize>(value: &Arc<T>, serializer: S) -> Result<S::Ok, S::Error> {
@@ -55,6 +57,8 @@ impl Publication {
                 range: Arc::new(value.year.all.clone()),
                 shares: value.year.shares.clone(),
             },
+            models: value.models.clone(),
+            models_limited: value.models_limited,
         });
         let agents = hide_agent_adapter::ADAPTERS
             .iter()

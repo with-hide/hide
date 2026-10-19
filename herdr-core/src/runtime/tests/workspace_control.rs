@@ -1741,6 +1741,7 @@ fn hide_memory_refuses_a_disconnected_or_unknown_caller_and_a_changed_checkout()
                 ssh_alias: "studio-host".into(),
             },
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         });
     let command = || crate::memory_command::MemoryCommand::Show { number: 1 };

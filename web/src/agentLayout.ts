@@ -3,7 +3,11 @@ import { adjacentInOrder, areaSentence, locateDisplay, moveLabel, neighbourArea,
 import type { MenuEntry } from "./components/entry-menu";
 
 export type AgentItem = { id: string };
-export type AgentLayout = AreaLayout<AgentItem> & { waiting?: number; canvases: Record<string, string> };
+export type AgentGroup = { id: string | null; name: string | null; tabs: string[] };
+export type AgentStartReceipt = { request_id: string; group_id: string | null; area_id: string; draft_tab_id: string | null; live_tab_id: string | null; pane_id: string | null; add_pane: boolean; state: "pending" | "failed" | "ready"; agent_kind: string | null; agent_phase: string | null };
+export type CheckoutAgentGroups = { selected: string | null; groups: AgentGroup[]; drafts: string[]; start_receipts?: AgentStartReceipt[] };
+export type AgentStartTarget = { group_id: string | null; area_id: string; tab_id: string | null; add_pane: boolean };
+export type AgentLayout = AreaLayout<AgentItem> & { waiting?: number; canvases: Record<string, string>; group_id?: string | null; groups?: AgentGroup[]; drafts?: string[]; can_undo_group?: boolean; start_receipts?: AgentStartReceipt[] };
 export const AGENT_WORDS: AreaWords = { kind: "agent" };
 export const remoteGroupReason = () => translate("panes.agent.remoteGroupReason");
 const EDGES: Edge[] = ["right", "left", "up", "down"];
@@ -13,17 +17,16 @@ export type AgentFrame = { workspace: { device_id: string; path: string }; remot
 export function agentMenu(frame: AgentFrame, id: string): MenuEntry<AgentCommand>[] {
   const located = locateDisplay(frame.layout.root, id);
   if (!located) return [];
-  const entries: MenuEntry<AgentCommand>[] = [{ id: "new_tab", label: translate("panes.area.newTab"), unavailable: null }];
+  const entries: MenuEntry<AgentCommand>[] = [{ id: "new_tab", icon: "add", label: translate("panes.area.newTab"), unavailable: null }, { id: "rename_tab", icon: "rename", label: translate("panes.agent.rename"), unavailable: null }];
   for (const edge of EDGES) {
     const eligibility = splitEligibility(frame.layout, frame.geometry, frame.sizes, id, located.area.id, edge, AGENT_WORDS);
-    entries.push({ id: `split_${edge}`, label: splitLabel(edge), unavailable: frame.remote ? remoteGroupReason() : eligibility.ok ? null : eligibility.reason });
+    entries.push({ id: `split_${edge}`, icon: `split_${edge}`, group: "split", menuLabel: translate(`menus.${edge}`), separated: edge === "right", label: splitLabel(edge), unavailable: frame.remote ? remoteGroupReason() : eligibility.ok ? null : eligibility.reason });
   }
   for (const edge of EDGES) {
     const neighbour = neighbourArea(frame.layout.root, located.area.id, edge);
-    if (neighbour) entries.push({ id: `move_${edge}`, label: moveLabel(edge), unavailable: null });
+    if (neighbour) entries.push({ id: `move_${edge}`, icon: edge, group: "move", menuLabel: translate(`menus.${edge}`), label: moveLabel(edge), unavailable: null });
   }
-  entries.push({ id: "rename_tab", label: translate("panes.agent.rename"), unavailable: null });
-  entries.push({ id: "copy_name", label: translate("panes.agent.copyName"), unavailable: null, separated: true }, { id: "close_tab", label: translate("panes.agent.closeTab"), unavailable: null, separated: true });
+  entries.push({ id: "copy_name", icon: "copy", label: translate("panes.agent.copyName"), unavailable: null, separated: true }, { id: "close_tab", icon: "close", label: translate("panes.agent.closeTab"), unavailable: null, separated: true });
   return entries;
 }
 export type AgentAreaStep = "focus_next" | "focus_previous" | "grow" | "shrink";

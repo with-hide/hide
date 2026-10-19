@@ -24,6 +24,23 @@ const HERDR = { HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1", HERDR_SOCKET_PATH: "/tmp
 const sample = (name) => structuredClone(SAMPLES[name]);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+test("post observation preserves the tool result and carries its actual native identity", async () => {
+  answer({ observation: {} });
+  const hooks = await plugin();
+  const result = { output: '{"id":"cli:agent:prompt","result":{"type":"agent_prompted"}}', metadata: {} };
+  const original = structuredClone(result);
+  await hooks["tool.execute.after"]({ tool: "bash", sessionID: "ses_child", callID: "raw-call", args: { command: "herdr agent prompt worker hi" } }, result);
+  assert.deepEqual(result, original);
+  const [observation] = await until("observation");
+  assert.equal(observation.input.session_id, "ses_child");
+  assert.equal(observation.input.observation.call_id, "raw-call");
+  assert.equal(observation.input.observation.result, original.output);
+  await hooks.event({ event: { type: "message.part.updated", properties: { part: { type: "tool", tool: "bash", sessionID: "ses_child", callID: "failed-call", state: { status: "error", input: { command: "herdr agent prompt worker hi" } } } } } });
+  const failed = (await until("observation", 2)).find((item) => item.input.observation.call_id === "failed-call");
+  assert.equal(failed.input.observation.failed, true);
+  assert.equal(failed.input.observation.result, null);
+});
+
 /** Writes the guardrails policy the core would publish, with `rules` on the fixture project, or removes it. */
 function policy(rules) {
   const file = path.join(homedir(), ".hide", "agent-hooks", "guardrails.json");
@@ -403,18 +420,12 @@ test("while a project has a protection on, file and shell calls ask the helper w
   }
 });
 
-test("the question tool is refused only when the helper says the pane is a Factory worker", async () => {
+test("native questions run without asking Hide's tool guard", async () => {
   const question = sample("tool.execute.before.question");
-  answer({ start: { context: "" }, tool: { deny: "Ask through hide factory ask" } });
-  let hooks = await plugin();
-  await assert.rejects(hooks["tool.execute.before"](question.input, question.output), {
-    message: "Ask through hide factory ask",
-  });
-  for (const tool_answer of [{}, { exit: 3 }, { delay_ms: 4000, deny: "late" }]) {
-    answer({ start: { context: "" }, tool: tool_answer });
-    hooks = await plugin();
-    await hooks["tool.execute.before"](question.input, question.output);
-  }
+  answer({ start: { context: "" }, tool: { deny: "Not run" } });
+  const hooks = await plugin();
+  await hooks["tool.execute.before"](question.input, question.output);
+  assert.deepEqual(calls().filter((call) => call.operation === "tool"), []);
 });
 
 test("child sessions move the pane's subagent counts, and a background child stays counted after the turn", async () => {
@@ -437,16 +448,6 @@ test("child sessions move the pane's subagent counts, and a background child sta
   await until("subagents", 1, (input) => input.working === 0 && input.done === 1);
 });
 
-test("a subagent's question call asks the Factory guard about the pane's root session", async () => {
-  answer({ start: { context: "" }, tool: {} });
-  const hooks = await plugin();
-  await hooks.event({ event: sample("session.created") });
-  await hooks.event({ event: sample("session.created.child") });
-  const question = sample("tool.execute.before.question");
-  await hooks["tool.execute.before"]({ ...question.input, sessionID: "ses_child" }, question.output);
-  const [call] = await until("tool");
-  assert.deepEqual(call.input, { session_id: "ses_root", tool: "question" });
-});
 
 test("past its session limit the plugin forgets finished children, keeps a running one counted and guides once", async () => {
   answer({ start: { context: "HIDE-GUIDANCE" }, prompt: { context: "", letters: [] }, subagents: { reported: true } });

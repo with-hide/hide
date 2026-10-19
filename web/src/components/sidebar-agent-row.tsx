@@ -165,6 +165,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
     <EntryContextMenu
       asChild
       label={t("common.entryActions", { name: agent.identity_label })}
+      title={agent.identity_label}
       items={() => menu.items(agent)}
       onSelect={(id) => menu.onSelect(agent, id)}
       data-agent-menu={agent.pane_id}
@@ -226,7 +227,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
             {ask || !folded ? null : <span className="pointer-events-none flex shrink-0"><DescendantMark agent={agent} /></span>}
             {agent.letters_waiting ? <RowLetterMark /> : null}
             {/* A time the core never measured draws nothing, and nothing stands in for it. */}
-            <Elapsed since={agent.changed_at_unix_ms} aria-hidden="true" className="pointer-events-none shrink-0 font-mono text-caption text-muted-foreground" data-agent-elapsed="true" />
+            <Elapsed since={agent.last_prompt_at_unix_ms} aria-hidden="true" className="pointer-events-none shrink-0 font-mono text-caption text-muted-foreground" data-agent-elapsed="true" />
             {/* Every row ends in the fold slot, so every time ends on one column (sidebar-readability D-3). */}
             <FoldLane />
           </span>

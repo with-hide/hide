@@ -22,17 +22,20 @@ pub const HELPER_BINARY_NAME: &str = if cfg!(windows) {
     "hide-agent-hooks"
 };
 
-/// The version of the installed entry. Raise it when the command Hide writes
-/// changes shape, so an older entry is reported as outdated and the operator
-/// is offered a reinstall rather than being silently left with a hook that
-/// reports nothing. Version 8 selects the file tools for the guardrails.
+/// The pane's `hide_hooks` reporting protocol. Raise it only when older
+/// reports cannot be interpreted: changing an installed command must not
+/// disconnect an already-running pane whose reports are still valid.
 pub const HOOK_VERSION: u32 = 8;
+
+/// The installed Claude Code and Codex command version, independent of the
+/// pane reporting protocol. Version 10 adds passive Post observation slots.
+pub const HOOK_ENTRY_VERSION: u32 = 10;
 
 /// The one sentence SessionStart adds to either agent runtime inside Hide.
 /// Both runtimes accept the same `hookSpecificOutput.additionalContext`
 /// envelope, while the runtime argument remains explicit in the installed
 /// command so a future protocol difference has one dispatch point.
-pub const PURPOSE_CONTEXT: &str = "When you create a worktree, set its one-line purpose in 40 characters or fewer by running `herdr workspace report-metadata <workspace> --source <you> --token purpose=\"…\"`. For work you will supervise, delegate with `hide agent spawn --parent here …`; this records responsibility and starts an automatic watch. For independent work the operator will handle, hand it off with `hide agent spawn …` without --parent; it becomes an operator-owned root with no automatic watch. Both modes record you as origin and leave the current screen and keyboard focus unchanged. From the machine that runs Hide, start the agent on a connected device by adding `--machine <device id>` (the device_id `hide workspace info` shows, the machine `hide agent list` shows for agents there); `--repo` and `--path` are then that device's paths. An agent on a device cannot use `--machine`: it is refused with `machine_not_permitted`. To put work into a Factory, run `hide factory add` rather than adding a GitHub label.";
+pub const PURPOSE_CONTEXT: &str = "Herdr provides direct terminal input and control. `herdr agent prompt` submits input directly; Hide may show a passive observation, but this creates no Hide letter, watch, or parent relationship. Use Hide letters for stored delivery, replies and retry management. When you create a worktree, set its one-line purpose in 40 characters or fewer by running `herdr workspace report-metadata <workspace> --source <you> --token purpose=\"…\"`. For work you will supervise, delegate with `hide agent spawn --parent here …`; this records responsibility and starts an automatic watch. For independent work the operator will handle, hand it off with `hide agent spawn …` without --parent; it becomes an operator-owned root with no automatic watch. Both modes record you as origin and leave the current screen and keyboard focus unchanged. From the machine that runs Hide, start the agent on a connected device by adding `--machine <device id>` (the device_id `hide workspace info` shows, the machine `hide agent list` shows for agents there); `--repo` and `--path` are then that device's paths. An agent on a device cannot use `--machine`: it is refused with `machine_not_permitted`.";
 
 pub fn hook_stdout(runtime: AgentRuntime, event: HookEvent) -> Option<String> {
     hook_stdout_with_context(runtime, event, None)
@@ -52,7 +55,9 @@ pub fn hook_stdout_with_context(
         HookEvent::SubagentStart
         | HookEvent::SubagentStop
         | HookEvent::Stop
-        | HookEvent::PreToolUse => return None,
+        | HookEvent::PreToolUse
+        | HookEvent::PostToolUse
+        | HookEvent::PostToolUseFailure => return None,
     };
     let output = match runtime {
         AgentRuntime::ClaudeCode | AgentRuntime::Codex => serde_json::json!({
@@ -189,7 +194,7 @@ pub const BLOCKED_TOKEN: &str = "hide_sub_blocked";
 
 /// `hide-subagents@N`, the exact value the helper writes into its command.
 pub fn hook_source_id() -> String {
-    format!("{HOOK_SOURCE_NAME}@{HOOK_VERSION}")
+    format!("{HOOK_SOURCE_NAME}@{HOOK_ENTRY_VERSION}")
 }
 
 /// Reads the version out of a `hide-subagents@N` source id.
@@ -249,6 +254,14 @@ pub enum AgentRuntime {
 
 impl AgentRuntime {
     pub const ALL: [AgentRuntime; 2] = [Self::ClaudeCode, Self::Codex];
+
+    /// Codex reports nonzero outcomes in PostToolUse. It has no declared
+    /// PostToolUseFailure event, so never write one into its configuration.
+    pub fn events(self) -> impl Iterator<Item = HookEvent> {
+        HookEvent::ALL.into_iter().filter(move |event| {
+            self == Self::ClaudeCode || *event != HookEvent::PostToolUseFailure
+        })
+    }
 
     /// The stable identifier used in state, diagnostics and the wire.
     pub fn id(self) -> &'static str {
@@ -375,16 +388,20 @@ pub enum HookEvent {
     /// matcher and refuses only a call that starts an agent through Herdr
     /// directly (`crate::spawn_guard`); every other call passes untouched.
     PreToolUse,
+    PostToolUse,
+    PostToolUseFailure,
 }
 
 impl HookEvent {
-    pub const ALL: [HookEvent; 6] = [
+    pub const ALL: [HookEvent; 8] = [
         Self::SessionStart,
         Self::UserPromptSubmit,
         Self::SubagentStart,
         Self::SubagentStop,
         Self::Stop,
         Self::PreToolUse,
+        Self::PostToolUse,
+        Self::PostToolUseFailure,
     ];
 
     pub fn name(self) -> &'static str {
@@ -395,6 +412,8 @@ impl HookEvent {
             Self::SubagentStop => "SubagentStop",
             Self::Stop => "Stop",
             Self::PreToolUse => "PreToolUse",
+            Self::PostToolUse => "PostToolUse",
+            Self::PostToolUseFailure => "PostToolUseFailure",
         }
     }
 
@@ -455,13 +474,6 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&ascii).unwrap(),
             serde_json::from_str::<serde_json::Value>(&json).unwrap()
         );
-    }
-
-    #[test]
-    fn session_guidance_sends_factory_work_through_the_factory_command() {
-        // PRD software-factory B18: a request to put work into a Factory
-        // uses `hide factory add`, not a label.
-        assert!(PURPOSE_CONTEXT.contains("`hide factory add`"));
     }
 
     #[test]

@@ -26,8 +26,8 @@ mod dormant;
 #[cfg(test)]
 pub(crate) use dormant::fixture_record;
 pub use dormant::{
-    DORMANT_BUDGET_SPENT, DormantOwner, DormantPhase, DormantRecord, DormantRegistration,
-    FactoryWorker, SleepId, SleepingSessionSnapshot,
+    DormantOwner, DormantPhase, DormantRecord, DormantRegistration, SleepId,
+    SleepingSessionSnapshot,
 };
 
 /// The Settings choices besides Never, in hours (PRD D-10).
@@ -701,6 +701,7 @@ mod tests {
             user_turn: None,
             status_word_visible: true,
             changed_at_unix_ms: Some(1_788_871_000_000),
+            last_prompt_at_unix_ms: None,
             last_activity: "1788871000000".to_owned(),
             state_change_seq: Some(4),
             session_id: Some("session-a".to_owned()),
@@ -868,10 +869,7 @@ mod tests {
             &HashMap::from([("w1:p9".to_owned(), 13 * HOUR)]),
             12 * HOUR,
         );
-        assert_eq!(
-            due,
-            ["w1:p1", "w1:p7", "w1:p11", "w1:p12", "w1:p13", "w1:p10"]
-        );
+        assert_eq!(due, ["w1:p1", "w1:p7", "w1:p11", "w1:p12", "w1:p10"]);
     }
 
     /// The sleeping row is drawn from the record, so the record has to carry

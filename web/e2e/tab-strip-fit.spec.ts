@@ -148,8 +148,13 @@ test("Selecting an Agent tab moves the title width to it, and the selected tab s
   const { tabs, stop } = await startStrip(page, 16);
   try {
     // Selecting another tab moves the title width to it in the same frame.
-    // The tool rail takes its width from the strip's room (PRD right-lane B1).
-    expect((await check(page, 1500 + 48)).stage).toBe("others-compact");
+    // Reserve room for the visible group and area controls, then place the
+    // others halfway through the independent compact-width interval.
+    const initial = await strip(page);
+    const compactOther = (ICON + CONTROL + TITLE_MIN) / 2;
+    const room = TITLE_MIN + (initial.tabs.length - 1) * compactOther;
+    const width = page.viewportSize()!.width + room - initial.room;
+    expect((await check(page, width)).stage).toBe("others-compact");
     const before = await strip(page);
     expect(before.tabs.filter((tab) => !tab.selected).every((tab) => tab.width < TITLE_MIN)).toBe(true);
     const target = before.tabs.findIndex((tab) => !tab.selected);
@@ -191,30 +196,40 @@ test("File View tabs use the same shrinking strip and transfer the longest title
     await expect(tabs).toHaveCount(names.length);
     // Pinned, the lane docks with a divider that widens it (PRD right-lane B5, B6).
     await page.locator("[data-lane-pin]").click();
+    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
+    const handle = page.locator('[data-lane-divider="lane"]');
+    const divider = await handle.boundingBox();
+    const body = await page.locator("[data-lane-row]").boundingBox();
+    if (!divider || !body) throw new Error("the docked lane has no resize geometry");
+    const sidebarWidth = (await page.locator("[data-sidebar-box]").boundingBox())!.width;
+    await page.mouse.move(divider.x + divider.width / 2, divider.y + 150);
+    expect(await handle.evaluate((node, point) => node.contains(document.elementFromPoint(point.x, point.y)), {
+      x: divider.x + divider.width / 2, y: divider.y + 150,
+    })).toBe(true);
+    await page.mouse.down();
+    await page.mouse.move(body.x + 10, divider.y + 150, { steps: 4 });
+    await expect(page.locator("[data-lane-guide]")).toHaveCount(1);
+    await page.mouse.up();
+    await expect(page.locator("[data-lane-guide]")).toHaveCount(0);
     const stages = new Set<Fit>();
-    for (const width of [2400, 2200, 2000, 1900, 1800, 1700, 1600, 1500, 1400, 1300, 1200]) {
+    // The stored lane width clamps as the window narrows. An overlay's
+    // outside-left divider can be behind the sidebar's resize hit area;
+    // dragging raw coordinates there would resize an unrelated surface.
+    for (const width of [2400, 2200, 2000, 1900, 1800, 1700, 1600, 1500, 1400, 1300, 1200, 1100]) {
       await page.setViewportSize({ width, height: 1000 });
       await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
       await expect(page.locator("[data-view-tab-bar]")).toBeVisible();
-      const handle = page.locator('[data-lane-divider="lane"]');
-      const divider = await handle.count() ? await handle.boundingBox() : null;
-      const body = await page.locator("[data-lane-row]").boundingBox();
-      if (divider && body) {
-        await page.mouse.move(divider.x + divider.width / 2, divider.y + 150);
-        await page.mouse.down();
-        await page.mouse.move(body.x + 10, divider.y + 150, { steps: 4 });
-        await page.mouse.up();
-      }
-      await expect(page.locator("[data-lane-guide]")).toHaveCount(0);
-      await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      expect((await page.locator("[data-sidebar-box]").boundingBox())!.width).toBe(sidebarWidth);
       // A divider release commits once through the core; observe that final
-      // geometry rather than sampling the optimistic drag's guide frame.
+      // geometry and its reveal together, rather than mixing resize frames.
+      let drawn = await strip(page, "view");
       await expect.poll(async () => {
-        const drawn = await strip(page, "view");
+        drawn = await strip(page, "view");
         const want = expected(drawn.room, names.length);
-        return drawn.tabs.every((tab) => Math.abs(tab.width - (tab.selected ? want.selected[0] : want.others[0])) < 0.5);
+        return drawn.tabs.every((tab) => Math.abs(tab.width - (tab.selected ? want.selected[0] : want.others[0])) < 0.5)
+          && drawn.scrolls === (want.selected[0] + (names.length - 1) * want.others[0] > drawn.room + 0.01)
+          && drawn.selectedInView;
       }).toBe(true);
-      const drawn = await strip(page, "view");
       const want = expected(drawn.room, names.length);
       for (const tab of drawn.tabs) {
         const fit = tab.selected ? want.selected : want.others;

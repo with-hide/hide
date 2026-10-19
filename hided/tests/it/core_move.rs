@@ -2672,7 +2672,7 @@ fn records(fixture: &Fixture, kind: &str) -> Result<Vec<Value>> {
 /// This watches what such a core reaches from this process: the device its
 /// copy registers (a listener its SSH config names) and Mobile's
 /// `tailscale`. The bell, watch warnings, human notices, provider calls,
-/// GitHub reads and the Factory are held inside the core, each tested there.
+/// GitHub reads are held inside the core, each tested there.
 #[test]
 fn a_pending_core_does_nothing_outside_until_its_link_commits() -> Result<()> {
     const INTENT: &str = "move-fixture";
@@ -3007,13 +3007,16 @@ fn what_each_machine_shows_survives_the_move_and_the_move_back() -> Result<()> {
                 .as_array()
                 .into_iter()
                 .flatten()
-                .any(|view| view["layout"]["root"]["area"]["displays"]
-                    .as_array()
-                    .is_some_and(|displays| !displays.is_empty())
-                    && view["bookmarks"]
-                        .as_object()
-                        .is_some_and(|bookmarks| !bookmarks.is_empty())),
-            "the move fixture must keep one View and a tab bookmark to it: {kept_before:#}"
+                .any(|view| {
+                    let area = &view["layout"]["root"]["area"];
+                    area["displays"].as_array().is_some_and(|displays| {
+                        displays.iter().any(|display| {
+                            display["url"] == "https://example.test/seed"
+                                && area["active"] == display["id"]
+                        })
+                    })
+                }),
+            "the move fixture must keep its selected View: {kept_before:#}"
         );
         let shown_after = wait_for("the window as it was, through the new core", || {
             let shown = window_shows(&fixture, TARGET_NODE)?;
@@ -3431,7 +3434,7 @@ fn kept_per_machine(dir: &std::path::Path, own: &str) -> Result<Value> {
             .into_iter()
             .flatten()
             .filter(|row| row["device_id"].as_str().and_then(|device| machine_of(device, own).ok()) == Some(machine))
-            .map(|row| unqualified(&json!({"path": row["path"], "tool": row["tool"], "pinned": row["pinned"], "tree": row["tree"], "layout": row["view_layout"], "agent_layout": row["agent_layout"], "bookmarks": row["tab_views"]})))
+            .map(|row| unqualified(&json!({"path": row["path"], "tool": row["tool"], "pinned": row["pinned"], "tree": row["tree"], "layout": row["view_layout"], "agent_layout": row["agent_layout"]})))
             .collect();
         let label_records: serde_json::Map<String, Value> = labels["targets"]
             .as_object()

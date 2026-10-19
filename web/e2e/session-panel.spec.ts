@@ -144,10 +144,10 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     }
     await showProjects(page);
     await expect(page.locator(`nav[data-sidebar] [data-pane="${stopped}"]`).first()).toBeVisible();
-    // The Overview is the device's backlog, Projects and Usage; its tasks are the sidebar's 태스크 list (PRD sidebar-task-lens B38).
+    // The approved Overview exposes work, projects, mixed backlog, retained history and account usage.
     await page.keyboard.press(chord("overview"));
     const modal = page.getByRole("dialog", { name: "Overview", exact: true });
-    expect(await modal.locator("[data-main-tab]").evaluateAll((tabs) => tabs.map((tab) => tab.getAttribute("data-main-tab")))).toEqual(["backlog", "projects", "usage"]);
+    expect(await modal.locator("[data-main-tab]").evaluateAll((tabs) => tabs.map((tab) => tab.getAttribute("data-main-tab")))).toEqual(["work", "projects", "backlog", "history", "usage"]);
     await page.keyboard.press("Escape");
     await showTasks(page);
     await page.mouse.move(2, 998);

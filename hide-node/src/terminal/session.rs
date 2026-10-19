@@ -405,6 +405,16 @@ impl Session {
         })
     }
 
+    /// A side-channel write may start after earlier controller writes have
+    /// reached the pipe. This barrier emits no terminal protocol or input.
+    pub(super) fn after_writes(&self, written: Written) -> Result<(), WriteRefused> {
+        self.send(WriterCommand::Line {
+            line: String::new(),
+            cost: 0,
+            written: Some(written),
+        })
+    }
+
     pub(super) fn resize(&self, rows: u16, cols: u16) -> Result<(), WriteRefused> {
         let line = protocol::resize_line(rows, cols).map_err(WriteRefused::Failed)?;
         self.send(WriterCommand::line(line, CONTROL_LINE_COST))

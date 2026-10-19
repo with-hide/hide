@@ -1,11 +1,8 @@
 //! Close-pane sleeping sessions use the existing writer and close owner.
 use super::*;
-use crate::agent_sleep::{
-    AgentSleepStore, DORMANT_BUDGET_SPENT, DormantOwner, DormantPhase, DormantRecord,
-    FactoryWorker, SleepId,
-};
+use crate::agent_sleep::{AgentSleepStore, DormantOwner, DormantPhase, DormantRecord, SleepId};
 
-/// How long a woken Factory worker may wait for the Factory to bind its pane.
+/// Retention bound for a woken record saved by an older Factory build.
 pub(in crate::runtime) const WOKEN_BINDING_LIMIT_MS: u64 = 60 * 60 * 1000;
 
 /// What a sleeping session an older build saved, which names no owner, asks
@@ -20,7 +17,6 @@ pub(in crate::runtime) struct SleepRefusal {
     pub(in crate::runtime) message: &'static str,
     /// The agent is working or the transition budget is spent: the same ask
     /// succeeds once that passes.
-    pub(in crate::runtime) transient: bool,
     retryable: bool,
 }
 
@@ -29,24 +25,17 @@ impl SleepRefusal {
         Self {
             code,
             message,
-            transient: false,
             retryable,
         }
-    }
-
-    const fn transient(mut self) -> Self {
-        self.transient = true;
-        self
     }
 }
 
 /// Why a wake was not started. `kept`: the record is still there, so the
-/// refusal is written on it; `transient`: asking again later can succeed.
+/// refusal is written on it.
 pub(in crate::runtime) struct WakeRefusal {
     pub(in crate::runtime) code: &'static str,
     pub(in crate::runtime) message: &'static str,
     kept: bool,
-    pub(in crate::runtime) transient: bool,
 }
 
 impl Runtime {
@@ -119,7 +108,7 @@ impl Runtime {
             return Ok(false);
         }
         if let Some(reason) = crate::agent_state::rest_refusal(&agent) {
-            return Err(SleepRefusal::new("agent_sleep.refused", reason, false).transient());
+            return Err(SleepRefusal::new("agent_sleep.refused", reason, false));
         }
         let Some((tab, owner)) = self.sleep_place(pane_id) else {
             return Err(SleepRefusal::new(
@@ -142,16 +131,6 @@ impl Runtime {
                 true,
             ));
         };
-        // A Factory worker's conversation keeps the way back to its worker,
-        // whoever asked for the sleep (#857).
-        let factory = self
-            .factory_panes
-            .get(pane_id)
-            .filter(|pane| {
-                hide_agent_adapter::canonical_kind(&pane.kind)
-                    == hide_agent_adapter::canonical_kind(&agent.agent_kind)
-            })
-            .map(|pane| pane.worker.clone());
         let launch = self.launch_choice_of(&agent);
         let record = DormantRecord {
             phase: DormantPhase::SavingClose,
@@ -174,7 +153,7 @@ impl Runtime {
             closed: false,
             wake_pane_id: None,
             wake_tab_id: None,
-            factory,
+            factory: None,
             since_unix_ms: now,
             transition_started_unix_ms: now,
             reason: None,
@@ -183,14 +162,11 @@ impl Runtime {
             owner: Some(owner),
         };
         if let Err(reason) = self.snapshot.ui_state.agent_sleep.admit_dormant(record) {
-            // The transition budget frees as the pending ones settle; a full
-            // archive does not.
-            let refusal = SleepRefusal::new("agent_sleep.admission_refused", reason, false);
-            return Err(if reason == DORMANT_BUDGET_SPENT {
-                refusal.transient()
-            } else {
-                refusal
-            });
+            return Err(SleepRefusal::new(
+                "agent_sleep.admission_refused",
+                reason,
+                false,
+            ));
         }
         self.persist_ui_state();
         Ok(true)
@@ -730,7 +706,7 @@ impl Runtime {
     }
 
     pub(in crate::runtime) fn request_dormant_wake(&mut self, id: &SleepId) -> bool {
-        match self.begin_dormant_wake(id, None) {
+        match self.begin_dormant_wake(id) {
             Ok(started) => started,
             Err(refusal) if refusal.kept => {
                 self.reject_dormant_action(id, refusal.code, refusal.message);
@@ -749,14 +725,12 @@ impl Runtime {
     pub(in crate::runtime) fn begin_dormant_wake(
         &mut self,
         id: &SleepId,
-        worker: Option<FactoryWorker>,
     ) -> Result<bool, WakeRefusal> {
         let Some(record) = self.snapshot.ui_state.agent_sleep.dormant.get(id).cloned() else {
             return Err(WakeRefusal {
                 code: "agent_sleep.not_found",
                 message: "This sleeping session is no longer available",
                 kept: false,
-                transient: false,
             });
         };
         if record.phase.in_flight() {
@@ -766,7 +740,6 @@ impl Runtime {
             code,
             message,
             kept: true,
-            transient: false,
         };
         if !record.closed || !matches!(record.phase, DormantPhase::Sleeping | DormantPhase::Failed)
         {
@@ -785,7 +758,6 @@ impl Runtime {
             .admit_dormant_transition()
         {
             return Err(WakeRefusal {
-                transient: true,
                 ..refuse("agent_sleep.admission_refused", reason)
             });
         }
@@ -794,7 +766,6 @@ impl Runtime {
             &format!("sleep:{}", id.as_str()),
         ) {
             return Err(WakeRefusal {
-                transient: true,
                 ..refuse(
                     "agent_sleep.admission_refused",
                     "This checkout already has pending agent operations. Wait for them to finish, then try again.",
@@ -808,9 +779,6 @@ impl Runtime {
             .dormant
             .get_mut(id)
             .unwrap();
-        if worker.is_some() {
-            current.factory = worker;
-        }
         if let Err(reason) = current.transition(DormantPhase::SavingWake) {
             self.finish_agent_effect(
                 &record.context.checkout_path,
@@ -1218,21 +1186,7 @@ impl Runtime {
                 rows_changed |= self.refresh_dormant_rows();
                 continue;
             }
-            if record.factory.is_some() {
-                // A Factory worker's way back stays until the Factory has
-                // bound the wake pane to it (#857).
-                if let Some(held) = self.snapshot.ui_state.agent_sleep.dormant.get_mut(&id) {
-                    match held.transition(DormantPhase::Woken) {
-                        Ok(()) => held.transition_started_unix_ms = unix_milliseconds(),
-                        Err(reason) => {
-                            held.phase = DormantPhase::Failed;
-                            held.reason = Some(reason.into());
-                        }
-                    }
-                }
-            } else {
-                self.snapshot.ui_state.agent_sleep.dormant.remove(&id);
-            }
+            self.snapshot.ui_state.agent_sleep.dormant.remove(&id);
             // The woken pane keeps the choice for the agent's next restart.
             // It is kept here, where the wake is confirmed once, because
             // Herdr can show the woken agent before the start's own answer.

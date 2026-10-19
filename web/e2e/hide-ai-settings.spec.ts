@@ -27,6 +27,8 @@ function standIns(herdr: HerdrFixture): string {
   fixtureProgram(dir, "pi", `if (process.argv.includes("--list-models")) { console.log("xai/pi-fixture\\nxai/pi-fixture-mini"); process.exit(0); }\nprocess.exit(1);\n`);
   // OpenCode can be named but not yet used (no way to keep its call read-only): it only has to exist.
   fixtureProgram(dir, "opencode", "process.exit(0);\n");
+  // A retired CLI can still be installed. Finding it must never probe or run it.
+  fixtureProgram(dir, "gemini", `require("node:fs").writeFileSync(${JSON.stringify(path.join(herdr.root, "gemini-invoked"))}, "unexpected invocation"); process.exit(1);\n`);
   return dir;
 }
 
@@ -113,6 +115,7 @@ test("Add agent offers the agents Hide AI can use, dims the one it cannot, and t
     await expect(menu.locator("[data-ai-add-item]")).toHaveCount(2);
     await expect(menu.locator("[data-ai-add-item='grok']")).toBeVisible();
     await expect(menu.locator("[data-ai-add-item='pi']")).toBeVisible();
+    await expect(menu).not.toContainText("Gemini");
     await expect(menu).toContainText("Hide AI can't use these yet");
     const dimmed = menu.locator("[data-ai-unusable-item='opencode']");
     await expect(dimmed).toHaveAttribute("data-disabled", "");
@@ -151,6 +154,48 @@ test("Add agent offers the agents Hide AI can use, dims the one it cannot, and t
     await expect(group.locator("[data-ai-fallback]")).toHaveCount(0);
     await expect.poll(() => stored(daemon).provider).toBe("grok");
     expect(stored(daemon).fallback ?? []).toEqual([]);
+  } finally {
+    daemon.stop();
+    herdr.stop();
+  }
+});
+
+test("a saved retired Gemini choice stays unchosen, preserves model data and never invokes its installed CLI", async ({ page }) => {
+  const herdr = await startHerdr();
+  const home = path.join(herdr.root, "retired-ai-home");
+  const settings = aiSettingsFile(home);
+  fs.mkdirSync(path.dirname(settings), { recursive: true });
+  fs.writeFileSync(settings, JSON.stringify({
+    provider: "gemini-cli",
+    models: { "gemini-cli": "saved-gemini", antigravity: "gemini-3.8-flash-high" },
+    fallback: [{ provider: "gemini-cli" }, { provider: "grok", model: "grok-fixture-mini" }],
+  }));
+  const daemon = await startHided(herdr, "hide-ai-retired", home, { PATH: `${standIns(herdr)}${path.delimiter}${herdr.fixturePath}` });
+  try {
+    const tab = await openHideAi(page, daemon);
+    // The kit has no switched-on agent here, so the normal first-run rule makes no replacement choice.
+    await expect(tab.locator("[data-ai-provider]")).toContainText("Choose");
+    await expect(tab.locator('[data-settings-group="hide-ai-fallback"]')).toHaveCount(0);
+    await tab.locator("[data-ai-provider]").click();
+    await expect(page.getByRole("option", { name: /Grok/ })).toBeVisible();
+    await expect(page.getByRole("option", { name: /Gemini/ })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    expect(fs.existsSync(path.join(herdr.root, "gemini-invoked"))).toBe(false);
+
+    // A settings write must not persist the internal default as a choice or erase the retired model.
+    await tab.locator("[data-ai-use]").click();
+    await expect.poll(() => stored(daemon).enabled).toBe(false);
+    expect(stored(daemon).provider).toBeUndefined();
+    expect(stored(daemon).fallback).toEqual([{ provider: "grok", model: "grok-fixture-mini" }]);
+    expect(stored(daemon).models).toMatchObject({ "gemini-cli": "saved-gemini", antigravity: "gemini-3.8-flash-high" });
+    await screenshot(page, "hide-ai-retired-gemini");
+    await tab.locator("[data-ai-use]").click();
+    await tab.locator("[data-ai-provider]").click();
+    await page.getByRole("option", { name: /Grok/ }).click();
+    await expect.poll(() => stored(daemon).provider).toBe("grok");
+    await expect(tab.locator("[data-ai-provider]")).toContainText("Grok");
+    expect(stored(daemon).fallback).toEqual([]);
+    expect(fs.existsSync(path.join(herdr.root, "gemini-invoked"))).toBe(false);
   } finally {
     daemon.stop();
     herdr.stop();

@@ -56,6 +56,8 @@ export type RaisedAsk = {
   what: string | null;
   /** The raised descendant itself, where a tree draws the ask. */
   raised_pane_id: string;
+  /** The raised descendant's title; drafts may name its parent as the holder. */
+  origin_title?: string;
   /** The agent the band names: the raised descendant, or for a draft the parent holding it. */
   pane_id: string;
   title: string;
@@ -120,8 +122,10 @@ export type AgentRow = {
   message?: string | null;
   /** Native unanswered question/plan, bounded and session/state-proven by the core. */
   user_turn?: UserTurnFact;
-  /** When the core last saw this agent change state (epoch ms); the shell counts the elapsed time from it. `null` before the core observed it. */
+  /** When the core last saw this agent change state (epoch ms), retained for state ordering. */
   changed_at_unix_ms: number | null;
+  /** Latest actual native request in the proven session (epoch ms). Absent when unknown; never fall back to state observation time. */
+  last_prompt_at_unix_ms?: number | null;
   /** The core's ordering key: `changed_at_unix_ms` as thirteen digits, else Herdr's state sequence zero-padded, so it sorts as text. */
   last_activity?: string;
   emphasized: boolean;
@@ -344,6 +348,8 @@ export type PullRequestWork = {
   asked_of_me: "unknown" | "none" | "direct" | "team";
   failed_checks: { name: string; url: string | null }[];
   pending_checks: number;
+  /** Disjoint counts from the open head's GitHub rollup; absent until read. */
+  check_counts?: { total: number; passed: number; failed: number; running: number; waiting: number; skipped: number; unknown: number } | null;
   /** Its place in the base branch's merge queue; `unknown` while the queue could not be read. */
   queue: { state: "unknown" | "not_queued" } | { state: "at"; position: number };
   review_requested_at_unix_ms: number | null;
@@ -443,6 +449,8 @@ export type Task = {
   sub_issues?: TaskSubIssues | null;
   /** The source's labels in its order, read with the list; absent when it has none, as every Local issue (`TaskLabel`). */
   labels?: IssueLabel[];
+  author?: string | null;
+  assignees?: string[];
 };
 
 /** GitHub's `completed` of `total` sub-issues, and the sub-issues themselves. */
@@ -473,6 +481,7 @@ export type TaskSource = {
 /** A project's tasks (`ProjectTasksSnapshot`); `source` is null only for a device's project. */
 export type ProjectTasks = {
   source: TaskSource | null;
+  sources?: TaskSource[];
   tasks: Task[];
   overflow: boolean;
 };
@@ -504,6 +513,8 @@ export type IssueComment = { author: string | null; created_at_unix_ms: number |
  * comments. The fields past `message` are empty until `ready`.
  */
 export type IssueDetail = {
+  workspace_id: string;
+  device_id: string;
   task_key: string;
   phase: "reading" | "ready" | "failed";
   body: string | null;
@@ -515,6 +526,10 @@ export type IssueDetail = {
   /** Absent for a source with no comments (Local). */
   comment_count: number | null;
   comments: IssueComment[];
+  comments_cursor?: string | null;
+  comments_has_more?: boolean;
+  comments_limited?: boolean;
+  comments_loading?: boolean;
 };
 
 /** The Overview's issue work in flight (`IssueWorkSnapshot`), one slot each. */
@@ -523,10 +538,10 @@ export type IssueWork = {
   backlog?: BacklogItem[];
   /** The last `되돌리기`. */
   undo?: BacklogUndo | null;
-  /** Where each item a window shows came from, one per item key (`backlog_origin`); kept while any window shows it. */
+  /** Where each selected workspace/device/item came from (`backlog_origin`); kept while any window shows that owner. */
   origins?: BacklogOrigin[];
-  /** Every item key a missed line made, for the backlog row's flag (B27). */
-  missed_keys?: string[];
+  /** Local flags belong to their device; GitHub repository/number flags have a null device (B27). */
+  missed_keys?: { task_key: string; device_id: string | null }[];
   /** Every GitHub issue key Hide made for the backlog: only these and memos show `되돌리기` (D-21, B31). */
   made_keys?: string[];
   detail: IssueDetail | null;
@@ -556,9 +571,11 @@ export type BacklogItem = {
   at_unix_ms: number;
 };
 
-export type BacklogUndo = { task_key: string; phase: "working" | "done" | "failed"; failure: BacklogFailure | null };
+export type BacklogUndo = { workspace_id: string; device_id: string; task_key: string; phase: "working" | "done" | "failed"; failure: BacklogFailure | null };
 
 export type BacklogOrigin = {
+  workspace_id: string;
+  device_id: string;
   task_key: string;
   phase: "reading" | "ready" | "failed";
   session: WorkSession | null;
@@ -738,6 +755,7 @@ export type WorktreeDisk = {
 };
 
 export type Checkout = {
+  agent_groups?: import("./agentLayout").CheckoutAgentGroups;
   agent_scope: AgentScope;
   id: string;
   workspace_id: string;
@@ -944,6 +962,8 @@ export type PaneHeader = {
   notice: PaneNotice | null;
   /** What waits on the operator in this pane, drawn on its second row. */
   band: PaneBand | null;
+  /** The current pane agent's own live working sentence, selected by the core. */
+  progress?: string | null;
 };
 export type PaneNotice = {kind: string; tone: "muted" | "warning" | "error"; reason: string | null; since_unix_ms: number | null; exit_code: number | null};
 /** The pane's own approval, answer, block or stop, or a raised descendant's ask; `read` once the operator has looked. */
@@ -1363,9 +1383,17 @@ export type KitComponentState = "installed" | "outdated" | "not_installed" | "re
 export type KitAgentAvailability = "available" | "not_installed" | "unsupported_system";
 
 /** The first-run wizard's steps (`contracts/snapshot-wire-enums.json`: `first_run_step`). */
-export type FirstRunStep = "agents" | "notifications" | "project" | "done";
+export type FirstRunStep = "agents" | "devices" | "notifications" | "project" | "done";
 
 export type FirstRun = { version: number; step: FirstRunStep };
+export type FirstRunProjectForm = { view?: "add" | "clone" | "create" | ""; url?: string; parent?: string; name?: string };
+export type FirstRunChoices = { agents?: string[] | null; devices?: string[]; project_device?: string | null; project_path?: string; project_form?: FirstRunProjectForm; notifications_answered?: boolean };
+export type HerdrProfile = {
+  id: string; label: string; target: string; session: string; enabled: boolean;
+  added_as: string | null; problem: string | null; device_id: string | null;
+  connect_state: string; connect_error: string | null;
+};
+export type HerdrProfiles = { state: "idle" | "loading" | "ready" | "failed"; error: string | null; profiles: HerdrProfile[]; truncated: boolean };
 
 /** The flow version this build draws; the core keeps the same number (`FIRST_RUN_VERSION`). */
 export const FIRST_RUN_VERSION = 1;
@@ -1556,7 +1584,7 @@ export type CoreDiagnostic = { kind: string; message: string; occurred_at: numbe
 export type AiProvider = {
   id: string;
   label: string;
-  /** The id the logos key the same agent by: the install kit's adapter id (`claude-code`, `codex`, `grok`, `opencode`, `pi`, `cursor`), or `gemini-cli` for Gemini CLI, which Hide AI still uses though the kit no longer lists it. */
+  /** The id the logos key the same agent by: the install kit's adapter id (`claude-code`, `codex`, `grok`, `opencode`, `pi`, `antigravity`). */
   agent: string;
   /** `ready`, `needs_login`, `usage_limited`, `not_installed`, `unavailable`, `unsupported`, or `unread`. */
   state: string;
@@ -1569,12 +1597,12 @@ export type AiProvider = {
   selectable: boolean;
   /** When a usage limit ends (unix ms), when the agent said. */
   retry_at_ms: number | null;
-  /** False when the agent has no sign-in check (Gemini CLI): `ready` then only means its program was found; absent from an older daemon. */
+  /** Every current provider checks sign-in; false or absent remains readable from older peers. */
   login_checked?: boolean;
   /** The model it is asked for; empty is the CLI's own default. */
   model: string;
   models: string[];
-  /** The list is the CLI's documented one and cannot be asked for (Gemini CLI). */
+  /** The list is documented rather than queried, as an older peer may report. */
   models_fixed: boolean;
   /** "CLI default" can be chosen: the agent is asked with no `--model`. */
   cli_default: boolean;
@@ -1876,7 +1904,8 @@ export type LinkSummaries = {
 export type WorkSession = { device_id: string; agent: string; session_id: string };
 export type WorkRequest = { offset: number; at_unix_ms: number; text: string; author: "operator" | "parent"; task_ids: string[]; chapter_id: string | null; judged: boolean };
 export type WorkEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished";
-export type WorkTask = { id: string; chapter_id: string; name: string; at_unix_ms: number; last_at_unix_ms: number; end: WorkEnd; done: boolean };
+/** `unjudged`: the session's newest turn went unjudged and the task is not done, so `end` is an earlier turn's (PRD task-continuation D-09). */
+export type WorkTask = { id: string; chapter_id: string; name: string; at_unix_ms: number; last_at_unix_ms: number; end: WorkEnd; done: boolean; unjudged: boolean };
 export type MissedWork = { id: string; kind: "leftover" | "problem" | "follow_up"; text: string; status: "open" | "resolved" | "issue" | "dismissed" | "backlog"; at_unix_ms: number; turn_offset: number; issue_repository: string | null; issue_number: number | null; backlog_key: string | null; creating: boolean };
 export type WorkOutput = { kind: "pr" | "issue"; repository: string; number: number; title: string; url: string; state: string; stale: boolean; last_read_at_unix_ms: number | null; created_at_unix_ms: number; task_id: string | null; source: WorkSession; source_name: string };
 export type SessionRecord = {
@@ -1885,8 +1914,10 @@ export type SessionRecord = {
   chapters: { id: string; goal: string; at_unix_ms: number }[]; tasks: WorkTask[]; requests: WorkRequest[]; missed: MissedWork[]; outputs: WorkOutput[]; children: SessionRecord[];
   /** How its direct children stand; absent without children. */
   child_progress?: ChildProgress | null;
+  /** For a child, the task group of the parent's turn that spawned it (PRD task-continuation B7); null when that turn held no task. */
+  spawn_task?: string | null;
 };
-/** One direct child as its parent counts it (`contracts/snapshot-wire-enums.json`: `child_work`): by its own tasks, or with none by its last END; `unjudged` has neither. */
+/** One direct child as its parent counts it (`contracts/snapshot-wire-enums.json`: `child_work`): a resting child's report or merged pull requests, else its own tasks, else its last END; `unjudged` has no judgment that says, or a newest turn that went unjudged. */
 export type ChildWork = "done" | "working" | "other" | "unjudged";
 /** One segment per direct child; `done` is null while any child is unjudged, never a false zero. */
 export type ChildProgress = { children: ChildWork[]; done: number | null };
@@ -1894,7 +1925,12 @@ export type ChildProgress = { children: ChildWork[]; done: number | null };
 export type WorkProgress = { session: WorkSession; done: number; total: number; tasks: WorkTask[]; outputs: WorkOutput[]; children: ChildProgress | null };
 export type SessionWorkSummary = { session: WorkSession; title: string; fallback_title: string; native_title: string | null; manual_title: string | null; cwd: string | null; ended_at_unix_ms: number | null; open_missed: number; subtree_open_missed: number; missed: MissedWork[] };
 export type SessionRecordSection = { session: WorkSession | null; loading: boolean; failure: string | null; record: SessionRecord | null };
-export type SessionWorkSearch = { query: string; loading: boolean; failure: string | null; results: { session: WorkSession; title: string; matched: string; at_unix_ms: number; cwd: string | null }[] };
+export type SessionSearchStatus = "current" | "working" | "done" | "needs_you" | "archived" | "retained";
+export type SessionSearchCursor = { at_unix_ms: number; device_id: string; agent: string; session_id: string };
+export type SessionSearchOptions = { request_id?: string | null; device_id?: string | null; project_root?: string | null; agent?: string | null; since_unix_ms?: number | null; until_unix_ms?: number | null; status?: SessionSearchStatus | null; include_titles?: boolean; include_tasks?: boolean; cursor?: SessionSearchCursor | null };
+export type SessionSearchMatch = { kind: "request" | "title" | "task"; text: string; at_unix_ms: number; request_offset: number | null };
+export type SessionSearchHit = { session: WorkSession; title: string; matched: string; at_unix_ms: number; cwd: string | null; project_root?: string | null; status?: SessionSearchStatus; matches?: SessionSearchMatch[]; match_count?: number; request_count?: number };
+export type SessionWorkSearch = { query: string; options?: SessionSearchOptions; loading: boolean; failure: string | null; results: SessionSearchHit[]; next_cursor?: SessionSearchCursor | null };
 
 /** A durable conversation intent, never a current pane or delivery target. */
 export type SleepingSession = {
@@ -1938,7 +1974,22 @@ export type ArchivedMember = {
   reason: string | null;
 };
 
+/** Retained letter and passive direct-input metadata with exact session proof. No bodies. */
+export type OverviewGraphParty = { device_id: string; pane_id: string; session: string };
+export type OverviewGraphLetter = { id: string; sender: OverviewGraphParty; recipient: OverviewGraphParty; kind: string; at_unix_ms: number };
+export type OverviewGraphMetadata = {
+  available: boolean;
+  limit: number;
+  retained_count: number;
+  truncated: boolean;
+  retention_ms: number;
+  letters: OverviewGraphLetter[];
+  direct_inputs?: { id: string; sender: OverviewGraphParty; recipient: OverviewGraphParty; at_unix_ms: number }[];
+  sessions: { device_id: string; pane_id: string; session_digest: string; launch_model: string | null }[];
+};
+
 export type SnapshotRest = {
+  overview_graph?: OverviewGraphMetadata;
   git_worktrees_loading?: boolean;
   navigator?: {
     agent_scope?: AgentScope;
@@ -1957,8 +2008,6 @@ export type SnapshotRest = {
     sleeping_sessions?: SleepingSession[];
     /** Newest archived first (D-09). */
     archived_sessions?: ArchivedSession[];
-    /** Panes a Factory runs its workers in, which offer no Archive session (D-25). */
-    factory_worker_panes?: string[];
     devices?: Device[];
     focused_device_id?: string | null;
   };
@@ -2020,8 +2069,10 @@ export type SnapshotRest = {
     agent_onboarding_agents?: string[];
     /** The first-run wizard's progress (PRD first-run-onboarding D-07): absent on a Mac that never had one; another flow `version` is not this build's to show. */
     first_run?: FirstRun | null;
+    first_run_choices?: FirstRunChoices;
     /** Settings > Notifications' Notify me when an agent needs me (D-21); the desktop app shows agent notifications only while it is on. */
     desktop_notifications?: boolean;
+    product_analytics_enabled?: boolean;
     desktop_notifications_done?: boolean;
     usage?: UsagePreferences;
     /** The screens whose one-line introduction was shown (B43). */
@@ -2045,8 +2096,6 @@ export type SnapshotRest = {
     recent_checkouts?: RecentCheckout[];
     /** The terminal panes the keyboard has been in, newest first, up to fifty: the Agent cycle's order (issue 301). */
     recent_pane_ids?: string[];
-    /** The Home agent pane started as the Factory secretary (PRD software-factory-ui B23). */
-    factory_secretary_pane?: string | null;
     [key: string]: unknown;
   };
   status?: {
@@ -2058,6 +2107,7 @@ export type SnapshotRest = {
     background_ai?: BackgroundAi;
     /** The Host entries Add device lists, read on an `ssh_hosts_list` event (PRD settings-cleanup D-19). */
     ssh_hosts?: SshHosts;
+    herdr_profiles?: HerdrProfiles;
     diagnostics?: CoreDiagnostic[];
     async_operations?: AsyncOperation[];
     tab_rename?: { request_id: string; tab_id: string; label: string; phase: "pending" | "succeeded" | "failed" } | null;

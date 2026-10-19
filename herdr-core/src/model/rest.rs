@@ -121,7 +121,6 @@ section!(NavigatorSections, NavigatorSnapshot, s, {
     hide_ai_checkouts: Vec<HideAiCheckoutSnapshot> => s.hide_ai_checkouts,
     sleeping_sessions: Vec<crate::agent_sleep::SleepingSessionSnapshot> => s.sleeping_sessions,
     archived_sessions: Vec<crate::session_archive::ArchivedSessionSnapshot> => s.archived_sessions,
-    factory_worker_panes: Vec<String> => s.factory_worker_panes,
 }, {});
 
 section!(TerminalSections, TerminalSnapshot, s, {
@@ -142,6 +141,7 @@ section!(StatusSections, StatusSnapshot, s, {
     agent_hooks: AgentHooksSnapshot => s.agent_hooks,
     background_ai: BackgroundAiSnapshot => s.background_ai,
     ssh_hosts: SshHostsSnapshot => s.ssh_hosts,
+    herdr_profiles: HerdrProfilesSnapshot => s.herdr_profiles,
     diagnostics: Vec<DiagnosticSnapshot> => s.diagnostics,
     last_error: Option<LastErrorSnapshot> => s.last_error,
     async_operations: Vec<AsyncOperationSnapshot> => s.async_operations,
@@ -151,6 +151,7 @@ section!(StatusSections, StatusSnapshot, s, {
 
 section!(RestSections, Snapshot, s, {
     delivery_watches: Vec<crate::delivery::watch::View> => s.delivery_watches,
+    overview_graph: OverviewGraphSnapshot => s.overview_graph,
     sessions: SessionsSnapshot => s.sessions,
     card: CheckoutCardSnapshot => s.card,
     git_worktrees: Option<ProjectWorktreesSnapshot> => s.git_worktrees,

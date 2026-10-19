@@ -12,7 +12,7 @@ import {
   PI_TITLE, appendOmpQuestion, prepareNativeWriter, prepareOpenCodeWriter, reportNativeWriter, reportOpenCodeState, setGrokPlanApproval, updateOmpTitle,
   writeOpenCodeQuestion,
 } from "./session-reader-fixture";
-import { openSleepingProject, screenshot } from "./wire";
+import { openSleepingProject, screenshot, sendEvent } from "./wire";
 import { afterCleanup } from "./worker-owned";
 import { FakeTailscale } from "./fake-tailscale";
 import { dumpOnFailure } from "./failure-dump";
@@ -33,8 +33,8 @@ async function disableAgentSummaries(page: Page): Promise<void> {
   await expect(page.locator("[data-settings]")).toHaveCount(0);
 }
 
-for (const [kind, id, initialTitle, resumeFlag] of [["pi", PI_ID, PI_TITLE, "--session"], ["omp", OMP_ID, OMP_TITLE, "--resume"], ["grok", GROK_ID, GROK_TITLE, "--resume"], ["cursor", CURSOR_ID, CURSOR_GOAL, "--resume"]] as const) {
-test(`${kind} ${kind === "cursor" ? "generated goal" : "native title"} and durable sleep wake the exact conversation in a fresh pane`, async ({ page }) => {
+for (const [kind, id, initialTitle, resumeFlag] of [["pi", PI_ID, PI_TITLE, "--session"], ["omp", OMP_ID, OMP_TITLE, "--resume"], ["grok", GROK_ID, GROK_TITLE, "--resume"]] as const) {
+test(`${kind} native title and durable sleep wake the exact conversation in a fresh pane`, async ({ page }) => {
   let agents: QuestionRow[] = [];
   page.on("websocket", (socket) => socket.on("framereceived", (frame) => {
     if (typeof frame.payload !== "string") return;
@@ -50,7 +50,7 @@ test(`${kind} ${kind === "cursor" ? "generated goal" : "native title"} and durab
     herdr.run(["agent", "start", `${kind}-reader`, "--kind", kind, "--pane", sourcePane]);
     await expect.poll(() => fs.existsSync(session)).toBe(true);
     reportNativeWriter(herdr, kind, sourcePane, session);
-    daemon = await startHided(herdr, `${kind}-reader`, herdr.env.HOME, kind === "cursor" ? { CURSOR_CONFIG_DIR: undefined, XDG_CONFIG_HOME: undefined } : {});
+    daemon = await startHided(herdr, `${kind}-reader`, herdr.env.HOME);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await page.locator("[data-checkout]").first().click();
     const row = page.locator(`nav[data-sidebar] [data-checkout-agents-open] [data-pane="${sourcePane}"]`);
@@ -92,10 +92,6 @@ test(`${kind} ${kind === "cursor" ? "generated goal" : "native title"} and durab
     }
     await row.click();
     await page.locator(`[data-pane-menu="${sourcePane}"]`).click();
-    if (kind === "cursor") {
-      await expect(page.locator('[data-menu-item="fork_agent"]')).toHaveCount(0);
-      expect(agents.find(agent => agent.pane_id === sourcePane)?.user_turn).toBeUndefined();
-    }
     await expect(page.locator('[data-menu-item="sleep_agent"]')).toBeEnabled({ timeout: 20_000 });
     await page.locator('[data-menu-item="sleep_agent"]').click();
     // Every agent of the project sleeps now, so it folds (PRD sidebar-titlebar-refresh B4).
@@ -115,8 +111,7 @@ test(`${kind} ${kind === "cursor" ? "generated goal" : "native title"} and durab
       return fresh;
     }, { timeout: 30_000 }).not.toBe("");
     await expect.poll(() => fs.readFileSync(path.join(herdr.root, `${kind}-launches.jsonl`), "utf8").trim().split("\n").map(line => JSON.parse(line) as string[])).toContainEqual([resumeFlag, id]);
-    // Cursor CLI runs no session hook on --resume, so the core reports the resumed session itself.
-    if (kind !== "cursor") reportNativeWriter(herdr, kind, fresh, session);
+    reportNativeWriter(herdr, kind, fresh, session);
     await expect(sleeping).toHaveCount(0, { timeout: 30_000 });
     await expect(page.locator(`nav[data-sidebar] [data-pane="${fresh}"]`)).toContainText(title);
     expect(fs.readFileSync(session)).toEqual(prior);
@@ -130,7 +125,7 @@ test(`${kind} ${kind === "cursor" ? "generated goal" : "native title"} and durab
 }
 
 for (const refusal of ["override", "duplicate"] as const) {
-test(`Cursor ${refusal} root refuses Sleep before closing its live pane`, async ({ page }) => {
+test(`Cursor ${refusal} root retains its historical goal while retired Sleep refuses to close its pane`, async ({ page }) => {
   const herdr = await startHerdr({ agents: false });
   let daemon: Daemon | null = null;
   try {
@@ -165,11 +160,13 @@ test(`Cursor ${refusal} root refuses Sleep before closing its live pane`, async 
     await expect(row).toContainText(CURSOR_GOAL, { timeout: 30_000 });
     await row.click();
     await page.locator(`[data-pane-menu="${pane}"]`).click();
-    await expect(page.locator('[data-menu-item="sleep_agent"]')).toBeEnabled({ timeout: 20_000 });
-    await page.locator('[data-menu-item="sleep_agent"]').click();
-    const reason = refusal === "duplicate" ? "cursor_launch_root_ambiguous" : "cursor_launch_root_unsupported";
-    await expect.poll(() => fs.readFileSync(path.join(daemon!.stateDir, "Logs", "core.jsonl"), "utf8")).toContain(`"reason":"${reason}"`);
-    await expect.poll(() => fs.readFileSync(path.join(daemon!.stateDir, "Logs", "core.jsonl"), "utf8")).toContain('"error_kind":"agent_sleep.failed"');
+    await expect(page.locator('[data-menu-group="fork"]')).toHaveCount(0);
+    await expect(page.locator('[data-menu-item="sleep_agent"]')).toBeDisabled();
+    // A stale client must also be refused by the core, before any close or launch.
+    await sendEvent(page, daemon, "agent_sleep", { pane_id: pane });
+    const log = () => fs.readFileSync(path.join(daemon!.stateDir, "Logs", "core.jsonl"), "utf8");
+    await expect.poll(log).toContain('"error_kind":"agent_sleep.refused"');
+    await expect.poll(log).toContain("This agent's reader does not support sleep");
     await expect(row).toContainText(CURSOR_GOAL);
     await expect(page.locator('[data-sleeping-session]')).toHaveCount(0);
     expect(JSON.stringify(herdr.run(["pane", "list"]))).toContain(`"pane_id":"${pane}"`);

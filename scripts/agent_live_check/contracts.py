@@ -37,7 +37,7 @@ def source_contract(checkout: Path) -> dict:
         raise ProtectionError("adapter_declarations_unreadable")
     bell = json.loads(declaration(checkout / "herdr-core/src/delivery/bell.rs",
                                   "    const SAMPLE: &str = "))
-    if not isinstance(bell, str) or not bell.startswith("🔔 ") or "\n" in bell:
+    if not isinstance(bell, str) or not bell.startswith("🦉 ") or "\n" in bell:
         raise ProtectionError("invalid_bell_sample")
     quiet = declaration(checkout / "herdr-core/src/delivery/doorbell.rs", "const QUIET_MS: u64 = ")
     if not quiet.replace("_", "").isdigit():

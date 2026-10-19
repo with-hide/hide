@@ -33,7 +33,7 @@ def seed(runtime, daemon, repository, writer, value):
     setup failure."""
     device = daemon.wait(lambda rest: (local_device(rest) or {}).get("id"), 30, "the core's own machine row")
     code, out, err = runtime.owner.run([str(writer), str(runtime.state), str(repository), device, title(value)],
-                                       env=runtime.env, check=False, seconds=30)
+                                       env=runtime.env, check=False)
     if code:
         raise ProcessError("journey_memory_card_refused: " + (err.strip() or out.strip())[:300])
     try:

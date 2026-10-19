@@ -418,6 +418,23 @@ fn cap_task_groups(tx: &Transaction<'_>, session: &SessionIdentity) -> Result<()
     Ok(())
 }
 
+/// Whether a turn at this offset is already judged or recorded unjudged.
+fn turn_recorded(
+    connection: &rusqlite::Connection,
+    session: &SessionIdentity,
+    offset: u64,
+) -> Result<bool, String> {
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM ledger_turns \
+            WHERE device=?1 AND agent=?2 AND id=?3 AND offset=?4) OR EXISTS(SELECT 1 FROM ledger_unjudged \
+            WHERE device=?1 AND agent=?2 AND id=?3 AND offset=?4)",
+            params![session.device_id, session.agent, session.session_id, offset as i64],
+            |row| row.get(0),
+        )
+        .map_err(failed)
+}
+
 fn cap(
     tx: &Transaction<'_>,
     session: &SessionIdentity,
@@ -646,17 +663,19 @@ impl LinkStore {
                 }
                 LedgerAnswer::Saved
             }
-            LedgerCall::ReleaseBacklog { backlog_key } => {
+            LedgerCall::ReleaseBacklog { target } => {
+                let backlog_key = target.key();
+                let device = target.local_device();
                 // A typed item's issue was closed: its create no longer
                 // names an issue `되돌리기` may close.
-                if let Some(reference) = crate::tasks::parse_github_key(&backlog_key) {
+                if let BacklogTarget::Github(reference) = &target {
                     tx.execute("UPDATE ledger_backlog SET state='undone' WHERE state='complete' AND lower(repo)=lower(?1) AND number=?2",
                         params![reference.repository,reference.number]).map_err(failed)?;
                 }
-                tx.execute("DELETE FROM ledger_issue_attempts WHERE EXISTS(SELECT 1 FROM ledger_missed m WHERE m.device=ledger_issue_attempts.device AND m.agent=ledger_issue_attempts.agent AND m.id=ledger_issue_attempts.id AND m.missed=ledger_issue_attempts.missed AND m.backlog_key=?1)",
-                    params![backlog_key]).map_err(failed)?;
-                tx.execute("UPDATE ledger_missed SET status=?2,issue_repo=NULL,issue_number=NULL,backlog_key=NULL WHERE backlog_key=?1",
-                    params![backlog_key,encoded(&MissedStatus::Open)?]).map_err(failed)?;
+                tx.execute("DELETE FROM ledger_issue_attempts WHERE EXISTS(SELECT 1 FROM ledger_missed m WHERE m.device=ledger_issue_attempts.device AND m.agent=ledger_issue_attempts.agent AND m.id=ledger_issue_attempts.id AND m.missed=ledger_issue_attempts.missed AND m.backlog_key=?1 AND (?2 IS NULL OR m.device=?2))",
+                    params![backlog_key,device]).map_err(failed)?;
+                tx.execute("UPDATE ledger_missed SET status=?2,issue_repo=NULL,issue_number=NULL,backlog_key=NULL WHERE backlog_key=?1 AND (?3 IS NULL OR device=?3)",
+                    params![backlog_key,encoded(&MissedStatus::Open)?,device]).map_err(failed)?;
                 LedgerAnswer::Saved
             }
             LedgerCall::DismissBacklog { intent } => {
@@ -685,11 +704,12 @@ impl LinkStore {
                 drop(statement);
                 LedgerAnswer::Pending(rows)
             }
-            LedgerCall::BacklogOrigin { backlog_key } => {
+            LedgerCall::BacklogOrigin { target } => {
+                let backlog_key = target.key();
                 let found: Option<(String, String, String)> = tx
                     .query_row(
-                        "SELECT device,agent,id FROM ledger_missed WHERE backlog_key=?1 LIMIT 1",
-                        params![backlog_key],
+                        "SELECT device,agent,id FROM ledger_missed WHERE backlog_key=?1 AND (?2 IS NULL OR device=?2) ORDER BY at DESC,device,agent,id,missed LIMIT 1",
+                        params![backlog_key,target.local_device()],
                         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                     )
                     .optional()
@@ -713,12 +733,17 @@ impl LinkStore {
             }
             LedgerCall::BacklogKeys => {
                 let mut statement = tx
-                    .prepare("SELECT backlog_key FROM ledger_missed WHERE backlog_key IS NOT NULL GROUP BY backlog_key ORDER BY MAX(at) DESC LIMIT ?1")
+                    .prepare("SELECT backlog_key,CASE WHEN substr(backlog_key,1,6)='local:' THEN device ELSE NULL END AS owner_device FROM ledger_missed WHERE backlog_key IS NOT NULL GROUP BY backlog_key,owner_device ORDER BY MAX(at) DESC,backlog_key,owner_device LIMIT ?1")
                     .map_err(failed)?;
                 let missed = statement
-                    .query_map(params![BACKLOG_KEYS_LIMIT as i64], |r| r.get(0))
+                    .query_map(params![BACKLOG_KEYS_LIMIT as i64], |r| {
+                        Ok(BacklogMissedKey {
+                            task_key: r.get(0)?,
+                            device_id: r.get(1)?,
+                        })
+                    })
                     .map_err(failed)?
-                    .collect::<Result<Vec<String>, _>>()
+                    .collect::<Result<Vec<BacklogMissedKey>, _>>()
                     .map_err(failed)?;
                 drop(statement);
                 let mut statement = tx
@@ -753,6 +778,35 @@ impl LinkStore {
     }
 
     pub fn apply_ledger_update(&mut self, update: &LedgerUpdate) -> Result<(), String> {
+        // A descendant's letter continues the task that spawned it, read
+        // before the write starts: the record is the same rule the screen
+        // reads, so a finished task is never reopened by a letter (B5).
+        let letter_task = match update {
+            LedgerUpdate::TurnEnd {
+                session,
+                offset,
+                end,
+                work_author: false,
+                letter: Some(sender),
+                ..
+            } if !self.turn_recorded(session, *offset)? => {
+                // A store failure is retried whole; any other failure to
+                // place the turn records it with no task rather than losing it.
+                match self.letter_task(session, sender, *end) {
+                    Ok(group) => group,
+                    Err(error) if error.starts_with("links_store_") => return Err(error),
+                    Err(error) => {
+                        crate::diagnostic!(serde_json::json!({
+                            "component":"links", "kind":"ledger.letter_task_unavailable",
+                            "device_id":session.device_id, "session_id":session.session_id,
+                            "offset":offset, "error":error,
+                        }));
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
         let tx = self.connection.transaction().map_err(failed)?;
         match update {
             LedgerUpdate::Unjudged { session, offsets } => {
@@ -901,27 +955,15 @@ impl LinkStore {
             LedgerUpdate::TurnEnd {
                 session,
                 offset,
+                started_at_unix_ms,
                 at_unix_ms,
                 end,
                 work_author,
+                letter: _,
                 turn_witness,
                 judgment,
             } => {
-                let exists: bool = tx
-                    .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM ledger_turns \
-                    WHERE device=?1 AND agent=?2 AND id=?3 AND offset=?4) OR EXISTS(SELECT 1 FROM ledger_unjudged \
-                    WHERE device=?1 AND agent=?2 AND id=?3 AND offset=?4)",
-                        params![
-                            session.device_id,
-                            session.agent,
-                            session.session_id,
-                            *offset as i64
-                        ],
-                        |row| row.get(0),
-                    )
-                    .map_err(failed)?;
-                if exists {
+                if turn_recorded(&tx, session, *offset)? {
                     return Ok(());
                 }
                 if judgment.missed.len() > NEW_MISSED_LIMIT
@@ -961,8 +1003,17 @@ impl LinkStore {
                     );
                     return Ok(());
                 }
-                if *work_author {
-                    match &judgment.task {
+                // A turn with no request of its own starts at the input that
+                // woke it (D-03).
+                let start_at = start.unwrap_or(*started_at_unix_ms).min(*at_unix_ms);
+                let lineage = letter_task.map(|group| TaskDecision::Continue { ids: vec![group] });
+                let decision = if *work_author {
+                    Some(&judgment.task)
+                } else {
+                    lineage.as_ref()
+                };
+                if let Some(decision) = decision {
+                    match decision {
                         TaskDecision::New { names } => {
                             let chapter = chapter.as_deref().ok_or("ledger_chapter_missing")?;
                             if names.is_empty() || names.len() > NEW_TASK_LIMIT {
@@ -994,7 +1045,7 @@ impl LinkStore {
                                         task,
                                         chapter,
                                         name,
-                                        start.unwrap_or(*at_unix_ms) as i64,
+                                        start_at as i64,
                                         *at_unix_ms as i64,
                                         encoded(end)?
                                     ],
@@ -1085,7 +1136,7 @@ impl LinkStore {
                         session.agent,
                         session.session_id,
                         *offset as i64,
-                        start.unwrap_or(*at_unix_ms) as i64,
+                        start_at as i64,
                         *at_unix_ms as i64,
                         encoded(end)?,
                         encoded(&tasks)?,
@@ -1128,7 +1179,7 @@ impl LinkStore {
                                     session.agent,
                                     session.session_id,
                                     number as i64,
-                                    start.unwrap_or(*at_unix_ms) as i64,
+                                    start_at as i64,
                                     *at_unix_ms as i64
                                 ],
                                 |row| row.get(0),
@@ -1349,6 +1400,7 @@ impl LinkStore {
                 last_at_unix_ms: last,
                 end: decoded(end)?,
                 done: false,
+                unjudged: false,
             });
         }
         record.missed = self.ledger_missed(session)?;
@@ -1416,11 +1468,22 @@ impl LinkStore {
             .map_err(failed)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(failed)?;
+        let mut child_work = Vec::with_capacity(children.len());
+        // Task groups a spawned child holds open (D-05, B23).
+        let mut busy_groups = BTreeSet::new();
         for child in children {
-            let child =
+            let mut child =
                 self.record_tree(&child, visited, depth + 1, request_budget, include_requests)?;
             let spawn_task: Option<String> = self.connection.query_row("SELECT output_task FROM ledger_turns WHERE device=?1 AND agent=?2 AND id=?3 AND ?4 BETWEEN start_at AND end_at ORDER BY start_at DESC LIMIT 1",
                 params![session.device_id,session.agent,session.session_id,child.started_at_unix_ms.map(|n|n as i64)],|r|r.get(0)).optional().map_err(failed)?.flatten();
+            child.spawn_task = spawn_task.clone();
+            let facts = self.child_facts(&child.session)?;
+            if facts.holds_task(&child)
+                && let Some(task) = &spawn_task
+            {
+                busy_groups.insert(task_group(task).to_owned());
+            }
+            child_work.push(ChildWork::of(&child, facts));
             record
                 .outputs
                 .extend(child.outputs.iter().cloned().map(|mut output| {
@@ -1440,21 +1503,160 @@ impl LinkStore {
                 output.number,
             ))
         });
-        // A request's tasks finish together: their shared END is Done and
-        // every pull request assigned to any of them is merged.
+        // A request's tasks finish together: they share every END and every
+        // pull request assigned to any of them (`task_done`). Done is read
+        // from facts and the last judged END; an unjudged newest turn only
+        // takes the word from a task left open (D-09, B19).
+        let latest_unjudged = self.latest_unjudged(session)?;
         for task in &mut record.tasks {
             let group = task_group(&task.id);
-            task.done = task.end == LabelEnd::Done
-                && record
-                    .outputs
-                    .iter()
-                    .filter(|o| {
-                        o.kind == "pr" && o.task_id.as_deref().map(task_group) == Some(group)
-                    })
-                    .all(|o| o.state == "merged");
+            task.done = task_done(
+                task.end,
+                record.outputs.iter().filter(|o| {
+                    o.kind == "pr" && o.task_id.as_deref().map(task_group) == Some(group)
+                }),
+                busy_groups.contains(group),
+            );
+            task.unjudged = !task.done && latest_unjudged;
         }
-        record.child_progress = ChildProgress::of(&record.children);
+        record.child_progress = ChildProgress::of(child_work);
         Ok(record)
+    }
+
+    /// Whether `update` is a descendant letter's turn that must wait for the
+    /// runtime's first lineage facts after a start: before them no sender can
+    /// be matched, and a turn recorded with no task is never placed again.
+    pub fn awaits_lineage(&self, update: &LedgerUpdate) -> bool {
+        self.lineage.is_none()
+            && matches!(
+                update,
+                LedgerUpdate::TurnEnd {
+                    work_author: false,
+                    letter: Some(_),
+                    ..
+                }
+            )
+    }
+
+    fn turn_recorded(&self, session: &SessionIdentity, offset: u64) -> Result<bool, String> {
+        turn_recorded(&self.connection, session, offset)
+    }
+
+    /// Whether the session's newest turn went unjudged: its transcript
+    /// offset is past every judged turn's.
+    fn latest_unjudged(&self, session: &SessionIdentity) -> Result<bool, String> {
+        self.connection
+            .query_row(
+                "SELECT COALESCE((SELECT MAX(offset) FROM ledger_unjudged WHERE device=?1 AND agent=?2 AND id=?3),-1) \
+                 > COALESCE((SELECT MAX(offset) FROM ledger_turns WHERE device=?1 AND agent=?2 AND id=?3),-1)",
+                params![session.device_id, session.agent, session.session_id],
+                |row| row.get(0),
+            )
+            .map_err(failed)
+    }
+
+    /// What decides a child beside its record (D-08, D-09): a report to its
+    /// parent with no turn started after it, and an unjudged newest turn.
+    fn child_facts(&self, child: &SessionIdentity) -> Result<ChildFacts, String> {
+        let lineage = self.lineage.as_ref().and_then(|known| known.get(child));
+        let reported_idle = match lineage.and_then(|lineage| lineage.reported_at_unix_ms) {
+            Some(at) => !self
+                .connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM ledger_turns WHERE device=?1 AND agent=?2 AND id=?3 AND start_at>?4) \
+                     OR EXISTS(SELECT 1 FROM ledger_requests WHERE device=?1 AND agent=?2 AND id=?3 AND at>?4)",
+                    params![child.device_id, child.agent, child.session_id, at as i64],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(failed)?,
+            None => false,
+        };
+        Ok(ChildFacts {
+            reported_idle,
+            latest_unjudged: self.latest_unjudged(child)?,
+            live: lineage.is_some_and(|lineage| lineage.live),
+        })
+    }
+
+    /// The task group a letter from `sender` continues (PRD
+    /// task-continuation D-02): the spawn task of the direct child whose
+    /// subtree holds the descendant of that name. A sender outside the
+    /// lineage or a name two groups share continues nothing, and a finished
+    /// task takes the turn only when its `end` keeps it finished: the
+    /// question of the turn that merged its PR keeps its `!` (B3, D-07), and
+    /// no letter reopens it (B5).
+    fn letter_task(
+        &self,
+        session: &SessionIdentity,
+        sender: &str,
+        end: LabelEnd,
+    ) -> Result<Option<String>, String> {
+        if self.session(&key(session))?.is_none() {
+            return Ok(None);
+        }
+        let record = self.record_tree(session, &mut BTreeSet::new(), 0, &mut 0, false)?;
+        let lineage = self.lineage.as_ref().ok_or("ledger_lineage_pending")?;
+        fn named(
+            record: &SessionRecord,
+            sender: &str,
+            lineage: &BTreeMap<SessionIdentity, super::ChildLineage>,
+        ) -> bool {
+            lineage
+                .get(&record.session)
+                .is_some_and(|child| hide_session::envelope_names(sender, &child.name))
+                || record
+                    .children
+                    .iter()
+                    .any(|child| named(child, sender, lineage))
+        }
+        let groups = record
+            .children
+            .iter()
+            .filter(|child| named(child, sender, lineage))
+            .map(|child| child.spawn_task.clone())
+            .collect::<BTreeSet<_>>();
+        if groups.len() > 1 {
+            crate::diagnostic!(serde_json::json!({
+                "component":"links", "kind":"ledger.letter_sender_ambiguous",
+                "device_id":session.device_id, "session_id":session.session_id,
+                "groups":groups.len(),
+            }));
+            return Ok(None);
+        }
+        if groups.is_empty() {
+            crate::diagnostic!(serde_json::json!({
+                "component":"links", "kind":"ledger.letter_sender_unknown",
+                "device_id":session.device_id, "session_id":session.session_id,
+            }));
+        } else if groups.contains(&None) {
+            // The child is known but no judged turn of this session holds its
+            // start, so there is no task to continue.
+            crate::diagnostic!(serde_json::json!({
+                "component":"links", "kind":"ledger.letter_spawn_task_missing",
+                "device_id":session.device_id, "session_id":session.session_id,
+            }));
+        }
+        let Some(group) = groups.into_iter().next().flatten() else {
+            return Ok(None);
+        };
+        let mut tasks = record
+            .tasks
+            .iter()
+            .filter(|task| task_group(&task.id) == group)
+            .peekable();
+        if tasks.peek().is_none() {
+            return Ok(None);
+        }
+        // Tasks of one group finish together, so they are all done or none.
+        let reopens = tasks.all(|task| task.done)
+            && !task_done(
+                end,
+                record.outputs.iter().filter(|o| {
+                    o.kind == "pr" && o.task_id.as_deref().map(task_group) == Some(group.as_str())
+                }),
+                false,
+            );
+        Ok((!reopens).then_some(group))
     }
 
     /// A live pane's chip and checklist: `None` for a session the ledger does
@@ -1725,17 +1927,52 @@ impl LinkStore {
         Ok(summaries)
     }
 
+    #[cfg(test)]
     pub fn ledger_search(
         &self,
         query: &str,
         summaries: bool,
     ) -> Result<Vec<SessionSearchHit>, String> {
+        self.ledger_search_page(
+            query,
+            &SessionSearchOptions {
+                include_tasks: summaries,
+                ..Default::default()
+            },
+            summaries,
+            &[],
+        )
+        .map(|page| page.results)
+    }
+
+    /// The retained ledger only. Every scope predicate precedes ranking and
+    /// the page limit; the cursor includes the whole native session identity.
+    pub fn ledger_search_page(
+        &self,
+        query: &str,
+        options: &SessionSearchOptions,
+        summaries: bool,
+        presence: &[SessionSearchPresence],
+    ) -> Result<SessionSearchPage, String> {
         let query = query.trim();
-        if query.is_empty() {
-            return Ok(Vec::new());
-        }
-        if query.chars().count() > 200 {
+        if query.chars().count() > 200 || !options.bounded() {
             return Err("ledger_query_capacity".to_owned());
+        }
+        if presence.len() > SUMMARY_SESSION_LIMIT {
+            return Err("ledger_search_presence_capacity".into());
+        }
+        if options
+            .since_unix_ms
+            .zip(options.until_unix_ms)
+            .is_some_and(|(since, until)| since > until)
+            || options.since_unix_ms.is_some_and(|at| at > i64::MAX as u64)
+            || options.until_unix_ms.is_some_and(|at| at > i64::MAX as u64)
+            || options
+                .cursor
+                .as_ref()
+                .is_some_and(|cursor| cursor.at_unix_ms > i64::MAX as u64)
+        {
+            return Err("ledger_search_range_invalid".into());
         }
         let pattern = format!(
             "%{}%",
@@ -1744,44 +1981,143 @@ impl LinkStore {
                 .replace('%', "\\%")
                 .replace('_', "\\_")
         );
-        let values = if summaries {
-            "SELECT device,agent,id,text,at FROM ledger_requests UNION ALL SELECT device,agent,id,name,at FROM ledger_tasks UNION ALL SELECT device,agent,id,goal,at FROM ledger_chapters"
-        } else {
-            "SELECT device,agent,id,text,at FROM ledger_requests"
-        };
+        let mut values = "SELECT r.device,r.agent,r.id,r.text,r.at,'request' AS kind,r.offset FROM ledger_requests r JOIN scoped s USING(device,agent,id) WHERE r.author='\"operator\"'".to_owned();
+        if options.include_tasks && summaries {
+            values.push_str(" UNION ALL SELECT r.device,r.agent,r.id,r.name,r.at,'task',NULL FROM ledger_tasks r JOIN scoped s USING(device,agent,id) UNION ALL SELECT r.device,r.agent,r.id,r.goal,r.at,'task',NULL FROM ledger_chapters r JOIN scoped s USING(device,agent,id)");
+        }
+        if options.include_titles {
+            values.push_str(" UNION ALL SELECT t.device,t.agent,t.id,t.manual_title,COALESCE(s.last_request_at,s.ended_at,s.started_at,0),'title',NULL FROM ledger_titles t JOIN scoped s USING(device,agent,id) WHERE t.manual_title IS NOT NULL UNION ALL SELECT t.device,t.agent,t.id,t.native_title,COALESCE(s.last_request_at,s.ended_at,s.started_at,0),'title',NULL FROM ledger_titles t JOIN scoped s USING(device,agent,id) WHERE t.native_title IS NOT NULL AND t.native_title IS NOT t.manual_title");
+        }
         let goal = if summaries {
             "(SELECT goal FROM ledger_chapters c WHERE c.device=s.device AND c.agent=s.agent AND c.id=s.id ORDER BY at DESC LIMIT 1)"
         } else {
             "NULL"
         };
         let sql = format!(
-            "WITH matched AS (SELECT *,row_number() OVER(PARTITION BY device,agent,id ORDER BY at DESC,text) AS rank FROM ({values}) WHERE text LIKE ?1 ESCAPE '\\') \
-            SELECT s.device,s.agent,s.id,COALESCE(t.manual_title,{goal},t.native_title),r.text,r.at,s.cwd \
-            FROM sessions s JOIN matched r ON s.device=r.device AND s.agent=r.agent AND s.id=r.id \
-            LEFT JOIN ledger_titles t ON t.device=s.device AND t.agent=s.agent AND t.id=s.id WHERE r.rank=1 ORDER BY r.at DESC,s.id LIMIT ?2"
+            r#"
+            WITH raw_presence AS (
+                SELECT json_extract(value,'$.session.device_id') device,json_extract(value,'$.session.agent') agent,
+                       json_extract(value,'$.session.session_id') id,json_extract(value,'$.status') status,CAST(key AS INTEGER) priority FROM json_each(?9)
+            ), named_presence AS (
+                SELECT p.device,p.agent,COALESCE((SELECT session FROM cursors c WHERE c.device=p.device AND c.agent=p.agent AND c.path=p.id AND c.session IS NOT NULL),p.id) id,p.status,p.priority FROM raw_presence p
+            ), presence AS (
+                SELECT device,agent,id,status FROM (SELECT *,row_number() OVER(PARTITION BY device,agent,id ORDER BY CASE WHEN status='archived' THEN 0 ELSE 1 END DESC,priority DESC) rank FROM named_presence) WHERE rank=1
+            ), scoped AS MATERIALIZED (
+                SELECT s.*,o.project,COALESCE(p.status,'retained') status FROM sessions s
+                LEFT JOIN ledger_session_origins o USING(device,agent,id)
+                LEFT JOIN presence p USING(device,agent,id)
+                WHERE (?3 IS NULL OR s.device=?3) AND (?4 IS NULL OR o.project=?4)
+                  AND (?5 IS NULL OR s.agent=?5)
+                  AND (?8 IS NULL OR COALESCE(p.status,'retained')=?8
+                    OR (?8='current' AND p.status IS NOT NULL AND p.status!='archived'))
+            ), matched AS MATERIALIZED (
+                SELECT * FROM ({values}) WHERE (?2 OR text LIKE ?1 ESCAPE '\')
+                  AND (?2 OR ((?6 IS NULL OR at>=?6) AND (?7 IS NULL OR at<=?7)))
+            ), ranked AS MATERIALIZED (
+                SELECT *,row_number() OVER(PARTITION BY device,agent,id ORDER BY at DESC,kind,offset DESC,text) rank FROM matched
+            ), totals AS (
+                SELECT device,agent,id,MAX(at) at,COUNT(*) count FROM matched GROUP BY device,agent,id
+            ), candidates AS (
+                SELECT s.device,s.agent,s.id,COALESCE(t.manual_title,{goal},t.native_title) title,
+                    s.cwd,s.project,s.status,
+                    CASE WHEN ?2 THEN MAX(COALESCE(s.last_request_at,0),COALESCE(s.ended_at,0),COALESCE(s.started_at,0),COALESCE(m.at,0)) ELSE m.at END activity,
+                    CASE WHEN ?2 THEN 0 ELSE COALESCE(m.count,0) END match_count,
+                    (SELECT COUNT(*) FROM ledger_requests r WHERE r.device=s.device AND r.agent=s.agent AND r.id=s.id AND r.author='"operator"') request_count
+                FROM scoped s LEFT JOIN totals m USING(device,agent,id) LEFT JOIN ledger_titles t USING(device,agent,id)
+                WHERE ?2 OR m.count>0
+            ) SELECT c.*,
+                (SELECT json_group_array(json_object('kind',kind,'text',text,'at_unix_ms',at,'request_offset',offset))
+                 FROM (SELECT kind,text,at,offset FROM ranked r WHERE r.device=c.device AND r.agent=c.agent AND r.id=c.id AND rank<=2 ORDER BY rank)) matches
+            FROM candidates c WHERE (?6 IS NULL OR activity>=?6) AND (?7 IS NULL OR activity<=?7)
+                AND (?10 IS NULL OR activity<?10 OR (activity=?10 AND (device,agent,id)>(?11,?12,?13)))
+            ORDER BY activity DESC,device,agent,id LIMIT ?14
+        "#
         );
+        let status = options.status.map(|status| match status {
+            SessionSearchStatus::Current => "current",
+            SessionSearchStatus::Working => "working",
+            SessionSearchStatus::Done => "done",
+            SessionSearchStatus::NeedsYou => "needs_you",
+            SessionSearchStatus::Archived => "archived",
+            SessionSearchStatus::Retained => "retained",
+        });
+        let cursor = options.cursor.as_ref();
         let mut statement = self.connection.prepare(&sql).map_err(failed)?;
-        statement
-            .query_map(params![pattern, SEARCH_LIMIT as i64], |r| {
-                let agent: String = r.get(1)?;
-                let title = r
-                    .get::<_, Option<String>>(3)?
-                    .unwrap_or_else(|| crate::sidebar::provider_name(Some(&agent)));
-                Ok(SessionSearchHit {
-                    session: SessionIdentity {
-                        device_id: r.get(0)?,
-                        agent,
-                        session_id: r.get(2)?,
-                    },
-                    title,
-                    matched: r.get(4)?,
-                    at_unix_ms: r.get(5)?,
-                    cwd: r.get(6)?,
-                })
-            })
+        let rows = statement
+            .query_map(
+                params![
+                    pattern,
+                    query.is_empty(),
+                    options.device_id,
+                    options.project_root,
+                    options.agent,
+                    options.since_unix_ms.map(|n| n as i64),
+                    options.until_unix_ms.map(|n| n as i64),
+                    status,
+                    encoded(&presence)?,
+                    cursor.map(|c| c.at_unix_ms as i64),
+                    cursor.map(|c| &c.device_id),
+                    cursor.map(|c| &c.agent),
+                    cursor.map(|c| &c.session_id),
+                    SEARCH_LIMIT as i64 + 1
+                ],
+                |r| {
+                    let agent: String = r.get(1)?;
+                    let title = r
+                        .get::<_, Option<String>>(3)?
+                        .unwrap_or_else(|| crate::sidebar::provider_name(Some(&agent)));
+                    Ok((
+                        SessionSearchHit {
+                            session: SessionIdentity {
+                                device_id: r.get(0)?,
+                                agent,
+                                session_id: r.get(2)?,
+                            },
+                            title,
+                            matched: String::new(),
+                            at_unix_ms: r.get(7)?,
+                            cwd: r.get(4)?,
+                            project_root: r.get(5)?,
+                            status: r.get(6)?,
+                            matches: Vec::new(),
+                            match_count: r.get(8)?,
+                            request_count: r.get(9)?,
+                        },
+                        r.get::<_, String>(10)?,
+                    ))
+                },
+            )
             .map_err(failed)?
-            .collect::<Result<_, _>>()
-            .map_err(failed)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(failed)?;
+        let mut results = rows
+            .into_iter()
+            .map(|(mut hit, matches)| {
+                hit.matches = serde_json::from_str(&matches)
+                    .map_err(|_| "ledger_search_result_invalid".to_owned())?;
+                hit.matched = hit
+                    .matches
+                    .first()
+                    .map(|m| m.text.clone())
+                    .unwrap_or_default();
+                Ok(hit)
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let has_more = results.len() > SEARCH_LIMIT;
+        results.truncate(SEARCH_LIMIT);
+        let next_cursor = results
+            .last()
+            .filter(|_| has_more)
+            .map(|hit| SessionSearchCursor {
+                at_unix_ms: hit.at_unix_ms,
+                device_id: hit.session.device_id.clone(),
+                agent: hit.session.agent.clone(),
+                session_id: hit.session.session_id.clone(),
+            });
+        Ok(SessionSearchPage {
+            results,
+            next_cursor,
+        })
     }
 
     pub fn ledger_creators(

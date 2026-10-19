@@ -505,6 +505,7 @@ pub(crate) fn fixture_record(pane: &str) -> DormantRecord {
             tab_label: "Tab".into(),
             tab_index: 0,
             agent_area: None,
+            agent_group: None,
             replacement_shell: false,
             replacement_in_tab: false,
             tab_name: Default::default(),
@@ -671,7 +672,6 @@ mod tests {
             ("pi", ("path", "/fixture/native.jsonl")),
             ("omp", ("path", "/fixture/native.jsonl")),
             ("grok", ("path", "/fixture/native.jsonl")),
-            ("cursor", ("path", "/fixture/native.jsonl")),
             ("opencode", ("id", "native-one")),
         ] {
             let entry = store.dormant.get_mut(&id).unwrap();
@@ -684,6 +684,18 @@ mod tests {
             });
             assert!(store.dormant_snapshots()[0].wake_available, "{kind}");
         }
+        // A retired kind keeps its record but cannot resume in this build.
+        let entry = store.dormant.get_mut(&id).unwrap();
+        entry.kind = "cursor".into();
+        entry.label_owner =
+            hide_session::label_reference_token("cursor", "id", "native-one").unwrap();
+        entry.source_reference = Some(crate::sidebar::SessionAgentSessionPayload {
+            kind: "path".into(),
+            value: "/fixture/native.jsonl".into(),
+        });
+        entry.validate().unwrap();
+        assert!(!store.dormant_snapshots()[0].wake_available);
+        assert_eq!(store.dormant.len(), 1);
         // An unknown kind has no reader at all.
         store.dormant.get_mut(&id).unwrap().kind = "unknown".into();
         assert!(!store.dormant_snapshots()[0].wake_available);

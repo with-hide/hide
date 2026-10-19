@@ -84,13 +84,13 @@ The SVGs are traced from those generated poses into separate flat shapes, with a
 ## Third-party agent marks
 
 The first-run agent choice, the Agents tab and Hide AI's agent selects and Add menu draw an agent's mark on a fixed light plate (`--logo-plate`), so a dark-filled mark stays legible in both themes (`web/src/components/agent-logo.tsx`).
-`AgentMark` (`web/src/AgentMark.tsx`) draws the same logo at the compact badge size for each of the eight supported agents on a pane's own header and in the places that are about the provider itself; a sidebar or Sessions row and an Agent tab draw it only while the operator's view mode shows logos or an ⌥ hold peeks at them (`AgentRowMark`, PRD agent-logo-view-mode), and every other list row or result draws no logo; every row names its agent in its hint and accessible name (PRD agent-mark-quiet), and a plain shell or a kind Hide does not support keeps the neutral `>_`; `agentMarkOf` in `web/src/agentLogos.ts` is the one place that picks the logo, from the adapter's `logo_id`.
+`AgentMark` (`web/src/AgentMark.tsx`) draws the same logo at the compact badge size for each of the seven supported agents on a pane's own header and in the places that are about the provider itself; a sidebar or Sessions row and an Agent tab draw it only while the operator's view mode shows logos or an ⌥ hold peeks at them (`AgentRowMark`, PRD agent-logo-view-mode), and every other list row or result draws no logo; every row names its agent in its hint and accessible name (PRD agent-mark-quiet), and a plain shell or a kind Hide does not support keeps the neutral `>_`; `agentMarkOf` in `web/src/agentLogos.ts` is the one place that picks the logo, from the adapter's `logo_id`.
 There the plate is only for a mark that would vanish on the dark theme: the manifest entry of a mark drawn dark on a transparent ground (Grok, Cursor) says `"plate": true`, and the others sit on the screen as published, since a plate behind every mark would turn the dark theme into a row of white tiles.
 `web/src/assets/agents/manifest.json` is the only list: a bundled file names its source URL, licence, any modification and the date it was taken, and an agent without an official source mark is a monogram with the reason written beside it.
-`scripts/check-agent-logos.mjs` (run by `check-design-contract`) fails a bundled file the manifest does not list, an adapter with no entry, an entry whose id is neither a kit adapter nor a Hide AI provider's agent (`hide-ai/src/registry.rs`), and an entry without its source and licence.
-A mark can outlive its agent's row in the kit while Hide AI still offers that agent: Gemini CLI's stays for the Hide AI provider.
+`scripts/check-agent-logos.mjs` (run by `check-design-contract`) fails a bundled file the manifest does not list, an adapter with no entry, an unknown entry and an entry without its source and licence.
+A retired agent's logo may remain for stored sessions only when its manifest entry says `history_only: true` and names the retained reader in its note; an active adapter or provider cannot use that classification.
 Marks are shown as the vendor published them: never recoloured, redrawn or approximated (design principle 10), and a mark whose source cannot be confirmed becomes a monogram rather than a guess.
-A mark is bundled in the format the vendor publishes, an SVG or, where it publishes none, its PNG (`gemini-cli.png`), named for its agent's id so `web/src/agentLogos.ts` maps it without a list of its own.
+A mark is bundled in the format the vendor publishes, an SVG or, where it publishes none, its PNG, named for its agent's id so `web/src/agentLogos.ts` maps it without a list of its own.
 An SVG that recolours itself under `prefers-color-scheme` takes the scheme from the app's theme inside an `<img>`, not from the plate behind it, so a dark-theme variant turns light on the light plate; where the vendor offers a fixed-colour variant that one is bundled instead, with the reason in its manifest `note` (Pi).
 Showing a mark names the product it belongs to and implies no endorsement; trademark questions go to the vendor's own brand page named in the manifest.
 
@@ -102,3 +102,22 @@ Keep layouts spacious and stable; use one clear accent at a time instead of deco
 Avoid surveillance language, noisy urgency, and promises that an agent's output is correct before a person reviews it.
 
 The logo signals this approach, while the interface continues to use its established design tokens and semantic status rules.
+
+## Product decoration
+
+The connecting desktop status page uses the original `desktop/static/owl-roam.json` with one locally bundled, pinned Lottie light player and a static SVG fallback.
+Its lowercase hide wordmark and brand line sit inside the flight path, above a thin indeterminate bar and the host's localized connecting sentence.
+Ready navigation never waits for a loop, and failure hides the decoration and preserves the existing recovery actions.
+The player and bar pause for reduced motion, a hidden document or an offscreen scene, and the document destroys its player and listeners on exit.
+The reduced-motion and failure still rests beside the brand so it cannot cover the words indefinitely.
+The player is MIT licensed; `desktop/static/owl-motion-LICENSE.md` ships beside the status page.
+
+The wizard uses `owl-agents`, `owl-devices` and `owl-ai` for its existing three steps.
+The ready Home without projects uses `owl-ai`; Factory uses one `owl-factory` in its first-visit line or empty state, without opening the unreleased Factory.
+`web/src/components/brand-owl.tsx` switches the canonical SVG animation to its matching still while motion is reduced or the image is hidden or offscreen, and owns and removes its listeners and intersection observer.
+A failed decoration records a structured diagnostic and leaves the screen's actions available.
+No decoration represents an agent's live state.
+
+`design/assets/owls/*.png` are transparent raster derivatives of those vector stills for Pen's image fills, with the same colors and proportions.
+Regenerate them with `rsvg-convert` at 288 square for the four web poses and 960 by 540 for the startup still.
+These are design artwork, not verification captures.

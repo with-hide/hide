@@ -8,6 +8,8 @@
 
 import type { TFunction } from "i18next";
 import type { AgentRow, Checkout, Device, RemotePaneLayout, RemoteSession, RemoteStatus, SnapshotRest, Tab, Workspace } from "./snapshot";
+import { findArea } from "./areaLayout";
+import type { WorkspaceView } from "./workspace";
 import { machineName } from "./screenMachine";
 
 export type RemoteContext = {
@@ -63,8 +65,20 @@ function tabById(session: RemoteSession, tabId: string | null | undefined): { wo
  * nobody streams, so the web follows the host's focus and moves it with
  * `remote_control` rather than keeping a selection of its own.
  */
-export function remoteView(session: RemoteSession | null): RemoteView | null {
+export function remoteView(session: RemoteSession | null, front?: WorkspaceView | null): RemoteView | null {
   if (!session) return null;
+  if (front?.agent_layout) {
+    const workspace = session.workspaces.find((row) => row.device_id === front.device_id && row.checkouts.some((checkout) => checkout.path === front.path));
+    const checkout = workspace?.checkouts.find((row) => row.path === front.path);
+    if (workspace && checkout) {
+      const area = findArea(front.agent_layout.root, front.agent_layout.active_area);
+      const shown = area ? front.agent_layout.canvases[area.id] ?? area.active : null;
+      const tab = checkout.tabs.find((row) => row.id === shown) ?? null;
+      const layout = session.pane_layouts.find((row) => row.tab_id === tab?.id) ?? null;
+      const focusedPaneId = tab?.panes.find((pane) => pane.id === session.focused_pane_id)?.id ?? layout?.focused_pane_id ?? tab?.panes[0]?.id ?? null;
+      return { workspace, checkout, tab, layout, focusedPaneId };
+    }
+  }
   const activeTabId =
     session.focused_tab_id ?? (session.focused_checkout_id ? session.active_tab_ids[session.focused_checkout_id] : undefined);
   const found = tabById(session, activeTabId);

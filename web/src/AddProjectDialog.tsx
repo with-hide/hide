@@ -22,7 +22,7 @@ import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, Sele
 import { RegistrationStatus, useRegistration } from "./registration";
 import type { MessageKey } from "./i18n/catalogs";
 import { useInterfaceTranslation } from "./i18n/client";
-import type { WorkspaceRegistration } from "./snapshot";
+import type { FirstRunProjectForm, WorkspaceRegistration } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -75,24 +75,34 @@ export function AddProjectViews({
   title,
   onLeave,
   onHost,
+  draft,
+  onDraft,
 }: {
   actions: Actions;
   title: (t: TFunction<"translation">) => string;
   onLeave?: () => void;
   /** The host the views add to, for the holder to name. */
   onHost?: (host: string) => void;
+  draft?: { device?: string | null; path?: string; form?: FirstRunProjectForm };
+  onDraft?: (draft: { project_device?: string; project_path?: string; project_form?: FirstRunProjectForm }) => void;
 }) {
   const { t } = useInterfaceTranslation();
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const focused = useShellStore((s) => s.rest?.navigator?.focused_device_id);
   const registrations = useShellStore((s) => s.rest?.ui_state?.workspace_registrations ?? NO_REGISTRATIONS);
   const hosts = addProjectHosts(devices, t);
-  const [chosen, setChosen] = useState(() => initialHost(hosts, focused));
+  const [chosen, setChosen] = useState(() => initialHost(hosts, draft?.device ?? focused));
   const host = hosts.find((row) => row.id === chosen) ?? hosts[0]!;
   const ways = hostWays(host.id, devices);
   // A clone still running when the dialog opens is shown where it started.
-  const [view, setView] = useState<"add" | OtherWay["id"]>(() => (cloneRunning(useShellStore.getState().rest?.repository_clone) ? "clone" : "add"));
-  const [text, setText] = useState("~/");
+  const [view, setView] = useState<"add" | OtherWay["id"]>(() => (cloneRunning(useShellStore.getState().rest?.repository_clone) ? "clone" : draft?.form?.view || "add"));
+  const [form, setForm] = useState<FirstRunProjectForm>(draft?.form ?? {});
+  const saveForm = (patch: FirstRunProjectForm) => {
+    const next = { ...form, ...patch };
+    setForm(next);
+    onDraft?.({ project_form: next });
+  };
+  const [text, setText] = useState(draft?.path || "~/");
   const registration = useRegistration(registrations);
   const { pending } = registration;
   const browseRef = useRef<HTMLButtonElement>(null);
@@ -113,6 +123,7 @@ export function AddProjectViews({
     registration.reset();
     if (next === "add" && view !== "add") returnTo.current = view;
     setView(next);
+    saveForm({ view: next });
   };
 
   const browse = async () => {
@@ -138,9 +149,9 @@ export function AddProjectViews({
   return (
       <>
         {view === "create" ? (
-          <CreateProjectView actions={actions} registrations={registrations} pickParent={ways.pickParent} onBack={() => open("add")} />
+          <CreateProjectView actions={actions} registrations={registrations} pickParent={ways.pickParent} onBack={() => open("add")} draft={form} onDraft={saveForm} />
         ) : view === "clone" ? (
-          <CloneFromUrl actions={actions} registrations={registrations} pickParent={ways.pickParent} onBack={() => open("add")} />
+          <CloneFromUrl actions={actions} registrations={registrations} pickParent={ways.pickParent} onBack={() => open("add")} draft={form} onDraft={saveForm} />
         ) : (
           <>
             <DialogHeader>
@@ -159,6 +170,7 @@ export function AddProjectViews({
                       return;
                     }
                     setChosen(next);
+                    onDraft?.({ project_device: next });
                     registration.reset();
                     hostChanged.current = true;
                   }}
@@ -221,7 +233,7 @@ export function AddProjectViews({
                       placeholder="~/…"
                       aria-label={t("addProject.folderOn", { host: host.label })}
                       data-add-project-path="true"
-                      onChange={(event) => setText(event.target.value)}
+                      onChange={(event) => { setText(event.target.value); onDraft?.({ project_path: event.target.value }); }}
                       onKeyDown={(event) => {
                         if (event.nativeEvent.isComposing || event.key !== "Enter") return;
                         event.preventDefault();

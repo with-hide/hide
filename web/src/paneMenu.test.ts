@@ -74,6 +74,6 @@ describe("the pane menu's Fork agent items", () => {
   it("follows Sleep agent, apart from the copy items", () => {
     const items = paneMenuItems({ id: "w1:p1", children: null, lineage_path: [], fork: { available: true }, sleep_action: { available: true } } as unknown as PaneRow, "reviewer");
     expect(items.map((item) => item.id)).toEqual(["sleep_agent", "fork_agent", "fork_agent_side", "copy_name", "copy_pane_id", "close_pane"]);
-    expect(items.filter((item) => item.separated).map((item) => item.id)).toEqual(["close_pane"]);
+    expect(items.filter((item) => item.separated).map((item) => item.id)).toEqual(["copy_name", "close_pane"]);
   });
 });

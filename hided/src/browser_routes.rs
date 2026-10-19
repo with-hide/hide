@@ -856,7 +856,7 @@ fn ssh_client(
         .into_any()
         .downcast::<hide_node::ssh::SshDevice>()
         .ok()
-        .map(|device| Arc::clone(device.client()))
+        .and_then(|device| device.client().cloned())
 }
 
 #[cfg(test)]

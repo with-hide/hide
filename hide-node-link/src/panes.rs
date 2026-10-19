@@ -5,6 +5,9 @@
 //! travel the same link as a stream, so a device pane needs no other
 //! connection to the core.
 
+pub use hide_agent_hooks::observation::{
+    DirectObservation, ITEM_LIMIT as OBSERVATION_ITEM_LIMIT, SEND_BUDGET as OBSERVATION_SEND_BUDGET,
+};
 use serde::{Deserialize, Serialize};
 
 /// Recovery advice shared by local and device pane refusals.
@@ -46,6 +49,16 @@ pub struct PaneIdentity {
     pub shell_started: u64,
 }
 
+/// Where a runtime hook can hand letters to its model.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PullPoint {
+    #[default]
+    Prompt,
+    Tool,
+    TurnEnd,
+}
+
 /// The only commands admitted by a hook's proof-and-answer exchange.
 /// Keeping this separate from Workspace commands prevents this transport
 /// from acquiring dispatch, browser, or letter-confirmation authority.
@@ -53,15 +66,15 @@ pub struct PaneIdentity {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HookCommand {
     WorkspaceInfo {},
+    /// Metadata-only passive observation; never dispatches input or letters.
+    Observation {
+        observation: DirectObservation,
+    },
     LetterPull {
         prompt_digest: Option<String>,
         session: Option<String>,
-        /// Asked at a tool event of a working agent (`hide inbox --hook
-        /// --tool`): the letters due mid-turn, for a kind whose adapter
-        /// takes them there. A helper on protocol 37 does not know the
-        /// field and would ask for a prompt's letters instead.
         #[serde(default)]
-        tool: bool,
+        point: PullPoint,
     },
     Memory {
         event: String,

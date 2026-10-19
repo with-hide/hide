@@ -52,7 +52,7 @@ test('shared Overview covers native pages, retains work and restores the keyboar
     await page.keyboard.press('Escape');
     await app.evaluate(({Menu}) => Menu.getApplicationMenu()!.getMenuItemById('overview')!.click());
     await expect(modal).toBeVisible();
-    await expect(modal.locator('[data-main-view="backlog"]')).toBeVisible();
+    await expect(modal.locator('[data-main-view="work"]')).toBeVisible();
     await app.evaluate(({Menu}) => Menu.getApplicationMenu()!.getMenuItemById('sidebar_projects')!.click());
     await expect(modal).toHaveCount(0);
     await app.evaluate(({Menu}) => Menu.getApplicationMenu()!.getMenuItemById('overview')!.click());

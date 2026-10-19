@@ -7,7 +7,6 @@ members = [
     "hide-kit",
     "hide-agent-hooks",
     "hide-ai",
-    "hide-factory",
     "hide-memory",
     "hide-node",
     "hide-node-link",

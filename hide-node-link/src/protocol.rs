@@ -98,10 +98,6 @@ use crate::error::HostError;
 /// node that owns the Herdr server, and terminal lines name the screen a
 /// view or a key came from. A node on 27 would refuse the first as unknown,
 /// so it is refused at Hello and reinstalled.
-/// A wire enum may gain a variant within 28 (`crate::factory::VerifyOutcome::Lost`)
-/// only because no peer of another build reads it: a node that dials its
-/// core links only on the core's exact build (PRD core-host-node-move B10,
-/// option C), and Factory runs never go to a device the core dials.
 /// An event may gain an optional field within 28 for the same reason:
 /// [`crate::panes::NodeEvent::StreamOpen`]'s `caller` is absent when the node
 /// proved nothing, and the core then checks the command with `pane_inspect`;
@@ -180,7 +176,30 @@ use crate::error::HostError;
 /// helper on 43 would drop the effort and still send the schema Codex
 /// refuses, so every agent label judged on that device's Codex would fail;
 /// it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 44;
+/// 45: `terminate_group` answers what it did (`GroupEnd`): ended, with each
+/// process under a Windows leader that was left running and why, or gone
+/// already, where it answered nothing and refused a job that had ended. A
+/// helper on 44 answers `null`, which a sleep could not read; it is refused
+/// at Hello and upgraded.
+/// 46: creation requests declare fork holds and bind their pane on the node.
+/// Older helpers cannot protect bare pane keys; Hello refuses them and the
+/// existing helper replacement installs a compatible build.
+/// 47: hook letter pulls name prompt, tool or turn end.
+/// A helper on 46 cannot distinguish the intake point; Hello refuses it
+/// until the existing helper replacement installs a compatible build.
+/// 48: side-channel pane input waits for the node's creation holder and
+/// gets a permission result before writing through Herdr, without attaching.
+/// Older terminal helpers cannot grant this permission and are replaced.
+/// 49: the owning node's shell recipe declares Integrated or Plain readiness.
+/// Older helpers cannot preserve ordinary shell starts and their readiness;
+/// Hello refuses them until the existing helper replacement upgrades them.
+/// 50: Memory worktree retirement is a regular machine operation.
+/// Factory operations are no longer part of the public protocol.
+/// An older helper cannot decode retirement and is upgraded at Hello.
+/// 51: kit calls distinguish attaching to a saved Herdr session from server
+/// replacement consent, and pane proofs carry passive hook observations.
+/// Older helpers could replace the selected server or reject its observation.
+pub const PROTOCOL_VERSION: u32 = 51;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -214,12 +233,23 @@ pub const OPENCODE_FORK_TIME: std::time::Duration = std::time::Duration::from_se
 
 const _: () = assert!(OPENCODE_FORK_TIME.as_secs() + 10 <= OPENCODE_FORK_TIMEOUT.as_secs());
 
-/// How a pane's shell is started so that it marks its first prompt
-/// ([`Call::ShellIntegration`]): the command the pane runs, the shell and
-/// its integration arguments, and the environment it is given.
+/// What confirms readiness of the owning node's shell recipe.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShellReadiness {
+    /// The recipe reports Hide's first-prompt token.
+    #[default]
+    Integrated,
+    /// No prompt token is coming; use the existing foreground-shell policy.
+    Plain,
+}
+
+/// The owning node's exact shell command, environment and readiness policy
+/// ([`Call::ShellIntegration`]), independent of the core machine's shell.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShellLaunch {
     pub command: Vec<String>,
+    pub readiness: ShellReadiness,
     #[serde(default)]
     pub env: std::collections::BTreeMap<String, String>,
 }
@@ -267,6 +297,10 @@ pub struct RootRef {
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Call {
     Hello,
+    /// Read-only status and current commit for the front checkout's header.
+    CheckoutGit {
+        path: String,
+    },
     RootOpen {
         root: String,
     },
@@ -407,6 +441,13 @@ pub enum Call {
     HomeSync {
         projects: Vec<String>,
     },
+    /// Retires a worktree owned by a completed or discarded background task.
+    WorktreeRetire {
+        root: String,
+        checkout: String,
+        branch: String,
+        discard: bool,
+    },
     /// Rechecks and removes one operator-confirmed linked worktree, forced
     /// only as far as the operator accepted
     /// (`hide_host::worktrees::remove_confirmed`).
@@ -426,6 +467,9 @@ pub enum Call {
         action: KitAction,
         cli_dir: String,
         herdr_socket: Option<String>,
+        /// A saved Herdr profile grants attachment, without server replacement.
+        #[serde(default)]
+        preserve_herdr_server: bool,
         /// Known registered checkout roots on this helper's device only.
         #[serde(default)]
         retirement_projects: Vec<String>,
@@ -578,9 +622,13 @@ pub enum Call {
     RemoveClipboard {
         path: String,
     },
-    /// `SIGTERM` to every member of the process group `leader` leads: a
-    /// pane's foreground job, ended for agent sleep. A group of 1 or less is
-    /// refused unsent, since kill(-0) and kill(-1) reach far more.
+    /// Ends the job `leader` leads, a pane's foreground job, for agent sleep
+    /// (`hide_platform::process::terminate_group`): `SIGTERM` to its process
+    /// group on Unix, and on Windows, where Herdr names the job by its first
+    /// process, that process and everything under it. A group of 1 or less
+    /// is refused unsent, since kill(-0) and kill(-1) reach far more. The
+    /// answer is a [`crate::process::GroupEnd`]: ended, with what was left
+    /// running, or gone already.
     TerminateGroup {
         leader: u32,
     },
@@ -622,11 +670,10 @@ pub enum Call {
         path: String,
         trusted: bool,
     },
-    /// Writes Hide's shell integration under the node's home once and
-    /// answers how a pane Hide makes for an agent starts the account's
-    /// shell so it marks its first prompt (`hide_host::shell_integration`),
-    /// a [`ShellLaunch`], or `null` for a shell the integration does not
-    /// reach.
+    /// Answers the account's exact normal shell recipe and readiness policy.
+    /// Tries Hide's first-prompt integration, otherwise preserves the same
+    /// account shell with Plain readiness. Missing authoritative launch facts
+    /// are an error, never a substitute shell (`hide_host::shell_integration`).
     ShellIntegration,
     /// The start time and program of each pid, in order
     /// (`process::ProcessStart`).
@@ -840,12 +887,6 @@ pub enum Call {
     Cancel {
         request: u64,
     },
-    /// The Software Factory's machine work on the core's own node
-    /// ([`crate::factory::FactoryCall`]). A git, `gh` or check run reports
-    /// while it runs, and a report answered with false stops it.
-    Factory {
-        call: crate::factory::FactoryCall,
-    },
     /// View feedback's files on this machine: a screen's staged screenshots
     /// and a letter's placed attachments ([`crate::feedback::FeedbackCall`]).
     Feedback {
@@ -886,10 +927,8 @@ impl Call {
     /// work on its own files, repositories, sessions, processes, kit and
     /// panes; what acts with the operator's own logins (GitHub, the AI
     /// providers and their usage), the files the operator picked on this
-    /// machine, and the Software Factory's work (D-01) are the core's own
-    /// node's, and a device refuses them unrun; a node that dialed its core
-    /// also does the Factory's work on its own projects
-    /// (`FactoryCall::answered_by_node`). The match names every request, so
+    /// machine, are the core's own node's, and a device refuses them unrun.
+    /// The match names every request, so
     /// a new one is decided here before it compiles.
     pub fn answered_by_device(&self) -> bool {
         match self {
@@ -911,10 +950,12 @@ impl Call {
             | Self::Changes { .. }
             | Self::Project { .. }
             | Self::Worktrees { .. }
+            | Self::CheckoutGit { .. }
             | Self::BranchCheck { .. }
             | Self::Directory { .. }
             | Self::Registrable { .. }
             | Self::HomeSync { .. }
+            | Self::WorktreeRetire { .. }
             | Self::WorktreeRemove { .. }
             | Self::WorktreeRemovalCheck { .. }
             | Self::Kit { .. }
@@ -982,8 +1023,7 @@ impl Call {
             | Self::Gh { .. }
             | Self::ReadAttachments { .. }
             | Self::ReadDropped { .. }
-            | Self::RemoveClipboard { .. }
-            | Self::Factory { .. } => false,
+            | Self::RemoveClipboard { .. } => false,
         }
     }
 }

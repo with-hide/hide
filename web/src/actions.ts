@@ -1,6 +1,7 @@
 import { projectCheckout } from "./projects";
 import { deviceConnected, readsHere } from "./devices";
 import { sameGithubPullRequest } from "./pullRequestIdentity";
+import { useGroupFeedback } from "./groupTabs";
 import { areaFrame } from "./areaFrames";
 import { AGENT_WORDS, agentAreaStepUnavailable, agentMenu, type AgentAreaStep, type AgentCommand } from "./agentLayout";
 import { findArea as findAgentArea, activeDisplay as activeAgentDisplay, adjacentInOrder as adjacentAgentArea, locateDisplay as locateAgentTab, neighbourArea as neighbourAgentArea, resizeTarget as resizeAgentTarget, type Edge as AgentEdge } from "./areaLayout";
@@ -38,7 +39,7 @@ import { cardOfItem } from "./overviewTasks";
 import { backlogIntent } from "./overviewBacklog";
 import { paneProgress, sessionOfAgent, workKey } from "./sessionWork";
 import { expectSurface, type Surface } from "./recent";
-import { useStartPanel } from "./startDraft";
+import { useStartPanel, useInlineStarts } from "./startDraft";
 import { contextAgents, remoteConnected, remoteContext, remoteControl, remoteRequestId, remoteTargetOfPane, remoteView, withDeviceForward, type RemoteAction, type RemoteView } from "./remote";
 import { armKeyTarget } from "./keyTarget";
 import {
@@ -64,19 +65,16 @@ import {
   type LinkTarget,
   type PrMergeMethod,
 } from "./snapshot";
-import { fileUrl, isHtmlFile } from "./browserViews";
+import { fileUrl, focusBrowserDisplay, isHtmlFile } from "./browserViews";
 import { requestLine } from "./editor/lineRequest";
 import { terminalPathOwner, type FoundPath } from "./terminalLinkProvider";
 import { homeOpening } from "./hideAiOrigin";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { useShellStore } from "./store";
-import { FACTORY_ENTRY, useUiStore, type FactoryPlace, type MainView, type OverviewPlace, type PendingClose } from "./ui";
-import type { FactoryCommand } from "./factory/commands";
-import { FACTORY_OPEN } from "./factory/launch";
-import { SECRETARY_PROMPT, paneListed } from "./factory/secretary";
+import { useUiStore, type MainView, type OverviewPlace, type PendingClose } from "./ui";
 import type { DispatchFn } from "./ws";
-import { closeShortcutPolicy, drawnViews, keyboardOwner, newTabPolicy } from "./viewFocus";
+import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
 import { focusTerminal } from "./terminals";
 import { zoomViewer } from "./viewers/viewerZoom";
 import { submitDrop, type CapturedDrop } from "./explorerDrop";
@@ -140,12 +138,7 @@ export function createActions(send: DispatchFn) {
   const diagnostic = (message: string) => useShellStore.getState().noteDiagnostic(message);
   const ui = () => useUiStore.getState();
 
-  /** A new secretary in this machine's Home (B23); its pane is recorded when the start answers (`useSecretaryStart`). */
-  const startSecretary = (provider: "claude" | "codex") => {
-    const requestId = remoteRequestId();
-    ui().setSecretaryStart({ phase: "start", requestId });
-    dispatch({ schema_version: 2, kind: "agent_start_in_checkout", payload: { home: true, provider, prompt: SECRETARY_PROMPT, request_id: requestId } });
-  };
+
 
   /** Remembers what was asked to come forward; `CenterScreen` shows it once it is in front. */
   const beginOpening = (target: OpenTarget) => {
@@ -251,7 +244,7 @@ export function createActions(send: DispatchFn) {
       ui().setNotice({ text: translate("shell.deviceNotConnected", { device: machineName(rest()?.navigator?.devices, context.device.id, translate), command: translate(command) }), refreshable: false });
       return null;
     }
-    return { targetId: context.device.id, view: remoteView(context.session), agents: context.session?.agents ?? [] };
+    return { targetId: context.device.id, view: remoteView(context.session, rest()?.workspace_view), agents: context.session?.agents ?? [] };
   };
 
   const sendRemote = (targetId: string, request: RemoteAction) => dispatch(remoteControl(targetId, request));
@@ -571,9 +564,8 @@ export function createActions(send: DispatchFn) {
    * event, naming the Workspace of the frame it was taken on, and the core
    * applies it whole or refuses it.
    */
-  const viewLayout = (frame: ViewFrame, action: { action: string } & Record<string, unknown>) => {
+  const viewLayout = (frame: ViewFrame, action: { action: string } & Record<string, unknown>) =>
     dispatch({ schema_version: 2, kind: "view_layout", payload: viewLayoutPayload(frame.workspace, action) });
-  };
 
   /**
    * Moves the keyboard to a display or an area once the core shows it there
@@ -788,6 +780,62 @@ export function createActions(send: DispatchFn) {
    * unsaved work this page cannot reproduce is not sent at all: a notice
    * offers Don't save, the only close that drops unsaved text.
    */
+  let stopCloseFocus: (() => void) | null = null;
+  const followViewClose = (frame: ViewFrame, displayId: string) => {
+    stopCloseFocus?.();
+    stopCloseFocus = null;
+    const located = locateDisplay(frame.layout.root, displayId);
+    const owner = keyboardCommandOwner();
+    const checkout = frontCheckout(rest());
+    if (!located || owner.kind !== "view" || owner.workspace !== checkout?.id) return;
+    if (located.area.active !== displayId || owner.areaId !== located.area.id) {
+      // Clicking a background X borrows native keyboard response even when
+      // preventDefault keeps the shell's DOM focus. Give the visible page back.
+      const inputArea = findArea(frame.layout.root, owner.areaId);
+      const page = inputArea?.displays.find((display) => display.id === inputArea.active && display.kind === "browser");
+      if (page) focusBrowserDisplay(workspaceKey(frame.workspace), page.id);
+      return;
+    }
+    const revision = keyboardInputRevision();
+    const workspace = workspaceKey(frame.workspace);
+    const errorAt = rest()?.status?.last_error?.occurred_at;
+    const finish = () => { stop(); if (stopCloseFocus === finish) stopCloseFocus = null; };
+    // One pending close follow, ended on removal, newer input, leaving the
+    // Workspace or disconnect. The core alone selects the MRU replacement.
+    const stop = useShellStore.subscribe((next) => {
+      const view = workspaceViewOf(next.rest);
+      if (keyboardInputRevision() !== revision || !view || workspaceKey(view) !== workspace || next.connection !== "live" || next.rest?.status?.last_error?.occurred_at !== errorAt) {
+        finish();
+        return;
+      }
+      if (!view.layout || locateDisplay(view.layout.root, displayId)) return;
+      finish();
+      requestAnimationFrame(() => {
+        if (keyboardInputRevision() !== revision) return;
+        const current = workspaceViewOf(rest());
+        if (!current?.layout || workspaceKey(current) !== workspace) return;
+        const area = findArea(current.layout.root, located.area.id) ?? findArea(current.layout.root, current.layout.active_area);
+        const screen = document.querySelector<HTMLElement>(`[data-workspace-screen="${CSS.escape(checkout.id)}"]`);
+        if (current.layout.display_count > 0 && area) {
+          const element = screen?.querySelector<HTMLElement>(`[data-view-area-id="${CSS.escape(area.id)}"]`);
+          const page = element?.querySelector<HTMLElement>("[data-browser-slot]")?.dataset.browserSlot;
+          if (page) focusBrowserDisplay(workspace, page);
+          else {
+            const content = element?.querySelector<HTMLElement>('.cm-content');
+            if (content) content.focus({ preventScroll: true });
+            else ui().setViewFocusRequest({ workspace, areaId: area.id, revision });
+          }
+        } else if (current.tool === "files" && current.tree) {
+          screen?.querySelector<HTMLElement>("[data-explorer-tree]")?.focus({ preventScroll: true });
+        } else {
+          const pane = useShellStore.getState().focusedPaneId;
+          if (pane && screen?.querySelector(`[data-pane-view="${CSS.escape(pane)}"]`)) focusTerminal(pane);
+        }
+      });
+    });
+    stopCloseFocus = finish;
+  };
+
   const closeView = (displayId: string) => {
     const frame = frameFor("close");
     if (!frame) return;
@@ -795,7 +843,11 @@ export function createActions(send: DispatchFn) {
     if (!located) return diagnostic(`view_layout close: ${displayId} is not open`);
     const state = useShellStore.getState();
     const tab = editorTabFor(state.editor, located.display.tab_id);
-    if (!tab || tab.kind !== "file") return viewLayout(frame, { action: "close", display_id: displayId });
+    if (!tab || tab.kind !== "file") {
+      followViewClose(frame, displayId);
+      if (viewLayout(frame, { action: "close", display_id: displayId }) === false) stopCloseFocus?.();
+      return;
+    }
     const last = displaysOfDocument(frame.layout.root, tab.id).length === 1;
     const document = state.documents[tab.id] ?? null;
     const carries = documentCloseCarries({ draft: latestDraft(tab.id), document, dirty: tab.dirty });
@@ -808,8 +860,9 @@ export function createActions(send: DispatchFn) {
       return;
     }
     const pending = carries.kind === "save" ? { tab_id: tab.id, path: tab.path, contents_utf8: carries.contents } : null;
+    followViewClose(frame, displayId);
     if (last) watchDocumentClose(tab, { workspace: frame.workspace, displayId }, pending, document);
-    viewLayout(frame, { action: "close", display_id: displayId, ...(pending ? { pending_save: pending } : {}) });
+    if (viewLayout(frame, { action: "close", display_id: displayId, ...(pending ? { pending_save: pending } : {}) }) === false) stopCloseFocus?.();
   };
 
   /**
@@ -819,7 +872,9 @@ export function createActions(send: DispatchFn) {
    */
   const closeViewWithoutSaving = (target: { workspace: ViewWorkspace; displayId: string }) => {
     ui().setNotice(null);
-    dispatch({ schema_version: 2, kind: "view_layout", payload: viewLayoutPayload(target.workspace, { action: "close", display_id: target.displayId, discard: true }) });
+    const frame = frameNow();
+    if (frame && workspaceKey(frame.workspace) === workspaceKey(target.workspace)) followViewClose(frame, target.displayId);
+    if (dispatch({ schema_version: 2, kind: "view_layout", payload: viewLayoutPayload(target.workspace, { action: "close", display_id: target.displayId, discard: true }) }) === false) stopCloseFocus?.();
   };
 
   /** A preview display becomes an ordinary one (B2): the named one, or the active one. */
@@ -893,6 +948,11 @@ export function createActions(send: DispatchFn) {
   };
 
   const createTab = (areaId?: string) => {
+      const view = workspaceViewOf(rest());
+      if (view?.agent_layout?.groups) {
+        agentGroup({ device_id: view.device_id, path: view.path }, view.agent_layout.group_id ?? null, { action: "new_tab", ...(areaId ? { area_id: areaId } : {}) });
+        return;
+      }
       if (remoteContext(rest())) {
         const host = remoteHost("shell.command.newTab");
         if (!host) return;
@@ -913,6 +973,12 @@ export function createActions(send: DispatchFn) {
     };
 
   const closeTab = (tabId: string) => {
+      const frame = areaFrame("agent");
+      if (frame?.layout.drafts?.includes(tabId)) {
+        const request = agentGroup(frame.workspace, frame.layout.group_id ?? null, { action: "close_draft", tab_id: tabId });
+        useInlineStarts.getState().noteClose(request, frame.workspace.device_id, frame.workspace.path, tabId);
+        return;
+      }
       if (remoteContext(rest())) {
         const host = remoteHost("shell.command.closeTab");
         if (!host) return;
@@ -928,10 +994,19 @@ export function createActions(send: DispatchFn) {
       requestClose("tab", id, tab?.panes ?? [], null);
     };
 
+  const agentGroup = (workspace: ViewWorkspace, groupId: string | null, action: { action: string } & Record<string, unknown>, requestId = remoteRequestId()) => {
+    if (["select", "create", "new_tab", "move", "dissolve", "undo"].includes(action.action)) {
+      const checkout = catalogWorkspaces(rest()).filter((project) => project.device_id === workspace.device_id).flatMap((project) => project.checkouts).find((checkout) => checkout.path === workspace.path);
+      if (checkout) beginOpening({ checkoutId: checkout.id, deviceId: workspace.device_id, path: checkout.path, workspaceId: checkout.workspace_id });
+    }
+    useGroupFeedback.setState({ request: { workspace, id: requestId } });
+    dispatch({ schema_version: 2, kind: "agent_group", payload: { workspace, group_id: groupId, request_id: requestId, ...action } });
+    return requestId;
+  };
   const agentLayout = (action: { action: string } & Record<string, unknown>) => {
     const frame = areaFrame("agent");
     if (!frame) return diagnostic("agent_layout: no Agent areas are drawn");
-    dispatch({ schema_version: 2, kind: "agent_layout", payload: { workspace: frame.workspace, ...action } });
+    dispatch({ schema_version: 2, kind: "agent_layout", payload: { workspace: frame.workspace, group_id: frame.layout.group_id ?? null, ...action } });
   };
   const runAgentCommand = (command: AgentCommand, tabId?: string) => {
     const frame = areaFrame("agent");
@@ -965,7 +1040,7 @@ export function createActions(send: DispatchFn) {
       if (area) agentLayout({ action: "move", tab_id: id, area_id: area, index: findAgentArea(frame.layout.root, area)?.displays.length ?? 0 });
     }
     if (command === "copy_name") {
-      const checkout = remoteContext(rest()) ? remoteView(remoteContext(rest())!.session)?.checkout : current()?.checkout;
+      const checkout = remoteContext(rest()) ? remoteView(remoteContext(rest())!.session, rest()?.workspace_view)?.checkout : current()?.checkout;
       const label = checkout?.strip.find((row) => row.source_id === id)?.label;
       if (label) void navigator.clipboard?.writeText(label);
     }
@@ -1207,11 +1282,26 @@ export function createActions(send: DispatchFn) {
      * off for Not now (B21), absent to leave it as it is. The agent step leaves this way only while this Mac's pass is refused: the
      * wizard closes with the question unanswered.
      */
-    advanceFirstRun(from: "agents" | "notifications" | "project", notifications?: boolean) {
+    advanceFirstRun(from: "agents" | "devices" | "notifications" | "project", notifications?: boolean) {
       dispatch({ schema_version: 2, kind: "first_run_advance", payload: notifications === undefined ? { from } : { from, notifications } });
+    },
+    backFirstRun(from: "devices" | "notifications" | "project") {
+      dispatch({ schema_version: 2, kind: "first_run_back", payload: { from } });
+    },
+    saveFirstRunDraft(draft: { agents?: string[]; devices?: string[]; project_device?: string; project_path?: string; project_form?: import("./snapshot").FirstRunProjectForm }) {
+      dispatch({ schema_version: 2, kind: "first_run_draft", payload: draft });
+    },
+    listHerdrProfiles() {
+      dispatch({ schema_version: 2, kind: "herdr_profiles_list", payload: {} });
+    },
+    connectHerdrProfile(profileId: string) {
+      dispatch({ schema_version: 2, kind: "herdr_profile_connect", payload: { profile_id: profileId, host_consent: true } });
     },
 
     /** Needs You, with an optional Done choice for the reopened wizard's Not now. */
+    setProductAnalytics(enabled: boolean) {
+      dispatch({ schema_version: 2, kind: "product_analytics_set", payload: { enabled } });
+    },
     setDesktopNotifications(enabled: boolean, doneEnabled?: boolean) {
       dispatch({ schema_version: 2, kind: "desktop_notifications_set", payload: doneEnabled === undefined ? { enabled } : { enabled, done_enabled: doneEnabled } });
     },
@@ -1410,10 +1500,13 @@ export function createActions(send: DispatchFn) {
       model?: string | null;
       prompt?: string | null;
       requestId?: string;
+      tabTarget?: import("./agentLayout").AgentStartTarget;
+      confirmOnly?: boolean;
       /** The session to resume instead of a new conversation (PRD link-graph B12); never with a prompt. */
       resumeSessionId?: string;
       resumeSessionPath?: string;
     }) {
+      if (!request.tabTarget && request.requestId && !request.resumeSessionId) beginOpening({ startRequestId: request.requestId });
       dispatch({
         schema_version: 2,
         kind: "agent_start_in_checkout",
@@ -1424,13 +1517,15 @@ export function createActions(send: DispatchFn) {
           ...(request.model ? { model: request.model } : {}),
           ...(request.prompt ? { prompt: request.prompt } : {}),
           ...(request.requestId ? { request_id: request.requestId } : {}),
+          ...(request.tabTarget ? { target: request.tabTarget } : {}),
+          ...(request.confirmOnly ? { confirm_only: true } : {}),
           ...(request.resumeSessionId ? { resume_session_id: request.resumeSessionId } : {}),
           ...(request.resumeSessionPath ? { resume_session_path: request.resumeSessionPath } : {}),
         },
       });
       // Keys typed before the new tab holds the keyboard reach its agent once
       // it has started, never the pane that had the keyboard.
-      if (request.requestId && (!request.deviceId || request.deviceId === localDeviceId(rest()))) armKeyTarget(request.requestId);
+      if (!request.confirmOnly && request.requestId && (!request.deviceId || request.deviceId === localDeviceId(rest()))) armKeyTarget(request.requestId);
     },
 
     /**
@@ -1441,10 +1536,10 @@ export function createActions(send: DispatchFn) {
      * Opens the start panel. Over Settings the panel takes Settings' place,
      * because Settings holds the keyboard, and Settings is what was in front (B25).
      */
-    openStartPanel() {
+    openStartPanel(projectId?: string) {
       const overSettings = ui().overlay === "settings";
       if (overSettings) ui().closeOverlay("settings");
-      useStartPanel.getState().open(overSettings);
+      useStartPanel.getState().open(overSettings, projectId ? { projectId } : null);
     },
 
     /**
@@ -1457,8 +1552,8 @@ export function createActions(send: DispatchFn) {
     },
 
     /** An issue's body, labels, author, assignees and comments for its panel and the Start dialog, answered in `issue_work.detail`. */
-    requestIssueDetail(workspaceId: string, taskKey: string) {
-      dispatch({ schema_version: 2, kind: "issue_detail_request", payload: { workspace_id: workspaceId, task_key: taskKey } });
+    requestIssueDetail(workspaceId: string, taskKey: string, commentsAfter?: string) {
+      dispatch({ schema_version: 2, kind: "issue_detail_request", payload: { workspace_id: workspaceId, task_key: taskKey, ...(commentsAfter ? { comments_after: commentsAfter } : {}) } });
     },
 
     /** Asks the background AI to name a worktree; `prefix` stays at the front. Answered in `issue_work.name`. */
@@ -1643,12 +1738,12 @@ export function createActions(send: DispatchFn) {
       const target = state.overlay === "search" ? state.searchReturnFocus : document.activeElement instanceof HTMLElement ? document.activeElement : null;
       if (view) state.setMainView(view);
       state.setOverview({ deviceId, projectId: null, panel: null, ...patch });
-      useUiStore.setState({ overviewOpen: modal || state.overviewOpen, overviewReturnFocus: state.overviewOpen ? state.overviewReturnFocus : target, overlay: "none", ...(!modal && !state.overviewOpen ? { screen: { kind: "main" as const, deviceId } } : {}) });
+      useUiStore.setState({ opening: null, overviewOpen: modal || state.overviewOpen, overviewReturnFocus: state.overviewOpen ? state.overviewReturnFocus : target, overlay: "none", ...(!modal && !state.overviewOpen ? { screen: { kind: "main" as const, deviceId } } : {}) });
     },
 
     /** A project's panel on the Overview's Projects (PRD sidebar-task-lens B41): a breadcrumb's project, a cross-project chip, a Recent Panels project. */
     openProjectPanel(deviceId: string, projectId: string) {
-      this.openOverview(deviceId, { view: "projects", panel: { kind: "project", workspaceId: projectId } });
+      this.openOverview(deviceId, { view: "projects", projectId });
     },
 
     /**
@@ -1806,6 +1901,10 @@ export function createActions(send: DispatchFn) {
      */
     newTabIn(deviceId: string, checkout: Checkout) {
       beginOpening({ checkoutId: checkout.id, deviceId, path: checkout.path, workspaceId: checkout.workspace_id });
+      if (checkout.agent_groups) {
+        agentGroup({ device_id: deviceId, path: checkout.path }, checkout.agent_groups.selected, { action: "new_tab" });
+        return;
+      }
       if (deviceId !== localDeviceId(rest())) {
         const host = remoteHost("shell.command.newTab");
         if (!host) return ui().setOpening(null);
@@ -1926,10 +2025,13 @@ export function createActions(send: DispatchFn) {
     focusPane,
 
     createTab,
+    agentGroup,
     agentLayout,
     runAgentCommand,
 
     focusTab(tabId: string) {
+      const frame = areaFrame("agent");
+      if (frame?.layout.drafts?.includes(tabId)) return agentLayout({ action: "focus", tab_id: tabId });
       if (remoteContext(rest())) {
         const host = remoteHost("shell.command.switchTab");
         if (!host) return;
@@ -1990,7 +2092,7 @@ export function createActions(send: DispatchFn) {
       // Herdr move while the device is not connected.
       const context = remoteContext(rest());
       if (context) {
-        const checkout = remoteView(context.session)?.checkout;
+        const checkout = remoteView(context.session, rest()?.workspace_view)?.checkout;
         if (!checkout) return diagnostic("reorder_tab: no device checkout in front");
         dispatch({
           schema_version: 2,
@@ -2003,11 +2105,14 @@ export function createActions(send: DispatchFn) {
     },
 
     closeFocused() {
-      const owner = keyboardOwner();
+      const owner = keyboardCommandOwner();
+      const agents = areaFrame("agent");
+      const active = agents ? activeAgentDisplay(agents.layout)?.display.id : null;
+      if (owner.kind !== "view" && active && agents?.layout.drafts?.includes(active)) return closeTab(active);
       const frame = frameNow();
       const area = owner.kind === "view" && frame ? findArea(frame.layout.root, owner.areaId) : null;
       const checkout = frontCheckout(rest());
-      const tab = remoteContext(rest()) ? remoteView(remoteContext(rest())?.session ?? null)?.tab : current()?.tab;
+      const tab = remoteContext(rest()) ? remoteView(remoteContext(rest())?.session ?? null, rest()?.workspace_view)?.tab : current()?.tab;
       const target = closeShortcutPolicy({
         owner,
         workspace: ui().screen?.kind === "workspace" ? checkout?.id ?? null : null,
@@ -2036,7 +2141,7 @@ export function createActions(send: DispatchFn) {
         for (const pane of tabs.find((tab) => tab.id === shown)?.panes ?? []) paneAreas[pane.id] = area.id;
       }
       const target = newTabPolicy({
-        owner: keyboardOwner(),
+        owner: keyboardCommandOwner(),
         workspace: ui().screen?.kind === "workspace" ? frontCheckout(rest())?.id ?? null : null,
         viewAreaIds: drawn ? areasOf(drawn.layout.root).map((area) => area.id) : [],
         paneAreas,
@@ -2176,7 +2281,7 @@ export function createActions(send: DispatchFn) {
      * editor tab owns the canvas, else the focused terminal pane's. */
     textScale(direction: "in" | "out" | "reset") {
       // A viewer's zoom is its display's own, page-local and never sent.
-      const owner = keyboardOwner();
+      const owner = keyboardCommandOwner();
       const frame = frameNow();
       const area = owner.kind === "view" && frame ? findArea(frame.layout.root, owner.areaId) : null;
       if (area?.active && zoomViewer(area.active, direction)) return;
@@ -2322,56 +2427,6 @@ export function createActions(send: DispatchFn) {
     },
 
     /**
-     * Opens the Factory screen (PRD software-factory-ui B1, B2): on 내 차례,
-     * or where `place` says; it is a page, so an Overview layer closes.
-     */
-    openFactory(place?: Partial<FactoryPlace>) {
-      // Until the Factory opens nothing reaches its screen (`factory/launch.ts`).
-      if (!FACTORY_OPEN) return;
-      const state = ui();
-      // Behind Settings or a dialog the Factory waits, as the Overview does. A
-      // panel's Escape layer does not hold it: the palette has closed itself
-      // before it asks, and the page replaces the panel.
-      if (state.overlay !== "none" && (state.overlay !== "search" || state.searchOver !== "none")) return;
-      if (state.workspaceDialog || state.pendingClose || state.pendingTrash) return;
-      if (state.overlay === "search") state.closeOverlay();
-      const current = state.screen?.kind === "factory" ? state.screen.place : FACTORY_ENTRY;
-      state.setScreen({ kind: "factory", place: { ...(place ? { ...FACTORY_ENTRY, factory: current.factory } : current), ...place } });
-    },
-
-    /**
-     * One screen action (B10, B19, B22): the stage-1 command, which the engine
-     * runs as the operator with the screen as relay. The answer lands in the
-     * `factory` section's `actions` under the returned request id.
-     */
-    factoryAction(command: FactoryCommand): string {
-      const requestId = remoteRequestId();
-      dispatch({ schema_version: 2, kind: "factory_action", payload: { request_id: requestId, command } });
-      return requestId;
-    },
-
-    /**
-     * 비서에게 묻기 and the sidebar's 비서 row (B23): the secretary the core
-     * remembers while its pane is listed, else a new one in this machine's
-     * Home, started with the first open Factory's default runtime.
-     */
-    openSecretary() {
-      const pane = rest()?.ui_state?.factory_secretary_pane ?? null;
-      if (pane && paneListed(rest(), pane)) return this.openAgent(pane);
-      if (ui().secretaryStart) return;
-      const factory = useShellStore.getState().factory?.summary?.factories.find((view) => !view.closed) ?? null;
-      if (!factory) return startSecretary("claude");
-      ui().setSecretaryStart({ phase: "config", requestId: this.factoryAction({ verb: "config", project: factory.project, set: [] }) });
-    },
-
-    /** Records the pane a secretary start answered with, so the next press goes to it. */
-    factorySecretarySet(paneId: string) {
-      dispatch({ schema_version: 2, kind: "factory_secretary_set", payload: { pane_id: paneId } });
-    },
-
-    startSecretary,
-
-    /**
      * A session's record (PRD sidebar-task-lens D-44, B15, B17): in the
      * lane's 보기 slot, where the core starts its read, or in the Overview's
      * panel when no Workspace is in front. The keyboard stays where it is.
@@ -2406,8 +2461,8 @@ export function createActions(send: DispatchFn) {
       if (top?.kind === "record" && workKey(top.session) === workKey(session) && laneUpWith("detail")) return this.toggleDetail();
       this.openSessionRecord(session);
     },
-    searchSessionWork(query: string) {
-      dispatch({ schema_version: 2, kind: "session_work_search", payload: { query } });
+    searchSessionWork(query: string, options?: import("./snapshot").SessionSearchOptions) {
+      dispatch({ schema_version: 2, kind: "session_work_search", payload: { query, ...(options ? { options } : {}) } });
     },
     setMissedStatus(session: import("./snapshot").WorkSession, id: string, status: "open" | "dismissed") {
       dispatch({ schema_version: 2, kind: "session_missed_status", payload: { session, id, status } });
@@ -2418,9 +2473,9 @@ export function createActions(send: DispatchFn) {
      * `백로그로` names the line. The returned intent names the item in
      * `issue_work.backlog` and is what a retry sends again.
      */
-    addBacklog(workspaceId: string, title: string, missed?: { session: import("./snapshot").WorkSession; id: string }): string {
+    addBacklog(workspaceId: string, title: string, missed?: { session: import("./snapshot").WorkSession; id: string }, destination?: { kind: "local" } | { kind: "github"; repository: string }): string {
       const intent = backlogIntent();
-      dispatch({ schema_version: 2, kind: "backlog_add", payload: { intent, workspace_id: workspaceId, title, ...(missed ? { missed } : {}) } });
+      dispatch({ schema_version: 2, kind: "backlog_add", payload: { intent, workspace_id: workspaceId, title, destination: destination?.kind ?? "local", ...(destination?.kind === "github" ? { repository: destination.repository } : {}), ...(missed ? { missed } : {}) } });
       return intent;
     },
     /** `다시 시도` on a failed item: the same intent, so a create GitHub already made is joined, not repeated (B30, B45). */
@@ -2436,12 +2491,12 @@ export function createActions(send: DispatchFn) {
       dispatch({ schema_version: 2, kind: "backlog_undo", payload: { workspace_id: workspaceId, task_key: taskKey } });
     },
     /** Where an item came from, for its panel (B31). */
-    readBacklogOrigin(workspaceId: string, taskKey: string) {
-      dispatch({ schema_version: 2, kind: "backlog_origin", payload: { workspace_id: workspaceId, task_key: taskKey } });
+    readBacklogOrigin(workspaceId: string, deviceId: string, taskKey: string) {
+      dispatch({ schema_version: 2, kind: "backlog_origin", payload: { workspace_id: workspaceId, device_id: deviceId, task_key: taskKey } });
     },
     /** No screen shows that item's origin any more: the core drops the session text it held for it. */
-    closeBacklogOrigin(taskKey: string) {
-      dispatch({ schema_version: 2, kind: "backlog_origin_close", payload: { task_key: taskKey } });
+    closeBacklogOrigin(workspaceId: string, deviceId: string, taskKey: string) {
+      dispatch({ schema_version: 2, kind: "backlog_origin_close", payload: { workspace_id: workspaceId, device_id: deviceId, task_key: taskKey } });
     },
     /** The projects the Projects tab shows, in its order, for the disk sweep; none when it is hidden (D-15, B53). */
     watchDisk(workspaceIds: readonly string[]) {
@@ -2477,15 +2532,6 @@ export function createActions(send: DispatchFn) {
     openRecordedOutput(output: import("./snapshot").WorkOutput) {
       if (output.kind === "pr") this.openSessionPullRequest({ workspace_id: null, number: output.number, url: output.url });
       else this.openRecordedIssue(output.source, output.repository, output.number);
-    },
-
-    /** Asks the engine for a Task page's detail; it follows the engine in `factory_task` until closed. */
-    factoryTaskOpen(factory: string, task: string) {
-      dispatch({ schema_version: 2, kind: "factory_task_open", payload: { factory, task } });
-    },
-
-    factoryTaskClose() {
-      dispatch({ schema_version: 2, kind: "factory_task_close", payload: {} });
     },
 
     toggleTool,

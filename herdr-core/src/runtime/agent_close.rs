@@ -90,8 +90,10 @@ impl Runtime {
         // removing the old tab so its area cannot collapse between the two effects.
         self.ingest_session(Ok(payload));
         if !self
-            .agent_layout_of(&(self.node.as_str().to_owned(), context.checkout_path.clone()))
-            .is_some_and(|layout| layout.tree.display(tab_id).is_some())
+            .workspace_views
+            .as_ref()
+            .and_then(|store| store.views.get(self.node.as_str(), &context.checkout_path))
+            .is_some_and(|view| view.agent_tab_group(tab_id).is_some())
             && self.workspace_views.is_some()
         {
             crate::diagnostic!(serde_json::json!({
@@ -191,12 +193,21 @@ impl Runtime {
             return Ok(());
         };
         let key = (self.node.as_str().to_owned(), context.checkout_path.clone());
-        let area = context.agent_area.clone().or_else(|| {
-            store
-                .views
-                .get(&key.0, &key.1)
-                .map(|view| (view.agent_layout.tree.active_area.clone(), usize::MAX))
-        });
+        let view = store.views.entry(&key.0, &key.1);
+        let group = context
+            .agent_group
+            .clone()
+            .filter(|id| view.group_layout(Some(id)).is_some());
+        let area = (group == context.agent_group)
+            .then(|| context.agent_area.clone())
+            .flatten()
+            .or_else(|| {
+                store
+                    .views
+                    .get(&key.0, &key.1)
+                    .and_then(|view| view.group_layout(group.as_deref()))
+                    .map(|layout| (layout.tree.active_area.clone(), usize::MAX))
+            });
         let Some((area, index)) = area else {
             return Ok(());
         };
@@ -205,7 +216,7 @@ impl Runtime {
         }
         store
             .agent_placements
-            .insert(tab_id.to_owned(), (key, area, Some(index)));
+            .insert(tab_id.to_owned(), (key, group, area, Some(index)));
         Ok(())
     }
 

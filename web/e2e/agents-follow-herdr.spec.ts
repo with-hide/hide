@@ -1,4 +1,4 @@
-// The supported agents are the ones the pinned Herdr ships an integration for (PRD agent-list-follows-herdr):
+// The seven active agents use the pinned Herdr's integrations (PRD agent-list-follows-herdr, B31 retirement):
 // omp is a row like Pi whose switch installs Herdr's real omp integration into `~/.omp/agent` and the shared
 // skill, and a Mac an earlier build put Gemini CLI on loses only Hide's Gemini pieces on the first run and
 // lists no Gemini row. Every step runs against the pinned Herdr binary and a hided that runs the install kit.
@@ -42,7 +42,7 @@ async function openAgents(page: Page, daemon: Daemon) {
 const RECORD = ".hide/kit/installed.json";
 const SHARED_SKILL = ".agents/skills/hide-browser/SKILL.md";
 
-/** Every supported agent's program, so the rows are all Installed whatever the Mac's own install folders hold. */
+/** Every active program plus retired Cursor: only seven rows may appear, even when Cursor is installed. */
 const PROGRAMS = ["claude", "codex", "grok", "opencode", "pi", "omp", "cursor-agent", "agy"];
 
 test("omp is a row after Pi, and its switch installs Herdr's omp integration in ~/.omp/agent once omp has made it", async ({ page }) => {
@@ -52,11 +52,12 @@ test("omp is a row after Pi, and its switch installs Herdr's omp integration in 
   try {
     const list = await openAgents(page, daemon);
     // B1, B5: the order of the supported agents, omp after Pi, off by default.
-    await expect(list.locator("[data-agent-row]")).toHaveCount(8, { timeout: 60_000 });
+    await expect(list.locator("[data-agent-row]")).toHaveCount(7, { timeout: 60_000 });
     const rows = await list.locator("[data-agent-row]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-agent-row")));
     // Claude Code, Codex and agy are on by default (agy by the operator's amendment to antigravity-first-class B1/D-14).
     const on = new Set(["claude-code", "codex", "antigravity"]);
-    expect(rows).toEqual(["claude-code", "codex", "grok", "opencode", "pi", "omp", "cursor", "antigravity"].map((id) => `${daemon.node}:${id}:${on.has(id) ? "on" : "off"}`));
+    expect(rows).toEqual(["claude-code", "codex", "grok", "opencode", "pi", "omp", "antigravity"].map((id) => `${daemon.node}:${id}:${on.has(id) ? "on" : "off"}`));
+    await expect(list.locator('[data-agent-row*="cursor"], [data-agent-switch*="cursor"]')).toHaveCount(0);
     const off = list.locator(`[data-agent-switch="${daemon.node}:omp:off"]`);
     await expect(off).toBeVisible();
     // Hide's extension gives omp letters and the spawn guard, so it carries no Basic chip (PRD pi-omp-extension).
@@ -129,9 +130,10 @@ test("a Mac an earlier build put Gemini CLI on loses only Hide's Gemini pieces a
     await expect.poll(() => fs.existsSync(path.join(home, SHARED_SKILL)), { timeout: 60_000 }).toBe(false);
     await expect.poll(() => read(path.join(home, RECORD)), { timeout: 60_000 }).not.toContain("gemini");
 
-    // B1, B8: the Agents tab lists the eight supported agents and nothing of Gemini CLI.
+    // B1, B8, B31: seven active agents, with neither retired Gemini CLI nor Cursor in the list.
     const list = await openAgents(page, daemon);
-    await expect(list.locator("[data-agent-row]")).toHaveCount(8, { timeout: 60_000 });
+    await expect(list.locator("[data-agent-row]")).toHaveCount(7, { timeout: 60_000 });
+    await expect(list.locator('[data-agent-row*="cursor"]')).toHaveCount(0);
     await expect(list.locator('[data-agent-row*="gemini"]')).toHaveCount(0);
     await expect(list).not.toContainText("Gemini");
     await expect(page.locator("body")).not.toContainText("from the screen");

@@ -25,7 +25,6 @@ use crate::state_file::SCHEMA_VERSION;
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// Longer than the daemon's own Factory answer limit, so the daemon's reason
 /// arrives rather than a local timeout.
-const FACTORY_TIMEOUT: Duration = Duration::from_secs(110);
 const REMOTE_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(25);
 /// A spawn on another device: its checks, worktree, tab and agent start are
 /// each a round trip over SSH.
@@ -452,66 +451,6 @@ pub fn request_delivery(
     })
 }
 
-/// A `hide factory` command. `add` may wait for its intake review, so the
-/// answer has longer than a Workspace request to arrive.
-pub fn request_factory(
-    credential: &mut Credential,
-    command: &hide_factory::Command,
-    hint: Option<&str>,
-) -> Result<Value, String> {
-    credential.run(|path, after| {
-        let reference = read_reference(path)?;
-        let request_id = fresh_request_id()?;
-        run_exchange_within(
-            path,
-            &reference,
-            json!({
-                "type":"factory", "request_id":request_id, "command":command, "caller_pane":hint
-            }),
-            &request_id,
-            true,
-            FACTORY_TIMEOUT,
-            after,
-        )
-    })
-}
-
-/// One question check, with no automatic replay on an expired credential.
-pub fn request_factory_question_guard(
-    credential: &Credential,
-    session: &str,
-    agent_runtime: &str,
-) -> Result<Value, String> {
-    let path = &credential.path;
-    let reference = read_reference(path)?;
-    let request_id = fresh_request_id()?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|_| "request_unavailable".to_owned())?;
-    runtime.block_on(async {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-        let (value, mut socket) = tokio::time::timeout_at(
-            deadline,
-            exchange_response_with_limit(
-                &reference,
-                json!({"type":"factory_question_guard", "request_id":request_id,
-                "session":session, "runtime":agent_runtime}),
-                &request_id,
-                Some(16 * 1024),
-            ),
-        )
-        .await
-        .map_err(|_| "factory_guard_expired".to_owned())??;
-        if credential.after_answer() == AfterAnswer::Claim {
-            tokio::time::timeout_at(deadline, claim(&mut socket, path))
-                .await
-                .map_err(|_| "factory_guard_expired".to_owned())??;
-        }
-        Ok(value)
-    })
-}
-
 /// How long `hide workspace memory` waits for the core's answer: the hook
 /// that runs it waits 1,250 ms in all, process start included.
 const MEMORY_WITHIN: Duration = Duration::from_millis(1_200);
@@ -561,6 +500,11 @@ pub fn request_hook(
 ) -> Result<Value, String> {
     let within = if matches!(command, hide_node_link::panes::HookCommand::Memory { .. }) {
         MEMORY_WITHIN
+    } else if matches!(
+        command,
+        hide_node_link::panes::HookCommand::Observation { .. }
+    ) {
+        hide_node_link::panes::OBSERVATION_SEND_BUDGET
     } else {
         TIMEOUT
     };

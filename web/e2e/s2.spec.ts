@@ -14,9 +14,9 @@ import path from "node:path";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { altScreenProgram, bytesReceived } from "./alt-screen-program";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { executeTerminalCheck, startDraftTerminal } from "./group-start-helper";
 import { startHided, type Daemon } from "./hided-fixture";
 import { projectRow } from "./overview-entry";
-import { FACTORY_OPEN } from "../src/factory/launch";
 import { countSent, screenshot, showProjectRow } from "./wire";
 import { chord, mod, SYSTEM } from "./chords";
 
@@ -224,7 +224,7 @@ test("switching checkouts is one focus_checkout, and a plain folder is a row of 
 });
 
 // @platform: ⌥T and ⌥` are chords the platform's browser keeps or moves, the new tab's label is the process name Herdr reads on that platform, and a tab closes through its Herdr.
-test("a tab switch mounts the new tab, ⌥T is one create_tab, ⌥` walks the recent agent panes, and the strip reorders locally and closes a tab", { tag: "@platform" }, async ({ page }) => {
+test("a tab switch mounts the new tab, ⌥T creates one draft, its terminal starts explicitly, and recent agents, reorder and close still work", { tag: "@platform" }, async ({ page }) => {
   const flow = await startFlow(page);
   try {
     const { herdr, tabs, sent } = flow;
@@ -239,18 +239,22 @@ test("a tab switch mounts the new tab, ⌥T is one create_tab, ⌥` walks the re
     await expect.poll(() => sent.get("agent_layout.focus")).toBe(1);
     await expect.poll(() => screen(page), { timeout: 15_000 }).toContain("fixture %");
 
-    // ⌥T is one create_tab; the new tab is active with the core's next label.
-    const nextLabel = (await page.locator("[data-new-agent-tab]").first().getAttribute("aria-label"))!.replace("New tab ", "");
+    // Group-tabs B5/B7: ⌥T creates one selected draft without a PTY;
+    // the explicit terminal start fills that slot in the marked owner.
     await page.keyboard.press(chord("new_tab"));
     await expect(page.locator("[data-tab]")).toHaveCount(4);
-    // The fourth tab belongs to the marked owner, not a second workspace.
+    await expect(page.locator("[data-agent-tab-start]")).toHaveAttribute("data-agent-tab-start", /^draft:/);
+    await expect.poll(() => sent.get("agent_group.new_tab")).toBe(1);
+    expect(sent.get("create_tab") ?? 0).toBe(0);
+    expect((herdr.run(["tab", "list", "--workspace", herdr.workspace]) as { result: { tabs: unknown[] } }).result.tabs).toHaveLength(3);
+    const startedTab = await startDraftTerminal(page);
     await expect.poll(() => (herdr.run(["tab", "list", "--workspace", herdr.workspace]) as { result: { tabs: unknown[] } }).result.tabs.length).toBe(4);
-    // The label is Herdr's: the strip shows an automatic label only until
-    // Herdr reports the pane's process, which then names the tab.
-    const labelled = () => (herdr.run(["api", "snapshot"]) as { result: { snapshot: { tabs: { tab_id: string; label?: string }[] } } }).result.snapshot.tabs.find((tab) => tab.label === nextLabel)?.tab_id;
+    // The promoted native tab has Herdr's label, independent of the draft's
+    // New tab caption and the old numbered new-tab button label.
+    const labelled = () => (herdr.run(["api", "snapshot"]) as { result: { snapshot: { tabs: { tab_id: string; label?: string }[] } } }).result.snapshot.tabs.find((tab) => tab.tab_id === startedTab)?.label;
     await expect.poll(labelled).toBeTruthy();
-    await expect(page.locator("[data-tab][aria-selected=true]")).toHaveAttribute("data-tab", labelled()!);
-    await expect.poll(() => sent.get("create_tab")).toBe(1);
+    await expect(page.locator("[data-tab][aria-selected=true]")).toHaveAttribute("data-tab", startedTab);
+    await executeTerminalCheck(page, herdr, (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!, 15_000);
 
     // ⌥` in the Agent area walks the recent agent panes. The new tab and the
     // second one run plain shells, so the first candidate is the agent pane
@@ -302,6 +306,12 @@ test("⌘D splits the focused pane, a divider drag sends one resize_pane, and �
     const { sent } = flow;
     await splitShell(page, flow);
     await expect(page.locator("[data-split]")).toHaveCount(2);
+    const boundaries = page.locator("[data-pane-boundary]");
+    await expect(boundaries).toHaveCount(2);
+    for (const line of await boundaries.all()) {
+      const geometry = await line.evaluate((el) => ({ width: el.getBoundingClientRect().width, pointerEvents: getComputedStyle(el).pointerEvents }));
+      expect(geometry).toEqual({ width: 1, pointerEvents: "none" });
+    }
     await screenshot(page, "s2-two-splits");
 
     // A divider drag sends one resize_pane on release and the grid follows Herdr.
@@ -522,16 +532,20 @@ test("of three panes the focused one is outlined, and zoom hides the other two b
     // Of three panes, the one holding the keyboard is outlined, and only it.
     await expect(page.locator("[data-pane-focus-outline]")).toHaveCount(1);
     await expect(shellPane.locator("[data-pane-focus-outline]")).toBeVisible();
+    await expect(page.locator("[data-pane-boundary]")).toHaveCount(2);
 
     await page.keyboard.press(chord("toggle_zoom"));
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-zoomed", "true");
+    await expect(page.locator("[data-pane-boundary]")).toHaveCount(0);
     await expect.poll(() => sent.get("toggle_zoom")).toBe(1);
-    // The zoomed header names the two panes it hides and draws no outline.
+    // Zoom keeps the input perimeter and names the two panes it hides.
     await expect(page.locator("[data-pane-zoom]")).toHaveAttribute("data-pane-zoom", "2");
-    await expect(page.locator("[data-pane-focus-outline]")).toHaveCount(0);
+    await expect(page.locator("[data-pane-focus-outline]")).toHaveCount(1);
+    await expect(shellPane.locator("[data-pane-focus-outline]")).toBeVisible();
     await screenshot(page, "s2-zoom-chip");
     await page.locator("[data-pane-zoom]").click();
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-zoomed", "false");
+    await expect(page.locator("[data-pane-boundary]")).toHaveCount(2);
     await expect.poll(() => sent.get("toggle_zoom")).toBe(2);
     await expect(page.locator('[data-pane-zoom]:not([data-pane-zoom="false"])')).toHaveCount(0);
   } finally {
@@ -548,17 +562,18 @@ test("a right-click focuses its pane and opens the terminal menu, whose Zoom pan
     const shellPane = page.locator(`[data-pane-view="${shellPaneId}"]`);
     const agentPane = herdr.panes[1];
 
-    // A right-click in a pane without the keyboard focus focuses it, like a click,
-    // and the outline moves with it while its menu is open.
+    // A right-click selects its pane, but the menu holds the keyboard until
+    // it closes, so no canvas carries input emphasis while it is open.
     const agentView = page.locator(`[data-pane-view="${agentPane}"]`);
     await agentView.locator("[data-terminal-host]").click({ button: "right", position: { x: 40, y: 40 } });
     await expect(page.getByRole("menu")).toBeVisible();
     await expect(agentView).toHaveAttribute("data-focused", "true");
-    await expect(agentView.locator("[data-pane-focus-outline]")).toBeVisible();
+    await expect(page.locator("[data-pane-focus-outline]")).toHaveCount(0);
     await page.keyboard.press("Escape");
     await expect(page.getByRole("menu")).toHaveCount(0);
     await expect.poll(() => herdrFocused(herdr), { timeout: 10_000 }).toBe(agentPane);
     await settledFocus(page, agentPane);
+    await expect(agentView.locator("[data-pane-focus-outline]")).toBeVisible();
     await shellPane.locator(".xterm-helper-textarea").focus();
     await expect.poll(() => herdrFocused(herdr), { timeout: 10_000 }).toBe(shellPaneId);
     await settledFocus(page, shellPaneId);
@@ -567,12 +582,12 @@ test("a right-click focuses its pane and opens the terminal menu, whose Zoom pan
     await shellPane.locator("[data-terminal-host]").click({ button: "right", position: { x: 40, y: 40 } });
     const menu = page.getByRole("menu");
     await expect(menu).toBeVisible();
-    for (const item of ["Paste", "Select all", "Find", "Split right", "Split down", "Zoom pane", "Copy pane name"]) {
+    for (const item of ["Paste", "Select all", "Find", "Split right", "Split down", "Zoom terminal", "Copy details"]) {
       await expect(menu.getByRole("menuitem", { name: item, exact: false }).first()).toBeVisible();
     }
-    await expect(page.locator("[data-pane-focus-outline]")).toBeVisible();
+    await expect(page.locator("[data-pane-focus-outline]")).toHaveCount(0);
     await screenshot(page, "s2-terminal-menu");
-    await menu.getByRole("menuitem", { name: /^Zoom pane/ }).click();
+    await menu.getByRole("menuitem", { name: /^Zoom terminal/ }).click();
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-zoomed", "true");
     await expect.poll(() => sent.get("toggle_zoom")).toBe(1);
     // The zoomed pane takes the whole canvas, not just its own split cell,
@@ -604,13 +619,12 @@ test("the shortcut sheet marks the moved chords and ⌘F reaches the agent's own
     await page.keyboard.press(chord("shortcuts"));
     await expect(page.locator("[data-shortcut-sheet]")).toBeVisible();
     // The complete command set includes the three direct Overview/sidebar commands
-    // and, once the Factory opens (src/factory/launch.ts), Open Factory (software-factory-ui B2).
     // The two numbered families each fold into one row and have no browser chord;
     // they never carry a Chrome move note (electron-digit-shortcuts-hints B3).
     // The two Explorer path copies and its Cut, Copy and Paste are rows too,
     // and so are the sidebar's Projects | Tasks switch (sidebar-task-lens D-19, D-32)
     // and Show task list (task-split-checklist D-06).
-    await expect(page.locator("[data-shortcut]")).toHaveCount(FACTORY_OPEN ? 55 : 54);
+    await expect(page.locator("[data-shortcut]")).toHaveCount(54);
     for (const title of ["Overview", "Focus sidebar", "Add to backlog"]) await expect(page.locator("[data-shortcut-sheet]")).toContainText(title);
     // Add to backlog moves in a macOS browser, where Chrome keeps ⌘⇧M for its profiles; Alt+Shift+M is free on Windows and Linux.
     // Assert the exact moved commands, including the unchanged platform exceptions.
@@ -651,9 +665,9 @@ function lastFiveShown(shown: string[], tabPanes: Map<string, string[]>): string
   return recent.flatMap((tab) => tabPanes.get(tab)!).sort();
 }
 
-test("creating a sixth tab keeps the four retained tabs, and two revisit cycles restore every evicted tab", async ({ page }) => {
+test("starting a terminal in a sixth tab keeps the four retained tabs, and two revisit cycles restore every evicted tab", async ({ page }) => {
   // Five tabs in a folder whose workspace is not its owner, so the sixth,
-  // created here, opens the owner workspace: Herdr answers with the new
+  // explicitly started in its draft, opens the owner workspace: Herdr answers with the new
   // pane before the core knows its workspace (I3 of the interaction audit).
   const flow = await startFlow(page, { tabLabels: ["second", "third", "fourth", "fifth"], ownerMark: false });
   try {
@@ -693,9 +707,10 @@ test("creating a sixth tab keeps the four retained tabs, and two revisit cycles 
     const before = flow.terminalLists.length;
     await page.locator("[data-new-agent-tab]").first().click();
     await expect(page.locator("[data-tab]")).toHaveCount(6);
+    await startDraftTerminal(page);
     await expect(page.locator("[data-pane-view]")).not.toHaveAttribute("data-pane-view", warmPane);
     await expect(page.locator("[data-pane-view]")).toHaveAttribute("data-transport", "controlling");
-    await expect.poll(() => screen(page)).toContain("fixture %");
+    await executeTerminalCheck(page, flow.herdr, (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!);
     const sixth = (await page.locator("[data-canvas]").getAttribute("data-canvas"))!;
     tabPanes.set(sixth, [(await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!]);
     await mark(tabPanes.get(sixth)![0], "keep-sixth");

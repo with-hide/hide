@@ -129,8 +129,8 @@ pub fn source(
     let Some(session) = session else {
         return Ok(None);
     };
-    let Some(agent) = hide_agent_adapter::adapter(&session.agent)
-        .and_then(|row| row.conversation)
+    let Some(agent) = Agent::from_kind(&session.agent)
+        .and_then(|agent| agent.format().adapter().conversation)
         .map(Agent::from_format)
     else {
         return Ok(None);

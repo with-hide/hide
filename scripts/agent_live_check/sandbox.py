@@ -16,6 +16,24 @@ from .processes import OwnedProcesses
 from .protection import ProtectionError, beneath, private_directory, write_private
 
 
+def verify_write_boundary(owner, env, command, allowed, outside):
+    """Exercise writes and links against disposable stand-ins, never operator files."""
+    forbidden, link = outside / "forbidden", outside / "forbidden-link"
+    write_private(forbidden, b"unchanged")
+    script = ("import pathlib,sys\n"
+              f"pathlib.Path({str(allowed)!r}).write_bytes(b'allowed')\n"
+              f"try: pathlib.Path({str(forbidden)!r}).write_bytes(b'changed')\n"
+              "except PermissionError: pass\n"
+              "else: sys.exit(31)\n"
+              f"try: pathlib.Path({str(link)!r}).symlink_to({str(allowed)!r})\n"
+              "except PermissionError: pass\n"
+              "else: sys.exit(32)\n")
+    code, _, _ = owner.run(command([sys.executable, "-c", script]), env=env, check=False)
+    if code or forbidden.read_bytes() != b"unchanged" or link.is_symlink() or not allowed.is_file():
+        raise ProtectionError("private_home_write_guard_not_enforced")
+    allowed.unlink()
+
+
 def spellings(paths: list[Path]) -> list[Path]:
     """Protect every alias traversed, its endpoint and each ancestor chain."""
     pending, seen = list(paths), {}
@@ -44,7 +62,7 @@ class WriteSandbox:
     def __init__(self, run: Path, sockets: Path, operator_home: Path,
                  state: Path | None = None, *, checkout: Path,
                  protected: list[Path] | None = None, routing: list[Path] | None = None,
-                 executables: list[Path] | None = None):
+                 executables: list[Path] | None = None, fake_private: bool = False):
         if sys.platform != "darwin" or not Path("/usr/bin/sandbox-exec").is_file():
             raise ProtectionError("authenticated_probes_require_macos_write_sandbox")
         self.run = run.resolve()
@@ -99,9 +117,12 @@ class WriteSandbox:
                  f"(allow network-outbound (remote unix-socket (subpath {quote(self.sockets)})))",
                  f"(allow network-outbound (remote unix-socket (subpath {quote(self.run)})))",
                  f"(deny file-read* (subpath {quote(self.run)}))",
-                 # Settings readers lstat every ancestor. Permit only this
-                 # directory's metadata, not its contents or its children.
-                 f"(allow file-read-metadata (literal {quote(self.run)}))",
+                 # Settings readers lstat every ancestor, and Bun's realpath
+                 # opens it (OpenCode resolves its project folder that way,
+                 # and falls back to HOME when it cannot). Permit only this
+                 # directory itself, its metadata and its names, not its
+                 # children.
+                 f"(allow file-read-metadata file-read-data (literal {quote(self.run)}))",
                  "(allow file-read* " + " ".join(f"(subpath {quote(p)})" for p in
                                                    [*allowed, self.run / "bin"]) + ")"]
         leaves = spellings([*protected, self.declared_proof])
@@ -118,7 +139,23 @@ class WriteSandbox:
                      operator_home / ".local/state/hide", operator_home / ".config/herdr",
                      *(routing or [])]):
             rules.append(f"(deny file-read* (subpath {quote(path)}))")
-        self.profile = self.run / "native-write-guard.sb"
+        if fake_private:
+            # Only keyless pinned CLIs enter this stricter mode. Operator native
+            # state is neither an auth source nor a destination, even if a CLI
+            # ignores HOME. No remote provider can receive a request.
+            rules.extend(["(deny file-write*)",
+                          "(allow file-write* " + " ".join(f"(subpath {quote(p)})" for p in allowed) + ")",
+                          '(allow file-write* (literal "/dev/null"))',
+                          "(deny network-outbound)",
+                          '(allow network-outbound (remote ip "localhost:*"))',
+                          f"(allow network-outbound (remote unix-socket (subpath {quote(self.sockets)})))",
+                          f"(allow network-outbound (remote unix-socket (subpath {quote(self.run)})))"])
+            # A changed HOME makes ancestor ~/.agents/skills look project-local
+            # to Pi. Conceal metadata too, so operator skills cannot enter a run.
+            for name in (".agents", ".claude", ".claude.json", ".codex", ".gemini", ".grok", ".omp", ".pi",
+                         ".config/opencode", ".local/share/opencode", "Library/Keychains"):
+                rules.append(f"(deny file-read* file-test-existence file-write* (subpath {quote(operator_home / name)}))")
+        self.profile = self.run / ("fake-write-guard.sb" if fake_private else "native-write-guard.sb")
         self.rules = rules
         self.references = set()
         write_private(self.profile, ("\n".join(rules) + "\n").encode())
@@ -140,6 +177,13 @@ class WriteSandbox:
     def command(self, argv: list[str]) -> list[str]:
         return ["/usr/bin/sandbox-exec", "-f", str(self.profile), *argv]
 
+    def verify_private(self, owner, env, outside):
+        """Fail before a CLI starts if the fake-only write boundary is ineffective.
+
+        The attempted forbidden write is a disposable stand-in, never an operator file.
+        """
+        verify_write_boundary(owner, env, self.command, self.probe / "private-guard-proof", outside)
+
     def verify(self, owner: OwnedProcesses, env: dict, outside: Path) -> None:
         """Exercise declared-file/control protection and Unix socket isolation.
 
@@ -152,14 +196,17 @@ class WriteSandbox:
         endpoint = outside / "operator-stand-in.sock"
         inside = self.probe / "guard-write-proof"
         private = self.run / "guard-controller-read"
+        # The run root itself may be listed (realpath opens it); its folders may not.
+        hidden = self.run / "guard-controller-folder"
         if beneath(outside, self.run) or beneath(outside, self.sockets):
             raise ProtectionError("guard_selftest_outside_aliases_allowance")
-        if any(path.exists() for path in (forbidden, endpoint, inside, native, private)):
+        if any(path.exists() for path in (forbidden, endpoint, inside, native, private, hidden)):
             raise ProtectionError("guard_selftest_paths_already_exist")
         listener = socket.socket(socket.AF_UNIX)
         try:
             write_private(forbidden, b"unchanged")
             write_private(private, b"controller-only")
+            hidden.mkdir(mode=0o700)
             listener.bind(str(endpoint))
             listener.listen(1)
             program = (
@@ -168,7 +215,7 @@ class WriteSandbox:
                 f"pathlib.Path({str(native)!r}).write_bytes(b'native-state'); "
                 f"p=pathlib.Path({str(forbidden)!r}); "
                 f"\nfor parent in pathlib.Path({str(inside)!r}).parents: parent.lstat()"
-                f"\ntry: os.listdir({str(self.run)!r})"
+                f"\ntry: os.listdir({str(hidden)!r})"
                 "\nexcept PermissionError: pass"
                 "\nelse: sys.exit(35)"
                 f"\ntry: pathlib.Path({str(private)!r}).read_bytes()"
@@ -198,3 +245,5 @@ class WriteSandbox:
             listener.close()
             for path in (forbidden, endpoint, inside, native, private):
                 path.unlink(missing_ok=True)
+            if hidden.is_dir():
+                hidden.rmdir()

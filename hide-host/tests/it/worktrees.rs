@@ -295,6 +295,68 @@ fn repository() -> tempfile::TempDir {
     directory
 }
 
+/// The header reads whole-checkout records without rename folding, and its
+/// upstream counts come from tracking refs, never a configured base branch.
+#[test]
+fn checkout_header_reads_file_edits_unborn_head_and_tracking_ref_changes() {
+    let repository = repository();
+    let root = repository.path();
+    let read = || hide_host::worktrees::checkout_git(root).unwrap();
+    assert_eq!(read().changed_files, 0);
+    assert_eq!(read().subject.as_deref(), Some("seed"));
+    assert_eq!(read().upstream_state, "none");
+    std::fs::write(root.join("tracked.txt"), "one\n").unwrap();
+    std::fs::write(root.join(".gitignore"), "ignored\n").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "tracked files"]);
+    std::fs::write(root.join("ignored"), "not a status record").unwrap();
+    std::fs::write(root.join("new.txt"), "untracked\n").unwrap();
+    std::fs::write(root.join("tracked.txt"), "two\n").unwrap();
+    assert_eq!(read().changed_files, 2);
+    std::fs::remove_file(root.join("new.txt")).unwrap();
+    git(root, &["mv", "tracked.txt", "renamed.txt"]);
+    assert_eq!(
+        read().changed_files,
+        2,
+        "a no-renames rename has two records"
+    );
+    git(
+        root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example/fixture.git",
+        ],
+    );
+    git(root, &["update-ref", "refs/remotes/origin/main", "HEAD~1"]);
+    git(root, &["branch", "--set-upstream-to", "origin/main"]);
+    let ahead = read();
+    assert_eq!(
+        (ahead.upstream.as_deref(), ahead.ahead, ahead.behind),
+        (Some("origin/main"), Some(1), Some(0))
+    );
+    git(root, &["update-ref", "-d", "refs/remotes/origin/main"]);
+    assert_eq!(read().upstream_state, "gone");
+    git(root, &["checkout", "--detach", "-q"]);
+    assert_eq!(read().upstream_state, "none");
+
+    let unborn = tempfile::tempdir().unwrap();
+    git(unborn.path(), &["init", "-q"]);
+    std::fs::write(unborn.path().join("first.txt"), "first\n").unwrap();
+    let facts = hide_host::worktrees::checkout_git(unborn.path()).unwrap();
+    assert_eq!(
+        (facts.head_sha, facts.subject, facts.commit_unix_seconds),
+        (None, None, None)
+    );
+    assert_eq!(facts.changed_files, 1);
+    std::fs::write(unborn.path().join(".git/index"), "broken index").unwrap();
+    assert!(
+        hide_host::worktrees::checkout_git(unborn.path()).is_err(),
+        "failure never becomes clean"
+    );
+}
+
 fn check(root: &Path, branch: &str) -> Result<serde_json::Value, hide_host::HostError> {
     handle(Call::BranchCheck {
         path: root.to_string_lossy().into_owned(),

@@ -29,7 +29,7 @@ const NOTHING_REMEMBERED: AgentStartChoice = { kind: null, models: {} };
 /** The kind a picker opens on: the last one a start named, Claude before any. */
 export function rememberedSelection(start: AgentStartChoice | undefined): AgentSelection {
   const remembered = start ?? NOTHING_REMEMBERED;
-  const kind = remembered.kind ?? PROVIDER_KINDS[0];
+  const kind = remembered.kind && PROVIDER_KINDS.includes(remembered.kind) ? remembered.kind : PROVIDER_KINDS[0];
   if (!kind) throw new Error("No start adapter declared");
   return { kind, model: remembered.models[kind] ?? null };
 }

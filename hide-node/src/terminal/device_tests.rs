@@ -810,6 +810,7 @@ fn held_proxy() -> (ProxyShared, Arc<Heard>) {
     let shared = ProxyShared {
         device: "mini".into(),
         link: 7,
+        permits: Arc::default(),
         state: Mutex::default(),
         ready: Condvar::new(),
         sink: Arc::clone(&heard) as Arc<dyn DeviceSink>,
@@ -1069,4 +1070,103 @@ fn a_frame_larger_than_the_cap_goes_up_whole_and_asks_no_redraw() {
     };
     assert!(output.full);
     assert_eq!(decode_base64(&output.data).unwrap(), frame);
+}
+
+#[test]
+fn side_channel_permission_waits_for_the_device_and_ends_with_its_link() {
+    let (proxy, link, heard) = proxy();
+    link.release();
+    let (reply, result) = channel();
+    proxy.input_permit(
+        "w1:p1",
+        12,
+        Box::new(move |outcome| {
+            reply.send(outcome).unwrap();
+        }),
+    );
+    wait_for(|| !link.lines().is_empty());
+    let TerminalDown::InputPermit {
+        ticket,
+        pane,
+        bytes,
+    } = &link.lines()[0]
+    else {
+        panic!("permission request")
+    };
+    assert_eq!((pane.as_str(), *bytes), ("w1:p1", 12));
+    assert!(matches!(
+        result.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    (proxy.inbound())(
+        &line_of(TerminalUp::Report {
+            report: TerminalReport::InputPermit {
+                ticket: *ticket,
+                outcome: Ok(()),
+            },
+        })
+        .unwrap(),
+    );
+    assert_eq!(result.recv_timeout(WAIT).unwrap(), Ok(()));
+    assert!(heard.reports.lock().unwrap().is_empty());
+    let (reply, result) = channel();
+    proxy.input_permit(
+        "w1:p1",
+        12,
+        Box::new(move |outcome| {
+            let _ = reply.send(outcome);
+        }),
+    );
+    drop(proxy);
+    assert_eq!(
+        result.recv_timeout(WAIT).unwrap(),
+        Err(hide_node_link::terminal::InputPermitError::Discarded)
+    );
+}
+
+#[test]
+fn pending_device_permissions_expire_without_new_input_and_end_with_the_link() {
+    use hide_node_link::terminal::InputPermitError;
+    for expire in [true, false] {
+        let (proxy, link, _) = proxy();
+        link.release();
+        let (reply, result) = channel();
+        proxy.input_permit(
+            "w1:p1",
+            12,
+            Box::new(move |outcome| {
+                let _ = reply.send(outcome);
+            }),
+        );
+        wait_for(|| !link.lines().is_empty());
+        {
+            let mut state = lock(&proxy.shared.state);
+            if expire {
+                // Advance the pending request's age, then wake the real
+                // writer. No new input arrives to clean up this request.
+                for (since, _) in state.permits.values_mut() {
+                    *since = Instant::now() - super::super::permit::MAX_AGE;
+                }
+            } else {
+                state.end_link = true;
+                state.failed = Some("test link ended".into());
+            }
+        }
+        proxy.shared.ready.notify_all();
+        assert_eq!(
+            result.recv_timeout(WAIT).unwrap(),
+            Err(InputPermitError::Discarded)
+        );
+        assert!(lock(&proxy.shared.state).permits.is_empty());
+        assert_eq!(
+            proxy
+                .shared
+                .permits
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        if !expire {
+            wait_for(|| link.ended.lock().unwrap().is_some());
+        }
+    }
 }

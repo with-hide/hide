@@ -77,9 +77,20 @@ fn main() -> ExitCode {
     };
     match arguments.first().map(String::as_str) {
         Some("hook") => {
-            // Grok and Cursor have no Memory and no bell: their hooks carry the
-            // spawn guard, the subagent count, Cursor's session guidance and,
-            // at a tool call, the letters due while the agent works
+            if argument_value("--event", &arguments)
+                .is_some_and(|event| matches!(event.as_str(), "PostToolUse" | "PostToolUseFailure"))
+            {
+                if std::panic::catch_unwind(|| run_observation_hook(&arguments, started)).is_err()
+                    && let Some(home) = home_directory()
+                {
+                    hide_agent_hooks::delivery::diagnose(&home, "format");
+                }
+                return ExitCode::SUCCESS;
+            }
+            // Grok and Cursor have no Memory: their hooks carry the spawn
+            // guard, subagent counts and letters at their declared gaps.
+            // Cursor adds session guidance; Grok observes bell submissions
+            // and takes letters at the end of a turn too
             // (`hide_agent_hooks::guidance`, `hide_agent_hooks::basic`).
             if let Some(agent) = argument_value("--runtime", &arguments)
                 .and_then(|value| GuidanceAgent::from_id(&value))
@@ -161,16 +172,65 @@ fn main() -> ExitCode {
     }
 }
 
+/// Post observation never prints a permission/context decision or alters the
+/// original tool's result. Ordinary calls do no new daemon/Herdr lookup.
+fn run_observation_hook(arguments: &[String], started: Instant) {
+    use hide_agent_hooks::observation;
+    let Some(runtime) = argument_value("--runtime", arguments) else {
+        return;
+    };
+    if !matches!(
+        runtime.as_str(),
+        "claude-code" | "codex" | "grok" | "antigravity"
+    ) {
+        return;
+    }
+    if runtime == "claude-code"
+        && hide_agent_hooks::runtime::ForeignOrigin::detect(|name| std::env::var_os(name)).is_some()
+    {
+        return;
+    }
+    if std::env::var_os("HERDR_PANE_ID").is_none() {
+        return;
+    }
+    let Some(home) = home_directory() else {
+        return;
+    };
+    let Some((payload, truncated)) = read_stdin_before_deadline(started + GUARD_PAYLOAD_BUDGET)
+    else {
+        hide_agent_hooks::delivery::diagnose(&home, "deadline");
+        return;
+    };
+    if truncated {
+        hide_agent_hooks::delivery::diagnose(&home, "format");
+        return;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let failure = argument_value("--event", arguments).as_deref() == Some("PostToolUseFailure");
+    if let Some(observed) = observation::native(&runtime, &payload, false, failure, now, &|name| {
+        std::env::var(name).ok()
+    }) {
+        observation::send(
+            &home,
+            &observed,
+            started + GUARD_PAYLOAD_BUDGET + observation::SEND_BUDGET,
+        );
+    }
+}
+
 fn usage() -> String {
     "usage: hide-agent-hooks hook --runtime <claude-code|codex> \
-     --event <SessionStart|UserPromptSubmit|SubagentStart|SubagentStop|Stop|PreToolUse> \
+     --event <SessionStart|UserPromptSubmit|SubagentStart|SubagentStop|Stop|PreToolUse|PostToolUse|PostToolUseFailure> \
      [--memory-injection] [--source <install marker>]\n       \
-     hide-agent-hooks hook --runtime <grok|cursor> \
-     --event <SessionStart|PreToolUse|SubagentStart|SubagentStop|Stop> \
+     hide-agent-hooks hook --runtime grok \
+     --event <SessionStart|UserPromptSubmit|PreToolUse|PostToolUse|PostToolUseFailure|SubagentStart|SubagentStop|Stop> \
      [--source <install marker>]\n       \
      hide-agent-hooks hook --runtime antigravity \
-     --event <SessionStart|UserPromptSubmit|PreToolUse|Stop> [--source <install marker>]\n       \
-     hide-agent-hooks <opencode|pi|omp> <start|prompt|confirm|tool|letters|subagents>\n       \
+     --event <SessionStart|UserPromptSubmit|PreToolUse|PostToolUse|Stop> [--source <install marker>]\n       \
+     hide-agent-hooks <opencode|pi|omp> <start|prompt|confirm|tool|observation|letters|subagents>\n       \
      hide-agent-hooks doctor [--json]"
         .to_owned()
 }
@@ -216,8 +276,15 @@ fn run_basic_hook(agent: GuidanceAgent, arguments: &[String], started: Instant) 
     if dialect == HookDialect::Cursor && inside_grok() {
         return;
     }
+    // Stop has one payload shared by its intake and subagent count.
+    let payload = matches!(event, HookEvent::Stop | HookEvent::UserPromptSubmit)
+        .then(|| read_stdin_before_deadline(started + GUARD_PAYLOAD_BUDGET))
+        .flatten();
     let (answer, intake) = std::panic::catch_unwind(|| match event {
         HookEvent::PreToolUse => basic_tool_call(dialect, agent.id(), started),
+        HookEvent::Stop | HookEvent::UserPromptSubmit => {
+            basic_turn_event(dialect, event, payload.as_ref(), started)
+        }
         HookEvent::SessionStart => (
             guidance::stdout(
                 agent,
@@ -248,7 +315,67 @@ fn run_basic_hook(agent: GuidanceAgent, arguments: &[String], started: Instant) 
     {
         hide_agent_hooks::delivery::diagnose_failure(&home, &failure);
     }
-    let _ = std::panic::catch_unwind(|| count_basic(dialect, event, started));
+    let _ = std::panic::catch_unwind(|| count_basic(dialect, event, payload.as_ref()));
+}
+
+fn basic_turn_event(
+    dialect: HookDialect,
+    event: HookEvent,
+    payload: Option<&(Vec<u8>, bool)>,
+    started: Instant,
+) -> (Option<String>, Option<hide_agent_hooks::delivery::Intake>) {
+    use hide_agent_hooks::delivery;
+    let Some((payload, truncated)) = payload else {
+        return (None, None);
+    };
+    if !std::env::var("HERDR_PANE_ID").is_ok_and(|pane| !pane.is_empty()) {
+        return (None, None);
+    }
+    let result = (|| match event {
+        HookEvent::UserPromptSubmit
+            if dialect
+                .adapter()
+                .prompt_hook
+                .is_some_and(|hook| !hook.context) =>
+        {
+            let prompt = delivery::read_prompt(payload, *truncated)?;
+            if prompt.session.is_none() {
+                return Ok(None);
+            }
+            // Observe-only hooks never print or confirm, even if an older
+            // peer accidentally answers with context.
+            delivery::pull(started + GUARD_BUDGET, &prompt).map(|_| None)
+        }
+        HookEvent::Stop
+            if dialect.adapter().turn_end_letters.is_some()
+                && matches!(
+                    basic::grok_stop(payload, *truncated),
+                    basic::GrokStop::Running {
+                        hook_active: false,
+                        ..
+                    }
+                ) =>
+        {
+            let Some(session) = basic::session(payload, *truncated, dialect)? else {
+                return Ok(None);
+            };
+            delivery::pull_at_turn_end(started + GUARD_BUDGET, &session)
+        }
+        _ => Ok(None),
+    })();
+    match result {
+        Ok(Some(intake)) => (
+            Some(serde_json::json!({"decision":"block", "reason":intake.context}).to_string()),
+            Some(intake),
+        ),
+        Ok(None) => (None, None),
+        Err(failure) => {
+            if let Some(home) = home_directory() {
+                delivery::diagnose_failure(&home, &failure);
+            }
+            (None, None)
+        }
+    }
 }
 
 /// A Grok or Cursor tool call: the guards' refusal in the agent's shape, or,
@@ -278,11 +405,18 @@ fn basic_tool_call(
         return (Some(answer), None);
     }
     let in_pane = std::env::var("HERDR_PANE_ID").is_ok_and(|value| !value.is_empty());
-    let Some(session) = (in_pane && dialect.adapter().tool_letters.is_some())
-        .then(|| basic::session(&payload, truncated, dialect))
-        .flatten()
-    else {
+    if !in_pane || dialect.adapter().tool_letters.is_none() {
         return (None, None);
+    }
+    let session = match basic::session(&payload, truncated, dialect) {
+        Ok(Some(session)) => session,
+        Ok(None) => return (None, None),
+        Err(failure) => {
+            if let Some(home) = home_directory() {
+                hide_agent_hooks::delivery::diagnose_failure(&home, &failure);
+            }
+            return (None, None);
+        }
     };
     match hide_agent_hooks::delivery::pull_at_tool(started + GUARD_BUDGET, &session) {
         Ok(Some(intake)) => (
@@ -434,7 +568,14 @@ fn antigravity_event(event: HookEvent, started: Instant) {
         (HookEvent::Stop, None) => {
             report_count(&home, event, Change::None, reporter(&conversation), true)
         }
-        (HookEvent::PreToolUse | HookEvent::SubagentStart | HookEvent::SubagentStop, None) => {}
+        (
+            HookEvent::PreToolUse
+            | HookEvent::PostToolUse
+            | HookEvent::PostToolUseFailure
+            | HookEvent::SubagentStart
+            | HookEvent::SubagentStop,
+            None,
+        ) => {}
     }
 }
 
@@ -574,7 +715,7 @@ fn antigravity_memory(
 /// The count a Grok or Cursor event makes. Grok's `Stop` names the
 /// background subagents still running and comes from inside a subagent too,
 /// which leaves the count alone; Cursor's subagents end with the turn.
-fn count_basic(dialect: HookDialect, event: HookEvent, started: Instant) {
+fn count_basic(dialect: HookDialect, event: HookEvent, payload: Option<&(Vec<u8>, bool)>) {
     // An agent whose adapter declares no count reports none, rather than a
     // zero its hooks never changed (Cursor, issue 911).
     if dialect.adapter().subagent_counts.is_none() {
@@ -585,18 +726,22 @@ fn count_basic(dialect: HookDialect, event: HookEvent, started: Instant) {
         (_, HookEvent::SubagentStart) => Change::Started(None),
         (_, HookEvent::SubagentStop) => Change::Stopped(None),
         (HookDialect::Grok, HookEvent::Stop) => {
-            let Some((payload, truncated)) =
-                read_stdin_before_deadline(started + GUARD_PAYLOAD_BUDGET)
-            else {
+            let Some((payload, truncated)) = payload else {
                 return;
             };
-            match basic::grok_stop(&payload, truncated) {
+            match basic::grok_stop(payload, *truncated) {
                 basic::GrokStop::Ignore => return,
-                basic::GrokStop::Running(running) => Change::Settled { running },
+                basic::GrokStop::Running { running, .. } => Change::Settled { running },
             }
         }
         (_, HookEvent::Stop) => Change::Settled { running: 0 },
-        (_, HookEvent::UserPromptSubmit | HookEvent::PreToolUse) => return,
+        (
+            _,
+            HookEvent::UserPromptSubmit
+            | HookEvent::PreToolUse
+            | HookEvent::PostToolUse
+            | HookEvent::PostToolUseFailure,
+        ) => return,
     };
     let Some(home) = home_directory() else { return };
     // Neither agent's hook input is read for its session here, so the file
@@ -678,7 +823,7 @@ fn guard_failed(arguments: &[String], cause: &str) {
 fn guard_refusal(
     dialect: HookDialect,
     runtime_id: &str,
-    started: Instant,
+    _started: Instant,
     payload: &[u8],
     truncated: bool,
 ) -> Option<String> {
@@ -701,33 +846,6 @@ fn guard_refusal(
     }
     // Outside a Herdr pane there is nothing to redirect.
     let pane = pane?;
-    // Question tools have no shell command and take their own readonly route,
-    // for an agent whose question tools are confirmed to reach this hook
-    // (Grok's are not yet, so its questions stay native).
-    if let Some(question) = (guard::may_hold_question(payload)
-        && hide_agent_adapter::direct_ask_kind(runtime_id).is_some())
-    .then(|| guard::read_question(payload, truncated, dialect))
-    .flatten()
-    {
-        let home = home_directory()?;
-        let program = workspace_context::cli_program()?;
-        return match guard::question_decision(
-            &program,
-            runtime_id,
-            &question.session,
-            started + GUARD_BUDGET,
-        ) {
-            guard::QuestionDecision::Worker => {
-                guard::record_question_refusal(&home, runtime_id, &pane, question.tool);
-                Some(guard::QUESTION_REASON.to_owned())
-            }
-            guard::QuestionDecision::Allow => None,
-            guard::QuestionDecision::Unreachable(cause) => {
-                guard::unreachable(&home, runtime_id, cause);
-                None
-            }
-        };
-    }
     // Every shell call comes through here: this one search decides the rest.
     if !guard::may_hold_launch(payload) {
         return None;
@@ -814,7 +932,13 @@ fn run_hook(arguments: &[String], started: Instant) {
     };
     let prompt = match (&payload, event) {
         (Some((bytes, truncated)), HookEvent::UserPromptSubmit) => {
-            hide_agent_hooks::delivery::read_prompt(bytes, *truncated)
+            match hide_agent_hooks::delivery::read_prompt(bytes, *truncated) {
+                Ok(prompt) => prompt,
+                Err(failure) => {
+                    hide_agent_hooks::delivery::diagnose_failure(&home, &failure);
+                    return;
+                }
+            }
         }
         _ => hide_agent_hooks::delivery::Prompt::default(),
     };

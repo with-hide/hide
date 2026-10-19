@@ -27,7 +27,7 @@ export function usagePeriodDays(range: UsageRange, count: number): UsageDay[] {
   return days.map((day, index) => ({ ...day, week: Math.floor((index + offset) / 7) }));
 }
 
-export function sumUsageDays(days: readonly UsageDay[]): UsageAmount {
+export function sumUsageDays(days: readonly { amount: UsageAmount }[]): UsageAmount {
   const total: UsageAmount = {
     calls: 0, new_tokens: 0,
     tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0, cache_write_1h: 0, reasoning: null },

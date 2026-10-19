@@ -48,6 +48,8 @@ struct PendingChoice {
     deadline_at_unix_ms: u64,
     memory_project: Option<String>,
     acknowledged: bool,
+    /// Core checkout navigation has already landed, without a Herdr effect.
+    core_choice: bool,
     /// A path the operator clicked in the chosen checkout, revealed once it
     /// is in front (`Runtime::reveal_when_in_front`).
     reveal: Option<super::RevealPathPayload>,
@@ -71,14 +73,14 @@ pub(super) struct WorkspaceViewStore {
     /// the tree the file carried until it is shown.
     pub(super) live: HashSet<WorkspaceKey>,
     pub(super) agent_live: HashSet<WorkspaceKey>,
-    /// What the bookmark pass saw of each Workspace it has had in front
-    /// (`view_bookmarks.rs`). Runtime only: a Workspace not seen yet counts
-    /// every shown tab as newly shown.
-    pub(super) bookmark_seen: HashMap<WorkspaceKey, super::view_bookmarks::Seen>,
     pub(super) agent_admissions: BTreeMap<WorkspaceKey, HashSet<String>>,
-    pub(super) agent_placements: BTreeMap<String, (WorkspaceKey, String, Option<usize>)>,
+    pub(super) agent_placements:
+        BTreeMap<String, (WorkspaceKey, Option<String>, String, Option<usize>)>,
     /// The Workspace the last sync saw in front.
     pub(super) front: Option<WorkspaceKey>,
+    /// Explicit checkout choices, independent of a remote Herdr's PTY focus.
+    /// Rebuilt from the existing per-checkout last-used stamps on reload.
+    pub(super) remote_front: HashMap<String, String>,
     /// One bounded acknowledgement slot for the last lane or tree width
     /// intent.
     /// It is published only for its Workspace and never saved.
@@ -289,6 +291,16 @@ impl WorkspaceViewStore {
                 }
             },
         };
+        let mut remote_front = HashMap::new();
+        let mut chosen = views
+            .workspaces
+            .iter()
+            .filter(|view| view.last_used_unix_ms > 0)
+            .collect::<Vec<_>>();
+        chosen.sort_by_key(|view| view.last_used_unix_ms);
+        for view in chosen {
+            remote_front.insert(view.device_id.clone(), view.path.clone());
+        }
         let resumable = views
             .workspaces
             .iter()
@@ -301,10 +313,10 @@ impl WorkspaceViewStore {
                 views,
                 live: HashSet::new(),
                 agent_live: HashSet::new(),
-                bookmark_seen: HashMap::new(),
                 agent_admissions: BTreeMap::new(),
                 agent_placements: BTreeMap::new(),
                 front: None,
+                remote_front,
                 width_request: None,
                 generation: 0,
                 browser_inventory_scope: Vec::new(),
@@ -329,6 +341,32 @@ impl WorkspaceViewStore {
 }
 
 impl Runtime {
+    /// Catalog comparisons include the same core-owned group projection as
+    /// the published frame, so rebuilding identical topology stays unchanged.
+    pub(super) fn project_catalog_agent_groups(&self, workspaces: &mut [WorkspaceSnapshot]) {
+        let Some(store) = &self.workspace_views else {
+            return;
+        };
+        for workspace in workspaces {
+            for checkout in &mut workspace.checkouts {
+                let view = store.views.get(&workspace.device_id, &checkout.path);
+                if let Some(view) = view {
+                    checkout.tabs.retain(|tab| {
+                        !super::group_starts::staged_tab(
+                            view,
+                            workspace.device_id == self.node.as_str(),
+                            &workspace.device_id,
+                            checkout.owner_workspace_id.as_deref(),
+                            tab,
+                        )
+                    });
+                    checkout.has_panes = checkout.tabs.iter().any(|tab| !tab.panes.is_empty());
+                }
+                checkout.agent_groups = view.map(|view| view.agent_groups_snapshot());
+            }
+        }
+    }
+
     pub(super) fn separate_view_areas(&self) -> bool {
         self.workspace_views.is_some()
     }
@@ -393,6 +431,41 @@ impl Runtime {
         self.workspace_key(workspace_id, checkout_id)
     }
 
+    /// Resolves a durable device/path identity without requiring a live tab.
+    pub(super) fn agent_workspace_ids(&self, key: &WorkspaceKey) -> Option<(String, String)> {
+        self.catalog_workspaces()
+            .filter(|workspace| workspace.device_id == key.0)
+            .find_map(|workspace| {
+                workspace
+                    .checkouts
+                    .iter()
+                    .find(|checkout| checkout.path == key.1)
+                    .map(|checkout| (workspace.id.clone(), checkout.id.clone()))
+            })
+    }
+
+    /// Chooses a checkout in the UI. An empty remote checkout creates no PTY.
+    pub(super) fn choose_agent_workspace(&mut self, key: &WorkspaceKey) -> bool {
+        let Some((workspace, checkout)) = self.agent_workspace_ids(key) else {
+            self.set_error(
+                "agent_group.workspace_unavailable",
+                "This checkout is no longer available. Select it again.",
+                false,
+            );
+            return false;
+        };
+        if key.0 == self.node.as_str() {
+            self.focus_checkout(&workspace, &checkout);
+        } else if let Some(store) = self.workspace_views.as_mut() {
+            store.remote_front.insert(key.0.clone(), key.1.clone());
+        } else {
+            return false;
+        }
+        self.bring_device_forward(key.0.clone());
+        self.mark_workspace_chosen(key);
+        true
+    }
+
     /// The terminal took the surface. Without View areas the document gives
     /// it back; with separate View areas the documents stay where they are.
     pub(super) fn yield_surface_to_terminal(&mut self) {
@@ -443,16 +516,29 @@ impl Runtime {
                 deadline_at_unix_ms: unix_milliseconds().saturating_add(CLOSE_STAGE_TIMEOUT_MS),
                 memory_project: None,
                 acknowledged: false,
+                core_choice: false,
                 reveal: None,
             });
         }
     }
 
-    /// The request a waiting device choice belongs to.
-    #[cfg(test)]
-    pub(super) fn pending_choice_request(&self) -> Option<&str> {
-        let pending = self.workspace_views.as_ref()?.pending_choice.as_ref()?;
-        Some(pending.request_id.as_str())
+    /// Keeps same-event Memory/reveal payloads correlated with a checkout
+    /// choice that completed in core state, without waiting for Herdr focus.
+    pub(super) fn remember_core_workspace_choice(
+        &mut self,
+        device: &str,
+        request: &str,
+        key: WorkspaceKey,
+    ) {
+        self.choose_when_in_front(device, request, key);
+        if let Some(pending) = self
+            .workspace_views
+            .as_mut()
+            .and_then(|store| store.pending_choice.as_mut())
+        {
+            pending.core_choice = true;
+            pending.acknowledged = true;
+        }
     }
 
     /// The path of the checkout a connected device's Herdr has in front.
@@ -789,6 +875,9 @@ impl Runtime {
         // and the one asked for: someone chose that one, so the request's
         // landing, should it still come, is no longer the operator's click.
         let elsewhere = store.pending_choice.as_ref().and_then(|pending| {
+            if pending.core_choice {
+                return None;
+            }
             let front = self.device_front_path(&pending.device_id)?;
             (Some(&front) != pending.device_front.as_ref() && front != pending.key.1).then(|| {
                 (
@@ -813,7 +902,8 @@ impl Runtime {
             .and_then(|store| store.pending_choice.as_ref())
             .filter(|pending| pending.memory_project.is_some() && pending.acknowledged)
             .filter(|pending| {
-                self.device_front_path(&pending.device_id).as_ref() == Some(&pending.key.1)
+                pending.core_choice
+                    || self.device_front_path(&pending.device_id).as_ref() == Some(&pending.key.1)
             })
             .map(|pending| pending.device_id.clone());
         if let Some(device) = memory_device
@@ -854,11 +944,27 @@ impl Runtime {
         self.restore_front_when_ready();
         self.reconcile_view_displays();
         self.sync_agent_selection();
-        // The one comparison point for Agent tab bookmarks: a restore lands
-        // before the editor is reconciled and the snapshot published, so the
-        // tab and the panel's fronts leave in the same frame.
-        if self.track_view_bookmarks() {
-            self.reconcile_view_displays();
+        if let Some(store) = &self.workspace_views {
+            for workspace in &mut self.snapshot.navigator.workspaces {
+                for checkout in &mut workspace.checkouts {
+                    checkout.agent_groups = store
+                        .views
+                        .get(&workspace.device_id, &checkout.path)
+                        .map(|view| view.agent_groups_snapshot());
+                }
+            }
+            for remote in &mut self.snapshot.status.remote {
+                if let Some(session) = &mut remote.session {
+                    for workspace in &mut session.workspaces {
+                        for checkout in &mut workspace.checkouts {
+                            checkout.agent_groups = store
+                                .views
+                                .get(&remote.target_id, &checkout.path)
+                                .map(|view| view.agent_groups_snapshot());
+                        }
+                    }
+                }
+            }
         }
         self.refresh_browser_inventory_scope();
         if let Some(store) = self.workspace_views.as_ref()
@@ -1056,6 +1162,7 @@ impl Runtime {
             WorkspaceViewSnapshot {
                 device_id: view.device_id.clone(),
                 path: view.path.clone(),
+                git: self.checkout_header_snapshot(key),
                 tool: view.tool,
                 last_tool: view.last_tool,
                 prs: view.prs,
@@ -1076,7 +1183,7 @@ impl Runtime {
                 layout,
                 agent_layout: self
                     .arranges_agent_areas(&key.0)
-                    .then(|| self.agent_layout_snapshot(key, &view.agent_layout)),
+                    .then(|| self.agent_layout_snapshot(key, view.selected_agent_layout())),
             }
         });
         // The one global panel every existing reader gates on (the Changes
@@ -1153,7 +1260,10 @@ impl Runtime {
             return;
         }
         let Some(context) = self.worker_context.clone() else {
-            if let Err(message) = workspace_views::save(&store.path, &store.views) {
+            let views = store.views.clone();
+            let result = workspace_views::save(&store.path, &views);
+            self.acknowledge_group_start_save(&views, &result);
+            if let Err(message) = result {
                 self.set_error("workspace_views.save_failed", message, true);
             }
             return;
@@ -1182,7 +1292,12 @@ impl Runtime {
                         store.save_pending = false;
                         (store.path.clone(), store.views.clone())
                     };
-                    if let Err(message) = workspace_views::save(&path, &views) {
+                    let result = workspace_views::save(&path, &views);
+                    runtime
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .acknowledge_group_start_save(&views, &result);
+                    if let Err(message) = result {
                         runtime.lock().unwrap_or_else(|e| e.into_inner()).set_error(
                             "workspace_views.save_failed",
                             message,
@@ -1241,11 +1356,9 @@ impl Runtime {
             .workspaces
             .retain(|view| view.device_id != device_id);
         store.live.retain(|(device, _)| device != device_id);
+        store.remote_front.remove(device_id);
         store
             .lane_called
-            .retain(|(device, _), _| device != device_id);
-        store
-            .bookmark_seen
             .retain(|(device, _), _| device != device_id);
         store
             .split_requests

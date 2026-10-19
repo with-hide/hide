@@ -12,7 +12,6 @@ These commands, the `hide agent` commands among them, need the running daemon an
 The daemon binds the caller through the existing Workspace credential boundary and resolves the actual pane, provider and native-session identity from Herdr.
 Only a pane-bound caller is accepted: a checkout-bound caller (a plain terminal, or a tool shell inside Codex's shared app-server daemon) is refused `agent_pane_required` whatever pane it names, and its next step is to run the command inside the agent's own pane, or to run that Codex without the shared daemon (`--no-daemon`).
 A pane hint cannot replace that binding: a pane-bound caller whose hint names another pane is refused `caller_identity_conflict`, and an absent, ambiguous or changed occupant returns an explicit error.
-`hide factory` is the exception ([factory.md](factory.md)): a checkout-bound caller acts as the operator without a pane, and its pane hint is never read as identity or lineage.
 Each queued command revalidates the caller's pane against the prepared Workspace and checkout context before applying or saving; a moved checkout returns `caller_context_changed`.
 Mailbox callers and new recipients require a positive native-session binding; a missing binding returns `native_identity_required`.
 Two missing native references in the same pane never authorize retained mail.
@@ -26,6 +25,13 @@ Each refusal's `next_action` says so: `target_ambiguous` points to the registrat
 A connected device recipient uses its node's pane service over that device's existing SSH link; the credential fixes its device, link, pane, sender and kind, and losing the link revokes that credential immediately.
 The only ledger remains on the controlling daemon.
 A disconnected device hook finishes within its two-second budget with no letters, leaving them pending in that ledger.
+
+An installed hook carries the state folder of the daemon whose kit wrote it, independent of the agent shell's `XDG_STATE_HOME`.
+The helper gives that captured route to sibling `hide` calls only when `HIDE_STATE_DIR` is absent or empty; capability validation and caller binding remain the CLI's responsibility.
+This keeps a Dock-launched app reachable when the shell uses another state home or the agent omits Hide's environment from a hook.
+After a state move, the next kit pass rewrites an unedited generated route to the running daemon's folder, while an operator-edited command waits for Reinstall.
+Until then, a missing old daemon leaves the letter pending and records the helper's existing `intake.failed` diagnostic with code `unavailable`, rather than confirming mail it did not deliver.
+See [agent-hooks.md](agent-hooks.md#what-is-written-and-where) for the argument, install versions and the separate pane-report protocol, which stays at 8 through this update.
 
 ```sh
 hide request send child-name --intent task-question-1 --body 'Please report the check result.'
@@ -60,7 +66,7 @@ A batch keeps the first letter's sender attribution in the request view; neither
 
 ### The contract a calling tool checks
 
-A tool that runs these commands from a program (sasu, a Factory engine) checks the installed `hide` before it calls one.
+A tool that runs these commands from a program (such as a dispatch client) checks the installed `hide` before it calls one.
 `hide version --json` answers `{"version", "commit", "contract"}`: the version the build reports, the commit it was built from (`null` for a debug build given none, or a build from a tree with no Git), and the `sha256:` digest of the command contract; neither it nor `hide contract --json` needs a daemon or a pane.
 `hide contract --json` answers that contract:
 
@@ -80,7 +86,7 @@ A command whose standard output is closed by its reader (`hide agent list | head
 A doorbell types one line that says what arrived ([The bell line](#the-bell-line)).
 It is typed when every one of these hide-owned facts holds, and the verdict reads no terminal screen, so a redrawn footer or a user's statusline cannot change it:
 
-- Herdr reports the pane `idle` or `done`, and has for 30 seconds; or Herdr reports it `working` and the letter's wait is over ([Letters while the agent works](#letters-while-the-agent-works)).
+- Herdr reports the pane `idle` or `done`, and has for 30 seconds; or the adapter declares no tool-letter intake, Herdr reports it `working` and the letter's wait is over ([Letters while the agent works](#letters-while-the-agent-works)).
 - Hide has routed no key to the pane for 30 seconds.
 - No input hide routed is newer than the later of the pane's last submission and the last time it entered `working`.
   Typed keys, a pasted attachment, a phone key and the keys of an agent's own find box all count as input, and none of them, Enter included, counts as a submission.
@@ -88,7 +94,7 @@ It is typed when every one of these hide-owned facts holds, and the verdict read
   A pane that entered `working` was submitted to as well, which is how an answered menu or a custom slash command that starts a turn clears the hold.
   A key after both is an unsent draft, an Esc-restored prompt or a recalled input; a pane held by one stays held until the next real prompt.
 - The pane still hosts the native session the letter was written for, and the agent kind is one the bell targets.
-- For Claude Code and Codex, whose session readers report turns, a read made for Herdr's current state says no native question or plan approval waits for the operator (see [A menu Herdr reads as a stop](#a-menu-herdr-reads-as-a-stop)).
+- For Claude Code, Codex and Grok, whose session readers report turns, a read made for Herdr's current state says no native question or plan approval waits for the operator (see [A menu Herdr reads as a stop](#a-menu-herdr-reads-as-a-stop)).
 - Herdr does not report the agent as starting or not ready.
   Herdr reports readiness only for an agent it launched itself (`herdr agent start`, which `hide agent spawn` uses): `launch_pending: true` while that start settles or is blocked, then `interactive_ready: true`.
   An agent the operator started by typing its program in a Herdr shell, the usual way a lead is started, carries neither flag; its readiness is unreported, not refused, and the facts above decide it.
@@ -98,18 +104,20 @@ It is typed when every one of these hide-owned facts holds, and the verdict read
   A start Herdr reads as blocked (a trust or login prompt at launch) stays pending until the agent goes idle, by Herdr's contract, and its letter waits until then.
   A read after the start's deadline (120 s) is where Herdr applies the deadline and clears the agent's name, as the agent's next state change would; the read does not hold that off.
 
-Herdr's `blocked` status guards every permission and selection menu Herdr reads as `blocked`, so only kinds whose menus were observed to read `blocked` are bell targets.
-Today those are Claude Code and Codex.
+Herdr's `blocked` status holds every permission or selection menu it reports that way.
+For a menu it reports as idle or done, a bell target also needs Hide's draft record or a native session wait to hold the bell.
+Claude Code and Codex can be rung at rest and while working; Grok can be rung only at rest, with Hide's draft guard and the native-session wait guard below.
 Repeat the complete scene matrix with the [local measurement tool](VERIFICATION.md#local-agent-bell-measurement) before enabling another target or relying on a result after a Herdr or agent CLI update.
 Its ignored run report records active detection-manifest versions and native outcomes, including unsafe picker/startup effects and unknown cells.
 The adapter declaration is a reviewed product decision; the tool never changes it automatically.
-The shared agent adapter declares bell eligibility separately from prompt intake, spawn refusal and session format; its contract rejects a bell without a prompt hook, and adding prompt intake alone never widens the bell targets.
+The shared agent adapter declares bell eligibility separately from prompt intake, spawn refusal and session format; its contract requires a submission hook and either prompt context or a turn-end intake hook for every bell, and adding prompt intake alone never widens the bell targets.
 Claude Code's plan approval reads `blocked`; Codex's does not, and the session read guards it instead (next section).
 Cursor is not a target: its menus have not been observed, and the agent checks leave Cursor out by the operator's decision of 2026-10-17.
-Grok is not a target for what its terminal was seen to do on 2026-10-18, on Grok 1.0.52 and 1.0.62 under an isolated Herdr 0.9.5 (Grok detection manifest 2026.10.05.1), answered by a scripted stand-in model, with each line typed by the doorbell's own call (`pane.send_input`, the line and Enter), observed by hand rather than by the local measurement tool's matrix.
-Two findings rule it out.
-First, its prompt hook cannot carry the letters, so a bell turn would bring the line and not the letter.
-Second, its plan review reads `working` for as long as it waits, and a bell target is rung while it works, so a bell would act on the review.
+Grok is a target at rest: a kind with tool letters never receives a working bell, so its plan review, which Herdr reads as `working`, is held.
+Its bell uses the same Herdr `agent.prompt` submission as every bell target; its prompt hook records the submission and recognizes the saved line, but prints and confirms nothing.
+The bell turn takes its pending batch at the first `PreToolUse`, or at `Stop` if it calls no tool.
+The following observations were made on 2026-10-18 with Grok 1.0.52 and 1.0.62 under isolated Herdr 0.9.5 (Grok detection manifest 2026.10.05.1), answered by a scripted stand-in model.
+The picker observations below used the then-current `pane.send_input` and Enter path; they are not evidence for `agent.prompt`.
 Grok's three hooks did the same on both versions:
 
 - `UserPromptSubmit` runs with the prompt and the session id, but nothing it prints reaches the model (Grok's hooks guide: "stdout of an allowing hook is discarded").
@@ -127,13 +135,14 @@ Grok's three hooks did the same on both versions:
 | `/resume` picker | `idle` | Taken as a search; the picker stayed open | 1.0.52 |
 | Folder-trust question at start, before Grok has a session | `idle`, ready | Its Enter trusted the folder; the missing native session holds the bell today (`session_changed`) | 1.0.52, 1.0.62 |
 
-At rest Grok's and Cursor's letters are read through `hide inbox`, and while they work their own tool hook hands them over ([Letters while the agent works](#letters-while-the-agent-works)).
+Cursor's letters at rest are read through `hide inbox`; Grok's rest bell opens a turn that takes them at a tool call or turn end, and while they work their own tool hook hands due letters over ([Letters while the agent works](#letters-while-the-agent-works)).
 OpenCode, Pi and omp are not targets either, though Hide's plugin and extension give them a prompt hook: on 2026-10-07 OpenCode's previous-session picker read `done`, and a bell's Enter there opened another session, and Pi's and omp's resume pickers read `done` too.
 Their letters ride their next prompt instead (below), or a tool result while they work, and a bell is reconsidered only in the change that would flip an adapter declaration, once the live-check tool has found a bell harmless in every scene that agent does not read as `blocked`.
 Herdr 0.9.1 reads a built-in slash picker such as `/model` or `/resume` as `done`, not `blocked`, for both targets, and a bell typed into an open picker is accepted by it.
 Hide therefore does not take the Enter that opens a picker for a submission: the pane holds as a draft, and stays held after `/clear`, `/model` or `/help` until the next real prompt runs its hook.
 The same holds after an Esc or Ctrl-C that interrupts a turn, since no prompt hook runs for it.
-Two residuals remain: a turn the operator did not start (a scheduled wake or a finished subagent) moves the pane to `working` and clears a half-typed draft, a prompt queued while the pane works leaves it held after its turn until the next prompt submitted from rest (its hook runs while `working` and clears nothing).
+On Grok 1.0.62 a completed background command fires `UserPromptSubmit` with the root session id and a `<system-reminder>` describing the completed task; its digest is not the saved bell line (measured against a local fake model).
+Two residuals remain: a turn the operator did not start (a scheduled wake or a finished subagent, including Grok's auto-wake turns) moves the pane to `working` and clears a half-typed draft, a prompt queued while the pane works leaves it held after its turn until the next prompt submitted from rest (its hook runs while `working` and clears nothing).
 A letter that cannot be belled waits, and the reason is logged as `doorbell.held` once per change with the letter and pane ids, never with its body and never on screen; the one hold that does not end on its own, a possible draft, is shown on the pane once it has rested ([Delivering a held letter now](#delivering-a-held-letter-now)).
 
 ### Letters while the agent works
@@ -142,17 +151,24 @@ A letter to an agent that is working no longer waits for its turn to end (PRD le
 It waits five minutes of unbroken work (`doorbell::MID_TURN_WAIT_MS`), counted from the later of its arrival and the moment the pane entered `working`, so an agent that just started a long turn is not interrupted at once and a letter that arrives late in a turn is not handed over on the next tool; a letter sent with `hide request send --now` (`Letter.immediate`) skips the wait and goes at the recipient's next safe gap.
 How it reaches the agent follows the kind, and one letter takes one path and is never both belled and handed over at a tool (D-10); the adapter contract holds `bell` and `tool_letters` to be each other's exception:
 
-- Claude Code and Codex, the bell targets, take the line the doorbell types into their composer while they work: both read a line typed during a turn after the current tool call, and the line's prompt hook takes the letters as it does at rest.
+- Claude Code and Codex, the bell targets, take the line the doorbell submits through Herdr's `agent.prompt` while they work: both read a line submitted during a turn after the current tool call, and the line's prompt hook takes the letters as it does at rest.
   Every other guard of a bell holds as it does at rest: a draft typed since the work began, a key or a status change in the last 30 seconds, a menu, a session not read, and a `working` state Herdr has not yet confirmed (`state_change_seq`), so the composer is never typed over the operator's own words (D-09).
-  A pane belled while working is not belled again for a later letter until the letter it rang for has left `pending`: a bell typed into a working pane moves nothing Hide can see, so the second ring would otherwise follow at once (`doorbell::Rung`).
+  A pane belled while working is not belled again for a later letter until the letter it rang for has left `pending`: submitting a bell to a working pane moves nothing Hide can see, so the second ring would otherwise follow at once (`doorbell::Rung`).
 - OpenCode, Pi and omp take them at a tool result: Hide's plugin (`tool.execute.after`) and extension (`tool_result`) ask the helper's `letters` operation, which runs `hide inbox --hook --session <id> --tool`, and append the bodies to the tool's output inside `<system-reminder>`, so the model reads them before its next step; they are confirmed as a prompt's letters are: OpenCode's once it stored the completed tool part of that session with the letters still in its output (OpenCode 2's once `session.tool.success` reports the result stored with them), Pi's and omp's once the host finished the result with Hide's text still in its content and the reply after it has ended (a `message_end` handler may still replace the result itself); a result stored or finished without the text never reached the model, and its letters stay pending in Hide for the next ask.
   While letters a script handed over wait for their receipt, the host's write and then Hide's confirmation, the script asks nothing, so a letter is never written twice; a write that never comes is forgotten after ten minutes, and the letter then rides the next ask.
 - Grok and Cursor take them through their own `PreToolUse` and `preToolUse` hook: a call that runs is answered with the letters as the hook's added context (`hookSpecificOutput.additionalContext`, which Grok's guide says reaches the model with the batch's tool results; `additional_context` beside `"permission": "allow"` for Cursor), and confirmed once that answer is printed.
-  Every tool call reaches the hook, since neither entry carries a matcher (`hide-guidance@6`; an omitted matcher matches everything in Grok's guide, and Cursor's is optional), so a `--now` letter goes at the next call whatever its tool; a refused call carries none.
+  Every tool call reaches the hook, since neither entry carries a matcher (Grok `hide-guidance@7`, Cursor `hide-guidance@6`; an omitted matcher matches everything in Grok's guide, and Cursor's is optional), so a `--now` letter goes at the next call whatever its tool; a refused call carries none.
 - Antigravity takes them through its `PreInvocation` hook, which agy runs before every model call of a turn: a call after the prompt's first is the gap after a tool, and Hide answers it with the letters due as an injected system message (`injectSteps`, as the prompt's letters go), confirmed once printed; agy has no bell, so this and the next prompt are its two paths.
 
-The ask (`Command::Pull { tool: true }`, node protocol 40) names the pane's own native session and is refused with `session_mismatch` for any other, since it hands letters over; it submits nothing, so a draft in the composer stays a draft (D-09).
-The core answers from the caller's own observation: the letters whose wait is over for an agent Herdr reports `working`, oldest first, under the prompt pull's caps (five letters, 8 KiB), and nothing for a resting agent, a letter still waiting, a letter past its deadline or a kind whose adapter declares no `tool_letters`; a letter it hands over is confirmed by the script, not received, so one lost in the host stays pending for the next ask (D-11).
+The ask (`Command::Pull { point: Tool }`, node protocol 47) names the pane's own native session and is refused with `session_mismatch` for any other, since it hands letters over; it submits nothing, so a draft in the composer stays a draft (D-09).
+Grok also asks at its root session's `Stop` with `hide inbox --hook --session <id> --turn-end`.
+A nonempty answer becomes `{"decision":"block","reason":<letters>}`, followed by confirmation after stdout flush; Grok feeds the reason to the model and continues the turn.
+A second Stop with `stopHookActive: true` makes no letter pull and ends normally even if confirmation of the first handover failed.
+Tool and turn-end intake share the three-handover limit and the five-letter, 8 KiB cap.
+Parallel tool hooks in one batch may pull the same claimed letter before either confirms it: the claim binds the bell turn, not an exclusive tool invocation.
+The worker serializes pulls and durably counts each handover, so this at-least-once path remains bounded at three; confirmation makes later pulls empty.
+An operator turn's new letter still waits five minutes unless sent with `--now`; ending that turn does not skip the wait, and its rest bell brings the letter instead.
+The core answers from the caller's own observation: the letters whose wait is over for an agent Herdr reports `working`, oldest first, under the prompt pull's caps (five letters, 8 KiB), and nothing for a resting agent without a bell-turn claim, a letter still waiting, a letter past its deadline or a kind whose adapter declares no `tool_letters`; a letter it hands over is confirmed by the script, not received, so one lost in the host stays pending for the next ask (D-11).
 The plugin and the extension ask at every tool result of the pane's root session, so a `--now` letter goes at the next result (B6), and skip only the results that come while letters they handed over wait for their receipt; Grok's and Cursor's hook runs per tool call and adds one CLI call there, and agy's per model call after the first.
 Each handover the core answers is counted on the letter (`Letter.tool_handovers`), and after three without a receipt the letter is not handed over at a tool again: it waits for the next prompt or `hide inbox`, as a letter does after its three bells (`mailbox::TOOL_HANDOVERS`, D-11).
 [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#letters-at-a-tool-event) owns the cost per tool call and how it is measured, and [agent-hooks.md](agent-hooks.md) each script's and hook's part.
@@ -178,17 +194,20 @@ A refusal before the reservation spends none, so a letter Herdr keeps refusing i
 A crash or changed pane after reservation may consume an attempt while leaving the letter pending.
 Legacy records with a successful bell but no total count conservatively have no automatic attempts left; manual and prompt-hook intake remain available.
 
-The `UserPromptSubmit` hook of a bell target reads the submitted prompt from its input payload and sends the core the SHA-256 of its trimmed text (`hide inbox --hook --prompt-digest <sha256>`), never the text itself.
+The `UserPromptSubmit` hook of a bell target reads the submitted prompt from its input payload and sends the core the SHA-256 of its canonical text (`hide inbox --hook --prompt-digest <sha256>`), never the text itself.
 The core alone knows which line its doorbell typed, so it alone decides whether the prompt was the bell ([Recognizing the bell](#recognizing-the-bell)).
 When it was, the pull takes the pending letters, oldest first, and after them the letters an earlier build acknowledged without a receipt (`hook_confirmed: false`), which the store's expiry pass before every request drops once their deadline passes, so such a backlog never displaces the letter the bell rang for; it emits their context, flushes stdout, then confirms those IDs.
-For any other prompt, the operator's own included, it adds at most one line, `Hide 편지 N통 대기 중, 이 턴이 끝난 뒤 전달`, counting the letters a bell will still bring, and confirms nothing; the prompt text is never changed and no letter body reaches an operator's turn.
+An adapter whose prompt hook cannot add context, today Grok, instead records the pending batch under the native session and the saved bell digest, returning no context or count.
+The first tool or turn-end pull in that session can hand this batch over immediately, without the five-minute wait.
+Every own-session prompt replaces that claim, so a later operator prompt cannot inherit the previous bell's letters and a letter arriving after the bell submission cannot join its batch.
+A prompt hook that can add context, on any other prompt including the operator's own, adds at most one line, `Hide 편지 N통 대기 중, 이 턴이 끝난 뒤 전달`, counting the letters a bell will still bring, and confirms nothing; the prompt text is never changed and no letter body reaches an operator's turn.
 A letter whose three bells are spent stays pending for `hide inbox` and expires undelivered.
 A payload that is truncated, unreadable or not read within 0.5 seconds counts as an operator prompt.
-Both pulls carry the payload's `session_id`; the core takes the pull as proof the pane's composer was sent only when that session is the pane's own native session, so a stray `hide inbox --hook` from another tool in the pane clears no draft.
+The pulls carry the payload's `session_id` (`sessionId` for Grok); the core takes the pull as proof the pane's composer was sent only when that session is the pane's own native session, so a stray `hide inbox --hook` from another tool in the pane clears no draft.
 The session id is not a secret, so this guards against accidents and not against a hostile process in the pane (external input, D-18).
 A hook that runs while Herdr already reports the pane `working` is a queued prompt being taken up and clears nothing, and a session longer than 4096 bytes (Herdr's own bound; Pi and omp name a session by its file path), starting with `-` or holding a control character is refused before it is hashed.
 A device kit of an earlier build sends a `bell` flag and no digest: the core drops the flag (`Command::from_wire`), so that kit's bell turn gets only the count line and the letter stays pending until the kit is updated, while its OpenCode, Pi or omp pane still takes its letters on the next prompt; keep the kit and the app on the same build.
-A prompt hook that runs inside an agent with no prompt hook of its own (Grok loading Claude Code's hook) receives nothing and confirms nothing.
+A foreign hook, including Claude Code's hook loaded inside Grok, receives nothing and confirms nothing.
 Claude Code's hook run inside OpenCode, through an operator plugin that bridges `~/.claude/settings.json`, ends silently as a whole, so OpenCode's letters and counts are taken once, by Hide's own plugin.
 
 An agent with a prompt hook that no bell rings for, today OpenCode through Hide's plugin and Pi and omp through Hide's extension, takes its letters on its next prompt, whoever typed it, since no turn of Hide's own will ever bring them (`mailbox::next_prompt_letters`).
@@ -216,14 +235,19 @@ OpenCode's plugin and Pi's and omp's extension hold the same 1.85-second prompt 
 The pinned Herdr API has no atomic composer guard.
 Hide checks the occupant before and after the durable reservation and checks its memory state immediately before the off-lock pane write, but direct external Herdr/TUI input can race that final write.
 That residual limit is the approved D-18 boundary; external input is not represented as a Hide key event.
+In Grok a direct Herdr client or another tool's keys can open `/model`, `/resume` or history without Hide knowing: a bell there can be swallowed as a model name or search.
+The same picker opened through Hide leaves an unsent draft and holds the bell.
+A background workflow approval card on Grok's daemon route is not yet verified: the measured 1.0.62 session used the shell route, where `await_user` produced an idle, paused workflow rather than that card.
+Until a native `blocked` status or a session wait is measured for that card, do not treat it as a proven bell hold; this remains a native-route coverage gap.
+A swallowed bell moves no observed state, so `Rung` prevents another ring in that episode; at most three later episodes ring before the letter waits for `hide inbox`.
 
 ### The bell line
 
-The doorbell types `🔔 <writer> <kind>: <the letter's first line>`, then ` · 외 N통` when N more letters wait for the same recipient, then ` · hide inbox` for a Codex recipient:
+The doorbell submits one line through Herdr's `agent.prompt`: `🦉 <writer> <kind>: <the letter's first line>`, followed by ` · 외 N통` when N more letters wait for the same recipient, and ` · hide inbox` for a Codex or Grok recipient (the adapter's `bell_names_inbox` declaration):
 
 ```
-🔔 label-end-fix 보고: label end 수정 PR #881을 열었습니다
-🔔 hierarchy-pen-scratch 보고: Pen 시안이 준비됐습니다 · 외 1통
+🦉 label-end-fix 보고: label end 수정 PR #881을 열었습니다
+🦉 hierarchy-pen-scratch 보고: Pen 시안이 준비됐습니다 · 외 1통
 ```
 
 The kind reads 요청 for a request, 막힘 for a block, 보고 for a report, 진행 for a progress letter, 답장 for a reply and 감시 for a watch warning.
@@ -231,22 +255,41 @@ The writer is the name the sender registered under (`hide agent register`, `hide
 A watch warning is named by the agent it watches, and its first line says for how long nothing moved, that the agent stopped with a question, or that it is blocked at a prompt ([Watch activity and completion](#watch-activity-and-completion)).
 Both are looked up in memory when the bell rings, on the doorbell's thread, never on the session-sync thread.
 The first line is the body's first line that has anything to show, cut to 60 characters with `…`, and the writer is cut to 32; a body with no such line leaves the colon and summary out.
-Agents learn from their session guidance that this first line is the letter's one-line summary, and that a prompt beginning with `🔔` brings a letter that `hide inbox` shows if the prompt did not.
+Agents learn from their session guidance that this first line is the letter's one-line summary, and that a prompt beginning with `🦉` brings a letter that `hide inbox` shows if the prompt did not.
+The mark is U+1F989 without a variation selector; Codex CLI on Windows may show the line without the owl.
 
 Whether the line names `hide inbox` is decided per runtime (`bell::names_inbox`), by whether its bell turn can arrive without Hide's hooks having run in the pane.
-Claude Code runs every user-level hook it is given, so its prompt hook hands the turn the letter and its session guidance has already said what `🔔` means; its line ends at the summary.
+Claude Code runs every user-level hook it is given, so its prompt hook hands the turn the letter and its session guidance has already said what `🦉` means; its line ends at the summary.
 Codex runs a user-level hook only once its own trust review approved that exact entry, so another tool's change to `hooks.json` silently stops Hide's, and a Codex attached to its shared app-server daemon runs hooks in the daemon's environment rather than the pane's ([agent-hooks.md](agent-hooks.md)); its bell turn can then arrive with neither the letter nor the guidance, so its line ends with ` · hide inbox`.
+Grok's prompt hook observes the submission without adding letter context, so its line names `hide inbox` too; tool or turn-end intake still confirms the letters.
 
-The line is typed into a composer and submitted with Enter, so it carries nothing a composer acts on while it is typed.
+The line is submitted to the checked pane through Herdr's `agent.prompt` on every system, so Herdr owns how each agent's input reader finishes a paste and submits it.
+The raw `pane.send_input` path could leave the bell unsent in a Windows input reader that treats the following Enter as part of its paste burst; the prompt API already supplies that reader's boundary ([herdrdev/herdr#3187](https://github.com/herdrdev/herdr/issues/3187)).
+Both APIs use the same bracketed-paste wrapper; the leftover Windows wrapper problem in [herdrdev/herdr#5371](https://github.com/herdrdev/herdr/issues/5371) occurs when the shell holds the terminal, rather than the detected foreground agent this API requires.
+Hide adds no cursor keys or submission delay of its own.
+A manually started agent is eligible once Herdr detects it; missing readiness flags do not exclude it.
+The pinned implementation checks for a known foreground agent and rejects a blocked or still-starting one before submission ([Herdr v0.9.5, `validate_agent_prompt`, lines 140-207](https://github.com/herdrdev/herdr/blob/v0.9.5/src/app/api/agents.rs#L140-L207)); a detected agent does not need to have been started through Herdr.
+On macOS, Herdr 0.9.5 accepted `/help` from Claude Code 2.1.302 and Codex CLI 0.163.0 through six launch paths each: direct binary, the journey's exec launcher, a shell alias, a shell function, `npx --no-install --call`, and managed `agent.start`.
+The manually started agents were accepted with `unknown` status and no readiness report once detected; npx calls before detection returned `agent_not_found` and both were accepted after detection.
+This measures prompt admission for those two CLIs on macOS, not letter intake or other agents and systems.
+The request asks for no turn wait and allows five seconds for Herdr's ordered PTY writes to finish, outside the runtime lock; success is only a bell attempt, and the prompt hook still has to confirm intake.
+The existing draft, identity and readiness checks, three-attempt limit and retry policy remain in force, and arbitrary phone replies retain their own submission contract.
+The line carries nothing a composer acts on while it is typed.
 Control characters become spaces, characters that draw nothing or reorder text are dropped (`display_text::one_line`), and runs of whitespace become one space.
 `@` opens the file picker in Claude Code and Codex and `$` opens Codex's skill picker, and Enter would accept the picker's choice instead of submitting, so both are typed as their full-width forms `＠` and `＄`; a backslash before Enter continues the line in Claude Code, so `\` is typed as `＼`.
-`/`, `!` and `#` act only as a prompt's first character, and the line begins with `🔔`.
+`/`, `!` and `#` act only as a prompt's first character, and the line begins with `🦉`.
 
 ### Recognizing the bell
 
 The reservation that spends one of a letter's three bells saves the exact line on the letter (`bell_line`) before it is typed.
 A prompt hook's pull is the bell's exactly when its digest is that of the saved line of a `pending` letter whose recipient is the caller's own pane and native session (`mailbox::rang`).
-A person who types `🔔` and the same words before the doorbell saved them, a bell line copied into another agent's pane, and a line whose letter was already taken in or cancelled are therefore ordinary prompts.
+The core and hook share `hide_agent_hooks::delivery::prompt_digest`: remove every character above U+FFFF, trim Unicode `White_Space` from its ends, then compare its SHA-256 exactly, with no agent or system branch.
+Codex CLI 0.163.0's Windows input reader can drop non-BMP characters, so losing the owl or another such character leaves the bell recognizable; every BMP character, including U+FE0F, remains significant.
+Older hooks' whole-line digests remain accepted against the saved line, including an existing `🔔` reservation, without migrating the ledger.
+Remove whole-line compatibility only when no hook older than this build can still run; a saved `🔔` bell becomes ineligible with its letter's 60-minute delivery deadline, so it does not require a ledger migration.
+New hooks send only the canonical digest.
+A new hook paired with an older daemon that has not been restarted may fail to match the canonical digest and repeat the bell until the daemon runs the new build.
+A person who types `🦉` and the same words before the doorbell saved them, a bell line copied into another agent's pane, and a line whose letter was already taken in or cancelled are therefore ordinary prompts.
 Once the line is saved, submitting it in that pane takes the letter whoever pressed Enter: the prompt then names the letter it brings.
 A second bell for the same letter saves its own line, so a hook of the first one that arrives after it is an ordinary prompt too.
 The ledger refuses a saved line longer than 512 bytes or holding a control character.
@@ -315,7 +358,7 @@ Every `capacity` refusal of a letter writes one `letter.capacity_refused` diagno
 | Pending delivery deadline | 60 minutes of the recipient's machine being reachable (wall time on the core's own machine), then `undelivered`; visible through CLI |
 | Quiet period | 30 seconds since hide last routed a key and since Herdr last changed the pane's status |
 | Doorbell reservations per letter | Three total, persisted across restart |
-| First inactivity warning | 20 minutes without activity; one minute (one tick) when the target stopped on a question or is held at a Herdr-blocked prompt and the observer is a pane; the Factory's stall window (30 minutes by default) when the observer is a Factory |
+| First inactivity warning | 20 minutes without activity (30 for a code-owned observer); one minute (one tick) when the target stopped on a question or is held at a Herdr-blocked prompt and the observer is a pane |
 | Second inactivity warning | First-warning time plus 60 minutes, at most two warnings per episode |
 | Unanswered parent warning notification | First-warning time plus 60 minutes, once per native target and inactivity episode |
 | Answer wait of a `request` or `block` | 24 hours from the send, then `answer_wait_ended: "deadline"`; an end of either registration ends it at once as `party_ended` for a letter the recipient took in |
@@ -369,7 +412,7 @@ A target that stopped on a question it asked only in its own pane, or that Herdr
 The fact is the target's own row while its pane runs the watched session: for a question, activity stopped, a question demand ([status-model.md](status-model.md#where-each-axis-comes-from)) and no blocked prompt; for a prompt, the row's `blocked`, whatever its activity, since Herdr reports no activity for a pane it holds at a menu.
 A blocked child also rises to the operator ([Delegated escalation](status-model.md#delegated-escalation)); the parent is told as well because a native runtime can time the prompt out on its own (Claude Code's built-in `rm` check gives up after two minutes, 2026-10-16), and a parent that hears in a minute can still tell the operator or send the child a safer command.
 A child that works, such as Codex while its async question stays open, keeps the 20 minutes.
-A question the target already sent this observer as a `request` or `block` letter still awaiting its answer keeps the 20 minutes too, since that letter rang the observer's doorbell; a blocked prompt rang nothing, so it is told whatever letters wait, and a Factory observer keeps its stall window for both, since its engine stops the worker on the first warning.
+A question the target already sent this observer as a `request` or `block` letter still awaiting its answer keeps the 20 minutes too, since that letter rang the observer's doorbell; a blocked prompt rang nothing, so it is told whatever letters wait.
 The early warning is the episode's first warning, and only its first line differs: `Stopped with a question (watch <id>).` or `Blocked at a prompt (watch <id>).` instead of `No activity for N minutes`.
 The second warning, the unanswered-parent human notice and the escalation to the operator follow from its time exactly as from a 20-minute warning, and new activity of the target starts a new episode, so one question gives at most one early warning.
 The runtime reads the row it already holds when it hands each watch to the tick, under the lock that builds the tick's work; nothing is added to the tick's reads, threads or timers.
@@ -386,23 +429,20 @@ The first receipt, an acknowledgement or the actual post-flush confirmation, rec
 A `progress` letter is received the same way and ends no watch: it is the interim report, such as a plan, and the child is still at work after it.
 A report from an unwatched sender is an ordinary letter; the parent can restart a watch explicitly.
 
-## The code-owned recipient `factory:<id>`
+## Code-owned identities
 
-Each open Factory is a code-owned recipient named `factory:<factory id>`, and [factory.md](factory.md#the-mailbox-recipient-factoryid) owns how it is used.
-Only the Factory's engine sends as it, and the ledger accepts that authority only while the Factory exists and is open.
-A pane or agent may send to it and may name it as a watch observer, and only while the Factory exists and is open; a pane or agent name that starts with `factory:` is refused at registration.
-A letter to it is never pasted into a composer and never rings a doorbell: the engine reads it, confirms it and, for a request or block, replies with its answer.
-The human-notice claim skips a letter whose recipient is code-owned.
-A watch observed by a Factory warns after that Factory's stall window (`stall_minutes`, 30 by default) rather than 20, and the engine acts on the first warning.
+The `factory:` name prefix remains reserved for compatibility with historical registrations.
+No Factory recipient is active in this release.
 
-Hide itself is a second code-owned identity, `hide:<role>` of kind `hide`, today only `hide:memory`: the origin of the agent a Memory card's promotion starts ([ARCHITECTURE.md: Project sessions and Memory](ARCHITECTURE.md#project-sessions-and-memory)).
+Hide itself is a code-owned identity, `hide:<role>` of kind `hide`, today only `hide:memory`: the origin of the agent a Memory card's promotion starts ([ARCHITECTURE.md: Project sessions and Memory](ARCHITECTURE.md#project-sessions-and-memory)).
 It is registered on its first spawn, sends nothing and receives nothing, and a pane or agent name that starts with `hide:` is refused at registration like `factory:`.
-A spawn is Hide AI's own when it is a handoff whose origin is that identity (`coordination::started::hide_started`): a Factory worker is a delegation of a Factory identity and a pane agent's handoff has a pane's identity as its origin, so neither counts, and no branch or worktree name ever decides it.
+A spawn is Hide AI's own when it is a handoff whose origin is that identity (`coordination::started::hide_started`): a pane agent's handoff has a pane's identity as its origin, so neither counts, and no branch or worktree name ever decides it.
 Only that identity may give a spawn a `task` (`SpawnTask`: a `kind` code such as `memory_promote` and a `target` such as the card `m72`, the codes the screen words), on a handoff; any other caller that sets one is refused `task_reserved`, and the task is part of the intent, so the same intent with another task is an `intent_conflict`.
 A receipt from before the task existed has none, and its agent and checkout are still Hide AI's, which the screen names `Hide AI` alone.
 The kind is a closed set in code (`TaskKind`), and each known kind names its home, the screen that shows its work (`TaskKind::home`, today `memory_promote` to the Memory tab); a new kind cannot be added without naming one.
 A kind this build does not know loads from the ledger as it was written, so a record a newer build wrote never fails the load or loses the rest of the ledger, and its agent stays an operator's row.
 A new spawn of a kind with no home is refused `task_kind_unknown`, and the first time an agent of such a kind is seen the diagnostic log records `hide_ai.task_kind_unknown` once.
+
 
 ## The operator's View feedback
 
@@ -493,7 +533,7 @@ The agent is registered under the device, so the sidebar and the Overview's task
 Before the intent is reserved or anything is made, the spawn is refused with a stable code and a next action when the id is not a device (`machine_unknown`, naming the connected device ids the caller could have used), the device is not connected or its helper cannot answer (`machine_unavailable`), `--repo` holds no repository there (`repository_unavailable`) or the agent CLI is not on the device's `PATH` (`agent_not_installed`); the checks are the node link's `repository` and `agent_installed` calls, taken off the runtime lock.
 The device is part of the intent: the same intent on another device, or on none, returns `intent_conflict`, and a spawn that already completed answers from its receipt even while the device is away.
 A spawn on a device makes several calls over SSH, so the CLI waits up to 60 seconds for it; one that times out still finishes, and running the same command again returns the same agent (`spawn_busy`, whose next action is to wait and run the same command again, while the first still runs).
-The checks of the device only read, so they run before the process-wide spawn lock is taken and a slow device does not make local or Factory spawns answer `spawn_busy`.
+The checks of the device only read, so they run before the process-wide spawn lock is taken and a slow device does not make local spawns answer `spawn_busy`.
 Creating is single-flight and the checks are not: each of the two calls waits up to 8 seconds, and checks of different spawns may overlap.
 When the device's Herdr stops answering after the spawn was reserved, the answer is `machine_unavailable`, the cause goes to the diagnostic log with the device and the spawn, and the same command continues the spawn once the device answers again.
 The CLI then answers `request_timeout` and says the request may still be running.
@@ -503,7 +543,6 @@ A parent other than the caller is refused with `parent_authority_required` befor
 The receipt keeps the device as an optional field of the version 1 ledger, absent for every older record.
 The spawn guard is unchanged: a direct `herdr --machine …` start is still the operator's own responsibility.
 The ledger stays at version 1: older records without mode load as delegation, missing origin defaults to null and legacy `no_watch` data is ignored without changing existing watches.
-Factory work remains explicitly delegated and watched, and dispatch clients using `--parent here` retain that behavior.
 The unsupported reconciliation/resume/session flags and relay, escalate, graph and events commands are absent.
 
 A registration ends when Herdr no longer has its pane, so its name and the watches on it do not outlive the pane; the ended record stays in the ledger, like one `hide agent end` ended, and still counts against the 2048-registration limit.
@@ -525,7 +564,7 @@ A launch chained behind another command is refused whole, and a launch inside `b
 A spawn whose child shows no session within 5 seconds (Codex before its first turn, OpenCode 2 before its first prompt) answers `native_identity_unavailable`, and the core binds the child when Herdr shows the session ([A registration that waits for its agent's session](#a-registration-that-waits-for-its-agents-session)).
 A spawn's tab runs the account's shell with Hide's shell integration where that shell is zsh, bash or fish (Windows PowerShell on Windows), and its start is typed only after the shell marked its first prompt ([ARCHITECTURE.md](ARCHITECTURE.md)); a shell stopped at a startup question within the 30 s wait is refused as `shell_starting` with that question's line, nothing typed, and the next action is to answer it in that pane and spawn again.
 A start Herdr typed whose agent never showed (a startup question took its first letter in a bash pane, or the program exited before Herdr saw it) leaves Herdr holding the agent's name in that pane until its 120 s deadline, and Herdr gives that name to any agent that appears there meanwhile.
-A spawn waits up to 30 seconds for Herdr to create the worktree, which runs `git worktree add` and can be slow on a large repository under load; when no answer comes in that time the spawn is refused `worktree_unconfirmed`, because Herdr may still finish the worktree, and the next action is to run the same command again with the same intent, which finds that worktree and continues in it; a Factory asks it again after five seconds.
+A spawn waits up to 30 seconds for Herdr to create the worktree, which runs `git worktree add` and can be slow on a large repository under load; when no answer comes in that time the spawn is refused `worktree_unconfirmed`, because Herdr may still finish the worktree, and the next action is to run the same command again with the same intent, which finds that worktree and continues in it.
 A Codex start on a machine whose install kit has not read its Codex is refused `codex_capability_unknown` with nothing typed, because every Codex Hide starts takes `--no-daemon` only when that Codex has the shared server ([agent-hooks.md](agent-hooks.md)); the next action is to have the operator press Check again in Settings > Agents for that machine and run the same command with the same intent, which continues in the pane the spawn made, and the screen words the code in the operator's language wherever it shows a start refusal; why the read failed is logged once by the core as `kit` / `codex_capability_unread` with the machine's device id, the cause, and the exit code or a signal, never a path or Codex's own output, and not at all when the read stopped because Hide was quitting.
 Running the same intent again while the name is held answers `native_identity_unavailable` and types nothing; once Herdr let it go and the shell alone holds the terminal it types the start once more (`start.resent`), and a second start that never showed, or anything else in the foreground, answers `agent_not_started`, whose next action is to look at that pane and spawn with a new intent.
 A spawn about to start its agent closes the pane of every earlier spawn of the same parent, name and device that made a pane and never bound a child, where no agent shows and the shell alone holds the terminal, so a new attempt leaves no extra tab and Herdr no longer holds the name for it; each close is logged as `spawn` / `unstarted_attempt.close`, and a pane that cannot be read or closed is left to Herdr's refusal.

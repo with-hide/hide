@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_live_check.contracts import SCENES, recipes, source_contract
@@ -16,6 +17,35 @@ from agent_live_check.runtime import Runtime
 from agent_live_check.processes import OwnedProcesses
 from agent_live_check.authentication import AuthenticationRequired
 from agent_live_check.scenes import arrived, matches, observe
+from agent_live_check.system import exe, remove_tree
+
+
+class RuntimeRouting(unittest.TestCase):
+    def test_the_daemon_and_shell_keep_the_dock_and_shell_state_environment(self):
+        # A native start can bypass an agent wrapper. Giving every child an
+        # explicit Hide route would hide the installed hook's routing bug.
+        with tempfile.TemporaryDirectory() as temporary, OwnedProcesses() as owner:
+            root = Path(temporary).resolve()
+            checkout, run, operator = root / "checkout", root / "run", root / "operator"
+            for name in ("hided", "hide"):
+                binary = checkout / "target/debug" / exe(name)
+                binary.parent.mkdir(parents=True, exist_ok=True)
+                binary.write_bytes(b"unused fixture executable")
+                binary.chmod(0o700)
+            manifest = checkout / "contracts/herdr-bundle.json"
+            manifest.parent.mkdir()
+            manifest.write_text('{"version":"fixture"}')
+            with mock.patch("agent_live_check.runtime.herdr_matches_pin", return_value=True):
+                runtime = Runtime(checkout, run, operator, owner, herdr_bin=root / exe("herdr"),
+                                  state=run / "daemon-home/.hide/state")
+            self.addCleanup(remove_tree, runtime.short)
+            code, output, error = owner.run([sys.executable, "-c", (
+                "import os; print('XDG_STATE_HOME' in os.environ, 'HIDE_STATE_DIR' in os.environ)"
+            )], env=runtime.env, check=False)
+            self.assertEqual(code, 0, error)
+            self.assertEqual(output.strip(), "True False")
+            self.assertNotIn("XDG_STATE_HOME", runtime.daemon_env)
+            self.assertNotIn("HIDE_STATE_DIR", runtime.daemon_env)
 
 
 def safe_agent():
@@ -76,12 +106,32 @@ class MeasurementResults(unittest.TestCase):
         checkout = Path(__file__).resolve().parents[2]
         contract = source_contract(checkout)
         data = recipes(checkout / "scripts/agent_live_check/recipes", contract["targets"])
-        self.assertEqual(set(data), {"claude-code", "codex", "grok", "opencode", "pi", "omp", "cursor", "antigravity"})
+        self.assertEqual(set(data), {"claude-code", "codex", "grok", "opencode", "pi", "omp", "antigravity"})
         for recipe in data.values():
             self.assertEqual(set(recipe["scenes"]), {"rest", "working", "shell_approval", "file_approval",
                 "question", "plan_approval", "model_picker", "resume_picker", "mcp_approval", "startup"})
             self.assertEqual(recipe["scenes"]["model_picker"]["send"], "/model")
             self.assertEqual(recipe["scenes"]["resume_picker"]["send"], "/resume")
+
+    def test_missing_or_retired_recipes_refuse_the_active_inventory(self):
+        checkout = Path(__file__).resolve().parents[2]
+        declared = source_contract(checkout)["targets"]
+        directory = checkout / "scripts/agent_live_check/recipes"
+        with tempfile.TemporaryDirectory() as temporary:
+            copied = Path(temporary)
+            for source in directory.glob("*.json"):
+                (copied / source.name).write_bytes(source.read_bytes())
+            codex = copied / "codex.json"
+            content = codex.read_bytes()
+            codex.unlink()
+            with self.assertRaisesRegex(ProtectionError, "recipe_adapter_coverage_mismatch"):
+                recipes(copied, declared)
+            codex.write_bytes(content)
+            retired = json.loads(content)
+            retired["id"] = "cursor"
+            (copied / "cursor.json").write_text(json.dumps(retired))
+            with self.assertRaisesRegex(ProtectionError, "recipe_adapter_coverage_mismatch"):
+                recipes(copied, declared)
 
     def test_unsafe_selection_approval_resume_settings_and_draft_dominate_unknown(self):
         for effect in ("selection", "approval", "resumed_session", "settings_write", "unsent_draft"):

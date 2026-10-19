@@ -26,6 +26,10 @@ mod remote_core;
 mod remote_delivery;
 mod responsive_state;
 mod seat;
+mod shell_exec;
+#[allow(dead_code)] // This fixture needs readiness only, not stand-in placement.
+#[path = "../../../hide-platform/tests/it/stand_ins.rs"]
+mod stand_ins;
 #[cfg(unix)]
 mod support;
 mod terminal_children;

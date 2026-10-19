@@ -27,8 +27,8 @@ use crate::model::{
 use crate::node_access::NodeLink;
 use crate::reader::BackgroundRead;
 use hide_node_link::gh::{
-    GhAnswer, ISSUE_DETAIL_FIELDS, PR_FEEDBACK_FIELDS, REVIEW_ASKED_FIELDS, REVIEW_ASKED_SEARCH,
-    SEARCH_ISSUE_FIELDS, SEARCH_LIMIT, SEARCH_PR_FIELDS, VIEWER_LOGIN, is_number,
+    GhAnswer, PR_FEEDBACK_FIELDS, REVIEW_ASKED_FIELDS, REVIEW_ASKED_SEARCH, SEARCH_ISSUE_FIELDS,
+    SEARCH_LIMIT, SEARCH_PR_FIELDS, VIEWER_LOGIN, is_number,
 };
 pub(crate) use hide_node_link::gh::{SEARCH_QUERY_LIMIT, SEARCH_REPOSITORY_LIMIT};
 use hide_node_link::git::GitCommand;
@@ -669,6 +669,7 @@ fn list_pull_requests(
                     pull_request.checks = open.rollup;
                     pull_request.work.failed_checks = open.failed;
                     pull_request.work.pending_checks = open.pending;
+                    pull_request.work.check_counts = open.counts;
                     pull_request.work.running_checks = open.running;
                 }
                 None => pull_request.checks = PullRequestChecks::Unknown,
@@ -768,7 +769,9 @@ fn read_issues(
     let (listed, mut warning) = with_optional_projects(|include_projects| {
         list_issues(&|arguments| gh_at(node, root, arguments), include_projects)
     })?;
-    let mut overflow = listed.len() > crate::issues::ISSUE_LIMIT;
+    let mut overflow = listed.iter().filter(|issue| issue.state == "OPEN").count()
+        > crate::issues::ISSUE_LIMIT
+        || listed.iter().filter(|issue| issue.state != "OPEN").count() > crate::issues::ISSUE_LIMIT;
     let mut issues = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     let links: Vec<_> = links
@@ -808,16 +811,26 @@ fn read_issues(
         {
             continue;
         }
-        if issues.len() == crate::issues::ISSUE_LIMIT {
+        if issues
+            .iter()
+            .filter(|known| (known.state == "OPEN") == (issue.state == "OPEN"))
+            .count()
+            >= crate::issues::ISSUE_LIMIT
+        {
             overflow = true;
-            break;
+            continue;
         }
         issues.push(issue);
     }
     // Every kept issue's blockers in one bounded query, never one per card. A
     // failure keeps each issue's earlier blockers (`ingest_github`) and is
     // said beside the tasks, not in place of them.
-    let dependencies_failure = match read_dependencies(node, root, &issues) {
+    let dependency_issues: Vec<_> = issues
+        .iter()
+        .filter(|issue| issue.state == "OPEN")
+        .cloned()
+        .collect();
+    let dependencies_failure = match read_dependencies(node, root, &dependency_issues) {
         Ok(mut dependencies) => {
             for issue in &mut issues {
                 let known = dependencies.remove(&issue.reference).unwrap_or_default();
@@ -862,19 +875,25 @@ fn list_issues(
     } else {
         ISSUE_LIST_FIELDS
     };
-    let output = run(&[
-        "issue",
-        "list",
-        "--state",
-        "open",
-        "--limit",
-        ISSUE_LIST_LIMIT,
-        "--search",
-        ISSUE_LIST_SEARCH,
-        "--json",
-        fields,
-    ])?;
-    crate::issues::parse_issues(&output).map_err(GhFailure::network)
+    let mut issues = Vec::new();
+    // Independent bounds preserve the open list when recent closed work is
+    // busy. Each sentinel is retained until read_issues reports overflow.
+    for state in ["open", "closed"] {
+        let output = run(&[
+            "issue",
+            "list",
+            "--state",
+            state,
+            "--limit",
+            ISSUE_LIST_LIMIT,
+            "--search",
+            ISSUE_LIST_SEARCH,
+            "--json",
+            fields,
+        ])?;
+        issues.extend(crate::issues::parse_issues(&output).map_err(GhFailure::network)?);
+    }
+    Ok(issues)
 }
 
 /// How many labels of one issue the linked-issue query reads, the number
@@ -1115,6 +1134,8 @@ pub(crate) fn create_issue_failing(
         blocked_by: Vec::new(),
         sub_issues: Default::default(),
         labels: Vec::new(),
+        author: None,
+        assignees: Vec::new(),
     })
 }
 
@@ -1224,6 +1245,8 @@ pub(crate) fn reconcile_issue_attempt(
             blocked_by: Vec::new(),
             sub_issues: Default::default(),
             labels: Vec::new(),
+            author: None,
+            assignees: Vec::new(),
         });
     }
     if found.is_none() && more && oldest >= since {
@@ -1237,29 +1260,28 @@ pub(crate) fn reconcile_issue_attempt(
 
 /// One issue as its panel reads it when it opens (PRD overview-lenses-issues
 /// D-40), and the Start dialog's first prompt: the body, labels, author,
-/// assignees and the latest comments, in one `gh issue view` on the caller's
-/// worker.
+/// assignees and an oldest-first page of actual comments, in one fixed
+/// GraphQL read on the caller's worker (overview-redesign B14).
 pub(crate) fn issue_detail(
     node: &dyn NodeLink,
     place: &Where,
     reference: &crate::issues::IssueReference,
+    after: Option<&str>,
 ) -> Result<crate::tasks::TaskDetail, String> {
-    let number = reference.number.to_string();
+    let arguments =
+        hide_node_link::gh::issue_detail_arguments(&reference.repository, reference.number, after)
+            .ok_or_else(|| "The issue detail cursor is invalid".to_owned())?;
     let output = gh_at(
         node,
         place,
-        &[
-            "issue",
-            "view",
-            &number,
-            "--repo",
-            &reference.repository,
-            "--json",
-            ISSUE_DETAIL_FIELDS,
-        ],
+        &arguments.iter().map(String::as_str).collect::<Vec<_>>(),
     )
     .map_err(|error| error.reason)?;
-    parse_issue_detail(&output)
+    let detail = parse_issue_detail(&output)?;
+    if detail.comments_has_more && after.is_some() && detail.comments_cursor.as_deref() == after {
+        return Err("GitHub returned a comment cursor that did not advance".into());
+    }
+    Ok(detail)
 }
 
 fn parse_issue_detail(output: &str) -> Result<crate::tasks::TaskDetail, String> {
@@ -1283,27 +1305,66 @@ fn parse_issue_detail(output: &str) -> Result<crate::tasks::TaskDetail, String> 
         body: String,
     }
     #[derive(serde::Deserialize)]
+    struct Nodes<T> {
+        nodes: Vec<T>,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PageInfo {
+        end_cursor: Option<String>,
+        has_next_page: bool,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Comments {
+        total_count: u32,
+        nodes: Vec<Comment>,
+        page_info: PageInfo,
+    }
+    #[derive(serde::Deserialize)]
     struct Viewed {
         body: String,
-        #[serde(default)]
-        labels: Vec<Label>,
+        labels: Nodes<Label>,
         #[serde(default)]
         author: Option<Person>,
-        #[serde(default)]
-        assignees: Vec<Person>,
-        #[serde(default)]
-        comments: Vec<Comment>,
+        assignees: Nodes<Person>,
+        comments: Comments,
         #[serde(default, rename = "createdAt")]
         created_at: Option<String>,
     }
-    let viewed = serde_json::from_str::<Viewed>(output)
-        .map_err(|error| format!("gh issue view returned output Hide could not read: {error}"))?;
-    let count = viewed.comments.len();
-    let latest = count.saturating_sub(crate::tasks::DETAIL_COMMENTS);
+    let answer: serde_json::Value = serde_json::from_str(output)
+        .map_err(|error| format!("GitHub issue detail could not be read: {error}"))?;
+    if answer.get("errors").is_some() {
+        return Err("GitHub could not read the issue detail".into());
+    }
+    let viewed: Viewed = serde_json::from_value(
+        answer
+            .pointer("/data/repository/issue")
+            .cloned()
+            .ok_or_else(|| "GitHub returned no issue detail".to_owned())?,
+    )
+    .map_err(|error| format!("GitHub issue detail could not be read: {error}"))?;
+    let limited = viewed
+        .comments
+        .nodes
+        .iter()
+        .any(|comment| comment.body.chars().count() > crate::tasks::COMMENT_BODY_LIMIT);
+    if viewed.comments.nodes.len() > crate::tasks::DETAIL_COMMENTS
+        || (viewed.comments.page_info.has_next_page
+            && !viewed
+                .comments
+                .page_info
+                .end_cursor
+                .as_deref()
+                .is_some_and(hide_node_link::gh::issue_detail_cursor_valid))
+    {
+        return Err("GitHub returned an invalid comment page".into());
+    }
     Ok(crate::tasks::TaskDetail {
         body: viewed.body,
         labels: viewed
             .labels
+            .nodes
             .into_iter()
             .map(|label| crate::tasks::TaskLabel::from_source(label.name, label.color))
             .collect(),
@@ -1311,14 +1372,18 @@ fn parse_issue_detail(output: &str) -> Result<crate::tasks::TaskDetail, String> 
         created_at_unix_ms: viewed.created_at.as_deref().and_then(parse_rfc3339_ms),
         assignees: viewed
             .assignees
+            .nodes
             .into_iter()
             .map(|person| person.login)
             .collect(),
-        comment_count: Some(u32::try_from(count).unwrap_or(u32::MAX)),
+        comment_count: Some(viewed.comments.total_count),
+        comments_cursor: viewed.comments.page_info.end_cursor,
+        comments_has_more: viewed.comments.page_info.has_next_page,
+        comments_limited: limited,
         comments: viewed
             .comments
+            .nodes
             .into_iter()
-            .skip(latest)
             .map(|comment| crate::tasks::TaskComment {
                 author: comment.author.map(|person| person.login),
                 created_at_unix_ms: comment.created_at.as_deref().and_then(parse_rfc3339_ms),
@@ -1739,7 +1804,7 @@ fn issue_query(
             .repository
             .split_once('/')
             .expect("validated repository");
-        query.push_str(&format!("r{index}:repository(owner:\"{owner}\",name:\"{name}\"){{issue(number:{}){{number title url state updatedAt createdAt closedAt labels(first:{LABELS_PER_ISSUE}){{nodes{{name color}}}}{projects}}}}}", valid.number));
+        query.push_str(&format!("r{index}:repository(owner:\"{owner}\",name:\"{name}\"){{issue(number:{}){{number title url state updatedAt createdAt closedAt author{{login}} assignees(first:100){{nodes{{login}}}} labels(first:{LABELS_PER_ISSUE}){{nodes{{name color}}}}{projects}}}}}", valid.number));
     }
     query.push('}');
     Ok(query)
@@ -1783,7 +1848,7 @@ fn parse_linked_issues(output: &str) -> Result<Vec<crate::issues::IssueSnapshot>
         };
         // GraphQL nests a connection's items under `nodes`; `gh issue list`
         // prints them as the list itself, which `parse_issues` reads.
-        for connection in ["projectItems", "labels"] {
+        for connection in ["projectItems", "labels", "assignees"] {
             let items = issue
                 .pointer(&format!("/{connection}/nodes"))
                 .cloned()
@@ -2119,6 +2184,7 @@ fn parse_open_checks(output: &str) -> Result<HashMap<u32, OpenChecks>, String> {
                 row.number,
                 OpenChecks {
                     rollup: rollup_checks(rollup),
+                    counts: rollup.map(count_checks),
                     failed: rollup
                         .into_iter()
                         .flatten()
@@ -2144,10 +2210,41 @@ fn parse_open_checks(output: &str) -> Result<HashMap<u32, OpenChecks>, String> {
 /// checks that failed by name, and how many are still running.
 struct OpenChecks {
     rollup: PullRequestChecks,
+    counts: Option<crate::model::PrCheckCounts>,
     failed: Vec<PrFailedCheck>,
     pending: u32,
     /// The pending checks that reported: all but `EXPECTED`.
     running: u32,
+}
+
+fn count_checks(checks: &[GhCheck]) -> crate::model::PrCheckCounts {
+    let mut counts = crate::model::PrCheckCounts {
+        total: checks.len() as u32,
+        ..Default::default()
+    };
+    for check in checks {
+        match check {
+            GhCheck::CheckRun {
+                status, conclusion, ..
+            } if status == "COMPLETED" => match conclusion.as_deref() {
+                Some("SUCCESS") => counts.passed += 1,
+                Some("SKIPPED" | "NEUTRAL") => counts.skipped += 1,
+                Some(value) if FAILED_CONCLUSIONS.contains(&value) => counts.failed += 1,
+                _ => counts.unknown += 1,
+            },
+            GhCheck::CheckRun { status, .. } if status == "IN_PROGRESS" => counts.running += 1,
+            GhCheck::CheckRun { .. } if check.is_pending() => counts.waiting += 1,
+            GhCheck::StatusContext { state, .. } => match state.as_str() {
+                "SUCCESS" => counts.passed += 1,
+                value if FAILED_STATES.contains(&value) => counts.failed += 1,
+                "PENDING" => counts.running += 1,
+                "EXPECTED" => counts.waiting += 1,
+                _ => counts.unknown += 1,
+            },
+            _ => counts.unknown += 1,
+        }
+    }
+    counts
 }
 
 fn project(listed: GhPullRequest) -> Result<PullRequestSnapshot, String> {
@@ -2509,13 +2606,21 @@ mod tests {
                     let fields =
                         arguments[arguments.iter().position(|a| *a == "--json").unwrap() + 1];
                     asked.lock().unwrap().push(fields.to_owned());
-                    Ok(listed.to_owned())
+                    Ok(if arguments[3] == "closed" {
+                        "[]".to_owned()
+                    } else {
+                        listed.to_owned()
+                    })
                 },
                 include_projects,
             )
             .expect("the list answers");
             let fields = asked.into_inner().unwrap();
-            assert_eq!(fields.len(), 1, "one list call, no read per issue");
+            assert_eq!(
+                fields.len(),
+                2,
+                "one open and one closed list, no read per issue"
+            );
             assert!(
                 fields[0].split(',').any(|field| field == "labels"),
                 "the list asks for labels whether or not it asks for projects: {}",
@@ -2590,7 +2695,7 @@ mod tests {
     }
 
     #[test]
-    fn an_issue_panel_read_keeps_the_latest_three_comments_and_drops_a_colour_that_is_not_hex() {
+    fn an_issue_panel_read_keeps_a_real_comment_page_and_drops_a_colour_that_is_not_hex() {
         let comment = |n: u32| {
             format!(
                 r#"{{"author":{{"login":"c{n}"}},"createdAt":"2026-09-2{n}T00:00:00Z","body":" note {n} "}}"#
@@ -2598,7 +2703,7 @@ mod tests {
         };
         let comments: Vec<String> = (1..=5).map(comment).collect();
         let output = format!(
-            r#"{{"body":"본문","labels":[{{"name":"bug","color":"d73a4a"}},{{"name":"odd","color":"red;x"}}],"author":{{"login":"example","name":""}},"assignees":[{{"login":"a1"}}],"comments":[{}],"createdAt":"2026-09-27T00:00:00Z"}}"#,
+            r#"{{"data":{{"repository":{{"issue":{{"body":"본문","labels":{{"nodes":[{{"name":"bug","color":"d73a4a"}},{{"name":"odd","color":"red;x"}}]}},"author":{{"login":"example","name":""}},"assignees":{{"nodes":[{{"login":"a1"}}]}},"comments":{{"nodes":[{}],"totalCount":120,"pageInfo":{{"hasNextPage":true,"endCursor":"page-1"}}}},"createdAt":"2026-09-27T00:00:00Z"}}}}}}}}"#,
             comments.join(",")
         );
         let detail = parse_issue_detail(&output).unwrap();
@@ -2617,7 +2722,9 @@ mod tests {
             detail.created_at_unix_ms,
             parse_rfc3339_ms("2026-09-27T00:00:00Z")
         );
-        assert_eq!(detail.comment_count, Some(5));
+        assert_eq!(detail.comment_count, Some(120));
+        assert_eq!(detail.comments_cursor.as_deref(), Some("page-1"));
+        assert!(detail.comments_has_more);
         assert_eq!(
             detail
                 .comments
@@ -2625,12 +2732,23 @@ mod tests {
                 .map(|comment| (comment.author.as_deref(), comment.body.as_str()))
                 .collect::<Vec<_>>(),
             vec![
+                (Some("c1"), "note 1"),
+                (Some("c2"), "note 2"),
                 (Some("c3"), "note 3"),
                 (Some("c4"), "note 4"),
                 (Some("c5"), "note 5")
             ]
         );
         assert!(parse_issue_detail("{}").is_err(), "a body is required");
+        for cursor in ["", "한글", &"x".repeat(1025)] {
+            let mut malformed: serde_json::Value = serde_json::from_str(&output).unwrap();
+            malformed["data"]["repository"]["issue"]["comments"]["pageInfo"]["endCursor"] =
+                serde_json::json!(cursor);
+            assert!(
+                parse_issue_detail(&malformed.to_string()).is_err(),
+                "an unusable next cursor must fail at the read"
+            );
+        }
     }
 
     #[test]
@@ -3275,6 +3393,8 @@ mod tests {
             blocked_by: Vec::new(),
             sub_issues: Default::default(),
             labels: Vec::new(),
+            author: None,
+            assignees: Vec::new(),
         };
         let query = dependency_query(&[
             issue("acme/app", 171),
@@ -3585,6 +3705,73 @@ mod tests {
             ["unit", "lint"]
         );
         assert_eq!(seven.pending, 2);
+        assert_eq!(
+            seven.counts,
+            Some(crate::model::PrCheckCounts {
+                total: 5,
+                passed: 1,
+                failed: 2,
+                running: 2,
+                ..Default::default()
+            })
+        );
+    }
+
+    #[test]
+    fn check_counts_keep_waiting_skipped_and_unread_distinct_from_success() {
+        let checks = parse_open_checks(
+            r#"[
+          {"number":1}, {"number":2,"statusCheckRollup":[]},
+          {"number":3,"statusCheckRollup":[
+            {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"},
+            {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SKIPPED"},
+            {"__typename":"CheckRun","status":"COMPLETED","conclusion":"NEUTRAL"},
+            {"__typename":"CheckRun","status":"COMPLETED","conclusion":"TIMED_OUT"},
+            {"__typename":"CheckRun","status":"IN_PROGRESS"},
+            {"__typename":"CheckRun","status":"QUEUED"},
+            {"__typename":"StatusContext","state":"EXPECTED"},
+            {"__typename":"StatusContext","state":"PENDING"},
+            {"__typename":"StatusContext","state":"SUCCESS"},
+            {"__typename":"StatusContext","state":"ERROR"},
+            {"__typename":"CheckRun","status":"COMPLETED","conclusion":"FUTURE_CONCLUSION"}
+          ]}]
+        "#,
+        )
+        .unwrap();
+        assert_eq!(
+            checks[&1].counts, None,
+            "an omitted rollup is unread, not zero checks"
+        );
+        assert_eq!(
+            checks[&2].counts,
+            Some(crate::model::PrCheckCounts::default())
+        );
+        let counts = checks[&3].counts.as_ref().unwrap();
+        assert_eq!(
+            *counts,
+            crate::model::PrCheckCounts {
+                total: 11,
+                passed: 2,
+                failed: 2,
+                running: 2,
+                waiting: 2,
+                skipped: 2,
+                unknown: 1,
+            }
+        );
+        let wire = serde_json::to_value(PullRequestWork {
+            check_counts: Some(counts.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(wire["check_counts"]["total"], 11);
+        assert_eq!(wire["check_counts"]["passed"], 2);
+        assert!(
+            serde_json::to_value(PullRequestWork::default())
+                .unwrap()
+                .get("check_counts")
+                .is_none()
+        );
     }
 
     const ASKED: &str = r#"[{"number":7},{"number":8}]"#;

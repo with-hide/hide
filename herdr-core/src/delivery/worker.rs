@@ -260,7 +260,7 @@ pub(crate) struct WatchWork {
     pub state_change_seq: Option<u64>,
     pub status_changed_at_unix_ms: u64,
     pub source: ActivitySource,
-    /// The watching Factory's own stall window, when it set one.
+    /// The observer's own inactivity window, when it set one.
     pub inactivity_ms: Option<u64>,
     /// The target's own row says it stopped on a question.
     pub asking: bool,
@@ -697,11 +697,16 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
         )),
         // A tool event's ask carries the caller's own pane as its target,
         // which says whether and since when it works.
-        Command::Pull { tool: true, .. } => {
+        Command::Pull {
+            point:
+                point @ (hide_node_link::panes::PullPoint::Tool
+                | hide_node_link::panes::PullPoint::TurnEnd),
+            ..
+        } => {
             let observed = target.as_ref().ok_or("agent_pane_required")?;
             let working_since =
                 (observed.status == "working").then_some(observed.entered_working_at_unix_ms);
-            let intake = mailbox::tool_pull(ledger, actor, working_since, now)?;
+            let intake = mailbox::gap_pull(ledger, actor, *point, working_since, now)?;
             // The handover is counted before the answer leaves, so a receipt
             // that never comes cannot make the same letter ride every tool;
             // the count moves nothing on screen.
@@ -811,7 +816,7 @@ fn run(
                     .map_err(|_| "delivery_unavailable".to_owned())
                     .and_then(|guard| {
                         if actor.code_owned() {
-                            // Only the core's Factory host and Hide itself
+                            // Only the core's code-owned callers
                             // hold this authority; neither has a pane to
                             // re-check.
                             return guard
@@ -881,7 +886,7 @@ fn run(
                                     target.actor.require_native_identity()?;
                                 }
                                 let current = if target.actor.code_owned() {
-                                    guard.factory_recipient_current(&target.actor)
+                                    false
                                 } else {
                                     guard.delivery_identity_current(&target.actor)
                                 };
@@ -1164,6 +1169,8 @@ mod tests {
         let observed = Observation {
             actor: target,
             raw_pane_id: "target".into(),
+            observed_since_unix_ms: 0,
+            terminal_id: None,
             status: "idle".into(),
             state_change_seq: Some(1),
             status_changed_at_unix_ms: 1,
@@ -1454,7 +1461,7 @@ mod tests {
             Command::Pull {
                 prompt_digest: None,
                 session: None,
-                tool: false,
+                point: hide_node_link::panes::PullPoint::Prompt,
             },
             Command::Confirm {
                 ids: vec![letter.id.clone()],

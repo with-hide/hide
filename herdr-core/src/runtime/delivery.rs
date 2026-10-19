@@ -20,6 +20,10 @@ pub(crate) const OBSERVATION_LIMIT: usize = 2048;
 pub(crate) struct Observation {
     pub actor: Actor,
     pub raw_pane_id: String,
+    /// This incarnation must already have been observed before a passive
+    /// post-tool event can name it. A freshness TTL alone proves no identity.
+    pub observed_since_unix_ms: u64,
+    pub terminal_id: Option<String>,
     pub status: String,
     pub state_change_seq: Option<u64>,
     pub status_changed_at_unix_ms: u64,
@@ -63,24 +67,6 @@ impl Observation {
                 .max(self.entered_working_at_unix_ms)
                 .max(self.released_input_at_unix_ms)
     }
-
-    /// A Factory's recipient as a letter target: no pane, no status.
-    pub(crate) fn code_owned(actor: Actor) -> Self {
-        Self {
-            raw_pane_id: actor.pane_id.clone(),
-            actor,
-            status: "idle".into(),
-            state_change_seq: None,
-            status_changed_at_unix_ms: 0,
-            last_input_at_unix_ms: 0,
-            last_submit_at_unix_ms: 0,
-            entered_working_at_unix_ms: 0,
-            released_input_at_unix_ms: 0,
-            session: None,
-            host_scope: None,
-            turn: Turn::NotReported,
-        }
-    }
 }
 
 impl Runtime {
@@ -95,6 +81,11 @@ impl Runtime {
         labels: Option<&LabelOverlay>,
     ) {
         let now = unix_milliseconds();
+        let terminals: std::collections::HashMap<_, _> = payload
+            .panes
+            .iter()
+            .map(|pane| (pane.pane_id.as_str(), pane.terminal_id.as_deref()))
+            .collect();
         let mut present = HashSet::new();
         let mut excess = false;
         for agent in &payload.agents {
@@ -138,6 +129,24 @@ impl Runtime {
                 .delivery_observations
                 .get(&pane_id)
                 .filter(|old| old.actor.same_identity(&actor));
+            let terminal_id = terminals.get(pane).copied().flatten().map(str::to_owned);
+            let observed_since_unix_ms = previous
+                .filter(|old| {
+                    old.terminal_id == terminal_id
+                        && old.host_scope.as_deref() == host_scope
+                        && hide_agent_adapter::canonical_kind(&old.actor.kind)
+                            == hide_agent_adapter::canonical_kind(&actor.kind)
+                        && old.session.as_ref().map(|reference| {
+                            (
+                                reference.reference_kind.as_str(),
+                                reference.reference_value.as_str(),
+                            )
+                        }) == agent
+                            .agent_session
+                            .as_ref()
+                            .map(|reference| (reference.kind.as_str(), reference.value.as_str()))
+                })
+                .map_or(now, |old| old.observed_since_unix_ms);
             let persisted = self.delivery_ledger.as_ref().ok().and_then(|ledger| {
                 ledger.watches.iter().find(|watch| {
                     watch.target.same_identity(&actor)
@@ -187,6 +196,8 @@ impl Runtime {
             let observation = Observation {
                 actor,
                 raw_pane_id: pane.to_owned(),
+                observed_since_unix_ms,
+                terminal_id,
                 status: status.to_owned(),
                 state_change_seq: agent.state_change_seq,
                 status_changed_at_unix_ms: changed_at,
@@ -592,7 +603,7 @@ impl Runtime {
         if let Command::Pull {
             session,
             prompt_digest,
-            tool,
+            point,
         } = &command
         {
             if prompt_digest
@@ -609,14 +620,14 @@ impl Runtime {
                 // A tool event's ask submits nothing: the composer may hold
                 // a draft while the agent works (D-09). It must come from
                 // the pane's own session, since it hands letters over.
-                if *tool {
+                if *point != hide_node_link::panes::PullPoint::Prompt {
                     if !own {
                         return Err("session_mismatch".into());
                     }
                 } else if own {
                     self.note_prompt_submitted(&actor.pane_id);
                 }
-            } else if *tool {
+            } else if *point != hide_node_link::panes::PullPoint::Prompt {
                 return Err("session_mismatch".into());
             }
         }
@@ -670,23 +681,11 @@ impl Runtime {
             Command::Send { .. } if repeated => None,
             // A tool event's ask is judged by the caller's own pane: whether
             // it works, and since when.
-            Command::Pull { tool: true, .. } => self.delivery_observations.get(actor_pane).cloned(),
-            Command::Send { target, .. }
-            | Command::WatchStart { target, .. }
-            | Command::WatchAssign {
-                observer: target, ..
-            } if target.starts_with(crate::delivery::FACTORY_PREFIX) => {
-                // A Factory is addressed by its code-owned name only; no
-                // pane can stand in for it.
-                let actor = Actor::factory(
-                    &target[crate::delivery::FACTORY_PREFIX.len()..],
-                    self.node.as_str(),
-                );
-                if !self.factory_recipient_current(&actor) {
-                    return Err("target_unavailable".into());
-                }
-                Some(Observation::code_owned(actor))
-            }
+            Command::Pull {
+                point:
+                    hide_node_link::panes::PullPoint::Tool | hide_node_link::panes::PullPoint::TurnEnd,
+                ..
+            } => self.delivery_observations.get(actor_pane).cloned(),
             Command::Send { target, .. }
             | Command::WatchStart { target, .. }
             | Command::WatchAssign {
@@ -831,9 +830,23 @@ impl Runtime {
         // Preserve installed bytes for startup recovery. In particular no
         // subsequent pull, tick or bell may acknowledge our old memory image.
         self.delivery_ledger = Err("ledger_unavailable".into());
+        self.snapshot.overview_graph.available = false;
     }
 
     pub(crate) fn publish_delivery(&mut self, ledger: Arc<Ledger>, transitions: bool) -> bool {
+        let now = unix_milliseconds();
+        let graph_changed = self.delivery_ledger.as_ref().ok().is_none_or(|previous| {
+            !self
+                .snapshot
+                .overview_graph
+                .matches_ledger(previous, &ledger, now)
+        });
+        if graph_changed {
+            let mut graph = crate::model::OverviewGraphSnapshot::from_ledger(&ledger, now)
+                .with_direct_inputs(self.links_work.direct_inputs.clone());
+            graph.sessions = std::mem::take(&mut self.snapshot.overview_graph.sessions);
+            self.snapshot.overview_graph = graph;
+        }
         let delivered: Vec<_> = ledger
             .letters
             .iter()
@@ -937,6 +950,7 @@ impl Runtime {
         self.feed_link_parents();
         let lineage = (waiters_moved || started_moved) && self.refresh_agent_lineage();
         changed
+            | graph_changed
             | reopened
             | feedback
             | continued
@@ -945,34 +959,11 @@ impl Runtime {
             | self.refresh_agent_scopes()
     }
 
-    /// The Factory host publishes which Factories exist.
-    /// The open Factories, each with the inactivity window its workers'
-    /// watches use.
-    pub(crate) fn set_factory_recipients(
-        &mut self,
-        factories: std::collections::BTreeMap<String, u64>,
-    ) {
-        self.factory_recipients = factories;
-    }
-
-    /// A code-owned recipient is current while its Factory exists and the
-    /// actor is exactly the one the host constructs.
-    pub(crate) fn factory_recipient_current(&self, actor: &Actor) -> bool {
-        actor
-            .pane_id
-            .strip_prefix(crate::delivery::FACTORY_PREFIX)
-            .is_some_and(|id| {
-                self.factory_recipients.contains_key(id)
-                    && *actor == Actor::factory(id, self.node.as_str())
-            })
-    }
-
     /// The authority a code-owned caller acts with: a Factory host's own
     /// recipient, or Hide's own identity for one of its roles; never a pane's.
     pub(crate) fn code_owned_authority_current(&self, caller: &str, actor: &Actor) -> bool {
         caller == actor.pane_id
-            && (self.factory_recipient_current(actor)
-                || *actor == Actor::hide(crate::delivery::HIDE_MEMORY_ROLE, self.node.as_str())
+            && (*actor == Actor::hide(crate::delivery::HIDE_MEMORY_ROLE, self.node.as_str())
                 || *actor == Actor::operator(self.node.as_str()))
     }
 
@@ -1016,31 +1007,6 @@ impl Runtime {
         role: &str,
     ) -> Result<(crate::delivery::worker::Client, Authority, Actor), String> {
         let actor = Actor::hide(role, self.node.as_str());
-        let context = Context {
-            device_id: self.node.as_str().into(),
-            workspace_id: actor.pane_id.clone(),
-            checkout_id: actor.pane_id.clone(),
-            checkout_path: String::new(),
-        };
-        Ok((
-            self.delivery_client.clone().ok_or("delivery_unavailable")?,
-            Authority {
-                caller: actor.pane_id.clone(),
-                context,
-            },
-            actor,
-        ))
-    }
-
-    /// A delivery client and authority for the Factory host (D-14).
-    pub(crate) fn factory_delivery(
-        &self,
-        id: &str,
-    ) -> Result<(crate::delivery::worker::Client, Authority, Actor), String> {
-        let actor = Actor::factory(id, self.node.as_str());
-        if !self.factory_recipient_current(&actor) {
-            return Err("factory_unavailable".into());
-        }
         let context = Context {
             device_id: self.node.as_str().into(),
             workspace_id: actor.pane_id.clone(),
@@ -1241,11 +1207,7 @@ impl Runtime {
                     state_change_seq: watch.last_state_change_seq,
                     status_changed_at_unix_ms: watch.status_changed_at_unix_ms,
                     source,
-                    inactivity_ms: watch
-                        .parent
-                        .pane_id
-                        .strip_prefix(crate::delivery::FACTORY_PREFIX)
-                        .and_then(|id| self.factory_recipients.get(id).copied()),
+                    inactivity_ms: None,
                     asking,
                     blocked,
                 }
@@ -1504,6 +1466,7 @@ pub(crate) mod tests {
         let panes = ["sender", "recipient"]
             .into_iter()
             .map(|id| crate::model::PaneSnapshot {
+                start_claim: None,
                 terminal_id: None,
                 failed_terminal_id: None,
                 id: id.into(),
@@ -2324,7 +2287,7 @@ pub(crate) mod tests {
                     Command::Pull {
                         prompt_digest: prompt_digest.clone(),
                         session: session.map(str::to_owned),
-                        tool: false,
+                        point: hide_node_link::panes::PullPoint::Prompt,
                     },
                 )
                 .unwrap();
@@ -2345,7 +2308,7 @@ pub(crate) mod tests {
                     Command::Pull {
                         prompt_digest: Some("prompt".into()),
                         session: None,
-                        tool: false,
+                        point: hide_node_link::panes::PullPoint::Prompt,
                     },
                 )
                 .err()
@@ -2355,7 +2318,7 @@ pub(crate) mod tests {
         let pull = |session: String| Command::Pull {
             prompt_digest: None,
             session: Some(session),
-            tool: false,
+            point: hide_node_link::panes::PullPoint::Prompt,
         };
         // An id past the session bound is refused before it is hashed under the lock.
         assert_eq!(
@@ -2444,7 +2407,7 @@ pub(crate) mod tests {
         let pull = |session: &str| Command::Pull {
             prompt_digest: None,
             session: Some(session.into()),
-            tool: true,
+            point: hide_node_link::panes::PullPoint::Tool,
         };
         clocks(&mut guard, "recipient", true);
         let prepared = guard
@@ -2490,7 +2453,7 @@ pub(crate) mod tests {
                     Command::Pull {
                         prompt_digest: None,
                         session: None,
-                        tool: true,
+                        point: hide_node_link::panes::PullPoint::Tool,
                     },
                 )
                 .err()
@@ -2502,71 +2465,10 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_pane_reaches_a_factory_only_while_it_exists_and_only_the_factory_sends_as_it() {
+    fn only_hide_and_the_operator_can_use_their_own_delivery_authority() {
         let root = tempfile::tempdir().unwrap();
-        let (runtime, _, _, path) = fixture(root.path());
-        let (worker, client) = Worker::spawn(
-            Arc::downgrade(&runtime),
-            ChangeNotifier::noop(),
-            path.clone(),
-        )
-        .unwrap();
-        let mut guard = runtime.lock().unwrap();
-        guard.install_delivery_client(client);
-        let context = guard
-            .workspace_control_query(crate::node::TEST_NODE, "sender", Query::Info)
-            .unwrap()
-            .context;
-        let send = |intent: &str| Command::Send {
-            target: "factory:f-1".into(),
-            intent: intent.into(),
-            body: "done".into(),
-            kind: "report".into(),
-            now: false,
-        };
-        assert_eq!(
-            guard
-                .prepare_delivery(
-                    crate::node::TEST_NODE,
-                    "sender",
-                    &context,
-                    None,
-                    send("early")
-                )
-                .err()
-                .as_deref(),
-            Some("target_unavailable"),
-            "no Factory f-1 exists yet"
-        );
-        assert_eq!(
-            guard.factory_delivery("f-1").err().as_deref(),
-            Some("factory_unavailable")
-        );
-        guard.set_factory_recipients([("f-1".to_owned(), 30 * 60_000)].into());
-        let prepared = guard
-            .prepare_delivery(
-                crate::node::TEST_NODE,
-                "sender",
-                &context,
-                None,
-                send("once"),
-            )
-            .unwrap();
-        drop(guard);
-        let result = prepared.run(Duration::from_secs(5)).unwrap();
-        assert_eq!(result["recipient"]["pane_id"], "factory:f-1");
-        assert_eq!(result["recipient"]["kind"], "factory");
-
-        // The Factory answers as itself; a pane cannot borrow its authority.
+        let (runtime, _, _, _) = fixture(root.path());
         let guard = runtime.lock().unwrap();
-        assert!(!guard.code_owned_authority_current(
-            "sender",
-            &Actor::factory("f-1", crate::node::TEST_NODE)
-        ));
-        assert!(guard.code_owned_authority_current(
-            "factory:f-1",
-            &Actor::factory("f-1", crate::node::TEST_NODE)
-        ));
         // Hide's own Memory identity answers as itself, and only that role.
         let hide = Actor::hide(crate::delivery::HIDE_MEMORY_ROLE, crate::node::TEST_NODE);
         assert!(guard.code_owned_authority_current("hide:memory", &hide));
@@ -2586,30 +2488,6 @@ pub(crate) mod tests {
         assert!(crate::delivery::reserved_name("OPERATOR:x"));
         assert!(!crate::delivery::reserved_name("operators"));
         assert!(crate::delivery::reserved_name(&operator.pane_id));
-        let forged = Actor {
-            session: Some("forged".into()),
-            ..Actor::factory("f-1", crate::node::TEST_NODE)
-        };
-        assert!(!guard.factory_recipient_current(&forged));
-        let prepared = guard
-            .factory_prepare(
-                "f-1",
-                Some("sender"),
-                Command::Send {
-                    target: "sender".into(),
-                    intent: "factory-answer".into(),
-                    body: "noted".into(),
-                    kind: "report".into(),
-                    now: false,
-                },
-            )
-            .unwrap();
-        drop(guard);
-        let result = prepared.run(Duration::from_secs(5)).unwrap();
-        assert_eq!(result["sender"]["pane_id"], "factory:f-1");
-        let stored = crate::delivery::ledger::load(&path).unwrap();
-        assert_eq!(stored.letters.len(), 2);
-        drop(worker);
     }
 
     #[test]
@@ -3250,7 +3128,7 @@ pub(crate) mod tests {
         device.machine = "device".into();
         device.actor.device_id = "device".into();
         device.actor.pane_id = "remote:device:pane:device-pane".into();
-        let factory = Actor::factory("f1", crate::node::TEST_NODE);
+        let factory = Actor::hide("fixture", crate::node::TEST_NODE);
         let mut owned = variant(next + 2, &factory.pane_id);
         owned.actor = factory;
         ledger.agents.extend([elsewhere, device, owned]);

@@ -123,7 +123,7 @@ fn agent(status: &str) -> Value {
 /// A Herdr with no workspace open that opens a marked Folder owner and
 /// starts whatever agent it is asked for.
 fn herdr(name: &str) -> FakeHerdr {
-    FakeHerdr::start(name, |method, _| match method {
+    FakeHerdr::start(name, |method, params| match method {
         "workspace.list" => {
             json!({"type": "workspace_list", "workspaces": [workspace_row("w1", "other")]})
         }
@@ -149,6 +149,20 @@ fn herdr(name: &str) -> FakeHerdr {
         }}),
         "agent.start" => json!({"type": "agent_started", "argv": [], "agent": agent("idle")}),
         "agent.prompt" => json!({"type": "agent_prompted", "agent": agent("working")}),
+        "pane.focus" => {
+            assert_eq!(params["pane_id"], "w4:p1");
+            json!({"type":"pane_info", "pane": agent("idle")})
+        }
+        "pane.layout" => {
+            assert_eq!(params["pane_id"], "w4:p1");
+            json!({"type":"pane_layout", "layout":{
+                "workspace_id":"w4", "tab_id":"w4:t1", "zoomed":false,
+                "area":{"x":0,"y":0,"width":80,"height":24}, "focused_pane_id":"w4:p1",
+                "panes":[{"pane_id":"w4:p1","focused":true,"rect":{"x":0,"y":0,"width":80,"height":24}}], "splits":[]}})
+        }
+        "workspace.get" => json!({"type":"workspace_info", "workspace":{
+            "workspace_id":"w4", "number":4, "label":"Home", "focused":true,
+            "pane_count":1, "tab_count":1, "active_tab_id":"w4:t1", "agent_status":"idle"}}),
         other => panic!("unexpected {other}"),
     })
 }
@@ -168,6 +182,7 @@ fn device_runtime(herdr: &FakeHerdr, machine: &Machine) -> SharedRuntime {
                 ssh_alias: DEVICE.to_owned(),
             },
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         });
     runtime.device_hosts.insert(
@@ -405,6 +420,11 @@ fn home_links_follow_registrations_once_home_exists() {
         .ui_state
         .workspace_registrations
         .push(registration(&machine.projects[0], crate::node::TEST_NODE));
+    let old = tab_order_payload(&machine.projects[0], &["w1:t1"], &["w1:t1"], "w1:t1");
+    shared
+        .lock()
+        .unwrap()
+        .ingest_session_with_catalog(Ok(old.clone()), None);
 
     dispatch(
         &shared,
@@ -418,7 +438,39 @@ fn home_links_follow_registrations_once_home_exists() {
             .is_some_and(|operation| operation.phase == "ready")
     });
     let home = machine.user_home.join("hide");
+    // The worker fixture has no session-sync thread. Publish the accepted
+    // Home pane as Herdr does before waiting for its ordered focus.
+    let mut session = tab_order_payload(home.to_str().unwrap(), &["w4:t1"], &["w4:t1"], "w4:t1");
+    session.focused_workspace_id = Some("w4".into());
+    session.focused_pane_id = Some("w4:p1".into());
+    session.workspaces[0].workspace_id = "w4".into();
+    session.tabs[0].workspace_id = "w4".into();
+    session.panes[0].pane_id = "w4:p1".into();
+    session.layouts[0].workspace_id = "w4".into();
+    session.layouts[0].focused_pane_id = "w4:p1".into();
+    session.layouts[0].panes[0].pane_id = "w4:p1".into();
+    session.focused_workspace_id = old.focused_workspace_id.clone();
+    session.focused_pane_id = old.focused_pane_id.clone();
+    session.workspaces.extend(old.workspaces);
+    session.tabs.extend(old.tabs);
+    session.panes.extend(old.panes);
+    session.layouts.extend(old.layouts);
+    shared
+        .lock()
+        .unwrap()
+        .ingest_session_with_catalog(Ok(session), None);
     assert!(home.join("app").is_symlink());
+    wait(
+        &shared,
+        "the Home terminal's focus is confirmed",
+        |runtime| {
+            runtime.pending_pane_focus.is_none()
+                && runtime.pane_focus_in_flight.is_none()
+                && runtime.snapshot.focused.pane_id.as_deref() == Some("w4:p1")
+        },
+    );
+    assert!(shared.lock().unwrap().snapshot.status.last_error.is_none());
+    assert!(herdr.methods().iter().any(|method| method == "pane.focus"));
     assert!(
         herdr
             .calls()

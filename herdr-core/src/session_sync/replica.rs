@@ -488,14 +488,21 @@ impl SessionReplica {
                                 let agent =
                                     agents.iter().find(|agent| agent.pane_id == pane.pane_id);
                                 PaneSnapshot {
+                                    start_claim: pane
+                                        .label
+                                        .as_deref()
+                                        .filter(|label| crate::start_claim::is_reserved(label))
+                                        .map(str::to_owned),
                                     terminal_id: Some(pane.terminal_id.clone()),
                                     failed_terminal_id: pane
                                         .restore_error
                                         .as_ref()
                                         .map(|_| pane.terminal_id.clone()),
                                     id: remote_pane_id(target_id, &pane.pane_id),
-                                    herdr_label: non_blank(pane.label.as_deref()),
-                                    terminal_title: non_blank(
+                                    herdr_label: crate::start_claim::public_label(
+                                        pane.label.as_deref(),
+                                    ),
+                                    terminal_title: crate::start_claim::public_label(
                                         pane.terminal_title_stripped
                                             .as_deref()
                                             .or(pane.terminal_title.as_deref()),

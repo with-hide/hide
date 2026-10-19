@@ -95,6 +95,19 @@ impl Opened {
             }
         }
     }
+
+    fn assert_no_input(&self) {
+        let until = Instant::now() + Duration::from_millis(100);
+        while let Ok(line) = self
+            .input
+            .recv_timeout(until.saturating_duration_since(Instant::now()))
+        {
+            assert_ne!(
+                line["type"], "terminal.input",
+                "keys reached the launch shell before the fork finished"
+            );
+        }
+    }
 }
 
 pub(super) struct FakeAttacher {
@@ -856,6 +869,7 @@ fn keys_sent_before_the_core_names_their_creation_reach_the_pane_it_makes() {
     );
     harness.service.control(TerminalControl::RequestOpen {
         request: "req-1".into(),
+        fork: false,
     });
     harness.service.key(
         KeyTarget::Request("req-1".into()),
@@ -870,6 +884,113 @@ fn keys_sent_before_the_core_names_their_creation_reach_the_pane_it_makes() {
     let opened = harness.opened();
     assert_eq!(opened.pane, "w1:p5");
     assert_eq!(opened.next_input(), b"echo hi\r");
+}
+
+#[test]
+fn bare_pane_keys_wait_for_the_fork_and_reach_only_its_terminal() {
+    let harness = harness(RetryPolicy::Automatic);
+    let fork = harness.controlling("w1:p2");
+    harness.service.control(TerminalControl::RequestOpen {
+        request: "fork-1".into(),
+        fork: true,
+    });
+    harness.service.control(TerminalControl::RequestHold {
+        request: "fork-1".into(),
+        pane: "w1:p2".into(),
+    });
+    harness.key("w1:p2", b"hello\r");
+    fork.assert_no_input();
+    harness.service.control(TerminalControl::RequestResolve {
+        request: "fork-1".into(),
+        pane: "w1:p2".into(),
+    });
+    assert_eq!(fork.next_input(), b"hello\r");
+    harness.key("w1:p2", b"next\r");
+    assert_eq!(fork.next_input(), b"next\r");
+}
+
+#[test]
+fn unconfirmed_fork_input_is_discarded_and_reported_only_when_keys_were_held() {
+    for typed in [true, false] {
+        let harness = harness(RetryPolicy::Automatic);
+        let fork = harness.controlling("w1:p2");
+        harness.service.control(TerminalControl::RequestOpen {
+            request: "fork-1".into(),
+            fork: true,
+        });
+        harness.service.control(TerminalControl::RequestHold {
+            request: "fork-1".into(),
+            pane: "w1:p2".into(),
+        });
+        if typed {
+            harness.key("w1:p2", b"lost");
+        }
+        harness.service.control(TerminalControl::RequestDiscard {
+            request: "fork-1".into(),
+            reason: "unconfirmed".into(),
+        });
+        fork.assert_no_input();
+        // The pane survives and accepts a fresh intent after the deadline.
+        harness.key("w1:p2", b"retry\r");
+        assert_eq!(fork.next_input(), b"retry\r");
+        let mut lost = 0;
+        loop {
+            match harness.reports.recv_timeout(WAIT).expect("input report") {
+                TerminalReport::RequestDiscarded { request, reason }
+                    if request == "fork-1" && reason == "unconfirmed" =>
+                {
+                    lost += 1
+                }
+                TerminalReport::Input {
+                    submitted: true, ..
+                } => break,
+                _ => {}
+            }
+        }
+        assert_eq!(lost, usize::from(typed));
+    }
+}
+
+#[test]
+fn fork_caps_report_failure_and_refuse_the_tail_until_completion() {
+    for timed_out in [false, true] {
+        let harness = harness(RetryPolicy::Automatic);
+        let fork = harness.controlling("w1:p2");
+        harness.service.control(TerminalControl::RequestOpen {
+            request: "fork-1".into(),
+            fork: true,
+        });
+        harness.service.control(TerminalControl::RequestHold {
+            request: "fork-1".into(),
+            pane: "w1:p2".into(),
+        });
+        if timed_out {
+            harness.key("w1:p2", b"lost");
+            harness.service.shared.run(|inner, shared| {
+                inner.tick(shared, Instant::now() + input::FORK_HOLD_MAX_AGE);
+            });
+        } else {
+            harness.key(
+                "w1:p2",
+                &vec![b'x'; hide_node_link::terminal::INPUT_HOLD_LIMIT_BYTES],
+            );
+            harness.key("w1:p2", b"overflow");
+        }
+        let reason = if timed_out { "timeout" } else { "limit" };
+        harness.report_where(|report| {
+            matches!(report,
+            TerminalReport::RequestDiscarded { request, reason: actual }
+                if request == "fork-1" && actual == reason)
+        });
+        harness.key("w1:p2", b"tail");
+        fork.assert_no_input();
+        harness.service.control(TerminalControl::RequestResolve {
+            request: "fork-1".into(),
+            pane: "w1:p2".into(),
+        });
+        harness.key("w1:p2", b"retry\r");
+        assert_eq!(fork.next_input(), b"retry\r");
+    }
 }
 
 #[test]
@@ -1501,4 +1622,214 @@ fn a_close_that_runs_before_a_spawn_s_worker_waits_and_nothing_opens_after_it() 
         late.recv_timeout(WAIT / 10).is_err(),
         "a session opened after its service's close returned"
     );
+}
+
+fn side_input(
+    service: &Service,
+    pane: &str,
+    bytes: usize,
+) -> Receiver<Result<(), hide_node_link::terminal::InputPermitError>> {
+    let (reply, result) = channel();
+    service.input_permit(
+        pane,
+        bytes,
+        Box::new(move |outcome| {
+            let _ = reply.send(outcome);
+        }),
+    );
+    result
+}
+
+#[test]
+fn a_phone_permission_follows_earlier_desktop_keys_through_the_attach_queue() {
+    let harness = harness(RetryPolicy::Automatic);
+    harness.service.control(TerminalControl::RequestOpen {
+        request: "fork".into(),
+        fork: true,
+    });
+    harness.service.control(TerminalControl::RequestHold {
+        request: "fork".into(),
+        pane: "w1:p2".into(),
+    });
+    harness.key("w1:p2", b"ab");
+    let permission = side_input(&harness.service, "w1:p2", 3);
+    harness.service.control(TerminalControl::RequestResolve {
+        request: "fork".into(),
+        pane: "w1:p2".into(),
+    });
+    assert!(matches!(
+        permission.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    harness.attach("w1:p2", Some(SIZE));
+    let opened = harness.opened();
+    assert_eq!(permission.recv_timeout(WAIT).unwrap(), Ok(()));
+    // Once the phone is permitted, the older desktop bytes have already
+    // reached the controller pipe. Reservation bytes are never written.
+    let mut written = Vec::new();
+    while let Ok(line) = opened.input.try_recv() {
+        if line["type"] == "terminal.input" {
+            written.extend(protocol::decode_base64(line["bytes"].as_str().unwrap()).unwrap());
+        }
+    }
+    assert_eq!(written, b"ab");
+}
+
+#[test]
+fn a_non_fork_permission_expires_and_releases_its_reserved_bytes() {
+    let harness = harness(RetryPolicy::Automatic);
+    harness.service.control(TerminalControl::RequestOpen {
+        request: "new".into(),
+        fork: false,
+    });
+    harness.service.control(TerminalControl::RequestHold {
+        request: "new".into(),
+        pane: "w1:p2".into(),
+    });
+    let permission = side_input(
+        &harness.service,
+        "w1:p2",
+        hide_node_link::terminal::INPUT_HOLD_LIMIT_BYTES,
+    );
+    let deadline = harness
+        .service
+        .shared
+        .lock()
+        .next_deadline()
+        .expect("permission owns a deadline");
+    harness.service.shared.run(|inner, shared| {
+        inner.tick(shared, deadline);
+    });
+    assert_eq!(
+        permission.recv_timeout(WAIT).unwrap(),
+        Err(hide_node_link::terminal::InputPermitError::Discarded)
+    );
+    let next = side_input(
+        &harness.service,
+        "w1:p2",
+        hide_node_link::terminal::INPUT_HOLD_LIMIT_BYTES,
+    );
+    harness.service.control(TerminalControl::RequestResolve {
+        request: "new".into(),
+        pane: "w1:p2".into(),
+    });
+    assert_eq!(
+        next.recv_timeout(WAIT).unwrap(),
+        Ok(()),
+        "expired reservation no longer consumes the cap"
+    );
+}
+
+#[test]
+fn side_channel_input_waits_for_the_fork_without_a_control_attach() {
+    let harness = harness(RetryPolicy::Automatic);
+    harness.service.control(TerminalControl::RequestOpen {
+        request: "fork".into(),
+        fork: true,
+    });
+    harness.service.control(TerminalControl::RequestHold {
+        request: "fork".into(),
+        pane: "w1:p2".into(),
+    });
+    let held = side_input(&harness.service, "w1:p2", 20);
+    assert!(matches!(
+        held.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    assert_eq!(
+        side_input(&harness.service, "w1:p3", 20)
+            .recv_timeout(WAIT)
+            .unwrap(),
+        Ok(())
+    );
+    harness.service.control(TerminalControl::RequestResolve {
+        request: "fork".into(),
+        pane: "w1:p2".into(),
+    });
+    assert_eq!(held.recv_timeout(WAIT).unwrap(), Ok(()));
+    assert!(matches!(
+        harness.opened.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    assert_eq!(harness.service.attached(), 0);
+}
+
+#[test]
+fn side_channel_input_shares_the_fork_caps_and_does_not_acknowledge_discarded_input() {
+    use hide_node_link::terminal::InputPermitError;
+    for timeout in [false, true] {
+        let harness = harness(RetryPolicy::Automatic);
+        harness.service.control(TerminalControl::RequestOpen {
+            request: "fork".into(),
+            fork: true,
+        });
+        harness.service.control(TerminalControl::RequestHold {
+            request: "fork".into(),
+            pane: "w1:p2".into(),
+        });
+        let held = side_input(
+            &harness.service,
+            "w1:p2",
+            hide_node_link::terminal::INPUT_HOLD_LIMIT_BYTES,
+        );
+        if timeout {
+            harness
+                .service
+                .shared
+                .run(|inner, shared| inner.tick(shared, Instant::now() + input::FORK_HOLD_MAX_AGE));
+        } else {
+            // A desktop key crosses the shared cap, including the phone's reservation.
+            harness.key("w1:p2", b"x");
+        }
+        assert_eq!(
+            held.recv_timeout(WAIT).unwrap(),
+            Err(InputPermitError::Discarded)
+        );
+        assert_eq!(
+            side_input(&harness.service, "w1:p2", 1)
+                .recv_timeout(WAIT)
+                .unwrap(),
+            Err(InputPermitError::Discarded)
+        );
+        harness.service.control(TerminalControl::RequestResolve {
+            request: "fork".into(),
+            pane: "w1:p2".into(),
+        });
+        assert_eq!(
+            side_input(&harness.service, "w1:p2", 1)
+                .recv_timeout(WAIT)
+                .unwrap(),
+            Ok(())
+        );
+    }
+}
+
+#[test]
+fn side_channel_waiters_are_bounded_and_node_close_refuses_them() {
+    use hide_node_link::terminal::InputPermitError;
+    let harness = harness(RetryPolicy::Automatic);
+    harness.service.control(TerminalControl::RequestOpen {
+        request: "fork".into(),
+        fork: true,
+    });
+    harness.service.control(TerminalControl::RequestHold {
+        request: "fork".into(),
+        pane: "w1:p2".into(),
+    });
+    let waiting = (0..64)
+        .map(|_| side_input(&harness.service, "w1:p2", 1))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        side_input(&harness.service, "w1:p2", 1)
+            .recv_timeout(WAIT)
+            .unwrap(),
+        Err(InputPermitError::Limit)
+    );
+    harness.service.close();
+    for result in waiting {
+        assert_eq!(
+            result.recv_timeout(WAIT).unwrap(),
+            Err(InputPermitError::Discarded)
+        );
+    }
 }

@@ -71,6 +71,8 @@ export type AreaAdapter<I extends AreaItem> = {
   /** The page's keyboard owner, independent of each layout's committed active area. */
   keyboardArea?: string | null;
   barAttributes?: Record<string, string>;
+  barStart?: (area: Area<I>) => React.ReactNode;
+  barEnd?: (area: Area<I>) => React.ReactNode;
   shown?: (area: Area<I>) => I | null;
   splitUnavailable?: string;
   label: (item: I) => string;
@@ -458,7 +460,7 @@ function AreaView({ area, index, count, switcher }: { area: Area<I>; index: numb
     >
       <AreaTabBar area={area} active={keyboard} index={index} count={count} switcher={switcher} />
       <div
-        className="flex min-h-0 min-w-0 flex-1 flex-col border border-transparent"
+        className={`relative flex min-h-0 min-w-0 flex-1 flex-col ${column === "view" ? `border-2 ${keyboard ? "border-primary" : "border-transparent"}` : "border border-transparent"}`}
         {...data("body", area.id)}
         onPointerDown={claim}
         onFocus={() => {
@@ -528,11 +530,14 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
   }, [area.active, area.displays.length, fits]);
   return (
     <div className={`flex h-[var(--size-tab-strip)] shrink-0 items-stretch border-b border-border ${active ? "bg-background" : "bg-card"}`} data-area-tab-bar={area.id} {...data("tab-bar", area.id)} {...tree.adapter.barAttributes}>
+      {tree.adapter.barStart?.(area)}
       <div ref={zone} className="flex min-w-0 flex-1 items-stretch">
         <div ref={strip} role="tablist" aria-label={t("panes.area.tabListOf", { label: tree.adapter.tabListLabel, index: index + 1, total: count })} className="flex min-w-0 items-stretch overflow-x-auto">
           {area.displays.map((display) => (
             <EntryContextMenu
               key={display.id}
+              returnToInput={column === "view"}
+              title={tree.adapter.label(display)}
               label={t(`panes.area.itemActions.${column}` as const, { label: tree.adapter.label(display) })}
               items={() => tree.menu(display.id)}
               onSelect={(id) => tree.adapter.runMenu(id, display.id)}
@@ -559,8 +564,10 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
         </Hint>
       </div>
       {switcher ? <AreaSwitcher current={area.id} /> : null}
+      {tree.adapter.barEnd?.(area)}
       {shown ? (
         <EntryDropdown
+          title={tree.adapter.label(shown)}
           label={t("panes.area.actionsFor", { actions: tree.adapter.actionsLabel, label: tree.adapter.label(shown) })}
           hint={t("panes.area.actionsFor", { actions: tree.adapter.actionsLabel, label: tree.adapter.label(shown) })}
           items={tree.menu(shown.id)}

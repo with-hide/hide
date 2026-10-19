@@ -11,6 +11,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, screen, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type NativeImage } from "electron";
 import { DebUpdater, MacUpdater, NsisUpdater, RpmUpdater } from "electron-updater";
 import { CHECK_UPDATES_COMMAND, SETUP_COMMAND } from "../../../web/src/host";
@@ -159,7 +160,7 @@ export class DesktopHost {
   private browserControlFlight: Promise<void> | null = null;
   private browserControlShutdown: Promise<void> | null = null;
   private browserControlClosed = false;
-  /** Shown Factory and agent notifications, kept so their click still reaches the shell. */
+  /** Shown agent notifications, kept so their click still reaches the shell. */
   private readonly notifications = new KeptNotifications<Notification>();
   private readonly permission: NotificationPermissionReader;
   /** Notification clicks, held until the shell reports its count, which it does once it holds a live snapshot to open them in. */
@@ -321,7 +322,7 @@ export class DesktopHost {
   }
 
   /**
-   * The Factory's macOS notifications (D-50): only this window's page on the
+   * System notifications: only this window's page on the
    * daemon origin is heard. A click brings the window forward and hands the
    * item's id to the shell, which opens it; the log records the outcome,
    * never the words.
@@ -1326,6 +1327,14 @@ export class DesktopHost {
       },
     });
     this.window = window;
+    // Decoration failure is diagnostic only. Accept a fixed event from our
+    // local status document, never arbitrary renderer text or personal data.
+    window.webContents.on("console-message", (details) => {
+      if (details.message === '{"event":"brand_owl.unavailable","scene":"startup","asset":"owl-roam"}'
+        && window.webContents.getURL().startsWith(pathToFileURL(STATUS_PAGE).href + "?")) {
+        this.log.event("brand_owl.unavailable", { scene: "startup", asset: "owl-roam" });
+      }
+    });
     this.browsers?.attach(window);
     window.once("ready-to-show", () => this.present(window, false));
     window.on("close", () => {

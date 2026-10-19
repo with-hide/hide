@@ -85,6 +85,70 @@ pub struct BacklogOrigin {
     pub missed: MissedWork,
 }
 
+/// The selected item's owner on the wire, across window holds and worker reads.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BacklogOriginIdentity {
+    pub workspace_id: String,
+    pub device_id: String,
+    pub task_key: String,
+}
+
+impl BacklogOriginIdentity {
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, value, limit) in [
+            ("workspace_id", self.workspace_id.as_str(), 256),
+            ("device_id", self.device_id.as_str(), 64),
+            ("task_key", self.task_key.as_str(), 256),
+        ] {
+            if value.is_empty() || value.len() > limit {
+                return Err(format!(
+                    "backlog_origin.{name} must have 1 to {limit} bytes"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Local memo numbers belong to one device and path; GitHub numbers to a repository.
+#[derive(Clone, Debug)]
+pub enum BacklogTarget {
+    Local {
+        device_id: String,
+        path: String,
+        number: u32,
+    },
+    Github(crate::issues::IssueReference),
+}
+
+impl BacklogTarget {
+    pub fn for_project(device: &str, path: &str, key: &str) -> Option<Self> {
+        if let Some((root, number)) = crate::tasks::parse_local_key(key) {
+            return (root == path && !device.is_empty()).then(|| Self::Local {
+                device_id: device.to_owned(),
+                path: root.to_owned(),
+                number,
+            });
+        }
+        crate::tasks::parse_github_key(key).map(Self::Github)
+    }
+
+    pub fn key(&self) -> String {
+        match self {
+            Self::Local { path, number, .. } => crate::tasks::local_key(path, *number),
+            Self::Github(reference) => crate::tasks::github_key(reference),
+        }
+    }
+
+    pub fn local_device(&self) -> Option<&str> {
+        match self {
+            Self::Local { device_id, .. } => Some(device_id),
+            Self::Github(_) => None,
+        }
+    }
+}
+
 /// Short store operations asked by a worker, never waited on by Runtime.
 #[derive(Clone, Debug)]
 pub enum LedgerCall {
@@ -118,7 +182,7 @@ pub enum LedgerCall {
     /// The item was undone: the missed line it came from is open again and
     /// its attempt is forgotten, so the next `백로그로` makes a new item.
     ReleaseBacklog {
-        backlog_key: String,
+        target: BacklogTarget,
     },
     /// The operator cleared a typed item that failed.
     DismissBacklog {
@@ -128,7 +192,7 @@ pub enum LedgerCall {
     PendingBacklog,
     /// The missed line a backlog item came from, if one did.
     BacklogOrigin {
-        backlog_key: String,
+        target: BacklogTarget,
     },
     /// Every backlog item key a missed line made, and every GitHub issue
     /// Hide made for the backlog, each newest first and at most
@@ -147,6 +211,13 @@ pub enum LedgerCall {
 /// far fewer.
 pub const BACKLOG_KEYS_LIMIT: usize = 1024;
 
+/// A Local backlog flag belongs to a device; a GitHub flag is shared by repository/number.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct BacklogMissedKey {
+    pub task_key: String,
+    pub device_id: Option<String>,
+}
+
 #[derive(Debug)]
 pub enum LedgerAnswer {
     Record(Box<SessionRecord>),
@@ -155,7 +226,7 @@ pub enum LedgerAnswer {
     Pending(Vec<PendingBacklog>),
     Origin(Option<Box<BacklogOrigin>>),
     BacklogKeys {
-        missed: Vec<String>,
+        missed: Vec<BacklogMissedKey>,
         made: Vec<String>,
     },
     Made(bool),
@@ -211,6 +282,11 @@ pub struct WorkTask {
     pub last_at_unix_ms: u64,
     pub end: LabelEnd,
     pub done: bool,
+    /// The session's newest turn went unjudged and the task is not done:
+    /// its END is an earlier turn's, so no word is drawn for it (PRD
+    /// task-continuation D-09).
+    #[serde(default)]
+    pub unjudged: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -327,9 +403,17 @@ pub enum LedgerUpdate {
     TurnEnd {
         session: SessionIdentity,
         offset: u64,
+        /// When the input that woke the turn arrived: a request, a letter, an
+        /// answer or an alert. A turn with no recorded request starts here,
+        /// so what it makes falls inside it (PRD task-continuation D-03).
+        started_at_unix_ms: u64,
         at_unix_ms: u64,
         end: LabelEnd,
         work_author: bool,
+        /// The sender's name when a report, progress or block letter woke
+        /// the turn: the ledger records the turn against the task that
+        /// spawned that descendant (D-02), never one the model picks.
+        letter: Option<String>,
         turn_witness: Option<String>,
         judgment: TurnJudgment,
     },
@@ -388,18 +472,21 @@ pub struct SessionRecord {
     pub children: Vec<SessionRecord>,
     /// How its direct children stand; absent without children.
     pub child_progress: Option<ChildProgress>,
+    /// For a child, the task group of the parent's turn that spawned it;
+    /// its outputs belong there and so does the child (B7).
+    pub spawn_task: Option<String>,
 }
 
-/// How one direct child stands for its parent's `자식 일` (PRD
-/// task-split-checklist D-04). A child counts done by its own tasks, all done
-/// by the task rule, or, with no task, by its last END being Done.
+/// How one direct child stands for its parent's `맡긴 일` (PRD
+/// task-split-checklist D-04, task-continuation D-08, D-09).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChildWork {
     Done,
     Working,
     Other,
-    /// Neither a task nor an END: no judgment says how it stands.
+    /// No judgment says how it stands: none was ever made, or its newest
+    /// turn went unjudged.
     Unjudged,
 }
 
@@ -411,19 +498,54 @@ pub struct ChildProgress {
     pub done: Option<usize>,
 }
 
+/// What the ledger reads about a child beside its record.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ChildFacts {
+    /// It sent its parent a report letter and started no turn after it.
+    pub reported_idle: bool,
+    /// Its newest turn went unjudged.
+    pub latest_unjudged: bool,
+    /// A pane runs its session now.
+    pub live: bool,
+}
+
+impl ChildFacts {
+    /// Whether the child holds the task that spawned it open (PRD
+    /// task-continuation D-05, B23): it works in a live pane on a judged
+    /// newest turn. A resting child, one whose newest turn went unjudged and
+    /// one no pane runs any more, whatever state it was last read in, hold
+    /// nothing.
+    pub fn holds_task(self, child: &SessionRecord) -> bool {
+        self.live && !self.latest_unjudged && child.state.as_deref() == Some("working")
+    }
+}
+
 impl ChildWork {
-    pub fn of(child: &SessionRecord) -> Self {
+    pub fn of(child: &SessionRecord, facts: ChildFacts) -> Self {
         // A child at work is not done, whatever an earlier turn finished: its
         // new request has no END yet (B8). Its state is what the label worker
         // last read from its live pane. One never judged stays unjudged.
         let judged = !child.tasks.is_empty() || child.last_end.is_some();
-        if judged && child.state.as_deref() == Some("working") {
+        let working = child.state.as_deref() == Some("working");
+        if judged && working {
             return Self::Working;
         }
+        // Facts finish a resting child before any judgment does: its report
+        // to the parent, or merged pull requests with none still open.
+        let prs = child.outputs.iter().filter(|output| output.kind == "pr");
+        let merged = prs.clone().any(|output| output.state == "merged");
+        let open = prs.clone().any(|output| pr_open(&output.state));
+        if !working && (facts.reported_idle || (merged && !open)) {
+            return Self::Done;
+        }
+        if !child.tasks.is_empty() && child.tasks.iter().all(|task| task.done) {
+            return Self::Done;
+        }
+        if facts.latest_unjudged {
+            return Self::Unjudged;
+        }
         if !child.tasks.is_empty() {
-            return if child.tasks.iter().all(|task| task.done) {
-                Self::Done
-            } else if child
+            return if child
                 .tasks
                 .iter()
                 .any(|task| matches!(task.end, LabelEnd::Working | LabelEnd::Waiting))
@@ -443,11 +565,10 @@ impl ChildWork {
 }
 
 impl ChildProgress {
-    pub fn of(children: &[SessionRecord]) -> Option<Self> {
+    pub fn of(children: Vec<ChildWork>) -> Option<Self> {
         if children.is_empty() {
             return None;
         }
-        let children = children.iter().map(ChildWork::of).collect::<Vec<_>>();
         let done = (!children.contains(&ChildWork::Unjudged)).then(|| {
             children
                 .iter()
@@ -456,6 +577,35 @@ impl ChildProgress {
         });
         Some(Self { children, done })
     }
+}
+
+/// A pull request still in play: neither merged nor closed unmerged.
+pub fn pr_open(state: &str) -> bool {
+    state != "merged" && state != "closed"
+}
+
+/// Whether a task group is finished (PRD task-continuation D-05, D-06): with
+/// a merged pull request and none still open, unless its last END says work
+/// is left or blocked or a child it spawned is still at work (B23); with no
+/// pull request that counts (a closed unmerged one does not), only when its
+/// last END is Done.
+pub fn task_done<'a>(
+    end: LabelEnd,
+    prs: impl Iterator<Item = &'a WorkOutput>,
+    child_working: bool,
+) -> bool {
+    let (mut merged, mut open) = (false, false);
+    for pr in prs {
+        merged |= pr.state == "merged";
+        open |= pr_open(&pr.state);
+    }
+    if open {
+        return false;
+    }
+    if merged {
+        return !child_working && !matches!(end, LabelEnd::Unfinished | LabelEnd::Blocked);
+    }
+    end == LabelEnd::Done
 }
 
 /// What a live pane's chip and checklist popover draw: its session's tasks
@@ -541,6 +691,86 @@ pub struct SessionSearchHit {
     pub matched: String,
     pub at_unix_ms: u64,
     pub cwd: Option<String>,
+    pub project_root: Option<String>,
+    /// Current core/archival evidence, never the last recorded native state.
+    pub status: String,
+    pub matches: Vec<SessionSearchMatch>,
+    pub match_count: usize,
+    pub request_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionSearchMatch {
+    pub kind: String,
+    pub text: String,
+    pub at_unix_ms: u64,
+    pub request_offset: Option<u64>,
+}
+
+/// A total order even when devices/providers reuse a native session id.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionSearchCursor {
+    pub at_unix_ms: u64,
+    pub device_id: String,
+    pub agent: String,
+    pub session_id: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SessionSearchOptions {
+    pub request_id: Option<String>,
+    pub device_id: Option<String>,
+    pub project_root: Option<String>,
+    pub agent: Option<String>,
+    pub since_unix_ms: Option<u64>,
+    pub until_unix_ms: Option<u64>,
+    pub status: Option<SessionSearchStatus>,
+    pub include_titles: bool,
+    pub include_tasks: bool,
+    pub cursor: Option<SessionSearchCursor>,
+}
+
+impl SessionSearchOptions {
+    pub fn bounded(&self) -> bool {
+        self.request_id
+            .as_ref()
+            .is_none_or(|value| value.len() <= 128)
+            && [&self.device_id, &self.project_root, &self.agent]
+                .iter()
+                .all(|value| value.as_ref().is_none_or(|value| value.len() <= 4096))
+            && self.cursor.as_ref().is_none_or(|cursor| {
+                [&cursor.device_id, &cursor.agent, &cursor.session_id]
+                    .iter()
+                    .all(|value| !value.is_empty() && value.len() <= 4096)
+            })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionSearchStatus {
+    Current,
+    Working,
+    Done,
+    NeedsYou,
+    Archived,
+    Retained,
+}
+
+/// The runtime's identity-proven state at query admission, bounded before
+/// leaving its lock. It is not persisted as another source of truth.
+#[derive(Clone, Debug, Serialize)]
+pub struct SessionSearchPresence {
+    pub session: SessionIdentity,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionSearchPage {
+    pub results: Vec<SessionSearchHit>,
+    pub next_cursor: Option<SessionSearchCursor>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -554,7 +784,9 @@ pub struct OutputCreator {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct SessionSearchSnapshot {
     pub query: String,
+    pub options: SessionSearchOptions,
     pub loading: bool,
     pub failure: Option<String>,
     pub results: Vec<SessionSearchHit>,
+    pub next_cursor: Option<SessionSearchCursor>,
 }

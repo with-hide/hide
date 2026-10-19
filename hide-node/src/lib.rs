@@ -35,6 +35,7 @@ pub const MAX_IN_FLIGHT: usize = 64;
 #[derive(Clone, Debug)]
 pub struct Local {
     env: Env,
+    herdr_socket: Option<PathBuf>,
     in_flight: Arc<AtomicUsize>,
     pending: Arc<Mutex<PendingCalls>>,
 }
@@ -68,6 +69,7 @@ impl Local {
     pub fn new(home: Option<PathBuf>) -> Self {
         Self {
             env: Env::standalone(home),
+            herdr_socket: None,
             in_flight: Arc::default(),
             pending: Arc::default(),
         }
@@ -103,6 +105,13 @@ impl Local {
         self
     }
 
+    /// Binds pane inspection to this node's configured Herdr, never a
+    /// socket supplied by a pane or inherited from the caller's environment.
+    pub fn with_herdr_socket(mut self, socket: PathBuf) -> Self {
+        self.herdr_socket = Some(socket);
+        self
+    }
+
     /// This process's own account, as a device's helper answers. Its stop
     /// is its own: closing it ends the work it started, never the work of
     /// another node value in the same process, which a helper's process-wide
@@ -112,6 +121,7 @@ impl Local {
         env.stop = Arc::default();
         Self {
             env,
+            herdr_socket: None,
             in_flight: Arc::default(),
             pending: Arc::default(),
         }
@@ -180,6 +190,8 @@ impl NodeLink for Local {
         }
         let admitted = Admitted(Arc::clone(&self.in_flight));
         let env = self.env.clone();
+        let herdr_socket = self.herdr_socket.clone();
+        let deadline = Instant::now() + timeout;
         let (answered, answer) = mpsc::sync_channel(1);
         let answered = Arc::new(answered);
         if !cleanup {
@@ -205,7 +217,7 @@ impl NodeLink for Local {
                         "This machine's node closed before its work started".to_owned(),
                     ))
                 } else {
-                    hide_host::serve::handle_in(call, &env)
+                    handle_local(call, &env, herdr_socket.as_deref(), deadline, &mut |_| true)
                         .map(LinkAnswer::Parsed)
                         .map_err(LinkError::Refused)
                 };
@@ -257,9 +269,15 @@ impl NodeLink for Local {
                 && deadline.is_none_or(|end| Instant::now() < end)
                 && progress(report)
         };
-        hide_host::serve::handle_with_progress(call, &self.env, &mut within)
-            .map(LinkAnswer::Parsed)
-            .map_err(LinkError::Refused)
+        handle_local(
+            call,
+            &self.env,
+            self.herdr_socket.as_deref(),
+            deadline.unwrap_or_else(Instant::now),
+            &mut within,
+        )
+        .map(LinkAnswer::Parsed)
+        .map_err(LinkError::Refused)
     }
 
     fn in_process(&self) -> bool {
@@ -298,7 +316,30 @@ impl NodeLink for Local {
     }
 }
 
-/// A request's name for a record (`save`, or `factory.verify_poll`), read
+/// Local and linked nodes use the same owning-machine pane proof.
+fn handle_local(
+    call: Call,
+    env: &Env,
+    socket: Option<&std::path::Path>,
+    deadline: Instant,
+    progress: &mut dyn FnMut(serde_json::Value) -> bool,
+) -> hide_host::HostResult<serde_json::Value> {
+    let Call::PaneInspect { pane_id } = call else {
+        return hide_host::serve::handle_with_progress(call, env, progress);
+    };
+    let socket = socket.ok_or_else(|| {
+        hide_host::HostError::new(
+            hide_host::ErrorCode::Unsupported,
+            "This node has no Herdr server",
+        )
+    })?;
+    let identity = hide_host::pane_peer::inspect_until(socket, &pane_id, deadline)
+        .map_err(|reason| hide_host::HostError::new(hide_host::ErrorCode::NotFound, reason))?;
+    serde_json::to_value(identity)
+        .map_err(|error| hide_host::HostError::new(hide_host::ErrorCode::Io, error.to_string()))
+}
+
+/// A request's name for a record (`save`, or `git_watch`), read
 /// from the first bytes of its wire form, so a large request is never
 /// written out whole.
 fn op_name(call: &Call) -> String {
@@ -326,11 +367,8 @@ fn op_name(call: &Call) -> String {
         let start = text.find(&format!("\"{name}\":\""))? + name.len() + 4;
         text[start..].split('"').next().map(str::to_owned)
     };
-    match (field("op"), field("factory")) {
-        (Some(op), Some(factory)) if op == "factory" => format!("factory.{factory}"),
-        (Some(op), _) => op,
-        (None, _) => "unknown".to_owned(),
-    }
+
+    field("op").unwrap_or_else(|| "unknown".to_owned())
 }
 
 #[cfg(test)]
@@ -341,10 +379,6 @@ mod tests {
     #[test]
     fn a_request_is_named_from_its_first_bytes() {
         assert_eq!(op_name(&Call::Hello), "hello");
-        let poll = Call::Factory {
-            call: hide_node_link::factory::FactoryCall::VerifyPoll { id: "v".to_owned() },
-        };
-        assert_eq!(op_name(&poll), "factory.verify_poll");
         let large = Call::GitWatch {
             common_dirs: vec!["/".repeat(1 << 20)],
         };
@@ -362,15 +396,8 @@ mod tests {
             Err(LinkError::Busy)
         ));
         node.in_flight.store(0, Ordering::Release);
-        let slow = Call::Factory {
-            call: hide_node_link::factory::FactoryCall::Check {
-                cwd: std::env::temp_dir().to_string_lossy().into_owned(),
-                text: if cfg!(windows) {
-                    "ping -n 3 127.0.0.1".to_owned()
-                } else {
-                    "sleep 2".to_owned()
-                },
-            },
+        let slow = Call::GitWatch {
+            common_dirs: Vec::new(),
         };
         let late = node.call(slow, Duration::from_millis(50));
         assert!(
@@ -378,101 +405,6 @@ mod tests {
             "{late:?}"
         );
         assert!(node.call(Call::Hello, Duration::from_secs(5)).is_ok());
-    }
-
-    #[test]
-    fn closing_the_node_releases_a_caller_before_its_machine_work_finishes() {
-        let directory = tempfile::tempdir().unwrap();
-        let node = Local::new(Some(directory.path().to_path_buf()));
-        let socket = directory.path().join("herdr.sock");
-        let lock = Call::LabelLock {
-            herdr_socket: Some(socket.to_string_lossy().into_owned()),
-            generator: 1,
-        };
-        let LinkAnswer::Parsed(held) = node.call(lock.clone(), Duration::from_secs(5)).unwrap()
-        else {
-            panic!("the own node returns a parsed answer");
-        };
-        assert_eq!(held["held"], true);
-        let caller = node.clone();
-        let cwd = directory.path().to_string_lossy().into_owned();
-        // Keep cmd.exe's command line free of a second shell's quoting.
-        // The marker/release handshake is the same on every system.
-        if cfg!(windows) {
-            std::fs::write(
-                directory.path().join("wait.cmd"),
-                "@echo off\r\necho ready>started\r\n:wait\r\nif exist release exit /b 0\r\nping -n 2 127.0.0.1 >nul\r\ngoto wait\r\n",
-            )
-            .unwrap();
-        }
-        let (finished, outcome) = mpsc::channel();
-        let pending = std::thread::spawn(move || {
-            let text = if cfg!(windows) {
-                "wait.cmd"
-            } else {
-                "printf ready > started; while [ ! -f release ]; do sleep 0.02; done"
-            };
-            let result = caller.call(
-                Call::Factory {
-                    call: hide_node_link::factory::FactoryCall::Check {
-                        cwd,
-                        text: text.to_owned(),
-                    },
-                },
-                Duration::from_secs(20),
-            );
-            let _ = finished.send(result);
-        });
-        let started = directory.path().join("started");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !started.exists() && Instant::now() < deadline {
-            std::thread::yield_now();
-        }
-        let admitted = started.exists();
-        node.close("core stopping");
-        let closed = outcome.recv_timeout(Duration::from_secs(1));
-        let in_flight = node.in_flight.load(Ordering::Acquire);
-        // The closed node and its unfinished host call still own Env clones.
-        // A replacement must nevertheless take the generator role now.
-        let replacement = Local::new(Some(directory.path().to_path_buf()));
-        let replacement_lock = replacement.call(lock, Duration::from_secs(5));
-        // Always release the real host command before asserting, including
-        // the old implementation which waits for this command to finish.
-        std::fs::write(directory.path().join("release"), "done").unwrap();
-        pending.join().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while node.in_flight.load(Ordering::Acquire) > 0 && Instant::now() < deadline {
-            std::thread::yield_now();
-        }
-        assert!(
-            admitted,
-            "the private host command never started; answer: {closed:?}"
-        );
-        assert!(
-            matches!(closed, Ok(Err(LinkError::Unknown(_)))),
-            "{closed:?}"
-        );
-        assert_eq!(in_flight, 1, "unfinished host work keeps its capacity slot");
-        assert!(
-            matches!(replacement_lock, Ok(LinkAnswer::Parsed(ref answer)) if answer["held"] == true),
-            "closed node retained the generator role: {replacement_lock:?}"
-        );
-        assert_eq!(node.in_flight.load(Ordering::Acquire), 0);
-        assert!(matches!(
-            node.call(Call::Hello, Duration::from_secs(1)),
-            Err(LinkError::NotConnected(_))
-        ));
-        // Router teardown follows link close; releasing an already absent
-        // backend is harmless and must still reach the owning host.
-        assert!(
-            node.call(Call::AiRelease { instance: 42 }, Duration::from_secs(5))
-                .is_ok()
-        );
-        assert!(
-            Local::new(None)
-                .call(Call::Hello, Duration::from_secs(5))
-                .is_ok()
-        );
     }
 
     /// A daemon started with a private home must never answer from the

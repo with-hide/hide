@@ -67,16 +67,18 @@ pub struct Capability {
 }
 
 impl Capability {
-    pub(crate) fn same_identity(&self, other: &Self) -> bool {
-        (self.binding == Binding::Checkout || self.pane_id == other.pane_id)
-            && self.context == other.context
-            && self.binding == other.binding
-    }
-    pub fn question_guard_terminal(&self) -> Option<&str> {
+    /// Only a pane-bound credential carries an attested terminal identity.
+    pub(crate) fn pane_terminal(&self) -> Option<&str> {
         match &self.binding {
             Binding::Pane { terminal_id, .. } => Some(terminal_id),
             Binding::Checkout => None,
         }
+    }
+
+    pub(crate) fn same_identity(&self, other: &Self) -> bool {
+        (self.binding == Binding::Checkout || self.pane_id == other.pane_id)
+            && self.context == other.context
+            && self.binding == other.binding
     }
 
     /// Whether this credential was issued for a pane of `node`, vouched for
@@ -85,14 +87,6 @@ impl Capability {
         self.remote
             .as_ref()
             .is_some_and(|remote| remote.node == node && remote.link.same_link(link))
-    }
-
-    pub fn question_guard_source_matches(&self, source: Option<(&str, &RemoteHost)>) -> bool {
-        match (&self.remote, source) {
-            (None, None) => true,
-            (Some(_), Some((node, link))) => self.vouched_by(node, link),
-            _ => false,
-        }
     }
 
     /// The refusal for a command whose answer no longer matches this
@@ -542,49 +536,6 @@ impl Registry {
         };
         if actual.context != cap.context || actual.binding != cap.binding {
             self.revoke(token);
-            return Err("pane_changed");
-        }
-        Ok(cap)
-    }
-
-    /// A question guard never borrows checkout authority or renews its budget.
-    /// Device inspection stays on the exact link that issued the credential.
-    pub fn validate_question_guard(
-        &self,
-        token: &str,
-        herdr_socket: Option<&Path>,
-        core: &CoreHandle,
-        attested: Option<&StreamAttestation>,
-        deadline: Instant,
-    ) -> Result<Capability, &'static str> {
-        let cap = self.get(token).ok_or("credential_expired")?;
-        if cap.binding == Binding::Checkout {
-            return Err("agent_pane_required");
-        }
-        let remaining = || {
-            deadline
-                .checked_duration_since(Instant::now())
-                .filter(|left| !left.is_zero())
-                .ok_or("factory_guard_expired")
-        };
-        let identity = if let Some(remote) = &cap.remote {
-            remote_identity(&cap, remote, attested, remaining()?)?
-        } else {
-            hide_node::pane_proof::inspect_until(
-                herdr_socket.ok_or("pane_unavailable")?,
-                &cap.pane_id,
-                deadline,
-            )?
-        };
-        if pane_binding(identity) != cap.binding {
-            return Err("pane_changed");
-        }
-        let context = core
-            .workspace_query_until(&cap.context.device_id, &cap.pane_id, Query::Info, deadline)
-            .map_err(|_| "pane_not_connected")?
-            .context;
-        remaining()?;
-        if context != cap.context || self.get(token).is_none() {
             return Err("pane_changed");
         }
         Ok(cap)
@@ -1211,11 +1162,6 @@ mod tests {
         assert!(registry.vouched(&token, "node-b", &link_b).is_none());
         assert!(registry.vouched(&token, "node-b", &link_a).is_none());
         assert!(registry.vouched(&token, "node-a", &next_a).is_none());
-        let capability = registry.get(&token).unwrap();
-        assert!(capability.question_guard_source_matches(Some(("node-a", &link_a))));
-        assert!(!capability.question_guard_source_matches(None));
-        assert!(!capability.question_guard_source_matches(Some(("node-b", &link_a))));
-        assert!(!capability.question_guard_source_matches(Some(("node-a", &next_a))));
         registry.revoke_link("node-a", &link_a);
         assert!(registry.vouched(&token, "node-a", &link_a).is_none());
         assert!(registry.get(&token).is_none());
@@ -1497,7 +1443,6 @@ mod tests {
                 received: Instant::now(),
             }
         };
-        let guard_deadline = || Instant::now() + Duration::from_secs(10);
         // This core knows no device, so a command that passed the pane check
         // stops at the context the core holds for it.
         let past_the_pane = Some("pane_not_connected");
@@ -1519,12 +1464,6 @@ mod tests {
             registry.validate(&token, None, &core, Some(&same)).err(),
             past_the_pane
         );
-        assert_eq!(
-            registry
-                .validate_question_guard(&token, None, &core, Some(&same), guard_deadline())
-                .err(),
-            past_the_pane
-        );
         assert_eq!(asked(), 0);
         let restarted = PaneIdentity {
             shell_started: 10,
@@ -1538,12 +1477,6 @@ mod tests {
             Some("pane_changed")
         );
         assert!(registry.get(&persistent).is_none());
-        assert_eq!(
-            registry
-                .validate_question_guard(&token, None, &core, Some(&changed), guard_deadline())
-                .err(),
-            Some("pane_changed")
-        );
         assert_eq!(
             registry.validate(&token, None, &core, Some(&changed)).err(),
             Some("pane_changed")
@@ -1855,49 +1788,5 @@ mod tests {
         let capability = registry.get(&reference.token).unwrap();
         assert_eq!(capability.pane_id, checkout_caller_id(&first, "/checkout"));
         assert_eq!(capability.context.checkout_path, "/checkout");
-        let core = CoreHandle::bare(directory.path());
-        assert!(capability.question_guard_source_matches(None));
-        assert!(
-            !capability
-                .question_guard_source_matches(Some(("node-a", &RemoteHost::detached("ssh:a"))))
-        );
-        assert!(matches!(registry.validate_question_guard(
-            &reference.token, None, &core, None, Instant::now() + Duration::from_secs(2),
-        ), Err(reason) if reason == "agent_pane_required"));
-        core.shutdown();
-        registry.claim(&reference.token).unwrap();
-
-        let second = format!("{:032x}", 2);
-        let (again, created) = registry
-            .issue(
-                &checkout_attestation(&second, "/checkout"),
-                &second,
-                12345,
-                None,
-            )
-            .unwrap();
-        assert_eq!(again, path);
-        assert!(!created);
-
-        let other = format!("{:032x}", 3);
-        let (elsewhere, created) = registry
-            .issue(&checkout_attestation(&other, "/other"), &other, 12345, None)
-            .unwrap();
-        assert!(created);
-        assert_ne!(elsewhere, path);
-
-        let pid = std::process::id() as i32;
-        let fourth = format!("{:032x}", 4);
-        let (one_shot, created) = registry
-            .issue(
-                &checkout_attestation(&fourth, "/checkout"),
-                &fourth,
-                12345,
-                Some((pid, process_start(pid).unwrap())),
-            )
-            .unwrap();
-        assert!(created);
-        assert_ne!(one_shot, path);
-        assert_eq!(registry.entries.lock().unwrap().len(), 3);
     }
 }

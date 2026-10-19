@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { UserPlusIcon } from "lucide-react";
 import type { Actions } from "./actions";
 import { AreaEmpty } from "./AreaEmpty";
 import { createAreaTree, type AreaAdapter } from "./AreaTree";
@@ -13,7 +14,14 @@ import { localDeviceId, type Checkout } from "./snapshot";
 import { useShellStore } from "./store";
 import { numberOf, numberedTabs } from "./numbering";
 import { useUiStore } from "./ui";
-import { AgentTab } from "./TabBar";
+import { AgentDraftTab, AgentTab } from "./TabBar";
+import { AgentGroupSelector } from "./AgentGroupControls";
+import { AgentTabStart } from "./AgentTabStart";
+import { inlineStartKey, useInlineStarts } from "./startDraft";
+import { receiptTarget } from "./inlineStart";
+import { useGroupName } from "./groupTabs";
+import { Hint } from "./components/ui/tooltip";
+import type { MenuEntry } from "./components/entry-menu";
 import { agentEntries, workspaceViewOf } from "./workspace";
 import { areasOf } from "./areaLayout";
 import { useKeyboardOwner } from "./viewFocus";
@@ -24,6 +32,8 @@ const SharedAgentTree = createAreaTree<AgentItem>("agent");
 export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checkout: Checkout; actions: Actions; deviceId?: string; remoteBody?: (tabId: string | null) => React.ReactNode }) {
   const { t } = useInterfaceTranslation();
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [adding, setAdding] = useState<string | null>(null);
+  const startDrafts = useInlineStarts((state) => state.drafts);
   const saved = useShellStore((s) => workspaceViewOf(s.rest)?.agent_layout);
   const numbered = useUiStore((s) => s.hint === "tabs");
   const owner = useKeyboardOwner();
@@ -54,7 +64,10 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
   });
   const numbers = numbered ? numberedTabs(checkout, layout) : null;
   const workspace = { device_id: device, path: checkout.path };
-  const label = (id: string) => entries.find((entry) => entry.source_id === id)?.label ?? id;
+  const isDraft = (id: string) => layout.drafts?.includes(id) ?? false;
+  const groupName = layout.groups?.find((group) => group.id === (layout.group_id ?? null))?.name ?? t("groups.ungrouped");
+  const label = (id: string) => isDraft(id) ? t("groups.newTab") : entries.find((entry) => entry.source_id === id)?.label ?? id;
+  const startForm = (tabId: string | null, areaId: string, addPane = false, recovery?: import("./agentLayout").AgentStartTarget) => <AgentTabStart key={`${layout.group_id}\0${tabId}\0${areaId}\0${addPane}`} workspace={workspace} target={recovery ?? { group_id: layout.group_id ?? null, area_id: areaId, tab_id: tabId, add_pane: addPane }} groupName={groupName} actions={actions} onCancel={addPane ? () => setAdding(null) : undefined} />;
   const adapter: AreaAdapter<AgentItem> = {
     words: AGENT_WORDS,
     keyboardArea: owner.kind !== "none" && owner.workspace === checkout.id
@@ -65,6 +78,8 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
         })?.id ?? null : null
       : null,
     barAttributes: { "data-tab-bar": checkout.id, ...(remote ? { "data-remote-tab-bar": "true" } : {}) },
+    barStart: layout.groups ? () => <AgentGroupSelector layout={layout} workspace={workspace} actions={actions} /> : undefined,
+    barEnd: layout.groups ? (area) => <Hint label={t("groups.addAgent")}><Button variant="ghost" size="sm" className="my-auto mr-xs shrink-0" aria-label={t("groups.addAgent")} disabled={!(layout.canvases[area.id] ?? area.active) || isDraft((layout.canvases[area.id] ?? area.active)!)} data-add-agent={layout.canvases[area.id] ?? area.active ?? undefined} onClick={() => setAdding(layout.canvases[area.id] ?? area.active)}><UserPlusIcon /><span className="hidden md:inline">{t("groups.addAgent")}</span></Button></Hint> : undefined,
     splitUnavailable: single ? remoteGroupReason() : undefined,
     label: (item) => label(item.id),
     sameContent: (a, b) => a.id === b.id,
@@ -73,17 +88,34 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
       return id ? { id } : null;
     },
     tab: (item, interaction) => {
+      if (isDraft(item.id)) return <AgentDraftTab id={item.id} number={numbers ? numberOf(numbers, item.id) : null} interaction={interaction} actions={actions} />;
       const entry = entries.find((row) => row.source_id === item.id);
       return entry ? <AgentTab number={numbers ? numberOf(numbers, item.id) : null} entry={entry} checkout={checkout} renaming={renaming === item.id} onCancelRename={() => setRenaming(null)} interaction={interaction} actions={actions} /> : null;
     },
-    body: (item, area) => <>
+    body: (item, area) => isDraft(item.id) ? startForm(item.id, area.id) : <div className="relative flex min-h-0 flex-1 flex-col">
+      {(() => {
+        const receipt = layout.start_receipts?.find((row) => row.live_tab_id === item.id && startDrafts[inlineStartKey(device, checkout.path, receiptTarget(row))]?.request?.id === row.request_id);
+        return receipt ? <div className="absolute inset-0 z-20 flex bg-background">{startForm(item.id, area.id, receipt.add_pane, receiptTarget(receipt))}</div> : adding === item.id ? <div className="absolute inset-0 z-20 flex bg-background">{startForm(item.id, area.id, true)}</div> : null;
+      })()}
       {area.id === layout.active_area ? <><RelationStatus actions={actions} visiblePaneIds={visiblePaneIds} /><FindBar actions={actions} /></> : null}
       {remote ? remoteBody?.(single ? null : item.id) : <PaneCanvas key={item.id} tab={checkout.tabs.find((tab) => tab.id === item.id) ?? null} actions={actions} />}
-    </>,
-    empty: (area) => <AreaEmpty state="no-agent-tab" text={t("panes.agent.noTab")}><Button variant="secondary" onClick={() => actions.createTab(area.id)} data-empty-new-tab="true">{t("panes.area.newTab")}</Button></AreaEmpty>,
+    </div>,
+    empty: (area) => layout.groups ? startForm(null, area.id) : <AreaEmpty state="no-agent-tab" text={t("panes.agent.noTab")}><Button variant="secondary" onClick={() => actions.createTab(area.id)} data-empty-new-tab="true">{t("panes.area.newTab")}</Button></AreaEmpty>,
     floating: (item) => <span className="truncate">{label(item.id)}</span>,
-    menu: (id, geometry, sizes) => agentMenu({ workspace, remote: single, layout, geometry, sizes }, id),
-    runMenu: (command, id) => command === "rename_tab" ? setRenaming(id) : actions.runAgentCommand(command as AgentCommand, id),
+    menu: (id, geometry, sizes) => {
+      const items: MenuEntry[] = agentMenu({ workspace, remote: single, layout, geometry, sizes }, id).filter((item) => !isDraft(id) || (item.id !== "rename_tab" && item.id !== "copy_name"));
+      if (layout.groups) {
+        items.splice(1, 0, { id: "group:new", label: t("groups.newWithTab"), unavailable: null }, { id: "group:move", label: t("groups.move"), unavailable: null, choices: layout.groups.map((group) => ({ id: `group:to:${group.id ?? ""}`, label: group.name ?? t("groups.ungrouped"), checked: group.id === (layout.group_id ?? null) })) });
+        if (layout.group_id) items.splice(3, 0, { id: "group:remove", label: t("groups.remove"), unavailable: null });
+      }
+      return items;
+    },
+    runMenu: (command, id) => {
+      if (command === "group:new") return useGroupName.getState().open({ workspace, groupId: null, name: "", tabId: id });
+      if (command === "group:remove" || command.startsWith("group:to:")) return void actions.agentGroup(workspace, command === "group:remove" ? null : command.slice(9) || null, { action: "move", tab_id: id });
+      if (command === "rename_tab") setRenaming(id);
+      else actions.runAgentCommand(command as AgentCommand, id);
+    },
     onMenuCloseAutoFocus: (event) => { if (renaming) event.preventDefault(); },
     focus: (id) => single ? actions.focusTab(id) : actions.agentLayout({ action: "focus", tab_id: id }),
     focusArea: (id) => { if (!single) actions.agentLayout({ action: "focus_area", area_id: id }); },
@@ -100,10 +132,10 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
     split: (id, areaId, edge) => actions.agentLayout({ action: "split", tab_id: id, area_id: areaId, edge, request_id: crypto.randomUUID() }),
     resize: (id, ratio) => actions.agentLayout({ action: "resize", split_id: id, ratio }),
     newTab: (areaId) => actions.createTab(areaId),
-    newTabLabel: t("panes.agent.newTabNamed", { label: checkout.next_tab_label }),
+    newTabLabel: layout.groups ? t("groups.newTab") : t("panes.agent.newTabNamed", { label: checkout.next_tab_label }),
     tabListLabel: t("panes.agent.tabList"), actionsLabel: t("panes.agent.tabActions"),
     newTabShortcut: commandLabel("new_tab"),
     onDraw: (frame) => noteAreaFrame("agent", frame ? { ...frame, layout, workspace, remote: single } : null),
   };
-  return <SharedAgentTree key={`${deviceId}\0${checkout.path}`} layout={layout} adapter={adapter} />;
+  return <SharedAgentTree key={`${deviceId}\0${checkout.path}\0${layout.group_id ?? ""}`} layout={layout} adapter={adapter} />;
 }

@@ -129,7 +129,7 @@ function frontLayoutOf(rest: SnapshotRest | null, checkout: Checkout) {
 export function currentSurface(rest: SnapshotRest | null, viewInUse: boolean): Surface | null {
   const context = remoteContext(rest);
   if (context) {
-    const view = remoteView(context.session);
+    const view = remoteView(context.session, rest?.workspace_view);
     return view?.tab?.id ? tabSurface(view.checkout, view.tab.id, context.device.id) : null;
   }
   const id = rest?.navigator?.focused_checkout_id;
@@ -148,8 +148,6 @@ export function currentSurface(rest: SnapshotRest | null, viewInUse: boolean): S
  */
 export function currentEntry(screen: Screen | null, rest: SnapshotRest | null, viewInUse: boolean): RecentEntry | null {
   if (screen?.kind === "main") return screenVisit(screen, frontDeviceId(rest));
-  // The Factory screen is reached by its own row and shortcut, not the recent order.
-  if (screen?.kind === "factory") return null;
   return currentSurface(rest, viewInUse);
 }
 
@@ -165,7 +163,7 @@ export function focusSignature(rest: SnapshotRest | null): string {
   const checkout = localCheckouts(rest).find((row) => row.id === navigator?.focused_checkout_id);
   const layout = checkout ? frontLayoutOf(rest, checkout) : null;
   const display = layout ? activeDisplay(layout)?.display.id : null;
-  const device = remoteView(remoteContext(rest)?.session ?? null);
+  const device = remoteView(remoteContext(rest)?.session ?? null, rest?.workspace_view);
   return [navigator?.focused_device_id, checkout?.id, checkout?.active_tab_id, rest?.focused?.pane_id, device?.checkout.id, device?.tab?.id, device?.focusedPaneId, workspaceViewOf(rest)?.tool, display].join("\u0000");
 }
 

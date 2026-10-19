@@ -6,6 +6,57 @@
 use super::*;
 use hide_kit::Feature;
 
+#[test]
+fn retired_history_keeps_conversation_mode_without_restoring_active_capabilities() {
+    let mut runtime = runtime();
+    let payload = crate::sidebar::owned_label_fixture(serde_json::json!({
+        "agents": [{
+            "pane_id": "w1:p1", "workspace_label": "History",
+            "agent": "cursor", "agent_status": "idle",
+            "tokens": {"status_idle": "○", "activity": "000000000000"}
+        }]
+    }))
+    .unwrap();
+    let agents = crate::sidebar::project_agents(payload).agents;
+    assert_eq!(agents.len(), 1);
+    runtime.snapshot.navigator.agents = agents.clone();
+    let toggle = serde_json::to_vec(&serde_json::json!({
+        "schema_version": SCHEMA_VERSION, "kind": "toggle_conversation",
+        "payload": {"pane_id": "w1:p1"}
+    }))
+    .unwrap();
+    runtime.dispatch_json(&toggle);
+    assert!(
+        runtime
+            .snapshot
+            .ui_state
+            .conversation_pane_ids
+            .contains("w1:p1")
+    );
+    assert!(!runtime.sync_conversation_modes(&agents));
+    assert!(
+        runtime
+            .snapshot
+            .ui_state
+            .conversation_pane_ids
+            .contains("w1:p1")
+    );
+    runtime.dispatch_json(&toggle);
+    assert!(runtime.snapshot.ui_state.conversation_pane_ids.is_empty());
+    assert!(!conversation_agent_kind("unknown-reader"));
+
+    // Direct observation admission requires this active registry lookup too.
+    assert!(hide_agent_adapter::adapter("cursor").is_none());
+    assert!(hide_agent_adapter::start_kind("cursor").is_none());
+    assert!(crate::agent_hooks::runtime_of("cursor").is_none());
+    assert!(!crate::agent_sleep::sleeps_kind("cursor"));
+    assert!(
+        !hide_kit::agents::ADAPTERS
+            .iter()
+            .any(|row| row.id == "cursor")
+    );
+}
+
 /// The kind Herdr names an agent by, from the kit adapter's id.
 fn herdr_kind(adapter: &hide_kit::AgentAdapter) -> &'static str {
     hide_agent_adapter::adapter(adapter.id).unwrap().herdr.name
@@ -23,7 +74,7 @@ fn every_flag_of_the_table_is_what_the_cores_own_gates_do() {
         let hook = crate::agent_hooks::runtime_of(kind).is_some()
             || matches!(adapter.hook, hide_kit::HookSupport::Plugin(_))
             || matches!(adapter.hook, hide_kit::HookSupport::Guidance(agent)
-                if agent.dialect().is_some() && agent.dialect() == declared.prompt_hook);
+                if agent.dialect().is_some() && agent.dialect() == declared.prompt_hook.filter(|hook| hook.context).map(|hook| hook.dialect));
         assert_eq!(adapter.supports(Feature::Letters), hook, "{kind}: letters");
         // Memory needs that hook and its own declaration.
         assert_eq!(
@@ -124,6 +175,7 @@ fn the_snapshot_row_carries_the_chip_and_the_table_in_order() {
             .collect::<Vec<_>>(),
         [
             Feature::Skill,
+            Feature::Bell,
             Feature::SpawnGuard,
             Feature::HerdrIntegration,
             Feature::Sleep,
@@ -131,7 +183,7 @@ fn the_snapshot_row_carries_the_chip_and_the_table_in_order() {
             Feature::Start,
             Feature::Titles
         ],
-        "grok guards and counts through its own hook, and its session reader adds titles and the exact lifecycle"
+        "grok takes resting letters, guards and counts through its own hook, and its reader adds titles and the exact lifecycle"
     );
     assert_eq!(
         grok.features

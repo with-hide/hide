@@ -77,6 +77,7 @@ pub struct Snapshot {
     pub usage: crate::usage::model::UsageSnapshot,
     pub schema_version: u32,
     pub delivery_watches: Vec<crate::delivery::watch::View>,
+    pub overview_graph: OverviewGraphSnapshot,
     pub navigator: NavigatorSnapshot,
     pub overlay: OverlaySnapshot,
     pub tab: TabSnapshot,
@@ -147,15 +148,6 @@ pub struct Snapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(serialize_with = "serialize_optional_shared")]
     pub session_work_search: Option<Arc<crate::links::ledger::SessionSearchSnapshot>>,
-    /// The Factory screens' summary and their actions' answers (PRD
-    /// software-factory-ui), absent until the Factory host first hands one
-    /// over. Its own revisioned section, stamped by edit number, so the
-    /// summary is never compared under the lock.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub factory: Option<Edited<crate::factory::screen::FactorySection>>,
-    /// The Task page a screen opened; its own revisioned section.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub factory_task: Option<Edited<crate::factory::screen::FactoryTaskSection>>,
 }
 
 /// A snapshot value that takes a new edit number whenever it may change, so
@@ -246,6 +238,9 @@ impl<T: Serialize> Serialize for Edited<T> {
 pub struct WorkspaceViewSnapshot {
     pub device_id: String,
     pub path: String,
+    /// The active checkout only, read by its own node independently of Changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) git: Option<crate::checkout_git::Header>,
     /// The tool the lane shows, or null while it is closed. An unpinned
     /// lane is drawn over the agents only once a call opened it (D-02).
     pub tool: Option<crate::workspace_views::Tool>,
@@ -311,12 +306,47 @@ pub struct BrowserAreaScopeRow {
 /// Agent tab identities only; pane contents remain in checkout.tabs.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct AgentLayoutSnapshot {
+    pub group_id: Option<String>,
+    pub groups: Vec<AgentGroupSnapshot>,
+    pub drafts: Vec<String>,
+    pub start_receipts: Vec<AgentStartReceiptSnapshot>,
+    pub can_undo_group: bool,
     pub waiting: usize,
     pub root: crate::split_tree::Node<crate::agent_layout::Tab>,
     pub active_area: String,
     pub canvases: BTreeMap<String, String>,
     pub limits: ViewLimitsSnapshot,
     pub display_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AgentGroupSnapshot {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub tabs: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct AgentGroupsSnapshot {
+    pub selected: Option<String>,
+    pub groups: Vec<AgentGroupSnapshot>,
+    pub drafts: Vec<String>,
+    pub start_receipts: Vec<AgentStartReceiptSnapshot>,
+}
+
+/// A start's identity and outcome. Prompts and ownership markers stay private.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AgentStartReceiptSnapshot {
+    pub request_id: String,
+    pub group_id: Option<String>,
+    pub area_id: String,
+    pub draft_tab_id: Option<String>,
+    pub live_tab_id: Option<String>,
+    pub pane_id: Option<String>,
+    pub add_pane: bool,
+    pub state: String,
+    pub agent_kind: Option<String>,
+    pub agent_phase: Option<String>,
 }
 
 /// The front Workspace's View areas (PRD S7): the tree the shell draws, the
@@ -711,11 +741,6 @@ pub struct NavigatorSnapshot {
     /// D-09); a row whose root is live again only feeds that root's record.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub archived_sessions: Vec<crate::session_archive::ArchivedSessionSnapshot>,
-    /// The panes a Factory runs its workers in, sorted: their lifecycle is
-    /// the Factory's, so the shell offers no `세션 보관` there (PRD
-    /// session-archive D-25).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub factory_worker_panes: Vec<String>,
 }
 
 /// Hide AI started this agent, read from the coordination ledger's record of
@@ -1302,10 +1327,14 @@ pub struct SidebarAgentSnapshot {
     /// still concern the operator.
     pub status_word_visible: bool,
     /// When the core last saw this agent change state, in epoch
-    /// milliseconds; `None` before the core has observed it. The shell turns
-    /// it into the elapsed time on its own one-second clock, so time passing
-    /// never republishes the snapshot (PRD labels-in-hided D-07).
+    /// milliseconds; `None` before the core has observed it. Retained for
+    /// state ordering, independently of the latest prompt.
     pub changed_at_unix_ms: Option<u64>,
+    /// Latest actual native request in this proven session, in epoch
+    /// milliseconds. Unknown or undated requests supply no display time.
+    /// The shell derives elapsed time on its shared clock, without snapshots.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_prompt_at_unix_ms: Option<u64>,
     /// The ordering key: `changed_at_unix_ms` as thirteen digits when the
     /// core has it, otherwise Herdr's state change sequence zero-padded.
     pub last_activity: String,
@@ -1718,6 +1747,7 @@ pub struct CheckoutPurposeSnapshot {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct CheckoutSnapshot {
+    pub agent_groups: Option<AgentGroupsSnapshot>,
     pub agent_scope: crate::agent_state::Scope,
     pub issue: Option<crate::issues::IssueLinkSnapshot>,
     /// The key of the task in its project's `tasks` this checkout works on.
@@ -2209,6 +2239,9 @@ pub struct TabSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PaneSnapshot {
+    /// Exact creation descriptor used only for start reconciliation, never a title.
+    #[serde(skip_serializing)]
+    pub start_claim: Option<String>,
     /// Internal incarnation used to bind a close approval to its terminal.
     #[serde(skip_serializing)]
     pub terminal_id: Option<String>,
@@ -2773,6 +2806,7 @@ pub struct FirstRun {
 #[serde(rename_all = "snake_case")]
 pub enum FirstRunStep {
     Agents,
+    Devices,
     Notifications,
     Project,
     Done,
@@ -2782,11 +2816,72 @@ impl FirstRunStep {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Agents => "agents",
+            Self::Devices => "devices",
             Self::Notifications => "notifications",
             Self::Project => "project",
             Self::Done => "done",
         }
     }
+}
+
+/// Choices are independent of navigation: Back, reload and Help never redo
+/// an effect or restore the initial installed-agent defaults.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct FirstRunChoices {
+    pub agents: Option<Vec<String>>,
+    pub devices: Vec<String>,
+    pub project_device: Option<String>,
+    pub project_path: String,
+    pub project_form: FirstRunProjectForm,
+    pub notifications_answered: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct FirstRunProjectForm {
+    pub view: String,
+    #[serde(
+        deserialize_with = "deserialize_first_run_url",
+        serialize_with = "serialize_first_run_url"
+    )]
+    pub url: String,
+    pub parent: String,
+    pub name: String,
+}
+
+/// Setup drafts are shared snapshots and durable preferences, never Git's
+/// credential-bearing input. Incomplete URLs stay local to the open form too.
+pub(crate) fn first_run_draft_url(raw: &str) -> String {
+    let value = raw.trim();
+    if value.len() > 4096
+        || value.contains(['?', '#'])
+        || hide_node_link::clone::CloneSource::parse(value).is_err()
+    {
+        return String::new();
+    }
+    let authority = if let Some((_, rest)) = value.split_once("://") {
+        rest.split('/').next().unwrap_or_default()
+    } else {
+        value.split(':').next().unwrap_or_default()
+    };
+    if authority.contains('@') {
+        return String::new();
+    }
+    value.to_owned()
+}
+
+fn deserialize_first_run_url<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    String::deserialize(deserializer).map(|value| first_run_draft_url(&value))
+}
+
+fn serialize_first_run_url<S: serde::Serializer>(
+    value: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&first_run_draft_url(value))
 }
 
 /// A screen whose one-line introduction shows on the first visit only
@@ -3656,10 +3751,15 @@ pub struct UiStateSnapshot {
     /// The first-run wizard's progress; `None` on a Mac that was never asked.
     #[serde(default)]
     pub first_run: Option<FirstRun>,
+    #[serde(default)]
+    pub first_run_choices: FirstRunChoices,
     /// Whether the desktop app shows an OS notification when a root agent
     /// newly needs the operator (Settings > Notifications).
     #[serde(default)]
     pub desktop_notifications: bool,
+    /// Content-free product statistics, shared by every window of this core.
+    #[serde(default = "default_panel_visible")]
+    pub product_analytics_enabled: bool,
     /// Done notifications are independent of Needs You; a fresh install
     /// leaves them off. Persistence migrates the former shared switch.
     #[serde(default)]
@@ -3774,12 +3874,6 @@ pub struct UiStateSnapshot {
     /// existed, which loads empty.
     #[serde(default)]
     pub recent_pane_ids: Vec<String>,
-    /// The Home agent pane started as the Factory secretary (PRD
-    /// software-factory-ui D-10, B23): 비서에게 묻기 goes to it while it is
-    /// listed and starts a new one when it is not. A Herdr restart mints new
-    /// pane ids, so the next press starts a new secretary.
-    #[serde(default)]
-    pub factory_secretary_pane: Option<String>,
     /// The names the operator gave tabs through Rename, by tab id, at most
     /// `OPERATOR_TAB_NAME_LIMIT`: a tab is named, and outlives its agents,
     /// only while its label is still the name recorded here (Herdr keeps tab
@@ -4000,13 +4094,13 @@ pub struct IssueWorkSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub undo: Option<BacklogUndoSnapshot>,
     /// Where each item a backlog panel or a Start dialog shows came from, one
-    /// per item key, kept while any window shows it (B31, B33).
+    /// per workspace/device/item, kept while any window shows it (B31, B33).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub origins: Vec<BacklogOriginSnapshot>,
     /// Every backlog item key a missed line made, newest first, for the
     /// backlog row's flag (B27).
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub missed_keys: Vec<String>,
+    pub missed_keys: Vec<crate::links::ledger::BacklogMissedKey>,
     /// Every GitHub issue key Hide made for the backlog (the quick add, the
     /// backlog's input or `백로그로`), newest first: only these and memos
     /// show `되돌리기` (D-21, B31).
@@ -4080,6 +4174,8 @@ impl From<hide_node_link::gh::GithubFailureCategory> for BacklogFailure {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct BacklogUndoSnapshot {
+    pub workspace_id: String,
+    pub device_id: String,
     pub task_key: String,
     /// `working`, `done` or `failed`.
     pub phase: String,
@@ -4088,6 +4184,8 @@ pub struct BacklogUndoSnapshot {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct BacklogOriginSnapshot {
+    pub workspace_id: String,
+    pub device_id: String,
     pub task_key: String,
     /// `reading`, `ready` or `failed`.
     pub phase: String,
@@ -4101,6 +4199,14 @@ pub struct BacklogOriginSnapshot {
     /// this device and never sent to GitHub (D-21).
     pub request: Option<String>,
     pub answer: Option<String>,
+}
+
+impl BacklogOriginSnapshot {
+    pub fn matches(&self, owner: &crate::links::ledger::BacklogOriginIdentity) -> bool {
+        self.workspace_id == owner.workspace_id
+            && self.device_id == owner.device_id
+            && self.task_key == owner.task_key
+    }
 }
 
 /// The latest GitHub search (`github_search`), matched by the web's own
@@ -4161,6 +4267,8 @@ impl GithubSearchSnapshot {
 /// empty until `ready`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IssueDetailSnapshot {
+    pub workspace_id: String,
+    pub device_id: String,
     pub task_key: String,
     /// `reading`, `ready` or `failed`.
     pub phase: String,
@@ -4172,28 +4280,51 @@ pub struct IssueDetailSnapshot {
     pub assignees: Vec<String>,
     pub comment_count: Option<u32>,
     pub comments: Vec<crate::tasks::TaskComment>,
+    pub comments_cursor: Option<String>,
+    pub comments_has_more: bool,
+    pub comments_limited: bool,
+    pub comments_loading: bool,
 }
 
 impl IssueDetailSnapshot {
-    pub fn reading(task_key: String) -> Self {
-        Self::settled(task_key, "reading", None)
+    pub fn reading(workspace_id: String, device_id: String, task_key: String) -> Self {
+        Self::settled(workspace_id, device_id, task_key, "reading", None)
     }
 
     /// The answer to a read: `ready` with what it read, or `failed` with why.
-    pub fn answered(task_key: String, answer: Result<crate::tasks::TaskDetail, String>) -> Self {
+    pub fn answered(
+        workspace_id: String,
+        device_id: String,
+        task_key: String,
+        answer: Result<crate::tasks::TaskDetail, String>,
+    ) -> Self {
         match answer {
-            Ok(detail) => Self::settled(task_key, "ready", Some(detail)),
+            Ok(detail) => Self::settled(workspace_id, device_id, task_key, "ready", Some(detail)),
             Err(message) => Self {
                 message: Some(message),
-                ..Self::settled(task_key, "failed", None)
+                ..Self::settled(workspace_id, device_id, task_key, "failed", None)
             },
         }
     }
 
-    fn settled(task_key: String, phase: &str, detail: Option<crate::tasks::TaskDetail>) -> Self {
+    pub fn matches(&self, workspace_id: &str, device_id: &str, task_key: &str) -> bool {
+        self.workspace_id == workspace_id
+            && self.device_id == device_id
+            && self.task_key == task_key
+    }
+
+    fn settled(
+        workspace_id: String,
+        device_id: String,
+        task_key: String,
+        phase: &str,
+        detail: Option<crate::tasks::TaskDetail>,
+    ) -> Self {
         let read = detail.is_some();
         let detail = detail.unwrap_or_default();
         Self {
+            workspace_id,
+            device_id,
             task_key,
             phase: phase.into(),
             body: read.then_some(detail.body),
@@ -4204,6 +4335,10 @@ impl IssueDetailSnapshot {
             assignees: detail.assignees,
             comment_count: detail.comment_count,
             comments: detail.comments,
+            comments_cursor: detail.comments_cursor,
+            comments_has_more: detail.comments_has_more,
+            comments_limited: detail.comments_limited,
+            comments_loading: false,
         }
     }
 }
@@ -4431,7 +4566,9 @@ impl Default for UiStateSnapshot {
             agent_onboarding: None,
             agent_onboarding_agents: Vec::new(),
             first_run: None,
+            first_run_choices: FirstRunChoices::default(),
             desktop_notifications: false,
+            product_analytics_enabled: true,
             desktop_notifications_done: false,
             screen_intros_seen: BTreeSet::new(),
             sidebar_width: default_sidebar_width(),
@@ -4451,7 +4588,6 @@ impl Default for UiStateSnapshot {
             session_archive: crate::session_archive::SessionArchive::default(),
             recent_checkouts: Vec::new(),
             recent_pane_ids: Vec::new(),
-            factory_secretary_pane: None,
             operator_tab_names: BTreeMap::new(),
         }
     }
@@ -4492,6 +4628,9 @@ pub struct DeviceRegistration {
     /// The Herdr socket on the device, for a host whose server does not
     /// listen at its default path; absent reads the host's default server.
     pub herdr_socket_path: Option<String>,
+    /// A saved profile selects this named Herdr server, never an implicit
+    /// fallback to the account's default session.
+    pub herdr_session: Option<String>,
     /// The operator's one consent for Hide's helper on this device (PRD S5.5
     /// D-20, D-23). Absent until given; a device registered before consent
     /// existed asks before its first file or Git use.
@@ -4554,6 +4693,8 @@ struct StoredDeviceRegistration {
     ssh_alias: Option<String>,
     #[serde(default)]
     herdr_socket_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    herdr_session: Option<String>,
     #[serde(default)]
     host_consent: Option<HostConsent>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -4585,6 +4726,7 @@ impl TryFrom<StoredDeviceRegistration> for DeviceRegistration {
             label: stored.label,
             origin,
             herdr_socket_path: stored.herdr_socket_path,
+            herdr_session: stored.herdr_session,
             host_consent: stored.host_consent,
         })
     }
@@ -4598,6 +4740,7 @@ impl From<DeviceRegistration> for StoredDeviceRegistration {
             label: registration.label,
             ssh_alias: registration.origin.ssh_alias().map(str::to_owned),
             herdr_socket_path: registration.herdr_socket_path,
+            herdr_session: registration.herdr_session,
             host_consent: registration.host_consent,
             inbound,
         }
@@ -5027,6 +5170,9 @@ pub struct PullRequestWork {
     /// are still running: the second line's `✗ <name>` and `CI · N`.
     pub failed_checks: Vec<PrFailedCheck>,
     pub pending_checks: u32,
+    /// The open head's complete GitHub rollup; absent when it was not read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_counts: Option<PrCheckCounts>,
     /// How many of those checks have reported and still run (`QUEUED`,
     /// `IN_PROGRESS`, `WAITING`, `PENDING`, `REQUESTED`), leaving out a
     /// required check that never reported (`EXPECTED`): only a running one
@@ -5045,6 +5191,18 @@ pub struct PullRequestWork {
     pub sessions: Vec<String>,
     #[serde(skip)]
     pub checkouts: Vec<String>,
+}
+
+/// Disjoint counts from one GitHub status-check rollup, never inferred from its summary.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct PrCheckCounts {
+    pub total: u32,
+    pub passed: u32,
+    pub failed: u32,
+    pub running: u32,
+    pub waiting: u32,
+    pub skipped: u32,
+    pub unknown: u32,
 }
 
 impl PullRequestSnapshot {
@@ -5533,6 +5691,7 @@ pub struct StatusSnapshot {
     pub background_ai: BackgroundAiSnapshot,
     /// The Host entries Add device offers (Settings › Devices).
     pub ssh_hosts: SshHostsSnapshot,
+    pub herdr_profiles: HerdrProfilesSnapshot,
     pub diagnostics: Vec<DiagnosticSnapshot>,
     pub last_error: Option<LastErrorSnapshot>,
     /// Core-owned operations which are waiting for a transport result or an
@@ -5585,6 +5744,39 @@ pub struct SshHostSnapshot {
     pub added_as: Option<String>,
     /// Why there is no address: `ssh_missing`, `ssh_failed` or `timed_out`.
     pub problem: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HerdrProfilesSnapshot {
+    pub state: String,
+    pub error: Option<String>,
+    pub profiles: Vec<HerdrProfileSnapshot>,
+    pub truncated: bool,
+}
+
+impl Default for HerdrProfilesSnapshot {
+    fn default() -> Self {
+        Self {
+            state: "idle".to_owned(),
+            error: None,
+            profiles: Vec::new(),
+            truncated: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HerdrProfileSnapshot {
+    pub id: String,
+    pub label: String,
+    pub target: String,
+    pub session: String,
+    pub enabled: bool,
+    pub added_as: Option<String>,
+    pub problem: Option<String>,
+    pub device_id: Option<String>,
+    pub connect_state: String,
+    pub connect_error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -5680,8 +5872,7 @@ pub struct BackgroundAiProviderSnapshot {
     pub label: String,
     /// The id the Agents tab and the logos key the same agent by: the kit's
     /// adapter id (`claude-code`, `codex`, `grok`, `opencode`, `pi`,
-    /// `cursor`), or `gemini-cli` for Gemini CLI, which Hide AI still uses
-    /// though the kit no longer lists it.
+    /// `antigravity`).
     pub agent: String,
     /// The availability class the provider layer reported: `ready`,
     /// `needs_login`, `not_installed`, `unavailable`, `unsupported`, or
@@ -5696,9 +5887,8 @@ pub struct BackgroundAiProviderSnapshot {
     /// Whether the agent's program was found; false only for
     /// `not_installed`.
     pub installed: bool,
-    /// Whether the agent's sign-in is checked without a request. False for
-    /// Gemini CLI, whose `ready` only means its program was found, so the
-    /// shell does not call it signed in and it is never chosen by itself.
+    /// Whether the agent's sign-in is checked without a request. Every
+    /// current provider checks it; older peers may report false.
     pub login_checked: bool,
     /// Whether Runs on and Add agent offer it: installed, signed in, a
     /// backend, and a call that cannot change files (D-15). Parked in a usage
@@ -5712,8 +5902,8 @@ pub struct BackgroundAiProviderSnapshot {
     /// The models this agent offers. Empty when they are not known, which
     /// `models_unavailable_reason` then says.
     pub models: Vec<String>,
-    /// The list is the CLI's documented one and cannot be asked for (Gemini
-    /// CLI), so the shell says so beside the menu (B36).
+    /// The list came from documented aliases rather than an account query,
+    /// as an older peer may report, so the shell labels it (B36).
     pub models_fixed: bool,
     /// Whether "CLI default" can be chosen: the agent is asked with no
     /// `--model` (B36). True for the agents measured against nothing yet.
@@ -5745,7 +5935,7 @@ impl BackgroundAiProviderSnapshot {
             state: "unread".to_owned(),
             headline: "Not checked yet".to_owned(),
             installed: true,
-            login_checked: provider.login_probe(),
+            login_checked: true,
             model: provider.default_model().to_owned(),
             cli_default: provider.default_model().is_empty(),
             ..Self::default()
@@ -5990,6 +6180,7 @@ impl Snapshot {
             schema_version: SCHEMA_VERSION,
             usage: crate::usage::model::UsageSnapshot::initial(options.node_id.as_str()),
             delivery_watches: Vec::new(),
+            overview_graph: OverviewGraphSnapshot::default(),
             navigator: NavigatorSnapshot {
                 agent_scope: Default::default(),
                 root_path: None,
@@ -6009,7 +6200,6 @@ impl Snapshot {
                 hide_ai_checkouts: Vec::new(),
                 sleeping_sessions: Vec::new(),
                 archived_sessions: Vec::new(),
-                factory_worker_panes: Vec::new(),
             },
             overlay: OverlaySnapshot {
                 kind: None,
@@ -6092,6 +6282,7 @@ impl Snapshot {
                 agent_hooks: AgentHooksSnapshot::default(),
                 background_ai: BackgroundAiSnapshot::unread(),
                 ssh_hosts: SshHostsSnapshot::default(),
+                herdr_profiles: HerdrProfilesSnapshot::default(),
                 diagnostics: Vec::new(),
                 last_error: None,
                 async_operations: Vec::new(),
@@ -6113,8 +6304,6 @@ impl Snapshot {
             link_panel: None,
             session_record: None,
             session_work_search: None,
-            factory: None,
-            factory_task: None,
         }
     }
 }
@@ -6138,6 +6327,7 @@ impl PetSnapshot {
     }
 }
 
+mod overview_graph;
 /// The sections of [`Snapshot`] that ride the revisioned `rest` channel of
 /// the delta wire: everything except the editor and the changes view (each
 /// with its own revision), the terminal chunk ring (sequence cursor), and the
@@ -6145,6 +6335,7 @@ impl PetSnapshot {
 /// Owned copy retained by the runtime to stamp revisions by comparison, so
 /// no mutation site needs dirty-tracking discipline.
 mod rest;
+pub use overview_graph::{GraphDirectInput, GraphParty, GraphSession, OverviewGraphSnapshot};
 pub use rest::{RestSections, RestWire};
 
 /// One delta response taken from the runtime, holding everything the wire
@@ -6172,9 +6363,6 @@ pub struct SnapshotDeltaPayload {
     pub link_panel: Option<Arc<crate::links::LinkPanelSnapshot>>,
     pub session_record: Option<Arc<crate::links::ledger::SessionRecordSnapshot>>,
     pub session_work_search: Option<Arc<crate::links::ledger::SessionSearchSnapshot>>,
-    pub factory: Option<crate::factory::screen::FactorySection>,
-    /// `Some(None)`: the open Task page closed since the reader's revision.
-    pub factory_task: Option<Option<crate::factory::screen::FactoryTaskSection>>,
     pub find: PaneFindSnapshot,
 }
 
@@ -6224,11 +6412,6 @@ pub struct SnapshotDeltaWire<'a> {
     pub session_record: Option<&'a crate::links::ledger::SessionRecordSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_work_search: Option<&'a crate::links::ledger::SessionSearchSnapshot>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub factory: Option<&'a crate::factory::screen::FactorySection>,
-    /// `null` when the page closed since the reader's revision.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub factory_task: Option<Option<&'a crate::factory::screen::FactoryTaskSection>>,
     /// Find state rides top-level rather than in `rest`, because it changes on
     /// every keystroke while a search is open. In `rest` each keystroke would
     /// restamp that revision and resend the whole navigator, ui state, and pet
@@ -6276,8 +6459,6 @@ impl<'a> SnapshotDeltaWire<'a> {
             link_panel: payload.link_panel.as_deref(),
             session_record: payload.session_record.as_deref(),
             session_work_search: payload.session_work_search.as_deref(),
-            factory: payload.factory.as_ref(),
-            factory_task: payload.factory_task.as_ref().map(Option::as_ref),
             find: &payload.find,
         }
     }
@@ -7078,6 +7259,7 @@ mod wire_enum_tests {
 
         let first_run = [
             FirstRunStep::Agents,
+            FirstRunStep::Devices,
             FirstRunStep::Notifications,
             FirstRunStep::Project,
             FirstRunStep::Done,
@@ -7085,6 +7267,7 @@ mod wire_enum_tests {
         for variant in first_run {
             match variant {
                 FirstRunStep::Agents
+                | FirstRunStep::Devices
                 | FirstRunStep::Notifications
                 | FirstRunStep::Project
                 | FirstRunStep::Done => {}
@@ -7295,198 +7478,6 @@ mod wire_enum_tests {
             .collect::<Vec<_>>();
         assert_wire(&contract, "link_target_kind", &kinds);
         checked.insert("link_target_kind");
-
-        // The Factory screens (PRD software-factory-ui): the summary carries
-        // these as the engine's own strings.
-        use hide_factory::model::{
-            AttemptOutcome, AttemptStage, Column, DiscoveryClass, QuestionKind, QuestionOrigin,
-            TaskState,
-        };
-        for state in TaskState::ALL {
-            match state {
-                TaskState::Drafting
-                | TaskState::Waiting
-                | TaskState::Running
-                | TaskState::Paused
-                | TaskState::Blocked
-                | TaskState::Verifying
-                | TaskState::MergeWaiting
-                | TaskState::Landed
-                | TaskState::Done
-                | TaskState::Stopped
-                | TaskState::Relanding
-                | TaskState::Outside
-                | TaskState::Cancelled => {}
-            }
-        }
-        let states = TaskState::ALL.map(TaskState::as_str);
-        assert_wire(&contract, "factory_task_state", &states);
-        checked.insert("factory_task_state");
-
-        for column in Column::ALL {
-            match column {
-                Column::Before | Column::Moving | Column::Stuck | Column::Done => {}
-            }
-        }
-        let columns = Column::ALL.map(Column::as_str);
-        assert_wire(&contract, "factory_column", &columns);
-        checked.insert("factory_column");
-
-        // An internally tagged enum: its `kind` is the wire string.
-        let kinds = [
-            QuestionKind::Intake,
-            QuestionKind::Split { pieces: Vec::new() },
-            QuestionKind::Default,
-            QuestionKind::Blocking,
-            QuestionKind::ScopeChange { change: None },
-            QuestionKind::NewTaskCap,
-            QuestionKind::ProposedTask {
-                draft: Box::default(),
-                discovery: None,
-            },
-            QuestionKind::Action,
-            QuestionKind::ConfirmCard,
-        ]
-        .iter()
-        .map(|kind| {
-            match kind {
-                QuestionKind::Intake
-                | QuestionKind::Split { .. }
-                | QuestionKind::Default
-                | QuestionKind::Blocking
-                | QuestionKind::ScopeChange { .. }
-                | QuestionKind::NewTaskCap
-                | QuestionKind::ProposedTask { .. }
-                | QuestionKind::Action
-                | QuestionKind::ConfirmCard => {}
-            }
-            serde_json::to_value(kind).unwrap()["kind"].clone()
-        })
-        .collect::<Vec<_>>();
-        assert_wire(&contract, "factory_question_kind", &kinds);
-        checked.insert("factory_question_kind");
-
-        let origins = [
-            QuestionOrigin::Review,
-            QuestionOrigin::Worker,
-            QuestionOrigin::Check,
-            QuestionOrigin::Engine,
-        ];
-        for origin in origins {
-            match origin {
-                QuestionOrigin::Review
-                | QuestionOrigin::Worker
-                | QuestionOrigin::Check
-                | QuestionOrigin::Engine => {}
-            }
-        }
-        assert_wire(&contract, "factory_question_origin", &origins);
-        checked.insert("factory_question_origin");
-
-        let classes = [
-            DiscoveryClass::InScope,
-            DiscoveryClass::Decision,
-            DiscoveryClass::ScopeChange,
-            DiscoveryClass::Prerequisite,
-            DiscoveryClass::Unrelated,
-        ];
-        for class in classes {
-            match class {
-                DiscoveryClass::InScope
-                | DiscoveryClass::Decision
-                | DiscoveryClass::ScopeChange
-                | DiscoveryClass::Prerequisite
-                | DiscoveryClass::Unrelated => {}
-            }
-        }
-        assert_wire(&contract, "factory_discovery_class", &classes);
-        checked.insert("factory_discovery_class");
-
-        let stages = [AttemptStage::Task, AttemptStage::PreMerge];
-        for stage in stages {
-            match stage {
-                AttemptStage::Task | AttemptStage::PreMerge => {}
-            }
-        }
-        assert_wire(&contract, "factory_attempt_stage", &stages);
-        checked.insert("factory_attempt_stage");
-
-        // `AttemptView.outcome`: an outcome's tag, or `running` before one.
-        let outcomes = [
-            Some(AttemptOutcome::Passed),
-            Some(AttemptOutcome::Failed {
-                check: String::new(),
-                link: String::new(),
-            }),
-            Some(AttemptOutcome::Environment {
-                signal: String::new(),
-                check: String::new(),
-            }),
-            Some(AttemptOutcome::Cancelled),
-            None,
-        ]
-        .iter()
-        .map(|outcome| match outcome {
-            Some(
-                outcome @ (AttemptOutcome::Passed
-                | AttemptOutcome::Failed { .. }
-                | AttemptOutcome::Environment { .. }
-                | AttemptOutcome::Cancelled),
-            ) => serde_json::to_value(outcome).unwrap()["result"].clone(),
-            None => serde_json::json!("running"),
-        })
-        .collect::<Vec<_>>();
-        assert_wire(&contract, "factory_attempt_outcome", &outcomes);
-        checked.insert("factory_attempt_outcome");
-
-        // The codes beside the summary's sentences; `hide-factory`'s
-        // `every_summary_code_is_pinned` holds each `ALL` to every variant.
-        use hide_factory::model::{EnvHold, Gate, StopReason};
-        use hide_factory::summary::{ResultCode, WaitingFor};
-        assert_wire(&contract, "factory_waiting_for", &WaitingFor::ALL);
-        checked.insert("factory_waiting_for");
-        assert_wire(&contract, "factory_env_hold", &EnvHold::ALL);
-        checked.insert("factory_env_hold");
-        assert_wire(&contract, "factory_stop_reason", &StopReason::ALL);
-        checked.insert("factory_stop_reason");
-        assert_wire(&contract, "factory_gate", &Gate::ALL);
-        checked.insert("factory_gate");
-        assert_wire(&contract, "factory_result_code", &ResultCode::ALL);
-        checked.insert("factory_result_code");
-        use hide_factory::model::{
-            CriterionState, DecisionKind, DecisionSource, Fallback, FollowUpState, ObserverMode,
-            PauseReason, RecoveryAction, RecoveryOutcome,
-        };
-        use hide_factory::summary::{DecisionBy, Holding};
-        assert_wire(&contract, "factory_holding", &Holding::ALL);
-        checked.insert("factory_holding");
-        assert_wire(&contract, "factory_decision_by", &DecisionBy::ALL);
-        checked.insert("factory_decision_by");
-        assert_wire(&contract, "factory_decision_source", &DecisionSource::ALL);
-        checked.insert("factory_decision_source");
-        assert_wire(&contract, "factory_follow_up_state", &FollowUpState::ALL);
-        checked.insert("factory_follow_up_state");
-        assert_wire(&contract, "factory_criterion_state", &CriterionState::ALL);
-        checked.insert("factory_criterion_state");
-        assert_wire(&contract, "factory_recovery_outcome", &RecoveryOutcome::ALL);
-        checked.insert("factory_recovery_outcome");
-        assert_wire(&contract, "factory_fallback", &Fallback::ALL);
-        checked.insert("factory_fallback");
-        assert_wire(&contract, "factory_recovery_action", &RecoveryAction::ALL);
-        checked.insert("factory_recovery_action");
-        assert_wire(&contract, "factory_decision_kind", &DecisionKind::ALL);
-        checked.insert("factory_decision_kind");
-        assert_wire(&contract, "factory_pause_reason", &PauseReason::ALL);
-        checked.insert("factory_pause_reason");
-        assert_wire(&contract, "factory_observer_mode", &ObserverMode::ALL);
-        checked.insert("factory_observer_mode");
-        use hide_factory::judgment::WorkerTextSource;
-        assert_wire(
-            &contract,
-            "factory_diagnosis_source",
-            &WorkerTextSource::ALL,
-        );
-        checked.insert("factory_diagnosis_source");
 
         use crate::agent_state::tally::tasks::TaskState as OverviewTaskState;
         let task_states = [

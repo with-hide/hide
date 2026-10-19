@@ -18,7 +18,7 @@ use crate::protocol::{
 };
 use crate::root::{Root, relative_path};
 use crate::{bytes, document, git, index, list, mutate, save, worktrees};
-use hide_node_link::process::{LineInput, ProcessStart};
+use hide_node_link::process::{GroupEnd, LeftRunning, LineInput, ProcessStart};
 
 /// Requests the helper works on at once; the core also admits at most this
 /// many per device, so the helper never queues behind itself.
@@ -79,7 +79,6 @@ pub fn serve_with_terminals(
             checkout_callers: false,
             opened_roots: None,
             browser: None,
-            factory: false,
             // A device's helper serves its core for the helper's whole life,
             // and keeps its worktree facts across its restarts.
             worktree_facts: std::env::var_os("HOME").map(|home| {
@@ -118,11 +117,6 @@ pub struct Services<'a> {
     /// node that dialed its core (PRD core-host-node-remote-core B4, B13,
     /// B15). Every other node refuses both.
     pub browser: Option<&'a dyn crate::link_bridge::BrowserGateway>,
-    /// Whether the node does the machine work of its core's Factories for
-    /// this machine's projects (`FactoryCall::answered_by_node`): a node
-    /// that dialed its core (PRD core-host-node-move Q17). A device its core
-    /// dialed keeps no Factory and refuses it.
-    pub factory: bool,
     /// Where the node keeps what it measured of each repository's worktrees
     /// beyond this link (`hide_kit::layout::worktree_facts`), so a node
     /// that restarted or linked again measures only the worktrees that
@@ -197,7 +191,6 @@ impl Services<'_> {
             checkout_callers: false,
             opened_roots: None,
             browser: None,
-            factory: false,
             worktree_facts: None,
             kit: KitPlace::Installed,
         }
@@ -235,7 +228,6 @@ fn serve_in(
     };
     let terminals = services.terminals;
     let heartbeat = services.heartbeat;
-    let factory = services.factory;
     let opened_roots = services.opened_roots;
     // Ends the heartbeat when the input does.
     let input_ended = (Mutex::new(false), std::sync::Condvar::new());
@@ -291,15 +283,10 @@ fn serve_in(
                     };
                     let id = request.id;
                     let outcome = match request.call {
-                        call if !call.answered_by_device()
-                            && !(factory
-                                && matches!(&call, Call::Factory { call } if call.answered_by_node())) =>
-                        {
-                            Err(HostError::new(
-                                ErrorCode::Unsupported,
-                                "A device does not answer this request; the core's own node does",
-                            ))
-                        }
+                        call if !call.answered_by_device() => Err(HostError::new(
+                            ErrorCode::Unsupported,
+                            "A device does not answer this request; the core's own node does",
+                        )),
                         Call::PanesStart { herdr_socket } => match bridges {
                             Ok(bridges) => panes
                                 .start(scope, output, bridges, &herdr_socket)
@@ -372,12 +359,18 @@ fn serve_in(
                             cli_dir,
                             herdr_socket,
                             retirement_projects,
+                            preserve_herdr_server,
                         } => handle_in(
                             Call::Kit {
                                 action,
                                 cli_dir,
-                                herdr_socket: kit_herdr_socket(herdr_socket, link.herdr_socket()),
+                                herdr_socket: if preserve_herdr_server {
+                                    herdr_socket
+                                } else {
+                                    kit_herdr_socket(herdr_socket, link.herdr_socket())
+                                },
                                 retirement_projects,
+                                preserve_herdr_server,
                             },
                             env,
                         ),
@@ -820,9 +813,6 @@ pub struct Env {
     pub stop: Arc<AtomicBool>,
     /// The background AI backends this node keeps for its core.
     pub ai: Arc<crate::ai::Backends>,
-    /// The verify bundles this node runs for its core's Factory, ended when
-    /// the last copy of the environment is dropped.
-    pub factory: Arc<crate::factory::Verifies>,
     /// The label generator locks this node's core took, released when the
     /// last copy of the environment is dropped: with the link it served.
     pub label_locks: Arc<crate::label_lock::LabelLocks>,
@@ -894,7 +884,6 @@ impl Env {
             shell: crate::shell_integration::UserShell::of_process(),
             stop: Arc::default(),
             ai: process_ai(),
-            factory: Arc::default(),
             label_locks: Arc::default(),
             worktrees: Arc::default(),
             state: std::env::var_os("HOME")
@@ -912,7 +901,6 @@ impl Env {
             shell: crate::shell_integration::UserShell::of_process(),
             stop: Arc::default(),
             ai: Arc::default(),
-            factory: Arc::default(),
             label_locks: Arc::default(),
             worktrees: Arc::default(),
             state: None,
@@ -1029,6 +1017,7 @@ pub fn handle_with_progress(
             })
         }
         Call::Project { path } => to_value(project_facts(&path)?),
+        Call::CheckoutGit { path } => to_value(worktrees::checkout_git(&absolute(&path)?)?),
         Call::Worktrees {
             path,
             bases,
@@ -1072,11 +1061,13 @@ pub fn handle_with_progress(
             cli_dir,
             herdr_socket,
             retirement_projects,
+            preserve_herdr_server,
         } => crate::kit::handle(
             action,
             &cli_dir,
             herdr_socket.as_deref(),
             &retirement_projects,
+            preserve_herdr_server,
             env,
         ),
         Call::WorktreesRegistered { root } => to_value(
@@ -1263,13 +1254,12 @@ pub fn handle_with_progress(
             to_value(())
         }
         Call::ShellIntegration => {
-            let home =
-                env.home("HOME is not set, so the shell integration has no place to live")?;
+            let executable = std::env::current_exe().ok();
             to_value(
-                crate::shell_integration::install(&home, &env.shell).map_err(|error| {
+                crate::shell_integration::prepare(env.home.as_deref(), &env.shell, executable.as_deref()).map_err(|error| {
                     HostError::new(
                         ErrorCode::Io,
-                        format!("the shell integration could not be written: {error}"),
+                        format!("The device's normal shell could not be prepared. Check its shell configuration and reconnect before retrying; no terminal was started. {error}"),
                     )
                 })?,
             )
@@ -1281,13 +1271,24 @@ pub fn handle_with_progress(
                     format!("Process group {leader} is not a pane's"),
                 ));
             }
-            hide_platform::process::terminate_group(leader).map_err(|error| {
+            let ended = hide_platform::process::terminate_group(leader).map_err(|error| {
                 HostError::new(
                     ErrorCode::Io,
                     format!("ending process group {leader} failed: {error}"),
                 )
             })?;
-            to_value(())
+            to_value(match ended {
+                hide_platform::process::GroupEnd::Ended { left } => GroupEnd::Ended {
+                    left: left
+                        .into_iter()
+                        .map(|process| LeftRunning {
+                            pid: process.pid,
+                            reason: process.reason,
+                        })
+                        .collect(),
+                },
+                hide_platform::process::GroupEnd::Gone => GroupEnd::Gone,
+            })
         }
         Call::ProcessStarts { pids } => to_value(
             pids.into_iter()
@@ -1519,6 +1520,16 @@ pub fn handle_with_progress(
             }
             to_value(answers)
         }
+        Call::WorktreeRetire {
+            root,
+            checkout,
+            branch,
+            discard,
+        } => {
+            worktrees::retire_owned(&absolute(&root)?, &absolute(&checkout)?, &branch, discard)
+                .map_err(|reason| HostError::new(ErrorCode::Io, reason))?;
+            to_value(())
+        }
         Call::WorktreeRemove { removal } => {
             absolute(&removal.repository_root)?;
             absolute(&removal.checkout_path)?;
@@ -1625,7 +1636,6 @@ pub fn handle_with_progress(
                 &expected_revision,
             )?)
         }
-        Call::Factory { call } => crate::factory::handle(call, &env.factory, progress),
         Call::Feedback { call } => {
             crate::feedback::handle(call, env.state.as_deref()).map_err(|reason| {
                 // A full attachments folder is a cap the screen names; any
@@ -2248,13 +2258,13 @@ mod tests {
         );
     }
 
-    /// A device refuses, unrun, what acts with the operator's logins or is
-    /// the Factory's, and still answers its own work on the same channel.
+    /// A device refuses, unrun, what acts with the operator's logins, and
+    /// still answers its own work on the same channel.
     #[test]
     fn a_device_refuses_the_core_machine_s_requests_unrun() {
         let requests = [
             r#"{"id":1,"op":"gh","cwd":null,"args":["auth","status"]}"#,
-            r#"{"id":2,"op":"factory","call":{"factory":"hide_program"}}"#,
+            r#"{"id":2,"op":"usage_limit_fetch","source":"claude_usage_text","root":"/"}"#,
             r#"{"id":3,"op":"usage_limit_fetch","source":"codex_usage","root":"/"}"#,
             r#"{"id":4,"op":"hello"}"#,
         ];

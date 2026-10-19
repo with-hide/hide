@@ -199,6 +199,7 @@ fn node_runtime_with(
             label: "MacBook".to_owned(),
             origin: crate::model::LinkOrigin::Inbound,
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         });
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
@@ -423,6 +424,461 @@ fn a_local_issue_key_is_applied_only_to_the_project_the_request_names() {
     );
 }
 
+/// Identical path/number keys on two devices carry different private
+/// bodies; every read identifies the project and the device that answered.
+#[test]
+fn same_path_memo_details_stay_with_the_requested_device() {
+    let repo = repo(None, "feature");
+    let mut store = crate::local_issues::LocalIssueStore::default();
+    let mut own = local_project(&[(1, "Own memo")]);
+    own.issues[0].body = "Private body on the core's machine".into();
+    store.projects.insert(repo.root.clone(), own);
+    let mut node = local_project(&[(1, "Node memo")]);
+    node.issues[0].body = "Private body on the node".into();
+    store
+        .devices
+        .entry(NODE.into())
+        .or_default()
+        .insert(repo.root.clone(), node);
+    let shared = node_runtime(&repo, FakeDevice::new(), Recording::of(None), store);
+    let node_workspace = node_project(&shared.lock().unwrap()).unwrap().id.clone();
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime.snapshot.navigator.workspaces.push(workspace(
+            "same-path-on-core",
+            "Own project",
+            &repo.root,
+            vec![checkout(
+                "same-path-on-core",
+                "same-path-checkout",
+                &repo.root,
+                None,
+            )],
+        ));
+        runtime.sync_tasks();
+    }
+    let key = crate::tasks::local_key(&repo.root, 1);
+    for (workspace_id, device_id, body) in [
+        (
+            "same-path-on-core",
+            crate::node::TEST_NODE,
+            "Private body on the core's machine",
+        ),
+        (node_workspace.as_str(), NODE, "Private body on the node"),
+        (
+            "same-path-on-core",
+            crate::node::TEST_NODE,
+            "Private body on the core's machine",
+        ),
+    ] {
+        dispatch(
+            &shared,
+            "issue_detail_request",
+            serde_json::json!({"workspace_id": workspace_id, "task_key": key}),
+        );
+        let runtime = shared.lock().unwrap();
+        let detail = runtime.snapshot.issue_work.detail.as_ref().unwrap();
+        assert!(detail.matches(workspace_id, device_id, &key));
+        assert_eq!(detail.phase, "ready");
+        assert_eq!(detail.body.as_deref(), Some(body));
+    }
+
+    let mut runtime = shared.lock().unwrap();
+    // Both owners above are admitted and contain this key. While B awaits
+    // an answer, a late A result must fail on owner identity, not phase or
+    // the absence of A from the catalog.
+    runtime.snapshot.issue_work.detail = Some(crate::model::IssueDetailSnapshot::reading(
+        node_workspace.clone(),
+        NODE.into(),
+        key.clone(),
+    ));
+    assert!(!runtime.ingest_issue_detail(
+        "same-path-on-core",
+        crate::node::TEST_NODE,
+        &key,
+        Ok(crate::tasks::TaskDetail {
+            body: "Late private body on the core's machine".into(),
+            ..Default::default()
+        }),
+    ));
+    let detail = runtime.snapshot.issue_work.detail.as_ref().unwrap();
+    assert!(detail.matches(&node_workspace, NODE, &key));
+    assert_eq!(detail.phase, "reading");
+    assert_eq!(detail.body, None);
+    assert!(runtime.ingest_issue_detail(
+        &node_workspace,
+        NODE,
+        &key,
+        Ok(crate::tasks::TaskDetail {
+            body: "Private body on the node".into(),
+            ..Default::default()
+        }),
+    ));
+    assert_eq!(
+        runtime
+            .snapshot
+            .issue_work
+            .detail
+            .as_ref()
+            .unwrap()
+            .body
+            .as_deref(),
+        Some("Private body on the node"),
+    );
+
+    // A cursor in an admitted owner's slot cannot authorize the other
+    // owner, even with the identical item key and cursor text.
+    runtime.snapshot.issue_work.detail = Some(crate::model::IssueDetailSnapshot::answered(
+        "same-path-on-core".into(),
+        crate::node::TEST_NODE.into(),
+        key.clone(),
+        Ok(crate::tasks::TaskDetail {
+            body: "Private body on the core's machine".into(),
+            comments_has_more: true,
+            comments_cursor: Some("same-owner-cursor".into()),
+            ..Default::default()
+        }),
+    ));
+    let event = serde_json::json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "issue_detail_request",
+        "payload": {"workspace_id": node_workspace, "task_key": key, "comments_after": "same-owner-cursor"},
+    });
+    assert!(!runtime.dispatch_json(&serde_json::to_vec(&event).unwrap()));
+    let detail = runtime.snapshot.issue_work.detail.as_ref().unwrap();
+    assert!(detail.matches("same-path-on-core", crate::node::TEST_NODE, &key));
+    assert_eq!(
+        detail.body.as_deref(),
+        Some("Private body on the core's machine")
+    );
+    assert!(!detail.comments_loading);
+}
+
+/// Keep real node admission and local stores; session listing and turn
+/// reads at the device boundary belong entirely to the fixture.
+struct OriginNode {
+    inner: Arc<dyn NodeLink>,
+    turn: hide_session::label_transcript::WorkTurn,
+    readers: hide_node_link::sessions::ReaderFeatures,
+    expected_session: &'static str,
+}
+
+impl NodeLink for OriginNode {
+    fn reader_features(&self) -> Option<&hide_node_link::sessions::ReaderFeatures> {
+        Some(&self.readers)
+    }
+
+    fn call(&self, call: Call, timeout: Duration) -> Result<LinkAnswer, LinkError> {
+        match call {
+            Call::LinkFiles { .. } => Ok(LinkAnswer::Parsed(
+                serde_json::to_value(Vec::<hide_session::links::Candidate>::new()).unwrap(),
+            )),
+            Call::SessionWorkTurn { request } => {
+                assert_eq!(request.session_id, self.expected_session);
+                assert_eq!(request.witness, self.turn.witness());
+                assert_eq!(request.offset, 1);
+                Ok(LinkAnswer::Parsed(
+                    serde_json::to_value(&self.turn).unwrap(),
+                ))
+            }
+            call => self.inner.call(call, timeout),
+        }
+    }
+}
+
+#[test]
+fn same_path_memo_origins_and_undo_stay_with_the_admitted_device() {
+    use crate::links::ledger::{BacklogOriginIdentity, MissedStatus, SessionIdentity};
+    let repo = repo(None, "feature");
+    let a_turn = hide_session::label_transcript::WorkTurn {
+        request: "Private original request on A".into(),
+        assistant: "Private original answer on A".into(),
+    };
+    let b_turn = hide_session::label_transcript::WorkTurn {
+        request: "Private original request on B".into(),
+        assistant: "Private original answer on B".into(),
+    };
+    let readers = serde_json::from_value::<hide_node_link::sessions::ReaderFeatures>(
+        serde_json::json!([{"provider": "codex", "features": ["labels"]}]),
+    )
+    .unwrap();
+    let shared = node_runtime(
+        &repo,
+        Arc::new(OriginNode {
+            inner: FakeDevice::new(),
+            turn: b_turn.clone(),
+            readers: readers.clone(),
+            expected_session: "origin-b",
+        }),
+        Arc::new(OriginNode {
+            inner: FakeDevice::new(),
+            turn: a_turn.clone(),
+            readers,
+            expected_session: "origin-a",
+        }),
+        crate::local_issues::LocalIssueStore::default(),
+    );
+    let b_workspace = node_project(&shared.lock().unwrap()).unwrap().id.clone();
+    let a_session = SessionIdentity {
+        device_id: crate::node::TEST_NODE.into(),
+        agent: "codex".into(),
+        session_id: "origin-a".into(),
+    };
+    let b_session = SessionIdentity {
+        device_id: NODE.into(),
+        agent: "codex".into(),
+        session_id: "origin-b".into(),
+    };
+    let (a_missed, b_missed, ledger_path) = {
+        let mut runtime = shared.lock().unwrap();
+        runtime.snapshot.navigator.workspaces.push(workspace(
+            "same-path-on-core",
+            "Own project",
+            &repo.root,
+            vec![checkout(
+                "same-path-on-core",
+                "same-path-checkout",
+                &repo.root,
+                None,
+            )],
+        ));
+        runtime.ai_settings = Some(hide_ai::settings::AiSettings {
+            enabled: true,
+            chosen: true,
+            agent_summary: true,
+            ..Default::default()
+        });
+        runtime.rebuild_device_rows();
+        assert!(
+            runtime
+                .snapshot
+                .navigator
+                .devices
+                .iter()
+                .any(|device| { device.id == NODE && device.state == "ready" })
+        );
+        runtime.sync_tasks();
+        let a = super::backlog::seed_missed_turn(
+            &runtime,
+            &a_session,
+            &repo.root,
+            &a_turn.request,
+            "Follow up on A",
+            Some(a_turn.witness()),
+        );
+        let b = super::backlog::seed_missed_turn(
+            &runtime,
+            &b_session,
+            &repo.root,
+            &b_turn.request,
+            "Follow up on B",
+            Some(b_turn.witness()),
+        );
+        (
+            a,
+            b,
+            hide_kit::layout::links_store(runtime.state_path.parent().unwrap()),
+        )
+    };
+    let _worker = super::super::links::spawn_worker(&shared, ChangeNotifier::noop()).unwrap();
+    for (intent, workspace_id, session, missed) in [
+        ("origin-a", "same-path-on-core", &a_session, a_missed),
+        ("origin-b", b_workspace.as_str(), &b_session, b_missed),
+    ] {
+        dispatch(
+            &shared,
+            "backlog_add",
+            serde_json::json!({
+                "intent": intent, "workspace_id": workspace_id, "title": format!("Memo on {}", session.device_id),
+                "destination": "local", "missed": {"session": session, "id": missed},
+            }),
+        );
+    }
+    let key = crate::tasks::local_key(&repo.root, 1);
+    wait(
+        &shared,
+        "both real missed memos and their owner flags",
+        |runtime| {
+            runtime
+                .snapshot
+                .issue_work
+                .backlog
+                .iter()
+                .filter(|row| row.task_key.as_deref() == Some(key.as_str()))
+                .count()
+                == 2
+                && runtime
+                    .snapshot
+                    .issue_work
+                    .missed_keys
+                    .iter()
+                    .filter(|item| item.task_key == key)
+                    .count()
+                    == 2
+        },
+    );
+    let a = BacklogOriginIdentity {
+        workspace_id: "same-path-on-core".into(),
+        device_id: crate::node::TEST_NODE.into(),
+        task_key: key.clone(),
+    };
+    let b = BacklogOriginIdentity {
+        workspace_id: b_workspace,
+        device_id: NODE.into(),
+        task_key: key.clone(),
+    };
+    // These are admitted projects on two live nodes, with the same actual
+    // path and number. Read A first, then B: no pre-seeded origin slots.
+    for owner in [&a, &b] {
+        dispatch(
+            &shared,
+            "backlog_origin",
+            serde_json::to_value(owner).unwrap(),
+        );
+        wait(&shared, "the selected device's origin", |runtime| {
+            runtime
+                .snapshot
+                .issue_work
+                .origins
+                .iter()
+                .any(|origin| origin.matches(owner) && origin.phase == "ready")
+        });
+    }
+    let assert_origins = |runtime: &Runtime| {
+        for (owner, turn) in [(&a, &a_turn), (&b, &b_turn)] {
+            let origin = runtime
+                .snapshot
+                .issue_work
+                .origins
+                .iter()
+                .find(|origin| origin.matches(owner))
+                .unwrap();
+            assert_eq!(origin.request.as_deref(), Some(turn.request.as_str()));
+            assert_eq!(origin.answer.as_deref(), Some(turn.assistant.as_str()));
+            assert_eq!(origin.session.as_ref().unwrap().device_id, owner.device_id);
+        }
+    };
+    assert_origins(&shared.lock().unwrap());
+    let mut late_a = shared
+        .lock()
+        .unwrap()
+        .snapshot
+        .issue_work
+        .origins
+        .iter()
+        .find(|origin| origin.matches(&a))
+        .unwrap()
+        .clone();
+    late_a.request = Some("Late private request on A".into());
+    late_a.answer = Some("Late private answer on A".into());
+    dispatch(
+        &shared,
+        "backlog_origin_close",
+        serde_json::to_value(&a).unwrap(),
+    );
+    {
+        let mut runtime = shared.lock().unwrap();
+        assert_eq!(runtime.snapshot.issue_work.origins.len(), 1);
+        assert!(runtime.snapshot.issue_work.origins[0].matches(&b));
+        assert!(!runtime.finish_backlog_origin(&a, 1, Ok(late_a.clone())));
+        assert_eq!(
+            runtime.snapshot.issue_work.origins[0].request.as_deref(),
+            Some(b_turn.request.as_str())
+        );
+    }
+    dispatch(&shared, "backlog_origin", serde_json::to_value(&a).unwrap());
+    wait(
+        &shared,
+        "A reopened under a new read generation",
+        |runtime| {
+            runtime
+                .snapshot
+                .issue_work
+                .origins
+                .iter()
+                .any(|origin| origin.matches(&a) && origin.phase == "ready")
+        },
+    );
+    {
+        let mut runtime = shared.lock().unwrap();
+        assert!(!runtime.finish_backlog_origin(&a, 1, Ok(late_a)));
+        assert_origins(&runtime);
+    }
+
+    dispatch(
+        &shared,
+        "backlog_undo",
+        serde_json::json!({"workspace_id": b.workspace_id, "task_key": key}),
+    );
+    wait(&shared, "only B's missed flag to clear", |runtime| {
+        let flags = &runtime.snapshot.issue_work.missed_keys;
+        flags.iter().any(|item| {
+            item.task_key == key && item.device_id.as_deref() == Some(crate::node::TEST_NODE)
+        }) && !flags
+            .iter()
+            .any(|item| item.task_key == key && item.device_id.as_deref() == Some(NODE))
+    });
+    {
+        let runtime = shared.lock().unwrap();
+        let local = runtime.local_issues.as_ref().unwrap();
+        assert!(local.issue(None, &repo.root, 1).is_some());
+        assert!(local.issue(Some(NODE), &repo.root, 1).is_none());
+        let pending = &runtime.snapshot.issue_work.backlog;
+        assert!(pending.iter().any(|row| row.workspace_id == a.workspace_id
+            && row.task_key.as_deref() == Some(key.as_str())));
+        assert!(!pending.iter().any(|row| row.workspace_id == b.workspace_id
+            && row.task_key.as_deref() == Some(key.as_str())));
+        let undo = runtime.snapshot.issue_work.undo.as_ref().unwrap();
+        assert_eq!(
+            (
+                &undo.workspace_id,
+                &undo.device_id,
+                &undo.task_key,
+                undo.phase.as_str()
+            ),
+            (&b.workspace_id, &b.device_id, &key, "done")
+        );
+        assert_eq!(runtime.snapshot.issue_work.origins.len(), 1);
+        let origin = &runtime.snapshot.issue_work.origins[0];
+        assert!(origin.matches(&a));
+        assert_eq!(origin.request.as_deref(), Some(a_turn.request.as_str()));
+        assert_eq!(origin.answer.as_deref(), Some(a_turn.assistant.as_str()));
+    }
+    let (store, _) = crate::links::store::LinkStore::open(&ledger_path).unwrap();
+    let a_record = store.ledger_record(&a_session).unwrap();
+    let b_record = store.ledger_record(&b_session).unwrap();
+    assert_eq!(a_record.missed[0].status, MissedStatus::Backlog);
+    assert_eq!(
+        a_record.missed[0].backlog_key.as_deref(),
+        Some(key.as_str())
+    );
+    assert_eq!(b_record.missed[0].status, MissedStatus::Open);
+    assert_eq!(b_record.missed[0].backlog_key, None);
+    // The last window must still release A's words if the project was
+    // removed while the panel was open; close needs identity, not admission.
+    shared
+        .lock()
+        .unwrap()
+        .snapshot
+        .navigator
+        .workspaces
+        .retain(|workspace| workspace.id != a.workspace_id);
+    dispatch(
+        &shared,
+        "backlog_origin_close",
+        serde_json::to_value(&a).unwrap(),
+    );
+    assert!(
+        shared
+            .lock()
+            .unwrap()
+            .snapshot
+            .issue_work
+            .origins
+            .is_empty()
+    );
+}
+
 fn github_issue(repository: &str, number: u32, title: &str) -> crate::issues::IssueSnapshot {
     crate::issues::IssueSnapshot {
         reference: crate::issues::IssueReference {
@@ -439,6 +895,8 @@ fn github_issue(repository: &str, number: u32, title: &str) -> crate::issues::Is
         blocked_by: Vec::new(),
         sub_issues: Default::default(),
         labels: Vec::new(),
+        author: None,
+        assignees: Vec::new(),
     }
 }
 
@@ -822,7 +1280,7 @@ fn a_new_github_issue_for_a_node_project_is_made_by_repository_name_here() {
     dispatch(
         &shared,
         "backlog_add",
-        serde_json::json!({"intent": "i-1", "workspace_id": workspace_id, "title": "From the MacBook"}),
+        serde_json::json!({"intent": "i-1", "workspace_id": workspace_id, "title": "From the MacBook", "destination":"github", "repository":"acme/app"}),
     );
     wait(&shared, "the new issue", |runtime| {
         runtime
@@ -1395,6 +1853,7 @@ fn a_node_s_worktree_with_no_pane_keeps_its_id_from_before_the_move_and_folds_wh
             label: "MacBook".to_owned(),
             origin: crate::model::LinkOrigin::Inbound,
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         },
         old_owner_herdr_socket: "/tmp/macbook-herdr.sock".to_owned(),
@@ -1462,71 +1921,6 @@ fn a_node_s_worktree_with_no_pane_keeps_its_id_from_before_the_move_and_folds_wh
             .all(|checkout| checkout.path != repo.linked),
         "{:?}",
         project.checkouts
-    );
-}
-
-/// A Factory on a node's project keeps its Local issues where that
-/// project's board reads them, under the node's id: its new issue continues
-/// the node project's numbers and shows on its Issues, and its marker finds
-/// that issue again; a project of this machine at the same path keeps its
-/// own issues untouched.
-#[test]
-fn a_factory_on_a_node_project_keeps_its_local_issues_under_the_node() {
-    use hide_factory::project::IssueBook;
-    let repo = repo(None, "feature");
-    let mut store = crate::local_issues::LocalIssueStore::default();
-    store
-        .projects
-        .insert(repo.root.clone(), local_project(&[(1, "this machine's")]));
-    store
-        .devices
-        .entry(NODE.to_owned())
-        .or_default()
-        .insert(repo.root.clone(), local_project(&[(4, "moved")]));
-    let shared = node_runtime(&repo, FakeDevice::new(), Recording::of(None), store);
-    let mut book = crate::factory::CoreIssues {
-        runtime: shared.weak(),
-    };
-    let number = book
-        .create(
-            Some(NODE),
-            &repo.root,
-            "Factory task",
-            "body <!-- f-1/t-1 -->",
-            "f-1/t-1",
-        )
-        .unwrap();
-    assert_eq!(number, 5);
-    assert_eq!(
-        book.create(Some(NODE), &repo.root, "again", "other body", "f-1/t-1")
-            .unwrap(),
-        5,
-        "the marker finds the issue it made"
-    );
-    assert_eq!(
-        book.read(Some(NODE), &repo.root, 5).unwrap().title,
-        "Factory task"
-    );
-    let runtime = shared.lock().unwrap();
-    assert_eq!(
-        task_ids(node_project(&runtime).unwrap()),
-        [
-            ("L-5".to_owned(), "Factory task".to_owned(), true),
-            ("L-4".to_owned(), "moved".to_owned(), true),
-        ]
-    );
-    let own = runtime
-        .local_issues
-        .as_ref()
-        .unwrap()
-        .project(None, &repo.root)
-        .unwrap();
-    assert_eq!(
-        own.issues
-            .iter()
-            .map(|issue| issue.title.as_str())
-            .collect::<Vec<_>>(),
-        ["this machine's"]
     );
 }
 

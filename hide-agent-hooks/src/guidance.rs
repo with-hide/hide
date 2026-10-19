@@ -1,18 +1,9 @@
-//! Hide's hook for the agents beyond Claude Code and Codex whose official
-//! documentation gives command hooks: Cursor and Grok (issue #517, PRD
-//! grok-cursor-hooks), and agy (PRD antigravity-first-class).
+//! Hide's command hooks for Grok and Antigravity, plus the ownership layouts
+//! retained only to remove retired agents' marked hooks.
 //!
-//! Claude Code and Codex are instrumented: their hooks count subagents,
-//! read Project Memory and pull letters (`install`, `runtime`). Cursor and
-//! Grok are the basic tier: neither documents a prompt hook that adds text,
-//! so they get no letters, Memory or bell. What they do document is a
-//! refusal of a shell call and the start and end of a subagent, so their
-//! hooks carry the spawn guard and the subagent count, and Cursor's session
-//! start also prints Hide's guidance in the field its documentation names
-//! (Grok discards what a session-start hook prints). This is a separate
-//! module with its own marker rather than more variants of
-//! [`crate::AgentRuntime`], whose six-event file, Memory and diagnosis these
-//! agents never feed (engineering rule 5, 13).
+//! Grok carries its spawn guard, subagent count and letter routes, while
+//! Antigravity's session and invocation events can add context.
+//! Cursor is retired: no new hook is installed and an old entry runs nothing.
 //!
 //! The rules are the ones `install` states for the other hooks: a file that
 //! does not parse is never written, what another tool wrote is never
@@ -31,7 +22,7 @@
 //! | Gemini CLI (retired) | `~/.gemini/settings.json` | `hooks.SessionStart[{matcher, hooks[{name, type, command, timeout ms}]}]` |
 //! | Qwen Code (retired) | `~/.qwen/settings.json` | `hooks.SessionStart[{hooks[{name, type, command, timeout s}]}]` |
 //! | Factory Droid (retired) | `~/.factory/hooks.json`, else the `hooks` key of `settings.json` | `SessionStart[{hooks[{type, command, timeout s}]}]` |
-//! | Cursor | `~/.cursor/hooks.json` | `{version 1, hooks.<camelCase event>[{command, timeout s, matcher?}]}` |
+//! | Cursor (retired) | `~/.cursor/hooks.json` | `{version 1, hooks.<camelCase event>[{command, timeout s, matcher?}]}` |
 //! | Grok | `~/.grok/hooks/hide.json`, Hide's own | `hooks.<Event>[{matcher?, hooks[{type, command, timeout s}]}]` |
 //! | agy | `~/.gemini/config/hooks.json`, the `hide` block | `hide.<Event>[{type, command, timeout s}]`, `hide.PreToolUse[{matcher, hooks[...]}]` |
 //!
@@ -48,6 +39,7 @@
 
 use std::path::{Path, PathBuf};
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -55,19 +47,12 @@ use crate::install::{
     HookDocument, HookStatus, InstallFailure, InstallOutcome, Quoting, RemoveOutcome,
     read_document, write_document,
 };
+use crate::route::HookTarget;
 use crate::runtime::{HookEvent, PURPOSE_CONTEXT, marker_version_of};
 
 /// The marker Hide stamps into every guidance hook it installs, carried as
 /// the `--source` argument of the command like the other hooks' marker.
 pub const GUIDANCE_SOURCE_NAME: &str = "hide-guidance";
-
-/// Raise it when the command or entry Hide writes changes shape. Version 2
-/// added the guard and subagent events beside Cursor's session start;
-/// version 3 stopped writing Cursor's `subagentStart`, `subagentStop` and
-/// `stop`, which only fed a count Cursor no longer reports (issue 940).
-/// Version 4 prepares Cursor's PowerShell input before starting the helper.
-/// Version 5 selects the file tools for the guardrails.
-pub const GUIDANCE_VERSION: u32 = 6;
 
 /// The one line every guidance hook adds after the shared instruction, so an
 /// agent that Hide cannot place in a Workspace still learns where the usage
@@ -95,6 +80,25 @@ pub enum GuidanceAgent {
 }
 
 impl GuidanceAgent {
+    /// Raise this agent's marker when its installed entry changes shape;
+    /// unrelated agents keep byte-identical hook entries.
+    /// The current active entries capture the daemon state route, including
+    /// Antigravity commands encoded across its Windows Go-to-cmd boundary.
+    pub const fn version(self) -> u32 {
+        match self {
+            Self::Grok => 9,
+            Self::Antigravity => 10,
+            Self::Cursor => 7,
+            Self::Gemini
+            | Self::Qwen
+            | Self::Droid
+            | Self::Copilot
+            | Self::Kiro
+            | Self::Augment
+            | Self::Junie => 6,
+        }
+    }
+
     pub const ALL: [GuidanceAgent; 10] = [
         Self::Gemini,
         Self::Qwen,
@@ -126,7 +130,7 @@ impl GuidanceAgent {
     }
 
     /// The agents Hide still writes a hook for, in Settings order.
-    pub const LIVE: [GuidanceAgent; 3] = [Self::Grok, Self::Cursor, Self::Antigravity];
+    pub const LIVE: [GuidanceAgent; 2] = [Self::Grok, Self::Antigravity];
 
     /// The agents whose hook an earlier build wrote and this one only removes.
     pub fn is_retired(self) -> bool {
@@ -138,7 +142,6 @@ impl GuidanceAgent {
     pub fn from_id(id: &str) -> Option<Self> {
         use hide_agent_adapter::{GuidanceDialect, HookInstall};
         match hide_agent_adapter::adapter(id)?.hook {
-            HookInstall::Guidance(GuidanceDialect::Cursor) => Some(Self::Cursor),
             HookInstall::Guidance(GuidanceDialect::Grok) => Some(Self::Grok),
             HookInstall::Guidance(GuidanceDialect::Antigravity) => Some(Self::Antigravity),
             _ => None,
@@ -149,7 +152,6 @@ impl GuidanceAgent {
     /// A retired agent has none: its entries run nothing.
     pub fn dialect(self) -> Option<hide_agent_adapter::HookDialect> {
         match self {
-            Self::Cursor => Some(hide_agent_adapter::HookDialect::Cursor),
             Self::Grok => Some(hide_agent_adapter::HookDialect::Grok),
             Self::Antigravity => Some(hide_agent_adapter::HookDialect::Antigravity),
             _ => None,
@@ -170,12 +172,23 @@ impl GuidanceAgent {
             Slot::new(HookEvent::PreToolUse, "preToolUse", None),
         ];
         const GROK: &[Slot] = &[
+            Slot::new(HookEvent::UserPromptSubmit, "UserPromptSubmit", None),
             Slot::new(HookEvent::SessionStart, "SessionStart", None),
             // Every tool call, which Grok's guide reads an omitted matcher
             // as: the guardrails read the shell and file calls, and the
             // letters due while the agent works go at any call's gap (PRD
             // letters-to-busy-agents B6).
             Slot::new(HookEvent::PreToolUse, "PreToolUse", None),
+            Slot::new(
+                HookEvent::PostToolUse,
+                "PostToolUse",
+                Some("run_terminal_command|Bash"),
+            ),
+            Slot::new(
+                HookEvent::PostToolUseFailure,
+                "PostToolUseFailure",
+                Some("run_terminal_command|Bash"),
+            ),
             Slot::new(HookEvent::SubagentStart, "SubagentStart", None),
             Slot::new(HookEvent::SubagentStop, "SubagentStop", None),
             Slot::new(HookEvent::Stop, "Stop", None),
@@ -183,16 +196,17 @@ impl GuidanceAgent {
         // agy's events: the first prompt of a conversation, every model call
         // (the helper reads it as the prompt hook), the tool call and the
         // turn's end. The matcher is a regular expression on the whole tool
-        // name: the shell, the file tools the guardrails judge and the
-        // question a Factory worker is refused (agy 1.3.6's CLI toolset).
+        // name: the shell and the file tools the guardrails judge
+        // (agy 1.3.6's CLI toolset).
         const ANTIGRAVITY: &[Slot] = &[
             Slot::new(HookEvent::SessionStart, "SessionStart", None),
             Slot::new(HookEvent::UserPromptSubmit, "PreInvocation", None),
+            Slot::new(HookEvent::PostToolUse, "PostToolUse", Some("run_command")),
             Slot::new(
                 HookEvent::PreToolUse,
                 "PreToolUse",
                 Some(
-                    "run_command|view_file|write_to_file|replace_file_content|multi_replace_file_content|ask_question",
+                    "run_command|view_file|write_to_file|replace_file_content|multi_replace_file_content",
                 ),
             ),
             Slot::new(HookEvent::Stop, "Stop", None),
@@ -448,11 +462,13 @@ pub fn stdout(agent: GuidanceAgent, context: &str) -> Option<String> {
 
 // --- Writing the entry -----------------------------------------------------------
 
-fn arguments(agent: GuidanceAgent, event: HookEvent) -> String {
+fn arguments(helper: HookTarget<'_>, agent: GuidanceAgent, event: HookEvent) -> String {
+    let version = agent.version();
     format!(
-        "hook --runtime {} --event {} --source {GUIDANCE_SOURCE_NAME}@{GUIDANCE_VERSION}",
+        "hook --runtime {} --event {} --source {GUIDANCE_SOURCE_NAME}@{version}{}",
         agent.id(),
-        event.name()
+        event.name(),
+        helper.arguments()
     )
 }
 
@@ -460,14 +476,15 @@ fn arguments(agent: GuidanceAgent, event: HookEvent) -> String {
 /// a removed app or helper folder is a hook that does nothing and succeeds
 /// (`docs/agent-hooks.md`, Installing). `otherwise` is what the command
 /// prints when the helper is gone.
-fn posix_command(
-    helper: &Path,
+fn posix_command<'a>(
+    helper: impl Into<HookTarget<'a>>,
     agent: GuidanceAgent,
     event: HookEvent,
     otherwise: Option<&str>,
 ) -> String {
+    let helper = helper.into();
     let quoted = Quoting::Posix.quote(&helper.display().to_string());
-    let arguments = arguments(agent, event);
+    let arguments = arguments(helper, agent, event);
     match otherwise {
         Some(text) => format!(
             "if [ -x {quoted} ]; then exec {quoted} {arguments}; else printf '%s\\n' {}; fi",
@@ -480,11 +497,16 @@ fn posix_command(
 /// The same guard for PowerShell: Copilot CLI's `powershell` key, and Grok's
 /// command on Windows, which Grok hands to `pwsh` or `powershell.exe` as
 /// `-NoProfile -NonInteractive -Command <command>` with the event on stdin.
-fn powershell_command(helper: &Path, agent: GuidanceAgent, event: HookEvent) -> String {
+fn powershell_command<'a>(
+    helper: impl Into<HookTarget<'a>>,
+    agent: GuidanceAgent,
+    event: HookEvent,
+) -> String {
+    let helper = helper.into();
     let quoted = Quoting::PowerShell.quote(&helper.display().to_string());
     format!(
         "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ & {quoted} {} }}",
-        arguments(agent, event)
+        arguments(helper, agent, event)
     )
 }
 
@@ -496,13 +518,18 @@ fn powershell_command(helper: &Path, agent: GuidanceAgent, event: HookEvent) -> 
 /// reports the gone helper. A path with a character a shell would read keeps
 /// the quoted, guarded form, which for a permission event prints the allow
 /// answer itself when the helper is gone.
-fn plain_command(helper: &Path, agent: GuidanceAgent, event: HookEvent) -> String {
+fn plain_command<'a>(
+    helper: impl Into<HookTarget<'a>>,
+    agent: GuidanceAgent,
+    event: HookEvent,
+) -> String {
+    let helper = helper.into();
     let path = helper.display().to_string();
     let plain = path
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || "/._+@:~-".contains(c));
     if plain {
-        format!("{path} {}", arguments(agent, event))
+        format!("{path} {}", arguments(helper, agent, event))
     } else {
         posix_command(
             helper,
@@ -522,11 +549,12 @@ fn plain_command(helper: &Path, agent: GuidanceAgent, event: HookEvent) -> Strin
 /// on a cold formatter rather than reading the event (issue 987).
 /// A missing helper still answers allow for a permission event, as the
 /// POSIX guard does.
-fn cursor_powershell_command(helper: &Path, event: HookEvent) -> String {
+fn cursor_powershell_command<'a>(helper: impl Into<HookTarget<'a>>, event: HookEvent) -> String {
+    let helper = helper.into();
     let quoted = Quoting::PowerShell.quote(&helper.display().to_string());
     let run = format!(
         "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ $payload = $input | Out-String -Stream; $payload | & {quoted} {} }}",
-        arguments(GuidanceAgent::Cursor, event)
+        arguments(helper, GuidanceAgent::Cursor, event)
     );
     if crate::basic::cursor_permission_event(event) {
         format!(
@@ -543,34 +571,66 @@ fn cursor_powershell_command(helper: &Path, event: HookEvent) -> String {
 /// when the helper is gone and when it ends without answering (a binary that
 /// cannot run, a crash): the helper prints its one line last and exits 0 on
 /// every path it reaches, so a failed run has printed nothing.
-fn antigravity_tool_command(helper: &Path) -> String {
+fn antigravity_tool_command<'a>(helper: impl Into<HookTarget<'a>>) -> String {
+    let helper = helper.into();
     let quoted = Quoting::Posix.quote(&helper.display().to_string());
-    let arguments = arguments(GuidanceAgent::Antigravity, HookEvent::PreToolUse);
+    let arguments = arguments(helper, GuidanceAgent::Antigravity, HookEvent::PreToolUse);
     let ask = Quoting::Posix.quote(crate::antigravity::ASK);
     format!(
         "if [ -x {quoted} ]; then {quoted} {arguments} || printf '%s\\n' {ask}; else printf '%s\\n' {ask}; fi"
     )
 }
 
-/// agy's command on Windows, which agy hands to `cmd /c`: it runs the helper
-/// while it is there and, for a tool call, answers ask itself when it is
-/// gone or fails, as [`antigravity_tool_command`] does.
-fn cmd_command(helper: &Path, agent: GuidanceAgent, event: HookEvent) -> String {
-    let quoted = Quoting::Cmd.quote(&helper.display().to_string());
-    let run = format!("{quoted} {}", arguments(agent, event));
-    if event == HookEvent::PreToolUse {
-        let ask = crate::antigravity::ASK;
-        format!("if exist {quoted} ({run} || echo {ask}) else (echo {ask})")
+/// agy 1.4.2 passes the command to cmd using Go's argument escaping, which
+/// turns embedded quotes into backslash-quote. cmd treats that backslash
+/// literally, so a quoted `if exist` path never reaches the helper. An
+/// encoded PowerShell command has no embedded quotes for that boundary.
+const AGY_WINDOWS_COMMAND: &str = "powershell.exe -NoProfile -NonInteractive -EncodedCommand ";
+
+fn antigravity_windows_command<'a>(helper: impl Into<HookTarget<'a>>, event: HookEvent) -> String {
+    let helper = helper.into();
+    let quoted = Quoting::PowerShell.quote(&helper.display().to_string());
+    let run = format!(
+        "& {quoted} {}",
+        arguments(helper, GuidanceAgent::Antigravity, event)
+    );
+    let script = if event == HookEvent::PreToolUse {
+        let ask = Quoting::PowerShell.quote(crate::antigravity::ASK);
+        format!(
+            "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ try {{ {run}; if ($LASTEXITCODE -ne 0) {{ {ask} }} }} catch {{ {ask} }} }} else {{ {ask} }}; exit 0"
+        )
     } else {
-        format!("if exist {quoted} ({run})")
+        format!("if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ {run} }}")
+    };
+    let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    format!(
+        "{AGY_WINDOWS_COMMAND}{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    )
+}
+
+/// Decode only the form Hide writes. Ownership, read-back and migration
+/// inspect the same script that PowerShell runs; malformed encodings are
+/// not claimed as Hide's entries.
+fn decoded_windows_command(text: &str) -> Option<String> {
+    let encoded = text.strip_prefix(AGY_WINDOWS_COMMAND)?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    let (pairs, remainder) = bytes.as_chunks::<2>();
+    if !remainder.is_empty() {
+        return None;
     }
+    let units: Vec<u16> = pairs.iter().copied().map(u16::from_le_bytes).collect();
+    String::from_utf16(&units).ok()
 }
 
 /// The entry Hide writes for `slot`.
-fn entry(agent: GuidanceAgent, helper: &Path, slot: &Slot) -> Value {
+fn entry<'a>(agent: GuidanceAgent, helper: impl Into<HookTarget<'a>>, slot: &Slot) -> Value {
+    let helper = helper.into();
     let event = slot.event;
     let command = if cfg!(windows) && agent == GuidanceAgent::Antigravity {
-        cmd_command(helper, agent, event)
+        antigravity_windows_command(helper, event)
     } else if agent == GuidanceAgent::Antigravity && event == HookEvent::PreToolUse {
         antigravity_tool_command(helper)
     } else if cfg!(windows) && agent == GuidanceAgent::Cursor {
@@ -770,7 +830,10 @@ fn entry_marker_version(entry: &Value) -> Option<u32> {
     strings(entry, &mut found);
     found
         .into_iter()
-        .filter_map(|text| marker_version_of(GUIDANCE_SOURCE_NAME, text))
+        .filter_map(|text| {
+            let decoded = decoded_windows_command(text);
+            marker_version_of(GUIDANCE_SOURCE_NAME, decoded.as_deref().unwrap_or(text))
+        })
         .min()
 }
 
@@ -778,18 +841,24 @@ fn entry_marker_version(entry: &Value) -> Option<u32> {
 fn entry_helper(agent: GuidanceAgent, entry: &Value) -> Option<String> {
     let mut found = Vec::new();
     strings(entry, &mut found);
-    found
-        .into_iter()
-        .filter(|text| text.contains(GUIDANCE_SOURCE_NAME))
-        .find_map(|text| {
-            agent.quoting().first_quoted(text).or_else(|| {
-                // Cursor's plain form: the helper's path, then its arguments.
-                text.split_whitespace()
-                    .next()
-                    .filter(|first| first.starts_with('/'))
-                    .map(str::to_owned)
-            })
+    found.into_iter().find_map(|text| {
+        if let Some(decoded) = decoded_windows_command(text) {
+            return decoded
+                .contains(GUIDANCE_SOURCE_NAME)
+                .then(|| Quoting::PowerShell.first_quoted(&decoded))
+                .flatten();
+        }
+        if !text.contains(GUIDANCE_SOURCE_NAME) {
+            return None;
+        }
+        agent.quoting().first_quoted(text).or_else(|| {
+            // Cursor's plain form: the helper's path, then its arguments.
+            text.split_whitespace()
+                .next()
+                .filter(|first| first.starts_with('/'))
+                .map(str::to_owned)
         })
+    })
 }
 
 /// Takes Hide's own hook out of `list` and nothing else. A group another
@@ -867,7 +936,7 @@ pub fn status(agent: GuidanceAgent, home: &Path) -> HookStatus {
             },
         };
     }
-    if missing_event || version < GUIDANCE_VERSION {
+    if missing_event || version < agent.version() {
         HookStatus::Outdated { version }
     } else {
         HookStatus::Installed { version }
@@ -894,7 +963,12 @@ pub fn installed_helper_path(agent: GuidanceAgent, home: &Path) -> Option<String
 /// entry that carries Hide's marker over anything else was edited, and the
 /// kit reads it Outdated and leaves it until Reinstall (PRD grok-cursor-hooks
 /// B8).
-pub fn matches_install(agent: GuidanceAgent, home: &Path, helper: &Path) -> bool {
+pub fn matches_install<'a>(
+    agent: GuidanceAgent,
+    home: &Path,
+    helper: impl Into<HookTarget<'a>>,
+) -> bool {
+    let helper = helper.into();
     let layout = agent.layout(home);
     let Ok(Some(mut document)) = read_document(&layout.path) else {
         return false;
@@ -911,6 +985,40 @@ pub fn matches_install(agent: GuidanceAgent, home: &Path, helper: &Path) -> bool
     })
 }
 
+/// A complete generated command may move to a different state folder;
+/// commands with operator edits still fail the exact comparison.
+pub fn matches_helper(agent: GuidanceAgent, home: &Path, helper: &Path) -> bool {
+    let Ok(Some(document)) = read_document(&agent.layout(home).path) else {
+        return false;
+    };
+    let mut texts = Vec::new();
+    strings(&document, &mut texts);
+    let mut state = None;
+    for text in texts {
+        let decoded = decoded_windows_command(text);
+        let command = decoded.as_deref().unwrap_or(text);
+        if entry_marker_version(&Value::String(text.to_owned())).is_none() {
+            continue;
+        }
+        match crate::route::in_command(command) {
+            Ok(Some(found)) => {
+                if state.as_ref().is_some_and(|state| state != &found) {
+                    return false;
+                }
+                state = Some(found);
+            }
+            Ok(None) => {}
+            Err(()) => return false,
+        }
+    }
+    match state {
+        Some(state) => {
+            HookTarget::new(helper, &state).is_ok_and(|target| matches_install(agent, home, target))
+        }
+        None => false,
+    }
+}
+
 fn blank_document(layout: &Layout) -> Value {
     match layout.shape {
         Shape::EventMap { .. } | Shape::NamedBlock { .. } => Value::Object(Map::new()),
@@ -921,11 +1029,12 @@ fn blank_document(layout: &Layout) -> Value {
 
 /// Appends Hide's entries, preserving everything already in the file; a
 /// second install converges on one entry per event.
-pub fn install(
+pub fn install<'a>(
     agent: GuidanceAgent,
     home: &Path,
-    helper: &Path,
+    helper: impl Into<HookTarget<'a>>,
 ) -> Result<InstallOutcome, InstallFailure> {
+    let helper = helper.into();
     if agent.is_retired() {
         return Err(failure_shape(
             &agent.config_path(home),
@@ -938,13 +1047,6 @@ pub fn install(
             path: agent.config_path(home).display().to_string(),
             detail: why.to_owned(),
         })?;
-    if agent.quoting() == Quoting::Cmd && !Quoting::cmd_safe(&helper.display().to_string()) {
-        return Err(InstallFailure::UnexpectedShape {
-            path: agent.config_path(home).display().to_string(),
-            detail: "the helper's path holds a character cmd would read inside its quotes"
-                .to_owned(),
-        });
-    }
     let outcome = install_any(agent, home, helper)?;
     if agent == GuidanceAgent::Antigravity {
         crate::antigravity_trust::prepare_read_only(home)?;
@@ -956,11 +1058,12 @@ pub fn install(
 /// lay down the files an earlier build wrote for a retired agent, on any
 /// system, since taking such an entry out never depends on the system's hook
 /// shell.
-fn install_any(
+fn install_any<'a>(
     agent: GuidanceAgent,
     home: &Path,
-    helper: &Path,
+    helper: impl Into<HookTarget<'a>>,
 ) -> Result<InstallOutcome, InstallFailure> {
+    let helper = helper.into();
     let layout = agent.layout(home);
     let mut document =
         read_document(&layout.path)?.unwrap_or_else(|| HookDocument::new(blank_document(&layout)));

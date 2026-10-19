@@ -255,7 +255,7 @@ class ScenePreparation(unittest.TestCase):
     def test_non_jsonl_providers_seed_real_completed_native_prompts_for_resume(self):
         checkout = Path(__file__).resolve().parents[2]
         data = recipes(checkout / "scripts/agent_live_check/recipes", source_contract(checkout)["targets"])
-        for key in ("grok", "opencode", "cursor"):
+        for key in ("grok", "opencode"):
             recipe, index, submitted = data[key], [0], []
             screens = ["❯ ", LABEL + "\nWorking", LABEL + "\n❯ "]
             statuses = ["idle", "working", "done"]

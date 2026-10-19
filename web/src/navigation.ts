@@ -17,6 +17,7 @@ import { machineName, windowDeviceId } from "./screenMachine";
 import { hideAiPlace } from "./hideAiOrigin";
 import { focusedRemoteDevice, frontCheckout, localDeviceId, type AgentRow, type Device, type HideAi, type RemoteStatus, type SnapshotRest, type Workspace, type WorkspaceRegistration } from "./snapshot";
 import type { Tool } from "./workspace";
+import { startAnswer } from "./startAnswer";
 
 export type AgentGroup = "needs_you" | "done" | "working" | "seen";
 export const AGENT_GROUPS: readonly { group: AgentGroup; label: MessageKey }[] = [
@@ -374,7 +375,7 @@ export function startupScreen(rest: SnapshotRest | null, hasFront: boolean): "wo
 }
 
 /** What All projects, an Overview or the Agents list asked to bring forward (B2, B12, B21). */
-export type OpenTarget = { checkoutId: string; deviceId: string; path: string | null; workspaceId?: string; expanded?: boolean; tool?: Tool } | { paneId: string };
+export type OpenTarget = { checkoutId: string; deviceId: string; path: string | null; workspaceId?: string; expanded?: boolean; tool?: Tool } | { paneId: string } | { startRequestId: string };
 
 /**
  * A Workspace or agent asked for and not yet in front. The screen changes
@@ -391,6 +392,11 @@ export const OPEN_ANSWER_TIMEOUT_MS = 15_000;
 export function openingLanded(rest: SnapshotRest | null, target: OpenTarget): boolean {
   const front = frontCheckout(rest);
   if (!front) return false;
+  if ("startRequestId" in target) {
+    const answer = startAnswer(rest, target.startRequestId);
+    return answer.phase === "ready" && answer.paneId !== null && rest?.focused?.pane_id === answer.paneId
+      && front.tabs.some((tab) => tab.panes.some((pane) => pane.id === answer.paneId));
+  }
   if ("paneId" in target) return front.tabs.some((tab) => tab.panes.some((pane) => pane.id === target.paneId));
   if (target.tool !== undefined) {
     const view = rest?.workspace_view;
@@ -405,6 +411,13 @@ export function openingLanded(rest: SnapshotRest | null, target: OpenTarget): bo
 /** A vanished local target is cancelled silently; other refusals keep their existing message. */
 export function openingProgress(rest: SnapshotRest | null, opening: Opening): "landed" | string | null {
   const target = opening.target;
+  if ("startRequestId" in target) {
+    const answer = startAnswer(rest, target.startRequestId);
+    // The start panel owns its refusal and draft. This intent only presents
+    // the core's accepted selection; it never sends another focus request.
+    if (answer.phase === "refused" || answer.phase === "failed") return "cancelled";
+    return openingLanded(rest, target) ? "landed" : null;
+  }
   if (rest?.navigator?.workspaces && "checkoutId" in target && target.deviceId === localDeviceId(rest) && target.workspaceId !== undefined
     && !rest.navigator.workspaces.some((workspace) => workspace.id === target.workspaceId && workspace.checkouts.some((checkout) => checkout.id === target.checkoutId))) return "cancelled";
   if (openingLanded(rest, target)) return "landed";

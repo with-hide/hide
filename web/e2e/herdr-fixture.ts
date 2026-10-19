@@ -327,7 +327,7 @@ export function linkFixtureTranscripts(fixture: Pick<HerdrFixture, "root">, home
 export function labelMarker(label: FixtureLabel): string {
   const answer = {
     goal: label.task,
-    goal_changed: true,
+    goal_update: "replace",
     // One line: the reply asked for when there is one, else the progress.
     line: label.reply ?? label.progress ?? "",
     end: label.end ?? (label.question ? "question" : "done"),

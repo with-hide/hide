@@ -1,8 +1,8 @@
-// hide-opencode-server@1 sha256=28d47b197fe67c3fbb0ac222f341ae563b7999c653d2f8593330775fe732f643
+// hide-opencode-server@4 sha256=a97053c5554a9de02eb99213935a006f1ff0fb4359464b48ae02b6006f0468d1
 // Hide's OpenCode 2 plugin, its server half, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // OpenCode 2 runs one server for every terminal attached to it, so this half is never any pane's: what needs the
-// pane (letters, guidance, Memory, the spawn and Factory guards, subagent counts) is asked of the TUI half, `tui.js`
+// pane (letters, guidance, Memory, the spawn guard, subagent counts) is asked of the TUI half, `tui.js`
 // beside it, which runs in the terminal that shows the session. Without one it only guards a protected project.
 
 import { spawn } from "node:child_process";
@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 const HELPER = "/kit path/it's/hide-agent-hooks";
+const ROUTE = [];
 
 // The budgets are the 1.x plugin's (`../hide.js`): the prompt one is Claude Code's prompt hook's, the tool one the
 // spawn guard's. A question to the TUI half spends the same budget, its trip included.
@@ -129,7 +130,7 @@ export function helper(state, operation, input, budgetMs, env = process.env) {
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(HELPER, ["opencode", operation], { stdio: ["pipe", "pipe", "ignore"], env });
+      child = spawn(HELPER, ["opencode", operation, ...ROUTE], { stdio: ["pipe", "pipe", "ignore"], env });
     } catch {
       resolve(null);
       return;
@@ -413,7 +414,7 @@ async function onPrompt(state, ctx, registration, event) {
 
 /**
  * The guards for one tool call: the terminal showing the session runs every one (the project's guardrails, the
- * spawn guard, the Factory worker's question guard); with none, or none answering, this half runs the guardrails
+ * spawn guard); with none, or none answering, this half runs the guardrails
  * alone, outside any pane. The refusal's reason, or null.
  */
 async function onTool(state, ctx, registration, event) {
@@ -427,8 +428,6 @@ async function onTool(state, ctx, registration, event) {
     request = { tool, command, cwd: workingFolder(input.workdir, directory) };
   } else if (FILE_TOOLS.has(tool)) {
     request = { tool, args: fileArgs(input), cwd: directory };
-  } else if (tool === "question") {
-    request = { tool };
   } else {
     return null;
   }
@@ -436,19 +435,18 @@ async function onTool(state, ctx, registration, event) {
   // terminal showing that session's root is then asked.
   const known = await rootOf(state, ctx, event.sessionID);
   const root = known ?? event.sessionID;
-  const guarded = tool !== "question" && policyOn();
+  const guarded = policyOn();
   // A shell call that can start an agent through Herdr is the spawn guard's.
   const launch = tool === "shell" && (request.command.includes("herdr") || request.command.includes("HERDR_BIN_PATH"));
   // The terminal is asked for what only a pane can judge, and then judges the guardrails too; a missing or
-  // unreadable policy is judged there, where the helper records why. A question no terminal answered in time lets
-  // the call run, as a timed-out helper does in the 1.x plugin, and reaches the diagnostic.
-  if ((known === undefined || terminalOf(state, root)) && (tool === "question" || launch || guarded !== false)) {
+  // unreadable policy is judged there, where the helper records why.
+  if ((known === undefined || terminalOf(state, root)) && (launch || guarded !== false)) {
     // The core knows the pane by the root session Herdr's integration reports, also for a subagent's call.
-    const session_id = tool === "question" ? root : event.sessionID;
+    const session_id = event.sessionID;
     const answer = await ask(state, registration, root, "tool", { ...request, session_id }, TOOL_BUDGET_MS, known === undefined);
     if (answer !== null) return typeof answer.deny === "string" && answer.deny ? answer.deny : null;
   }
-  if (!guarded || tool === "question") return null;
+  if (!guarded) return null;
   const answer = await helper(state, "tool", { ...request, session_id: event.sessionID, guard_only: true }, TOOL_BUDGET_MS, serverEnv());
   return typeof answer?.deny === "string" && answer.deny ? answer.deny : null;
 }
@@ -459,6 +457,7 @@ async function onTool(state, ctx, registration, event) {
  * whose letters wait for their receipt asks nothing: those are not written twice.
  */
 async function onToolResult(state, ctx, registration, event) {
+  await observeTool(state, ctx, registration, event);
   const sessionID = event?.sessionID;
   const key = toolKey(sessionID, event?.id);
   if (!key || event.status !== "completed" || !Array.isArray(event.result?.content)) return;
@@ -472,6 +471,24 @@ async function onToolResult(state, ctx, registration, event) {
   const text = reminder(answer.context);
   event.result = { ...event.result, content: [...event.result.content, { type: "text", text }] };
   if (letters.length > 0) holdReceipt(state, key, { root: sessionID, letters, text });
+}
+
+/** The shared server has no pane credential. Only the terminal already
+ * attached to the actual session's root may run the observation helper. */
+async function observeTool(state, ctx, registration, event) {
+  const command = event?.input?.command;
+  if (event?.tool !== "shell" || typeof command !== "string" || !(command.includes("herdr") || command.includes("HERDR_BIN_PATH"))) return;
+  if (!['completed', 'error'].includes(event.status) || typeof event.sessionID !== "string" || typeof event.id !== "string") return;
+  if (Buffer.byteLength(command, "utf8") > 64 * 1024) { state.lost += 1; return; }
+  const known = await rootOf(state, ctx, event.sessionID);
+  const root = known ?? event.sessionID;
+  const content = event.result?.content;
+  const truncated = Array.isArray(content) && (content.length > 16 || content.reduce((sum, part) => sum + (typeof part?.text === "string" ? Buffer.byteLength(part.text, "utf8") : 0), 0) > 128 * 1024);
+  const result = !truncated && Array.isArray(content) && content.every((part) => part?.type === "text" && typeof part.text === "string") ? { content: content.filter((part) => part?.type === "text").map((part) => ({ type: "text", text: part.text })) } : null;
+  await ask(state, registration, root, "observation", {
+    session_id: event.sessionID,
+    observation: { command, call_id: event.id, result, truncated, failed: event.status === "error" },
+  }, 1500, known === undefined);
 }
 
 /** OpenCode's events: a session's line, and the writes Hide's letters wait for. */

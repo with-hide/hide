@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::route::HookTarget;
 use crate::runtime::{AgentRuntime, HookEvent, hook_source_id, marker_version_in};
 
 /// Why Hide did not change a runtime's hook file.
@@ -125,7 +126,7 @@ pub fn status(runtime: AgentRuntime, home: &Path) -> HookStatus {
     };
     let mut lowest: Option<u32> = None;
     let mut missing_event = false;
-    for event in HookEvent::ALL {
+    for event in runtime.events() {
         let groups = hooks.get(event.name()).and_then(Value::as_array);
         // An entry of Hide's that selects other tools than the ones Hide
         // writes today is outdated whatever its version says: the file does
@@ -157,7 +158,7 @@ pub fn status(runtime: AgentRuntime, home: &Path) -> HookStatus {
             },
         };
     }
-    if missing_event || version < crate::runtime::HOOK_VERSION {
+    if missing_event || version < crate::runtime::HOOK_ENTRY_VERSION {
         HookStatus::Outdated { version }
     } else {
         HookStatus::Installed { version }
@@ -170,18 +171,19 @@ pub fn status(runtime: AgentRuntime, home: &Path) -> HookStatus {
 /// `helper` is the absolute path of the `hide-agent-hooks` executable the
 /// hook will run. It is written into the command verbatim, so the caller
 /// hands the path of the bundle that is actually running.
-pub fn install(
+pub fn install<'a>(
     runtime: AgentRuntime,
     home: &Path,
-    helper: &Path,
+    helper: impl Into<HookTarget<'a>>,
 ) -> Result<InstallOutcome, InstallFailure> {
+    let helper = helper.into();
     let path = runtime.config_path(home);
     let mut document =
         read_document(&path)?.unwrap_or_else(|| HookDocument::new(Value::Object(Map::new())));
     let before = document.value.clone();
     let hooks = hooks_object_mut(&mut document, &path)?;
     let mut preserved = 0usize;
-    for event in HookEvent::ALL {
+    for event in runtime.events() {
         let groups = event_array_mut(hooks, event, &path)?;
         // Remove Hide's own entries first so a second install converges on
         // one entry per event rather than appending another
@@ -201,6 +203,76 @@ pub fn install(
         changed: true,
         preserved_entries: preserved,
     })
+}
+
+/// Whether each owned entry is exactly the command this target installs.
+pub fn matches_install<'a>(
+    runtime: AgentRuntime,
+    home: &Path,
+    helper: impl Into<HookTarget<'a>>,
+) -> bool {
+    let helper = helper.into();
+    let Ok(Some(document)) = read_document(&runtime.config_path(home)) else {
+        return false;
+    };
+    runtime.events().all(|event| {
+        let Some(groups) = document
+            .get(HOOKS_KEY)
+            .and_then(|hooks| hooks.get(event.name()))
+            .and_then(Value::as_array)
+        else {
+            return false;
+        };
+        let mut owned = groups
+            .iter()
+            .filter(|group| group_marker_version(group).is_some());
+        owned.next() == Some(&hook_group(helper, runtime, event)) && owned.next().is_none()
+    })
+}
+
+/// A generated entry for this helper at a previous state route is stale;
+/// arbitrary edits are not permission for the kit to replace the entry.
+pub fn matches_helper(runtime: AgentRuntime, home: &Path, helper: &Path) -> bool {
+    let Ok(Some(document)) = read_document(&runtime.config_path(home)) else {
+        return false;
+    };
+    let mut state = None;
+    let Some(hooks) = document.get(HOOKS_KEY).and_then(Value::as_object) else {
+        return false;
+    };
+    for group in hooks
+        .values()
+        .filter_map(Value::as_array)
+        .flatten()
+        .filter(|group| group_marker_version(group).is_some())
+    {
+        for hook in group
+            .get("hooks")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            for text in hook_texts(hook) {
+                match crate::route::in_command(text) {
+                    Ok(Some(found)) => {
+                        if state.as_ref().is_some_and(|state| state != &found) {
+                            return false;
+                        }
+                        state = Some(found);
+                    }
+                    Ok(None) => {}
+                    Err(()) => return false,
+                }
+            }
+        }
+    }
+    match state {
+        Some(state) => HookTarget::new(helper, &state)
+            .is_ok_and(|target| matches_install(runtime, home, target)),
+        // This version always installs a route. Removing it is an edit;
+        // older unbound versions are upgraded by the marker-version check.
+        None => false,
+    }
 }
 
 /// Takes out only the entries carrying Hide's marker.
@@ -261,7 +333,12 @@ pub fn remove(runtime: AgentRuntime, home: &Path) -> Result<RemoveOutcome, Insta
 /// file or directory`, which is what happened on 2026-09-10; guarded, a
 /// missing helper is a hook that does nothing and succeeds (PRD
 /// device-parity D-11, B3).
-fn hook_group(helper: &Path, runtime: AgentRuntime, event: HookEvent) -> Value {
+fn hook_group<'a>(
+    helper: impl Into<HookTarget<'a>>,
+    runtime: AgentRuntime,
+    event: HookEvent,
+) -> Value {
+    let helper = helper.into();
     let hook = if cfg!(windows) {
         windows_hook(helper, runtime, event)
     } else {
@@ -289,6 +366,7 @@ fn hook_group(helper: &Path, runtime: AgentRuntime, event: HookEvent) -> Value {
 /// tool, measured 2026-10-15), so each question tool is named.
 pub(crate) fn hook_matcher(runtime: AgentRuntime, event: HookEvent) -> Option<&'static str> {
     match (runtime, event) {
+        (_, HookEvent::PostToolUse | HookEvent::PostToolUseFailure) => Some("Bash|PowerShell"),
         (AgentRuntime::ClaudeCode, HookEvent::PreToolUse) => {
             Some("Bash|AskUserQuestion|ExitPlanMode|Edit|Write|MultiEdit|NotebookEdit|Read")
         }
@@ -301,23 +379,32 @@ pub(crate) fn hook_matcher(runtime: AgentRuntime, event: HookEvent) -> Option<&'
 
 /// The arguments the helper runs with, after its path. The guard reads no
 /// Memory, so its entry does not ask for the Memory input.
-fn helper_arguments(runtime: AgentRuntime, event: HookEvent) -> String {
-    let memory = if event == HookEvent::PreToolUse {
+fn helper_arguments(helper: HookTarget<'_>, runtime: AgentRuntime, event: HookEvent) -> String {
+    let memory = if matches!(
+        event,
+        HookEvent::PreToolUse | HookEvent::PostToolUse | HookEvent::PostToolUseFailure
+    ) {
         ""
     } else {
         " --memory-injection"
     };
     format!(
-        "hook --runtime {} --event {}{memory} --source {}",
+        "hook --runtime {} --event {}{memory} --source {}{}",
         runtime.id(),
         event.name(),
-        hook_source_id()
+        hook_source_id(),
+        helper.arguments()
     )
 }
 
 /// macOS and Linux: both runtimes hand the command to a POSIX shell (Claude
 /// Code `sh -c`, Codex the session's shell, zsh or bash, with `-c`).
-fn posix_hook(helper: &Path, runtime: AgentRuntime, event: HookEvent) -> Value {
+fn posix_hook<'a>(
+    helper: impl Into<HookTarget<'a>>,
+    runtime: AgentRuntime,
+    event: HookEvent,
+) -> Value {
+    let helper = helper.into();
     serde_json::json!({
         "type": "command",
         "command": posix_command(helper, runtime, event),
@@ -325,11 +412,16 @@ fn posix_hook(helper: &Path, runtime: AgentRuntime, event: HookEvent) -> Value {
     })
 }
 
-fn posix_command(helper: &Path, runtime: AgentRuntime, event: HookEvent) -> String {
+fn posix_command<'a>(
+    helper: impl Into<HookTarget<'a>>,
+    runtime: AgentRuntime,
+    event: HookEvent,
+) -> String {
+    let helper = helper.into();
     let quoted = Quoting::Posix.quote(&helper.display().to_string());
     format!(
         "if [ -x {quoted} ]; then exec {quoted} {}; fi",
-        helper_arguments(runtime, event)
+        helper_arguments(helper, runtime, event)
     )
 }
 
@@ -339,7 +431,12 @@ fn posix_command(helper: &Path, runtime: AgentRuntime, event: HookEvent) -> Stri
 /// through Git Bash when it is installed and PowerShell otherwise, so its
 /// entry names PowerShell itself in exec form (`args`), which no shell
 /// re-parses and which runs the same on every machine.
-fn windows_hook(helper: &Path, runtime: AgentRuntime, event: HookEvent) -> Value {
+fn windows_hook<'a>(
+    helper: impl Into<HookTarget<'a>>,
+    runtime: AgentRuntime,
+    event: HookEvent,
+) -> Value {
+    let helper = helper.into();
     let guard = windows_guard(helper, runtime, event);
     match runtime {
         AgentRuntime::ClaudeCode => serde_json::json!({
@@ -356,11 +453,16 @@ fn windows_hook(helper: &Path, runtime: AgentRuntime, event: HookEvent) -> Value
     }
 }
 
-fn windows_guard(helper: &Path, runtime: AgentRuntime, event: HookEvent) -> String {
+fn windows_guard<'a>(
+    helper: impl Into<HookTarget<'a>>,
+    runtime: AgentRuntime,
+    event: HookEvent,
+) -> String {
+    let helper = helper.into();
     let quoted = Quoting::PowerShell.quote(&helper.display().to_string());
     format!(
         "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ & {quoted} {} }}",
-        helper_arguments(runtime, event)
+        helper_arguments(helper, runtime, event)
     )
 }
 
@@ -368,7 +470,8 @@ fn windows_guard(helper: &Path, runtime: AgentRuntime, event: HookEvent) -> Stri
 /// system. Codex takes the command string itself on every system, so this is
 /// the whole of what Codex hashes and shows for the entry; the trust step
 /// compares against it instead of rebuilding it (`crate::codex_trust`).
-pub(crate) fn codex_command(helper: &Path, event: HookEvent) -> String {
+pub(crate) fn codex_command<'a>(helper: impl Into<HookTarget<'a>>, event: HookEvent) -> String {
+    let helper = helper.into();
     if cfg!(windows) {
         windows_guard(helper, AgentRuntime::Codex, event)
     } else {
@@ -390,10 +493,8 @@ pub(crate) enum Quoting {
     /// Single quotes, a quote inside doubled. PowerShell takes the
     /// typographic single quotes for `'` as well, so they are doubled too.
     PowerShell,
-    /// Double quotes, for a command `cmd /c` runs (agy's hooks on Windows).
-    /// A Windows path holds no `"`, and one that holds a `%`, which cmd
-    /// expands inside quotes too, is refused before it is written
-    /// ([`Self::cmd_safe`]).
+    /// Double quotes in agy's legacy Windows commands, retained for reading
+    /// and migrating the entries written before guidance version 7.
     Cmd,
 }
 
@@ -406,11 +507,6 @@ impl Quoting {
 
     pub(crate) const POWERSHELL_QUOTES: [char; 5] =
         ['\'', '\u{2018}', '\u{2019}', '\u{201A}', '\u{201B}'];
-
-    /// Whether `value` reads the same inside cmd's double quotes.
-    pub(crate) fn cmd_safe(value: &str) -> bool {
-        !value.contains(['"', '%', '\n', '\r'])
-    }
 
     pub(crate) fn quote(self, value: &str) -> String {
         match self {
@@ -818,7 +914,7 @@ mod tests {
         // And removal works without the binary, because it reads the file.
         let outcome = remove(runtime, fixture.home()).unwrap();
         assert!(outcome.changed);
-        assert_eq!(outcome.removed_entries, HookEvent::ALL.len());
+        assert_eq!(outcome.removed_entries, runtime.events().count());
         assert!(matches!(
             status(runtime, fixture.home()),
             HookStatus::NotInstalled
@@ -917,7 +1013,7 @@ mod tests {
             .unwrap();
         assert!(session_start_command.contains("--runtime codex"));
         assert!(session_start_command.contains("--memory-injection"));
-        assert!(session_start_command.contains("--source hide-subagents@8"));
+        assert!(session_start_command.contains("--source hide-subagents@10"));
         let guard = if cfg!(windows) {
             "if (Test-Path -LiteralPath '"
         } else {
@@ -929,7 +1025,7 @@ mod tests {
         );
     }
 
-    /// The bytes version seven writes on Mac and Linux. Changing them makes
+    /// The unbound command bytes on macOS and Linux. Changing them makes
     /// every installed entry read as another build's, so they are pinned as
     /// independent literals, quote escaping included.
     #[test]
@@ -940,12 +1036,12 @@ mod tests {
             (
                 AgentRuntime::ClaudeCode,
                 HookEvent::SessionStart,
-                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime claude-code --event SessionStart --memory-injection --source hide-subagents@8; fi","timeout":8}"#,
+                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime claude-code --event SessionStart --memory-injection --source hide-subagents@10; fi","timeout":8}"#,
             ),
             (
                 AgentRuntime::Codex,
                 HookEvent::Stop,
-                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime codex --event Stop --memory-injection --source hide-subagents@8; fi","timeout":8}"#,
+                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime codex --event Stop --memory-injection --source hide-subagents@10; fi","timeout":8}"#,
             ),
         ];
         for (runtime, event, bytes) in pinned {
@@ -976,7 +1072,7 @@ mod tests {
         let quoted = "'C:\\Users\\example\\a b''c\\it\u{2019}\u{2019}s\\hide-agent-hooks.exe'";
         let guard = |runtime: &str| {
             format!(
-                "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ & {quoted} hook --runtime {runtime} --event Stop --memory-injection --source hide-subagents@8 }}"
+                "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ & {quoted} hook --runtime {runtime} --event Stop --memory-injection --source hide-subagents@10 }}"
             )
         };
         let codex = windows_hook(helper, AgentRuntime::Codex, HookEvent::Stop);
@@ -998,7 +1094,7 @@ mod tests {
             let group = serde_json::json!({ "hooks": [hook] });
             assert_eq!(
                 group_marker_version(&group),
-                Some(crate::runtime::HOOK_VERSION)
+                Some(crate::runtime::HOOK_ENTRY_VERSION)
             );
             let text = hook_texts(&group["hooks"][0])
                 .find(|text| text.contains('\''))
@@ -1029,7 +1125,7 @@ mod tests {
             "a converged install writes nothing"
         );
         assert_eq!(fixture.read(AgentRuntime::Codex), first);
-        for event in HookEvent::ALL {
+        for event in AgentRuntime::Codex.events() {
             let groups = first["hooks"][event.name()].as_array().unwrap();
             assert_eq!(
                 owned_versions(groups).len(),
@@ -1050,7 +1146,7 @@ mod tests {
         let path = helper(&fixture);
         install(AgentRuntime::Codex, fixture.home(), &path).unwrap();
         let written = fixture.read(AgentRuntime::Codex);
-        for event in HookEvent::ALL {
+        for event in AgentRuntime::Codex.events() {
             let group = &written["hooks"][event.name()][0];
             assert_eq!(
                 group["hooks"][0]["command"],
@@ -1125,7 +1221,7 @@ mod tests {
             assert!(!second.changed, "a second install writes nothing");
             assert_eq!(fixture.read(runtime), after);
             let removed = remove(runtime, fixture.home()).unwrap();
-            assert_eq!(removed.removed_entries, HookEvent::ALL.len());
+            assert_eq!(removed.removed_entries, runtime.events().count());
             let left = fixture.read(runtime);
             assert_eq!(
                 left["hooks"]["PreToolUse"].as_array().unwrap().len(),
@@ -1149,7 +1245,7 @@ mod tests {
                 .remove("PreToolUse");
             fixture.write(runtime, &serde_json::to_string_pretty(&document).unwrap());
             assert!(
-                matches!(status(runtime, fixture.home()), HookStatus::Outdated { version } if version == crate::runtime::HOOK_VERSION),
+                matches!(status(runtime, fixture.home()), HookStatus::Outdated { version } if version == crate::runtime::HOOK_ENTRY_VERSION),
                 "{runtime:?}"
             );
             install(runtime, fixture.home(), &path).unwrap();
@@ -1182,7 +1278,7 @@ mod tests {
             assert_eq!(
                 matches!(
                     status(runtime, fixture.home()),
-                    HookStatus::Outdated { version } if version == crate::runtime::HOOK_VERSION
+                    HookStatus::Outdated { version } if version == crate::runtime::HOOK_ENTRY_VERSION
                 ),
                 stale,
                 "{runtime:?}"
@@ -1230,7 +1326,10 @@ mod tests {
 
         let outcome = remove(AgentRuntime::Codex, fixture.home()).unwrap();
         assert!(outcome.changed);
-        assert_eq!(outcome.removed_entries, HookEvent::ALL.len());
+        assert_eq!(
+            outcome.removed_entries,
+            AgentRuntime::Codex.events().count()
+        );
         assert_eq!(outcome.preserved_entries, 3);
 
         let after = fixture.read(AgentRuntime::Codex);
@@ -1270,7 +1369,7 @@ mod tests {
         let helper_path = helper(&fixture);
         let quoted = Quoting::NATIVE.quote(&helper_path.display().to_string());
         let mut document = serde_json::json!({ "hooks": {} });
-        for event in HookEvent::ALL {
+        for event in AgentRuntime::Codex.events() {
             document["hooks"][event.name()] = serde_json::json!([{
                 "hooks": [{
                     "type": "command",
@@ -1428,7 +1527,7 @@ mod tests {
         assert_eq!(
             status(AgentRuntime::ClaudeCode, fixture.home()),
             HookStatus::Installed {
-                version: crate::runtime::HOOK_VERSION
+                version: crate::runtime::HOOK_ENTRY_VERSION
             }
         );
     }

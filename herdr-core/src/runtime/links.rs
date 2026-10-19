@@ -9,7 +9,7 @@
 use super::*;
 use crate::links::ledger::{
     LedgerUpdate, MissedStatus, SessionIdentity, SessionRecord, SessionRecordSnapshot,
-    SessionSearchHit, SessionSearchSnapshot,
+    SessionSearchOptions, SessionSearchPage, SessionSearchPresence, SessionSearchSnapshot,
 };
 use crate::links::worker::{
     LinkClient, LinkWorker, PanelAnswer, PanelRequest, PanelTarget, Paths, Sink,
@@ -24,6 +24,7 @@ use std::hash::{Hash, Hasher};
 #[derive(Default)]
 pub(super) struct LinksWork {
     pub(super) client: Option<LinkClient>,
+    pub(super) direct_inputs: Vec<crate::model::GraphDirectInput>,
     projects_print: Option<u64>,
     panes: Arc<Vec<PaneFact>>,
     parents: Arc<Vec<ParentFact>>,
@@ -51,6 +52,14 @@ pub(super) struct RecordOpenPayload {
 #[serde(deny_unknown_fields)]
 pub(super) struct RecordSearchPayload {
     pub query: String,
+    #[serde(default)]
+    pub options: SessionSearchOptions,
+}
+
+impl RecordSearchPayload {
+    pub(super) fn bounded(&self) -> bool {
+        self.query.chars().count() <= 200 && self.options.bounded()
+    }
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -83,10 +92,19 @@ impl RuntimeSink {
 }
 
 impl Sink for RuntimeSink {
+    fn direct_observations(&self, facts: Vec<crate::links::observation::DirectFact>) {
+        let mut inputs: Vec<_> = facts.iter().filter_map(|fact| fact.graph_input()).collect();
+        inputs.sort_unstable_by(|a, b| {
+            b.at_unix_ms
+                .cmp(&a.at_unix_ms)
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        self.apply(move |runtime| runtime.ingest_direct_observations(inputs));
+    }
     fn record(&self, generation: u64, answer: Result<SessionRecord, String>) {
         self.apply(move |runtime| runtime.ingest_session_record(generation, answer));
     }
-    fn session_search(&self, generation: u64, answer: Result<Vec<SessionSearchHit>, String>) {
+    fn session_search(&self, generation: u64, answer: Result<SessionSearchPage, String>) {
         self.apply(move |runtime| runtime.ingest_work_search(generation, answer));
     }
     fn summaries(&self, summaries: BTreeMap<String, ProjectLinkSummary>) {
@@ -166,12 +184,36 @@ pub(crate) fn spawn_worker(
 
 /// A session file's agent name for a Hide agent kind.
 pub(super) fn session_agent(kind: &str) -> Option<&'static str> {
-    hide_agent_adapter::adapter(kind)?
-        .session
-        .map(|format| format.adapter().herdr.name)
+    hide_session::Agent::from_kind(kind).map(|agent| agent.as_str())
 }
 
 impl Runtime {
+    /// The proof owner obtains a handle under the lock, then admits off-lock.
+    pub fn direct_observation_client(&self) -> Option<LinkClient> {
+        self.links_work.client.clone()
+    }
+
+    fn ingest_direct_observations(&mut self, inputs: Vec<crate::model::GraphDirectInput>) -> bool {
+        if self.links_work.direct_inputs == inputs {
+            return false;
+        }
+        self.links_work.direct_inputs = inputs.clone();
+        let mut graph = self
+            .delivery_ledger
+            .as_ref()
+            .map_or_else(
+                |_| crate::model::OverviewGraphSnapshot::default(),
+                |ledger| {
+                    crate::model::OverviewGraphSnapshot::from_ledger(ledger, unix_milliseconds())
+                },
+            )
+            .with_direct_inputs(inputs);
+        graph.sessions = std::mem::take(&mut self.snapshot.overview_graph.sessions);
+        let changed = self.snapshot.overview_graph != graph;
+        self.snapshot.overview_graph = graph;
+        changed
+    }
+
     pub(super) fn open_session_record(&mut self, payload: RecordOpenPayload) -> bool {
         self.links_work.record_generation += 1;
         let mut record = SessionRecordSnapshot {
@@ -203,17 +245,26 @@ impl Runtime {
         self.links_work.search_generation += 1;
         let mut search = SessionSearchSnapshot {
             query: payload.query.clone(),
-            loading: !payload.query.is_empty(),
+            options: payload.options.clone(),
+            loading: true,
             ..Default::default()
         };
-        if !payload.query.is_empty() {
+        // Current state is meaningful only for an exact current native
+        // identity. Retained native `ended_at` and title states are historic.
+        let presence = self.session_search_presence();
+        if presence.len() > crate::links::SUMMARY_SESSION_LIMIT {
+            search.loading = false;
+            search.failure = Some("ledger_search_presence_capacity".into());
+        } else {
             match self.links_work.client.as_ref() {
                 Some(client) => client.search_sessions(
                     self.links_work.search_generation,
                     payload.query,
+                    payload.options,
                     self.ai_settings.as_ref().is_some_and(|settings| {
                         settings.enabled && settings.chosen && settings.agent_summary
                     }),
+                    presence,
                 ),
                 None => {
                     search.loading = false;
@@ -223,6 +274,73 @@ impl Runtime {
         }
         self.snapshot.session_work_search = Some(Arc::new(search));
         true
+    }
+
+    fn session_search_presence(&self) -> Vec<SessionSearchPresence> {
+        let mut states = BTreeMap::new();
+        for archive in self.snapshot.ui_state.session_archive.records.values() {
+            for member in archive.held().filter(|member| member.closed) {
+                let Some(kind) = session_agent(&member.kind) else {
+                    continue;
+                };
+                states.insert(
+                    SessionIdentity {
+                        device_id: member.machine.clone(),
+                        agent: kind.into(),
+                        session_id: member.native_session_id.clone(),
+                    },
+                    "archived".to_owned(),
+                );
+            }
+        }
+        let sources = std::iter::once((self.node.as_str(), &self.snapshot.navigator.agents)).chain(
+            self.snapshot
+                .status
+                .remote
+                .iter()
+                .filter(|remote| remote.state == "connected")
+                .filter_map(|remote| {
+                    remote
+                        .session
+                        .as_ref()
+                        .map(|session| (remote.target_id.as_str(), &session.agents))
+                }),
+        );
+        'sources: for (owner, agents) in sources {
+            for agent in agents {
+                let Some(session_id) = &agent.session_id else {
+                    continue;
+                };
+                let Some(kind) = session_agent(&agent.agent_kind) else {
+                    continue;
+                };
+                let device = owner;
+                let status = if agent.state.needs_you {
+                    "needs_you"
+                } else if agent.state.working {
+                    "working"
+                } else if agent.status_code == AgentStatusCode::Done {
+                    "done"
+                } else {
+                    "current"
+                };
+                states.insert(
+                    SessionIdentity {
+                        device_id: device.into(),
+                        agent: kind.into(),
+                        session_id: session_id.clone(),
+                    },
+                    status.into(),
+                );
+                if states.len() > crate::links::SUMMARY_SESSION_LIMIT {
+                    break 'sources;
+                }
+            }
+        }
+        states
+            .into_iter()
+            .map(|(session, status)| SessionSearchPresence { session, status })
+            .collect()
     }
 
     pub(super) fn set_missed_status(&mut self, payload: MissedStatusPayload) -> bool {
@@ -284,7 +402,7 @@ impl Runtime {
     fn ingest_work_search(
         &mut self,
         generation: u64,
-        answer: Result<Vec<SessionSearchHit>, String>,
+        answer: Result<SessionSearchPage, String>,
     ) -> bool {
         if generation != self.links_work.search_generation {
             return false;
@@ -294,10 +412,14 @@ impl Runtime {
         };
         let mut snapshot = SessionSearchSnapshot {
             query: held.query.clone(),
+            options: held.options.clone(),
             ..Default::default()
         };
         match answer {
-            Ok(results) => snapshot.results = results,
+            Ok(page) => {
+                snapshot.results = page.results;
+                snapshot.next_cursor = page.next_cursor;
+            }
             Err(code) => snapshot.failure = Some(code),
         }
         self.snapshot.session_work_search = Some(Arc::new(snapshot));
@@ -519,9 +641,12 @@ impl Runtime {
         if self.links_work.parents_print == Some(print) {
             return;
         }
+        // The first facts go out even when empty: the links worker holds a
+        // descendant letter's turn until it has them.
+        let first = self.links_work.parents_print.is_none();
         self.links_work.parents_print = Some(print);
         let parents = self.link_parent_facts();
-        if *self.links_work.parents != parents {
+        if first || *self.links_work.parents != parents {
             self.links_work.parents = Arc::new(parents);
             client.parents(Arc::clone(&self.links_work.parents));
         }
@@ -552,6 +677,9 @@ impl Runtime {
                 .hash(&mut hasher);
         }
         if let Ok(ledger) = self.delivery_ledger.as_ref() {
+            // A new letter may be a child's report (`link_parent_facts`);
+            // every letter takes an id, so the next one moves the print.
+            ledger.next_id.hash(&mut hasher);
             for record in &ledger.agents {
                 (
                     &record.id,
@@ -641,6 +769,9 @@ impl Runtime {
                     parent_agent: session_agent(&parent.agent_kind)?.to_owned(),
                     parent_session_id: parent.session_id.clone()?,
                     parent_name: wire_name(parent, devices.get(parent.pane_id.as_str())?),
+                    name: wire_name(agent, devices.get(agent.pane_id.as_str())?),
+                    reported_at_unix_ms: None,
+                    live: true,
                 })
             })
             .map(|parent| {
@@ -662,6 +793,37 @@ impl Runtime {
             .iter()
             .map(|record| (record.id.as_str(), record))
             .collect::<HashMap<_, _>>();
+        // A child's report to its parent counts it finished while it rests
+        // (PRD task-continuation D-08); the ledger keeps a bounded tail of
+        // letters, so an older report is simply not known.
+        let identity = |actor: &crate::delivery::Actor| {
+            (
+                actor.pane_id.clone(),
+                actor.device_id.clone(),
+                actor.session.clone(),
+            )
+        };
+        let mut reports = HashMap::new();
+        for letter in ledger
+            .letters
+            .iter()
+            .filter(|letter| letter.kind == "report")
+        {
+            let at = reports
+                .entry((identity(&letter.sender), identity(&letter.recipient)))
+                .or_insert(letter.created_at_unix_ms);
+            *at = (*at).max(letter.created_at_unix_ms);
+        }
+        // A registered child is live while a pane runs its session.
+        let live = self
+            .link_lineage_agents()
+            .filter_map(|agent| {
+                Some((
+                    *devices.get(agent.pane_id.as_str())?,
+                    agent.session_id.as_deref()?,
+                ))
+            })
+            .collect::<std::collections::HashSet<_>>();
         let registered = ledger
             .agents
             .iter()
@@ -678,6 +840,12 @@ impl Runtime {
                     parent_agent: session_agent(&parent.actor.kind)?.to_owned(),
                     parent_session_id: parent.session.clone(),
                     parent_name: parent.wire_name().to_owned(),
+                    name: record.wire_name().to_owned(),
+                    reported_at_unix_ms: reports
+                        .get(&(identity(&record.actor), identity(&parent.actor)))
+                        .copied(),
+                    live: live
+                        .contains(&(record.actor.device_id.as_str(), record.session.as_str())),
                 })
             })
             .collect::<Vec<_>>();
@@ -1022,4 +1190,85 @@ fn link_pr(
         issues,
         hide_issue_known: checkout.is_some(),
     })
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    #[test]
+    fn retained_history_keeps_its_native_search_presence() {
+        let mut runtime = crate::runtime::tests::runtime();
+        let payload = crate::sidebar::owned_label_fixture(serde_json::json!({
+            "agents": [{
+                "pane_id":"w1:p1", "workspace_label":"History", "agent":"cursor",
+                "agent_status":"idle",
+                "tokens":{"status_idle":"○", "activity":"000000000000"}
+            }]
+        }))
+        .unwrap();
+        let mut agents = crate::sidebar::project_agents(payload).agents;
+        agents[0].session_id = Some("retained-native-id".into());
+        runtime.snapshot.navigator.agents = agents;
+        let presence = runtime.session_search_presence();
+        assert_eq!(presence.len(), 1);
+        assert_eq!(presence[0].session.agent, "cursor");
+        assert_eq!(presence[0].session.session_id, "retained-native-id");
+        assert!(session_agent("unknown-reader").is_none());
+    }
+
+    #[test]
+    fn history_late_search_answer_cannot_replace_the_new_request_or_its_cursor() {
+        let mut runtime = crate::runtime::tests::runtime();
+        runtime.links_work.client = Some(LinkClient::full_mailbox_for_test());
+        let send = |runtime: &mut Runtime, request: &str, query: &str| {
+            runtime.dispatch_json(&serde_json::to_vec(&serde_json::json!({
+                "schema_version": 2, "kind": "session_work_search",
+                "payload": { "query": query, "options": { "request_id": request, "device_id": "remote" } }
+            })).unwrap());
+        };
+        send(&mut runtime, "history-first", "old");
+        let first = runtime.links_work.search_generation;
+        send(&mut runtime, "history-second", "new");
+        assert!(!runtime.ingest_work_search(first, Err("late_read_failure".into())));
+        let pending = runtime.snapshot.session_work_search.as_ref().unwrap();
+        assert_eq!(
+            pending.options.request_id.as_deref(),
+            Some("history-second")
+        );
+        assert!(pending.loading);
+        let cursor = crate::links::ledger::SessionSearchCursor {
+            at_unix_ms: 123,
+            device_id: "remote".into(),
+            agent: "codex".into(),
+            session_id: "reused-id".into(),
+        };
+        let page = SessionSearchPage {
+            results: vec![],
+            next_cursor: Some(cursor.clone()),
+        };
+        assert!(runtime.ingest_work_search(runtime.links_work.search_generation, Ok(page)));
+        let ready = runtime.snapshot.session_work_search.as_ref().unwrap();
+        assert!(!ready.loading);
+        assert_eq!(ready.query, "new");
+        assert_eq!(ready.options.request_id.as_deref(), Some("history-second"));
+        assert_eq!(ready.next_cursor, Some(cursor));
+        assert!(ready.failure.is_none());
+    }
+
+    #[test]
+    fn history_event_accepts_legacy_queries_and_rejects_unknown_or_oversized_options() {
+        let event = |payload| {
+            serde_json::to_vec(&serde_json::json!({ "schema_version": 2, "kind": "session_work_search", "payload": payload })).unwrap()
+        };
+        assert!(crate::runtime::events::decode(&event(serde_json::json!({"query":""}))).is_ok());
+        for payload in [
+            serde_json::json!({"query":"x", "options":{"unknown":true}}),
+            serde_json::json!({"query":"x", "options":{"status":"historically_working"}}),
+            serde_json::json!({"query":"x", "options":{"request_id":"x".repeat(129)}}),
+            serde_json::json!({"query":"x".repeat(201)}),
+        ] {
+            assert!(crate::runtime::events::decode(&event(payload)).is_err());
+        }
+    }
 }

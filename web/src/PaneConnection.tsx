@@ -1,4 +1,4 @@
-import { TriangleAlertIcon } from "lucide-react";
+import { UnlinkIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import {
@@ -11,9 +11,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "./components/ui/alert-dialog";
-import { badgeVariants } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
+import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { connectionCopy, notConnected, offersReopen, offersSharedServerOff, reopenFailureKey, reopenPending, sharedServerOutcome } from "./paneConnectionRules";
 import { remoteContext } from "./remote";
@@ -21,7 +21,7 @@ import { machineName, windowDeviceId } from "./screenMachine";
 import type { PaneRow } from "./snapshot";
 import { useShellStore } from "./store";
 
-// The "Not connected" chip in a pane header and the popover that fixes it
+// The integration status icon in a pane header and the popover that fixes it
 // (PRD settings-cleanup D-11, D-12, B26 to B31). The core judges the
 // connection (`PaneChildren.connection`) and owns what Reopen is doing, so
 // the popover only shows the snapshot: the pending and failed states, and the
@@ -94,22 +94,24 @@ function ConnectionPopover({
         if (!next) setAskedOff(false);
       }}
     >
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={`${badgeVariants({ variant: "outline" })} cursor-pointer gap-xxs text-warning outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring`}
-          data-pane-connection={connection.reason}
-          data-pane-connection-pane={paneId}
-        >
-          <TriangleAlertIcon aria-hidden="true" />
-          {t("panes.connection.chip")}
-        </button>
-      </PopoverTrigger>
+      <Hint label={t("panes.connection.chip")} active={!open}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={t("panes.connection.chip")}
+            data-pane-connection={connection.reason}
+            data-pane-connection-pane={paneId}
+          >
+            <UnlinkIcon className="size-(--size-icon-sm)" aria-hidden="true" />
+          </Button>
+        </PopoverTrigger>
+      </Hint>
       <PopoverContent
         align="start"
         role="dialog"
         aria-label={t(copy.title)}
-        className="flex flex-col gap-sm"
+        className="flex flex-col gap-sm [&:lang(ko)]:break-keep"
         data-pane-connection-popover={connection.reason}
       >
         <strong className="text-subhead text-foreground">{t(copy.title)}</strong>
@@ -146,7 +148,7 @@ function ConnectionPopover({
             </span>
           </div>
         ) : null}
-        {/* The answer outlives the reason it fixed: once the server is off, this pane reads "started before Hide was set up". */}
+        {/* The answer outlives the reason it fixed: turning the server off can leave this pane awaiting its own reports. */}
         {outcome ? (
           <span
             className={`text-caption ${outcome.phase === "failed" ? "text-destructive" : "text-muted-foreground"}`}

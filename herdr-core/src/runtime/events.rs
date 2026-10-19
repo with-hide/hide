@@ -293,6 +293,8 @@ pub(super) struct RegisterDevicePayload {
     /// The device's Herdr socket when its server is not at the default path.
     #[serde(default)]
     pub(super) herdr_socket_path: Option<String>,
+    #[serde(default)]
+    pub(super) herdr_session: Option<String>,
     /// The operator allowed Hide's helper on the device in the same form
     /// (PRD S5.5 B50); absent or false registers it without file access.
     #[serde(default)]
@@ -842,6 +844,10 @@ pub(super) struct OverviewOpenSectionPayload {
 /// it. `terminal` means the tab alone.
 #[derive(Debug, Deserialize)]
 pub(super) struct AgentStartInCheckoutPayload {
+    #[serde(default)]
+    pub(super) confirm_only: bool,
+    #[serde(default)]
+    pub(super) target: Option<super::group_starts::StartTarget>,
     /// The checkout to start in; absent for a Home start.
     #[serde(default)]
     pub(super) checkout_path: Option<String>,
@@ -933,11 +939,13 @@ pub(super) struct IssueSettingsSetPayload {
 
 /// `issue_detail_request`: one issue's body, labels, author, assignees and
 /// comments, for its panel and the Start dialog.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct IssueDetailRequestPayload {
     pub(super) workspace_id: String,
     pub(super) task_key: String,
+    #[serde(default)]
+    pub(super) comments_after: Option<String>,
 }
 
 /// `github_search`: pull requests and issues of this Mac's GitHub projects
@@ -1179,6 +1187,15 @@ pub(super) struct KitCheckPayload {}
 #[derive(Debug, Deserialize)]
 pub(super) struct SshHostsListPayload {}
 
+#[derive(Debug, Deserialize)]
+pub(super) struct HerdrProfilesListPayload {}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct HerdrProfileConnectPayload {
+    pub(super) profile_id: String,
+    pub(super) host_consent: bool,
+}
+
 /// Whether any window draws this daemon's snapshot, sent by hided as its
 /// first window arrives and its last one leaves. Without one, the readers
 /// that only feed what a window draws (ports, worktrees, pull requests,
@@ -1293,6 +1310,20 @@ pub(super) struct FirstRunAdvancePayload {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct FirstRunBackPayload {
+    pub(super) from: crate::model::FirstRunStep,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FirstRunDraftPayload {
+    pub(super) agents: Option<Vec<String>>,
+    pub(super) devices: Option<Vec<String>>,
+    pub(super) project_device: Option<String>,
+    pub(super) project_path: Option<String>,
+    pub(super) project_form: Option<crate::model::FirstRunProjectForm>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct DesktopNotificationsSetPayload {
     pub(super) enabled: bool,
     /// The reopened wizard's Not now disables both with its one event.
@@ -1327,6 +1358,11 @@ pub(super) struct InterfaceLanguageSetPayload {
     // Required, including an explicit null to return to system language.
     #[serde(deserialize_with = "serde_json::Value::deserialize")]
     pub(super) language: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ProductAnalyticsSetPayload {
+    pub(super) enabled: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1403,6 +1439,7 @@ pub(super) enum Event {
     WorkspaceView(WorkspaceViewPayload),
     ViewLayout(ViewLayoutPayload),
     AgentLayout(AgentLayoutPayload),
+    AgentGroup(AgentGroupPayload),
     BrowserOpen(BrowserOpenPayload),
     BrowserState(BrowserStatePayload),
     Attachment(AttachmentPayload),
@@ -1502,12 +1539,8 @@ pub(super) enum Event {
     BacklogRetry(super::backlog::BacklogIntentPayload),
     BacklogDismiss(super::backlog::BacklogIntentPayload),
     BacklogUndo(super::backlog::BacklogItemPayload),
-    BacklogOrigin(super::backlog::BacklogItemPayload),
-    BacklogOriginClose(super::backlog::BacklogKeyPayload),
-    FactoryAction(Box<super::factory::FactoryActionPayload>),
-    FactoryTaskOpen(super::factory::FactoryTaskOpenPayload),
-    FactoryTaskClose,
-    FactorySecretarySet(PaneTargetPayload),
+    BacklogOrigin(crate::links::ledger::BacklogOriginIdentity),
+    BacklogOriginClose(crate::links::ledger::BacklogOriginIdentity),
     SessionsSetFilter(SessionsFilterPayload),
     ArchiveOpen(ArchiveOpenPayload),
     MemoryAction(MemoryActionPayload),
@@ -1523,6 +1556,8 @@ pub(super) enum Event {
     CodexDaemonDisable(CodexDaemonDisablePayload),
     KitCheck(KitCheckPayload),
     SshHostsList(SshHostsListPayload),
+    HerdrProfilesList(HerdrProfilesListPayload),
+    HerdrProfileConnect(HerdrProfileConnectPayload),
     UiAttached(UiAttachedPayload),
     AiSettings(AiSettingsPayload),
     TerminalResize(TerminalResizePayload),
@@ -1532,6 +1567,8 @@ pub(super) enum Event {
     PaneFindOpen(PaneFindOpenPayload),
     PaneTextScale(PaneTextScalePayload),
     EditorTextScale(EditorTextScalePayload),
+    ProductAnalyticsSet(ProductAnalyticsSetPayload),
+    ProductAnalyticsConnected,
     ThemeSet(ThemeSetPayload),
     AgentLogoModeSet(AgentLogoModeSetPayload),
     ColorThemeSet(ColorThemeSetPayload),
@@ -1540,6 +1577,8 @@ pub(super) enum Event {
     UsageHiddenSet(UsageHiddenSetPayload),
     AgentOnboardingApply(AgentOnboardingApplyPayload),
     FirstRunAdvance(FirstRunAdvancePayload),
+    FirstRunBack(FirstRunBackPayload),
+    FirstRunDraft(FirstRunDraftPayload),
     DesktopNotificationsSet(DesktopNotificationsSetPayload),
     DesktopNotificationsDoneSet(DesktopNotificationsDoneSetPayload),
     ScreenIntroSeen(ScreenIntroSeenPayload),
@@ -1754,20 +1793,25 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "links_open" => decode!(super::links::LinksOpenPayload, LinksOpen),
         "session_record_open" => decode!(super::links::RecordOpenPayload, SessionRecordOpen),
         "session_record_close" => Ok(Event::SessionRecordClose),
-        "session_work_search" => decode!(super::links::RecordSearchPayload, SessionWorkSearch),
+        "session_work_search" => {
+            let search: super::links::RecordSearchPayload =
+                serde_json::from_value(payload).map_err(|_| invalid_payload(&kind))?;
+            if !search.bounded() {
+                return Err(invalid_payload(&kind));
+            }
+            Ok(Event::SessionWorkSearch(search))
+        }
         "session_missed_status" => decode!(super::links::MissedStatusPayload, SessionMissedStatus),
         "backlog_add" => decode!(super::backlog::BacklogAddPayload, BacklogAdd),
         "backlog_retry" => decode!(super::backlog::BacklogIntentPayload, BacklogRetry),
         "backlog_dismiss" => decode!(super::backlog::BacklogIntentPayload, BacklogDismiss),
         "backlog_undo" => decode!(super::backlog::BacklogItemPayload, BacklogUndo),
-        "backlog_origin" => decode!(super::backlog::BacklogItemPayload, BacklogOrigin),
-        "backlog_origin_close" => decode!(super::backlog::BacklogKeyPayload, BacklogOriginClose),
-        "factory_action" => serde_json::from_value::<super::factory::FactoryActionPayload>(payload)
-            .map(|payload| Event::FactoryAction(Box::new(payload)))
-            .map_err(|_| invalid_payload(&kind)),
-        "factory_task_open" => decode!(super::factory::FactoryTaskOpenPayload, FactoryTaskOpen),
-        "factory_task_close" => Ok(Event::FactoryTaskClose),
-        "factory_secretary_set" => decode!(PaneTargetPayload, FactorySecretarySet),
+        "backlog_origin" => decode!(crate::links::ledger::BacklogOriginIdentity, BacklogOrigin),
+        "backlog_origin_close" => decode!(
+            crate::links::ledger::BacklogOriginIdentity,
+            BacklogOriginClose
+        ),
+
         "links_close" => Ok(Event::LinksClose),
         "archive_open" => decode!(ArchiveOpenPayload, ArchiveOpen),
         "memory_action" => decode!(MemoryActionPayload, MemoryAction),
@@ -1783,6 +1827,8 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "codex_daemon_disable" => decode!(CodexDaemonDisablePayload, CodexDaemonDisable),
         "kit_check" => decode!(KitCheckPayload, KitCheck),
         "ssh_hosts_list" => decode!(SshHostsListPayload, SshHostsList),
+        "herdr_profiles_list" => decode!(HerdrProfilesListPayload, HerdrProfilesList),
+        "herdr_profile_connect" => decode!(HerdrProfileConnectPayload, HerdrProfileConnect),
         "ui_attached" => decode!(UiAttachedPayload, UiAttached),
         "ai_settings" => decode!(AiSettingsPayload, AiSettings),
         "terminal_resize" => decode!(TerminalResizePayload, TerminalResize),
@@ -1792,6 +1838,8 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "pane_find_open" => decode!(PaneFindOpenPayload, PaneFindOpen),
         "pane_text_scale" => decode!(PaneTextScalePayload, PaneTextScale),
         "editor_text_scale" => decode!(EditorTextScalePayload, EditorTextScale),
+        "product_analytics_set" => decode!(ProductAnalyticsSetPayload, ProductAnalyticsSet),
+        "product_analytics_connected" => Ok(Event::ProductAnalyticsConnected),
         "theme_set" => decode!(ThemeSetPayload, ThemeSet),
         "agent_logo_mode_set" => decode!(AgentLogoModeSetPayload, AgentLogoModeSet),
         "color_theme_set" => decode!(ColorThemeSetPayload, ColorThemeSet),
@@ -1800,6 +1848,8 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "interface_language_set" => decode!(InterfaceLanguageSetPayload, InterfaceLanguageSet),
         "agent_onboarding_apply" => decode!(AgentOnboardingApplyPayload, AgentOnboardingApply),
         "first_run_advance" => decode!(FirstRunAdvancePayload, FirstRunAdvance),
+        "first_run_back" => decode!(FirstRunBackPayload, FirstRunBack),
+        "first_run_draft" => decode!(FirstRunDraftPayload, FirstRunDraft),
         "desktop_notifications_set" => {
             decode!(DesktopNotificationsSetPayload, DesktopNotificationsSet)
         }
@@ -1855,6 +1905,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "pet_shortcut_update" => decode!(PetShortcutPayload, PetShortcutUpdate),
         "workspace_view" => decode!(WorkspaceViewPayload, WorkspaceView),
         "agent_layout" => decode!(AgentLayoutPayload, AgentLayout),
+        "agent_group" => decode!(AgentGroupPayload, AgentGroup),
         "view_layout" => decode!(ViewLayoutPayload, ViewLayout),
         "browser_open" => decode!(BrowserOpenPayload, BrowserOpen),
         "view_comment" => decode!(super::view_feedback::ViewCommentPayload, ViewComment),
@@ -1976,6 +2027,7 @@ impl Runtime {
         match event {
             Event::WorkspaceView(payload) => self.apply_workspace_view(payload),
             Event::AgentLayout(payload) => self.apply_agent_layout(payload),
+            Event::AgentGroup(payload) => self.apply_agent_group(payload),
             Event::ViewLayout(payload) => self.apply_view_layout(payload),
             Event::BrowserOpen(payload) => self.open_browser(payload),
             Event::ViewComment(payload) => self.apply_view_comment(payload),
@@ -1993,10 +2045,6 @@ impl Runtime {
             Event::BacklogUndo(payload) => self.undo_backlog(payload),
             Event::BacklogOrigin(payload) => self.read_backlog_origin(payload),
             Event::BacklogOriginClose(payload) => self.close_backlog_origin(payload),
-            Event::FactoryAction(payload) => self.factory_action(*payload),
-            Event::FactoryTaskOpen(payload) => self.factory_task_open(payload),
-            Event::FactoryTaskClose => self.factory_task_close(),
-            Event::FactorySecretarySet(payload) => self.factory_secretary_set(payload.pane_id),
             Event::LinksClose => self.close_links(),
             Event::SessionsSetFilter(payload) => {
                 self.set_sessions_filter(&payload.provider, payload.query)
@@ -2146,6 +2194,10 @@ impl Runtime {
             ),
             Event::KitCheck(_) => self.request_kit_check(),
             Event::SshHostsList(_) => self.request_ssh_hosts(),
+            Event::HerdrProfilesList(_) => self.request_herdr_profiles(),
+            Event::HerdrProfileConnect(payload) => {
+                self.connect_herdr_profile(&payload.profile_id, payload.host_consent)
+            }
             // Nothing drawn changes; the coordinator reads it on its next wake.
             Event::UiAttached(payload) => {
                 self.ui_attached = payload.attached;
@@ -2758,6 +2810,19 @@ impl Runtime {
                     .map(str::trim)
                     .filter(|path| !path.is_empty())
                     .map(str::to_owned);
+                if payload
+                    .herdr_session
+                    .as_deref()
+                    .is_some_and(|session| !hide_node_link::device::valid_herdr_session(session))
+                    || (payload.herdr_session.is_some() && herdr_socket_path.is_some())
+                {
+                    self.set_error(
+                        "device.invalid",
+                        "Choose one valid Herdr session or an explicit socket",
+                        false,
+                    );
+                    return true;
+                }
                 if herdr_socket_path
                     .as_deref()
                     .is_some_and(|path| !crate::remote::valid_remote_socket_path(path))
@@ -2794,6 +2859,7 @@ impl Runtime {
                         ssh_alias: ssh_alias.clone(),
                     },
                     herdr_socket_path,
+                    herdr_session: payload.herdr_session,
                     host_consent: payload.host_consent.then(|| self.new_host_consent()),
                 };
                 self.snapshot
@@ -3173,7 +3239,6 @@ impl Runtime {
                     return true;
                 };
                 let request = ForkRequest {
-                    parent_state_change_seq: agent.state_change_seq,
                     connection_generation: self.live_generation,
                     parent_pane_id: pane_id.clone(),
                     agent: agent_kind,
@@ -3192,14 +3257,23 @@ impl Runtime {
                 // Keys typed between the press and the agent's start wait for
                 // the fork's agent rather than reaching the shell that starts
                 // it (B4); `ingest_fork_result` resolves or discards them.
-                if let Some(request_id) = payload.request_id.as_deref() {
-                    self.input_requests.open(
-                        request_id,
-                        super::terminal_input::InputOrigin::Fork(pane_id.clone()),
-                        std::time::Instant::now(),
+                let request_id = payload
+                    .request_id
+                    .unwrap_or_else(|| format!("fork-{}", self.fork_sequence));
+                if !self.input_requests.open(
+                    &request_id,
+                    super::terminal_input::InputOrigin::Fork(pane_id.clone()),
+                    std::time::Instant::now(),
+                ) {
+                    self.forks_in_flight.remove(&pane_id);
+                    self.set_error(
+                        "pane.fork_input_unavailable",
+                        "The fork could not reserve its input holder. Try again after other panes finish starting.",
+                        false,
                     );
-                    self.sync_input_requests();
+                    return true;
                 }
+                self.sync_input_requests();
                 self.push_diagnostic("pane.fork.requested", format!("Forking pane {pane_id}"));
                 if let Err(message) = live::spawn_agent_fork(context, request) {
                     // A worker that never started is a fork that failed, and
@@ -3863,6 +3937,8 @@ impl Runtime {
             Event::FirstRunAdvance(payload) => {
                 self.advance_first_run(payload.from, payload.notifications)
             }
+            Event::FirstRunBack(payload) => self.back_first_run(payload.from),
+            Event::FirstRunDraft(payload) => self.update_first_run_draft(payload),
             Event::DesktopNotificationsSet(payload) => self
                 .set_desktop_notification_preferences(Some(payload.enabled), payload.done_enabled),
             Event::DesktopNotificationsDoneSet(payload) => {
@@ -3926,6 +4002,23 @@ impl Runtime {
                     return false;
                 }
                 self.snapshot.ui_state.interface_language = language;
+                self.persist_ui_state();
+                true
+            }
+            Event::ProductAnalyticsConnected => {
+                if let Some(sink) = &self.product_analytics {
+                    sink.capture(crate::product_analytics::Event::Connected);
+                }
+                false
+            }
+            Event::ProductAnalyticsSet(payload) => {
+                if self.snapshot.ui_state.product_analytics_enabled == payload.enabled {
+                    return false;
+                }
+                if let Some(sink) = &self.product_analytics {
+                    sink.set_enabled(payload.enabled);
+                }
+                self.snapshot.ui_state.product_analytics_enabled = payload.enabled;
                 self.persist_ui_state();
                 true
             }
@@ -4083,8 +4176,6 @@ impl Runtime {
                     session_resolution_inputs: current.session_resolution_inputs,
                     session_collapsed_checkout_ids: current.session_collapsed_checkout_ids,
                     session_open_folds: current.session_open_folds,
-                    // The secretary belongs to `factory_secretary_set`.
-                    factory_secretary_pane: current.factory_secretary_pane,
                     // Recorded by the core when a Rename lands.
                     operator_tab_names: current.operator_tab_names,
                     expanded_paths: payload.expanded_paths,
@@ -4169,7 +4260,9 @@ impl Runtime {
                     // The wizard's own events own its progress, the
                     // notification switch and the introductions seen.
                     first_run: current.first_run,
+                    first_run_choices: current.first_run_choices,
                     desktop_notifications: current.desktop_notifications,
+                    product_analytics_enabled: current.product_analytics_enabled,
                     desktop_notifications_done: current.desktop_notifications_done,
                     screen_intros_seen: current.screen_intros_seen,
                     // A width outside the drag's range keeps the last one; the

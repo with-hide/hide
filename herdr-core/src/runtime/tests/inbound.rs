@@ -30,6 +30,7 @@ fn dialed_link(runtime: &mut Runtime, device: &str, host: Arc<dyn crate::node_ac
                     ssh_alias: "fixture-host".to_owned(),
                 },
                 herdr_socket_path: None,
+                herdr_session: None,
                 host_consent: None,
             });
     }
@@ -420,6 +421,7 @@ fn inbound_nodes_are_capped_and_their_labels_are_plain_text() {
                     label: format!("node {index}"),
                     origin: crate::model::LinkOrigin::Inbound,
                     herdr_socket_path: None,
+                    herdr_session: None,
                     host_consent: None,
                 });
         }
@@ -528,16 +530,6 @@ fn memory_is_answered_for_this_machine_and_a_linked_node_only() {
     assert_eq!(
         scope("studio"),
         Ok(("studio".to_owned(), "/work/project".to_owned()))
-    );
-    assert_eq!(
-        shared
-            .lock()
-            .unwrap()
-            .factory_linked_node("studio")
-            .err()
-            .as_deref(),
-        Some("factory_device_unsupported"),
-        "Memory admission does not grant Factory authority"
     );
 
     let (link, release) = held_link_to(Arc::new(hide_node::Local::new(Some(
@@ -940,98 +932,6 @@ fn a_node_s_checkout_in_front_is_the_node_s_not_this_machine_s() {
     runtime.snapshot.navigator.focused_device_id = Some(NODE.to_owned());
     runtime.snapshot.navigator.focused_checkout_id = Some(checkout);
     assert!(runtime.focused_local_checkout().is_none());
-}
-
-#[test]
-fn a_factory_runs_on_this_machine_or_a_node_that_dials_in_never_a_dialed_device() {
-    let shared = shared_runtime();
-    let own = shared.lock().unwrap().node.as_str().to_owned();
-    let event = serde_json::json!({
-        "schema_version": SCHEMA_VERSION,
-        "kind": "register_device",
-        "payload": {"id": "studio", "label": "studio", "ssh_alias": "studio-host"},
-    });
-    shared
-        .lock()
-        .unwrap()
-        .dispatch_json(&serde_json::to_vec(&event).unwrap());
-    let (link, release) = held_link();
-    shared
-        .lock()
-        .unwrap()
-        .accept_inbound_node(NODE, "MacBook", link)
-        .expect("the link is taken");
-    wait(&shared, "the link ready", |runtime| {
-        runtime.host_snapshot(NODE).state == "ready"
-    });
-    let path = "/Users/alice/alpha";
-    let views = tempfile::tempdir().unwrap();
-    {
-        let mut runtime = shared.lock().unwrap();
-        runtime.ingest_remote_session(
-            NODE,
-            Ok(session(vec![herdr_workspace(
-                NODE,
-                "w1",
-                path,
-                &[("t1", path)],
-            )])),
-        );
-        runtime.workspace_views =
-            Some(WorkspaceViewStore::open(views.path().join("views.json"), Default::default()).0);
-    }
-
-    let runtime = shared.lock().unwrap();
-    let node = |device: &str| {
-        runtime
-            .factory_node(device)
-            .map_err(|refusal| refusal.reason)
-    };
-    assert_eq!(node(&own), Ok(None));
-    assert_eq!(node(NODE), Ok(Some(NODE.to_owned())));
-    assert_eq!(node("studio"), Err("factory_device_unsupported".to_owned()));
-    assert_eq!(node("gone"), Err("factory_device_unknown".to_owned()));
-
-    let pane = format!("remote:{NODE}:pane:t1");
-    let context = runtime
-        .workspace_control_query(NODE, &pane, crate::workspace_control::Query::Info)
-        .expect("the node's pane is in the catalog")
-        .context;
-    let caller = runtime
-        .factory_caller(NODE, &pane, &context, Some("t9"))
-        .expect("a caller on the node");
-    assert_eq!(caller.node.as_deref(), Some(NODE));
-    assert_eq!(caller.pane.as_deref(), Some(pane.as_str()));
-    assert_eq!(caller.cwd.as_deref(), Some(path));
-    assert_eq!(
-        caller.claimed,
-        Some(format!("remote:{NODE}:pane:t9")),
-        "a node's hint names a pane on that node"
-    );
-    assert_eq!(
-        runtime
-            .factory_caller("studio", "w1:p1", &context, None)
-            .err()
-            .as_deref(),
-        Some("factory_local_only")
-    );
-
-    let control = runtime
-        .factory_start_control(Some(NODE))
-        .expect("the node's Herdr and link");
-    assert!(Arc::ptr_eq(
-        &control.connector,
-        &runtime.delivery_connector(NODE).unwrap()
-    ));
-    assert!(runtime.factory_start_control_current(&control));
-    drop(runtime);
-    drop(release);
-    wait(&shared, "the link ended", |runtime| {
-        runtime.host_snapshot(NODE).state != "ready"
-    });
-    let runtime = shared.lock().unwrap();
-    assert!(!runtime.factory_start_control_current(&control));
-    assert!(runtime.factory_start_control(Some(NODE)).is_err());
 }
 
 /// A `hide memory show` from a node's pane is recorded for that pane's

@@ -167,7 +167,6 @@ impl Runtime {
         }
         let request_id = operation.request_id.clone();
         let agent_kind = operation.agent_kind.clone();
-        let focus = !operation.stays_behind;
         let synced = match synced {
             Ok(synced) => synced,
             Err(LinkError::Refused(error))
@@ -223,6 +222,7 @@ impl Runtime {
         // A registration that changed while this sync ran is caught up now.
         self.request_home_link_syncs();
         Some(live::CheckoutTabRequest {
+            start: None,
             resume_reference: None,
             id,
             agent_kind: None,
@@ -231,7 +231,9 @@ impl Runtime {
             checkout_path: synced.home,
             label,
             host,
-            focus,
+            // The task's result uses the same latest-navigation admission as
+            // a checkout start, after Home's asynchronous sync has finished.
+            focus: false,
         })
     }
 

@@ -54,6 +54,63 @@ fn every_session_sync_snapshot_fixture_obeys_the_generated_contract() {
     }
 }
 
+#[test]
+fn start_claims_stay_internal_in_local_and_device_session_projections() {
+    let claim = crate::start_claim::label(&"b".repeat(64));
+    let mut value = snapshot();
+    value["panes"][0]["label"] = json!(claim);
+    value["panes"][0]["terminal_title"] = json!(claim);
+    value["panes"][0]["terminal_title_stripped"] = json!(claim);
+    let mut replica = SessionReplica::from_snapshot(&value).unwrap();
+    let local = replica.project();
+    assert_eq!(local.panes[0].start_claim.as_deref(), Some(claim.as_str()));
+    assert_eq!(local.panes[0].label, None);
+    assert_eq!(local.panes[0].terminal_title, None);
+    let (remote, _) = replica.project_remote("device", local).unwrap();
+    let pane = &remote.workspaces[0].checkouts[0].tabs[0].panes[0];
+    assert_eq!(pane.start_claim.as_deref(), Some(claim.as_str()));
+    assert_eq!(pane.herdr_label, None);
+    assert_eq!(pane.terminal_title, None);
+    let public = serde_json::to_string(&remote).unwrap();
+    assert!(!public.contains(&claim));
+    assert!(!public.contains("start_claim"));
+
+    // A human rename ends the creation-label proof, and neither a shared
+    // prefix nor whitespace in a human title makes it a reserved descriptor.
+    value["panes"][0]["label"] = json!("hide-start:v1:human notes");
+    value["panes"][0]["terminal_title"] = json!(" 작업 메모 ");
+    value["panes"][0]["terminal_title_stripped"] = json!(" 작업 메모 ");
+    replica
+        .apply(
+            event(
+                "pane_updated",
+                json!({
+                    "type": "pane_updated", "pane": value["panes"][0]
+                }),
+            ),
+            ApplyMode::Strict,
+        )
+        .unwrap();
+    let local = replica.project();
+    assert_eq!(local.panes[0].start_claim, None);
+    assert_eq!(
+        local.panes[0].label.as_deref(),
+        Some("hide-start:v1:human notes")
+    );
+    assert_eq!(
+        local.panes[0].terminal_title.as_deref(),
+        Some(" 작업 메모 ")
+    );
+    let (remote, _) = replica.project_remote("device", local).unwrap();
+    let pane = &remote.workspaces[0].checkouts[0].tabs[0].panes[0];
+    assert_eq!(pane.start_claim, None);
+    assert_eq!(
+        pane.herdr_label.as_deref(),
+        Some("hide-start:v1:human notes")
+    );
+    assert_eq!(pane.terminal_title.as_deref(), Some(" 작업 메모 "));
+}
+
 /// Coexistence B1/B7: terminal failure survives both projections and a pane
 /// update, but a missing cwd alone never makes a live shell a failed terminal.
 #[test]

@@ -1,0 +1,114 @@
+# Manual unsigned preparation only. No tag, release or signing credential is
+# written here; a consumer must verify this successful main run and receipt.
+name: release candidate
+run-name: Candidate ${{ inputs.tag }} from ${{ inputs.public_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      public_sha:
+        description: Full public main commit whose verify push run passed.
+        required: true
+        type: string
+      tag:
+        description: Candidate version, vX.Y.Z or vX.Y.Z-rc.N (no tag is created).
+        required: true
+        type: string
+      verification_run_id:
+        description: Successful pr.yml push/main run of exactly public_sha.
+        required: true
+        type: string
+      build_order:
+        description: Positive safe integer used by every package of this candidate.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-candidate-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      receipt: ${{ steps.source.outputs.receipt }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Require the exact verified main source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFICATION_RUN: ${{ inputs.verification_run_id }}
+          PUBLIC_SHA: ${{ inputs.public_sha }}
+        run: |
+          # Validate the path component before calling the API. The receipt
+          # checker also validates all inputs before they reach a build.
+          [[ "$VERIFICATION_RUN" =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$VERIFICATION_RUN" > "$RUNNER_TEMP/verification.json"
+          node scripts/release-candidate.mjs "$RUNNER_TEMP/verification.json" > "$RUNNER_TEMP/candidate.json"
+          git merge-base --is-ancestor "$PUBLIC_SHA" origin/main
+          echo "receipt=$(cat "$RUNNER_TEMP/candidate.json")" >> "$GITHUB_OUTPUT"
+
+  packages:
+    needs: validate
+    uses: ./.github/workflows/package.yml
+    with:
+      version: ${{ inputs.tag }}
+      source-sha: ${{ inputs.public_sha }}
+      build-order: ${{ inputs.build_order }}
+      include-macos: false
+      macos-signing: adhoc
+
+  agent-journey:
+    needs: validate
+    uses: ./.github/workflows/agent-journey.yml
+    permissions:
+      contents: read
+    with:
+      source-sha: ${{ inputs.public_sha }}
+      systems: '["linux","macos","windows"]'
+      live: true
+      fake: true
+      agy: linux
+    # These are the existing public journey's provider keys, never signing
+    # keys or credentials for a private repository.
+    secrets:
+      HIDE_CLAUDE_API_KEY: ${{ secrets.HIDE_CLAUDE_API_KEY }}
+      HIDE_CODEX_API_KEY: ${{ secrets.HIDE_CODEX_API_KEY }}
+      HIDE_AGY_API_KEY: ${{ secrets.HIDE_AGY_API_KEY }}
+      HIDE_GROK_API_KEY: ${{ secrets.HIDE_GROK_API_KEY }}
+      HIDE_OPENCODE_API_KEY: ${{ secrets.HIDE_OPENCODE_API_KEY }}
+      HIDE_PI_API_KEY: ${{ secrets.HIDE_PI_API_KEY }}
+      HIDE_OMP_API_KEY: ${{ secrets.HIDE_OMP_API_KEY }}
+
+  receipt:
+    needs: [validate, packages, agent-journey]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Record the successful candidate
+        env:
+          RECEIPT: ${{ needs.validate.outputs.receipt }}
+        run: |
+          mkdir -p agents/runs/release-candidate
+          node -e 'require("node:fs").writeFileSync("agents/runs/release-candidate/candidate.json", JSON.stringify(JSON.parse(process.env.RECEIPT)) + "\n")'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hide-release-candidate
+          path: agents/runs/release-candidate/candidate.json
+          if-no-files-found: error
+          retention-days: 7

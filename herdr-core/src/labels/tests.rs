@@ -61,7 +61,7 @@ impl Scripted {
             format!("{goal} 진행")
         };
         self.answers.lock().unwrap().push_back(json!({
-            "goal": goal, "goal_changed": true, "line": line, "end": end,
+            "goal": goal, "goal_update": "replace", "line": line, "end": end,
             "work":{"task":{"kind":"none"},"missed":[],"resolved":[],"output_task_id":null},
         }));
     }
@@ -69,7 +69,7 @@ impl Scripted {
     /// A turn start's answer, which says nothing of how the turn ends.
     fn begin(&self, goal: &str) {
         self.answers.lock().unwrap().push_back(json!({
-            "goal": goal, "goal_changed": true, "line": format!("{goal} 진행"),
+            "goal": goal, "goal_update": "replace", "line": format!("{goal} 진행"),
         }));
     }
 
@@ -144,12 +144,42 @@ impl AiBackend for Scripted {
 struct CountingSource {
     inner: super::NodeTranscripts,
     reads: AtomicUsize,
+    completed: AtomicUsize,
+    held: Mutex<bool>,
+    released: Condvar,
+}
+
+impl CountingSource {
+    fn hold(&self) {
+        *self.held.lock().unwrap() = true;
+    }
+
+    fn release(&self) {
+        *self.held.lock().unwrap() = false;
+        self.released.notify_all();
+    }
 }
 
 impl TranscriptSource for CountingSource {
     fn read(&self, request: &LabelTranscriptRequest) -> Result<LabelTranscript, ReadFailure> {
         self.reads.fetch_add(1, Ordering::SeqCst);
-        self.inner.read(request)
+        let mut held = self.held.lock().unwrap();
+        while *held {
+            let (next, timeout) = self
+                .released
+                .wait_timeout(held, Duration::from_secs(20))
+                .unwrap();
+            held = next;
+            if timeout.timed_out() && *held {
+                return Err(ReadFailure::Pending(
+                    "fixture reader hold expired".to_owned(),
+                ));
+            }
+        }
+        drop(held);
+        let result = self.inner.read(request);
+        self.completed.fetch_add(1, Ordering::SeqCst);
+        result
     }
 }
 
@@ -215,6 +245,9 @@ impl Harness {
                 super::NodeTranscripts::new(Box::new(move || Ok(Arc::clone(&node))))
             },
             reads: AtomicUsize::new(0),
+            completed: AtomicUsize::new(0),
+            held: Mutex::new(false),
+            released: Condvar::new(),
         });
         let (worker, woken) = self.spawn(store, LOCAL_TARGET, "local.sock", source.clone());
         (worker, woken, source)
@@ -342,6 +375,20 @@ fn settle(worker: &mut LabelWorker, woken: &Receiver<()>) {
     }
 }
 
+fn drain_until(
+    worker: &mut LabelWorker,
+    woken: &Receiver<()>,
+    ready: impl Fn(&LabelWorker) -> bool,
+) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !ready(worker) {
+        let left = deadline.saturating_duration_since(Instant::now());
+        assert!(!left.is_zero(), "the expected worker result did not arrive");
+        let _ = woken.recv_timeout(left.min(Duration::from_millis(200)));
+        worker.drain(Instant::now(), unix_now_ms());
+    }
+}
+
 /// What the row would carry for the agent as it is now.
 fn shown(worker: &LabelWorker, agent: &ObservedAgent) -> Option<AgentLabel> {
     let (kind, value) = agent.reference.clone().unwrap();
@@ -368,6 +415,18 @@ fn shown_facts(
     .unwrap();
     worker.overlay().apply(&mut payload);
     payload.agents.remove(0).facts
+}
+
+fn shown_row(worker: &LabelWorker, agent: &ObservedAgent) -> crate::model::SidebarAgentSnapshot {
+    let (kind, value) = agent.reference.clone().unwrap();
+    let mut payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [{
+        "pane_id": agent.pane_id, "agent": agent.agent, "agent_status": agent.status,
+        "state_change_seq": agent.state_change_seq,
+        "agent_session": {"kind": kind, "value": value},
+    }]}))
+    .unwrap();
+    worker.overlay().apply(&mut payload);
+    crate::sidebar::project_agents(payload).agents.remove(0)
 }
 
 fn task(label: Option<AgentLabel>) -> Option<String> {
@@ -1075,6 +1134,7 @@ fn the_end_request_names_the_finished_tasks_a_re_request_may_continue() {
                 last_at_unix_ms: 2,
                 end: super::analysis::LabelEnd::Done,
                 done: true,
+                unjudged: false,
             }],
             ..Default::default()
         },
@@ -1457,8 +1517,16 @@ fn a_restored_device_mark_does_not_spare_another_session_in_the_same_pane() {
 fn a_turn_that_ends_within_the_start_delay_costs_one_request_not_two() {
     let mut harness = Harness::new();
     harness.start_delay = Duration::from_secs(15);
-    let (mut worker, woken, path) = harness_with_named_pane(&harness);
+    let (worker, _, path) = harness_with_named_pane(&harness);
     let named = harness.backend.calls();
+    drop(worker);
+    // Legacy records and restored device marks have a title but no evidence.
+    // Recovering their context must not buy an extra START request.
+    let store = harness.store();
+    let mut records = store.target(LOCAL_TARGET);
+    records.get_mut("w1:p1").unwrap().goal_evidence = None;
+    store.save_target(LOCAL_TARGET, &records);
+    let (mut worker, woken, _) = harness.worker(store);
     // A second turn begins: its start is held, not asked.
     harness.session(
         "a",
@@ -1509,7 +1577,9 @@ fn a_short_turn_with_a_new_job_renames_the_pane_and_a_follow_up_does_not() {
     ];
     harness.session("a", "native-a", &turns);
     harness.input.record("w1:p1", turn_at(2) - 300, false);
-    harness.backend.answer("README 오타 수정 작업", "done", "");
+    harness
+        .backend
+        .answer("첫 요청에 붙은 작업 이름", "done", "");
     observe(&mut worker, &agent(&path, "working", 7));
     settle(&mut worker, &woken);
     let idle = agent(&path, "idle", 8);
@@ -1518,7 +1588,7 @@ fn a_short_turn_with_a_new_job_renames_the_pane_and_a_follow_up_does_not() {
     assert_eq!(harness.backend.calls(), named + 1, "one call for the turn");
     assert_eq!(
         task(shown(&worker, &idle)).as_deref(),
-        Some("README 오타 수정 작업")
+        Some("첫 요청에 붙은 작업 이름")
     );
     let asked = harness
         .backend
@@ -1540,7 +1610,7 @@ fn a_short_turn_with_a_new_job_renames_the_pane_and_a_follow_up_does_not() {
     harness.session("a", "native-a", &turns);
     harness.input.record("w1:p1", turn_at(4) - 300, false);
     harness.backend.answers.lock().unwrap().push_back(json!({
-        "goal": "README 파일 위치 확인 작업", "goal_changed": false, "line": "README.md였음", "end": "done",
+        "goal": "README 파일 위치 확인 작업", "goal_update": "keep", "line": "README.md였음", "end": "done",
         "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
     }));
     observe(&mut worker, &agent(&path, "working", 9));
@@ -1550,18 +1620,178 @@ fn a_short_turn_with_a_new_job_renames_the_pane_and_a_follow_up_does_not() {
     settle(&mut worker, &woken);
     assert_eq!(harness.backend.calls(), named + 2);
     let label = shown(&worker, &idle).unwrap();
-    assert_eq!(label.task.as_deref(), Some("README 오타 수정 작업"));
+    assert_eq!(label.task.as_deref(), Some("첫 요청에 붙은 작업 이름"));
     assert_eq!(label.progress.as_deref(), Some("README.md였음"));
+    let inputs = harness.backend.inputs.lock().unwrap();
+    let input = inputs.last().unwrap();
+    assert!(input.contains("README 오타 고쳐줘"), "{input}");
+    let evidence = input
+        .split("<goal-evidence>")
+        .nth(1)
+        .unwrap()
+        .split("</goal-evidence>")
+        .next()
+        .unwrap();
+    assert!(!evidence.contains("첫 요청"), "{input}");
+}
+
+#[test]
+fn a_vague_goal_can_be_refined_at_the_end_without_losing_its_assignment() {
+    let harness = Harness::new();
+    let store = harness.store();
+    let mut turns = vec![("user", "Read worker.md and carry out the assigned work")];
+    let path = harness.session("a", "native-a", &turns);
+    harness.backend.begin("개선사항 구현 및 배포");
+    let (mut worker, woken, _) = harness.worker(Arc::clone(&store));
+    observe(&mut worker, &agent(&path, "working", 1));
+    settle(&mut worker, &woken);
+    turns.push(("assistant", "그래프 필터와 프로젝트 접기를 반영했습니다"));
+    harness.session("a", "native-a", &turns);
+    harness.backend.answers.lock().unwrap().push_back(json!({
+        "goal": "에이전트 그래프 필터와 프로젝트 접기", "goal_update": "refine",
+        "line": "필터와 접기를 반영함", "end": "done",
+        "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
+    }));
+    let idle = agent(&path, "idle", 2);
+    observe(&mut worker, &idle);
+    settle(&mut worker, &woken);
+    assert_eq!(
+        task(shown(&worker, &idle)).as_deref(),
+        Some("에이전트 그래프 필터와 프로젝트 접기")
+    );
+    // Two later exchanges prune the initial assistant reply while retaining
+    // the first human request. They must not overwrite the saved scope.
+    for (request, reply, seq) in [
+        ("CI만 확인해", "CI 통과", 3),
+        ("로그도 확인해", "로그 정상", 4),
+    ] {
+        turns.extend([("user", request), ("assistant", reply)]);
+        harness.session("a", "native-a", &turns);
+        harness
+            .input
+            .record("w1:p1", turn_at((turns.len() - 2) as u64) - 300, false);
+        harness.backend.answers.lock().unwrap().push_back(json!({
+            "goal": "에이전트 그래프 필터와 프로젝트 접기", "goal_update": "keep",
+            "line": reply, "end": "done",
+            "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
+        }));
+        observe(&mut worker, &agent(&path, "idle", seq));
+        settle(&mut worker, &woken);
+    }
+    drop(worker);
+    store.flush();
+    drop(store);
+
+    // A restart recovers the current turn at its anchor, not the first request.
+    // Its persisted evidence must still resolve this terse follow-up.
+    turns.push(("user", "그 방향으로 계속해"));
+    harness.session("a", "native-a", &turns);
+    harness.backend.answers.lock().unwrap().push_back(json!({
+        "goal": "새 표현으로 바꾼 작업 제목", "goal_update": "keep", "line": "",
+    }));
+    let (mut worker, woken, _) = harness.worker(harness.store());
+    let working = agent(&path, "working", 5);
+    observe(&mut worker, &working);
+    settle(&mut worker, &woken);
+    assert_eq!(
+        task(shown(&worker, &working)).as_deref(),
+        Some("에이전트 그래프 필터와 프로젝트 접기")
+    );
+    let inputs = harness.backend.inputs.lock().unwrap();
+    let input = inputs.last().unwrap();
+    assert!(
+        input.contains("그래프 필터와 프로젝트 접기를 반영했습니다"),
+        "{input}"
+    );
+    assert!(input.contains("그 방향으로 계속해"), "{input}");
+}
+
+/// A session can contain several unrelated assignments before this daemon
+/// first sees it. Its earliest request is not the origin of its current title.
+#[test]
+fn historical_requests_are_not_backfilled_as_the_current_assignments_evidence() {
+    let harness = Harness::new();
+    let store = harness.store();
+    let mut turns = vec![
+        ("user", "영상 인수인계 문서를 복원해"),
+        ("assistant", "인수인계 문서 복원 완료"),
+        ("user", "Bastion IP를 등록하고 회신해"),
+        ("assistant", "Bastion 등록과 회신 완료"),
+    ];
+    let path = harness.session("a", "native-a", &turns);
+    harness
+        .backend
+        .answer("Bastion IP 등록 및 회신", "done", "회신 완료");
+    let (mut worker, woken, _) = harness.worker(Arc::clone(&store));
+    observe(&mut worker, &agent(&path, "idle", 1));
+    settle(&mut worker, &woken);
+    assert!(store.target(LOCAL_TARGET)["w1:p1"].goal_evidence.is_none());
+    drop(worker);
+    store.flush();
+    drop(store);
+
+    turns.extend([
+        ("user", "그 회신 결과 알려줘"),
+        ("assistant", "IP 등록 완료를 회신했습니다"),
+    ]);
+    harness.session("a", "native-a", &turns);
+    harness.backend.answers.lock().unwrap().push_back(json!({
+        "goal": "Bastion IP 등록 및 회신", "goal_update": "keep", "line": "IP 등록 완료 회신", "end": "done",
+        "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
+    }));
+    let (mut worker, woken, _) = harness.worker(harness.store());
+    let idle = agent(&path, "idle", 2);
+    observe(&mut worker, &idle);
+    settle(&mut worker, &woken);
+    assert_eq!(
+        task(shown(&worker, &idle)).as_deref(),
+        Some("Bastion IP 등록 및 회신")
+    );
+    let inputs = harness.backend.inputs.lock().unwrap();
+    let input = inputs.last().unwrap();
+    assert!(!input.contains("인수인계"), "{input}");
+    assert!(input.contains("Bastion IP 등록 및 회신"), "{input}");
+    assert!(input.contains("<goal-evidence></goal-evidence>"), "{input}");
+}
+
+#[test]
+fn another_agents_follow_up_cannot_refine_the_operators_goal() {
+    let harness = Harness::new();
+    let (mut worker, woken, path) = harness_with_named_pane(&harness);
+    harness.session(
+        "a",
+        "native-a",
+        &[
+            ("user", "첫 요청"),
+            ("assistant", "완료"),
+            (
+                "user",
+                "Hide letter letter-2 from child (agent-2) [report]\n구체화한 이름입니다",
+            ),
+            ("assistant", "보고를 확인했습니다"),
+        ],
+    );
+    harness.backend.answers.lock().unwrap().push_back(json!({
+        "goal": "자식이 제안한 다른 작업 이름", "goal_update": "refine", "line": "보고 확인", "end": "done",
+        "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
+    }));
+    let idle = agent(&path, "idle", 8);
+    observe(&mut worker, &idle);
+    settle(&mut worker, &woken);
+    assert_eq!(
+        task(shown(&worker, &idle)).as_deref(),
+        Some("첫 요청에 붙은 작업 이름")
+    );
 }
 
 /// Only the operator's short turn renames from its end: another agent's
 /// letter does not, and neither does the end of a turn whose start was
-/// asked, whatever `goal_changed` says (D-04).
+/// asked, whatever replacement the model returns (D-04).
 #[test]
 fn an_end_renames_only_an_operator_turn_whose_start_was_never_asked() {
     let renaming = |goal: &str| {
         json!({
-            "goal": goal, "goal_changed": true, "line": "끝냄", "end": "done",
+            "goal": goal, "goal_update": "replace", "line": "끝냄", "end": "done",
             "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
         })
     };
@@ -1600,7 +1830,7 @@ fn an_end_renames_only_an_operator_turn_whose_start_was_never_asked() {
     harness.session("a", "native-a", &turns);
     harness.input.record("w1:p1", turn_at(4) - 300, false);
     harness.backend.answers.lock().unwrap().push_back(json!({
-        "goal": "첫 요청에 붙은 작업 이름", "goal_changed": false, "line": "하는 중",
+        "goal": "첫 요청에 붙은 작업 이름", "goal_update": "keep", "line": "하는 중",
     }));
     observe(&mut worker, &agent(&path, "working", 9));
     settle(&mut worker, &woken);
@@ -1692,6 +1922,193 @@ fn harness_with_named_pane(harness: &Harness) -> (LabelWorker, Receiver<()>, Pat
     settle(&mut worker, &woken);
     assert_eq!(harness.backend.calls(), 2, "the first turn was not named");
     (worker, woken, path)
+}
+
+#[test]
+fn a_new_working_turn_hides_the_previous_turns_sentence_until_its_own_analysis() {
+    let mut harness = Harness::new();
+    harness.start_delay = Duration::from_secs(15);
+    let (mut worker, woken, path) = harness_with_named_pane(&harness);
+    let first_line = "첫 요청에 붙은 작업 이름 진행";
+    assert_eq!(
+        shown(&worker, &agent(&path, "idle", 6))
+            .unwrap()
+            .progress
+            .as_deref(),
+        Some(first_line)
+    );
+
+    harness.session(
+        "a",
+        "native-a",
+        &[
+            ("user", "첫 요청"),
+            ("assistant", "완료"),
+            ("user", "다음 요청"),
+            ("assistant", "하는 중"),
+        ],
+    );
+    harness.backend.begin("다음 요청의 작업 이름");
+    let working = agent(&path, "working", 7);
+    observe(&mut worker, &working);
+    settle(&mut worker, &woken);
+    assert_eq!(shown(&worker, &working).unwrap().progress, None);
+
+    worker.tick(Instant::now() + Duration::from_secs(20));
+    settle(&mut worker, &woken);
+    assert_eq!(
+        shown(&worker, &working).unwrap().progress.as_deref(),
+        Some("다음 요청의 작업 이름 진행")
+    );
+}
+
+#[test]
+fn a_second_working_turn_retires_the_first_turns_line_before_analysis() {
+    let mut harness = Harness::new();
+    harness.start_delay = Duration::from_secs(15);
+    let path = harness.session(
+        "a",
+        "native-a",
+        &[("user", "첫 요청"), ("assistant", "첫 작업 중")],
+    );
+    harness.backend.begin("첫 요청의 실제 작업");
+    let (mut worker, woken, _) = harness.worker(harness.store());
+    let first = agent(&path, "working", 5);
+    observe(&mut worker, &first);
+    settle(&mut worker, &woken);
+    assert_eq!(
+        shown(&worker, &first).unwrap().progress.as_deref(),
+        Some("첫 요청의 실제 작업 진행")
+    );
+
+    harness.session(
+        "a",
+        "native-a",
+        &[
+            ("user", "첫 요청"),
+            ("assistant", "첫 작업 중"),
+            ("user", "둘째 요청"),
+            ("assistant", "둘째 작업 중"),
+        ],
+    );
+    harness.backend.begin("둘째 요청의 실제 작업");
+    let second = agent(&path, "working", 6);
+    observe(&mut worker, &second);
+    settle(&mut worker, &woken);
+    assert_eq!(shown(&worker, &second).unwrap().progress, None);
+
+    worker.tick(Instant::now() + Duration::from_secs(20));
+    settle(&mut worker, &woken);
+    assert_eq!(
+        shown(&worker, &second).unwrap().progress.as_deref(),
+        Some("둘째 요청의 실제 작업 진행")
+    );
+}
+
+#[test]
+fn an_old_analysis_cannot_restore_progress_after_a_new_turn_was_read() {
+    let mut harness = Harness::new();
+    harness.start_delay = Duration::from_secs(15);
+    let path = harness.session("a", "native-a", &[("user", "첫 요청")]);
+    harness.backend.begin("첫 요청의 실제 작업");
+    let (mut worker, woken, source) = harness.worker(harness.store());
+    let first = agent(&path, "working", 5);
+    observe(&mut worker, &first);
+    settle(&mut worker, &woken);
+    assert_eq!(
+        shown(&worker, &first).unwrap().progress.as_deref(),
+        Some("첫 요청의 실제 작업 진행")
+    );
+
+    harness.session(
+        "a",
+        "native-a",
+        &[("user", "첫 요청"), ("user", "둘째 요청")],
+    );
+    harness.backend.begin("둘째 요청의 실제 작업");
+    harness.backend.hold();
+    let second = agent(&path, "working", 6);
+    observe(&mut worker, &second);
+    settle(&mut worker, &woken);
+    worker.tick(Instant::now() + Duration::from_secs(20));
+    drain_until(&mut worker, &woken, |_| harness.backend.calls() == 2);
+
+    harness.session(
+        "a",
+        "native-a",
+        &[
+            ("user", "첫 요청"),
+            ("user", "둘째 요청"),
+            ("user", "셋째 요청"),
+        ],
+    );
+    harness.backend.begin("셋째 요청의 실제 작업");
+    let third = agent(&path, "working", 7);
+    observe(&mut worker, &third);
+    drain_until(&mut worker, &woken, |worker| {
+        source.completed.load(Ordering::SeqCst) >= 3 && worker.reader_idle()
+    });
+    assert_eq!(shown(&worker, &third).unwrap().progress, None);
+
+    harness.backend.release();
+    settle(&mut worker, &woken);
+    assert_eq!(shown(&worker, &third).unwrap().progress, None);
+    worker.tick(Instant::now() + Duration::from_secs(20));
+    settle(&mut worker, &woken);
+    assert_eq!(
+        shown(&worker, &third).unwrap().progress.as_deref(),
+        Some("셋째 요청의 실제 작업 진행")
+    );
+}
+
+#[test]
+fn a_new_turn_read_retires_an_old_done_result_that_arrived_first() {
+    let mut harness = Harness::new();
+    harness.start_delay = Duration::from_secs(15);
+    let path = harness.session("a", "native-a", &[("user", "첫 요청")]);
+    harness.backend.begin("첫 요청의 실제 작업");
+    let (mut worker, woken, source) = harness.worker(harness.store());
+    let first = agent(&path, "working", 5);
+    observe(&mut worker, &first);
+    settle(&mut worker, &woken);
+
+    harness.backend.answer("마친 첫 요청을 정리함", "done", "");
+    harness.backend.hold();
+    harness.session(
+        "a",
+        "native-a",
+        &[("user", "첫 요청"), ("assistant", "첫 작업 완료")],
+    );
+    let idle = agent(&path, "idle", 6);
+    observe(&mut worker, &idle);
+    drain_until(&mut worker, &woken, |_| harness.backend.calls() == 2);
+
+    harness.session(
+        "a",
+        "native-a",
+        &[("user", "첫 요청"), ("user", "다음 요청")],
+    );
+    harness.backend.begin("다음 요청의 실제 작업");
+    source.hold();
+    let next = agent(&path, "working", 7);
+    observe(&mut worker, &next);
+    assert_eq!(shown(&worker, &next).unwrap().progress, None);
+    harness.backend.release();
+    drain_until(&mut worker, &woken, |worker| worker.analyzer_idle());
+    assert_eq!(shown(&worker, &next).unwrap().progress, None);
+
+    harness.backend.hold();
+    source.release();
+    drain_until(&mut worker, &woken, |worker| {
+        source.completed.load(Ordering::SeqCst) >= 3 && worker.reader_idle()
+    });
+    assert_eq!(shown(&worker, &next).unwrap().progress, None);
+    harness.backend.release();
+    settle(&mut worker, &woken);
+    assert_eq!(
+        shown(&worker, &next).unwrap().progress.as_deref(),
+        Some("다음 요청의 실제 작업 진행")
+    );
 }
 
 #[test]
@@ -1804,7 +2221,7 @@ fn a_null_goal_is_valid_but_an_absent_or_invalid_goal_is_not() {
     use super::analysis::{AnalysisPhase, LabelEnd};
     use super::context_label::{parse, request};
     for phase in [AnalysisPhase::TurnStart, AnalysisPhase::TurnEnd] {
-        let mut answer = json!({"goal": null, "goal_changed": false, "line": ""});
+        let mut answer = json!({"goal": null, "goal_update": "keep", "line": ""});
         if phase == AnalysisPhase::TurnEnd {
             answer["end"] = json!("done");
             answer["work"] =
@@ -1833,9 +2250,11 @@ fn a_null_goal_is_valid_but_an_absent_or_invalid_goal_is_not() {
             schema["properties"]["goal"]["type"],
             json!(["string", "null"])
         );
-        answer["goal_changed"] = json!(true);
-        assert!(parse(phase, hide_ai::OutputLanguage::Korean, answer.clone()).is_err());
-        answer["goal_changed"] = json!(false);
+        for update in ["replace", "refine"] {
+            answer["goal_update"] = json!(update);
+            assert!(parse(phase, hide_ai::OutputLanguage::Korean, answer.clone()).is_err());
+        }
+        answer["goal_update"] = json!("keep");
         for invalid in [json!(""), json!("짧음"), json!(42)] {
             answer["goal"] = invalid;
             assert!(parse(phase, hide_ai::OutputLanguage::Korean, answer.clone()).is_err());
@@ -1864,7 +2283,7 @@ fn greetings_keep_the_native_title_until_real_work_sets_a_goal() {
         writeln!(file, "{}", json!({"type":"custom-title", "customTitle":"Claude 이름 질문", "sessionId":"native-greeting"})).unwrap();
     }
     harness.backend.answers.lock().unwrap().push_back(json!({
-        "goal": null, "goal_changed": false, "line": "", "end": "done",
+        "goal": null, "goal_update": "keep", "line": "", "end": "done",
         "work":{"task":{"kind":"none"},"missed":[],"resolved":[],"output_task_id":null},
     }));
     let idle = agent(&path, "idle", 1);
@@ -1891,7 +2310,7 @@ fn greetings_keep_the_native_title_until_real_work_sets_a_goal() {
     harness.session("greeting", "native-greeting", &named);
     harness.input.record("w1:p1", turn_at(2) - 300, false);
     harness.backend.answers.lock().unwrap().push_back(json!({
-        "goal": null, "goal_changed": false, "line": "", "end": "done",
+        "goal": null, "goal_update": "keep", "line": "", "end": "done",
         "work":{"task":{"kind":"none"},"missed":[],"resolved":[],"output_task_id":null},
     }));
     observe(&mut worker, &agent(&path, "idle", 2));
@@ -1922,7 +2341,7 @@ fn greetings_keep_the_native_title_until_real_work_sets_a_goal() {
     completed_turn.push(("assistant", "배포 환경을 선택해 주세요."));
     harness.session("greeting", "native-greeting", &completed_turn);
     harness.backend.answers.lock().unwrap().push_back(json!({
-        "goal": null, "goal_changed": false, "line": "배포 환경을 선택하세요", "end": "question",
+        "goal": null, "goal_update": "keep", "line": "배포 환경을 선택하세요", "end": "question",
         "work":{"task":{"kind":"none"},"missed":[],"resolved":[],"output_task_id":null},
     }));
     let question = agent(&path, "idle", 4);
@@ -1949,7 +2368,7 @@ fn the_providers_answer_is_judged_before_it_is_shown() {
     use super::context_label::parse_text;
     let question_without_reply = parse_text(
         AnalysisPhase::TurnEnd,
-        r#"{"goal":"배포 방식 결정 작업","goal_changed":true,"line":"","end":"question"}"#,
+        r#"{"goal":"배포 방식 결정 작업","goal_update":"replace","line":"","end":"question"}"#,
     )
     .unwrap();
     assert_eq!(
@@ -1959,7 +2378,7 @@ fn the_providers_answer_is_judged_before_it_is_shown() {
     );
     let long = parse_text(
         AnalysisPhase::TurnEnd,
-        r#"{"goal":"배포 방식 결정 작업","goal_changed":false,"line":"이 줄은 사십 자를 훌쩍 넘기는 아주 긴 결과 문장이라서 화면 한 줄에 맞게 반드시 잘려야 합니다","end":"done"}"#,
+        r#"{"goal":"배포 방식 결정 작업","goal_update":"keep","line":"이 줄은 사십 자를 훌쩍 넘기는 아주 긴 결과 문장이라서 화면 한 줄에 맞게 반드시 잘려야 합니다","end":"done"}"#,
     )
     .unwrap();
     assert_eq!(
@@ -1968,7 +2387,7 @@ fn the_providers_answer_is_judged_before_it_is_shown() {
     );
     let block_without_cause = parse_text(
         AnalysisPhase::TurnEnd,
-        r#"{"goal":"배포 방식 결정 작업","goal_changed":false,"line":"","end":"blocked"}"#,
+        r#"{"goal":"배포 방식 결정 작업","goal_update":"keep","line":"","end":"blocked"}"#,
     )
     .unwrap();
     assert_eq!(
@@ -1978,7 +2397,7 @@ fn the_providers_answer_is_judged_before_it_is_shown() {
     );
     let block = parse_text(
         AnalysisPhase::TurnEnd,
-        r#"{"goal":"배포 방식 결정 작업","goal_changed":false,"line":"디스크 여유가 없어 검증을 못 함","end":"blocked"}"#,
+        r#"{"goal":"배포 방식 결정 작업","goal_update":"keep","line":"디스크 여유가 없어 검증을 못 함","end":"blocked"}"#,
     )
     .unwrap();
     assert_eq!(block.end, LabelEnd::Blocked);
@@ -1988,7 +2407,7 @@ fn the_providers_answer_is_judged_before_it_is_shown() {
             parse_text(
                 AnalysisPhase::TurnEnd,
                 &format!(
-                    r#"{{"goal":"배포 방식 결정 작업","goal_changed":true,"line":"테스트 레인 실행 중","end":"{end}"}}"#
+                    r#"{{"goal":"배포 방식 결정 작업","goal_update":"replace","line":"테스트 레인 실행 중","end":"{end}"}}"#
                 ),
             )
             .is_err(),
@@ -2008,7 +2427,7 @@ fn a_long_line_is_cut_between_words_and_a_question_stays_a_question() {
             AnalysisPhase::TurnEnd,
             language,
             json!({
-                "goal": null, "goal_changed": false, "line": line, "end": end,
+                "goal": null, "goal_update": "keep", "line": line, "end": end,
                 "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
             }),
         )
@@ -2070,14 +2489,14 @@ fn each_turn_boundary_is_asked_only_what_it_can_know() {
     );
     let started = parse_text(
         AnalysisPhase::TurnStart,
-        r#"{"goal":"배포 방식 결정 작업","goal_changed":false,"line":"배포 스크립트 고치는 중"}"#,
+        r#"{"goal":"배포 방식 결정 작업","goal_update":"keep","line":"배포 스크립트 고치는 중"}"#,
     )
     .unwrap();
     assert_eq!(started.end, LabelEnd::Working);
     assert!(
         parse_text(
             AnalysisPhase::TurnStart,
-            r#"{"goal":"배포 방식 결정 작업","goal_changed":false,"line":"앞 턴은 덜 끝남","end":"unfinished"}"#,
+            r#"{"goal":"배포 방식 결정 작업","goal_update":"keep","line":"앞 턴은 덜 끝남","end":"unfinished"}"#,
         )
         .is_err(),
         "a turn's start does not judge how a turn ended"
@@ -2153,11 +2572,7 @@ fn a_label_request_carries_its_language_and_that_languages_lengths() {
             assert_eq!(asked.answer, hide_ai::AnswerMode::PlainJson);
             assert_eq!(asked.output_schema["properties"]["goal"]["maxLength"], goal);
             assert!(asked.system.contains(&format!("8 to {goal} characters")));
-            assert!(
-                asked
-                    .system
-                    .contains(&format!("line is one line of at most {line} characters"))
-            );
+            assert!(asked.system.contains(&format!("at most {line} characters")));
             for name in ["English", "Korean", "Chinese", "Japanese"] {
                 assert!(
                     !asked.system.contains(name),
@@ -2168,7 +2583,7 @@ fn a_label_request_carries_its_language_and_that_languages_lengths() {
         }
         let mut answer = json!({
             "goal": "w".repeat(goal + 5),
-            "goal_changed": true,
+            "goal_update": "replace",
             "line": "l".repeat(line + 5),
         });
         let parsed = parse(AnalysisPhase::TurnStart, language, answer.clone()).unwrap();
@@ -2290,6 +2705,10 @@ fn a_device_panes_label_is_read_through_its_helper() {
     assert_eq!(
         task(shown(&worker, &idle)).as_deref(),
         Some("미니 배치 실행 작업")
+    );
+    assert_eq!(
+        shown_row(&worker, &idle).last_prompt_at_unix_ms,
+        Some(turn_at(0))
     );
 }
 
@@ -2561,6 +2980,9 @@ fn a_request_the_operator_submitted_is_theirs_and_survives_a_restart_without_a_r
         facts.reply.as_ref().unwrap().text,
         "만들었습니다\nPR을 열었어요"
     );
+    let row = shown_row(&worker, &idle);
+    assert_eq!(row.last_prompt_at_unix_ms, Some(turn_at(2)));
+    assert_ne!(row.changed_at_unix_ms, row.last_prompt_at_unix_ms);
 
     // A restarted daemon has no submits and reads nothing for an unchanged
     // pane; what it shows is what was stored.
@@ -2578,6 +3000,57 @@ fn a_request_the_operator_submitted_is_theirs_and_survives_a_restart_without_a_r
         "{reads} reads before"
     );
     assert_eq!(harness.store().target(LOCAL_TARGET)["w1:p1"].facts, facts);
+    let restored = shown_row(&restarted, &idle);
+    assert_eq!(restored.last_prompt_at_unix_ms, row.last_prompt_at_unix_ms);
+    assert_eq!(restored.last_activity, row.last_activity);
+}
+
+#[test]
+fn a_rewritten_transcript_removes_a_missing_request_without_changing_the_owner() {
+    let harness = Harness::new();
+    let store = harness.store();
+    let (mut worker, woken, _) = harness.worker(Arc::clone(&store));
+    let turns = [
+        ("user", "요청 보기 만들어줘"),
+        ("assistant", "만들었습니다"),
+        (
+            "user",
+            "Hide letter r1 from ci-lead (claude) [request]\nCI 다시 봐줘",
+        ),
+    ];
+    let path = harness.session("a", "native-a", &turns);
+    harness.input.record("w1:p1", turn_at(0) - 300, false);
+    harness.backend.answer("요청 보기", "done", "");
+    observe(&mut worker, &agent(&path, "idle", 3));
+    settle(&mut worker, &woken);
+    assert_eq!(
+        shown_row(&worker, &agent(&path, "idle", 3)).last_prompt_at_unix_ms,
+        Some(turn_at(2))
+    );
+
+    // The shorter native file no longer contains the other sender's request.
+    harness.session("a", "native-a", &turns[..2]);
+    harness.backend.answer("요청 보기", "done", "");
+    let shortened = agent(&path, "idle", 4);
+    observe(&mut worker, &shortened);
+    settle_with_ticks(&mut worker, &woken);
+    let facts = shown_facts(&worker, &shortened).unwrap();
+    assert_eq!(facts.operator_request.unwrap().text, turns[0].1);
+    assert!(facts.other_request.is_none());
+    assert_eq!(
+        shown_row(&worker, &shortened).last_prompt_at_unix_ms,
+        Some(turn_at(0))
+    );
+
+    // Metadata/assistant output alone cannot retain either request's time.
+    harness.session("a", "native-a", &[("assistant", "보관된 응답")]);
+    let no_prompt = agent(&path, "working", 5);
+    observe(&mut worker, &no_prompt);
+    settle_with_ticks(&mut worker, &woken);
+    assert_eq!(shown_row(&worker, &no_prompt).last_prompt_at_unix_ms, None);
+    let facts = shown_facts(&worker, &no_prompt).unwrap();
+    assert!(facts.operator_request.is_none());
+    assert!(facts.other_request.is_none());
 }
 
 #[test]
@@ -3707,6 +4180,9 @@ fn a_failed_same_state_follow_up_forgets_structured_question_without_ai() {
                 }
             })),
             reads: AtomicUsize::new(0),
+            completed: AtomicUsize::new(0),
+            held: Mutex::new(false),
+            released: Condvar::new(),
         });
         let (mut worker, woken) =
             harness.spawn(harness.store(), LOCAL_TARGET, "local.sock", source.clone());
@@ -4461,7 +4937,7 @@ fn a_pane_with_no_goal_is_still_analyzed_after_a_restart() {
     let harness = Harness::new();
     let no_goal = || {
         json!({
-            "goal": null, "goal_changed": false, "line": "", "end": "done",
+            "goal": null, "goal_update": "keep", "line": "", "end": "done",
             "work":{"task":{"kind":"none"},"missed":[],"resolved":[],"output_task_id":null},
         })
     };
@@ -4503,4 +4979,146 @@ fn a_pane_with_no_goal_is_still_analyzed_after_a_restart() {
         task(shown(&worker, &idle)).as_deref(),
         Some("README 섹션 안내")
     );
+}
+
+/// PRD task-continuation D-02, D-03, D-09: a turn a letter woke tells the
+/// ledger who sent it and when it arrived, and a watch alert's or a reply's
+/// failed turn leaves no unknown behind.
+#[test]
+fn a_letter_turn_end_names_its_sender_and_start_and_a_failed_watch_or_reply_turn_stays_unrecorded()
+{
+    use crate::links::ledger::{LedgerContext, LedgerUpdate, SessionIdentity};
+    let harness = Harness::new();
+    let store = harness.store();
+    let client = crate::links::worker::LinkClient::open_mailbox_for_test();
+    let node: Arc<dyn crate::node_access::NodeLink> = Arc::new(hide_node::Local::new(Some(
+        harness.home.path().to_path_buf(),
+    )));
+    let (mut worker, woken) = harness.spawn_with_ledger(
+        Arc::clone(&store),
+        LOCAL_TARGET,
+        "local.sock",
+        Arc::new(NodeTranscripts::new(Box::new(move || {
+            Ok(Arc::clone(&node))
+        }))),
+        Arc::new(Mutex::new(Some(client.clone()))),
+    );
+    client.prime_context_for_test(
+        SessionIdentity {
+            device_id: LOCAL_TARGET.into(),
+            agent: "claude".into(),
+            session_id: "native-a".into(),
+        },
+        LedgerContext::default(),
+    );
+    let mut lines = vec![
+        ("user", "두 일을 자식에게 맡기고 머지까지 해줘"),
+        ("assistant", "자식 둘을 띄웠습니다"),
+        (
+            "user",
+            "Hide letter letter-1 from impl-a (claude) [report]\n끝났어요",
+        ),
+        ("assistant", "PR을 머지했습니다"),
+    ];
+    let path = later_session(&harness, &lines);
+    harness
+        .backend
+        .answer("사이드바 두 화면 개선 작업", "waiting", "");
+    observe(&mut worker, &agent(&path, "idle", 3));
+    settle(&mut worker, &woken);
+    let turn_ends = || {
+        client
+            .ledger_updates_for_test()
+            .into_iter()
+            .filter_map(|update| match update {
+                LedgerUpdate::TurnEnd {
+                    letter,
+                    work_author,
+                    started_at_unix_ms,
+                    at_unix_ms,
+                    ..
+                } => Some((
+                    letter,
+                    work_author,
+                    started_at_unix_ms,
+                    started_at_unix_ms <= at_unix_ms,
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    // The turn starts at the letter, 2099-10-01T00:00:02Z.
+    assert_eq!(
+        turn_ends(),
+        [(Some("impl-a".to_owned()), false, 4_094_496_002_000, true)]
+    );
+    let unjudged = || {
+        client
+            .ledger_updates_for_test()
+            .into_iter()
+            .filter(|update| matches!(update, LedgerUpdate::Unjudged { offsets, .. } if !offsets.is_empty()))
+            .count()
+    };
+    let before = unjudged();
+    lines.extend([
+        (
+            "user",
+            "Hide letter letter-2 from observer (claude) [watch]\nNo activity for 20 minutes",
+        ),
+        ("assistant", "확인했습니다"),
+    ]);
+    later_session(&harness, &lines);
+    harness.backend.time_out(2);
+    observe(&mut worker, &agent(&path, "idle", 5));
+    settle(&mut worker, &woken);
+    worker.tick(Instant::now() + Duration::from_secs(1));
+    settle(&mut worker, &woken);
+    assert_eq!(
+        unjudged(),
+        before,
+        "a watch turn's failure records no unknown"
+    );
+    lines.extend([
+        (
+            "user",
+            "Hide letter letter-3 from observer (claude) [reply]\n좋아요",
+        ),
+        ("assistant", "알겠습니다"),
+    ]);
+    later_session(&harness, &lines);
+    harness.backend.time_out(2);
+    observe(&mut worker, &agent(&path, "idle", 7));
+    settle(&mut worker, &woken);
+    worker.tick(Instant::now() + Duration::from_secs(1));
+    settle(&mut worker, &woken);
+    assert_eq!(
+        unjudged(),
+        before,
+        "a reply turn's failure records no unknown"
+    );
+    lines.extend([
+        (
+            "user",
+            "Hide letter letter-4 from impl-b (claude) [progress]\n진행 중",
+        ),
+        ("assistant", "기다립니다"),
+    ]);
+    later_session(&harness, &lines);
+    harness.backend.time_out(2);
+    observe(&mut worker, &agent(&path, "idle", 9));
+    settle(&mut worker, &woken);
+    worker.tick(Instant::now() + Duration::from_secs(1));
+    settle(&mut worker, &woken);
+    assert_eq!(unjudged(), before + 1, "a descendant letter's failure does");
+}
+
+/// `Harness::session` with turns dated after the worker switched summaries
+/// on, so the ledger takes their judgments.
+fn later_session(harness: &Harness, turns: &[(&str, &str)]) -> PathBuf {
+    let path = harness.session("a", "native-a", turns);
+    let dated = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("\"2026-10-01T00:00:", "\"2099-10-01T00:00:");
+    std::fs::write(&path, dated).unwrap();
+    path
 }

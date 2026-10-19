@@ -3,7 +3,7 @@
 import { expect, type ElectronApplication } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { declareParent, labelAgent, setFixtureLifecycle, startHerdr } from "../../web/e2e/herdr-fixture";
+import { continueFixtureTranscript, declareParent, labelAgent, setFixtureLifecycle, startHerdr } from "../../web/e2e/herdr-fixture";
 import { enterWorkspace, showTasks } from "../../web/e2e/wire";
 import { fitWindow, isolate, launchShell, test } from "./fixture";
 import { captureNativeWindow } from "./native-window";
@@ -15,7 +15,7 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
   const failures: unknown[] = [];
   try {
     const [parent, child] = herdr.panes;
-    labelAgent(herdr, parent, { task: "한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목", progress: "자식 검토 결과를 기다리는 중" });
+    const parentSession = labelAgent(herdr, parent, { task: "한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목", progress: "자식 검토 결과를 기다리는 중" });
     labelAgent(herdr, child, { task: "자식의 긴 한국어 검증 요청과 회귀 결과 확인", progress: "검증 명령 실행 권한이 필요합니다" });
     declareParent(herdr, child, parent);
     await setFixtureLifecycle(herdr, child, "blocked");
@@ -29,6 +29,19 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
     await expect(pane.locator('[data-pane-header-band="raised"]')).toBeVisible({ timeout: 30_000 });
     const treeButton = pane.locator(`[data-pane-tree="${parent}"]`);
     await expect(treeButton).toBeVisible();
+    await expect(treeButton).toHaveText("1");
+    await expect(pane.locator(`[data-pane-child-name]`)).toHaveCount(0);
+    await expect(pane.locator(`[data-pane-own-progress="${parent}"]`)).toHaveCount(0);
+    const raisedRow = pane.locator('[data-pane-header-band="raised"]');
+    const raisedVerb = raisedRow.locator('[data-verb="approval"]');
+    const raisedWho = raisedRow.locator(`[data-pane-band-who="${child}"]`);
+    await expect(raisedVerb).toHaveText("Approval");
+    await expect(raisedWho).toContainText("자식의 긴 한국어 검증 요청");
+    await expect(raisedWho).toContainText("(child)");
+    expect(await raisedVerb.evaluate((verb, childPaneId) => {
+      const who = verb.parentElement?.querySelector(`[data-pane-band-who="${childPaneId}"]`);
+      return !!who && !!(verb.compareDocumentPosition(who) & Node.DOCUMENT_POSITION_FOLLOWING);
+    }, child)).toBe(true);
     const terminal = await host.boundingBox();
     const facts = { head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), parent, child, home: run.env.HOME, socket: herdr.socket, state: run.env.HIDE_STATE_DIR, provider: "synthetic agent transcript and lifecycle" };
     for (const theme of ["light", "dark"] as const) {
@@ -55,6 +68,9 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
     }
     await setFixtureLifecycle(herdr, child, "working");
     await expect(pane.locator('[data-pane-header-band="raised"]')).toHaveCount(0);
+    continueFixtureTranscript(herdr, parentSession, { task: "한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목", progress: "자식 검토 결과를 기다리는 중" });
+    await setFixtureLifecycle(herdr, parent, "working");
+    await expect(pane.locator(`[data-pane-own-progress="${parent}"]`)).toHaveText("자식 검토 결과를 기다리는 중", { timeout: 25_000 });
     expect(await host.boundingBox()).toEqual(terminal);
     await expect(page.locator(`nav[data-sidebar] [data-pane="${child}"]`)).toHaveCount(0);
     await captureNativeWindow(app, "session-working-restored", { ...facts, terminal });

@@ -9,9 +9,9 @@ mod antigravity;
 mod claude;
 mod codex;
 mod codex_home;
-mod gemini;
 mod grok;
 mod log;
+mod omp;
 mod pi;
 mod process;
 mod program;
@@ -30,9 +30,9 @@ pub use antigravity::{
 };
 pub use claude::{ClaudeCliBackend, ClaudeConfig, USAGE_ENVIRONMENT, UsageError};
 pub use codex::{CodexAppServerBackend, CodexConfig};
-pub use gemini::GeminiCliBackend;
 pub use grok::GrokCliBackend;
 pub use log::{AiLogEvent, AiLogSink, NoopLogSink};
+pub use omp::{OmpConfig, OmpSdkBackend};
 pub use pi::PiCliBackend;
 pub use process::ProcessMeasurement;
 pub use program::resolve_binary;
@@ -61,9 +61,8 @@ use serde_json::Value;
 pub enum ModelCatalog {
     /// The list the provider's own CLI or account answered.
     Offered(Vec<String>),
-    /// A list the CLI documents but cannot be asked for (Gemini CLI's
-    /// aliases). The shell says so beside the menu instead of presenting it
-    /// as the account's own list (B36).
+    /// A documented list from a compatible peer, rather than the account's
+    /// own answer. Kept readable for older node responses (B36).
     Fixed(Vec<String>),
     Unknown {
         reason: String,
@@ -447,6 +446,10 @@ pub struct ModelTokens {
 /// joined another's flight is one execution and is told once. Implementations
 /// queue and return: the router calls this on the request's own thread.
 pub trait AiUsageSink: Send + Sync + fmt::Debug {
+    /// One backend execution, including retries and fallbacks, after admission.
+    /// No request or response content crosses this callback.
+    fn started(&self) {}
+
     /// `models` is empty for an attempt that was submitted and reported no
     /// usage (a timeout, a lost connection, a cancel or an unusable answer
     /// after the prompt went out, a provider whose usage is not read): an

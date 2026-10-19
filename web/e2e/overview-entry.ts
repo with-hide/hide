@@ -4,7 +4,7 @@
 // lifetime, focus and terminal preservation belong to overview-modal.spec.
 import { expect, type Page } from "@playwright/test";
 
-export type OverviewTab = "backlog" | "projects";
+export type OverviewTab = "work" | "projects" | "backlog" | "history" | "usage";
 
 /** The Overview on one of its tabs, opened from the sidebar's Overview row when it is not on screen yet. */
 export async function openOverview(page: Page, tab: OverviewTab = "backlog") {

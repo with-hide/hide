@@ -24,9 +24,11 @@
 //!   need an execution policy that allows scripts.
 //!
 //! A shell starts as Herdr starts its own by default (Herdr's `auto` mode):
-//! a login shell on macOS and not on Linux. Any other shell (sh, nu, cmd)
-//! gets no launch, and a start there is confirmed after the fact instead
-//! (`herdr-core`'s `agent_start`).
+//! a login shell on macOS and not on Linux. Other Unix shells, and an
+//! integration that cannot be installed, get an explicit ordinary launch
+//! with Plain readiness (`herdr-core`'s `agent_start`). On macOS the same
+//! hided executable replaces itself with that shell using its login argv0;
+//! Linux starts it directly. Neither route invents shell-specific flags.
 //!
 //! The files live under the node's account home
 //! (`hide_kit::layout::shell_integration`), one folder per version of their
@@ -41,7 +43,7 @@ use std::path::PathBuf;
 #[cfg(unix)]
 use std::time::{Duration, SystemTime};
 
-pub use hide_node_link::protocol::ShellLaunch;
+pub use hide_node_link::protocol::{ShellLaunch, ShellReadiness};
 
 /// The token the first prompt reports on the pane, and the value it reports.
 pub const PROMPT_TOKEN: &str = "hide_prompt";
@@ -103,6 +105,109 @@ impl UserShell {
     }
 }
 
+/// Answers from the owning node's facts, before a terminal is created.
+/// `executor` is this node's running hided, never a path from its caller.
+/// A saved recipe keeps that exact path through recovery: if an update
+/// removes it before creation, creation fails rather than selecting another
+/// build or creating a replacement terminal.
+#[cfg(unix)]
+pub fn prepare(
+    home: Option<&Path>,
+    user: &UserShell,
+    executor: Option<&Path>,
+) -> io::Result<ShellLaunch> {
+    let shell = user.shell.as_deref().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the account's SHELL is not set",
+        )
+    })?;
+    require_executable(Path::new(shell))?;
+    if let Some(home) = home {
+        match install(home, user) {
+            Ok(Some(launch)) => return Ok(launch),
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "component": "shell_integration",
+                        "kind": "install.failed",
+                        "outcome": "plain_shell",
+                        "reason": format!("{:?}", error.kind()),
+                    })
+                );
+            }
+        }
+    }
+    plain(shell, executor)
+}
+
+#[cfg(unix)]
+fn require_executable(path: &Path) -> io::Result<()> {
+    if !path.is_absolute() || !path.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the account's shell executable must be an existing absolute file",
+        ));
+    }
+    if !hide_platform::fs::permissions::is_executable(path)? {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the account's shell executable cannot be run",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn plain(shell: &str, executor: Option<&Path>) -> io::Result<ShellLaunch> {
+    #[cfg(target_os = "macos")]
+    let command = {
+        let executor = executor.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "the owning node's hided path is unknown",
+            )
+        })?;
+        require_executable(executor)?;
+        let executor = executor.to_str().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the owning node's hided path cannot be represented",
+            )
+        })?;
+        vec![
+            executor.into(),
+            "shell-exec".into(),
+            "--shell".into(),
+            shell.into(),
+            "--login".into(),
+        ]
+    };
+    #[cfg(not(target_os = "macos"))]
+    let command = {
+        let _ = executor;
+        vec![shell.into()]
+    };
+    Ok(ShellLaunch {
+        command,
+        env: Default::default(),
+        readiness: ShellReadiness::Plain,
+    })
+}
+
+/// Windows keeps Herdr's existing PowerShell launch and prompt contract.
+#[cfg(windows)]
+pub fn prepare(
+    home: Option<&Path>,
+    user: &UserShell,
+    _executor: Option<&Path>,
+) -> io::Result<ShellLaunch> {
+    install(home.unwrap_or_else(|| Path::new("")), user)?
+        .ok_or_else(|| io::Error::other("the owning node's PowerShell recipe is missing"))
+}
+
 /// Writes the integration under `home` once and answers how a pane starts
 /// `user`'s shell with it; `None` for a shell it does not reach.
 #[cfg(unix)]
@@ -146,7 +251,11 @@ pub fn install(home: &Path, user: &UserShell) -> io::Result<Option<ShellLaunch>>
         }
         _ => return Ok(None),
     }
-    Ok(Some(ShellLaunch { command, env }))
+    Ok(Some(ShellLaunch {
+        command,
+        env,
+        readiness: ShellReadiness::Integrated,
+    }))
 }
 
 /// Herdr's own shell for a Windows pane, Windows PowerShell, with the
@@ -161,6 +270,7 @@ pub fn install(_home: &Path, _user: &UserShell) -> io::Result<Option<ShellLaunch
             POWERSHELL_COMMAND.into(),
         ],
         env: Default::default(),
+        readiness: ShellReadiness::Integrated,
     }))
 }
 
@@ -334,6 +444,82 @@ mod tests {
     /// Herdr's `auto` mode: a login shell on macOS, not on Linux.
     fn login() -> bool {
         cfg!(target_os = "macos")
+    }
+
+    #[test]
+    fn ordinary_sh_has_an_explicit_recipe_and_plain_readiness() {
+        let executable = std::env::current_exe().unwrap();
+        let prepared = prepare(None, &user("/bin/sh"), Some(&executable)).unwrap();
+        let expected: Vec<String> = if login() {
+            vec![
+                executable.to_str().unwrap().into(),
+                "shell-exec".into(),
+                "--shell".into(),
+                "/bin/sh".into(),
+                "--login".into(),
+            ]
+        } else {
+            vec!["/bin/sh".into()]
+        };
+        assert_eq!(prepared.command, expected);
+        assert_eq!(prepared.readiness, ShellReadiness::Plain);
+        assert!(prepared.env.is_empty());
+    }
+
+    #[test]
+    fn an_integration_install_failure_preserves_the_accounts_normal_shell() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("not-a-folder");
+        std::fs::write(&home, "occupied").unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let prepared = prepare(Some(&home), &user("/bin/bash"), Some(&executable)).unwrap();
+        assert_eq!(prepared, plain("/bin/bash", Some(&executable)).unwrap());
+        assert!(
+            prepared.env.is_empty(),
+            "no partial integration environment escapes"
+        );
+        assert_eq!(std::fs::read_to_string(home).unwrap(), "occupied");
+    }
+
+    #[test]
+    fn an_integrated_recipe_keeps_its_prompt_readiness() {
+        let home = tempfile::tempdir().unwrap();
+        let prepared = prepare(Some(home.path()), &user("/bin/bash"), None).unwrap();
+        assert_eq!(prepared.readiness, ShellReadiness::Integrated);
+        assert_eq!(prepared.command[0], "/bin/bash");
+        assert_eq!(prepared.command[1], "--init-file");
+    }
+
+    #[test]
+    fn missing_relative_or_unexecutable_account_shells_fail_before_any_install() {
+        let home = tempfile::tempdir().unwrap();
+        let file = home.path().join("not-executable");
+        std::fs::write(&file, "not an executable").unwrap();
+        for shell in [
+            None,
+            Some("sh"),
+            Some("/hide-nonexistent-shell"),
+            file.to_str(),
+        ] {
+            let user = UserShell {
+                shell: shell.map(str::to_owned),
+                ..Default::default()
+            };
+            assert!(prepare(Some(home.path()), &user, None).is_err());
+        }
+        assert!(!hide_kit::layout::shell_integration(home.path()).exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_missing_or_relative_owning_node_executable_cannot_be_a_plain_recipe() {
+        for executor in [
+            None,
+            Some(Path::new("hided")),
+            Some(Path::new("/hide-removed-build/hided")),
+        ] {
+            assert!(prepare(None, &user("/bin/sh"), executor).is_err());
+        }
     }
 
     #[test]

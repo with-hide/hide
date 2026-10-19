@@ -1987,9 +1987,17 @@ fn agent_start_remembers_its_choice_and_answers_its_own_request() {
     assert_eq!(restored.agent_start, choice);
 
     assert!(runtime.dispatch_json(&start("terminal", "opus", "r4")));
-    let error = runtime.snapshot.status.last_error.clone().expect("refusal");
-    assert_eq!(error.kind, "agent_start.unknown_model");
-    assert_eq!(error.request_id.as_deref(), Some("r4"));
+    let operation = runtime
+        .snapshot
+        .task_operation
+        .clone()
+        .expect("terminal operation");
+    assert_eq!(operation.request_id.as_deref(), Some("r4"));
+    assert_eq!(
+        operation.agent_kind, None,
+        "terminal ignores agent model fields"
+    );
+    assert_eq!(runtime.snapshot.ui_state.agent_start, choice);
 
     assert!(runtime.dispatch_json(&start("terminal", "", "r5")));
     let operation = runtime.snapshot.task_operation.clone().expect("operation");
@@ -2135,6 +2143,19 @@ fn a_task_that_stays_behind_leaves_the_desktop_focus_where_it_was() {
     };
     for (stays_behind, shown) in [(false, "new:pane"), (true, "existing:pane")] {
         let mut runtime = runtime();
+        // This test compares desktop and phone navigation after a pane is
+        // published; waiting for a new checkout's catalog is tested separately.
+        runtime.snapshot.navigator.workspaces = vec![workspace(
+            "project",
+            "Project",
+            "/fixture/repo",
+            vec![checkout(
+                "project",
+                "checkout",
+                "/fixture/repo",
+                Some(pane("new:pane", "/fixture/repo")),
+            )],
+        )];
         runtime.snapshot.terminal.pane_id = Some("existing:pane".into());
         runtime.snapshot.focused.surface = Surface::Terminal;
         runtime.snapshot.focused.pane_id = Some("existing:pane".into());
@@ -3361,6 +3382,7 @@ fn a_task_agent_start_reports_apart_from_the_creation_it_follows() {
 
     // The pane is not in this runtime's navigator, so the retry says so and
     // starts nothing.
+    runtime.snapshot.task_operation.as_mut().unwrap().request_id = Some("restore-session".into());
     let retry = serde_json::to_vec(&serde_json::json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "task_agent_retry",
@@ -3376,6 +3398,15 @@ fn a_task_agent_start_reports_apart_from_the_creation_it_follows() {
             .as_ref()
             .map(|error| error.kind.as_str()),
         Some("task_operation.agent_retry_pane_gone")
+    );
+    assert_eq!(
+        runtime
+            .snapshot()
+            .status
+            .last_error
+            .as_ref()
+            .and_then(|error| error.request_id.as_deref()),
+        Some("restore-session")
     );
     assert_eq!(
         runtime
@@ -4032,6 +4063,7 @@ fn tab_with_pane(pane_id: &str) -> TabSnapshot {
         empty: false,
         delegated: false,
         panes: vec![crate::model::PaneSnapshot {
+            start_claim: None,
             terminal_id: None,
             failed_terminal_id: None,
             id: pane_id.to_owned(),

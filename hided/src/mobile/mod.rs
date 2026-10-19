@@ -1531,6 +1531,10 @@ impl Mobile {
         }
     }
 
+    pub fn terminals(&self) -> &dyn hide_node_link::terminal::TerminalNode {
+        self.config.core.terminals.as_ref()
+    }
+
     /// The Herdr connection for a pane on this Mac or a connected device.
     pub fn herdr_api(
         &self,

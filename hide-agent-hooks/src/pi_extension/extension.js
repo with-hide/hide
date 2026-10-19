@@ -11,6 +11,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 const HELPER = __HIDE_HELPER__;
+const ROUTE = __HIDE_ROUTE__;
 const AGENT = __HIDE_AGENT__;
 const VERSION = __HIDE_VERSION__;
 
@@ -121,7 +122,7 @@ function helper(state, operation, input, budgetMs) {
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(HELPER, [AGENT, operation], { stdio: ["pipe", "pipe", "ignore"] });
+      child = spawn(HELPER, [AGENT, operation, ...ROUTE], { stdio: ["pipe", "pipe", "ignore"] });
     } catch {
       state.lost += 1;
       resolve(null);
@@ -393,6 +394,7 @@ function handoverOpen(state) {
  * reply, before the next result.
  */
 async function onToolResult(state, event, ctx) {
+  await observeTool(state, event, ctx);
   if (!root(ctx) || typeof event?.toolCallId !== "string") return undefined;
   const session = sessionFile(ctx);
   if (!session) return undefined;
@@ -407,6 +409,37 @@ async function onToolResult(state, event, ctx) {
   const content = [...(Array.isArray(event.content) ? event.content : []), { type: "text", text }];
   // Replacing the content alone drops a tool's structured result: it is returned with it.
   return event.structuredContent === undefined ? { content } : { content, structuredContent: event.structuredContent };
+}
+
+/** `tool_result` includes the executed input in both hosts. Internal omp
+ * sessions keep their own native id; a parent's file is never substituted.
+ * The daemon may reject a child it cannot attest. */
+async function observeTool(state, event, ctx) {
+  const command = event?.input?.command;
+  if (!["bash", "powershell"].includes(event?.toolName) || typeof command !== "string" || !(command.includes("herdr") || command.includes("HERDR_BIN_PATH"))) return;
+  const session = nativeSession(ctx);
+  if (!session || typeof event.toolCallId !== "string" || Buffer.byteLength(command, "utf8") > 64 * 1024) { state.lost += 1; return; }
+  const content = event.content;
+  const truncated = Array.isArray(content) && (content.length > 16 || content.reduce((sum, part) => sum + (typeof part?.text === "string" ? Buffer.byteLength(part.text, "utf8") : 0), 0) > 128 * 1024);
+  // Preserve Pi's separate structured result when it actually is the Herdr
+  // envelope, without serializing arbitrary tool metadata or prompt bodies.
+  const structured = AGENT === "pi" && event.structuredContent?.id === "cli:agent:prompt" && !event.structuredContent?.error && event.structuredContent?.result?.type === "agent_prompted" ? event.structuredContent : null;
+  let result = null;
+  if (structured) {
+    const agent = structured.result.agent;
+    const reference = agent?.agent_session;
+    const identifiers = [agent?.pane_id, agent?.terminal_id, reference?.source, reference?.agent, reference?.kind, reference?.value];
+    if (identifiers.every((value) => value === undefined || value === null || (typeof value === "string" && value.length <= 4096))) {
+      result = { id: "cli:agent:prompt", result: { type: "agent_prompted", agent: { pane_id: agent?.pane_id, terminal_id: agent?.terminal_id, agent_session: reference ? { source: reference.source, agent: reference.agent, kind: reference.kind, value: reference.value } : null } } };
+    }
+  } else if (!truncated && Array.isArray(content) && content.every((part) => part?.type === "text" && typeof part.text === "string")) {
+    result = { content: content.filter((part) => part?.type === "text").map((part) => ({ type: "text", text: part.text })) };
+  }
+  await helper(state, "observation", {
+    session_id: session,
+    observation: { command, call_id: event.toolCallId, result, truncated,
+      failed: event.isError === true, asynchronous: Boolean(event.details?.background || event.details?.asyncJobId) },
+  }, 1500);
 }
 
 /** A message the host finished: Hide's hidden message is written, and the reply after it means the turn is recorded. */
@@ -481,11 +514,6 @@ async function onTool(state, event, ctx) {
   } else if (FILE_TOOLS.has(tool)) {
     if (!guardrailsOn(state)) return null;
     request = { tool, args: fileArgs(event?.input), cwd: ctx?.cwd };
-  } else if (tool === "ask" && AGENT === "omp" && !state.guardOnly) {
-    // The core knows the pane by the root session Herdr's integration reports, also for a subagent's call.
-    const session = root(ctx) ? sessionFile(ctx) : shared.rootSession;
-    if (!session) return null;
-    request = { session_id: session, tool };
   } else {
     return null;
   }
@@ -606,7 +634,7 @@ export default function hide(pi) {
     if (shared.publish && AGENT === "omp") shared.publish = null;
     // A prompt or tool call still asking has no one to answer; a confirmation or a count finishes on its own budget.
     for (const running of state.running) {
-      if (["prompt", "tool", "start"].includes(running.hideOperation)) {
+      if (["prompt", "tool", "start", "observation"].includes(running.hideOperation)) {
         try {
           running.kill("SIGKILL");
         } catch {}

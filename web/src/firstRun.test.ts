@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountHome, failedAgents, underHome, firstRunStep, firstStartAgent, notificationState, notSignedIn, tileStatus, whatChanges } from "./firstRun";
+import { accountHome, failedAgents, underHome, firstRunStep, firstStartAgent, notificationState, notSignedIn, tileStatus, whatChanges, wizardSteps } from "./firstRun";
 import type { AiProvider, Kit, KitAgent, SnapshotRest } from "./snapshot";
 
 const agent = (id: string, overrides: Partial<KitAgent> = {}): KitAgent => ({
@@ -40,7 +40,7 @@ describe("a tile's line (B8, B9)", () => {
     expect(tileStatus(agent("antigravity"), [provider("antigravity", "needs_login")])).toBe("not_signed_in");
     // Until the kit has made Hide AI's folder for agy, its provider is dimmed: signed in or not is unknown.
     expect(tileStatus(agent("antigravity"), [provider("antigravity", "unsupported")])).toBe("installed");
-    expect(tileStatus(agent("cursor", { availability: "not_installed" }), undefined)).toBe("not_installed");
+    expect(tileStatus(agent("grok", { availability: "not_installed" }), undefined)).toBe("not_installed");
   });
 });
 
@@ -98,7 +98,16 @@ describe("the start panel's first agent (D-15)", () => {
     expect(firstStartAgent([on("claude-code"), on("codex")], [provider("claude-code", "needs_login"), provider("codex", "ready")])).toBe("codex");
     expect(firstStartAgent([on("opencode"), on("codex")], [provider("codex", "needs_login")])).toBe("opencode");
     expect(firstStartAgent([agent("codex")], [provider("codex", "ready")])).toBeNull();
+    // A remote kit has no claim about the local account's sign-in.
+    expect(firstStartAgent([on("opencode"), on("codex")], undefined)).toBe("opencode");
   });
+});
+
+it("skips Devices only when discovery proved there are no saved profiles", () => {
+  const steps = ["agents", "devices", "notifications", "project"];
+  expect(wizardSteps(undefined)).toEqual(steps);
+  for (const state of ["idle", "loading", "failed"] as const) expect(wizardSteps({ state, error: null, profiles: [], truncated: false })).toEqual(steps);
+  expect(wizardSteps({ state: "ready", error: null, profiles: [], truncated: false })).toEqual(["agents", "notifications", "project"]);
 });
 
 describe("the start panel's sign-in mark (B23, D-06)", () => {

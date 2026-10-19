@@ -80,12 +80,12 @@ const GUARD_STATES: Record<string, ProjectSettings["guardrails"]> = {
 
 const installed: KitPiece = { state: "installed", reason: null, location: null };
 
-/** This machine's agents: every hook in place, or Codex's untrusted and Cursor switched off. */
+/** This machine's agents: every hook in place, or Codex's untrusted and Grok switched off. */
 function sceneAgents(uncovered: boolean): KitAgent[] {
   const agent = (id: string, label: string, hook: KitPiece = installed, enabled = true): KitAgent => ({ id, label, availability: "available", enabled, chosen: true, skill: installed, hook, doc_url: "" });
   return [
     agent("claude-code", "Claude Code"),
     agent("codex", "Codex", uncovered ? { state: "failed", reason: "Codex has not trusted Hide's hook", location: null } : installed),
-    agent("cursor", "Cursor", installed, !uncovered),
+    agent("grok", "Grok", installed, !uncovered),
   ];
 }

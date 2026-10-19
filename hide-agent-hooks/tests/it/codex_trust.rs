@@ -11,10 +11,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
+use hide_agent_hooks::AgentRuntime;
 use hide_agent_hooks::codex_trust::{
     HookEntry, Limits, TrustFailureKind, TrustOutcome, trust_own_hooks, trust_own_hooks_within,
 };
-use hide_agent_hooks::{AgentRuntime, HookEvent};
 use serde_json::{Value, json};
 
 const HELPER: &str = "/kit/hide-agent-hooks";
@@ -50,8 +50,12 @@ impl Fixture {
 
     /// Hide's entries as the kit writes them.
     fn install(&self) {
-        hide_agent_hooks::install(AgentRuntime::Codex, self.home.path(), Path::new(HELPER))
-            .unwrap();
+        hide_agent_hooks::install(
+            AgentRuntime::Codex,
+            self.home.path(),
+            crate::hook_target(Path::new(HELPER)),
+        )
+        .unwrap();
     }
 
     fn hooks_json(&self) -> PathBuf {
@@ -74,7 +78,7 @@ impl Fixture {
         trust_own_hooks(
             &self.codex,
             self.home.path(),
-            Path::new(HELPER),
+            crate::hook_target(Path::new(HELPER)),
             herdr,
             &self.stop,
         )
@@ -84,7 +88,7 @@ impl Fixture {
         trust_own_hooks_within(
             &self.codex,
             self.home.path(),
-            Path::new(HELPER),
+            crate::hook_target(Path::new(HELPER)),
             &[],
             &self.stop,
             limits,
@@ -125,17 +129,29 @@ fn quick() -> Limits {
     }
 }
 
-fn five() -> usize {
-    HookEvent::ALL.len()
+// Codex declares PostToolUse for success and failure, without the separate
+// PostToolUseFailure slot that Claude Code registers. Trust exactly
+// the runtime-specific events the installer writes.
+fn own_hook_count() -> usize {
+    AgentRuntime::Codex.events().count()
 }
 
 #[test]
 fn a_fresh_install_is_trusted_in_one_write_and_a_repeat_writes_nothing() {
     let fixture = Fixture::new();
     fixture.install();
-    assert_eq!(fixture.trust(), TrustOutcome::Trusted { recorded: five() });
+    let installed: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.hooks_json()).unwrap()).unwrap();
+    assert!(installed["hooks"].get("PostToolUse").is_some());
+    assert!(installed["hooks"].get("PostToolUseFailure").is_none());
+    assert_eq!(
+        fixture.trust(),
+        TrustOutcome::Trusted {
+            recorded: own_hook_count()
+        }
+    );
     let held = fixture.held();
-    assert_eq!(held.len(), five());
+    assert_eq!(held.len(), own_hook_count());
     assert!(held.values().all(|table| {
         table["trusted_hash"]
             .as_str()
@@ -164,9 +180,14 @@ fn another_tools_hook_and_a_hide_marked_one_with_another_command_stay_for_review
         stop.push(json!({"hooks": [{"type": "command", "command": "echo foreign"}]}));
         stop.push(json!({"hooks": [{"type": "command", "command": marked}]}));
     });
-    assert_eq!(fixture.trust(), TrustOutcome::Trusted { recorded: five() });
+    assert_eq!(
+        fixture.trust(),
+        TrustOutcome::Trusted {
+            recorded: own_hook_count()
+        }
+    );
     let held = fixture.held();
-    assert_eq!(held.len(), five());
+    assert_eq!(held.len(), own_hook_count());
     assert!(held.contains_key(&fixture.key("stop", 0)));
     assert!(
         !held.contains_key(&fixture.key("stop", 1)),
@@ -238,7 +259,12 @@ fn a_changed_hide_entry_is_trusted_again_and_a_hook_the_operator_turned_off_stay
         json!({ &key: {"trusted_hash": "sha256:older", "enabled": false} }).to_string(),
     )
     .unwrap();
-    assert_eq!(fixture.trust(), TrustOutcome::Trusted { recorded: five() });
+    assert_eq!(
+        fixture.trust(),
+        TrustOutcome::Trusted {
+            recorded: own_hook_count()
+        }
+    );
     let table = &fixture.held()[&key];
     assert_ne!(table["trusted_hash"], "sha256:older");
     assert_eq!(table["enabled"], false);
@@ -347,7 +373,7 @@ fn what_codex_does_not_do_is_a_failure_with_its_cause() {
     let missing = trust_own_hooks(
         &fixture.home.path().join("no-such-codex"),
         fixture.home.path(),
-        Path::new(HELPER),
+        crate::hook_target(Path::new(HELPER)),
         &[],
         &fixture.stop,
     );
@@ -406,7 +432,12 @@ fn notifications_and_requests_of_codexs_own_are_refused_and_the_answer_still_mat
     let fixture = Fixture::new();
     fixture.install();
     fixture.mode("noisy");
-    assert_eq!(fixture.trust(), TrustOutcome::Trusted { recorded: five() });
+    assert_eq!(
+        fixture.trust(),
+        TrustOutcome::Trusted {
+            recorded: own_hook_count()
+        }
+    );
     // Hide answered the request the server made before each list, whose id
     // collided with Hide's own next request.
     assert_eq!(fixture.calls("hooks/list"), 2);
@@ -467,7 +498,12 @@ fn a_process_outside_the_childs_tree_holding_its_output_does_not_hold_the_check(
     assert!(hide_platform::process::is_alive(escaped));
     // What the test started goes.
     hide_platform::process::kill_tree(escaped).unwrap();
-    assert_eq!(outcome, TrustOutcome::Trusted { recorded: five() });
+    assert_eq!(
+        outcome,
+        TrustOutcome::Trusted {
+            recorded: own_hook_count()
+        }
+    );
 }
 
 #[test]
@@ -475,7 +511,12 @@ fn a_warning_about_another_tools_hook_does_not_fail_the_check() {
     let fixture = Fixture::new();
     fixture.install();
     fixture.mode("warning");
-    assert_eq!(fixture.trust(), TrustOutcome::Trusted { recorded: five() });
+    assert_eq!(
+        fixture.trust(),
+        TrustOutcome::Trusted {
+            recorded: own_hook_count()
+        }
+    );
 }
 
 const HERDR_SCRIPT: &str = "herdr-agent-state.sh";
@@ -521,11 +562,11 @@ fn an_entry_the_kit_recorded_herdr_writing_is_trusted_with_hides_own_in_one_writ
     assert_eq!(
         fixture.trust_herdr(&[herdr_entry(&command)]),
         TrustOutcome::Trusted {
-            recorded: five() + 1
+            recorded: own_hook_count() + 1
         }
     );
     assert_eq!(fixture.calls("config/batchWrite"), 1);
-    assert_eq!(fixture.held().len(), five() + 1);
+    assert_eq!(fixture.held().len(), own_hook_count() + 1);
     // Herdr's group follows Hide's `SessionStart` group in the file.
     assert!(
         fixture
@@ -549,8 +590,13 @@ fn herdrs_entry_the_kit_did_not_record_stays_for_the_review_screen() {
     let command = herdr_command(&fixture);
     add_herdr(&fixture, &command);
 
-    assert_eq!(fixture.trust(), TrustOutcome::Trusted { recorded: five() });
-    assert_eq!(fixture.held().len(), five());
+    assert_eq!(
+        fixture.trust(),
+        TrustOutcome::Trusted {
+            recorded: own_hook_count()
+        }
+    );
+    assert_eq!(fixture.held().len(), own_hook_count());
     assert!(
         !fixture
             .held()
@@ -574,7 +620,7 @@ fn a_look_alike_of_herdrs_command_is_left_for_the_review_screen_beside_the_real_
     assert_eq!(
         fixture.trust_herdr(&[herdr_entry(&command)]),
         TrustOutcome::Trusted {
-            recorded: five() + 1
+            recorded: own_hook_count() + 1
         }
     );
     let held = fixture.held();

@@ -1,5 +1,5 @@
-//! The doorbell types one short line into an idle agent pane so a pending
-//! letter wakes it. Herdr has no atomic composer guard, so the rule is
+//! The doorbell submits one short line through Herdr's `agent.prompt` so a
+//! pending letter wakes its idle agent. Herdr has no atomic composer guard, so the rule is
 //! conservative: a letter waits unless every fact hide owns says the pane is
 //! at rest. Nothing here reads the terminal, and nothing clears or restores
 //! input; a TUI that redraws its footer or statusline cannot change a verdict.
@@ -29,6 +29,9 @@ const QUIET_MS: u64 = 30_000;
 pub(crate) const MID_TURN_WAIT_MS: u64 = 5 * 60_000;
 const WORK_PER_PASS: usize = 8;
 const RPC_TIMEOUT: Duration = Duration::from_millis(500);
+/// Prompt submission acknowledges ordered PTY writes, including Herdr's
+/// input-reader boundary. It needs more time than a state read, not a turn wait.
+const PROMPT_TIMEOUT: Duration = Duration::from_secs(5);
 /// A letter refused between its verdict and the input is tried again in the
 /// same pane episode after this long, doubling up to `RETRY_LIMIT_MS`. The
 /// refusal can come from a fact the episode does not carry, such as Herdr's
@@ -117,11 +120,11 @@ impl Hold {
     }
 }
 
-/// The agent kinds a bell may be typed into: those whose permission and
-/// selection menus Herdr was observed to report as `blocked` in an isolated
-/// run (`docs/delivery.md`, Verification). A menu Herdr reads as a stop
-/// (Codex's plan approval) is guarded by the session read instead
-/// ([`Turn`]), so a kind that was not observed is not in this list.
+/// The adapter declares whether a kind accepts a bell. The verdict still
+/// requires a resting or eligible working state, no Hide-routed draft and
+/// no native wait; a kind with tool letters is rung only at rest.
+/// `docs/delivery.md` records the observed menu states and the residual
+/// for input that bypasses Hide.
 pub(crate) fn bell_target(kind: &str) -> bool {
     hide_agent_adapter::adapter(kind).is_some_and(|row| row.bell)
 }
@@ -184,6 +187,7 @@ pub(crate) fn judge(observation: &Observation, patience: Patience, now: u64) -> 
         "idle" | "done" if observation.state_change_seq.is_some() => {}
         "working"
             if observation.state_change_seq.is_some()
+                && !super::mailbox::tool_letters(&observation.actor.kind)
                 && patience.due(observation.entered_working_at_unix_ms, now) => {}
         "working" => return Err(Hold::Working),
         "blocked" => return Err(Hold::Blocked),
@@ -600,26 +604,27 @@ fn native_current(
     let agent = wire::delivery_agent(rpc(connector, "agent.get", parameters)?)
         .map_err(|_| "herdr_format")?;
     Ok(match agent.readiness {
-        Readiness::Launching => Err(Hold::Launching),
-        Readiness::NotReady => Err(Hold::NotReady),
-        Readiness::Ready | Readiness::Unreported
-            if agent.pane_id != observed.raw_pane_id
-                || agent.name != observed.actor.name
-                || !agent.kind.as_deref().is_some_and(|kind| {
-                    hide_agent_adapter::canonical_kind(kind)
-                        == hide_agent_adapter::canonical_kind(&observed.actor.kind)
-                })
-                || agent.session != observed.actor.session =>
+        readiness if !readiness.accepts_input() => Err(if readiness == Readiness::Launching {
+            Hold::Launching
+        } else {
+            Hold::NotReady
+        }),
+        _ if agent.pane_id != observed.raw_pane_id
+            || agent.name != observed.actor.name
+            || !agent.kind.as_deref().is_some_and(|kind| {
+                hide_agent_adapter::canonical_kind(kind)
+                    == hide_agent_adapter::canonical_kind(&observed.actor.kind)
+            })
+            || agent.session != observed.actor.session =>
         {
             Err(Hold::Identity)
         }
-        Readiness::Ready | Readiness::Unreported
-            if agent.status != observed.status
-                || Some(agent.state_change_seq) != observed.state_change_seq =>
+        _ if agent.status != observed.status
+            || Some(agent.state_change_seq) != observed.state_change_seq =>
         {
             Err(Hold::Moved)
         }
-        Readiness::Ready | Readiness::Unreported => Ok(()),
+        _ => Ok(()),
     })
 }
 
@@ -674,9 +679,13 @@ fn deliver(
     }
     // The line is the one the reservation saved, so the prompt hook of the
     // turn it opens is recognized by it (`mailbox::rang`).
-    let parameters =
-        wire::delivery_input_params(&observed.raw_pane_id, line).map_err(|_| "herdr_parameters")?;
-    rpc(connector, "pane.send_input", parameters)?;
+    // Herdr owns submission for each input reader, including Windows paste
+    // bursts (herdrdev/herdr#3187). Raw pane input bypasses that contract.
+    let parameters = wire::delivery_prompt_params(&observed.raw_pane_id, line)
+        .map_err(|_| "herdr_parameters")?;
+    let submitted = request_small_response(connector, "agent.prompt", parameters, PROMPT_TIMEOUT)
+        .map_err(|_| "herdr_call_failed")?;
+    wire::delivery_prompted(submitted).map_err(|_| "herdr_format")?;
     // Arrival is not intake. Only a flushed prompt-hook confirmation clears it.
     Ok(Outcome::Rung)
 }
@@ -705,6 +714,8 @@ mod tests {
                 session: Some("session".into()),
             },
             raw_pane_id: "pane".into(),
+            observed_since_unix_ms: 0,
+            terminal_id: None,
             status: "idle".into(),
             state_change_seq: Some(7),
             status_changed_at_unix_ms: NOW - 60_000,
@@ -794,6 +805,42 @@ mod tests {
                 assert_eq!(judge(&pane, WAITED, NOW), Ok(()), "{kind} {status}");
             }
         }
+    }
+
+    #[test]
+    fn a_tool_letters_kind_rings_only_at_rest_with_no_draft_or_native_wait() {
+        let mut pane = at_rest("grok");
+        pane.turn = Turn::Read(Waiting::Nothing);
+        for status in ["idle", "done"] {
+            pane.status = status.into();
+            assert_eq!(judge(&pane, WAITED, NOW), Ok(()));
+        }
+        pane.status = "working".into();
+        pane.entered_working_at_unix_ms = 1;
+        assert_eq!(judge(&pane, WAITED, NOW), Err(Hold::Working));
+        assert_eq!(
+            judge(
+                &pane,
+                Patience {
+                    now: true,
+                    ..WAITED
+                },
+                NOW
+            ),
+            Err(Hold::Working)
+        );
+        pane.status = "idle".into();
+        pane.last_input_at_unix_ms += 1;
+        assert_eq!(judge(&pane, WAITED, NOW), Err(Hold::Draft));
+        pane.last_submit_at_unix_ms = pane.last_input_at_unix_ms;
+        for wait in [Waiting::PlanApproval, Waiting::Question] {
+            pane.turn = Turn::Read(wait);
+            assert_eq!(judge(&pane, WAITED, NOW), Err(Hold::AwaitingOperator));
+        }
+        pane.turn = Turn::Unread;
+        assert_eq!(judge(&pane, WAITED, NOW), Err(Hold::SessionUnread));
+        pane.turn = Turn::Read(Waiting::Nothing);
+        assert_eq!(judge(&pane, WAITED, NOW), Ok(()));
     }
 
     #[test]
@@ -970,6 +1017,10 @@ mod tests {
 
     impl Bell {
         fn start(flags: Value) -> Self {
+            Self::with_submission_error(flags, None)
+        }
+
+        fn with_submission_error(flags: Value, submission_error: Option<&'static str>) -> Self {
             use crate::delivery::Command;
             use crate::runtime::delivery::tests::{authority, fixture, recipient_at_rest};
             let root = tempfile::tempdir().unwrap();
@@ -977,23 +1028,38 @@ mod tests {
             let flags = Arc::new(Mutex::new(flags));
             let answer = Arc::clone(&flags);
             let herdr =
-                crate::fake_herdr::FakeHerdr::start("doorbell", move |method, _| match method {
-                    "agent.get" => {
-                        let mut agent = json!({
-                            "pane_id": "recipient", "terminal_id": "terminal",
-                            "workspace_id": "w1", "tab_id": "w1:t1", "focused": false,
-                            "revision": 1, "name": "recipient", "agent": "codex",
-                            "agent_status": "idle", "state_change_seq": 2,
-                            "agent_session": {"source": "hook", "agent": "codex",
-                                "kind": "id", "value": "recipient-native"},
-                        });
-                        for (key, value) in answer.lock().unwrap().as_object().unwrap() {
-                            agent[key] = value.clone();
+                crate::fake_herdr::FakeHerdr::start_with_errors("doorbell", move |method, _| {
+                    match method {
+                        "agent.get" | "agent.prompt" => {
+                            if method == "agent.prompt"
+                                && let Some(code) = submission_error
+                            {
+                                return Err((
+                                    code.into(),
+                                    "submission refused or timed out".into(),
+                                ));
+                            }
+                            let mut agent = json!({
+                                "pane_id": "recipient", "terminal_id": "terminal",
+                                "workspace_id": "w1", "tab_id": "w1:t1", "focused": false,
+                                "revision": 1, "name": "recipient", "agent": "codex",
+                                "agent_status": "idle", "state_change_seq": 2,
+                                "agent_session": {"source": "hook", "agent": "codex",
+                                    "kind": "id", "value": "recipient-native"},
+                            });
+                            for (key, value) in answer.lock().unwrap().as_object().unwrap() {
+                                agent[key] = value.clone();
+                            }
+                            let response = if method == "agent.prompt" {
+                                "agent_prompted"
+                            } else {
+                                "agent_info"
+                            };
+                            Ok(json!({"type": response, "agent": agent}))
                         }
-                        json!({"type": "agent_info", "agent": agent})
+                        "pane.send_input" => Ok(json!({"type": "ok"})),
+                        other => panic!("unexpected {other}"),
                     }
-                    "pane.send_input" => json!({"type": "ok"}),
-                    other => panic!("unexpected {other}"),
                 });
             let recipient =
                 recipient_at_rest(&mut runtime.lock().unwrap(), "recipient-native", &herdr);
@@ -1101,7 +1167,7 @@ mod tests {
             self.herdr
                 .calls()
                 .into_iter()
-                .filter(|(method, _)| method == "pane.send_input")
+                .filter(|(method, _)| method == "agent.prompt")
                 .map(|(_, params)| params)
                 .collect()
         }
@@ -1262,20 +1328,74 @@ mod tests {
             assert_eq!(held(&records), Vec::<&str>::new(), "{flags}");
             let typed = bell.typed();
             assert_eq!(typed.len(), 1, "{flags}");
-            assert_eq!(typed[0]["pane_id"], "recipient");
+            assert_eq!(typed[0]["target"], "recipient");
             // The recipient is a Codex, so the line names where the letter is.
             assert_eq!(
-                typed[0]["text"], "🔔 Codex 보고: private · hide inbox",
+                typed[0]["text"], "🦉 Codex 보고: private · hide inbox",
                 "{flags}"
             );
-            assert_eq!(typed[0]["keys"], json!(["enter"]));
+            // Herdr owns each input reader's submission. Hide neither sends
+            // cursor keys nor waits for a turn to finish before confirming it.
+            assert!(typed[0].get("keys").is_none());
+            assert!(typed[0].get("wait").is_none());
+            assert!(
+                !bell
+                    .herdr
+                    .methods()
+                    .iter()
+                    .any(|method| method == "pane.send_input"),
+                "one prompt must not also be sent as raw input"
+            );
             assert_eq!(bell.attempts(), 1, "{flags}");
             // The letter keeps the line it was rung with, which is what
             // recognizes the turn the bell opens.
             assert_eq!(
                 bell.line().as_deref(),
-                Some("🔔 Codex 보고: private · hide inbox")
+                Some("🦉 Codex 보고: private · hide inbox")
             );
+        }
+    }
+
+    /// A failed submission may have written input before its answer was
+    /// lost. Neither an explicit refusal nor Herdr's submission timeout is
+    /// intake, and neither may make a timer type the same bell twice.
+    #[test]
+    fn a_refused_or_timed_out_prompt_stays_pending_until_the_pane_moves() {
+        for code in ["agent_blocked", "timeout"] {
+            let bell = Bell::with_submission_error(json!({}), Some(code));
+            let mut doorbell = Doorbell::default();
+            let at = now();
+            let records = bell.pass(&mut doorbell, at);
+            assert!(
+                records
+                    .iter()
+                    .any(|record| record["kind"] == "doorbell.failed"),
+                "{code}: {records:?}"
+            );
+            assert_eq!(bell.typed().len(), 1, "{code}");
+            {
+                let guard = bell.runtime.lock().unwrap();
+                let ledger = guard.delivery_state().unwrap();
+                let letter = ledger
+                    .letters
+                    .iter()
+                    .find(|letter| letter.id == bell.letter)
+                    .unwrap();
+                assert_eq!(letter.state, State::Pending, "{code}");
+                assert!(!letter.bell_sent, "{code}");
+                assert_eq!(letter.bell_errors, 1, "{code}");
+                assert_eq!(letter.attempts(), 1, "{code}");
+            }
+            assert!(
+                bell.pass(&mut doorbell, at + 2 * RETRY_LIMIT_MS).is_empty(),
+                "{code}"
+            );
+            assert_eq!(
+                bell.typed().len(),
+                1,
+                "{code}: a timer must not retry an uncertain submission"
+            );
+            assert_eq!(bell.attempts(), 1, "{code}");
         }
     }
 
@@ -1398,7 +1518,7 @@ mod tests {
         // No registration and no row: the runtime's name, never an id.
         assert_eq!(
             line(&ledger, &letter),
-            "🔔 Codex 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
+            "🦉 Codex 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
         );
         // A row with no title is called by its runtime too.
         let untitled: crate::sidebar::SessionSnapshotPayload = serde_json::from_value(json!({
@@ -1409,7 +1529,7 @@ mod tests {
         crate::runtime::delivery::tests::show_agents(&mut runtime.lock().unwrap(), untitled);
         assert_eq!(
             line(&ledger, &letter),
-            "🔔 Codex 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
+            "🦉 Codex 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
         );
         // The sidebar's title for the pane, while the pane still hosts it.
         let titled: crate::sidebar::SessionSnapshotPayload = serde_json::from_value(json!({
@@ -1421,13 +1541,13 @@ mod tests {
         crate::runtime::delivery::tests::show_agents(&mut runtime.lock().unwrap(), titled);
         assert_eq!(
             line(&ledger, &letter),
-            "🔔 라벨 제목 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
+            "🦉 라벨 제목 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
         );
         let mut moved_on = letter.clone();
         moved_on.sender.session = Some("an-earlier-session".into());
         assert_eq!(
             line(&ledger, &moved_on),
-            "🔔 Codex 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
+            "🦉 Codex 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
         );
         // The name it registered under comes first.
         ledger.agents.push(crate::coordination::AgentRecord {
@@ -1448,14 +1568,14 @@ mod tests {
         });
         assert_eq!(
             line(&ledger, &letter),
-            "🔔 label-end-fix 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
+            "🦉 label-end-fix 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
         );
         // A registration with no name of its own is called by the title, not
         // by its registration id, which the letter's envelope carries.
         ledger.agents[0].name = None;
         assert_eq!(
             line(&ledger, &letter),
-            "🔔 라벨 제목 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
+            "🦉 라벨 제목 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
         );
         ledger.agents[0].name = Some("label-end-fix".into());
         // A watch warning is about the agent it watches, not its parent.
@@ -1470,7 +1590,7 @@ mod tests {
         });
         assert_eq!(
             line(&ledger, &warning),
-            "🔔 label-end-fix 감시: 리뷰 끝났습니다 · 외 1통 · hide inbox"
+            "🦉 label-end-fix 감시: 리뷰 끝났습니다 · 외 1통 · hide inbox"
         );
     }
 
@@ -1665,11 +1785,12 @@ mod tests {
         // as a ring at rest does, and the letter keeps that line.
         let typed = bell.typed();
         assert_eq!(typed.len(), 1);
-        assert_eq!(typed[0]["text"], "🔔 Codex 보고: private · hide inbox");
-        assert_eq!(typed[0]["keys"], json!(["enter"]));
+        assert_eq!(typed[0]["text"], "🦉 Codex 보고: private · hide inbox");
+        assert_eq!(typed[0]["target"], "recipient");
+        assert!(typed[0].get("wait").is_none());
         assert_eq!(
             bell.line().as_deref(),
-            Some("🔔 Codex 보고: private · hide inbox")
+            Some("🦉 Codex 보고: private · hide inbox")
         );
         assert_eq!(bell.attempts(), 1);
     }
@@ -1709,11 +1830,11 @@ mod tests {
     }
 
     #[test]
-    fn the_bell_rings_for_claude_code_and_codex_and_never_for_opencode() {
-        for kind in ["claude", "claude-code", "claude_code", "codex"] {
+    fn the_bell_targets_match_the_reviewed_adapter_declarations() {
+        for kind in ["claude", "claude-code", "claude_code", "codex", "grok"] {
             assert!(bell_target(kind), "{kind}");
         }
-        for kind in ["opencode", "pi", "grok", "cursor", "gemini", "amp", ""] {
+        for kind in ["opencode", "pi", "cursor", "gemini", "amp", ""] {
             assert!(!bell_target(kind), "{kind}");
         }
     }

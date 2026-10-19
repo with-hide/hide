@@ -53,14 +53,23 @@ target/debug/examples/export_web_contract > contracts/agent-adapters.json
 
 # Agent journey
 
-`agent-journey.json` is the agent journey's projection of the same declarations ([docs/VERIFICATION.md](../docs/VERIFICATION.md#agent-journey)): for each adapter its Herdr kind, the flag that separates a spawn's first prompt, the model flag, the name a row shows for it while it has no task title (`untitled`), which journey cells it declares, and the most model requests a signed-in CI run may make for it (`request_budget`, three per turn the declared cells start).
+`agent-journey.json` is the agent journey's projection of the same declarations ([docs/VERIFICATION.md](../docs/VERIFICATION.md#agent-journey)): for each adapter its Herdr kind, the source Herdr's own integration reports its session under (`herdr_source`, named by the integration target: `herdr:antigravity_cli` for agy), its own folder in its HOME (`home_folder`, which the kit reads as the agent being set up), the flag that separates a spawn's first prompt, the model flag, the name a row shows for it while it has no task title (`untitled`), which journey cells it declares, how a letter reaches it (`letter`: `bell` wakes the pane, `next_prompt` rides the next prompt's hook, `tool` waits until the agent reads its inbox), how it wakes from sleep (`wake`: `pane` wakes the pane it sleeps in, `sleeping_session` reopens a closed session in a new pane), where the native title its `title` cell reads comes from (`title`: `automatic` when the agent titles its session itself, `{"named": "/name"}` when only the name the operator gives it with that command is one, as Pi's), and the most model requests a signed-in CI run may make for it (`request_budget`, three per turn the declared cells start, four for Grok, whose CLI makes four for every turn).
 `scripts/agent_journey` reads only this file for what an agent supports, so a cell an adapter does not declare reads N/A rather than a failure.
+The `fake_home` declaration also carries a private-HOME API-key route and auto-update disable policy with its source evidence, or a named exception.
+These policies are for the keyless journey only and never authorize changing HOME for a real login.
 The Rust contract test fails when the file differs from the current projection; regenerate it, never edit it:
 
 ```sh
 bash scripts/verify-cargo.sh build -p hide-agent-adapter --example export_journey_contract
 target/debug/examples/export_journey_contract > contracts/agent-journey.json
 ```
+
+# Agent CLI pins
+
+`agent-clis.json` is the one place a CI agent CLI version is written: for each agent, by its Herdr kind, the version every CI lane installs, the installer (`npm` with its package, or the vendor's own installer for Grok, omp and agy), for an npm package whose program is not its `.bin` shim the program's path in the package, and for an npm package that needs its install scripts why (`install_scripts`; every other package installs with `--ignore-scripts`).
+`scripts/install-agent-clis.py` reads it to install each CLI on a runner and fails when a CLI answers another version, and the agent journey reads it to say in its report whether the CLI it measured answered that version, which fails its lane otherwise; a row whose installer takes no version (agy's) says so in `pinned`, and its version is checked, not installed, so a new vendor release fails until its pin moves.
+omp's binary is checked against its release's `SHA256SUMS.txt`; Grok's and agy's vendor installers publish no checksum, so only the version each answers is checked.
+Move a pin in a pull request: a change to this file or an installer plans the `agent CLIs` lane, which installs every pinned CLI on Linux and Windows; no workflow restates a version.
 
 # hide CLI contract
 

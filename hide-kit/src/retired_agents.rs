@@ -1,4 +1,4 @@
-//! The fourteen agents Hide stopped supporting (PRD settings-cleanup D-06,
+//! The fifteen agents Hide stopped supporting (PRD settings-cleanup D-06,
 //! and Gemini CLI once Hide's support list became the agents the pinned
 //! Herdr ships an integration for): the one-time pass that takes out what an
 //! earlier build put on a machine for them.
@@ -15,8 +15,8 @@
 //!
 //! A transition path: it goes with the release after the one that ships it,
 //! together with the layouts of the seven hooks in `hide_agent_hooks::guidance`.
-//! Gemini CLI joined later than the other thirteen, so the release that ships
-//! its retirement is the one the whole path waits for.
+//! Cursor joined after Gemini CLI, so the release that ships its retirement
+//! is the one the whole path waits for.
 
 use std::path::PathBuf;
 
@@ -41,6 +41,7 @@ struct Retired {
     label: &'static str,
     skills: Skills,
     hook: Option<GuidanceAgent>,
+    herdr: Option<&'static str>,
 }
 
 const fn retired(
@@ -54,10 +55,18 @@ const fn retired(
         label,
         skills,
         hook,
+        herdr: None,
     }
 }
 
-const RETIRED: [Retired; 14] = [
+const RETIRED: [Retired; 15] = [
+    Retired {
+        id: "cursor",
+        label: "Cursor",
+        skills: Skills::Shared,
+        hook: Some(GuidanceAgent::Cursor),
+        herdr: Some("cursor"),
+    },
     retired(
         "copilot-cli",
         "GitHub Copilot CLI",
@@ -130,18 +139,41 @@ pub(crate) fn retire(target: &KitTarget, record: &mut Record, live_reads_shared:
     let mut outcome = Outcome::default();
     for agent in &RETIRED {
         let hook_code = format!("hook:{}", agent.id);
+        let herdr_code = format!("herdr:{}", agent.id);
         let own_skill = match agent.skills {
             Skills::Own(folder) => Some(own_skill_code(folder)),
             Skills::Shared => None,
         };
         // Nothing in the record names this agent: nothing of it is Hide's.
         let owned = record.agent_choice(agent.id).is_some()
+            || (agent.herdr.is_some() && record.contains_piece(&herdr_code))
             || (agent.hook.is_some() && record.contains_piece(&hook_code))
             || own_skill
                 .as_deref()
                 .is_some_and(|code| record.contains_piece(code));
         if !owned {
             continue;
+        }
+        if let Some(integration) = agent.herdr
+            && record.contains_piece(&herdr_code)
+        {
+            match crate::herdr_integration::uninstall(target, integration) {
+                Ok(()) => {
+                    outcome
+                        .report
+                        .removed
+                        .push(format!("{} Herdr integration", agent.label));
+                    outcome.changed |= record.forget_piece(&herdr_code);
+                }
+                Err(reason) => {
+                    outcome
+                        .report
+                        .failures
+                        .push(format!("{} Herdr integration: {reason}", agent.label));
+                    // Ownership must survive failure even though the active adapter is gone.
+                    continue;
+                }
+            }
         }
         if let Some(hook) = agent.hook
             && record.contains_piece(&hook_code)
@@ -210,6 +242,24 @@ pub(crate) fn retire(target: &KitTarget, record: &mut Record, live_reads_shared:
         }
     }
     outcome
+}
+
+/// Full kit removal also reaches integrations no active adapter iterates.
+pub(crate) fn remove_herdr(target: &KitTarget, record: &Record) -> Vec<(String, RemoveOutcome)> {
+    RETIRED
+        .iter()
+        .filter_map(|agent| {
+            let integration = agent.herdr?;
+            let code = format!("herdr:{}", agent.id);
+            record.contains_piece(&code).then(|| {
+                let outcome = match crate::herdr_integration::uninstall(target, integration) {
+                    Ok(()) => RemoveOutcome::Removed,
+                    Err(reason) => RemoveOutcome::Failed { reason },
+                };
+                (code, outcome)
+            })
+        })
+        .collect()
 }
 
 /// What taking Hide off a machine removes for the retired agents: their

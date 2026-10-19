@@ -26,15 +26,14 @@ type ReleaseSourceAnswer =
     Result<(herdr_core::ReleaseSource, serde_json::Value), herdr_core::MoveSourceRefusal>;
 
 enum Command {
-    FactoryQuestionGuard {
+    ObservationPrepare {
         device_id: String,
         pane_id: String,
         expected: Context,
-        session: String,
-        agent_runtime: String,
-        terminal_id: String,
+        terminal: String,
+        observation: hide_node_link::panes::DirectObservation,
         deadline: std::time::Instant,
-        reply: Sender<Result<herdr_core::factory::PreparedQuestionGuard, String>>,
+        reply: Sender<Result<herdr_core::direct_observation::PreparedObservation, String>>,
     },
     DeliveryHuman {
         reply: Sender<Result<herdr_core::delivery::worker::PreparedHuman, String>>,
@@ -49,14 +48,6 @@ enum Command {
         hint: Option<String>,
         command: herdr_core::delivery::Command,
         reply: Sender<Result<herdr_core::delivery::worker::Prepared, String>>,
-    },
-    FactoryPrepare {
-        device_id: String,
-        pane_id: String,
-        expected: Context,
-        hint: Option<String>,
-        command: hide_factory::Command,
-        reply: Sender<Result<herdr_core::factory::PreparedFactory, String>>,
     },
     MemoryPrepare {
         device_id: String,
@@ -180,6 +171,34 @@ struct Running {
 }
 
 impl CoreHandle {
+    pub fn prepare_direct_observation(
+        &self,
+        device: &str,
+        pane: &str,
+        expected: &Context,
+        terminal: String,
+        observation: hide_node_link::panes::DirectObservation,
+        deadline: std::time::Instant,
+    ) -> Result<herdr_core::direct_observation::PreparedObservation, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::ObservationPrepare {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                expected: expected.clone(),
+                terminal,
+                observation,
+                deadline,
+                reply,
+            })
+            .map_err(|_| "observation_unavailable")?;
+        let left = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .ok_or("observation_expired")?;
+        result
+            .recv_timeout(left)
+            .map_err(|_| "observation_expired")?
+    }
     /// The machine the core runs on.
     pub fn node(&self) -> &herdr_core::node::NodeId {
         &self.node
@@ -231,31 +250,6 @@ impl CoreHandle {
             .map_err(|_| "delivery_unavailable".to_owned())?
     }
 
-    /// A `hide factory` command, checked on the owner thread like a delivery.
-    pub fn prepare_factory(
-        &self,
-        device: &str,
-        pane: &str,
-        expected: &Context,
-        hint: Option<String>,
-        command: hide_factory::Command,
-    ) -> Result<herdr_core::factory::PreparedFactory, String> {
-        let (reply, result) = mpsc::channel();
-        self.commands
-            .send(Command::FactoryPrepare {
-                device_id: device.to_owned(),
-                pane_id: pane.to_owned(),
-                expected: expected.clone(),
-                hint,
-                command,
-                reply,
-            })
-            .map_err(|_| "factory_unavailable".to_owned())?;
-        result
-            .recv()
-            .map_err(|_| "factory_unavailable".to_owned())?
-    }
-
     /// Checks a `hide memory` caller on the owner thread; the command runs
     /// on the caller's blocking task.
     pub fn prepare_memory(
@@ -276,39 +270,6 @@ impl CoreHandle {
             })
             .map_err(|_| "memory_unavailable".to_owned())?;
         result.recv().map_err(|_| "memory_unavailable".to_owned())?
-    }
-
-    #[allow(clippy::too_many_arguments)] // carry the authenticated pane facts and caller-owned deadline unchanged
-    pub fn prepare_factory_question_guard(
-        &self,
-        device: &str,
-        pane: &str,
-        expected: &Context,
-        session: String,
-        agent_runtime: String,
-        terminal_id: String,
-        deadline: std::time::Instant,
-    ) -> Result<herdr_core::factory::PreparedQuestionGuard, String> {
-        let (reply, result) = mpsc::channel();
-        let left = deadline
-            .checked_duration_since(std::time::Instant::now())
-            .filter(|left| !left.is_zero())
-            .ok_or("factory_guard_expired")?;
-        self.commands
-            .send(Command::FactoryQuestionGuard {
-                device_id: device.to_owned(),
-                pane_id: pane.to_owned(),
-                expected: expected.clone(),
-                session,
-                agent_runtime,
-                terminal_id,
-                deadline,
-                reply,
-            })
-            .map_err(|_| "factory_guard_unavailable")?;
-        result
-            .recv_timeout(left)
-            .map_err(|_| "factory_guard_expired")?
     }
 
     pub fn set_file_roots(
@@ -595,33 +556,6 @@ impl CoreHandle {
         })?
     }
 
-    pub fn workspace_query_until(
-        &self,
-        device_id: &str,
-        pane_id: &str,
-        query: Query,
-        deadline: std::time::Instant,
-    ) -> Result<QueryResult, Refusal> {
-        let unavailable = || Refusal {
-            reason: "factory_guard_expired",
-            next_action: "Continue the tool call",
-        };
-        let left = deadline
-            .checked_duration_since(std::time::Instant::now())
-            .filter(|left| !left.is_zero())
-            .ok_or_else(unavailable)?;
-        let (reply, rx) = mpsc::channel();
-        self.commands
-            .send(Command::WorkspaceQuery {
-                device_id: device_id.to_owned(),
-                pane_id: pane_id.to_owned(),
-                query,
-                reply,
-            })
-            .map_err(|_| unavailable())?;
-        rx.recv_timeout(left).map_err(|_| unavailable())?
-    }
-
     pub fn workspace_action(
         &self,
         device_id: &str,
@@ -769,7 +703,10 @@ fn owner_loop(
         .to_path_buf();
     own_node = own_node
         .keeping_worktree_facts_in(hide_kit::layout::worktree_facts(&state_dir))
-        .keeping_feedback_in(state_dir);
+        .keeping_feedback_in(state_dir.clone());
+    if let Some(socket) = options.herdr_socket_path.as_deref() {
+        own_node = own_node.with_herdr_socket(std::path::PathBuf::from(socket));
+    }
     // The install kit's parts ship beside this binary: in the app bundle, or
     // in the build folder a move or a core update placed in this account's
     // helper root, which a moved core's login item runs. A daemon anywhere
@@ -793,6 +730,13 @@ fn owner_loop(
             .ok()
             .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)),
     )
+    .with_herdr_program(
+        options
+            .herdr_bin_path
+            .as_ref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("herdr")),
+    )
     .with_helper_root(
         options
             .host_helper_root
@@ -801,13 +745,27 @@ fn owner_loop(
     )
     .with_pane_events(panes)
     .with_terminals(Arc::clone(&terminals) as Arc<dyn DeviceSink>);
-    let Some(core) = Core::create(
+    let analytics = crate::env::product_analytics_token().and_then(|token| {
+        match crate::product_analytics::Worker::start(home.as_deref(), &state_dir, token) {
+            Ok(worker) => worker,
+            Err(reason) => {
+                herdr_core::diagnostic!(
+                    serde_json::json!({ "component": "product_analytics", "kind": reason })
+                );
+                None
+            }
+        }
+    });
+    let Some(core) = Core::create_with_product_analytics(
         options,
         std::sync::Arc::new(own_node),
         own_herdr,
         std::sync::Arc::new(devices),
         terminals,
         terminal_reports,
+        analytics.as_ref().map(|worker| {
+            Arc::clone(&worker.client) as Arc<dyn herdr_core::product_analytics::Sink>
+        }),
     ) else {
         let _ = ready.send(Err(
             "herdr-core create failed (check schema_version and paths)".to_owned(),
@@ -824,23 +782,21 @@ fn owner_loop(
     let mut _held_roots = hide_node::HeldRoots::default();
     while let Ok(command) = commands.recv() {
         match command {
-            Command::FactoryQuestionGuard {
+            Command::ObservationPrepare {
                 device_id,
                 pane_id,
                 expected,
-                session,
-                agent_runtime,
-                terminal_id,
+                terminal,
+                observation,
                 deadline,
                 reply,
             } => {
-                let _ = reply.send(core.prepare_factory_question_guard(
+                let _ = reply.send(core.prepare_direct_observation(
                     &device_id,
                     &pane_id,
                     &expected,
-                    &session,
-                    &agent_runtime,
-                    &terminal_id,
+                    &terminal,
+                    observation,
                     deadline,
                 ));
             }
@@ -859,22 +815,7 @@ fn owner_loop(
             } => {
                 let _ = reply.send(core.prepare_memory(&device_id, &pane_id, &expected, command));
             }
-            Command::FactoryPrepare {
-                device_id,
-                pane_id,
-                expected,
-                hint,
-                command,
-                reply,
-            } => {
-                let _ = reply.send(core.prepare_factory(
-                    &device_id,
-                    &pane_id,
-                    &expected,
-                    hint.as_deref(),
-                    command,
-                ));
-            }
+
             Command::DeliveryPrepare {
                 device_id,
                 pane_id,

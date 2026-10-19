@@ -5,7 +5,7 @@
 //! and the latest exchange; each section is masked and cut on its own so the
 //! requests survive a long exchange, within 4000 characters. A turn
 //! costs at most two requests, one at its start and one at its end, and one
-//! more only when the end's timed out (D-33); a `goal_changed: false` answer
+//! more only when the end's timed out (D-33); a `goal_update: keep` answer
 //! keeps the goal verbatim.
 
 use std::collections::VecDeque;
@@ -21,6 +21,9 @@ use regex::Regex;
 /// Upper bound on the analysis context. This also guards against one
 /// enormous turn while the initial or rolling sections are being assembled.
 pub(crate) const MAX_ANALYSIS_CONTEXT_CHARS: usize = 4_000;
+/// The assigned work's evidence survives terse follow-ups, without growing
+/// the request or persisting an unbounded conversation.
+pub(crate) const MAX_GOAL_EVIDENCE_CHARS: usize = 800;
 /// The shortest goal that names a result rather than a word.
 pub(crate) const MIN_GOAL_CHARS: usize = 8;
 
@@ -64,12 +67,21 @@ pub(crate) struct Analysis {
     /// What the session is to have made when it ends (D-38), absent until
     /// the operator has asked for work.
     pub(crate) goal: Option<String>,
-    pub(crate) goal_changed: bool,
+    pub(crate) goal_update: GoalUpdate,
     /// This turn's work while it runs, its result once over, or what the
     /// operator is to answer or do when it ended on a question.
     pub(crate) line: String,
     pub(crate) end: LabelEnd,
     pub(crate) work: Option<crate::links::ledger::TurnJudgment>,
+}
+
+/// A clearer name for the same assignment is distinct from a new assignment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum GoalUpdate {
+    Keep,
+    Refine,
+    Replace,
 }
 
 /// How the turn stands by the agent's last word (D-08). Only a question, a
@@ -331,6 +343,7 @@ pub(crate) fn analysis_context(
 /// end.
 pub(crate) fn rolling_analysis_context(
     previous_goal: &str,
+    goal_evidence: &str,
     new_requests: &[LabelEvent],
     events: &[LabelEvent],
 ) -> String {
@@ -347,18 +360,59 @@ pub(crate) fn rolling_analysis_context(
     };
     bounded_context(
         &format!(
-            "<previous-goal>{}</previous-goal>\n<new-operator-requests>\n",
+            "<previous-goal>{}</previous-goal>\n<goal-evidence>{}</goal-evidence>\n<new-operator-requests>\n",
             // A goal stored by an earlier build is not bounded by this one's
             // limits; it may not crowd the new requests out.
             head(
                 &mask(&strip_code_fences(previous_goal)),
                 MAX_REQUEST_SECTION_CHARS / 4
-            )
+            ),
+            head(goal_evidence, MAX_GOAL_EVIDENCE_CHARS),
         ),
         &delta,
         "\n</new-operator-requests>",
         &latest_turn_exchange(events),
     )
+}
+
+/// Attributed requests establish work; the first three replies can clarify a
+/// path-only assignment without a later sub-task replacing its subject. Mask
+/// before retaining either; device records never save this text to disk.
+pub(crate) fn goal_evidence(
+    events: &[LabelEvent],
+    operator: &dyn Fn(&LabelEvent) -> bool,
+) -> Option<String> {
+    let requests = initial_operator_requests(events, operator)?;
+    let first = events
+        .iter()
+        .position(|event| event.kind == LabelEventKind::Human && operator(event))?;
+    let replies = events[first + 1..]
+        .iter()
+        .take_while(|event| event.kind != LabelEventKind::Human)
+        .filter(|event| event.kind == LabelEventKind::Assistant && event.sender.is_none())
+        .take(3)
+        .map(|event| format!("assistant: {}", event.text))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if replies.is_empty() {
+        return Some(head(
+            &mask(&strip_code_fences(&requests)),
+            MAX_GOAL_EVIDENCE_CHARS,
+        ));
+    }
+    const OPEN: &str = "\n<assignment-replies>\n";
+    const CLOSE: &str = "\n</assignment-replies>";
+    let request_room = MAX_GOAL_EVIDENCE_CHARS / 2;
+    Some(format!(
+        "{}{}{}{}",
+        head(&mask(&strip_code_fences(&requests)), request_room),
+        OPEN,
+        head(
+            &mask(&strip_code_fences(&replies)),
+            MAX_GOAL_EVIDENCE_CHARS - request_room - chars(OPEN) - chars(CLOSE)
+        ),
+        CLOSE,
+    ))
 }
 
 /// The share of [`MAX_ANALYSIS_CONTEXT_CHARS`] the requests section may take,
@@ -782,10 +836,61 @@ mod tests {
         ];
         let cursor = task_input_cursor(&events[..1]);
         let delta = new_human_turns(&events, cursor);
-        let context = rolling_analysis_context("이전 작업 제목", &delta, &events);
+        let context = rolling_analysis_context("이전 작업 제목", "", &delta, &events);
         assert!(context.contains("<previous-goal>이전 작업 제목</previous-goal>"));
         assert!(context.contains("user: new request"));
         assert!(!context.contains("user: old request"));
+    }
+
+    #[test]
+    fn path_only_assignments_keep_the_agents_initial_scope_not_a_later_subtask() {
+        let events = vec![
+            human("Read worker.md and carry out the assigned work", 1),
+            assistant("지시를 읽겠습니다", 2),
+            assistant("사용량의 모델별 집계와 기간 필터를 맡았습니다", 3),
+            human("이제 문서 한 줄만 수정해", 4),
+            assistant("문서 한 줄을 수정했습니다", 5),
+        ];
+        let evidence = goal_evidence(&events, &|_| true).unwrap();
+        assert!(
+            evidence.contains("사용량의 모델별 집계와 기간 필터"),
+            "{evidence}"
+        );
+        assert!(!evidence.contains("assistant: 문서 한 줄"), "{evidence}");
+        assert!(evidence.chars().count() <= MAX_GOAL_EVIDENCE_CHARS);
+    }
+
+    #[test]
+    fn assignment_evidence_survives_a_terse_follow_up_within_the_context_bound() {
+        let events = vec![
+            human("에이전트 그래프의 필터와 프로젝트 접기를 개선해줘", 1),
+            assistant("시안을 만들겠습니다", 2),
+            human("그 방향으로 진행해", 3),
+            assistant(&"큰 출력 ".repeat(2_000), 4),
+        ];
+        let evidence = goal_evidence(&events[..1], &|_| true).unwrap();
+        let context =
+            rolling_analysis_context("개선사항 구현 및 배포", &evidence, &events[2..3], &events);
+        assert!(context.contains("에이전트 그래프의 필터와 프로젝트 접기를 개선해줘"));
+        assert!(context.contains("그 방향으로 진행해"));
+        assert_eq!(context.chars().count(), MAX_ANALYSIS_CONTEXT_CHARS);
+
+        let evidence = goal_evidence(
+            &[
+                human(
+                    "token=private-value /Users/example/project 그래프 필터 개선",
+                    1,
+                ),
+                human(&"긴 요청 ".repeat(2_000), 2),
+                human("다른 에이전트의 작업", 3),
+            ],
+            &|event| event.offset != 3,
+        )
+        .unwrap();
+        assert!(evidence.chars().count() <= MAX_GOAL_EVIDENCE_CHARS);
+        assert!(!evidence.contains("private-value"));
+        assert!(!evidence.contains("/Users/example"));
+        assert!(!evidence.contains("다른 에이전트의 작업"));
     }
 
     fn sections(context: &str) -> (&str, &str) {
@@ -805,7 +910,7 @@ mod tests {
             assistant(&reminder, 4),
         ];
         let initial = analysis_context(&events, &|_| true);
-        let rolling = rolling_analysis_context("이전 작업 제목", &events[2..3], &events);
+        let rolling = rolling_analysis_context("이전 작업 제목", "", &events[2..3], &events);
         for (context, kept) in [
             (&initial, "user: 첫 요청 문장"),
             (&rolling, "<previous-goal>이전 작업 제목</previous-goal>"),
@@ -832,7 +937,7 @@ mod tests {
         ];
         for context in [
             analysis_context(&events, &|_| true),
-            rolling_analysis_context("이전 작업 제목", &events, &events),
+            rolling_analysis_context("이전 작업 제목", "", &events, &events),
         ] {
             let (requests, exchange) = sections(&context);
             assert!(requests.chars().count() <= MAX_REQUEST_SECTION_CHARS);
@@ -851,7 +956,7 @@ mod tests {
         let goal = "이전 빌드가 남긴 긴 목표 ".repeat(400);
         let answer = "긴 답 ".repeat(2_000);
         let events = vec![human("새 요청", 1), assistant(&answer, 2)];
-        let context = rolling_analysis_context(&goal, &events[..1], &events);
+        let context = rolling_analysis_context(&goal, "", &events[..1], &events);
         assert!(context.chars().count() <= MAX_ANALYSIS_CONTEXT_CHARS);
         assert!(sections(&context).0.contains("user: 새 요청"));
     }
@@ -1025,7 +1130,7 @@ mod tests {
             let events = [human(&request, 1)];
             for context in [
                 analysis_context(&events, &|_| true),
-                rolling_analysis_context("기존 작업 결과물", &events, &events),
+                rolling_analysis_context("기존 작업 결과물", "", &events, &events),
             ] {
                 if !context.contains(&expected_request) || context.contains(&request) {
                     failures.push(format!(
@@ -1049,7 +1154,7 @@ mod tests {
         let events = [human(request, 1)];
         for context in [
             analysis_context(&events, &|_| true),
-            rolling_analysis_context("기존 작업 결과물", &events, &events),
+            rolling_analysis_context("기존 작업 결과물", "", &events, &events),
         ] {
             assert!(context.contains(request), "{context}");
         }

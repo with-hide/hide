@@ -1,4 +1,4 @@
-//! What the CLIs that answer in text (Gemini CLI, Grok, Pi) share.
+//! What the CLIs that answer in text (Grok, Pi, Antigravity) share.
 //!
 //! None of them enforces an output schema the way Claude Code and Codex do,
 //! so each is asked for one JSON object in its system prompt, and the answer
@@ -226,8 +226,8 @@ mod tests {
             AiError::UsageLimited { retry_after: None }
         );
         assert_eq!(
-            classify_failure("gemini", Some(1), "503 Service Unavailable"),
-            AiError::Transient("gemini_upstream".to_owned())
+            classify_failure("grok", Some(1), "503 Service Unavailable"),
+            AiError::Transient("grok_upstream".to_owned())
         );
         assert_eq!(
             classify_failure("pi", Some(3), "something odd happened"),

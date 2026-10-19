@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
+use hide_agent_hooks::route::HookTarget;
 use hide_agent_hooks::{AgentRuntime, HookStatus, InstallFailure, MemoryCompatibility};
 
 use crate::{KitTarget, Observed, RemoveOutcome};
@@ -18,6 +19,12 @@ fn helper(target: &KitTarget) -> PathBuf {
 }
 
 pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
+    let wanted = helper(target);
+    let state = crate::layout::state_dir_from_process(&target.home);
+    let hook_target = match HookTarget::new(&wanted, &state) {
+        Ok(target) => target,
+        Err(reason) => return Observed::Blocked(reason.to_owned()),
+    };
     let status = hide_agent_hooks::install::status(runtime, &target.home);
     let observed = match status {
         HookStatus::RuntimeAbsent => {
@@ -27,16 +34,34 @@ pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
         HookStatus::NotInstalled | HookStatus::Off => Observed::Missing,
         HookStatus::Outdated { version } => Observed::Stale(format!(
             "version {version} of the hook is there; this build writes version {}",
-            hide_agent_hooks::HOOK_VERSION
+            hide_agent_hooks::HOOK_ENTRY_VERSION
         )),
         HookStatus::Failed {
             reason: InstallFailure::HelperMissing { helper, .. },
         } => Observed::Stale(format!("the hook points at {helper}, which is gone")),
         HookStatus::Failed { reason } => return Observed::Blocked(reason.message()),
         HookStatus::Installed { .. } => {
-            let wanted = helper(target);
             match hide_agent_hooks::installed_helper_path(runtime, &target.home) {
-                Some(found) if Path::new(&found) == wanted => Observed::Current,
+                Some(found) if Path::new(&found) == wanted => {
+                    if hide_agent_hooks::install::matches_install(
+                        runtime,
+                        &target.home,
+                        hook_target,
+                    ) {
+                        Observed::Current
+                    } else if hide_agent_hooks::install::matches_helper(
+                        runtime,
+                        &target.home,
+                        &wanted,
+                    ) {
+                        Observed::Stale("the hook's captured state route changed".to_owned())
+                    } else {
+                        Observed::Edited(
+                            "Hide's hook entries were edited; Reinstall puts Hide's back"
+                                .to_owned(),
+                        )
+                    }
+                }
                 Some(found) => Observed::Stale(format!(
                     "the hook runs {found}, not this build's {}",
                     wanted.display()
@@ -71,7 +96,10 @@ pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
 }
 
 pub(crate) fn install(target: &KitTarget, runtime: AgentRuntime) -> Result<(), String> {
-    hide_agent_hooks::install(runtime, &target.home, &helper(target))
+    let helper = helper(target);
+    let state = crate::layout::state_dir_from_process(&target.home);
+    let hook_target = HookTarget::new(&helper, &state)?;
+    hide_agent_hooks::install(runtime, &target.home, hook_target)
         .map(|_| ())
         .map_err(|failure| failure.message())
 }

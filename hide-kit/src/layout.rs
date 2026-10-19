@@ -25,6 +25,21 @@ pub fn hide_home(home: &Path) -> PathBuf {
     home.join(HIDE_HOME)
 }
 
+/// A disable-only switch, also written by cross-platform test fixtures.
+/// Unlike `fixture_home`, this grants no test or service-control authority.
+pub fn product_analytics_disabled(home: &Path) -> PathBuf {
+    hide_home(home).join("product-analytics-disabled")
+}
+
+/// Pinned CLIs shared by local keyless journey runs, never operator executables.
+pub fn journey_cli_cache(home: &Path) -> PathBuf {
+    hide_home(home).join("cache/journey-clis")
+}
+
+/// Four GiB across all pins, including an in-progress installation.
+/// Crossing it refuses the run; it never evicts a CLI another run may use.
+pub const JOURNEY_CLI_CACHE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
 /// The file that declares a HOME a test fixture's ([`fixture_home`]).
 pub const FIXTURE_HOME_MARKER: &str = ".hide-e2e-device-home";
 
@@ -123,6 +138,11 @@ pub fn workspace_bridges(state_dir: &Path) -> PathBuf {
     state_dir.join("workspace-bridges")
 }
 
+/// The daemon's lifetime lock, shared with the account kit's route ownership check.
+pub fn daemon_lock(state_dir: &Path) -> PathBuf {
+    state_dir.join("hided.lock")
+}
+
 /// Durable local requests and watches; its owner is the core delivery worker.
 pub fn delivery_ledger(state_dir: &Path) -> PathBuf {
     state_dir.join("delivery-ledger.json")
@@ -149,6 +169,13 @@ pub fn links_store(state_dir: &Path) -> PathBuf {
 
 /// Usage events and retained daily totals, owned by the core's usage worker.
 pub const USAGE_STORE: &str = "usage.sqlite3";
+
+/// Random product statistics identity, unrelated to host or account identity.
+pub const PRODUCT_ANALYTICS_ID: &str = "product-analytics-id";
+
+pub fn product_analytics_id(state_dir: &Path) -> PathBuf {
+    state_dir.join(PRODUCT_ANALYTICS_ID)
+}
 
 pub fn usage_store(state_dir: &Path) -> PathBuf {
     state_dir.join(USAGE_STORE)

@@ -1,10 +1,10 @@
 import { useInterfaceTranslation } from "./i18n/client";
-import { LaptopIcon, LayoutDashboardIcon } from "lucide-react";
+import { ChevronDownIcon, LaptopIcon, LayoutDashboardIcon, SearchIcon } from "lucide-react";
 import { memo, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Actions } from "./actions";
 import { deviceScope } from "./agentScope";
-import { deviceConnected, frontDeviceId, tileCounts, tileHint, tileMonogram, tileName } from "./devices";
+import { deviceConnected, frontDeviceId, tileCounts, tileHint, tileMonogram } from "./devices";
 import { machineName, windowDeviceId, windowFirst } from "./screenMachine";
 import { useShellStore } from "./store";
 import { overviewDeviceOf } from "./overviewTasks";
@@ -12,6 +12,7 @@ import { useUiStore } from "./ui";
 import { MainScreen } from "./MainScreen";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "./components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "./components/ui/dropdown-menu";
 import { Kbd } from "./components/ui/kbd";
 import { Hint } from "./components/ui/tooltip";
 import { commandLabel } from "./shortcutLabels";
@@ -56,10 +57,11 @@ export function OverviewPage({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const deviceId = useOverviewDevice();
   return <div className="flex min-h-0 flex-1 flex-col" data-overview-page="true" data-overview-device={deviceId}>
-    <div className="flex shrink-0 items-center gap-md border-b border-border px-lg py-sm">
-      <h1 className="shrink-0 text-title font-semibold">{t("overview.title")}</h1>
-      <DeviceSwitch selected={deviceId} />
+    <div className="flex shrink-0 flex-wrap items-center gap-md border-b border-border px-lg py-md">
+      <h1 className="shrink-0 text-headline font-semibold">{t("overview.title")}</h1>
       <span className="flex-1" />
+      <Hint label={t("commands.search")}><Button variant="ghost" size="icon-sm" aria-label={t("commands.search")} onClick={actions.openSearch}><SearchIcon /></Button></Hint>
+      <DeviceSwitch selected={deviceId} />
       <Button variant="ghost" size="sm" aria-label={t("overview.close")} onClick={actions.closeOverview}><Kbd>Esc</Kbd></Button>
     </div>
     <MainScreen actions={actions} deviceId={deviceId} />
@@ -67,9 +69,8 @@ export function OverviewPage({ actions }: { actions: Actions }) {
 }
 
 /**
- * Every device as its rail tile and name (B2): the rail's front device marked
- * `rail`, one that does not answer `연결 안 됨`, and each hint carries its
- * counts. Picking one changes only the Overview.
+ * A compact device choice names its connection state. Picking another
+ * device changes only the Overview and clears its previous project scope.
  */
 function DeviceSwitch({ selected }: { selected: string }) {
   const { t } = useInterfaceTranslation();
@@ -78,38 +79,42 @@ function DeviceSwitch({ selected }: { selected: string }) {
     const own = windowDeviceId(devices);
     return windowFirst(devices).map((device) => ({ id: device.id, own: device.id === own, label: machineName(devices, device.id, t) }));
   }, [devices, t]);
-  if (rows.length < 2) return null;
-  return <div role="radiogroup" aria-label={t("overviewTasks.devices")} className="flex min-w-0 items-center gap-xxs overflow-x-auto rounded-md border border-border p-xxs" data-overview-devices="true">
-    {rows.map((row) => <DeviceChoice key={row.id} id={row.id} own={row.own} label={row.label} selected={row.id === selected} />)}
+  if (rows.length === 0) return null;
+  const current = rows.find((row) => row.id === selected) ?? rows[0]!;
+  return <div className="min-w-0 max-w-full" data-overview-devices="true">
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild><Button variant="outline" size="sm" aria-label={t("overviewTasks.devices")} className="max-w-full"><DeviceLabel {...current} /><ChevronDownIcon /></Button></DropdownMenuTrigger>
+      <DropdownMenuContent align="end" aria-label={t("overviewTasks.devices")}>
+        <DropdownMenuRadioGroup value={selected} onValueChange={(id) => useUiStore.getState().setOverview({ deviceId: id })}>
+          {rows.map((row) => <DeviceChoice key={row.id} {...row} />)}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   </div>;
 }
 
-const DeviceChoice = memo(function DeviceChoice({ id, own, label, selected }: { id: string; own: boolean; label: string; selected: boolean }) {
+function DeviceLabel({ id, own, label }: { id: string; own: boolean; label: string }) {
+  const { t } = useInterfaceTranslation();
+  const connected = useShellStore((s) => deviceConnected(s.rest, id));
+  return <span className="flex min-w-0 items-center gap-xs">
+    <span aria-hidden="true" className="shrink-0 text-muted-foreground">{own ? <LaptopIcon className="size-(--size-icon)" /> : tileMonogram(label)}</span>
+    <span className="truncate font-medium">{label}</span>
+    <span className={cn("shrink-0 text-micro", connected ? "text-success" : "text-muted-foreground")} data-device-choice-offline={!connected || undefined}>{t(connected ? "devices.line.ready" : "devices.rail.notConnected")}</span>
+  </span>;
+}
+
+const DeviceChoice = memo(function DeviceChoice({ id, own, label }: { id: string; own: boolean; label: string }) {
   const { t } = useInterfaceTranslation();
   const counts = useShellStore(useShallow((s) => tileCounts(s.rest, s.agents, id)));
   const connected = useShellStore((s) => deviceConnected(s.rest, id));
-  const front = useShellStore((s) => frontDeviceId(s.rest) === id);
-  const name = [tileName(label, connected, counts, t), front ? t("overviewTasks.railHint") : null].filter(Boolean).join(", ");
-  return <Hint label={tileHint(label, connected, counts, t)}>
-    <button
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      aria-label={name}
+  return <DropdownMenuRadioItem
+      value={id}
+      title={tileHint(label, connected, counts, t)}
       data-overview-device-choice={id}
       data-connected={connected ? "true" : "false"}
-      className={cn("flex shrink-0 items-center gap-xs rounded-sm px-sm py-xxs text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring", selected ? "bg-secondary text-foreground" : "text-subtle-foreground")}
-      onClick={() => useUiStore.getState().setOverview({ deviceId: id })}
     >
-      <span aria-hidden="true" className={cn("relative flex size-(--size-icon-lg) items-center justify-center rounded-xs bg-secondary text-micro font-semibold", !connected && "opacity-(--opacity-dimmed)")}>
-        {own ? <LaptopIcon className="size-(--size-icon)" /> : tileMonogram(label)}
-        {connected && counts.needs_you > 0 ? <span className="absolute -right-xxs -top-xxs size-(--size-tab-status-dot) rounded-full bg-warning" data-device-choice-dot="true" /> : null}
-      </span>
-      <span className="font-medium">{label}</span>
-      {front ? <span aria-hidden="true" className="rounded-xs bg-muted px-xxs text-micro text-muted-foreground" data-device-choice-rail="true">{t("overviewTasks.rail")}</span> : null}
-      {!connected ? <span aria-hidden="true" className="text-micro text-muted-foreground" data-device-choice-offline="true">{t("devices.rail.notConnected")}</span> : null}
-    </button>
-  </Hint>;
+      <DeviceLabel id={id} own={own} label={label} />
+    </DropdownMenuRadioItem>;
 });
 
 export function OverviewModal({ actions }: { actions: Actions }) {

@@ -50,6 +50,8 @@ export function taskState(task: WorkTask, outputs: readonly WorkOutput[]) {
   if (prs.some((output) => output.state === "ci_failed")) return "ci_failed";
   if (prs.some((output) => ["open", "review"].includes(output.state))) return "review";
   if (task.done) return "done";
+  // The newest turn went unjudged: its END is an earlier turn's, so no word (PRD task-continuation D-09).
+  if (task.unjudged) return "unjudged";
   return task.end === "done" ? "unfinished" : task.end === "waiting" ? "working" : task.end;
 }
 const OUTPUT_ORDER: Record<string, number> = { ci_failed: 0, review: 1, open: 2, merged: 3, closed: 4 };
@@ -67,10 +69,6 @@ export function openMissedWork(work: readonly SessionWorkSummary[]): { owner: Se
     .sort((a, b) => b.item.at_unix_ms - a.item.at_unix_ms);
 }
 
-/** The outputs this record's own session made that no drawn task line claims (PRD pr-card-and-session-record-redesign B15): beside the title. With Agent summaries off no task line is drawn, so every own output stands there. */
-export function titleOutputs(record: SessionRecord, summaries: boolean): WorkOutput[] {
-  return ownOutputs(record).filter((output) => !summaries || !record.tasks.some((task) => groupPrs(task, [output]).length > 0));
-}
 /** The outputs the record's own session made. A task id names a turn offset, so a descendant's output can carry the same id as a task here and must not be read against it. */
 function ownOutputs(record: SessionRecord): WorkOutput[] {
   const own = workKey(record.session);
@@ -96,81 +94,28 @@ export function outputPrState(state: string): PrState {
 }
 
 export type TaskState = ReturnType<typeof taskState>;
-/** One task with what hangs from it: the pull requests and the children of its request's group (on the group's first task), and the request that asked for it. */
-export type ChecklistTask = { task: WorkTask; state: TaskState; prs: WorkOutput[]; children: SessionRecord[]; request: WorkRequest | null };
-/** An open missed item, the task its turn belongs to and, for a descendant's, its session (`named`). */
-export type OwnedMissed = { owner: Pick<SessionRecord, "session" | "title" | "cwd">; missed: MissedWork; task: string | null; named: boolean };
+/** One requested task, its derived verdict and the original request that asked for it. */
+export type ChecklistTask = { task: WorkTask; state: TaskState; request: WorkRequest | null };
 export type Checklist = {
   tasks: ChecklistTask[];
   done: number;
   total: number;
-  /** The direct children no task holds by time (PRD record-card-readability D-03): started before the first task, or with no start time. */
-  delegated: SessionRecord[];
-  /** What is still open of what this session and its descendants missed, oldest first, the descendants' last. */
-  missed: OwnedMissed[];
-  /** The newest request not yet judged while the session works. */
   latest: WorkRequest | null;
 };
 
-/**
- * One record's assigned work as a checklist, first-asked first (PRD
- * record-card-readability D-03, D-07): each task with its PRs, its request and
- * the direct children it delegated, decided by time alone: a child stands
- * under the task whose time is the latest at or before the child's start, the
- * tasks one request made counting as their first. A child that started before
- * every task, or has no start time, is listed in `delegated`. Only open missed
- * work is kept, each named by the task its turn's request carries;
- * `descendants` are the records below this one, whose open missed work comes
- * last, named by its session.
- */
-export function checklist(record: SessionRecord, descendants: readonly SessionRecord[] = []): Checklist {
+/** Requested work, first-asked first; task state uses only this session's outputs. */
+export function checklist(record: SessionRecord): Checklist {
   const byAt = <T extends { at_unix_ms: number }>(rows: readonly T[]) => [...rows].sort((a, b) => a.at_unix_ms - b.at_unix_ms);
   const tasks = byAt(record.tasks);
   const outputs = ownOutputs(record);
   const taskIds = new Set(tasks.map((task) => task.id));
-  // A request's tasks are one group: its pull requests and its children hang once, from the group's first task (task-split-checklist D-08, D-13).
-  const leaders = new Map<string, WorkTask>();
-  for (const task of tasks) if (!leaders.has(taskGroup(task.id))) leaders.set(taskGroup(task.id), task);
-  const leaderOf = (id: string) => leaders.get(taskGroup(id));
   const requests = byAt(record.requests);
   const requestOf = (task: WorkTask) => requests.find((request) => request.task_ids.some((id) => taskIds.has(id) && taskGroup(id) === taskGroup(task.id))) ?? null;
-  const leading = [...leaders.values()];
-  const placed = new Map<string, SessionRecord[]>();
-  const delegated: SessionRecord[] = [];
-  for (const child of [...record.children].sort((a, b) => (a.started_at_unix_ms ?? 0) - (b.started_at_unix_ms ?? 0))) {
-    const start = child.started_at_unix_ms;
-    let holder: WorkTask | undefined;
-    if (start !== null) for (const task of leading) if (task.at_unix_ms <= start) holder = task;
-    if (holder) placed.set(holder.id, [...(placed.get(holder.id) ?? []), child]);
-  }
-  // In the record's order, as the summaries-off list draws them.
-  for (const child of record.children) if (child.started_at_unix_ms === null || !leading.some((task) => task.at_unix_ms <= child.started_at_unix_ms!)) delegated.push(child);
-  const taskOf = (offset: number) => {
-    const id = record.requests.find((request) => request.offset === offset)?.task_ids.find((id) => taskIds.has(id));
-    return id === undefined ? null : leaderOf(id)?.name ?? null;
-  };
-  const open = (missed: MissedWork) => missed.status === "open";
-  const missed: OwnedMissed[] = [
-    ...byAt(record.missed.filter(open)).map((one) => ({ owner: record, missed: one, task: taskOf(one.turn_offset), named: false })),
-    ...descendants.flatMap((below) => byAt(below.missed.filter(open)).map((one) => ({ owner: below, missed: one, task: null, named: true }))),
-  ];
-  const view = (task: WorkTask): ChecklistTask => {
-    const leads = leaderOf(task.id) === task;
-    return {
-      task,
-      state: taskState(task, outputs),
-      prs: leads ? orderedOutputs(groupPrs(task, outputs)) : [],
-      children: leads ? placed.get(task.id) ?? [] : [],
-      request: requestOf(task),
-    };
-  };
   const latest = record.requests.reduce<WorkRequest | null>((latest, request) => (!latest || request.offset > latest.offset ? request : latest), null);
   return {
-    tasks: tasks.map(view),
+    tasks: tasks.map((task) => ({ task, state: taskState(task, outputs), request: requestOf(task) })),
     done: tasks.filter((task) => task.done).length,
     total: tasks.length,
-    delegated,
-    missed,
     latest: record.state === "working" && latest && !latest.judged ? latest : null,
   };
 }
@@ -187,7 +132,7 @@ export type SessionPlace = { project: Workspace; checkout: Checkout | null; agen
 export function sessionPlace(projects: readonly BoardProject[], session: WorkSession, cwd: string | null, rest: SnapshotRest | null): SessionPlace | null {
   const own = projects.filter(({ workspace }) => workspace.device_id === session.device_id);
   for (const { workspace, agents } of own) {
-    const agent = agents.find((row) => row.session_id === session.session_id && (row.device_id ?? localDeviceId(rest)) === session.device_id);
+    const agent = agents.find((row) => row.agent_kind === session.agent && row.session_id === session.session_id && (row.device_id ?? localDeviceId(rest)) === session.device_id);
     const member = agent ? workspace.agent_scope.members.find((row) => row.pane_id === agent.pane_id) : undefined;
     if (!agent || !member) continue;
     return { project: workspace, checkout: workspace.checkouts.find((row) => row.id === member.checkout_id) ?? null, agent };

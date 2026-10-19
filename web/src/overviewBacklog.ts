@@ -1,7 +1,6 @@
-// The Overview's 백로그 tab as data (PRD overview-device-tasks D-09, D-10,
-// D-22, B25-B30): each project's unstarted open items, newest first, and the
-// items the core is still making. A started item is one a checkout works on
-// (its `task_key`); it leaves the backlog and is counted as in progress.
+// Mixed backlog projections and filters (overview-redesign B11-B13).
+// The default backlogOf call retains the existing unstarted-open tally;
+// the read view explicitly requests all loaded GitHub issues and local memos.
 
 import type { BoardProject } from "./projectBoard";
 import type { BacklogFailure, BacklogItem, IssueLabel, Task, TaskSource, Workspace } from "./snapshot";
@@ -11,7 +10,7 @@ import { isMemoKey } from "./overviewTasks";
 export const BACKLOG_TITLE_LIMIT = 256;
 
 /** Rows a section shows before `나머지 이슈 N ›` (B27). */
-export const BACKLOG_SHOWN = 8;
+export const BACKLOG_SHOWN = 50;
 
 export type BacklogRow = {
   key: string;
@@ -23,6 +22,11 @@ export type BacklogRow = {
   /** When it was made, else last changed; the order and the age. */
   at: number | null;
   local: boolean;
+  author: string | null;
+  assignees: readonly string[];
+  open: boolean;
+  started: boolean;
+  updated: number | null;
 };
 
 export type ProjectBacklog = {
@@ -33,7 +37,7 @@ export type ProjectBacklog = {
   started: number;
 };
 
-function rowOf(task: Task): BacklogRow {
+function rowOf(task: Task, started = false): BacklogRow {
   return {
     key: task.key,
     token: task.id,
@@ -42,6 +46,11 @@ function rowOf(task: Task): BacklogRow {
     labels: task.labels ?? [],
     at: task.created_at_unix_ms ?? task.updated_at_unix_ms ?? null,
     local: isMemoKey(task.key),
+    author: task.author ?? null,
+    assignees: task.assignees ?? [],
+    open: task.open,
+    started,
+    updated: task.updated_at_unix_ms ?? task.created_at_unix_ms ?? null,
   };
 }
 
@@ -59,12 +68,12 @@ export function startedKeys(workspace: Pick<Workspace, "checkouts">): Set<string
   return new Set(workspace.checkouts.flatMap((checkout) => (checkout.task_key ? [checkout.task_key] : [])));
 }
 
-export function backlogOf(workspace: Pick<Workspace, "checkouts" | "tasks">): ProjectBacklog {
+export function backlogOf(workspace: Pick<Workspace, "checkouts" | "tasks">, all = false): ProjectBacklog {
   const started = startedKeys(workspace);
   const open = (workspace.tasks?.tasks ?? []).filter((task) => task.open);
   return {
     source: workspace.tasks?.source ?? null,
-    rows: open.filter((task) => !started.has(task.key)).map(rowOf).sort((a, b) => (b.at ?? 0) - (a.at ?? 0)),
+    rows: (all ? workspace.tasks?.tasks ?? [] : open.filter((task) => !started.has(task.key))).map((task) => rowOf(task, started.has(task.key))).sort((a, b) => (all ? b.updated ?? b.at ?? 0 : b.at ?? 0) - (all ? a.updated ?? a.at ?? 0 : a.at ?? 0)),
     started: open.filter((task) => started.has(task.key)).length,
   };
 }
@@ -87,15 +96,37 @@ export function pendingItems(items: readonly BacklogItem[] | undefined, workspac
 }
 
 /** The search box and the label chips (B27): words in the token or title, and any one picked label. */
-export function filterRows(rows: readonly BacklogRow[], query: string, labels: readonly string[]): BacklogRow[] {
-  const needle = query.trim().toLocaleLowerCase();
-  return rows.filter((row) => (needle === "" || `${row.token ?? ""}\n${row.title}`.toLocaleLowerCase().includes(needle)) && (labels.length === 0 || row.labels.some((label) => labels.includes(label.name))));
+export type BacklogFilters = { source: "all" | "github" | "local"; status: "open" | "started" | "closed" | "all"; author: string; assignee: string };
+export const BACKLOG_FILTERS: BacklogFilters = { source: "all", status: "open", author: "", assignee: "" };
+
+export function filterRows(rows: readonly BacklogRow[], query: string, labels: readonly string[], filters?: BacklogFilters): BacklogRow[] {
+  const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  return rows.filter((row) => {
+    if (filters) {
+      if (filters.source !== "all" && row.local !== (filters.source === "local")) return false;
+      if (filters.status === "open" && (!row.open || row.started)) return false;
+      if (filters.status === "started" && (!row.open || !row.started)) return false;
+      if (filters.status === "closed" && row.open) return false;
+      if (filters.author && row.author !== filters.author) return false;
+      if (filters.assignee && !row.assignees.includes(filters.assignee)) return false;
+    }
+    if (labels.length && !row.labels.some((label) => labels.includes(label.name))) return false;
+    return words.every((word) => {
+      if (word.startsWith("label:")) return row.labels.some((label) => label.name.toLocaleLowerCase().includes(word.slice(6)));
+      if (word.startsWith("author:")) return row.author?.toLocaleLowerCase().includes(word.slice(7)) ?? false;
+      if (word.startsWith("assignee:")) return row.assignees.some((person) => person.toLocaleLowerCase().includes(word.slice(9)));
+      if (word === "is:open") return row.open;
+      if (word === "is:closed") return !row.open;
+      if (word === "is:started") return row.started;
+      return `${row.token ?? ""}\n${row.title}`.toLocaleLowerCase().includes(word);
+    });
+  });
 }
 
 /** Every label the device's backlog rows carry, once, by name. */
 export function backlogLabels(projects: readonly BoardProject[]): IssueLabel[] {
   const labels = new Map<string, IssueLabel>();
-  for (const { workspace } of projects) for (const row of backlogOf(workspace).rows) for (const label of row.labels) if (!labels.has(label.name)) labels.set(label.name, label);
+  for (const { workspace } of projects) for (const row of backlogOf(workspace, true).rows) for (const label of row.labels) if (!labels.has(label.name)) labels.set(label.name, label);
   return [...labels.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -123,3 +154,10 @@ export function destinationOf(source: TaskSource | null): Destination {
   if (!source || source.kind !== "github") return "local";
   return source.public === true ? "public" : source.public === false ? "private" : "unknown";
 }
+
+export function githubSource(workspace: Pick<Workspace, "tasks"> | null): TaskSource | null {
+  const tasks = workspace?.tasks;
+  return tasks?.sources?.find((source) => source.kind === "github") ?? (tasks?.source?.kind === "github" ? tasks.source : null);
+}
+
+export type BacklogDestination = { kind: "local" } | { kind: "github"; repository: string };

@@ -27,6 +27,7 @@ export function freshError(state: Shell, previous: Shell) {
  */
 export function errorNotice(error: { kind: string; message: string } | null | undefined): { text: string; refreshable: boolean } | null {
   if (!error) return null;
+  if (error.kind === "terminal.input_hold_failed") return { text: error.message, refreshable: false };
   if (error.kind.startsWith("remote.control.")) return { text: error.message, refreshable: error.kind === "remote.control.close_status_unknown" };
   const refusal = viewRefusal(error);
   if (refusal) return { text: refusal, refreshable: false };

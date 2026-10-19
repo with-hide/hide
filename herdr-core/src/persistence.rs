@@ -138,7 +138,11 @@ struct StoredUiState {
     #[serde(default)]
     first_run: Option<crate::model::FirstRun>,
     #[serde(default)]
+    first_run_choices: crate::model::FirstRunChoices,
+    #[serde(default)]
     desktop_notifications: bool,
+    #[serde(default = "default_panel_visible")]
+    product_analytics_enabled: bool,
     /// Absent in a store from before the split: keep the old shared choice.
     #[serde(default)]
     desktop_notifications_done: Option<bool>,
@@ -210,9 +214,6 @@ struct StoredUiState {
     /// loads empty. More entries than the limit (a hand edit) are cut to it.
     #[serde(default)]
     recent_pane_ids: Vec<String>,
-    /// Absent in a store written before the Factory secretary existed.
-    #[serde(default)]
-    factory_secretary_pane: Option<String>,
     /// Absent in a store written before Rename was recorded, which loads
     /// empty: no tab named before then counts as the operator's until it is
     /// renamed again. More entries than the limit (a hand edit) are cut to it.
@@ -484,7 +485,9 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             agent_onboarding: stored.agent_onboarding,
             agent_onboarding_agents: stored.agent_onboarding_agents,
             first_run: stored.first_run,
+            first_run_choices: stored.first_run_choices,
             desktop_notifications: stored.desktop_notifications,
+            product_analytics_enabled: stored.product_analytics_enabled,
             desktop_notifications_done: stored
                 .desktop_notifications_done
                 .unwrap_or(stored.desktop_notifications),
@@ -534,7 +537,6 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
                 recent.truncate(crate::model::RECENT_PANE_LIMIT);
                 recent
             },
-            factory_secretary_pane: stored.factory_secretary_pane,
             operator_tab_names: stored
                 .operator_tab_names
                 .into_iter()
@@ -654,7 +656,9 @@ pub fn save(
         agent_onboarding: state.agent_onboarding,
         agent_onboarding_agents: state.agent_onboarding_agents.clone(),
         first_run: state.first_run,
+        first_run_choices: state.first_run_choices.clone(),
         desktop_notifications: state.desktop_notifications,
+        product_analytics_enabled: state.product_analytics_enabled,
         desktop_notifications_done: Some(state.desktop_notifications_done),
         screen_intros_seen: state.screen_intros_seen.clone(),
         sidebar_width: state.sidebar_width,
@@ -677,7 +681,6 @@ pub fn save(
         session_archive: state.session_archive.clone(),
         recent_checkouts: state.recent_checkouts.clone(),
         recent_pane_ids: state.recent_pane_ids.clone(),
-        factory_secretary_pane: state.factory_secretary_pane.clone(),
         operator_tab_names: state.operator_tab_names.clone(),
     };
     let bytes = serde_json::to_vec_pretty(&stored)

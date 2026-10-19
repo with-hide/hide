@@ -147,14 +147,10 @@ impl Runtime {
                     // Update the focus memory from the authoritative reads;
                     // geometry still belongs to the sequenced session stream.
                     for stored in &mut self.snapshot.pane_layouts {
-                        if stored.workspace_id == layout.workspace_id {
-                            self.herdr_active_tab_ids.remove(&stored.tab_id);
-                        }
                         if stored.tab_id == layout.tab_id {
                             stored.focused_pane_id = layout.focused_pane_id.clone();
                         }
                     }
-                    self.herdr_active_tab_ids.insert(layout.tab_id.clone());
                     self.finish_pane_focus_request(
                         pending.request_id.as_deref(),
                         &pending.target_id,
@@ -328,7 +324,7 @@ impl Runtime {
                 let (live_pane_ids, active_pane_ids) = remote_terminal_pane_sets(
                     &session,
                     focused_device_id.as_deref() == Some(target_id.as_str()),
-                    &self.node_shown_agent_tabs(&target_id),
+                    self.node_shown_agent_tabs(&target_id).as_deref(),
                 );
                 self.reconcile_remote_terminal_panes(&target_id, &live_pane_ids, &active_pane_ids)
                     | changed
@@ -1685,6 +1681,7 @@ impl Runtime {
 
     fn ingest_terminal_report(&mut self, report: TerminalReport) -> bool {
         match report {
+            TerminalReport::InputPermit { .. } => false,
             TerminalReport::State { pane, state } => {
                 // A pane Herdr no longer lists is not brought back by a late
                 // report from its node.
@@ -1770,8 +1767,14 @@ impl Runtime {
                 self.push_diagnostic(kind, message);
                 true
             }
-            TerminalReport::RequestDiscarded { request, .. } => {
+            TerminalReport::RequestDiscarded { request, reason } => {
                 if self.input_requests.discarded_by_node(&request) {
+                    self.push_diagnostic(
+                        "terminal.input_discarded",
+                        format!("Request {request}: {reason}"),
+                    );
+                    self.set_error("terminal.input_hold_failed",
+                        "Queued input could not be delivered. Type it again once the pane is ready.", true);
                     self.sync_input_requests();
                     return true;
                 }

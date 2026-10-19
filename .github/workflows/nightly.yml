@@ -126,9 +126,10 @@ jobs:
       HIDE_AGY_API_KEY: ${{ secrets.HIDE_AGY_API_KEY }}
 
   # The agent journey: the stand-ins on Linux and macOS, the Windows forms,
-  # and, when the CI account's keys are set, Claude Code and Codex signed in
-  # on all three systems (one system's on that system's hand run);
-  # docs/VERIFICATION.md, Agent journey.
+  # the pinned CLIs against the fake model and each agent whose CI key is set
+  # signed in on all three systems, agy on the night's system of its quota
+  # rotation (one system's on that system's hand run); docs/VERIFICATION.md,
+  # Agent journey.
   agent-journey:
     name: agent journey
     if: ${{ inputs.lane != 'agy' }}
@@ -138,9 +139,16 @@ jobs:
     with:
       systems: ${{ inputs.lane == 'linux' && '["linux"]' || inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux","macos","windows"]' }}
       live: true
+      fake: true
+      agy: rotation
     secrets:
       HIDE_CLAUDE_API_KEY: ${{ secrets.HIDE_CLAUDE_API_KEY }}
       HIDE_CODEX_API_KEY: ${{ secrets.HIDE_CODEX_API_KEY }}
+      HIDE_AGY_API_KEY: ${{ secrets.HIDE_AGY_API_KEY }}
+      HIDE_GROK_API_KEY: ${{ secrets.HIDE_GROK_API_KEY }}
+      HIDE_OPENCODE_API_KEY: ${{ secrets.HIDE_OPENCODE_API_KEY }}
+      HIDE_PI_API_KEY: ${{ secrets.HIDE_PI_API_KEY }}
+      HIDE_OMP_API_KEY: ${{ secrets.HIDE_OMP_API_KEY }}
 
   # The real Claude Code and Codex read the folder trust Hide records for a
   # worktree it made, on all three systems (one system's on that system's

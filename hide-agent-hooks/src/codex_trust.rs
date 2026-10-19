@@ -43,7 +43,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::install::{codex_command, hook_matcher};
-use crate::runtime::{AgentRuntime, HookEvent};
+use crate::runtime::AgentRuntime;
+#[cfg(test)]
+use crate::runtime::HookEvent;
 
 /// How long Codex gets. It answers each call in well under a second; these
 /// are the bounds for one that does not.
@@ -173,10 +175,10 @@ impl TrustFailure {
 /// `herdr` is what the kit recorded Herdr's integration added to that file
 /// (empty unless the kit installed it); each is trusted as exactly the entry
 /// the kit saw Herdr write.
-pub fn trust_own_hooks(
+pub fn trust_own_hooks<'a>(
     codex: &Path,
     home: &Path,
-    helper: &Path,
+    helper: impl Into<crate::route::HookTarget<'a>>,
     herdr: &[HookEntry],
     stop: &AtomicBool,
 ) -> TrustOutcome {
@@ -185,10 +187,10 @@ pub fn trust_own_hooks(
 
 /// [`trust_own_hooks`] with the bounds named, for a caller (a test) that
 /// needs a Codex that does not answer to be given up on sooner.
-pub fn trust_own_hooks_within(
+pub fn trust_own_hooks_within<'a>(
     codex: &Path,
     home: &Path,
-    helper: &Path,
+    helper: impl Into<crate::route::HookTarget<'a>>,
     herdr: &[HookEntry],
     stop: &AtomicBool,
     limits: Limits,
@@ -242,9 +244,13 @@ struct Expected {
 }
 
 /// Hide's own six entries, then the entries the kit recorded Herdr writing.
-fn expected_entries(helper: &Path, herdr: &[HookEntry]) -> Vec<Expected> {
-    HookEvent::ALL
-        .into_iter()
+fn expected_entries<'a>(
+    helper: impl Into<crate::route::HookTarget<'a>>,
+    herdr: &[HookEntry],
+) -> Vec<Expected> {
+    let helper = helper.into();
+    AgentRuntime::Codex
+        .events()
         .map(|event| Expected {
             event: wire_event_name(event.name()),
             handler_type: COMMAND_HANDLER.to_owned(),
@@ -1236,8 +1242,8 @@ mod tests {
 
     #[test]
     fn event_names_follow_the_wire_spelling() {
-        let names: Vec<_> = HookEvent::ALL
-            .into_iter()
+        let names: Vec<_> = AgentRuntime::Codex
+            .events()
             .map(|event| wire_event_name(event.name()))
             .collect();
         assert_eq!(
@@ -1248,7 +1254,8 @@ mod tests {
                 "subagentStart",
                 "subagentStop",
                 "stop",
-                "preToolUse"
+                "preToolUse",
+                "postToolUse"
             ]
         );
     }
@@ -1282,8 +1289,8 @@ mod tests {
             command.replace("--runtime codex", "--runtime claude-code"),
             command.replace("SessionStart", "Stop"),
             command.replace(
-                &format!("hide-subagents@{}", crate::HOOK_VERSION),
-                &format!("hide-subagents@{}", crate::HOOK_VERSION - 1),
+                &format!("hide-subagents@{}", crate::HOOK_ENTRY_VERSION),
+                &format!("hide-subagents@{}", crate::HOOK_ENTRY_VERSION - 1),
             ),
             format!("{command} "),
             command.to_uppercase(),
@@ -1313,7 +1320,7 @@ mod tests {
 
     #[test]
     fn each_event_matches_only_its_own_command() {
-        for event in HookEvent::ALL {
+        for event in AgentRuntime::Codex.events() {
             let mut hook = listed(
                 &wire_event_name(event.name()),
                 &hide_command(event),

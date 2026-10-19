@@ -250,6 +250,25 @@ fn resuming_starts_the_root_with_its_resume_arguments_and_it_leaves_the_archive_
         kind: "id".into(),
         value: session_of("w1:p1"),
     });
+    // The accepted root terminal exists too, even though another pane
+    // reports its conversation. Publish it before the next queued start:
+    // an unlisted accepted pane cannot settle the root's navigation.
+    let created: SessionSnapshotPayload = crate::sidebar::owned_label_fixture(serde_json::json!({
+        "agents": [], "workspaces": [],
+        "tabs": [{"workspace_id": "w1", "tab_id": "w1:t9", "label": ""}],
+        "panes": [{"pane_id": "w1:p9", "cwd": A}],
+        "layouts": [{
+            "workspace_id": "w1", "tab_id": "w1:t9", "zoomed": false,
+            "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+            "focused_pane_id": "w1:p9",
+            "panes": [{"pane_id": "w1:p9", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
+            "splits": []
+        }]
+    }))
+    .expect("the accepted root terminal");
+    payload.tabs.extend(created.tabs);
+    payload.panes.extend(created.panes);
+    payload.layouts.extend(created.layouts);
     runtime.ingest_session_with_catalog(Ok(payload), Some(tree_catalog()));
     runtime.advance_session_archive();
     let (_, held) = record(&runtime).unwrap();

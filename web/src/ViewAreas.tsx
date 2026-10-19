@@ -1,6 +1,7 @@
 import { GlobeIcon, Link2Icon, LoaderCircleIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
+import { agentProductName } from "./agentAdapters";
 import { createAreaTree, tabFit, type AreaAdapter, type AreaTabInteraction } from "./AreaTree";
 import { AreaEmpty } from "./AreaEmpty";
 import { BrowserDisplay } from "./BrowserDisplay";
@@ -10,8 +11,8 @@ import { FileMark } from "./components/file-mark";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { revealHost } from "./host";
-import { CommentCount, FeedbackRow, OpenerMark } from "./ViewComments";
-import { DisplayEditor, DocumentKeeper } from "./Editor";
+import { CommentCount, FeedbackRow } from "./ViewComments";
+import { DisplayEditor, DocumentKeeper, PendingDocumentHeader } from "./Editor";
 import { fileIcon } from "./fileIcons";
 import { useInterfaceTranslation } from "./i18n/client";
 import { windowDeviceId } from "./screenMachine";
@@ -19,7 +20,7 @@ import { editorTabFor, frontCheckout, type ViewDisplaySnapshot, type ViewLayoutS
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { commandLabel } from "./shortcutLabels";
-import { noteDrawnViews, useKeyboardOwner } from "./viewFocus";
+import { keyboardInputRevision, noteDrawnViews, useKeyboardOwner } from "./viewFocus";
 import { displayIdentity, displayMenu, focusRequestArrived, placeKey, shownDisplays, workspaceKey, showsSameDocument, VIEW_WORDS, type ViewMenuId, type ViewWorkspace } from "./viewLayout";
 import { locateDisplay } from "./areaLayout";
 import { workspaceViewOf } from "./workspace";
@@ -82,11 +83,13 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
   useEffect(() => {
     if (!request || !body || !focusRequestArrived(request, key, layout, opens)) return;
     useUiStore.getState().setViewFocusRequest(null);
-    const areaId = layout.active_area;
+    const areaId = "areaId" in request ? request.areaId : layout.active_area;
+    const revision = "revision" in request ? request.revision : undefined;
     const before = document.activeElement;
     requestAnimationFrame(() => {
       contentWatch.current?.disconnect();
       contentWatch.current = null;
+      if (revision !== undefined && keyboardInputRevision() !== revision) return;
       const now = document.activeElement;
       if (now !== before && now !== null && now !== document.body) return;
       const area = body.querySelector<HTMLElement>(`[data-view-area-id="${CSS.escape(areaId)}"]`);
@@ -100,9 +103,10 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
       const tab = area.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
       (content ?? tab)?.focus({ preventScroll: true });
       if (content || !tab || !area.querySelector(READING)) return;
+      const waitingRevision = keyboardInputRevision();
       const watch = new MutationObserver(() => {
         const mounted = area.querySelector<HTMLElement>(".cm-content");
-        if (document.activeElement !== tab || (!mounted && !area.querySelector(READING))) watch.disconnect();
+        if (keyboardInputRevision() !== waitingRevision || document.activeElement !== tab || (!mounted && !area.querySelector(READING))) watch.disconnect();
         else if (mounted) {
           watch.disconnect();
           mounted.focus({ preventScroll: true });
@@ -134,7 +138,7 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
     ),
     empty: () => <AreaEmpty state="no-view" text={t("documents.view.empty")} />,
     floating: (display) => <>{displayMark(display)}<span className={`truncate ${display.preview ? "italic" : ""}`}>{display.label}</span></>,
-    menu: (id, geometry, sizes) => [{ id: "new_tab", label: t("panes.area.newTab"), unavailable: null }, ...displayMenu(layout, geometry, sizes, id, { host: revealHost(), device: workspace.device_id, node: windowDeviceId(useShellStore.getState().rest?.navigator?.devices) })],
+    menu: (id, geometry, sizes) => [{ id: "new_tab", icon: "add", label: t("panes.area.newTab"), unavailable: null }, ...displayMenu(layout, geometry, sizes, id, { host: revealHost(), device: workspace.device_id, node: windowDeviceId(useShellStore.getState().rest?.navigator?.devices) })],
     runMenu: (id, displayId) => id === "new_tab" ? actions.openBrowser("", workspace, locateDisplay(layout.root, displayId)?.area.id) : actions.runViewMenu(id as ViewMenuId, displayId),
     focus: actions.focusView,
     focusArea: actions.focusViewArea,
@@ -161,13 +165,11 @@ function DisplayBody({ display, workspace, actions }: { display: ViewDisplaySnap
   if (display.state === "open") {
     return <DisplayEditor display={display} workspace={workspace} placeKey={placeKey(workspaceKey(workspace), display)} actions={actions} />;
   }
-  if (display.state === "opening") return <AreaEmpty state="view-opening" text={t("documents.view.openingNamed", { label: display.label })} />;
-  if (display.state === "waiting") return <AreaEmpty state="view-waiting" text={display.reason ?? t("documents.view.waitingPath", { path: display.path })} />;
-  return (
+  const state = display.state === "opening" ? <AreaEmpty state="view-opening" text={t("documents.view.openingNamed", { label: display.label })} /> : display.state === "waiting" ? <AreaEmpty state="view-waiting" text={display.reason ?? t("documents.view.waitingPath", { path: display.path })} /> : (
     <AreaEmpty state="view-unavailable" text={display.reason ? t("documents.view.unavailableReason", { path: display.path, reason: display.reason }) : t("documents.view.unavailable", { path: display.path })}>
       {/* Each button is one action on this view alone, like a tab's ×: its
           press does not also make the area active (one action, one event). */}
-      <Button variant="secondary" onPointerDown={(event) => event.stopPropagation()} onClick={() => actions.closeView(display.id)} data-close-unavailable={display.id}>
+      <Button variant="secondary" data-keyboard-stays="true" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); }} onClick={() => actions.closeView(display.id)} data-close-unavailable={display.id}>
         {t("documents.view.closeView")}
       </Button>
       <Button variant="ghost" onPointerDown={(event) => event.stopPropagation()} onClick={() => actions.retryView(display.id)} data-retry-unavailable={display.id}>
@@ -175,6 +177,11 @@ function DisplayBody({ display, workspace, actions }: { display: ViewDisplaySnap
       </Button>
     </AreaEmpty>
   );
+  return <>
+    <PendingDocumentHeader display={display} actions={actions} />
+    {state}
+  </>;
+
 }
 
 /** One display's tab: its kind's mark, italic while a preview, its save marks, and its whole identity (B2, B21). */
@@ -191,6 +198,10 @@ export function DisplayTab({ display, workspace, interaction, actions }: { displ
   const comments = display.comments ?? 0;
   const identity = [
     displayIdentity(display, t),
+    display.opener ? [
+      display.opener.pane_id ? display.opener.name : t("feedback.mark.closed", { name: display.opener.name }),
+      t("feedback.mark.opened", { product: agentProductName(display.opener.provider) }),
+    ].join(" · ") : null,
     state,
     tabOnly ? t("documents.tabOnly") : null,
     attached ? t("documents.agentAttached") : null,
@@ -241,7 +252,6 @@ export function DisplayTab({ display, workspace, interaction, actions }: { displ
         {saving ? <span className="text-muted-foreground"> {t("documents.tabSaving")}</span> : dirty ? <span className="text-warning"> ●</span> : null}
         {tabOnly ? <span className="text-muted-foreground"> {t("documents.tabOnly")}</span> : null}
       </span>
-      {display.opener ? <OpenerMark opener={display.opener} actions={actions} /> : null}
       <CommentCount display={display} />
       <Hint label={closeLabel}>
         <Button
@@ -249,7 +259,8 @@ export function DisplayTab({ display, workspace, interaction, actions }: { displ
           size="icon-sm"
           className={`${fit.close} shrink-0 hover:bg-popover hover:text-foreground focus-visible:visible group-hover:visible ${selected ? "visible" : "invisible"}`}
           aria-label={closeLabel}
-          onPointerDown={(event) => event.stopPropagation()}
+          data-keyboard-stays="true"
+          onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
           onClick={(event) => {
             event.stopPropagation();
             actions.closeView(display.id);
@@ -258,7 +269,7 @@ export function DisplayTab({ display, workspace, interaction, actions }: { displ
           <XIcon />
         </Button>
       </Hint>
-      {selected && areaActive ? <span className="absolute inset-x-0 bottom-0 h-[var(--size-tab-indicator)] bg-foreground" /> : null}
+      {selected && areaActive ? <span className="absolute inset-x-0 bottom-0 h-[var(--size-tab-indicator)] bg-primary" /> : null}
     </div>
     </Hint>
   );

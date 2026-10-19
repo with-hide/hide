@@ -47,6 +47,15 @@ pub(crate) fn spawn_worker(
 }
 
 impl Runtime {
+    pub(crate) fn install_product_analytics(
+        &mut self,
+        sink: Arc<dyn crate::product_analytics::Sink>,
+    ) {
+        sink.set_enabled(self.snapshot.ui_state.product_analytics_enabled);
+        self.ai_usage.set_product_analytics(Arc::clone(&sink));
+        self.product_analytics = Some(sink);
+    }
+
     /// The sink a router is built with, so what it spends is counted.
     pub(crate) fn ai_usage(&self) -> Arc<dyn hide_ai::AiUsageSink> {
         Arc::clone(&self.ai_usage) as Arc<dyn hide_ai::AiUsageSink>

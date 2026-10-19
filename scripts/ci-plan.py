@@ -41,7 +41,9 @@ LANES = (
     "os-contract",
     "os-contract-macos",
     "agy-contract",
+    "omp-contract",
     "agent-journey",
+    "agent-clis",
     "windows-check",
     "windows-e2e",
     "windows-desktop",
@@ -53,8 +55,12 @@ LANES = (
 # What a full plan runs. `package` builds release packages from cold on three
 # runners, so it runs for a change to what goes into one (PACKAGE_PATHS) and
 # nothing else: main's push runs leave it out, the nightly calls
-# `package.yml` itself and a release builds its own.
-FULL_LANES = tuple(lane for lane in LANES if lane != "package")
+# `package.yml` itself and a release builds its own. `agent-clis` installs
+# every pinned agent CLI on three runners, macOS's among them, for a change to
+# the pin table or its installer and nothing else, since no other path
+# reaches what it installs; the nightly's and a release's journey install
+# every CLI too.
+FULL_LANES = tuple(lane for lane in LANES if lane not in ("package", "agent-clis"))
 
 # Crates whose change reaches what differs by operating system: the platform
 # layer, the Herdr client's IPC, the install kit and hooks, and the daemon and
@@ -143,12 +149,11 @@ READERS = (
     ("docs/AI_PROVIDERS.md", {"rust"}, {"hide-agent-adapter"}),
     ("web/src/assets/agents/manifest.json", {"rust"}, {"hide-agent-adapter"}),
     # The contracts a test holds the code to; the code does not read them.
-    # herdr-core's memory_hook test and hide-agent-adapter's contract test
-    # read the WebSocket schema. The web shell's types are generated from it
+    # herdr-core's memory_hook test reads the WebSocket schema. The web shell's types are generated from it
     # by hand (`gen:types`) and committed, so no web lane reads it.
-    ("contracts/hided-ws.schema.json", {"rust"}, {"herdr-core", "hide-agent-adapter"}),
+    ("contracts/hided-ws.schema.json", {"rust"}, {"herdr-core"}),
     # herdr-core's `model::wire_enum_tests`, and web/src/userTurn.test.ts,
-    # prMark.test.ts and factory/labels.test.ts.
+    # prMark.test.ts.
     ("contracts/snapshot-wire-enums.json", {"rust", "checks"}, {"herdr-core"}),
     # hide-agent-adapter's contract test; web/src/agentAdapters.ts imports it
     # into the shell, which plans what a web shell file plans.
@@ -157,6 +162,8 @@ READERS = (
     ("contracts/hide-cli.json", {"rust"}, {"hided"}),
     # hide-agent-hooks' agy_binary test, which the agy contract also runs.
     ("contracts/provider-quota.json", {"rust"}, {"hide-agent-hooks"}),
+    # policy's test_agent_journey_cells shares the hook's prompt identity examples.
+    ("hide-agent-hooks/tests/fixtures/bell-prompt-identity.json", {"policy"}, set()),
     # hide-agent-adapter's contract test.
     ("contracts/usage-coverage.json", {"rust"}, {"hide-agent-adapter"}),
 )
@@ -230,6 +237,9 @@ DESKTOP_E2E_LANES = {"checks", "desktop-e2e", "windows-desktop", "windows-check"
 # The agent journey's keyless lane runs its code on the compiled stand-ins
 # (`agent-journey.yml`); the stand-ins' sources are also the e2e's.
 JOURNEY_LANES = {"agent-journey"}
+# The pinned agent CLIs and their installer: a pin moves in the pull request
+# that installs it on every system (contracts/README.md, Agent CLI pins).
+AGENT_CLI_LANES = {"agent-clis"}
 # Files inside a crate the journey runs as its own tools: Hide's conversation
 # reader, its Project Memory card writer and Codex's app-server stand-in.
 JOURNEY_CRATE_FILES = ("hide-session/examples/journey_conversation.rs", "hide-memory/examples/journey_memory.rs",
@@ -249,6 +259,8 @@ NAMED_LANES = (
     ("web/e2e/shims/live-check.h", WEB_E2E_LANES | JOURNEY_LANES),
     # The journey's controller builds the desktop e2e's spawn provider.
     ("web/e2e/shims/spawn-provider.c", WEB_E2E_LANES | JOURNEY_LANES),
+    # The pin table's reader, which the installer imports too.
+    ("scripts/agent_journey/clis.py", JOURNEY_LANES | AGENT_CLI_LANES),
     ("scripts/agent_journey/*", JOURNEY_LANES),
     ("scripts/agent-journey-check.py", JOURNEY_LANES),
     ("scripts/agent-journey-lane.py", JOURNEY_LANES),
@@ -282,8 +294,12 @@ NAMED_LANES = (
     (".github/workflows/desktop-e2e.yml", {"desktop-e2e", "windows-desktop"}),
     (".github/workflows/os-contract.yml", {"os-contract", "os-contract-macos"}),
     (".github/workflows/agy-contract.yml", {"agy-contract"}),
+    (".github/workflows/omp-contract.yml", {"omp-contract"}),
     (".github/workflows/agent-journey.yml", JOURNEY_LANES),
-    ("scripts/install-agy.sh", {"agy-contract"}),
+    ("scripts/install-agy.sh", {"agy-contract"} | AGENT_CLI_LANES),
+    (".github/workflows/agent-clis.yml", AGENT_CLI_LANES),
+    ("contracts/agent-clis.json", AGENT_CLI_LANES),
+    ("scripts/install-agent-clis.py", AGENT_CLI_LANES),
     (".github/workflows/remote-mailbox.yml", {"remote-mailbox"}),
     (".github/workflows/package.yml", set()),
     (".github/workflows/release.yml", set()),
@@ -382,6 +398,8 @@ def classify(path, status, crates, root):
             lanes.add("os-contract-macos")
         if crate["name"] in AGY_CRATES:
             lanes.add("agy-contract")
+        if crate["name"] in {"hide-ai", "hide-platform"}:
+            lanes.add("omp-contract")
         if path.as_posix() in JOURNEY_CRATE_FILES:
             lanes.update(JOURNEY_LANES)
         return lanes, f"crate {crate['name']}: {path}", packages

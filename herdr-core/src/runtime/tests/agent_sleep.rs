@@ -235,47 +235,43 @@ fn a_native_dormant_journey_refuses_a_changed_route_before_close_wake_or_start()
     }
 }
 
+/// A retained conversation survives retirement, without acquiring a new
+/// wake, pane or provider integration in this build.
 #[test]
-#[cfg(unix)]
-fn cursor_durable_sleep_wakes_exactly_once_and_refuses_a_lost_native_owner() {
-    const CHILD: &str = "HIDE_TEST_CURSOR_SLEEP_CHILD";
-    if std::env::var_os(CHILD).is_none() {
-        // The native fixture owns a default-root account, independent of any
-        // Cursor roots exported by the test runner. Never mutate the shared
-        // process environment after the reader has captured its startup roots.
-        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-        command
-            .args([
-                "--exact",
-                "runtime::tests::agent_sleep::cursor_durable_sleep_wakes_exactly_once_and_refuses_a_lost_native_owner",
-                "--nocapture",
-                "--test-threads=1",
-            ])
-            .env(CHILD, "1")
-            .env_remove("CURSOR_CONFIG_DIR")
-            .env_remove("XDG_CONFIG_HOME");
-        let output = hide_platform::process::run_to_end(
-            &mut command,
-            Duration::from_secs(60),
-            &std::sync::atomic::AtomicBool::new(false),
-        )
-        .unwrap();
-        assert!(
-            output.succeeded(),
-            "private default-root sleep test failed:\n{}\n{}",
-            output.stdout,
-            output.stderr
-        );
-        return;
-    }
-    for phase in [
-        "none",
-        "missing-source-before-close",
-        "missing-source-before-wake",
-        "missing-source-before-start",
-    ] {
-        durable_dormant_journey("cursor", phase);
-    }
+fn a_retired_cursor_sleep_record_is_preserved_but_cannot_wake() {
+    use crate::agent_sleep::DormantPhase;
+    let mut runtime = close_pane_runtime("pi");
+    assert!(runtime.begin_dormant_sleep(SLEEPER, 1));
+    let (id, native_id) = {
+        let (id, record) = runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .dormant
+            .iter_mut()
+            .next()
+            .unwrap();
+        record.kind = "cursor".into();
+        record.label_owner =
+            hide_session::label_reference_token("cursor", "id", &record.native_session_id).unwrap();
+        record.validate().unwrap();
+        record.closed = true;
+        record.phase = DormantPhase::Sleeping;
+        (id.clone(), record.native_session_id.clone())
+    };
+    runtime.close_operations.clear();
+    runtime.refresh_dormant_rows();
+    assert!(!runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
+    assert!(runtime.request_dormant_wake(&id));
+    assert_eq!(
+        runtime.snapshot.status.last_error.as_ref().unwrap().kind,
+        "agent_sleep.wake_unavailable"
+    );
+    let retained = &runtime.snapshot.ui_state.agent_sleep.dormant[&id];
+    assert_eq!(retained.kind, "cursor");
+    assert_eq!(retained.native_session_id, native_id);
+    assert!(retained.wake_pane_id.is_none());
+    assert!(runtime.close_operations.is_empty());
 }
 
 /// OpenCode's proof reads its database row: a session moved to another
@@ -404,18 +400,6 @@ impl NativeRecord {
     }
 }
 
-/// A Factory worker's conversation, saved when its pane closed and bound to
-/// it again once the Factory has taken the wake pane (#857): Hide's own sleep
-/// close is no operator closing a worker, and the way back to the worker
-/// outlives the wake until the Factory lets go of it.
-#[test]
-#[cfg(unix)]
-fn a_factory_workers_sleep_is_no_operator_close_and_keeps_its_way_back_until_bound() {
-    for kind in ["pi", "omp"] {
-        durable_dormant_journey(kind, "factory-bound");
-    }
-}
-
 #[cfg(unix)]
 fn durable_dormant_journey(kind: &'static str, interference: &'static str) {
     durable_dormant_journey_in(kind, interference, false);
@@ -460,9 +444,7 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
             path,
         }
     } else {
-        let native_path = if kind == "cursor" {
-            crate::fixture::cursor_session(home.path(), Path::new(&cwd), native_id)
-        } else {
+        let native_path = {
             let folder = crate::fixture::native_session_folder(
                 home.path(),
                 if kind == "omp" { "omp" } else { "pi" },
@@ -495,13 +477,9 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
     let native = Arc::new(native);
     let native_folder = native.folder.clone();
     let backup_path = native_folder.join(format!("date_{native_id}-alias.jsonl.123.bak"));
-    let backup_bytes = if kind == "cursor" {
-        String::new()
-    } else {
-        String::from_utf8(native.other.clone())
-            .unwrap()
-            .replace(native_id, "different-native-owner")
-    };
+    let backup_bytes = String::from_utf8(native.other.clone())
+        .unwrap()
+        .replace(native_id, "different-native-owner");
     if kind != "claude" {
         runtime.own_node = Arc::new(hide_node::Local::new(Some(home.path().to_path_buf())));
         runtime.live.as_mut().unwrap().node = runtime.own_node();
@@ -563,25 +541,6 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
         // the agent with the choice the record kept.
         assert!(record.owner.is_some());
     }
-    let bound = crate::agent_sleep::FactoryWorker {
-        factory: "f-1".into(),
-        agent: Some("agent-7".into()),
-        name: "factory-fixture-T-1".into(),
-        worktree: cwd.clone(),
-    };
-    let factory_port = (interference == "factory-bound").then(|| {
-        runtime
-            .snapshot
-            .ui_state
-            .agent_sleep
-            .dormant
-            .get_mut(&id)
-            .unwrap()
-            .factory = Some(bound.clone());
-        let (port, watch) = crate::factory::ScreenPort::watched();
-        runtime.set_factory_screen_port(port);
-        watch
-    });
     if interference == "before-close" {
         native.duplicate();
     }
@@ -725,20 +684,6 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
                 "tab_id":"w-order:t3","focused":false,"agent_status":"idle","revision":1
             }})
         }
-        // The one agent whose resume runs no session hook has the core say
-        // which session the woken pane resumed; no other kind is reported for.
-        "pane.report_agent_session" => {
-            assert_eq!(
-                kind, "cursor",
-                "only a kind whose resume reports no session"
-            );
-            assert_eq!(params["pane_id"], "w-order:t3:p");
-            assert_eq!(
-                params["agent_session_id"],
-                "11111111-2222-3333-4444-555555555555"
-            );
-            serde_json::json!({"type":"ok"})
-        }
         other => panic!("unexpected dormant effect: {other}"),
     });
     runtime.live.as_mut().unwrap().api_connector = Arc::new(herdr.connector());
@@ -811,20 +756,6 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
             DormantPhase::Sleeping
         );
         assert_eq!(runtime.snapshot.recent_closed.count, 0);
-        if let Some(port) = &factory_port {
-            assert_eq!(
-                port.closes_announced(),
-                0,
-                "Hide's sleep close is no operator closing a worker"
-            );
-            assert!(
-                runtime.factory_worker_probe(SLEEPER).asleep,
-                "the worker's pane is asleep, not gone"
-            );
-            // The same port does hear an operator's close.
-            runtime.factory_panes_closed(&["w-order:t9:p".to_owned()]);
-            assert_eq!(port.closes_announced(), 1);
-        }
         if interference == "before-wake" {
             native.duplicate();
         }
@@ -889,17 +820,6 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
         observed.recv_timeout(Duration::from_secs(5)).unwrap(),
         "start"
     );
-    if kind == "cursor" {
-        // Herdr publishes the woken pane's session only after the core's
-        // report, which follows the start on the wake's own worker and is
-        // fenced on the saved intent, so the record is confirmed after it.
-        wait_for("the resumed session's report", || {
-            herdr
-                .methods()
-                .iter()
-                .any(|method| method == "pane.report_agent_session")
-        });
-    }
     {
         let mut runtime = shared.lock().unwrap();
         let work = crate::agent_sleep_herdr::DormantWork {
@@ -948,34 +868,6 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
             (!launch.is_default()).then_some((wake_name.as_str(), &launch)),
             "{kind}"
         );
-        if factory_port.is_some() {
-            // The conversation runs in its wake pane; the record stays, with
-            // its worker, until the Factory has bound that pane.
-            assert_eq!(
-                runtime.snapshot.ui_state.agent_sleep.dormant[&id].phase,
-                DormantPhase::Woken
-            );
-            assert_eq!(
-                runtime.factory_dormant_workers(),
-                [crate::runtime::DormantWorker {
-                    id: id.clone(),
-                    worker: bound,
-                    old_pane: SLEEPER.into(),
-                    kind: kind.into(),
-                    state: crate::runtime::DormantState::Woken {
-                        pane: "w-order:t3:p".into(),
-                        // This fixture's worker held no delivery registration.
-                        continued: false,
-                    },
-                }]
-            );
-            assert!(
-                runtime.factory_worker_probe(SLEEPER).asleep,
-                "the Task names the old pane until the Factory binds the new one"
-            );
-            assert!(!runtime.factory_worker_probe("w-order:t3:p").asleep);
-            runtime.factory_dormant_release(&id);
-        }
         assert!(runtime.snapshot.ui_state.agent_sleep.dormant.is_empty());
         assert_eq!(runtime.snapshot.recent_closed.count, 0);
         assert!(persisted_dormant(&path, &id).is_null());
@@ -1006,7 +898,7 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
             .iter()
             .filter(|called| called.as_str() == "pane.report_agent_session")
             .count(),
-        usize::from(kind == "cursor"),
+        0,
         "{calls:?}"
     );
     for method in ["pane.close", "layout.apply", "agent.start"] {
@@ -1030,15 +922,6 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
 #[cfg(unix)]
 fn a_sleeping_session_wakes_in_its_checkout_while_no_list_shows_it() {
     durable_dormant_journey("claude", "unlisted-before-wake");
-}
-
-fn factory_worker(agent: &str) -> crate::agent_sleep::FactoryWorker {
-    crate::agent_sleep::FactoryWorker {
-        factory: "f-1".into(),
-        agent: Some(agent.into()),
-        name: "factory-fixture-T-1".into(),
-        worktree: CHECKOUT.into(),
-    }
 }
 
 /// A live runtime whose agent in t2 is a `kind` session with a proven native
@@ -1068,50 +951,6 @@ fn close_pane_runtime(kind: &str) -> Runtime {
     runtime
 }
 
-/// A Factory asks a worker that closes its pane to sleep: the same intent a
-/// person's Sleep saves, and it keeps whose conversation it is (#857).
-#[test]
-fn factory_sleep_saves_a_close_pane_agents_intent_bound_to_its_worker() {
-    use crate::agent_sleep::DormantPhase;
-    for kind in ["pi", "omp"] {
-        for published in [true, false] {
-            let mut runtime = close_pane_runtime(kind);
-            let worker = factory_worker("agent-7");
-            if published {
-                runtime.set_factory_panes(std::collections::HashMap::from([(
-                    SLEEPER.to_owned(),
-                    crate::runtime::FactoryPane {
-                        kind: kind.into(),
-                        started_at: 1,
-                        worker: worker.clone(),
-                    },
-                )]));
-            }
-            assert_eq!(runtime.factory_sleep(SLEEPER), Ok(true), "{kind}");
-            let store = &runtime.snapshot.ui_state.agent_sleep;
-            assert!(store.records.is_empty(), "no keep-pane record, {kind}");
-            let record = store.dormant.values().next().expect("the saved intent");
-            assert!(
-                matches!(
-                    record.phase,
-                    DormantPhase::SavingClose | DormantPhase::Closing
-                ),
-                "{kind}: {:?}",
-                record.phase
-            );
-            assert_eq!(
-                (record.old_pane_id.as_str(), record.kind.as_str()),
-                (SLEEPER, kind)
-            );
-            assert_eq!(record.factory, published.then_some(worker), "{kind}");
-            // Asked again while the save is in flight: the same intent.
-            assert_eq!(runtime.factory_sleep(SLEEPER), Ok(true));
-            assert_eq!(runtime.snapshot.ui_state.agent_sleep.dormant.len(), 1);
-            assert!(runtime.factory_worker_probe(SLEEPER).asleep);
-        }
-    }
-}
-
 /// A sleep that closes the pane keeps the choice Hide started the agent with
 /// in its saved intent, which its wake starts the agent with again.
 #[test]
@@ -1134,7 +973,10 @@ fn a_dormant_sleep_keeps_the_choice_the_agent_was_started_with() {
         if let Some(recorded) = recorded {
             runtime.record_pane_launch(SLEEPER, "pi", "reviewer", recorded, None);
         }
-        assert_eq!(runtime.factory_sleep(SLEEPER), Ok(true));
+        runtime.dispatch_json(&event(
+            "agent_sleep",
+            serde_json::json!({"pane_id": SLEEPER}),
+        ));
         let record = runtime
             .snapshot
             .ui_state
@@ -1385,142 +1227,6 @@ fn a_sleeping_session_offers_wake_only_over_a_connection() {
 
     runtime.set_live(live);
     assert!(runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
-}
-
-/// A close-pane agent the Factory does not sleep is refused before anything
-/// is saved or closed: its pane stays and its Task keeps working.
-#[test]
-fn factory_sleep_refuses_a_close_pane_agent_outside_pi_and_omp() {
-    let mut runtime = close_pane_runtime("grok");
-    assert_eq!(runtime.factory_sleep(SLEEPER), Err("agent_cannot_sleep"));
-    let store = &runtime.snapshot.ui_state.agent_sleep;
-    assert!(store.records.is_empty() && store.dormant.is_empty());
-}
-
-/// Sessions are not saved past the in-flight budget: the Factory asks again
-/// later, and no error reaches the screen for it.
-#[test]
-fn factory_sleep_waits_for_the_transition_budget_instead_of_failing() {
-    let mut runtime = close_pane_runtime("pi");
-    assert_eq!(runtime.factory_sleep(SLEEPER), Ok(true));
-    let template = {
-        let store = &mut runtime.snapshot.ui_state.agent_sleep;
-        let id = store.dormant.keys().next().unwrap().clone();
-        store.dormant.remove(&id).unwrap()
-    };
-    let mut index = 0;
-    while runtime
-        .snapshot
-        .ui_state
-        .agent_sleep
-        .admit_dormant_transition()
-        .is_ok()
-    {
-        let mut busy = template.clone();
-        busy.old_pane_id = format!("busy-{index}");
-        runtime
-            .snapshot
-            .ui_state
-            .agent_sleep
-            .admit_dormant(busy)
-            .unwrap();
-        index += 1;
-    }
-    assert!(index > 0);
-    assert_eq!(runtime.factory_sleep(SLEEPER), Ok(false));
-    assert!(runtime.snapshot.status.last_error.is_none());
-}
-
-/// A Factory wakes a worker whose pane closed: the saved conversation is
-/// bound to the worker as the wake begins, once its sleep has landed.
-#[test]
-fn factory_wake_binds_the_saved_conversation_to_its_worker_as_the_wake_begins() {
-    use crate::agent_sleep::DormantPhase;
-    use crate::runtime::FactoryWake;
-    let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
-    runtime.ingest_session(Ok(session(Some(4))));
-    let id = dormant_intent(&mut runtime);
-    let worker = hide_factory::model::WorkerRef {
-        factory: "f-1".into(),
-        agent: Some("agent-7".into()),
-        name: "factory-fixture-T-1".into(),
-        node: None,
-        pane: Some(SLEEPER.into()),
-        runtime: hide_factory::model::Runtime::CLAUDE,
-        worktree: CHECKOUT.into(),
-        branch: "factory/T-1".into(),
-        started_at: 1,
-        asleep: true,
-        model: None,
-        effort: None,
-    };
-    // The close has not landed: ask again later, change nothing.
-    let before = runtime.snapshot.ui_state.agent_sleep.clone();
-    assert_eq!(runtime.factory_wake(&worker), FactoryWake::Later);
-    assert_eq!(runtime.snapshot.ui_state.agent_sleep, before);
-
-    // Slept and closed; the agent is gone from Herdr.
-    {
-        let record = runtime
-            .snapshot
-            .ui_state
-            .agent_sleep
-            .dormant
-            .get_mut(&id)
-            .unwrap();
-        record.phase = DormantPhase::Sleeping;
-        record.closed = true;
-        record.close_key = Some("close-1".into());
-    }
-    runtime.ingest_session(Ok(tab_order_payload(
-        CHECKOUT,
-        &["w-order:t1"],
-        &["w-order:t1"],
-        "w-order:t1",
-    )));
-    // Another worker's pane id, a worker started after the sleep, and a
-    // different kind of agent are not this conversation's.
-    for other in [
-        hide_factory::model::WorkerRef {
-            pane: Some("w-order:t9:p".into()),
-            ..worker.clone()
-        },
-        hide_factory::model::WorkerRef {
-            started_at: 5,
-            ..worker.clone()
-        },
-        hide_factory::model::WorkerRef {
-            runtime: hide_factory::model::Runtime::parse("pi").unwrap(),
-            ..worker.clone()
-        },
-    ] {
-        assert_eq!(
-            runtime.factory_wake(&other),
-            FactoryWake::Awake,
-            "{other:?}"
-        );
-    }
-    assert_eq!(
-        runtime.snapshot.ui_state.agent_sleep.dormant[&id].phase,
-        DormantPhase::Sleeping
-    );
-
-    assert_eq!(runtime.factory_wake(&worker), FactoryWake::Asked);
-    let record = &runtime.snapshot.ui_state.agent_sleep.dormant[&id];
-    assert!(record.phase.in_flight(), "{:?}", record.phase);
-    assert_eq!(record.factory, Some(factory_worker("agent-7")));
-    // Asked again while it runs, and by a worker the record is bound to
-    // another than.
-    assert_eq!(runtime.factory_wake(&worker), FactoryWake::Asked);
-    let other = hide_factory::model::WorkerRef {
-        agent: Some("agent-8".into()),
-        ..worker
-    };
-    assert_eq!(runtime.factory_wake(&other), FactoryWake::Awake);
-    assert_eq!(
-        runtime.snapshot.ui_state.agent_sleep.dormant[&id].factory,
-        Some(factory_worker("agent-7"))
-    );
 }
 
 /// An uncertain close is inspected through the real worker, never repaired.
@@ -2197,6 +1903,41 @@ fn a_failed_wake_says_why_and_can_be_retried_fresh() {
     assert_eq!(row(&runtime)["sleep"]["state"], "waking");
 }
 
+/// Herdr answers a wake's start once it has typed the start line; a line the
+/// pane's shell never ran (a Windows prompt reading a leftover bracketed
+/// paste as keys) brings no agent, and the wake fails with a reason once the
+/// start's deadline has passed rather than reading waking for good.
+#[test]
+fn a_wake_whose_agent_never_appears_fails_at_the_starts_deadline() {
+    let (mut runtime, _) = asleep();
+    runtime.ingest_session(Ok(session(None)));
+    assert!(runtime.dispatch_json(&event(
+        "agent_wake",
+        serde_json::json!({"pane_id": SLEEPER})
+    )));
+    let started = unix_milliseconds();
+    runtime.ingest_agent_wake(
+        SLEEPER,
+        crate::agent_sleep::WakeMode::Resume,
+        crate::agent_sleep_herdr::WakeOutcome::Started,
+    );
+    runtime.tick_agent_sleep(started + 30_000);
+    assert_eq!(
+        row(&runtime)["sleep"]["state"],
+        "waking",
+        "inside the deadline"
+    );
+
+    assert!(runtime.tick_agent_sleep(started + 130_000));
+    let failed = row(&runtime);
+    assert_eq!(failed["sleep"]["state"], "failed");
+    assert_eq!(
+        failed["sleep"]["reason"],
+        "The agent did not become ready in time."
+    );
+    assert_eq!(failed["status_code"], "sleep_failed");
+}
+
 /// B16, B17, B18: a new agent in the pane is awake whatever started it,
 /// and a closed pane takes its record with it.
 #[test]
@@ -2627,56 +2368,6 @@ fn a_sleeping_childs_registration_letters_and_watch_pass_to_the_pane_that_wakes_
             .pane_id,
         WOKEN
     );
-}
-
-/// A Factory's worker that sleeps by closing its pane keeps its record until
-/// the Factory binds the pane it woke in; the registration the delivery store
-/// moved there is the worker's own, so the Factory keeps its agent id (#857).
-#[test]
-fn a_factory_workers_moved_registration_is_reported_with_its_woken_pane() {
-    let sleeping = SleepingChild::new();
-    {
-        let mut runtime = sleeping.shared.lock().unwrap();
-        let record = runtime
-            .snapshot
-            .ui_state
-            .agent_sleep
-            .dormant
-            .get_mut(&sleeping.id)
-            .unwrap();
-        record.factory = Some(factory_worker("agent-2"));
-    }
-    sleeping.pane_closed();
-    sleeping.woken(CHILD_NATIVE);
-    sleeping.pass();
-    wait(
-        &sleeping.shared,
-        "the registration to reach the woken pane",
-        |runtime| {
-            runtime
-                .factory_dormant_workers()
-                .iter()
-                .any(|worker| matches!(worker.state, crate::runtime::DormantState::Woken { .. }))
-        },
-    );
-    let mut runtime = sleeping.shared.lock().unwrap();
-    let workers = runtime.factory_dormant_workers();
-    assert_eq!(workers.len(), 1);
-    assert_eq!(
-        workers[0].state,
-        crate::runtime::DormantState::Woken {
-            pane: WOKEN.into(),
-            continued: true,
-        }
-    );
-    assert_eq!(workers[0].worker.agent.as_deref(), Some("agent-2"));
-    // The record stays for the Factory until it has bound the pane.
-    assert_eq!(
-        runtime.snapshot.ui_state.agent_sleep.dormant[&sleeping.id].phase,
-        crate::agent_sleep::DormantPhase::Woken
-    );
-    runtime.factory_dormant_release(&sleeping.id);
-    assert!(runtime.snapshot.ui_state.agent_sleep.dormant.is_empty());
 }
 
 /// A pane that is not the same conversation never inherits the registration:

@@ -1,4 +1,4 @@
-import { CircleDotIcon, FactoryIcon, FolderIcon, GlobeIcon, GitBranchIcon, LoaderCircleIcon, SearchIcon, ServerIcon, TriangleAlertIcon, ChevronRightIcon } from "lucide-react";
+import { CircleDotIcon, FolderIcon, GlobeIcon, GitBranchIcon, LoaderCircleIcon, SearchIcon, ServerIcon, TriangleAlertIcon, ChevronRightIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import type { Actions } from "./actions";
@@ -10,8 +10,7 @@ import { DeviceChip } from "./components/device-chip";
 import { Command, CommandDialog, CommandGroup, CommandInput, CommandItem, CommandList } from "./components/ui/command";
 import { Kbd } from "./components/ui/kbd";
 import { frontTarget, relationRows, relationsOf, type Relations } from "./relations";
-import { FACTORY_OPEN } from "./factory/launch";
-import { factoryEntry, filterEntries, githubEntries, groupEntries, openUrlEntry, recentEntries, GITHUB_GROUP, RECENT_GROUP, RELATED_GROUP, SESSIONS_GROUP, sessionEntries, searchEntries, type SearchEntry, type SearchSection, type Tone } from "./search";
+import { filterEntries, githubEntries, groupEntries, openUrlEntry, recentEntries, GITHUB_GROUP, RECENT_GROUP, RELATED_GROUP, SESSIONS_GROUP, sessionEntries, searchEntries, type SearchEntry, type SearchSection, type Tone } from "./search";
 import { summariesEnabled } from "./hideAi";
 import { workKey, recordTitle } from "./sessionWork";
 import { Button } from "./components/ui/button";
@@ -104,7 +103,7 @@ export function SearchPalette({ actions }: { actions: Actions }) {
     return () => observer.disconnect();
   }, [box]);
 
-  const entries = useMemo(() => (rest ? [...searchEntries(rest, t), ...(FACTORY_OPEN ? [factoryEntry(t)] : [])] : []), [rest, t]);
+  const entries = useMemo(() => (rest ? searchEntries(rest, t) : []), [rest, t]);
   const related = useMemo<Relations | null>(() => (front.target ? relationsOf(rest, front.target, t, true) : null), [rest, front, t]);
   const trimmed = query.trim();
   useEffect(() => { actions.searchSessionWork(trimmed); }, [actions, trimmed, summaries]);
@@ -154,7 +153,6 @@ export function SearchPalette({ actions }: { actions: Actions }) {
       case "session":
         return entry.session ? actions.openSessionRecord(entry.session) : undefined;
       case "command":
-        if (entry.command === "factory_open") return actions.openFactory();
         return entry.command === "open_url" && entry.url ? actions.openBrowser(entry.url) : actions.openStartPanel();
       case "device":
         return entry.deviceId ? actions.focusDevice(entry.deviceId) : undefined;
@@ -286,7 +284,7 @@ function EntryIcon({ entry }: { entry: SearchEntry }) {
     );
   }
   const Icon =
-    entry.command === "open_url" ? GlobeIcon : entry.command === "factory_open" ? FactoryIcon : entry.kind === "project" ? FolderIcon : entry.kind === "checkout" ? GitBranchIcon : entry.kind === "device" ? ServerIcon : entry.kind === "issue" ? CircleDotIcon : ChevronRightIcon;
+    entry.command === "open_url" ? GlobeIcon : entry.kind === "project" ? FolderIcon : entry.kind === "checkout" ? GitBranchIcon : entry.kind === "device" ? ServerIcon : entry.kind === "issue" ? CircleDotIcon : ChevronRightIcon;
   const tone = entry.kind === "issue" ? TONE_CLASS[entry.status?.tone ?? "muted"] : "";
   return (
     <span className={`flex w-(--size-agent-badge-compact) shrink-0 justify-center ${tone}`} aria-hidden="true">

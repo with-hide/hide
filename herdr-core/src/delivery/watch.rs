@@ -69,12 +69,10 @@ impl Watch {
     }
 }
 
-/// How long a watch waits before its first warning: a Factory observer
-/// stops a quiet worker after 30 minutes unless the reading carries the
-/// Factory's own window, every other observer after 20.
+/// Code-owned observers keep their existing thirty-minute window.
 pub fn inactivity_window(watch: &Watch) -> u64 {
     if watch.parent.code_owned() {
-        super::FACTORY_INACTIVITY_MS
+        30 * 60_000
     } else {
         INACTIVITY_MS
     }
@@ -184,8 +182,7 @@ pub struct Reading {
     pub session_modified_at_unix_ms: Option<u64>,
     pub failure: Option<String>,
     pub gone: bool,
-    /// A window that replaces [`inactivity_window`] for this watch: a
-    /// Factory's stall setting (D-30).
+    /// A caller-selected window that replaces [`inactivity_window`].
     pub inactivity_ms: Option<u64>,
     /// The target's own row says it stopped on a question, neither working
     /// nor held by a Herdr-blocked prompt.
@@ -446,8 +443,8 @@ enum Early {
     Question,
 }
 
-/// A Factory is never told early, because its engine stops the worker on the
-/// first warning. A question the target sent the observer by letter, still
+/// Code-owned observers use their full window. A question the target sent
+/// the observer by letter, still
 /// awaiting its answer, already rang the observer's doorbell; a blocked prompt
 /// rang nothing, so it is told whatever letters wait.
 fn early_warning(ledger: &Ledger, watch: &Watch, reading: &Reading) -> Option<Early> {
@@ -628,39 +625,6 @@ mod tests {
         assert_eq!(ledger, before);
     }
 
-    #[test]
-    fn a_factory_observer_warns_after_thirty_quiet_minutes_not_twenty() {
-        let mut ledger = Ledger::default();
-        let factory = Actor::factory("f-1", crate::node::TEST_NODE);
-        let watch = start(&mut ledger, &factory, &actor("worker"), 10).unwrap();
-        tick(&mut ledger, &[reading(&watch.id, 10)], 10 + INACTIVITY_MS).unwrap();
-        assert!(ledger.letters.is_empty());
-        tick(&mut ledger, &[reading(&watch.id, 10)], 10 + 30 * 60_000 - 1).unwrap();
-        assert!(ledger.letters.is_empty());
-        tick(&mut ledger, &[reading(&watch.id, 10)], 10 + 30 * 60_000).unwrap();
-        assert_eq!(ledger.letters.len(), 1);
-    }
-
-    #[test]
-    fn a_factory_s_stall_setting_replaces_the_thirty_minute_window() {
-        let mut ledger = Ledger::default();
-        let watch = start(
-            &mut ledger,
-            &Actor::factory("f-1", crate::node::TEST_NODE),
-            &actor("worker"),
-            10,
-        )
-        .unwrap();
-        let within = |id: &str| Reading {
-            inactivity_ms: Some(45 * 60_000),
-            ..reading(id, 10)
-        };
-        tick(&mut ledger, &[within(&watch.id)], 10 + 45 * 60_000 - 1).unwrap();
-        assert!(ledger.letters.is_empty());
-        tick(&mut ledger, &[within(&watch.id)], 10 + 45 * 60_000).unwrap();
-        assert_eq!(ledger.letters.len(), 1);
-    }
-
     fn summaries(ledger: &Ledger) -> Vec<&str> {
         ledger
             .letters
@@ -703,7 +667,7 @@ mod tests {
     /// docs/delivery.md, Watch activity and completion: a child Herdr holds
     /// at a blocked prompt is told to its parent one tick later, whatever
     /// letters wait, because the prompt rang no doorbell and its runtime may
-    /// time it out; the Factory keeps its own window.
+    /// time it out.
     #[test]
     fn a_target_held_at_a_blocked_prompt_warns_its_parent_after_one_tick() {
         let mut ledger = Ledger::default();
@@ -743,16 +707,22 @@ mod tests {
         );
         tick(&mut ledger, &[blocked], 10 + INACTIVITY_MS).unwrap();
         assert_eq!(summaries(&ledger).len(), 1, "one early warning per episode");
-
         let mut ledger = Ledger::default();
-        let factory = Actor::factory("f-1", crate::node::TEST_NODE);
-        let watch = start(&mut ledger, &factory, &actor("worker"), 10).unwrap();
+        let observer = Actor::hide(crate::delivery::HIDE_MEMORY_ROLE, crate::node::TEST_NODE);
+        let watch = start(&mut ledger, &observer, &actor("worker"), 10).unwrap();
         let blocked = Reading {
             blocked: true,
             ..reading(&watch.id, 10)
         };
-        tick(&mut ledger, &[blocked], 10 + INACTIVITY_MS).unwrap();
+        tick(
+            &mut ledger,
+            std::slice::from_ref(&blocked),
+            10 + INACTIVITY_MS,
+        )
+        .unwrap();
         assert!(ledger.letters.is_empty());
+        tick(&mut ledger, &[blocked], 10 + 30 * 60_000).unwrap();
+        assert_eq!(summaries(&ledger).len(), 1);
     }
 
     #[test]
@@ -779,11 +749,9 @@ mod tests {
         );
     }
 
-    /// A question the child already sent its parent by letter rang the
-    /// parent's doorbell, and a Factory stops a worker on its first warning,
-    /// so neither is told early.
+    /// A question sent by letter already rang the parent's doorbell.
     #[test]
-    fn a_question_sent_by_letter_or_watched_by_a_factory_waits_its_full_window() {
+    fn a_question_sent_by_letter_waits_its_full_window() {
         let mut ledger = Ledger::default();
         let (parent, child) = (actor("parent"), actor("child"));
         let watch = start(&mut ledger, &parent, &child, 10).unwrap();
@@ -823,16 +791,6 @@ mod tests {
             1,
             "a cancelled letter asks nothing"
         );
-
-        let mut ledger = Ledger::default();
-        let factory = Actor::factory("f-1", crate::node::TEST_NODE);
-        let watch = start(&mut ledger, &factory, &actor("worker"), 10).unwrap();
-        let asking = Reading {
-            asking: true,
-            ..reading(&watch.id, 10)
-        };
-        tick(&mut ledger, &[asking], 10 + INACTIVITY_MS).unwrap();
-        assert!(ledger.letters.is_empty());
     }
 
     #[test]
@@ -1003,6 +961,7 @@ mod tests {
             watch_warning: None,
             answer_wait_ended: None,
             bell_line: None,
+            bell_turn: None,
             intake_from: None,
             immediate: false,
             tool_handovers: 0,

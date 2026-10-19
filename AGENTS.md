@@ -18,7 +18,6 @@ Before writing or changing a test, read `docs/TESTING.md` for which layer to tes
 - `hide-agent-hooks/` - the only code that writes a configuration file the operator owns (each agent runtime's hook file). A separate crate because a `settings.json` write must never sit behind the render lock; see `docs/agent-hooks.md`.
 - `hide-platform/` - the operating-system layer under every other crate: what differs between macOS, Linux and Windows is written here once and checked by contract tests that run on all three; today the local stream (`ipc`) the Herdr client uses, the processes (`process`: the one child-start helper and what the kernel says about a pid), the files (`fs`: private files and folders, locks, atomic replacement, links, file identity), and how a path is spelled between machines (`path`: `/` between names on every system, converted to a native path only on the machine that owns it). It has no hide dependencies and keeps no state of a caller's; the one thing it remembers is the login shell's `PATH` (`programs`), a fact about the account keyed by the shell and home it was read for, so the kit, Hide AI and a device helper share one answer instead of each starting the operator's shell; see `docs/ARCHITECTURE.md`, The platform layer.
 - `hide-ai/` - the provider boundary for background AI features, backed by the user's own logged-in CLIs; see `docs/AI_PROVIDERS.md`.
-- `skills/` - agent skills that come with the repository; each one runs a procedure a guide owns and points back to it (`merge-order`: `CONTRIBUTING.md`; `release`: `CONTRIBUTING.md`, Releases, with the agent journey of `docs/VERIFICATION.md`).
 - `workspace-hack/` - no code: kept by `cargo hakari`, it turns on the union of every member's features for each third-party crate, so every cargo command builds a dependency once; see `docs/BUILD.md`, One feature set per dependency.
 - `hide-session/` - shared local Claude, Codex and OpenCode session location, incremental and backwards page reading, and conversation parsing used by the core's label worker, the core usage fallback and the phone's conversation; `tests/it/adapters.rs` is each agent reader's contract.
 Agent registration, spawning and lineage are owned by the core, in `herdr-core/src/coordination/`; see `docs/delivery.md` and `docs/status-model.md`.
@@ -38,7 +37,7 @@ Leave out the technical detail and the comparison of alternatives unless the ope
 ## Working Beside Open Pull Requests
 
 Other agents' pull requests are open while you work, and a green pull request that a merge then breaks waits through `verify` again; `CONTRIBUTING.md`, Starting work beside open pull requests, owns the rule and the measurements.
-Do these three things, at these three moments, on every task; `python3 scripts/merge-order.py` reads git and GitHub as they are now and answers each with one `Do:` line, and the `merge-order` skill (`skills/merge-order/SKILL.md`) says how to act on it.
+Do these three things, at these three moments, on every task; `python3 scripts/merge-order.py` reads git and GitHub as they are now and answers each with one `Do:` line.
 
 1. Before the first line of code: start on an open pull request's branch, and open yours with `--base <that branch>`, only when the work needs what that pull request adds (an API, state, schema or contract); work that only might touch the same files starts from main, like work that does not.
 2. After the first push: run `python3 scripts/merge-order.py <number>` (or `--branch <name>` before the pull request exists) and act on its `Do:` line and nothing else; `Stay as you are` is the usual answer, and a stack is only ever joined by merging the layer below, never by rebasing and never by merging main into an upper layer.
@@ -102,7 +101,7 @@ Read `docs/ARCHITECTURE.md` in full before changing anything under `herdr-core/`
 - Herdr owns pane existence, split geometry, zoom, cwd, agent lifecycle and the PTY; the core owns each checkout's visible tab, the keyboard focus pane, panel visibility and text scale, and changes those on the event that asked for it, telling Herdr afterwards.
   While that notification is pending, Herdr's move is read as confirmation; with nothing pending, a move Herdr makes on its own is followed and a diagnostic records it; a refusal or a timeout keeps the core's value and records a diagnostic.
   A zoom, split, resize, pane close or new tab Hide asked for is drawn before Herdr's layout confirms it, and Herdr's layout replaces the drawing; each terminal's grid follows the rectangle drawn for it at once, because the PTY size is the controller client's and never Herdr's layout's (`docs/ARCHITECTURE.md`, Drawn ahead of Herdr).
-  Each tab runs one geometry operation at a time with at most eight waiting, and a refusal drops the line behind it; keys typed before a new pane exists are held by the node that holds the pane up to 64 KiB per holder and 3 s per key, never dropped silently.
+  Each tab runs one geometry operation at a time with at most eight waiting, and a refusal drops the line behind it; keys typed before a new pane exists are held by the node that holds the pane up to 64 KiB per holder and 3 s per key; fork input waits until the fork ends for up to 30 s and reported cap failures.
 - The notifier announces once per burst, and `herdr_core_snapshot` clears its latch **before** it takes the lock; clearing it after the read would swallow a change that landed during the read.
   Launch creates the core once, after the runtime resolution has finished, and never replaces it.
 - A user action is one event, not a sequence: dispatch is fire-and-forget, so four events would arrive as four frames and a refusal partway would leave the screen half moved.
@@ -178,12 +177,10 @@ Conventions:
 
 Read [docs/UI_BEHAVIOR.md](docs/UI_BEHAVIOR.md) before changing any surface a user looks at; it owns what the UI does.
 Read [docs/DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md) before making a design change; it owns how a change moves from scratch to a shipped PR, including the token/System-part/Component procedures and the screen transplant procedure.
-Visual authority is the Pen library (`design/hide-ui.lib.pen`), numeric authority is `design/tokens.json`, and code authority is `web/src/components/ui` and `web/src/components`.
-`scripts/gen-tokens.mjs` writes `design/tokens.json` to `web/src/tokens.css`; nothing else consumes the tokens.
+Numeric authority is `design/tokens.json`, and code authority is `web/src/components/ui` and `web/src/components`.
+`scripts/gen-tokens.mjs` writes `web/src/tokens.css` and `web/src/generated/accents.ts` from the tokens.
 Run `node scripts/check-design-contract.mjs` before delivery; it is the entrypoint `design-contract.yml` runs.
 
-### The Design Library
-
-`design/hide-ui.lib.pen` is the committed design-system library: tokens, `System /` shadcn-part sheets, and `Component /` hide-composite sheets with their state sheets.
-Only `System /` and `Component /` top-level sheets belong there; product screens live in `design/hide-screens.pen` instead, and proposals, audits, and scratch never enter either committed file.
-Read [DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md) in full before editing it: it owns the scratch-to-PR flow, human review, local scratch, Pen toolchain limits, the screen transplant procedure, and how to add a token, a System part, or a Component.
+Original design boards, proposal tools and maintainer skills are maintained separately.
+The public checkout must build and pass its gates without access to them.
+Use the production gallery and isolated app captures for public visual review, following [DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md).

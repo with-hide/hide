@@ -1,3 +1,4 @@
+import { useKeyboardOwner } from "./viewFocus";
 import type { TFunction } from "i18next";
 import { markWords } from "./agentRow";
 import { CircleAlertIcon, EllipsisIcon, Maximize2Icon, MoonIcon, TerminalSquareIcon, XIcon } from "lucide-react";
@@ -183,6 +184,8 @@ export const PaneView = memo(function PaneView({
   const refusal = useShellStore((s) => s.attachmentRefusal);
   const setRefusal = useShellStore((s) => s.setAttachmentRefusal);
   const paneId = pane.id;
+  const owner = useKeyboardOwner();
+  const input = owner.kind === "pane" && owner.paneId === paneId;
   const dispatch = actions.dispatch;
   const title = paneTitle(pane);
   const paneMenu = usePaneMenu(pane, title, actions);
@@ -300,7 +303,7 @@ export const PaneView = memo(function PaneView({
     >
       <header
         className={`relative flex h-[var(--size-pane-header)] shrink-0 items-center gap-sm px-sm text-caption ${
-          focused ? "bg-secondary text-foreground" : "bg-card text-muted-foreground"
+          input ? "bg-primary/[var(--opacity-selected-fill)] text-foreground" : "bg-card text-muted-foreground"
         }`}
         onContextMenu={(event) => {
           event.preventDefault();
@@ -431,14 +434,8 @@ export const PaneView = memo(function PaneView({
           </button>
         ) : null}
       </div>
-      {/* Which terminal takes the keys, among several (docs/UI_BEHAVIOR.md):
-          drawn while its pane holds the keyboard or its menu is open. */}
-      {focused && paneCount > 1 && !zoomed ? (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 z-10 hidden border border-subtle-foreground group-focus-within/pane:block group-data-[menu-open=true]/pane:block"
-          data-pane-focus-outline="true"
-        />
+      {input ? (
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-10 border-2 border-primary" data-pane-focus-outline="true" />
       ) : null}
     </section>
   );

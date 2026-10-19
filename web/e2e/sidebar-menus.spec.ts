@@ -2,9 +2,9 @@
 // pinned Herdr and hided: a Git project Herdr shows without a registration,
 // with an agent in its main checkout and one in a linked worktree. The
 // project row's menu lists the board's items and Pin registers the row and
-// pins it; New tab in main opens a tab in the default checkout and brings it
-// to the front; Set as default checkout moves the home glyph and the first
-// place to the worktree; the agent row's Copy session id puts Herdr's
+// pins it; New tab in main opens a draft in the default checkout and brings
+// it to the front, where an explicit start creates its terminal; Set as default
+// checkout moves the home glyph and the first place to the worktree; the agent row's Copy session id puts Herdr's
 // session id on the clipboard, and its Close tab… closes that agent's tab.
 // Each contract is its own spec on its own fixture. Light and Dark captures of
 // the menus land in HIDE_E2E_SCREENSHOT_DIR.
@@ -14,6 +14,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { claudeProjects, labelAgent, setFixtureSession, writeFixtureTranscript, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startDraftTerminal } from "./group-start-helper";
+import { herdrTabs } from "./failure-dump";
 import { startHided } from "./hided-fixture";
 import { rest, screenshot } from "./wire";
 import { chord, commandLabel } from "./chords";
@@ -49,7 +51,7 @@ async function workspaceAt(herdr: HerdrFixture, cwd: string, task: string): Prom
 /** The open menu as it is drawn: a line per item (its label and chord), "─" per separator, "(disabled)" after a disabled item. */
 async function menuLines(menu: Locator): Promise<string[]> {
   return menu.evaluate((element) =>
-    Array.from(element.children).map((child) => {
+    Array.from(element.children).filter((child) => !child.hasAttribute("data-menu-title")).map((child) => {
       if (child.getAttribute("role") === "separator") return "─";
       const label = child.querySelector("[data-menu-label]")?.textContent ?? "";
       const chord = child.querySelector("[data-menu-shortcut]")?.textContent;
@@ -248,7 +250,7 @@ test("a checkout row's menu offers worktree actions, and the default checkout ca
     };
     await expect
       .poll(checkoutLines, { timeout: 30_000 })
-      .toEqual(["Open", `New tab here ${commandLabel("new_tab")}`, "─", "Set purpose…", "Set as default checkout", "Copy branch name", "Copy path", "─", "Delete worktree…"]);
+      .toEqual(["Open", `New tab here ${commandLabel("new_tab")}`, "New group…", "─", "Set purpose…", "Set as default checkout", "Copy branch name", "Copy path", "─", "Delete worktree…"]);
     await openMenu(page, feature.locator("[data-checkout-menu]"), `${BRANCH} actions`);
     await screenshot(page, "sidebar-menus-checkout-dark");
     await page.keyboard.press("Escape");
@@ -259,13 +261,23 @@ test("a checkout row's menu offers worktree actions, and the default checkout ca
   } finally { stop(); }
 });
 
-test("New tab in main opens a tab in the default checkout and brings it to the front", async ({ page }) => {
-  const { projectRow, main, stop } = await startMenus(page);
+test("New tab in main opens a draft in the default checkout and its terminal starts there", async ({ page }) => {
+  const { herdr, projectRow, main, stop } = await startMenus(page);
   try {
+    const nativeTabs = () => (herdrTabs(herdr) as { tabs: string[] }[]).flatMap((workspace) => workspace.tabs).sort();
+    const before = nativeTabs();
+    // Drafts share the Agent tab kind; native IDs distinguish the live tabs.
+    const liveTabs = page.locator('[data-tab-bar] [data-tab-kind="herdr"]:not([data-tab^="draft:"])');
     const menu = await openMenu(page, projectRow, "repo actions");
     await menu.locator('[data-menu-item="new_tab_primary"]').click();
     await expect(page.locator("[data-workspace-screen]")).toBeVisible({ timeout: 20_000 });
-    await expect(page.locator(`[data-tab-bar] [data-tab-kind="herdr"]`)).toHaveCount(2, { timeout: 20_000 });
+    await expect(page.locator("[data-agent-tab-start]")).toHaveAttribute("data-agent-tab-start", /^draft:/);
+    await expect(liveTabs).toHaveCount(1);
+    expect(nativeTabs()).toEqual(before);
+    await expect(main.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
+    const started = await startDraftTerminal(page);
+    await expect(liveTabs).toHaveCount(2, { timeout: 20_000 });
+    await expect.poll(nativeTabs).toEqual([...before, started].sort());
     await expect(main.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
   } finally { stop(); }
 });
@@ -289,16 +301,19 @@ test("the agent row's menu copies Herdr's session id, the row's title and the pa
     // B7, B8
     await expect(agentRow).toBeVisible();
     let menu = await openMenu(page, agentRow, "사이드바 메뉴 구현 actions");
-    expect(await menuLines(menu)).toEqual(["Show", "─", "Copy title", "Copy session id", "Copy pane ID", "─", "Close tab…"]);
+    expect(await menuLines(menu)).toEqual(["Show", "─", "Copy details", "─", "Close tab…"]);
     await screenshot(page, "sidebar-menus-agent-dark");
-    await menu.locator('[data-menu-item="copy_session_id"]').click();
+    await menu.locator('[data-menu-group="copy"]').hover();
+    await page.locator('[data-menu-item="copy_session_id"]').click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(SESSION);
     menu = await openMenu(page, agentRow, "사이드바 메뉴 구현 actions");
-    await menu.locator('[data-menu-item="copy_title"]').click();
+    await menu.locator('[data-menu-group="copy"]').hover();
+    await page.locator('[data-menu-item="copy_title"]').click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("사이드바 메뉴 구현");
     // The id `herdr pane list` names this pane by, the one ⌘K finds it by.
     menu = await openMenu(page, agentRow, "사이드바 메뉴 구현 actions");
-    await menu.locator('[data-menu-item="copy_pane_id"]').click();
+    await menu.locator('[data-menu-group="copy"]').hover();
+    await page.locator('[data-menu-item="copy_pane_id"]').click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(worktreePane);
   } finally { stop(); }
 });

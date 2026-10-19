@@ -12,8 +12,6 @@ import { configureFileBytes } from "./fileBytes";
 import { installKeyboard, observeRecent, reconcileHeldCycle } from "./keyboard";
 import { noteOperatorPointer, observeInputRequests } from "./keyTarget";
 import { OverviewModal, OverviewPage } from "./Overview";
-import { FactoryScreen } from "./factory/FactoryScreen";
-import { useFactoryNotifications } from "./factory/notify";
 import { AgentCloseNotice, ConfirmClose, ConfirmTrash, CycleOverlay, NoticeBar } from "./Overlays";
 import { ConfirmArchive, ConfirmArchiveDelete } from "./ArchiveDialogs";
 import { QuickAdd } from "./QuickAdd";
@@ -25,6 +23,8 @@ import { useAgentNotifications } from "./agentNotices";
 import { useGithubLook } from "./githubLook";
 import { SettingsGate } from "./SettingsSheet";
 import { StartPanelHost } from "./StartPanel";
+import { GroupNameDialog } from "./AgentGroupControls";
+import { InlineStartHost } from "./AgentTabStart";
 import { FONT_SIZE_BASE, usableAccent, usableFontSize } from "./settings";
 import { ShortcutSheet } from "./ShortcutSheet";
 import { Sidebar } from "./sidebar";
@@ -33,6 +33,7 @@ import { readEditorAvailability } from "./host";
 import { RegionFailed, RenderBoundary, ShellFailed, SidebarFailed, TitleRowFailed } from "./RenderBoundary";
 import { focusedRemoteDevice, frontCheckout } from "./snapshot";
 import { OPEN_ANSWER_TIMEOUT_MS, openingProgress, startupScreen, waitingForSavedWorkspace } from "./navigation";
+import { START_ANSWER_TIMEOUT_MS } from "./startAnswer";
 import { useShellStore } from "./store";
 import { AddProjectDialog } from "./AddProjectDialog";
 import { WorkspaceDialogs, WorkspaceNotices } from "./WorkspaceDialogs";
@@ -51,7 +52,6 @@ export function App() {
   const dispatchRef = useRef<DispatchFn>(noop);
   const actions: Actions = useMemo(() => createActions((event) => dispatchRef.current(event)), []);
   useUsageWindowHint(actions);
-  useFactoryNotifications(actions);
   useAgentNotifications(actions);
   useGithubLook(actions);
   // Open in VS Code is offered only where the desktop app found it (D-14).
@@ -267,6 +267,8 @@ export function App() {
     ["palette", <Palette actions={actions} />],
     ["quick_add", <QuickAdd actions={actions} />],
     ["start_panel", <StartPanelHost actions={actions} />],
+    ["group_name", <GroupNameDialog actions={actions} />],
+    ["inline_starts", <InlineStartHost />],
     ["shortcuts", <ShortcutSheetGate actions={actions} />],
     ["settings", <SettingsGate actions={actions} />],
     ["first_run", <FirstRunWizard actions={actions} />],
@@ -356,11 +358,14 @@ function CenterScreen({ actions }: { actions: Actions }) {
     const timer = window.setTimeout(() => {
       const store = useUiStore.getState();
       if (store.opening !== opening) return;
+      // The start panel owns a missing answer. Presentation may also have
+      // been superseded by a core visit, which needs no second notice.
+      if ("startRequestId" in opening.target) return store.setOpening(null);
       const failure = translate("shell.openTimeout");
       if (store.screen?.kind !== "workspace") return store.setOpening({ ...opening, failure });
       store.setOpening(null);
       store.setNotice({ text: translate("shell.notOpened", { reason: failure }), refreshable: false });
-    }, OPEN_ANSWER_TIMEOUT_MS);
+    }, "startRequestId" in opening.target ? START_ANSWER_TIMEOUT_MS : OPEN_ANSWER_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
   }, [opening]);
   useEffect(() => {
@@ -386,7 +391,6 @@ function CenterScreen({ actions }: { actions: Actions }) {
       </div>
     );
   }
-  if (screen.kind === "factory") return <FactoryScreen actions={actions} />;
   if (screen.kind === "workspace" && front && hasView) return <WorkspaceScreen actions={actions} />;
   return <OverviewPage actions={actions} />;
 }

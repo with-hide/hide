@@ -33,6 +33,119 @@ pub const GIT_DEADLINE: Duration = Duration::from_secs(15);
 /// [`WORKTREES_READ_TIME`] to the rest.
 pub const WORKTREE_MEASURE_TIME: Duration = Duration::from_secs(30);
 
+/// One status invocation plus an exact-object log read, on the owning node.
+/// No rename detection, ignored walk, base comparison or other checkout read.
+pub fn checkout_git(path: &Path) -> HostResult<hide_node_link::worktrees::CheckoutGit> {
+    let until = Instant::now() + Duration::from_secs(3);
+    let fail = |reason| HostError::new(ErrorCode::Io, reason);
+    let status = git_within_limit(
+        path,
+        &[
+            "status",
+            "--porcelain=v2",
+            "--branch",
+            "-z",
+            "--no-renames",
+            "--untracked-files=all",
+        ],
+        Duration::from_secs(3),
+        Some(8 * 1024 * 1024),
+    )
+    .map_err(fail)?;
+    let mut facts = checkout_status(&status).map_err(fail)?;
+    if let Some(head) = facts.head_sha.as_deref() {
+        let log = git_within_limit(
+            path,
+            &["log", "-1", "--format=%ct%x00%s", head, "--"],
+            until.saturating_duration_since(Instant::now()),
+            Some(64 * 1024),
+        )
+        .map_err(fail)?;
+        let (time, subject) = log
+            .trim_end()
+            .split_once('\0')
+            .ok_or_else(|| fail("Git returned no commit time or subject".to_owned()))?;
+        facts.commit_unix_seconds = Some(
+            time.parse()
+                .map_err(|_| fail("Git returned an invalid commit time".to_owned()))?,
+        );
+        facts.subject = Some(subject.to_owned());
+    }
+    let repository = hide_project::git::discover(path)
+        .ok_or_else(|| fail("The checkout's Git directory is unavailable".to_owned()))?;
+    facts.origin_url = repository
+        .config()
+        .map_err(fail)?
+        .origin_url()
+        .map(str::to_owned);
+    facts.last_fetch_unix_ms = std::fs::metadata(repository.common_dir.join("FETCH_HEAD"))
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .and_then(|time| u64::try_from(time.as_millis()).ok());
+    Ok(facts)
+}
+
+fn checkout_status(status: &str) -> Result<hide_node_link::worktrees::CheckoutGit, String> {
+    let mut facts = hide_node_link::worktrees::CheckoutGit::default();
+    let mut saw_head = false;
+    for record in status.split('\0').filter(|record| !record.is_empty()) {
+        if let Some(head) = record.strip_prefix("# branch.oid ") {
+            saw_head = true;
+            if head != "(initial)" {
+                if !matches!(head.len(), 40 | 64)
+                    || !head.bytes().all(|byte| byte.is_ascii_hexdigit())
+                {
+                    return Err("Git returned an invalid HEAD".to_owned());
+                }
+                facts.head_sha = Some(head.to_owned());
+            }
+        } else if let Some(upstream) = record.strip_prefix("# branch.upstream ") {
+            facts.upstream = Some(upstream.to_owned());
+        } else if let Some(counts) = record.strip_prefix("# branch.ab ") {
+            let (ahead, behind) = counts
+                .split_once(' ')
+                .ok_or("Git returned invalid upstream counts")?;
+            facts.ahead = Some(
+                ahead
+                    .strip_prefix('+')
+                    .ok_or("Git returned invalid ahead count")?
+                    .parse()
+                    .map_err(|_| "Git returned invalid ahead count")?,
+            );
+            facts.behind = Some(
+                behind
+                    .strip_prefix('-')
+                    .ok_or("Git returned invalid behind count")?
+                    .parse()
+                    .map_err(|_| "Git returned invalid behind count")?,
+            );
+        } else if record.starts_with("# ") {
+            // Other documented branch headers carry no status records.
+        } else if matches!(record.as_bytes().first(), Some(b'1' | b'2' | b'u' | b'?')) {
+            facts.changed_files = facts
+                .changed_files
+                .checked_add(1)
+                .ok_or("Git status count exceeded its limit")?;
+            if record.starts_with("u ") {
+                facts.conflicts += 1;
+            }
+        } else {
+            return Err("Git returned an unrecognized status record".to_owned());
+        }
+    }
+    if !saw_head {
+        return Err("Git returned no HEAD status".to_owned());
+    }
+    facts.upstream_state = match (&facts.upstream, facts.ahead, facts.behind) {
+        (None, _, _) => "none",
+        (Some(_), Some(_), Some(_)) => "tracked",
+        _ => "gone",
+    }
+    .to_owned();
+    Ok(facts)
+}
+
 /// Reads the repository that holds `path`: its main worktree, default
 /// branch, local branches and every listed worktree. `bases` names a branch's
 /// pull request base; `base_override` is the operator's chosen base. With
@@ -1179,6 +1292,15 @@ fn git_until(cwd: &Path, arguments: &[&str], until: Instant) -> Result<String, S
 /// [`git`] with its own bound, for the one command that may legitimately
 /// outlast a read: a removal that deletes the folder in place.
 fn git_within(cwd: &Path, arguments: &[&str], deadline: Duration) -> Result<String, String> {
+    git_within_limit(cwd, arguments, deadline, None)
+}
+
+fn git_within_limit(
+    cwd: &Path,
+    arguments: &[&str],
+    deadline: Duration,
+    limit: Option<u64>,
+) -> Result<String, String> {
     if let Some(calls) = GIT_CALLS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1186,13 +1308,14 @@ fn git_within(cwd: &Path, arguments: &[&str], deadline: Duration) -> Result<Stri
     {
         calls.push((cwd.to_owned(), arguments.first().unwrap_or(&"").to_string()));
     }
-    let output = output_within(
+    let output = output_limited(
         hide_platform::programs::command("git")
             .arg("--no-optional-locks")
             .arg("-C")
             .arg(cwd)
             .args(arguments),
         deadline,
+        limit,
     )
     .map_err(|error| format!("git could not be run: {error}"))?;
     let Some(output) = output else {
@@ -1487,6 +1610,15 @@ pub fn output_within(
     command: &mut Command,
     deadline: Duration,
 ) -> std::io::Result<Option<std::process::Output>> {
+    output_limited(command, deadline, None)
+}
+
+#[allow(clippy::disallowed_methods)] // a bounded production wait
+fn output_limited(
+    command: &mut Command,
+    deadline: Duration,
+    limit: Option<u64>,
+) -> std::io::Result<Option<std::process::Output>> {
     use std::io::Read;
     use std::process::Stdio;
     use std::sync::mpsc;
@@ -1502,7 +1634,13 @@ pub fn output_within(
         std::thread::spawn(move || {
             let mut buffer = Vec::new();
             if let Some(mut pipe) = pipe {
-                let _: std::io::Result<usize> = pipe.read_to_end(&mut buffer);
+                let _: std::io::Result<usize> = match limit {
+                    Some(limit) => pipe.by_ref().take(limit + 1).read_to_end(&mut buffer),
+                    None => pipe.read_to_end(&mut buffer),
+                };
+                if limit.is_some_and(|limit| buffer.len() as u64 > limit) {
+                    let _ = std::io::copy(&mut pipe, &mut std::io::sink());
+                }
             }
             let _ = sender.send(buffer);
         });
@@ -1547,6 +1685,12 @@ pub fn output_within(
         }
         return Ok(None);
     };
+    if limit.is_some_and(|limit| stdout.len() as u64 > limit || stderr.len() as u64 > limit) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Git header read exceeded its output limit",
+        ));
+    }
     Ok(Some(std::process::Output {
         status,
         stdout,
@@ -1644,6 +1788,51 @@ pub use hide_node_link::worktrees::Registered;
 /// Every worktree Git registers for `root`, the main worktree first.
 pub fn registered(root: &Path) -> Result<Vec<Registered>, String> {
     registered_until(root, Instant::now() + GIT_DEADLINE)
+}
+
+/// Retires a background task's checkout. A completed task keeps its branch;
+/// an explicitly discarded task drops it after removing its own checkout.
+pub fn retire_owned(
+    root: &Path,
+    checkout: &Path,
+    branch: &str,
+    discard: bool,
+) -> Result<(), String> {
+    let checked = git(root, &["check-ref-format", "--branch", branch])?;
+    if checked.trim() != branch || branch.starts_with('-') {
+        return Err("Invalid task branch. Review the task checkout before retrying.".into());
+    }
+    let rows = registered(root)?;
+    if let Some((index, row)) = rows
+        .iter()
+        .enumerate()
+        .find(|(_, row)| Path::new(&row.path) == checkout)
+    {
+        if index == 0 || row.branch.as_deref() != Some(branch) {
+            return Err("The task checkout changed. Review it before retiring it.".into());
+        }
+    } else if checkout.try_exists().map_err(|error| error.to_string())? {
+        return Err(
+            "The task folder is no longer a registered checkout. Review it before retrying.".into(),
+        );
+    }
+    remove_worktree(root, checkout, discard)?;
+    if discard {
+        let branches = git(
+            root,
+            &[
+                "branch",
+                "--list",
+                "--format=%(refname:short)",
+                "--",
+                branch,
+            ],
+        )?;
+        if branches.lines().any(|name| name == branch) {
+            delete_branch(root, branch, discard)?;
+        }
+    }
+    Ok(())
 }
 
 fn registered_until(root: &Path, until: Instant) -> Result<Vec<Registered>, String> {
@@ -2310,15 +2499,15 @@ pub fn remove_confirmed(request: &ConfirmedRemoval) -> Result<String, String> {
     let Some(branch) = request.delete_branch.as_deref() else {
         return Ok(format!("Deleted {path}. Its local branch was kept."));
     };
-    let flag = if request.force_delete_branch {
-        "-D"
-    } else {
-        "-d"
-    };
-    match git(root, &["branch", flag, "--", branch]) {
+    match delete_branch(root, branch, request.force_delete_branch) {
         Ok(_) => Ok(format!("Deleted {path} and local branch {branch}.")),
         Err(detail) => Ok(format!("Deleted {path}; branch {branch} remains: {detail}")),
     }
+}
+
+fn delete_branch(root: &Path, branch: &str, force: bool) -> Result<String, String> {
+    let flag = if force { "-D" } else { "-d" };
+    git(root, &["branch", flag, "--", branch])
 }
 
 fn io_error(message: String) -> HostError {
@@ -2512,6 +2701,38 @@ mod holder_scan_tests {
 #[cfg(test)]
 mod measure_tests {
     use super::*;
+
+    #[test]
+    fn retiring_a_completed_task_keeps_its_branch_and_refuses_dirty_work() {
+        let fixture = Fixture::new(&["task"]);
+        let checkout = fixture.linked("task");
+        std::fs::write(checkout.join("draft.txt"), "keep this work").unwrap();
+        assert!(retire_owned(&fixture.root, &checkout, "task", false).is_err());
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("draft.txt")).unwrap(),
+            "keep this work"
+        );
+        std::fs::remove_file(checkout.join("draft.txt")).unwrap();
+        retire_owned(&fixture.root, &checkout, "task", false).unwrap();
+        assert!(!checkout.exists());
+        assert!(git(&fixture.root, &["rev-parse", "--verify", "refs/heads/task"]).is_ok());
+        retire_owned(&fixture.root, &checkout, "task", false).unwrap();
+    }
+
+    #[test]
+    fn discarding_a_task_removes_only_its_confirmed_checkout_and_branch() {
+        let fixture = Fixture::new(&["task", "other"]);
+        let checkout = fixture.linked("task");
+        std::fs::write(checkout.join("draft.txt"), "unfinished").unwrap();
+        assert!(retire_owned(&fixture.root, &checkout, "other", true).is_err());
+        assert!(retire_owned(&fixture.root, &fixture.root, "main", true).is_err());
+        assert!(checkout.join("draft.txt").is_file());
+        retire_owned(&fixture.root, &checkout, "task", true).unwrap();
+        assert!(!checkout.exists());
+        assert!(git(&fixture.root, &["rev-parse", "--verify", "refs/heads/task"]).is_err());
+        assert!(fixture.linked("other").is_dir());
+        retire_owned(&fixture.root, &checkout, "task", true).unwrap();
+    }
 
     /// A worktree git lists but disk does not have reports `missing` and no
     /// counts, so an absent checkout never reads as a clean one.

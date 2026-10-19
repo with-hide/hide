@@ -65,13 +65,120 @@ fn a_pass_that_installs_the_codex_hook_has_codex_trust_it_and_a_repeat_asks_for_
         "{report:?}"
     );
     assert_eq!(codex_part(&report).reason, None);
-    assert_eq!(held_keys(&fixture), hide_agent_hooks::HookEvent::ALL.len());
+    assert_eq!(
+        held_keys(&fixture),
+        hide_agent_hooks::AgentRuntime::Codex.events().count()
+    );
     assert_eq!(calls(&fixture, "config/batchWrite"), 1);
 
     // The same pass again checks, and writes nothing (B7).
     let report = apply(&fixture.target, &Scope::automatic());
     assert_eq!(codex_part(&report).state, ComponentState::Installed);
     assert_eq!(calls(&fixture, "config/batchWrite"), 1);
+}
+
+#[test]
+fn a_route_move_refreshes_both_installed_hooks_and_codex_trust_once() {
+    use hide_agent_hooks::{AgentRuntime, route::HookTarget};
+    let fixture = with_codex();
+    let helper = fixture
+        .target
+        .kit_dir
+        .join(hide_agent_hooks::HELPER_BINARY_NAME);
+    let previous = fixture.home().join("previous-state");
+    let old = HookTarget::new(&helper, &previous).unwrap();
+    let codex_path = AgentRuntime::Codex.config_path(fixture.home());
+    std::fs::write(&codex_path, OTHER_TOOL).unwrap();
+    for runtime in AgentRuntime::ALL {
+        hide_agent_hooks::install(runtime, fixture.home(), old).unwrap();
+    }
+    assert!(matches!(
+        hide_agent_hooks::codex_trust::trust_own_hooks(
+            fixture.target.codex.as_deref().unwrap(),
+            fixture.home(),
+            old,
+            &[],
+            &fixture.target.stop
+        ),
+        hide_agent_hooks::codex_trust::TrustOutcome::Trusted { .. }
+    ));
+    assert_eq!(calls(&fixture, "config/batchWrite"), 1);
+    let before: Vec<_> = AgentRuntime::ALL
+        .iter()
+        .map(|runtime| std::fs::read(runtime.config_path(fixture.home())).unwrap())
+        .collect();
+    let report = apply(&fixture.target, &Scope::automatic());
+    for id in [ComponentId::ClaudeCodeHook, ComponentId::CodexHook] {
+        assert_eq!(state(&report, id), ComponentState::Installed, "{report:?}");
+    }
+    let after: Vec<_> = AgentRuntime::ALL
+        .iter()
+        .map(|runtime| std::fs::read(runtime.config_path(fixture.home())).unwrap())
+        .collect();
+    for (old, new) in before.iter().zip(&after) {
+        assert_ne!(old, new);
+        assert_eq!(
+            other_tool_entry(std::str::from_utf8(new).unwrap()),
+            other_tool_entry(OTHER_TOOL)
+        );
+    }
+    assert_eq!(
+        calls(&fixture, "config/batchWrite"),
+        2,
+        "the new command gets fresh trust"
+    );
+    apply(&fixture.target, &Scope::automatic());
+    for (runtime, bytes) in AgentRuntime::ALL.iter().zip(&after) {
+        assert_eq!(
+            &std::fs::read(runtime.config_path(fixture.home())).unwrap(),
+            bytes
+        );
+    }
+    assert_eq!(calls(&fixture, "config/batchWrite"), 2);
+}
+
+#[test]
+fn a_second_daemon_cannot_rewrite_the_live_owners_account_hooks() {
+    use hide_platform::fs::lock::{Mode, Waited, lock_file};
+    let fixture = with_codex();
+    apply(&fixture.target, &Scope::automatic());
+    let previous = fixture.home().join("live-other-state");
+    std::fs::create_dir_all(&previous).unwrap();
+    let file =
+        hide_platform::fs::private::open_own_file(&layout::daemon_lock(&previous), true).unwrap();
+    let Waited::Locked(owner) =
+        lock_file(file, Mode::Exclusive, std::time::Duration::ZERO, &|| false).unwrap()
+    else {
+        panic!("fixture daemon owns its lock")
+    };
+    let mut installed = record::load(fixture.home()).unwrap();
+    installed.remember_state_route(previous);
+    record::save(fixture.home(), &installed).unwrap();
+    let paths = [
+        hide_agent_hooks::AgentRuntime::ClaudeCode.config_path(fixture.home()),
+        hide_agent_hooks::AgentRuntime::Codex.config_path(fixture.home()),
+        record::kit_state_dir(fixture.home()).join("installed.json"),
+    ];
+    let before: Vec<_> = paths
+        .iter()
+        .map(|path| std::fs::read(path).unwrap())
+        .collect();
+    let refused = apply(&fixture.target, &Scope::automatic());
+    assert_eq!(refused.refused.as_ref().unwrap().cause, RefusalCause::Busy);
+    assert_eq!(
+        status(&fixture.target).refused.as_ref().unwrap().cause,
+        RefusalCause::Busy
+    );
+    for (path, bytes) in paths.iter().zip(before) {
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+    drop(owner);
+    let allowed = apply(&fixture.target, &Scope::automatic());
+    assert!(allowed.refused.is_none(), "{allowed:?}");
+    assert_eq!(
+        record::load(fixture.home()).unwrap().state_route(),
+        Some(layout::state_dir_from_process(fixture.home()).as_path())
+    );
 }
 
 #[test]
@@ -108,7 +215,10 @@ fn a_failure_is_the_codex_parts_reason_only_and_status_keeps_it_until_a_pass_suc
     assert_eq!(codex_part(&report).reason, None);
     let read = status(&fixture.target);
     assert_eq!(codex_part(&read).state, ComponentState::Installed);
-    assert_eq!(held_keys(&fixture), hide_agent_hooks::HookEvent::ALL.len());
+    assert_eq!(
+        held_keys(&fixture),
+        hide_agent_hooks::AgentRuntime::Codex.events().count()
+    );
 }
 
 #[test]
@@ -180,7 +290,10 @@ fn the_first_run_pass_that_switches_codex_on_has_codex_trust_the_hook_in_that_pa
         ComponentState::Installed,
         "{report:?}"
     );
-    assert_eq!(held_keys(&fixture), hide_agent_hooks::HookEvent::ALL.len());
+    assert_eq!(
+        held_keys(&fixture),
+        hide_agent_hooks::AgentRuntime::Codex.events().count()
+    );
 }
 
 #[test]
@@ -205,7 +318,10 @@ fn a_changed_hook_is_trusted_in_the_pass_that_replaces_it() {
     );
     let after = std::fs::read_to_string(codex_file(&fixture, "fake-trust.json")).unwrap();
     assert_ne!(after, before, "the new entries' hashes were recorded");
-    assert_eq!(held_keys(&fixture), hide_agent_hooks::HookEvent::ALL.len());
+    assert_eq!(
+        held_keys(&fixture),
+        hide_agent_hooks::AgentRuntime::Codex.events().count()
+    );
     assert_eq!(calls(&fixture, "config/batchWrite"), 2);
 }
 
@@ -361,7 +477,7 @@ fn a_fresh_machine_has_codex_trust_herdrs_entry_with_hides_in_the_pass_that_inst
     assert!(trusted(&fixture, &command));
     assert_eq!(
         held_keys(&fixture),
-        hide_agent_hooks::HookEvent::ALL.len() + 1
+        hide_agent_hooks::AgentRuntime::Codex.events().count() + 1
     );
     // One check, one write, for both (B1).
     assert_eq!(calls(&fixture, "initialize"), 1);
@@ -403,7 +519,10 @@ fn an_integration_the_operator_installed_first_is_not_trusted_and_stays_untouche
     );
     assert!(learned(&fixture).is_empty());
     assert!(!trusted(&fixture, &command));
-    assert_eq!(held_keys(&fixture), hide_agent_hooks::HookEvent::ALL.len());
+    assert_eq!(
+        held_keys(&fixture),
+        hide_agent_hooks::AgentRuntime::Codex.events().count()
+    );
 }
 
 #[test]
@@ -423,7 +542,7 @@ fn a_look_alike_of_herdrs_command_beside_the_real_one_is_not_trusted() {
     assert!(!trusted(&fixture, &format!("{command} && true")));
     assert_eq!(
         held_keys(&fixture),
-        hide_agent_hooks::HookEvent::ALL.len() + 1
+        hide_agent_hooks::AgentRuntime::Codex.events().count() + 1
     );
 }
 
@@ -483,7 +602,7 @@ fn a_refused_record_is_the_codex_parts_reason_and_the_next_pass_trusts_both() {
     assert!(trusted(&fixture, &herdr_command(&fixture)));
     assert_eq!(
         held_keys(&fixture),
-        hide_agent_hooks::HookEvent::ALL.len() + 1
+        hide_agent_hooks::AgentRuntime::Codex.events().count() + 1
     );
 }
 
@@ -547,7 +666,7 @@ fn an_entry_another_writer_adds_after_herdrs_install_is_not_recorded_or_trusted(
     assert!(!trusted(&fixture, "bash /foreign/late.sh"));
     assert_eq!(
         held_keys(&fixture),
-        hide_agent_hooks::HookEvent::ALL.len() + 1
+        hide_agent_hooks::AgentRuntime::Codex.events().count() + 1
     );
 }
 
@@ -573,7 +692,10 @@ fn an_install_that_added_a_pile_of_entries_teaches_nothing() {
     assert!(!trusted(&fixture, &herdr_command(&fixture)));
     assert!(!trusted(&fixture, "bash /extra/0.sh"));
     // Hide's own entries are trusted whatever Herdr's install did.
-    assert_eq!(held_keys(&fixture), hide_agent_hooks::HookEvent::ALL.len());
+    assert_eq!(
+        held_keys(&fixture),
+        hide_agent_hooks::AgentRuntime::Codex.events().count()
+    );
 }
 
 #[test]

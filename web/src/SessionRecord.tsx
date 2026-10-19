@@ -1,15 +1,15 @@
-import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleDotIcon, CircleHelpIcon, FlagIcon, HouseIcon, LoaderCircleIcon, SquareTerminalIcon } from "lucide-react";
+import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleDotIcon, CircleHelpIcon, Clock3Icon, SquareIcon, GitPullRequestIcon, InfoIcon, LightbulbIcon, MessageSquareIcon, TriangleAlertIcon, HouseIcon, LoaderCircleIcon, SquareTerminalIcon, RotateCcwIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { agentProductName } from "./agentAdapters";
 import { deviceConnected, readsHere } from "./devices";
 import { branchChip, markTone } from "./agentRow";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { Button } from "./components/ui/button";
 import { Elapsed } from "./components/elapsed";
 import { PrMark } from "./components/pr-mark";
-import { SessionRow } from "./components/session-row";
-import { StateBox, type StateBoxTone } from "./components/state-box";
+import { StateBox } from "./components/state-box";
 import { StatusMark } from "./components/status-mark";
 import { shownTaskState, TaskMark, TaskName, TaskWord } from "./components/task-progress";
 import { Hint } from "./components/ui/tooltip";
@@ -17,20 +17,25 @@ import { formatDateTime } from "./i18n/format";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
-import { checklist, childOutputs, orderedOutputs, outputPrState, recordTitle, recordTree, sessionOfAgentOn, sessionPlace, titleOutputs, workKey, type ChecklistTask } from "./sessionWork";
+import { checklist, childOutputs, orderedOutputs, outputPrState, recordTitle, recordTree, sessionOfAgentOn, sessionPlace, workKey, type ChecklistTask } from "./sessionWork";
 import { boardProjects } from "./navigation";
 import { cardLine, cardOfPane, cardQuestion, everyAgent } from "./overviewTasks";
 import { destinationOf } from "./overviewBacklog";
-import { folderName } from "./linkPanel";
+import { folderName, resumeBlock, resumeProvider } from "./linkPanel";
+import { useSessionResume } from "./useSessionResume";
+import { recordDate } from "./sessionRecordTime";
 import { machineName } from "./screenMachine";
 import { localDeviceId } from "./snapshot";
-import type { AgentRow, AgentStatusCode, MissedWork, RowMark, SessionRecord as RecordValue, WorkEnd, WorkOutput, WorkSession } from "./snapshot";
+import type { AgentRow, AgentStatusCode, Checkout, MissedWork, RowMark, SessionRecord as RecordValue, WorkEnd, WorkOutput, WorkSession } from "./snapshot";
 import { statusText } from "./agentStatus";
 import { useShellStore } from "./store";
 import { summariesEnabled } from "./hideAi";
 import { PR_LOOK } from "./prMark";
 import { archivedChildrenOf, archivedMemberOf } from "./archive";
 import type { ArchivedMember, ArchivedSession } from "./snapshot";
+import { HighlightedRequest } from "./RequestHighlight";
+
+type RequestLocator = { request_offset: number; query?: string };
 
 const ROW = "min-w-0 rounded-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring";
 /** Under a task's line: the icon column's width and its gap, so what hangs from a task lines up with its name. */
@@ -49,6 +54,8 @@ export type RecordFrame = {
   head?: ReactNode;
   /** A line above the record (the dashed card's B14 note). */
   note?: string | null;
+  /** A retained History hit, scoped by the target's full session identity. */
+  locator?: RequestLocator;
   /** The children drilled into, outermost first (B20). */
   trail: readonly WorkSession[];
   onTrail: (trail: readonly WorkSession[]) => void;
@@ -107,7 +114,6 @@ export function SessionRecord({ actions, target, frame }: { actions: Actions; ta
     }
     return null;
   });
-  const descendants = useMemo(() => (shown ? recordTree(shown).slice(1) : []), [shown]);
   const wasConnected = useRef(connected);
   // The connection this window is on: a new self-contained snapshot is a new core session (a reconnect, or a core that moved), which has read nothing.
   const generation = useShellStore((state) => state.viewGeneration);
@@ -135,23 +141,15 @@ export function SessionRecord({ actions, target, frame }: { actions: Actions; ta
       {parent ? <Button size="sm" variant="ghost" className="min-w-0 self-start px-md" onClick={up} data-record-up="true"><ArrowLeftIcon /><span className="truncate">{t("record.backTo", { parent: recordTitle(parent, summaries) })}</span></Button> : null}
     </>}
     {frame.note ? <p className="px-md pb-xs text-caption text-muted-foreground" data-record-note="true">{frame.note}</p> : null}
-    {!own || own.loading ? <div className="space-y-md px-md py-sm" aria-busy="true" data-record-loading="true">{[0, 1, 2].map((key) => <div key={key} className="h-(--size-control-lg) rounded-sm bg-muted" />)}</div> : own.failure ? <div role="status" className="px-md py-sm text-caption"><p>{t("sessionWork.failed")}</p><Button size="sm" variant="ghost" onClick={frame.onRead}>{t("common.retry")}</Button></div> : shown ? <div className={cn("min-h-0 flex-1 overflow-y-auto px-md pb-md text-caption [word-break:keep-all]", !connected && "opacity-(--opacity-disabled)")} data-record-content="true">
-      <h2 className="flex min-w-0 items-center gap-xs py-sm text-subhead font-semibold"><AgentMark kind={shown.session.agent} /><span className="min-w-0 truncate" title={recordTitle(shown, summaries)}>{recordTitle(shown, summaries)}</span><OutputMarks outputs={titleOutputs(shown, summaries)} actions={actions} /></h2>
-      <RecordPlace record={shown} actions={actions} />
-      <Work key={`work:${workKey(shown.session)}`} record={shown} descendants={descendants} summaries={summaries} onOpen={open} actions={actions} />
-      <Words key={`words:${workKey(shown.session)}`} record={shown} parent={parent ? recordTitle(parent, summaries) : liveParent} />
+    {!own || own.loading ? <div className="space-y-md px-md py-sm" aria-busy="true" data-record-loading="true">{[0, 1, 2].map((key) => <div key={key} className="h-(--size-control-lg) rounded-sm bg-muted" />)}</div> : own.failure ? <div role="status" className="px-md py-sm text-caption"><p>{t("sessionWork.failed")}</p><Button size="sm" variant="ghost" onClick={frame.onRead}>{t("common.retry")}</Button></div> : shown ? <div className={cn("min-h-0 flex-1 overflow-y-auto px-lg pb-lg text-caption [word-break:keep-all]", !connected && "opacity-(--opacity-disabled)")} data-record-content="true">
+      <h2 className="flex min-w-0 items-center gap-xs py-sm text-subhead font-semibold"><AgentMark kind={shown.session.agent} /><span className="min-w-0 whitespace-normal [overflow-wrap:anywhere]" title={recordTitle(shown, summaries)}>{recordTitle(shown, summaries)}</span></h2>
+      <RecordPlace key={workKey(shown.session)} record={shown} actions={actions} />
+      <Work key={`work:${workKey(shown.session)}`} record={shown} summaries={summaries} onOpen={open} actions={actions} parent={parent ? recordTitle(parent, summaries) : liveParent} locator={workKey(shown.session) === workKey(target) ? frame.locator : undefined} />
     </div> : null}
   </div>;
 }
 
-/**
- * The record's place line, then the 지금 box (PRD overview-device-tasks B17;
- * PRD pr-card-and-session-record-redesign B14, B17; PRD
- * record-card-readability B5): device · project · ⌂ every checkout of the
- * task, a removed one as `(없어짐)`; the children stand under their tasks. The
- * task's line and question are the root's; a child's box reads its own
- * agent's state and, once its pane is gone, its record's end.
- */
+/** Agent product, device, project and checkouts, followed by this session's native state. */
 function RecordPlace({ record, actions }: { record: RecordValue; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const rest = useShellStore((state) => state.rest);
@@ -172,13 +170,43 @@ function RecordPlace({ record, actions }: { record: RecordValue; actions: Action
     : place?.checkout ? [place.checkout] : [];
   return <>
     <p className="mb-sm flex min-w-0 flex-wrap items-center gap-x-xs text-micro text-muted-foreground" data-record-place="true">
-      {[device, place?.project.label ?? null].filter(Boolean).join(" · ")}
+      {[agentProductName(record.session.agent), device, place?.project.label ?? null].filter(Boolean).join(" · ")}
       {checkouts.map((checkout) => <span key={checkout.id} className={cn("inline-flex min-w-0 items-center gap-xxs", !checkout.exists && "text-muted-foreground/70")} data-record-checkout={checkout.id} data-removed={checkout.exists ? undefined : "true"}>· <HouseIcon aria-hidden="true" className="size-(--size-icon-sm)" /><span className="truncate">{checkout.exists ? checkout.label : t("record.worktreeGone", { label: checkout.label })}</span></span>)}
     </p>
     {archived ? <ArchivedNow row={archived.row} member={archived.row.members[archived.index]!} own={archived.index > 0} connected={deviceConnected(rest, archived.row.device_id)} actions={actions} />
-      : root || place?.agent || record.ended_at_unix_ms !== null ? <NowBox record={record} agent={place?.agent ?? null} line={root ? cardLine(root, rows) : null} question={root ? cardQuestion(root, rows) : null} actions={actions} /> : null}
+      : <NowBox record={record} checkout={place?.checkout ?? null} agent={place?.agent ?? null} line={root ? cardLine(root, rows) : null} question={root ? cardQuestion(root, rows) : null} actions={actions} />}
     {left ? <ArchivedChildren row={left.row} members={left.members} connected={deviceConnected(rest, left.row.device_id)} actions={actions} /> : null}
   </>;
+}
+
+/** Uses the same device, checkout and native resume boundary as a PR's session line. */
+function RestoreSession({ record, checkout: original, actions }: { record: RecordValue; checkout: Checkout | null; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const rest = useShellStore((state) => state.rest);
+  const connected = useShellStore((state) => state.connection === "live");
+  const node = localDeviceId(rest);
+  const checkout = original?.exists ? original : null;
+  const blocked = resumeBlock({ ...record.session, file: record.path ? "present" : "missing" }, checkout, rest?.navigator?.devices, node);
+  const { resume, start } = useSessionResume();
+  const busy = resume.request !== null && !resume.uncertain;
+  const off = blocked !== null || !connected;
+  const reason = blocked ? "device" in blocked ? t(blocked.key, { device: blocked.device }) : t(blocked.key) : !connected ? t("devices.rail.notConnected") : null;
+  const restore = () => {
+    const provider = resumeProvider(record.session.agent);
+    if (off || busy || !provider || !checkout) return;
+    start((requestId, confirmOnly) => actions.startAgent({ target: { checkoutPath: checkout.path }, deviceId: record.session.device_id === node ? undefined : record.session.device_id, provider, resumeSessionId: record.session.session_id, resumeSessionPath: record.path ?? undefined, requestId, confirmOnly }));
+  };
+  return <div className="flex min-w-0 flex-col items-end gap-xs" data-record-restore="true">
+    <Button size="sm" disabled={off || busy} aria-busy={busy || undefined} onClick={restore} data-record-restore-button="true">
+      {busy ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : <RotateCcwIcon aria-hidden="true" />}{t(resume.uncertain ? "groups.confirm" : busy ? "recordCard.restoring" : "recordCard.restore")}
+    </Button>
+    {resume.uncertain ? <p role="status" className="text-micro text-muted-foreground [overflow-wrap:anywhere]">{t("links.resumeUnknown")}</p> : null}
+    {reason ? <p className="text-micro text-muted-foreground [overflow-wrap:anywhere]" data-record-restore-unavailable="true">{reason}</p> : null}
+    {resume.failure !== null ? <div role="alert" className="flex min-w-0 flex-wrap items-center gap-xs text-caption text-warning" data-record-restore-failed="true">
+      <span className="min-w-0 [overflow-wrap:anywhere]">{resume.uncertain ? resume.failure : resume.failure ? t("links.resumeFailed", { reason: resume.failure }) : t("links.resumeFailedPlain")}</span>
+      {!resume.uncertain ? <Button size="sm" variant="ghost" disabled={off || busy} onClick={restore}>{t("common.retry")}</Button> : null}
+    </div> : null}
+  </div>;
 }
 
 /** What the agent last reported, its newest line, while its pane is still known. */
@@ -186,35 +214,30 @@ function lastWords(agent: AgentRow | null): string | null {
   return agent?.message?.trim().split(/\r?\n/).filter((line) => line.trim()).at(-1) ?? null;
 }
 
-/**
- * The 지금 box (B14): the PR card's decision box part, edged in the state's
- * colour. Working: `작업 중 · <경과>`, the last words, `pane으로`. A
- * question: `질문 · <경과>`, its first line, `답하러 가기`. Blocked: the
- * reason and `pane 보기`. Ended: `끝남 · <경과>` and the last words, no button.
- */
-function NowBox({ record, agent, line, question, actions }: { record: RecordValue; agent: AgentRow | null; line: ReturnType<typeof cardLine> | null; question: string | null; actions: Actions }) {
+/** Native state and the action for this session: visit its pane or restore its conversation. */
+function NowBox({ record, checkout, agent, line, question, actions }: { record: RecordValue; checkout: Checkout | null; agent: AgentRow | null; line: ReturnType<typeof cardLine> | null; question: string | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const kind: "question" | "blocked" | "working" | "ended" = line?.kind === "needs_you" || agent?.status_code === "question" || agent?.status_code === "approval" ? "question" : line?.kind === "blocked" ? "blocked" : agent?.status_code === "working" ? "working" : "ended";
-  const tone: StateBoxTone = kind === "working" ? "working" : kind === "question" ? "attention" : kind === "blocked" ? "failed" : "done";
   const since = kind === "ended" ? record.ended_at_unix_ms ?? agent?.changed_at_unix_ms ?? null : agent?.changed_at_unix_ms ?? null;
   const word = kind === "working" ? t("agents.status.working") : kind === "question" ? t("agents.status.question") : kind === "blocked" ? t("agents.status.error") : agent && agent.status_code !== "done" ? statusText(t, agent.status_code) : t("sessionWork.done");
   const said = kind === "question" ? question ?? agent?.state.ask?.what ?? null : kind === "blocked" ? (line?.kind === "blocked" ? line.what : null) ?? lastWords(agent) : lastWords(agent);
   const pane = agent?.pane_id ?? null;
-  const button = pane === null || kind === "ended" ? null : kind === "question" ? (
+  const button = pane === null ? <RestoreSession record={record} checkout={checkout} actions={actions} /> : kind === "question" ? (
     <Button size="sm" onClick={() => actions.openAgent(pane)} data-record-now-button="answer"><CircleHelpIcon aria-hidden="true" />{t("links.answer")}</Button>
   ) : (
     <Button size="sm" variant="secondary" onClick={() => actions.openAgent(pane)} data-record-now-button="pane"><SquareTerminalIcon aria-hidden="true" />{t(kind === "blocked" ? "work.card.viewPane" : "record.toPane")}</Button>
   );
-  return <StateBox tone={tone} className="mb-sm" aria-label={t("sessionWork.now")} data-record-now={kind}>
+  return <div className="mb-sm flex min-w-0 flex-col gap-xs" aria-label={t("sessionWork.now")} data-record-now={kind}>
     <div className="flex min-w-0 flex-wrap items-center gap-sm">
-      <p className={cn("flex min-w-0 flex-1 items-center gap-xs font-medium", kind === "working" ? "text-agent-working" : kind === "question" ? "text-warning" : kind === "blocked" ? "text-destructive" : "text-foreground")}>
+      <p className={cn("flex min-w-0 flex-1 flex-wrap items-center gap-xs font-medium", kind === "working" ? "text-agent-working" : kind === "question" ? "text-warning" : kind === "blocked" ? "text-destructive" : "text-foreground")}>
         <span>{word}</span>
         {since !== null ? <Elapsed since={since} className="font-mono text-caption font-normal text-muted-foreground" data-record-now-elapsed="true" /> : null}
+        <span className="rounded-xs border border-border px-xs text-micro font-normal text-muted-foreground" data-record-pane={pane ? "open" : "closed"}>{t(pane ? "recordCard.paneOpen" : "recordCard.paneClosed")}</span>
       </p>
       {button}
     </div>
-    {said ? <p className={cn("whitespace-normal text-caption [overflow-wrap:anywhere]", kind === "question" ? "text-warning" : kind === "blocked" ? "text-destructive" : "text-subtle-foreground")} title={said} data-record-now-words="true">{said}</p> : null}
-  </StateBox>;
+    {said && kind !== "working" ? <p className={cn("whitespace-normal text-caption [overflow-wrap:anywhere]", kind === "question" ? "text-warning" : kind === "blocked" ? "text-destructive" : "text-subtle-foreground")} title={said} data-record-now-words="true">{said}</p> : null}
+  </div>;
 }
 
 /**
@@ -282,10 +305,10 @@ function ArchivedChildren({ row, members, connected, actions }: { row: ArchivedS
 
 /** A section's head (PRD record-card-readability D-01): a small quiet label, a strong count, and what the count leaves out in words. */
 function SectionHead({ label, count, summary, className }: { label: string; count?: string | number; summary?: string | null; className?: string }) {
-  return <h3 className={cn("mb-xs flex min-w-0 flex-wrap items-baseline gap-x-xs text-micro font-medium text-muted-foreground", className)}>
+  return <h3 className={cn("mb-xs flex min-w-0 flex-wrap items-baseline gap-x-xs text-caption font-semibold text-foreground", className)}>
     <span>{label}</span>
     {count !== undefined ? <span className="text-caption font-semibold tabular-nums text-foreground">{count}</span> : null}
-    {summary ? <span className="font-normal">· {summary}</span> : null}
+    {summary ? <span className="text-micro font-normal text-muted-foreground">· {summary}</span> : null}
   </h3>;
 }
 
@@ -304,127 +327,135 @@ function OutputMark({ output, actions }: { output: WorkOutput; actions: Actions 
   </button>;
 }
 
-/** The marks of several outputs, worst first; nothing without any. */
-function OutputMarks({ outputs, actions }: { outputs: readonly WorkOutput[]; actions: Actions }) {
-  if (!outputs.length) return null;
-  return <span className="flex shrink-0 flex-wrap items-center gap-xxs" data-record-output-marks={outputs.length}>{orderedOutputs(outputs).map((output) => <OutputMark key={`${output.kind}:${output.repository}:${output.number}`} output={output} actions={actions} />)}</span>;
-}
-
-/**
- * What the session was asked and what it handed on (PRD
- * record-card-readability D-01 to D-07, B1-B14): with Agent summaries on, the
- * checklist under `시킨 일 <끝남>/<전체> · 맡긴 일 <N>`, each task with the
- * children it delegated hanging under it by `↳`, the children no task holds
- * under a small `맡긴 일` at its end; with summaries off, which keep no task,
- * the children as one list. Then, with summaries on, `놓친 것 N`, what is
- * still open of what the session and its descendants missed.
- */
-const NO_RECORDS: readonly RecordValue[] = [];
-function Work({ record, descendants = NO_RECORDS, summaries, onOpen, actions }: { record: RecordValue; descendants?: readonly RecordValue[]; summaries: boolean; onOpen: (child: RecordValue) => void; actions: Actions }) {
+/** The current session owns the requested work and tabs. Children expand without replacing it. */
+function Work({ record, summaries, onOpen, actions, parent, locator }: { record: RecordValue; summaries: boolean; onOpen: (child: RecordValue) => void; actions: Actions; parent: string | null; locator?: RequestLocator }) {
   const { t } = useInterfaceTranslation();
-  const list = useMemo(() => checklist(record, descendants), [record, descendants]);
-  // The live row's mark, while the session has one: a task in progress is drawn so only while its row draws a ring (B34), and only a live session asks with `!`.
-  // A primitive, so a snapshot that moves nothing of this mark leaves the checklist alone.
-  const mark = useShellStore((state) => {
-    const key = workKey(record.session);
-    const localId = localDeviceId(state.rest);
-    for (const row of everyAgent(state.rest, state.agents).values()) {
-      const session = sessionOfAgentOn(row, localId);
-      if (session && workKey(session) === key) return row.mark;
-    }
-    return null;
-  });
-  const children = record.children.length;
-  const rows = (items: readonly RecordValue[], hang: boolean) => <ChildRows parent={record} items={items} hang={hang} summaries={summaries} onOpen={onOpen} actions={actions} />;
   return <>
-    {summaries ? <section className="mt-md" data-record-work="true">
-      <SectionHead label={t("sessionWork.tasks")} count={list.total ? `${list.done}/${list.total}` : undefined} summary={children ? t("sessionWork.delegatedCount", { count: children }) : null} />
-      {!list.tasks.length && !list.delegated.length && !list.latest ? <p className="text-micro text-muted-foreground">{t("sessionWork.empty")}</p> : null}
-      {list.tasks.map((item) => <TaskRow key={item.task.id} item={item} mark={mark} actions={actions}>{item.children.length ? rows(item.children, true) : null}</TaskRow>)}
-      {list.latest ? <div className="flex min-w-0 items-start gap-xs py-xs" data-record-latest-request={list.latest.offset}><span className="shrink-0 font-medium text-agent-working">{t("sessionWork.justAsked")}</span><span className="min-w-0 flex-1 whitespace-normal [overflow-wrap:anywhere]" title={list.latest.text}>{list.latest.text.split(/\r?\n/)[0]}</span></div> : null}
-      {list.delegated.length ? <div data-record-delegated={list.delegated.length}><h4 className="mt-sm mb-xxs text-micro font-medium text-muted-foreground">{t("sessionWork.delegated")}</h4>{rows(list.delegated, false)}</div> : null}
-    </section> : children ? <section className="mt-md" data-record-delegated={children}>
-      <SectionHead label={t("sessionWork.delegated")} count={children} />
-      {rows(record.children, false)}
-    </section> : null}
-    {summaries && list.missed.length ? <section className="mt-md" data-record-missed={list.missed.length}>
-      <SectionHead label={t("sessionWork.missed")} count={list.missed.length} />
-      {list.missed.map(({ owner, missed, task, named }) => <MissedLine key={`${workKey(owner.session)}:${missed.id}`} missed={missed} session={owner.session} cwd={owner.cwd} note={named ? owner.title : task} actions={actions} />)}
+    <RequestedWork record={record} summaries={summaries} />
+    <RecordTabs record={record} summaries={summaries} actions={actions} parent={parent} locator={locator} />
+    {record.children.length ? <section className="mt-lg min-w-0" data-record-delegated={record.children.length}>
+      <SectionHead label={t("recordCard.children")} count={record.children.length} />
+      <ChildRows parent={record} summaries={summaries} onOpen={onOpen} actions={actions} />
     </section> : null}
   </>;
 }
 
-/** A task: its box, its name with the request that asked for it in the tooltip (B25), the words its box leaves out, its pull requests, and the children it delegated under it. */
-function TaskRow({ item, mark, actions, children }: { item: ChecklistTask; mark: RowMark | null; actions: Actions; children: ReactNode }) {
-  const { task } = item;
+function useRecordAgent(record: RecordValue) {
+  return useShellStore((state) => {
+    const key = workKey(record.session);
+    for (const row of everyAgent(state.rest, state.agents).values()) {
+      const session = sessionOfAgentOn(row, localDeviceId(state.rest));
+      if (session && workKey(session) === key) return row;
+    }
+    return null;
+  });
+}
+
+function RequestTime({ at, full = false }: { at: number; full?: boolean }) {
+  const { i18n } = useInterfaceTranslation();
+  return <time className="shrink-0 font-mono text-micro text-muted-foreground" dateTime={new Date(at).toISOString()}>{full ? `${recordDate(at)} ` : null}{formatDateTime(requireInterfaceLanguage(i18n.language), at, { hour: "2-digit", minute: "2-digit", hour12: false })}</time>;
+}
+
+function RequestedWork({ record, summaries }: { record: RecordValue; summaries: boolean }) {
+  const { t } = useInterfaceTranslation();
+  const list = useMemo(() => checklist(record), [record]);
+  const agent = useRecordAgent(record);
+  const latest = [...record.requests].sort((a, b) => b.at_unix_ms - a.at_unix_ms || b.offset - a.offset)[0];
+  const said = lastWords(agent);
+  return <section className="mt-lg min-w-0" data-record-work={summaries && list.tasks.length ? "true" : undefined}>
+    <SectionHead label={t(summaries && list.tasks.length ? "sessionWork.tasks" : "recordCard.latestRequest")} summary={summaries && list.total ? t("recordCard.completed", { done: list.done, total: list.total }) : null} />
+    {summaries ? list.tasks.map((item) => <TaskRow key={item.task.id} item={item} mark={agent?.mark ?? null} />) : null}
+    {(!summaries || !list.tasks.length) && latest ? <div className="whitespace-pre-wrap text-caption [overflow-wrap:anywhere]" data-record-raw-request="true"><p className="mb-xs text-micro text-muted-foreground">{t(summaries ? latest.judged ? "recordCard.request" : "recordCard.pending" : "recordCard.aiOff")} · <RequestTime at={latest.at_unix_ms} full /></p>{latest.text}</div> : null}
+    {!latest && !list.tasks.length ? <p className="text-micro text-muted-foreground">{t("sessionWork.empty")}</p> : null}
+    {summaries && list.tasks.length && list.latest ? <p className="mt-sm whitespace-pre-wrap text-caption [overflow-wrap:anywhere]" data-record-latest-request={list.latest.offset}><span className="mr-xs text-micro text-muted-foreground">{t("recordCard.pending")} · <RequestTime at={list.latest.at_unix_ms} full /></span>{list.latest.text}</p> : null}
+    {said && agent?.status_code === "working" ? <p className="mt-sm flex min-w-0 items-baseline gap-xs border-t border-border pt-sm text-caption" data-record-current="true"><span className="shrink-0 text-micro text-agent-working">{t("sessionWork.now")}</span><span className="min-w-0 whitespace-normal text-subtle-foreground [overflow-wrap:anywhere]">{said}</span></p> : null}
+  </section>;
+}
+
+/** The original request is visible beneath the task, including its actual timestamp. */
+function TaskRow({ item, mark }: { item: ChecklistTask; mark: RowMark | null }) {
+  const { t } = useInterfaceTranslation();
   const state = shownTaskState(item.state, mark);
-  const live = mark !== null;
-  const name = <TaskName state={state} name={task.name} className={state === "done" ? undefined : "font-medium"} data-record-task-name="true" />;
-  return <div className="py-xxs" data-record-task={task.id}>
+  return <div className="min-w-0 py-sm" data-record-task={item.task.id}>
     <div className="flex min-w-0 items-start gap-xs">
-      <TaskMark state={state} live={live} />
-      {item.request ? <Hint label={item.request.text}>{name}</Hint> : name}
-      <TaskWord state={state} live={live} prShown={item.prs.length > 0} />
-      {item.prs.map((output) => <span key={output.url} data-record-task-pr={output.number}><OutputMark output={output} actions={actions} /></span>)}
+      <TaskMark state={state} live={mark !== null} question={item.task.end === "question"} />
+      <TaskName state={state} name={item.task.name} className="font-medium" data-record-task-name="true" />
+      {state === "working" || state === "done" ? <span className={cn("shrink-0 text-micro leading-(--size-sidebar-line)", state === "working" ? "text-agent-working" : "text-muted-foreground")}>{t(state === "done" ? "sessionWork.done" : "agents.status.working")}</span> : <TaskWord state={state} live={mark !== null} prShown={false} />}
     </div>
-    {children}
+    {item.request ? <p className={cn("mt-xs whitespace-pre-wrap text-caption text-subtle-foreground [overflow-wrap:anywhere]", LANE)} data-record-task-request={item.request.offset}><span className="mr-xs text-micro text-muted-foreground">{t("recordCard.request")} · <RequestTime at={item.request.at_unix_ms} /></span>{item.request.text}</p> : null}
   </div>;
 }
 
-/** A child's words when its pane is gone, by its last END; its mark is quiet, since no pane is left to work, answer or read (status-marks D-06, B24). */
+function RecordTabs({ record, summaries, actions, parent, locator }: { record: RecordValue; summaries: boolean; actions: Actions; parent: string | null; locator?: RequestLocator }) {
+  const { t } = useInterfaceTranslation();
+  const [selected, setSelected] = useState(locator ? "requests" : record.missed.some((item) => item.status === "open") && summaries ? "findings" : "prs");
+  useEffect(() => { if (locator) setSelected("requests"); }, [locator?.request_offset, locator?.query]);
+  const own = workKey(record.session);
+  const outputs = orderedOutputs(record.outputs.filter((output) => workKey(output.source) === own));
+  const found = summaries ? record.missed.filter((item) => item.status === "open") : [];
+  const primary = outputs.filter((output) => output.state !== "merged" && output.state !== "closed");
+  const settled = outputs.filter((output) => output.state === "merged" || output.state === "closed");
+  const outputRows = (items: WorkOutput[]) => items.map((output) => <div key={`${output.kind}:${output.repository}:${output.number}`} className="flex min-w-0 items-start gap-sm py-xs" data-record-pr-row={output.number}><OutputMark output={output} actions={actions} /><button type="button" className={cn(ROW, "min-w-0 flex-1 whitespace-normal text-caption hover:underline [overflow-wrap:anywhere]", output.stale && "opacity-(--opacity-dimmed)")} onClick={() => actions.openRecordedOutput(output)} title={staleHint(output, t("common.unavailable")) ?? undefined}>{output.title}</button></div>);
+  const tab = "h-auto min-w-0 max-w-full shrink-0 rounded-none border-b-2 border-transparent bg-transparent px-none py-sm text-caption font-medium data-[state=active]:border-foreground data-[state=active]:bg-transparent";
+  return <Tabs value={!summaries && selected === "findings" ? "prs" : selected} onValueChange={setSelected} className="mt-lg min-w-0 gap-sm border-t border-border pt-sm" data-record-tabs="true">
+    <TabsList className="w-full flex-wrap justify-start gap-sm rounded-none border-b border-border bg-transparent p-none">
+      <TabsTrigger value="prs" className={tab}><GitPullRequestIcon aria-hidden="true" className="size-(--size-icon-sm)" />{t(outputs.some((output) => output.kind === "issue") ? "recordCard.results" : "recordCard.prs")} <span className="text-micro text-muted-foreground">{outputs.length}</span></TabsTrigger>
+      {summaries ? <TabsTrigger value="findings" className={tab}><TriangleAlertIcon aria-hidden="true" className="size-(--size-icon-sm)" />{t("recordCard.findings")} <span className="text-micro text-muted-foreground">{found.length}</span></TabsTrigger> : null}
+      <TabsTrigger value="requests" className={tab}><MessageSquareIcon aria-hidden="true" className="size-(--size-icon-sm)" />{t("recordCard.history")} <span className="text-micro text-muted-foreground">{record.requests.length}</span></TabsTrigger>
+    </TabsList>
+    <TabsContent value="prs" className="min-w-0">
+      {!outputs.length ? <p className="py-xs text-micro text-muted-foreground">{t("recordCard.noPrs")}</p> : null}
+      {outputRows(primary)}
+      {settled.length ? <details className="min-w-0"><summary className="cursor-pointer py-xs text-micro text-muted-foreground">{t("recordCard.settled", { count: settled.length })}</summary>{outputRows(settled)}</details> : null}
+    </TabsContent>
+    {summaries ? <TabsContent value="findings" className="min-w-0" data-record-missed={found.length}>
+      <p className="mb-sm text-micro text-muted-foreground">{t(found.length ? "recordCard.unassigned" : "recordCard.noFindings")}</p>
+      {found.map((missed) => <MissedLine key={missed.id} missed={missed} session={record.session} cwd={record.cwd} note={null} actions={actions} />)}
+    </TabsContent> : null}
+    <TabsContent value="requests" className="min-w-0"><Words record={record} parent={parent} locator={locator} /></TabsContent>
+  </Tabs>;
+}
+
+/** One flat list, with one child expanded at a time and no row of unbounded PR marks. */
 const END_STATUS: Record<WorkEnd, AgentStatusCode> = { done: "done", working: "working", waiting: "waiting", question: "question", blocked: "error", unfinished: "unfinished" };
 const FIRST_CHILDREN = 5;
-
-/**
- * Children as agent rows (PRD record-card-readability D-06, B10, B11): the
- * sidebar's status mark, the agent's logo and the title, a short state word
- * while it is not done, its pull requests and issues as marks; a finished
- * child is a ✓ and a dim title. The branch it worked on and its device are in
- * the tooltip. `기록 보기` stands at the right while the pointer or the
- * keyboard is on it, and pressing the row opens the child's record in this
- * place. Under a task (`hang`) each row starts with `↳`; a list of its own
- * shows five and `N개 더 보기`.
- */
-function ChildRows({ parent, items, hang, summaries, onOpen, actions }: { parent: RecordValue; items: readonly RecordValue[]; hang: boolean; summaries: boolean; onOpen: (child: RecordValue) => void; actions: Actions }) {
+function ChildRows({ parent, summaries, onOpen, actions }: { parent: RecordValue; summaries: boolean; onOpen: (child: RecordValue) => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const [visible, setVisible] = useState(FIRST_CHILDREN);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const rest = useShellStore((state) => state.rest);
   const agents = useShellStore((state) => state.agents);
-  const rows = useMemo(() => everyAgent(rest, agents), [rest, agents]);
-  const shown = hang ? items : items.slice(0, visible);
-  return <ol className={cn("min-w-0", hang && LANE)} data-record-children={items.length}>
-    {shown.map((child) => {
-      const live = [...rows.values()].find((row) => row.session_id === child.session.session_id) ?? null;
-      const title = recordTitle(child, summaries);
-      const agent = agentProductName(child.session.agent);
-      // An archived child runs nothing, so its record's last state is not said (PRD session-archive B19).
+  const rows = useMemo(() => [...everyAgent(rest, agents).values()], [rest, agents]);
+  return <ol className="min-w-0" data-record-children={parent.children.length}>
+    {parent.children.slice(0, visible).map((child, index) => {
+      const key = workKey(child.session);
+      const live = rows.find((row) => { const session = sessionOfAgentOn(row, localDeviceId(rest)); return session && workKey(session) === key; }) ?? null;
       const held = live ? null : archivedMemberOf(rest, child.session);
       const away = held ? held.row.members[held.index]!.resume : null;
-      const done = live ? live.status_code === "done" : !away && (child.last_end === "done" || (child.tasks.length > 0 && child.tasks.every((task) => task.done)));
-      const state = away && away !== "resumed" ? archivedWord(t, away) : done ? null : live ? statusText(t, live.status_code) : child.state ? statusText(t, child.state as AgentStatusCode) : child.last_end ? statusText(t, END_STATUS[child.last_end]) : null;
-      const status = live && !done ? <StatusMark mark={live.mark} className={markTone(live)} data-agent-status-mark={live.mark} />
-        : done ? <span className="inline-flex size-(--size-agent-mark) items-center justify-center text-success" data-agent-status-mark="done-check"><CheckIcon className="size-full" /></span>
-          : <StatusMark mark={null} data-agent-status-mark="ended" />;
+      // The core also knows report completion and whether the newest turn was judged.
+      const progress = summaries ? parent.child_progress?.children[index] : undefined;
+      const done = live?.status_code === "working" ? false : progress !== undefined ? !away && progress === "done" : live ? live.status_code === "done" : summaries && !away && (child.tasks.length > 0 ? child.tasks.every((task) => task.done) : child.last_end === "done");
+      const state = away && away !== "resumed" ? archivedWord(t, away) : done ? t("sessionWork.done") : live ? statusText(t, live.status_code) : progress === "unjudged" ? t("common.unavailable") : summaries && child.last_end ? (child.last_end === "done" && (progress === "other" || child.tasks.some((task) => !task.done)) ? t("sessionWork.left") : statusText(t, END_STATUS[child.last_end])) : t("common.unavailable");
+      const title = recordTitle(child, summaries);
+      const outputs = childOutputs(parent, child).filter((output) => workKey(output.source) === key);
+      const prs = outputs.filter((output) => output.kind === "pr").length;
+      const findings = summaries ? child.missed.filter((item) => item.status === "open").length : 0;
       const branch = live ? branchChip(live) : child.cwd && child.cwd !== parent.cwd ? folderName(child.cwd) : null;
       const device = child.session.device_id !== parent.session.device_id ? machineName(rest?.navigator?.devices, child.session.device_id, t) : null;
-      const below = recordTree(child).length - 1;
-      return <SessionRow
-        key={workKey(child.session)}
-        mark={<>{hang ? <span className="text-micro text-muted-foreground" data-record-child-arrow="true">↳</span> : null}{status}<AgentMark kind={child.session.agent} /></>}
-        title={title}
-        titleClassName={done ? "text-subtle-foreground" : undefined}
-        hint={[title, agent, branch, device, below ? t("sessionWork.delegatedCount", { count: below }) : null].filter(Boolean).join(" · ")}
-        chips={<>
-          {state ? <span className="shrink-0 text-caption text-muted-foreground" data-record-child-state="true">{state}</span> : null}
-          <OutputMarks outputs={childOutputs(parent, child)} actions={actions} />
-        </>}
-        reveal={<span className="inline-flex items-center gap-xxs text-caption text-subtle-foreground" data-record-child-open="true">{t("sessionWork.openRecord")}<ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" /></span>}
-        onPress={() => onOpen(child)}
-        pressLabel={[title, agent, state].filter(Boolean).join(", ")}
-        data-record-child={child.session.session_id}
-      />;
+      return <li key={key} className="min-w-0 border-b border-border last:border-b-0" data-record-child={child.session.session_id}>
+        <button type="button" className={cn(ROW, "flex w-full items-start gap-sm py-sm hover:bg-accent")} aria-expanded={expanded === key} title={[branch, device].filter(Boolean).join(" · ")} onClick={() => setExpanded(expanded === key ? null : key)}>
+          {done ? <CheckIcon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-success" /> : live ? <StatusMark mark={live.mark} className={cn("mt-xs shrink-0", markTone(live))} /> : summaries && progress !== "unjudged" && child.last_end === "waiting" ? <Clock3Icon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-muted-foreground" /> : <SquareIcon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-muted-foreground" />}
+          <span className="min-w-0 flex-1"><span className={cn("block whitespace-normal text-caption font-medium [overflow-wrap:anywhere]", done && "text-subtle-foreground")}>{title}</span><span className="mt-xs flex min-w-0 flex-wrap items-center gap-x-xs gap-y-xxs text-micro text-muted-foreground"><AgentMark kind={child.session.agent} />{agentProductName(child.session.agent)} · <span data-record-child-state="true">{state}</span>{prs ? <span>· {t("recordCard.prs")} {prs}</span> : null}{findings ? <span>· {t("recordCard.findings")} {findings}</span> : null}</span></span>
+          <ChevronRightIcon aria-hidden="true" className={cn("mt-xs size-(--size-icon-sm) shrink-0 text-muted-foreground", expanded === key && "rotate-90")} />
+        </button>
+        {expanded === key ? <div className="mb-sm ml-md min-w-0 border-l-2 border-border bg-card px-sm pb-sm" data-record-child-detail={child.session.session_id}>
+          <div className="flex min-w-0 flex-wrap gap-xs pt-sm"><Button size="sm" variant="ghost" onClick={() => onOpen(child)}>{t("sessionWork.openRecord")}<ChevronRightIcon aria-hidden="true" /></Button>{live ? <Button size="sm" variant="ghost" onClick={() => actions.openAgent(live.pane_id)}><SquareTerminalIcon aria-hidden="true" />{t("record.toPane")}</Button> : null}</div>
+          <RequestedWork record={child} summaries={summaries} />
+          <RecordTabs record={{ ...child, outputs }} summaries={summaries} actions={actions} parent={recordTitle(parent, summaries)} />
+        </div> : null}
+      </li>;
     })}
-    {!hang && items.length > visible ? <li><Button size="sm" variant="ghost" onClick={() => setVisible((count) => count + FIRST_CHILDREN)}>{t("sessionWork.moreChildren", { count: items.length - visible })}</Button></li> : null}
+    {parent.children.length > visible ? <li><Button size="sm" variant="ghost" onClick={() => setVisible((count) => count + FIRST_CHILDREN)}>{t("sessionWork.moreChildren", { count: parent.children.length - visible })}</Button></li> : null}
   </ol>;
 }
 
@@ -455,9 +486,12 @@ function MissedLine({ missed, session, cwd, note, actions, className }: { missed
     if (project) actions.addBacklog(project.id, missed.text, { session, id: missed.id });
   };
   const small = "h-auto shrink-0 px-xs py-0 text-micro";
-  return <div className={cn("flex min-w-0 flex-wrap items-center gap-x-xs gap-y-xxs py-xxs", className)} data-missed-work={missed.id}>
-    <FlagIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-warning" />
-    <span className="min-w-0 flex-1 basis-1/2 whitespace-normal text-warning [overflow-wrap:anywhere]" title={missed.text}>{missed.text}{note ? <span className="text-muted-foreground" data-missed-note="true"> · {note}</span> : null}</span>
+  return <div className={cn("flex min-w-0 flex-wrap items-center gap-x-xs gap-y-xs border-b border-border py-sm last:border-b-0", className)} data-missed-work={missed.id}>
+    <span className={cn("inline-flex shrink-0 items-center gap-xxs text-micro", missed.kind === "problem" ? "text-warning" : "text-muted-foreground")}>
+      {missed.kind === "problem" ? <TriangleAlertIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <LightbulbIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
+      {t(`sessionWork.kind.${missed.kind}`)}
+    </span>
+    <span className="min-w-0 flex-1 basis-1/2 whitespace-normal text-foreground [overflow-wrap:anywhere]" title={missed.text}>{missed.text}{note ? <span className="text-muted-foreground" data-missed-note="true"> · {note}</span> : null}</span>
     {making ? <span className="flex shrink-0 items-center gap-xxs text-micro text-muted-foreground" data-missed-making="true"><LoaderCircleIcon aria-hidden="true" className="size-(--size-icon-sm) animate-spin" />{t("backlog.creating")}</span> : failed ? <span role="status" className="flex shrink-0 flex-wrap items-center gap-xs text-micro text-destructive" data-missed-failed={failed.failure ?? "refused"}>
       <span>{t(`backlog.failure.${failed.failure ?? "refused"}`)}</span>
       {failed.retry ? <Button size="sm" variant="ghost" className={small} disabled={!connected} onClick={() => actions.retryBacklog(failed.intent)}>{t("common.retry")}</Button>
@@ -482,31 +516,39 @@ export function MissedRow({ missed, record, actions }: { missed: MissedWork; rec
   </li>;
 }
 
-/**
- * The requests the session received, at the record's end (PRD
- * record-card-readability D-15, B24, B25): `내 말 N`, or `받은 요청 N` when a
- * parent asked, each request's first line after who said it (`나`, or the
- * parent) and its time at the right, oldest first with the newest four open
- * and `이전 N턴` before them. The full words stay in the line's tooltip.
- */
-function Words({ record, parent }: { record: RecordValue; parent: string | null }) {
+/** Full request history, author and timestamp, with the latest four initially visible. */
+function Words({ record, parent, locator }: { record: RecordValue; parent: string | null; locator?: RequestLocator }) {
   const { t, i18n } = useInterfaceTranslation();
   const [all, setAll] = useState(false);
   const requests = useMemo(() => [...record.requests].sort((a, b) => a.at_unix_ms - b.at_unix_ms || a.offset - b.offset), [record.requests]);
-  const hidden = all ? 0 : Math.max(0, requests.length - FIRST_WORDS);
-  const received = requests.some((request) => request.author === "parent");
+  const hidden = all || locator ? 0 : Math.max(0, requests.length - FIRST_WORDS);
+  const target = useRef<HTMLDivElement>(null);
+  const located = locator && requests.some((request) => request.offset === locator.request_offset);
+  useEffect(() => {
+    if (located && target.current) {
+      target.current.focus({ preventScroll: true });
+      target.current.scrollIntoView({ block: "center" });
+    }
+  }, [located, locator?.request_offset, locator?.query]);
   const language = requireInterfaceLanguage(i18n.language);
-  return <section className="mt-md" data-record-words={requests.length}>
-    <SectionHead label={t(received ? "sessionWork.receivedWords" : "sessionWork.myWords")} count={requests.length} />
+  return <section className="min-w-0" data-record-words={requests.length}>
+    {locator ? <Hint label={t("overviewHistory.limit")}><button type="button" className="inline-flex items-center gap-xs rounded-xs py-xs text-micro text-muted-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring" data-record-retention="true"><InfoIcon aria-hidden="true" className="size-(--size-icon-sm)" />{t("overviewHistory.limitLabel")}</button></Hint> : null}
+    {locator && !located ? <p role="status" className="py-xs text-caption text-muted-foreground" data-record-request-unavailable="true">{t("overviewHistory.requestUnavailable")}</p> : null}
     {!requests.length ? <p className="text-micro text-muted-foreground">{t("sessionWork.empty")}</p> : null}
     {hidden ? <button type="button" className={cn(ROW, "flex items-center gap-xxs py-xxs text-micro text-muted-foreground hover:text-foreground")} aria-expanded="false" onClick={() => setAll(true)} data-record-words-earlier={hidden}>{t("sessionWork.earlierTurns", { count: hidden })}<ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" /></button> : null}
     <ol className="min-w-0">
-      {requests.slice(hidden).map((request) => {
+      {requests.slice(hidden).map((request, index, shown) => {
         const who = request.author === "operator" ? t("sessionWork.me") : parent ?? t("sessionWork.parent");
-        return <li key={request.offset} className="flex min-w-0 items-baseline gap-sm py-xxs" data-record-request={request.offset}>
+        const matched = locator?.request_offset === request.offset;
+        const day = recordDate(request.at_unix_ms);
+        const first = index === 0 || recordDate(shown[index - 1]!.at_unix_ms) !== day;
+        return <li key={request.offset} className="min-w-0">
+          {first ? <div className="flex items-center gap-sm pt-sm pb-xs" data-record-date={day}><time dateTime={day} className="shrink-0 font-mono text-micro text-muted-foreground">{day}</time><span className="h-px min-w-0 flex-1 bg-border" aria-hidden="true" /></div> : null}
+          <div ref={matched ? target : undefined} tabIndex={matched ? -1 : undefined} className={cn("flex min-w-0 flex-wrap items-baseline gap-sm py-sm", matched && "rounded-xs bg-accent/40 px-xs outline-none focus:ring-1 focus:ring-ring")} data-record-request={request.offset} data-record-request-match={matched ? "true" : undefined}>
           <span className="w-(--size-control) shrink-0 truncate text-micro text-muted-foreground" title={who}>{who}</span>
-          <span className="min-w-0 flex-1 truncate text-subtle-foreground" title={request.text}>{request.text.split(/\r?\n/)[0]}</span>
+          <span className="min-w-0 flex-1 whitespace-pre-wrap text-subtle-foreground [overflow-wrap:anywhere]" title={request.text}>{matched ? <HighlightedRequest text={request.text} query={locator.query ?? ""} /> : request.text}</span>
           <time className="shrink-0 font-mono text-micro text-muted-foreground" dateTime={new Date(request.at_unix_ms).toISOString()}>{formatDateTime(language, request.at_unix_ms, { hour: "2-digit", minute: "2-digit", hour12: false })}</time>
+          </div>
         </li>;
       })}
     </ol>

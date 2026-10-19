@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { startHerdr, declareParent, printLinesCommand } from "./herdr-fixture";
 import { herdrGate } from "./herdr-gate";
+import { startDraftTerminal } from "./group-start-helper";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot, showTool } from "./wire";
 import { chord } from "./chords";
@@ -307,8 +308,12 @@ test("New tab and Reopen use the requested area and Rename works in either bar",
     const left = page.locator(`[data-agent-area-id="${leftId}"]`);
     await left.getByRole("button", { name: /^New tab/ }).click();
     await expect(left.locator('[role="tab"]')).toHaveCount(2);
-    const createdId = (await shape(page))[0]!.tabs.find((id) => id !== herdr.tab)!;
+    const draftId = (await shape(page))[0]!.tabs.find((id) => id !== herdr.tab)!;
+    // B5/B7: New tab places a draft in this area; starting its terminal
+    // promotes that same slot before Rename and native close/reopen apply.
+    const createdId = await startDraftTerminal(left, draftId);
     await expect(left.locator("[data-canvas]")).toHaveAttribute("data-canvas", createdId);
+    await expect(tab(page, secondId)).toHaveAttribute("aria-selected", "true");
     for (const id of [createdId, secondId]) {
       await tab(page, id).click({ button: "right" });
       await page.locator('[data-menu-item="rename_tab"]').click();
@@ -417,7 +422,7 @@ test("A delegated canvas's normal tab keeps the Agent commands in its menu", asy
     await tab(page, herdr.tab).click();
     await expect(page.locator(`[data-pane-view="${parent}"]`)).toHaveAttribute("data-focused", "true");
     await tab(page, herdr.tab).click({ button: "right" });
-    await expect(page.locator('[role="menu"] [data-menu-item="split_right"]')).toBeVisible();
+    await expect(page.locator('[role="menu"] [data-menu-group="split"]')).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.locator('[role="menu"]')).toHaveCount(0);
     await screenshot(page, "agent-groups-delegated-return");

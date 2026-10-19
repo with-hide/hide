@@ -11,6 +11,7 @@ static FAKE_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 mod claude_cli;
 mod codex_app_server;
+mod omp_sdk;
 mod process_ownership;
 mod search_path;
 mod text_clis;

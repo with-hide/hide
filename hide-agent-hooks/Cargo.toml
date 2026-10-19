@@ -12,6 +12,7 @@ name = "hide-agent-hooks"
 path = "src/bin/hide-agent-hooks.rs"
 
 [dependencies]
+base64 = "=0.23.1"
 hide-agent-adapter = { path = "../hide-agent-adapter" }
 # Hide AI's tool-free folder for agy, whose trust this crate records.
 hide-ai = { path = "../hide-ai" }

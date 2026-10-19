@@ -94,6 +94,8 @@ const state = path.join(home, ".hide", "state");
 
 try {
   fs.mkdirSync(home);
+  fs.mkdirSync(path.join(home, ".hide"));
+  fs.writeFileSync(path.join(home, ".hide", "product-analytics-disabled"), "");
   const app = installed;
   let resources = path.join(app, "resources");
   const bundled = (name) => path.join(resources, `${name}${exe}`);

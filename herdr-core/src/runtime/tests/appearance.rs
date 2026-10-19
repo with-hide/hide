@@ -38,6 +38,44 @@ fn state_path(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     (folder, path)
 }
 
+#[test]
+fn product_analytics_opt_out_survives_restart_and_stale_ui_saves() {
+    let (_state, path) = state_path("product-analytics");
+    let mut runtime = runtime_at(&path);
+    assert!(runtime.snapshot().ui_state.product_analytics_enabled);
+    let stale = ui_state_update(&runtime, serde_json::json!({"font_size": 15}));
+    let off = serde_json::to_vec(&serde_json::json!({
+        "schema_version": SCHEMA_VERSION, "kind": "product_analytics_set",
+        "payload": {"enabled": false}
+    }))
+    .unwrap();
+    assert!(runtime.dispatch_json(&off));
+    assert!(
+        !runtime.dispatch_json(&off),
+        "the desired value is idempotent"
+    );
+    runtime.dispatch_json(&stale);
+    assert!(!runtime.snapshot().ui_state.product_analytics_enabled);
+    drop(runtime);
+    let restarted = runtime_at(&path);
+    assert!(!restarted.snapshot().ui_state.product_analytics_enabled);
+    drop(restarted);
+    let mut stored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    stored
+        .as_object_mut()
+        .unwrap()
+        .remove("product_analytics_enabled");
+    std::fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
+    assert!(
+        runtime_at(&path)
+            .snapshot()
+            .ui_state
+            .product_analytics_enabled,
+        "a store from before analytics uses the authorized default"
+    );
+}
+
 fn theme_set(theme: &str) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "schema_version": SCHEMA_VERSION,

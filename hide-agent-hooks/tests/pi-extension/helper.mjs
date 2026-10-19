@@ -4,6 +4,10 @@
 // back, `exit` ends without one, `raw` prints it unparsed.
 
 import { appendFileSync, readFileSync } from "node:fs";
+import assert from "node:assert/strict";
+
+// The generated extension must carry its route even if the host filters env.
+assert.deepEqual(process.argv.slice(4), ["--state-dir-b64", "L2NhcHR1cmVkLXN0YXRl"]);
 
 const [agent, operation] = process.argv.slice(2);
 let stdin = "";

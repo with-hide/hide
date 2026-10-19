@@ -32,9 +32,9 @@ use serde_json::json;
 
 use super::analysis::{AnalysisFailure, LabelEnd};
 use super::analysis::{
-    AnalysisPhase, analysis_context, analysis_phase, context_fingerprint, interrupted,
-    new_human_turns, newest_user_is_last, retain_bounded, rolling_analysis_context,
-    task_input_cursor, turn_key,
+    AnalysisPhase, GoalUpdate, analysis_context, analysis_phase, context_fingerprint,
+    goal_evidence, interrupted, new_human_turns, newest_user_is_last, retain_bounded,
+    rolling_analysis_context, task_input_cursor, turn_key,
 };
 use super::analyzer::{AnalysisJob, AnalysisResult, LabelAnalyzer};
 use super::context_label;
@@ -209,6 +209,11 @@ enum WorkerResult {
 struct AnalysisMeta {
     ledger_session: Option<SessionIdentity>,
     work_author: bool,
+    /// The sender of the descendant's report, progress or block that woke
+    /// the turn: the one letter that continues its task, the ledger checking
+    /// the lineage (PRD task-continuation D-02). A watch alert or a reply
+    /// carries no work.
+    work_letter: Option<String>,
     turn_witness: Option<String>,
     offset: Option<u64>,
     at_unix_ms: u64,
@@ -220,6 +225,9 @@ struct AnalysisMeta {
     phase: AnalysisPhase,
     task_input_cursor: Option<u64>,
     initial_context: bool,
+    goal_evidence: Option<String>,
+    goal_evidence_start: Option<u64>,
+    goal_evidence_refresh: Option<String>,
     /// The turn began with the operator's request, so it may move the goal
     /// (D-09).
     operator_turn: bool,
@@ -428,9 +436,8 @@ impl LabelWorker {
                 record.agent_status = Some(status.clone());
                 self.dirty = true;
             }
-            // A running agent is not waiting on anyone: how the last turn
-            // ended (and a question's reply or a block's cause) is over, and
-            // the turn's end writes anew. A
+            // A running agent is not waiting on anyone: the last turn's end
+            // and sentence are over, and the new turn's analysis writes anew. A
             // stopped agent whose state moved and is stopped again (or at a
             // permission prompt) ran in between, even when its working state
             // came and went inside one burst of Herdr events and was never
@@ -439,10 +446,12 @@ impl LabelWorker {
                 || (seq_moved
                     && was_stopped
                     && matches!(status.as_str(), "idle" | "done" | "blocked"));
-            if ran && let Some(end) = record.end.filter(|end| *end != LabelEnd::Working) {
-                if matches!(end, LabelEnd::Question | LabelEnd::Blocked) {
-                    record.line.clear();
-                }
+            if ran
+                && record
+                    .end
+                    .is_some_and(|end| end != LabelEnd::Working || was_stopped)
+            {
+                record.line.clear();
                 record.end = None;
                 self.dirty = true;
                 changed = true;
@@ -831,6 +840,16 @@ impl LabelWorker {
                 .any(|pane| pane.needs_read && pane.reference_token.is_some())
     }
 
+    #[cfg(test)]
+    pub(crate) fn reader_idle(&self) -> bool {
+        self.read_in_flight.is_none()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn analyzer_idle(&self) -> bool {
+        self.analysis_in_flight.is_none()
+    }
+
     /// Takes the generator role when it is free. Returns whether this worker
     /// started or stopped generating; one that took the role over from
     /// another core reads again whatever moved while that one generated.
@@ -1068,6 +1087,7 @@ impl LabelWorker {
             }));
             record.reset_analysis();
             verdicts_forgotten = true;
+            changed = true;
         }
         if record.proven_reference.as_deref() != Some(reference) {
             record.proven_reference = Some(reference.to_owned());
@@ -1274,6 +1294,19 @@ impl LabelWorker {
             pane.needs_read = true;
             return changed;
         }
+        // A line and its end belong to the Human turn that was analyzed.
+        // A new turn can begin while Herdr still reports Working, or while
+        // the old turn's end analysis is in flight.
+        if let Some(turn) = turn_key(pane.events.make_contiguous())
+            && let Some(record) = self.records.get_mut(pane_id)
+            && record.analysis_turn_start != Some(turn)
+            && (record.end.is_some() || !record.line.is_empty())
+        {
+            record.line.clear();
+            record.end = None;
+            self.dirty = true;
+            changed = true;
+        }
         let armed = std::mem::take(&mut pane.follow_up_armed);
         let submitted_before = self.analysis_in_flight.clone();
         changed |= self.decide(pane_id, now);
@@ -1440,7 +1473,11 @@ impl LabelWorker {
         // short turns end first, and their end call names the goal. A pane
         // with no goal yet is named at once: nothing shows its work until
         // the first answer lands.
-        if phase == AnalysisPhase::TurnStart && !initial_context && !self.start_delay.is_zero() {
+        if phase == AnalysisPhase::TurnStart
+            && record.goal.is_some()
+            && record.task_input_cursor.is_some()
+            && !self.start_delay.is_zero()
+        {
             let due = match pane.start_held {
                 Some((held, due)) if held == turn => due,
                 _ => {
@@ -1473,15 +1510,56 @@ impl LabelWorker {
             .is_some_and(operator);
         let start_skipped =
             phase == AnalysisPhase::TurnEnd && record.analysis_turn_start != Some(turn);
-        let mut context = if initial_context {
+        let mut delta = new_human_turns(events, record.task_input_cursor);
+        delta.retain(operator);
+        // Only one newly assigned request has a known origin. A first read
+        // containing several historical requests cannot prove which one
+        // established the current goal; never label the oldest as its origin.
+        let evidence_events: &[LabelEvent] = if delta.len() == 1
+            && events
+                .iter()
+                .rfind(|event| event.kind == LabelEventKind::Human)
+                .is_some_and(|event| event.offset == delta[0].offset)
+        {
+            let first = &delta[0];
+            let start = events
+                .iter()
+                .position(|event| event.offset == first.offset)
+                .expect("delta is from these events");
+            &events[start..]
+        } else {
+            &[]
+        };
+        let evidence = goal_evidence(evidence_events, &operator);
+        let evidence_start = evidence_events
+            .iter()
+            .find(|event| event.kind == LabelEventKind::Human && operator(event))
+            .map(|event| event.offset);
+        // A start can precede the agent's explanation of a path-only brief.
+        // Refresh only from that same assignment's original request, never
+        // from a later narrow follow-up. Once another turn begins, retention
+        // may keep the original request but prune its replies: the saved
+        // clarification remains authoritative then.
+        let evidence_refresh = record
+            .goal_evidence_start
+            .and_then(|offset| events.iter().position(|event| event.offset == offset))
+            .filter(|start| {
+                !events[start + 1..]
+                    .iter()
+                    .any(|event| event.kind == LabelEventKind::Human)
+            })
+            .and_then(|start| goal_evidence(&events[start..], &operator));
+        let mut context = if initial_context && record.goal.is_none() {
             analysis_context(events, &operator)
         } else {
-            let mut delta = new_human_turns(events, record.task_input_cursor);
-            delta.retain(operator);
             // An end whose start was never asked sees the requests the
             // start would have, so it can tell a new job from a follow-up.
             rolling_analysis_context(
                 record.goal.as_deref().unwrap_or_default(),
+                evidence_refresh
+                    .as_deref()
+                    .or(record.goal_evidence.as_deref())
+                    .unwrap_or_default(),
                 if phase == AnalysisPhase::TurnStart || start_skipped {
                     &delta
                 } else {
@@ -1589,6 +1667,12 @@ impl LabelWorker {
             .rfind(|event| event.kind == LabelEventKind::Human)
             .and_then(|event| hide_session::label_transcript::work_turn(events, event.offset))
             .map(|turn| turn.witness());
+        let work_letter = events
+            .iter()
+            .rfind(|event| event.kind == LabelEventKind::Human)
+            .and_then(|event| hide_session::envelope_header(&event.text))
+            .filter(|(_, kind)| matches!(kind.as_str(), "report" | "progress" | "block"))
+            .map(|(sender, _)| sender);
         if phase == AnalysisPhase::TurnEnd {
             context.push_str(&super::analysis::work_context(work_author, &ledger));
         }
@@ -1614,6 +1698,7 @@ impl LabelWorker {
         let meta = AnalysisMeta {
             ledger_session,
             work_author,
+            work_letter,
             turn_witness,
             offset: events
                 .iter()
@@ -1631,6 +1716,9 @@ impl LabelWorker {
             phase,
             task_input_cursor: task_input_cursor(events),
             initial_context,
+            goal_evidence: evidence,
+            goal_evidence_start: evidence_start,
+            goal_evidence_refresh: evidence_refresh,
             operator_turn,
             start_skipped,
             context_chars: context.chars().count(),
@@ -1687,24 +1775,53 @@ impl LabelWorker {
         if !self.summaries {
             return false;
         }
+        // Reads and analyses can finish in either order. Keep an older
+        // turn's task judgment, but never publish its sentence over a newer
+        // Human turn that the reader has already proven.
+        let stale_turn = self
+            .panes
+            .get_mut(pane_id)
+            .and_then(|pane| turn_key(pane.events.make_contiguous()))
+            .is_some_and(|turn| turn != outcome.turn);
+        // A TurnEnd request was made for a stopped agent. If it has since
+        // resumed, its old sentence cannot describe the running turn, even
+        // before the new transcript read has completed (or if that read fails).
+        let stale_display = stale_turn
+            || (outcome.phase == AnalysisPhase::TurnEnd
+                && self
+                    .panes
+                    .get(pane_id)
+                    .is_some_and(|pane| pane.status == "working"));
         match result {
             Ok((provider, analysis)) => {
                 let record = self.records.get_mut(pane_id).expect("checked above");
                 let previous_goal = record.goal.clone();
-                // A first goal or the start of a turn the operator asked
-                // for may move the goal (D-09), and so may the end of one
-                // whose start was never asked (label-judgment-fixes D-04).
-                // With goal_changed false, the provider's goal value is
-                // ignored, including null.
+                // A new assignment still belongs to the operator's first
+                // boundary. A clearer name for that same assignment may
+                // arrive at its end; another agent's letter cannot rename it.
                 let may_update_goal = previous_goal.is_none()
+                    || (outcome.operator_turn
+                        && !stale_display
+                        && analysis.goal_update == GoalUpdate::Refine)
                     || ((outcome.initial_context
                         || outcome.phase == AnalysisPhase::TurnStart
                         || outcome.start_skipped)
                         && outcome.operator_turn
-                        && analysis.goal_changed);
+                        && analysis.goal_update == GoalUpdate::Replace);
                 let goal_changed = may_update_goal && previous_goal != analysis.goal;
                 if goal_changed {
                     record.goal = analysis.goal.clone();
+                }
+                if record.goal.is_some()
+                    && (previous_goal.is_none()
+                        || (may_update_goal && analysis.goal_update == GoalUpdate::Replace))
+                {
+                    record.goal_evidence.clone_from(&outcome.goal_evidence);
+                    record.goal_evidence_start = outcome.goal_evidence_start;
+                } else if record.goal.is_some() && outcome.goal_evidence_refresh.is_some() {
+                    record
+                        .goal_evidence
+                        .clone_from(&outcome.goal_evidence_refresh);
                 }
                 if let Some(session) = outcome.ledger_session.clone()
                     && let Some(client) = self.ledger.lock().ok().and_then(|client| client.clone())
@@ -1730,9 +1847,11 @@ impl LabelWorker {
                         && let Err(code) = client.ledger(LedgerUpdate::TurnEnd {
                             session,
                             offset,
+                            started_at_unix_ms: outcome.request_at_unix_ms,
                             at_unix_ms: outcome.at_unix_ms,
                             end: analysis.end,
                             work_author: outcome.work_author,
+                            letter: outcome.work_letter.clone(),
                             turn_witness: outcome.turn_witness.clone(),
                             judgment,
                         })
@@ -1741,6 +1860,24 @@ impl LabelWorker {
                             json!({"component":"labels","kind":"ledger.enqueue_failed","pane_id":pane_id,"code":code})
                         );
                     }
+                }
+                if stale_display {
+                    record.task_input_cursor =
+                        outcome.task_input_cursor.or(record.task_input_cursor);
+                    match outcome.phase {
+                        AnalysisPhase::TurnStart => record.analysis_turn_start = Some(outcome.turn),
+                        AnalysisPhase::TurnEnd => {
+                            record.analysis_turn_start = Some(outcome.turn);
+                            record.analysis_turn_end = Some(outcome.turn);
+                        }
+                    }
+                    self.dirty = true;
+                    crate::diagnostic!(json!({
+                        "component": "labels", "kind": "analysis.discarded_old_turn_display",
+                        "target": self.target, "pane_id": pane_id,
+                        "turn": format!("{:016x}", outcome.turn),
+                    }));
+                    return goal_changed;
                 }
                 record.line = analysis.line.clone();
                 record.end = Some(analysis.end);
@@ -1780,6 +1917,37 @@ impl LabelWorker {
             // A stopping daemon records nothing; the next one asks again.
             Err(AnalysisFailure::Stopped) => false,
             Err(failure) => {
+                if stale_display {
+                    let record = self.records.get_mut(pane_id).expect("checked above");
+                    record.task_input_cursor =
+                        outcome.task_input_cursor.or(record.task_input_cursor);
+                    record.analysis_turn_start = Some(outcome.turn);
+                    if outcome.phase == AnalysisPhase::TurnEnd {
+                        record.analysis_turn_end = Some(outcome.turn);
+                    }
+                    self.dirty = true;
+                    if outcome.phase == AnalysisPhase::TurnEnd
+                        && (outcome.work_author || outcome.work_letter.is_some())
+                        && let Some(session) = outcome.ledger_session.clone()
+                        && let Some(offset) = outcome.offset
+                        && let Some(client) =
+                            self.ledger.lock().ok().and_then(|client| client.clone())
+                        && let Err(code) = client.ledger(LedgerUpdate::Unjudged {
+                            session,
+                            offsets: vec![offset],
+                        })
+                    {
+                        crate::diagnostic!(
+                            json!({"component":"labels","kind":"ledger.enqueue_failed","pane_id":pane_id,"code":code})
+                        );
+                    }
+                    self.log_failure(
+                        pane_id,
+                        "analysis.discarded_old_turn_failure",
+                        &failure.detail(),
+                    );
+                    return false;
+                }
                 // The turn's own line and end are unknown now: the row shows
                 // its facts and never stops on a guess; the goal stays
                 // (D-33, B20).
@@ -1800,7 +1968,11 @@ impl LabelWorker {
                     self.log_failure(pane_id, "analysis.retried", &failure.detail());
                     return cleared;
                 }
+                // Only a turn that can move a task leaves an unknown on one
+                // when its judgment fails: a watch alert or a reply moves
+                // none (B4, D-09).
                 if outcome.phase == AnalysisPhase::TurnEnd
+                    && (outcome.work_author || outcome.work_letter.is_some())
                     && let Some(session) = outcome.ledger_session.clone()
                     && let Some(offset) = outcome.offset
                     && let Some(client) = self.ledger.lock().ok().and_then(|client| client.clone())
@@ -1864,7 +2036,9 @@ fn wake_loss_diagnostic(pane_id: &str, cause: hide_session::turns::WakeLoss) -> 
 }
 
 fn provider(kind: Option<&str>) -> Option<Agent> {
-    let adapter = hide_agent_adapter::adapter(kind?)?;
+    let agent = Agent::from_kind(kind?)?;
+    // History readers survive retirement from active launch and hook support.
+    let adapter = agent.format().adapter();
     adapter
         .titles
         .or(adapter.conversation)

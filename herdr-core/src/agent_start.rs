@@ -69,6 +69,67 @@ pub(crate) const SHELL_WAIT: Duration = Duration::from_secs(30);
 pub(crate) const AGENT_START_DEADLINE: Duration = Duration::from_secs(120);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A typed start is not proof that its program exists. Keep the fork's node
+/// holder until Herdr observes this named agent ready in the created pane.
+/// This determines only input release, never whether the fork succeeded.
+/// Reads also settle Herdr's pending start (#3853); nothing is typed again.
+/// Runs on the existing fork worker, with no Runtime lock or new timer.
+#[allow(clippy::disallowed_methods)] // bounded production polling, not a test sleep
+pub(crate) fn confirm_fork_started(
+    connector: &dyn ApiConnector,
+    pane: &str,
+    name: &str,
+    kind: &str,
+    current: &dyn Fn() -> Result<(), String>,
+    deadline: Instant,
+) -> Result<(), String> {
+    let params = wire::agent_target_params(name)?;
+    let mut last_read_error = None;
+    loop {
+        current()?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(match last_read_error {
+                Some(error) => format!("The fork's input readiness deadline elapsed: {error}"),
+                None => "The fork's input readiness deadline elapsed.".into(),
+            });
+        }
+        let agent = request_with_connector(
+            connector,
+            "agent.get",
+            params.clone(),
+            remaining.min(READ_TIMEOUT),
+        )
+        .map_err(|error| format!("The fork's agent could not be confirmed: {error}"))
+        .and_then(wire::delivery_agent);
+        // A transient read failure proves neither readiness nor a closed
+        // pane. Keep refusing input until a positive answer or the deadline.
+        if let Ok(agent) = agent {
+            last_read_error = None;
+            if agent.pane_id != pane || agent.name != name {
+                return Err("The fork's agent identity changed.".into());
+            }
+            if let Some(observed) = agent.kind {
+                if hide_agent_adapter::canonical_kind(&observed)
+                    != hide_agent_adapter::canonical_kind(kind)
+                {
+                    return Err("The fork's agent kind changed.".into());
+                }
+                if agent.readiness.accepts_input() {
+                    return current();
+                }
+            }
+        } else {
+            last_read_error = agent.err();
+        }
+        thread::sleep(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(POLL_INTERVAL),
+        );
+    }
+}
 const PANE_BUSY: &str = "agent_pane_busy";
 const NAME_TAKEN: &str = "agent_name_taken";
 const AGENT_NOT_FOUND: &str = "agent_not_found";
@@ -110,9 +171,16 @@ impl ShellStart {
     /// when the tab runs `launch`, else by holding the terminal.
     pub(crate) fn of_tab(launched: bool, launch: Option<&ShellLaunch>) -> Self {
         match launch.and_then(|launch| launch.command.first()) {
-            Some(shell) if launched => Self::Integrated {
-                program: program_name(shell),
-            },
+            Some(shell)
+                if launched
+                    && launch.is_some_and(|launch| {
+                        launch.readiness == hide_node_link::protocol::ShellReadiness::Integrated
+                    }) =>
+            {
+                Self::Integrated {
+                    program: program_name(shell),
+                }
+            }
             _ => Self::Plain,
         }
     }
@@ -213,9 +281,9 @@ pub(crate) fn trust_worktree(
 
 /// How a pane Hide makes for a start runs the account's shell so that it
 /// marks its first prompt, written by `node`, the node of the machine that
-/// will run the pane. `None` for a shell the integration does not reach,
-/// and, logged, for a node that cannot be reached or cannot write it: the
-/// pane then starts as any other and the start is confirmed after typing.
+/// will run the pane. The node supplies an explicit Plain recipe when it
+/// cannot install prompt integration. `None`, logged, means the node or its
+/// normal shell cannot be confirmed; group starts refuse before creation.
 pub(crate) fn shell_launch(
     node: Option<&dyn NodeLink>,
     correlation_id: &str,
@@ -645,6 +713,160 @@ mod tests {
     use crate::fake_herdr::FakeHerdr;
 
     const SHELL: u32 = 4100;
+
+    #[test]
+    fn every_fork_kind_uses_delivery_readiness_and_checks_its_owner_after_the_read() {
+        use crate::fork::ForkableAgent::*;
+        for agent in [Claude, Codex, Grok, Pi, Omp, OpenCode, Antigravity] {
+            for reported in [true, false] {
+                for owner_ends in [true, false] {
+                    let reads = Arc::new(AtomicUsize::new(0));
+                    let observed = reads.clone();
+                    let herdr = FakeHerdr::start("fork-ready-kinds", move |method, _| {
+                        assert_eq!(method, "agent.get");
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        let mut reply = json!({"type":"agent_info", "agent": {
+                            "pane_id":"w1:p1", "terminal_id":"terminal-one", "workspace_id":"w1", "tab_id":"w1:t1",
+                            "name":"fork-one", "agent":agent.kind(), "launch_pending":false,
+                            "focused":false, "agent_status":"idle", "revision":1
+                        }});
+                        if reported {
+                            reply["agent"]["interactive_ready"] = json!(true);
+                        }
+                        reply
+                    });
+                    let result = confirm_fork_started(
+                        &herdr.connector(),
+                        "w1:p1",
+                        "fork-one",
+                        agent.kind(),
+                        &|| {
+                            if owner_ends && reads.load(Ordering::SeqCst) > 0 {
+                                Err("daemon ended".into())
+                            } else {
+                                Ok(())
+                            }
+                        },
+                        Instant::now() + Duration::from_secs(5),
+                    );
+                    assert_eq!(
+                        result.is_ok(),
+                        !owner_ends,
+                        "{agent:?}, reported={reported}"
+                    );
+                    assert_eq!(reads.load(Ordering::SeqCst), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_still_pending_fork_reaches_its_deadline_without_typing() {
+        let herdr = FakeHerdr::start("fork-remains-pending", |method, _| {
+            assert_eq!(method, "agent.get", "input never reaches the shell");
+            json!({"type":"agent_info", "agent": {
+                "pane_id":"w1:p1", "terminal_id":"terminal-one", "workspace_id":"w1", "tab_id":"w1:t1",
+                "name":"fork-one", "agent":"claude", "launch_pending":true,
+                "interactive_ready":false, "focused":false, "agent_status":"idle", "revision":1
+            }})
+        });
+        let result = confirm_fork_started(
+            &herdr.connector(),
+            "w1:p1",
+            "fork-one",
+            "claude",
+            &|| Ok(()),
+            Instant::now() + Duration::from_millis(200),
+        );
+        assert!(result.unwrap_err().contains("deadline elapsed"));
+        assert!(!herdr.methods().is_empty());
+    }
+
+    #[test]
+    fn a_fork_waits_for_its_named_agent_instead_of_releasing_keys_to_a_shell() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let observed = reads.clone();
+        let herdr = FakeHerdr::start("fork-start-observed", move |method, params| {
+            assert_eq!(method, "agent.get");
+            assert_eq!(params["target"], "fork-one");
+            let read = observed.fetch_add(1, Ordering::SeqCst);
+            json!({"type":"agent_info", "agent": {
+                "pane_id":"w1:p1", "terminal_id":"terminal-one", "workspace_id":"w1", "tab_id":"w1:t1",
+                "name":"fork-one", "agent":if read == 0 { Value::Null } else { json!("claude") },
+                "launch_pending":read < 2, "interactive_ready":read >= 2,
+                "focused":false, "agent_status":"idle", "revision":1
+            }})
+        });
+        confirm_fork_started(
+            &herdr.connector(),
+            "w1:p1",
+            "fork-one",
+            "claude",
+            &|| Ok(()),
+            Instant::now() + Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            3,
+            "a reserved name and a still-starting process are not ready"
+        );
+    }
+
+    #[test]
+    fn a_fork_with_no_confirmed_agent_refuses_input() {
+        for case in [
+            "gone",
+            "pane-changed",
+            "name-changed",
+            "kind-changed",
+            "shell",
+            "owner-ended",
+            "deadline",
+        ] {
+            let reads = Arc::new(AtomicUsize::new(0));
+            let observed = reads.clone();
+            let herdr = FakeHerdr::start_with_errors("fork-start-refused", move |method, _| {
+                assert_eq!(method, "agent.get", "confirmation never types keys");
+                let read = observed.fetch_add(1, Ordering::SeqCst);
+                if case == "gone" || read > 0 {
+                    return Err(("agent_not_found".into(), "start failed".into()));
+                }
+                let agent = json!({
+                    "pane_id":if case == "pane-changed" { "w1:p2" } else { "w1:p1" },
+                    "name":if case == "name-changed" { "replacement" } else { "fork-one" },
+                    "agent":if case == "kind-changed" { json!("pi") } else if case == "shell" { Value::Null } else { json!("claude") },
+                    "terminal_id":"terminal-one", "workspace_id":"w1", "tab_id":"w1:t1",
+                    "interactive_ready":true, "focused":false, "agent_status":"idle", "revision":1
+                });
+                Ok(json!({"type":"agent_info", "agent":agent}))
+            });
+            let deadline = Instant::now()
+                + if case == "deadline" {
+                    Duration::ZERO
+                } else {
+                    Duration::from_millis(200)
+                };
+            let result = confirm_fork_started(
+                &herdr.connector(),
+                "w1:p1",
+                "fork-one",
+                "claude",
+                &|| {
+                    if case == "owner-ended" {
+                        Err("fork ended".into())
+                    } else {
+                        Ok(())
+                    }
+                },
+                deadline,
+            );
+            assert!(result.is_err(), "{case}");
+            if matches!(case, "owner-ended" | "deadline") {
+                assert_eq!(reads.load(Ordering::SeqCst), 0);
+            }
+        }
+    }
 
     fn process_info(foreground: u32, pids: &[u32]) -> Value {
         let processes: Vec<Value> = pids
@@ -1276,6 +1498,7 @@ mod tests {
     fn a_launched_shell_is_named_as_its_pane_lists_it() {
         let launch = |shell: &str| ShellLaunch {
             command: vec![shell.into(), "-l".into()],
+            readiness: hide_node_link::protocol::ShellReadiness::Integrated,
             env: Default::default(),
         };
         for (shell, program) in [

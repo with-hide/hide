@@ -1162,7 +1162,6 @@ dependencies = [
  "hide-agent-adapter",
  "hide-agent-hooks",
  "hide-ai",
- "hide-factory",
  "hide-herdr-client",
  "hide-host",
  "hide-kit",
@@ -1215,6 +1214,7 @@ dependencies = [
 name = "hide-agent-hooks"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "hide-agent-adapter",
  "hide-ai",
  "hide-herdr-client",
@@ -1240,23 +1240,6 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
- "tempfile",
- "workspace-hack",
-]
-
-[[package]]
-name = "hide-factory"
-version = "0.1.0"
-dependencies = [
- "base64 0.23.1",
- "hide-agent-adapter",
- "hide-node",
- "hide-node-link",
- "hide-platform",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.10.9",
  "tempfile",
  "workspace-hack",
 ]
@@ -1436,7 +1419,6 @@ dependencies = [
  "hex",
  "hide-agent-adapter",
  "hide-agent-hooks",
- "hide-factory",
  "hide-herdr-client",
  "hide-host",
  "hide-kit",
@@ -1449,6 +1431,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "jiff",
  "libc",
  "md5",
  "percent-encoding",

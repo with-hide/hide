@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { createActions, type Actions } from "./actions";
-import { needsYouCount, receiveAgentNotice, useAgentNotifications } from "./agentNotices";
+import { receiveAgentNotice, useAgentNotifications } from "./agentNotices";
 import type { AgentScope } from "./agentScope";
 import { clientI18n } from "./i18n/translator";
 import { useShellStore } from "./store";
@@ -100,25 +100,21 @@ it("asks for agent notices while the switch is on, words each one, withdraws a s
   useShellStore.setState(saved, true);
 });
 
-/** A device whose sidebar Needs You group holds `shown` and `more` agents, and Done holds one. */
-function device(id: string, shown: number, more: number) {
+/** The core's raised groups; `more` rows still contribute when the list folds. */
+function device(id: string, shown: number, more: number, done = 1, doneMore = 0) {
   const refs = (n: number, at: number) => Array.from({ length: n }, (_, i) => ({ pane_id: `${id}:p${at + i}`, occurrence: 0 }));
-  const raised: AgentScope["raised"] = [{ group: "done", shown: refs(1, 90), more: [] }];
+  const raised: AgentScope["raised"] = [{ group: "done", shown: refs(done, 90), more: refs(doneMore, 90 + done) }];
   if (shown + more > 0) raised.unshift({ group: "needs_you", shown: refs(shown, 0), more: refs(more, shown) });
   return { id, agent_scope: { raised } };
 }
 
-it("counts every device's Needs You group for the app icon, not Done", () => {
-  expect(needsYouCount(null)).toBe(0);
-  expect(needsYouCount({ navigator: { devices: [device("node", 5, 2), device("mini", 1, 0), device("box", 0, 0)] } } as never)).toBe(8);
-});
-
+// Operator decision 2026-10-18: include unread Done in the app icon under its own switch.
 it.each([
   [false, false, [], 0, false],
   [true, false, ["Needs You · my-app"], 2, true],
-  [false, true, ["Unread · my-app"], 0, true],
-  [true, true, ["Needs You · my-app", "Unread · my-app"], 2, true],
-] as const)("with Needs You=%s and Done=%s sends only the chosen groups and counts Needs You", async (needsYou, done, bodies, badge, wanted) => {
+  [false, true, ["Unread · my-app"], 1, true],
+  [true, true, ["Needs You · my-app", "Unread · my-app"], 3, true],
+] as const)("with Needs You=%s and Done=%s sends and counts only the chosen groups", async (needsYou, done, bodies, badge, wanted) => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const shown: string[] = [];
   const reported: number[] = [];
@@ -151,7 +147,7 @@ it.each([
   }
 });
 
-it("reports the app icon's count once the page is live, on each change, and none while the switch is off", async () => {
+it("counts enabled groups across devices, updates when Done is read, and keeps the legacy shared choice", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const reported: number[] = [];
   window.hideHost = {
@@ -163,17 +159,24 @@ it("reports the app icon's count once the page is live, on each change, and none
   const actions = createActions(() => true);
   const saved = useShellStore.getState();
   const root = createRoot(document.body.appendChild(document.createElement("div")));
-  const rest = (on: boolean, needsYou: number) => ({ ui_state: { desktop_notifications: on }, navigator: { devices: [device("node", needsYou, 0)] } });
+  const rest = (on: boolean, needsYou: number, done = 1) => ({ ui_state: { desktop_notifications: on }, navigator: { devices: [device("node", needsYou, 0, done)] } });
   await act(async () => {
     useShellStore.setState({ connection: "connecting", rest: rest(true, 2) } as never);
     root.render(<Probe actions={actions} />);
   });
   expect(reported).toEqual([]);
   await act(async () => useShellStore.setState({ connection: "live" } as never));
+  // A new snapshot with the same count sends no extra badge update.
   await act(async () => useShellStore.setState({ rest: rest(true, 2) } as never));
   await act(async () => useShellStore.setState({ rest: rest(true, 3) } as never));
+  await act(async () => useShellStore.setState({ rest: rest(true, 3, 0) } as never));
+  await act(async () => useShellStore.setState({ rest: {
+    ui_state: { desktop_notifications: true, desktop_notifications_done: true },
+    navigator: { devices: [device("node", 5, 2, 2, 1), device("mini", 1, 0, 0), device("box", 0, 0)] },
+  } } as never));
+  await act(async () => useShellStore.setState({ rest: null }));
   await act(async () => useShellStore.setState({ rest: rest(false, 3) } as never));
-  expect(reported).toEqual([2, 3, 0]);
+  expect(reported).toEqual([3, 4, 3, 12, 0]);
   await act(async () => root.unmount());
   useShellStore.setState(saved, true);
 });

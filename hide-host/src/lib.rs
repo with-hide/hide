@@ -22,7 +22,6 @@ pub mod disk_layers;
 pub mod document;
 #[cfg(all(test, unix))]
 mod executable_fixture;
-pub mod factory;
 pub mod feedback;
 pub mod gh;
 pub mod git;

@@ -41,4 +41,8 @@ await build({ ...common, entryPoints: [path.join(root, "src/main/index.ts")], ou
 await build({ ...common, entryPoints: [path.join(root, "src/preload/index.ts")], outfile: path.join(dist, "preload.js") });
 
 fs.cpSync(path.join(root, "static"), path.join(dist, "static"), { recursive: true });
+// JSON is embedded in the local script: file: needs neither fetch nor a relaxed CSP.
+await build({ entryPoints: [path.join(root, "static/status.js")], outfile: path.join(dist, "static/status.js"), bundle: true, platform: "browser", format: "iife", target: "chrome144", minify: true, legalComments: "eof" });
+fs.rmSync(path.join(dist, "static/owl-motion.js"));
+fs.rmSync(path.join(dist, "static/owl-roam.json"));
 fs.writeFileSync(path.join(dist, "static", "tokens.css"), tokenCss.replace(themeBlocks, ":root {"));

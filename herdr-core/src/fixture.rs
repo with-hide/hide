@@ -2,6 +2,31 @@ use serde::{Deserialize, Serialize};
 
 pub const FIXTURE_PREFIX: &str = "hide-verify-";
 
+/// An account shell for FakeHerdr journeys. Unix owns an executable file;
+/// Windows uses Herdr's PowerShell recipe. The peer never runs the shell.
+#[cfg(test)]
+pub(crate) fn integrated_shell(home: &std::path::Path) -> hide_host::shell_integration::UserShell {
+    #[cfg(unix)]
+    let shell = {
+        use std::os::unix::fs::PermissionsExt;
+
+        let shell = home.join("bin/zsh");
+        std::fs::create_dir_all(shell.parent().unwrap()).unwrap();
+        std::fs::write(&shell, "#!/bin/sh\nexit 97\n").unwrap();
+        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o700)).unwrap();
+        shell.to_str().unwrap().to_owned()
+    };
+    #[cfg(windows)]
+    let shell = {
+        let _ = home;
+        "powershell.exe".to_owned()
+    };
+    hide_host::shell_integration::UserShell {
+        shell: Some(shell),
+        ..Default::default()
+    }
+}
+
 /// Synthetic fixtures live below the canonical OS temp directory. These
 /// bucket spellings come from Pi 1.0.4 and omp 18.7.0, independently of the
 /// product's locator, so a wrong locator cannot move the expected fixture.
@@ -114,50 +139,6 @@ fn antigravity_uri(cwd: &std::path::Path) -> String {
     let wire = hide_platform::path::to_wire(cwd).unwrap();
     let slash = if wire.starts_with('/') { "" } else { "/" };
     format!("file://{slash}{}", wire.replace(' ', "%20"))
-}
-
-/// The pinned Cursor CLI's ordinary route and independently encoded graph.
-/// The fixture owns its writer; production readers never create these files.
-#[cfg(test)]
-pub(crate) fn cursor_session(
-    home: &std::path::Path,
-    cwd: &std::path::Path,
-    id: &str,
-) -> std::path::PathBuf {
-    let bucket = format!("{:x}", md5::compute(cwd.to_str().unwrap().as_bytes()));
-    let folder = home.join(".cursor/chats").join(bucket).join(id);
-    std::fs::create_dir_all(&folder).unwrap();
-    std::fs::write(
-        folder.join("meta.json"),
-        serde_json::json!({"schemaVersion":1,"cwd":cwd,"createdAtMs":1790989200000u64,
-            "hasConversation":true,"isSubagent":false})
-        .to_string(),
-    )
-    .unwrap();
-    let graph: serde_json::Value = serde_json::from_str(include_str!(
-        "../../hide-session/tests/fixtures/cursor-2026.10.01/graph.json"
-    ))
-    .unwrap();
-    let database = folder.join("store.db");
-    let connection = rusqlite::Connection::open(&database).unwrap();
-    connection.execute_batch("PRAGMA user_version=1; CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT); CREATE TABLE blobs(id TEXT PRIMARY KEY,data BLOB);").unwrap();
-    let meta = serde_json::json!({"agentId":id,"latestRootBlobId":graph["roots"]["first"],"createdAt":1790989200000u64});
-    connection
-        .execute(
-            "INSERT INTO meta VALUES('0',?1)",
-            [hex::encode(meta.to_string())],
-        )
-        .unwrap();
-    for (key, value) in graph["blobs"].as_object().unwrap() {
-        connection
-            .execute(
-                "INSERT INTO blobs VALUES(?1,?2)",
-                rusqlite::params![key, hex::decode(value.as_str().unwrap()).unwrap()],
-            )
-            .unwrap();
-    }
-    drop(connection);
-    database
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

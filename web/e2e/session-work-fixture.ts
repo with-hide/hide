@@ -58,7 +58,7 @@ const clock = JSON.parse(fs.readFileSync(${JSON.stringify(clock)}, "utf8"));
 const created = fs.existsSync(issueFile) ? JSON.parse(fs.readFileSync(issueFile, "utf8")) : null;
 const pull = (number, title, merged, failed, at) => ({number,title,state:merged?"MERGED":"OPEN",url:"https://github.com/acme/repo/pull/"+number,headRefName:"main",headRefOid:"1".repeat(40),isCrossRepository:false,baseRefName:"main",reviewDecision:"REVIEW_REQUIRED",isDraft:false,mergedAt:merged?new Date(at+1000).toISOString():null,closedAt:null,createdAt:new Date(at+500).toISOString(),updatedAt:new Date(at+1000).toISOString(),closingIssuesReferences:[],statusCheckRollup:[{__typename:"CheckRun",name:"verify",status:"COMPLETED",conclusion:failed?"FAILURE":"SUCCESS"}]});
 const pulls = [pull(31,"기록 화면 구현",true,false,clock.first),pull(32,"이슈와 검색 검증",false,true,clock.next),pull(34,"자식 연결 검증",true,false,clock.first+200)];
-const tracked = {number:41,title:"기록 화면 후속 검증",state:"OPEN",url:"https://github.com/acme/repo/issues/41",createdAt:new Date(clock.first+500).toISOString(),updatedAt:new Date(clock.first+1000).toISOString(),labels:[]};
+const tracked = {number:41,title:"기록 화면 후속 검증",state:"OPEN",url:"https://github.com/acme/repo/issues/41",createdAt:new Date(clock.first+500).toISOString(),updatedAt:new Date(clock.first+1000).toISOString(),labels:[],author:{login:"reviewer"},assignees:[]};
 const [a,b] = args;
 if(a==="auth"&&b==="status") process.exit(0);
 if(a==="api"&&b==="user") {process.stdout.write("example-user\\n");process.exit(0);}
@@ -73,7 +73,7 @@ if(a==="repo"&&b==="view") {
  if(fs.existsSync(${JSON.stringify(repositoryUnavailable)})) {process.stderr.write("fixture GitHub unavailable\\n");process.exit(1);} out({nameWithOwner:repo,id:"R_"+repo.replaceAll("/","_")});process.exit(0);}
 if(a==="pr"&&b==="list") {out(pulls.filter(p=>args.includes("all")|| (args.includes("merged")?p.state==="MERGED":p.state==="OPEN")));process.exit(0);}
 const open=created&&created.state==="OPEN"?[created]:[];
-if(a==="issue"&&b==="list") {out([tracked,...open]);process.exit(0);}
+if(a==="issue"&&b==="list") {out([tracked,...(created?[created]:[])].filter(item=>item.state===(args.includes("closed")?"CLOSED":"OPEN")));process.exit(0);}
 if(a==="issue"&&b==="close") {if(created){created.state="CLOSED";fs.writeFileSync(issueFile,JSON.stringify(created));}process.exit(0);}
 if(a==="issue"&&b==="create") {
  const title=args[args.indexOf("--title")+1];
@@ -84,7 +84,12 @@ if(a==="issue"&&b==="create") {
 }
 if(a==="api"&&b==="graphql") {
  const query=args.join(" ");
- if(query.includes("states:[OPEN,CLOSED]")) out({data:{repository:{issues:{nodes:created?[{...created,viewerDidAuthor:true}]:[],pageInfo:{hasNextPage:false}}}}});
+ if(query.includes("HideIssueDetail")) {
+  const number=Number(args.find(value=>value.startsWith("number="))?.slice(7));
+  const item=number===77?created:tracked;
+  out({data:{repository:{issue:item?{...item,body:"## 검증 항목\\n\\n본문과 실제 댓글을 읽습니다.",author:{login:"reviewer"},assignees:{nodes:[]},labels:{nodes:[]},comments:{totalCount:1,nodes:[{author:{login:"reviewer"},createdAt:new Date(clock.first+2000).toISOString(),body:"실제 fixture 댓글"}],pageInfo:{endCursor:null,hasNextPage:false}}}:null}}});
+ }
+ else if(query.includes("states:[OPEN,CLOSED]")) out({data:{repository:{issues:{nodes:created?[{...created,viewerDidAuthor:true}]:[],pageInfo:{hasNextPage:false}}}}});
  else if(query.includes("issues(first:100")) out({data:{repository:{issues:{nodes:open,pageInfo:{hasNextPage:false}}}}});
  else if(query.includes("issue(number:")) out({data:{r0:{issue:query.includes("77")?created:tracked}}});
  else out({data:{}});

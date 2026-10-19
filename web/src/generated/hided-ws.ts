@@ -5,7 +5,6 @@ export type HidedWs =
   | ServerFrame
   | ClientEvent
   | WorkspaceQuery
-  | FactoryQuestionGuard
   | WorkspaceAction
   | LinksQuery
   | MemoryHookAsk
@@ -375,8 +374,28 @@ export interface UsageHideAiFeature {
   providers: string[];
 }
 export interface UsageHistory {
+  /**
+   * Newest recorded model/day contributions inside the year calendar. Absent on older daemons; unknown model names are null. No model is inferred from aggregate totals.
+   *
+   * @maxItems 4096
+   */
+  models?: UsageModelDay[];
+  /**
+   * Model detail exceeded 4096 rows. Listed contributions are partial; the independent daily and period totals are unchanged.
+   */
+  models_limited?: boolean;
   popover: UsageHistorySurface;
   year: UsageHistorySurface;
+}
+/**
+ * One recorded day/agent/model contribution on the core node. Hide AI is already in all-agent totals. Per-model call counts are reports, not backend attempts.
+ */
+export interface UsageModelDay {
+  date: string;
+  agent: string;
+  model: string | null;
+  hide_ai: boolean;
+  amount: UsageAmount;
 }
 export interface UsageHistorySurface {
   range: UsageRange;
@@ -409,15 +428,6 @@ export interface WorkspaceQuery {
   type: "workspace_query";
   request_id: WorkspaceRequestId;
   query: "info" | "view_list";
-}
-/**
- * One bounded readonly check against an already-open Factory. Only an attested pane on its issuing connection may ask. A successful workspace_result has result.deny true only for the current Task-held spawn joined to its fresh native execution; every unresolved identity or failure allows the hook tool.
- */
-export interface FactoryQuestionGuard {
-  type: "factory_question_guard";
-  request_id: WorkspaceRequestId;
-  session: string;
-  runtime: "claude-code" | "codex" | "opencode" | "omp" | "antigravity";
 }
 /**
  * One pane-scoped document or View transition. Repeating the same request ID and command returns its recorded result within the ten-minute retry window.

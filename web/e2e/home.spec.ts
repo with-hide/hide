@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { herdrGate } from "./herdr-gate";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 import { chord } from "./chords";
@@ -89,12 +90,21 @@ async function recordFailure(page: Page, herdr: HerdrFixture, daemon: Daemon | n
 }
 
 /** A start aimed at Home with a pinned project: `~/hide` is made and the agent runs in it, Herdr's pane included. */
-async function inOpenedHome(page: Page, check: (home: string, herdr: HerdrFixture) => Promise<void>): Promise<void> {
+async function inOpenedHome(page: Page, check: (home: string, herdr: HerdrFixture) => Promise<void>, registeredFirst = false): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 800 });
   const herdr = await startHerdr();
+  let gate: Awaited<ReturnType<typeof herdrGate>> | null = null;
+  let registeredWithoutPane = false;
+  if (registeredFirst) page.on("websocket", (socket) => socket.on("framereceived", ({ payload }) => {
+    try {
+      const frame = JSON.parse(String(payload)) as { payload?: { rest?: { navigator?: { workspaces?: { is_home?: boolean; checkouts: { owner_workspace_id?: string | null; tabs: unknown[] }[] }[] } } } };
+      registeredWithoutPane ||= frame.payload?.rest?.navigator?.workspaces?.some((workspace) => workspace.is_home && workspace.checkouts.some((checkout) => !checkout.owner_workspace_id && checkout.tabs.length === 0)) ?? false;
+    } catch { /* Terminal frames are binary. */ }
+  }));
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "home");
+    if (registeredFirst) gate = await herdrGate(herdr);
+    daemon = await startHided(herdr, "home", undefined, gate ? { HERDR_SOCKET_PATH: gate.socket } : undefined);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await pinFixture(page);
@@ -103,7 +113,17 @@ async function inOpenedHome(page: Page, check: (home: string, herdr: HerdrFixtur
     expect(fs.existsSync(home)).toBe(false);
 
     await aimAtHome(page, daemon.node);
+    const held = gate?.arm("workspace.create");
     await page.locator("[data-start-submit]").click();
+    if (gate) {
+      await held;
+      // Publish the existing workspace once while Home's creation is held:
+      // the registered Home now has a row, but no Herdr owner or pane.
+      herdr.run(["workspace", "rename", herdr.workspace, "catalog-ready"]);
+      await expect.poll(() => registeredWithoutPane, { message: "Home is listed before Herdr creates its first pane" }).toBe(true);
+      console.log(`[${Date.now()}] Home registration listed without an owner or pane; releasing workspace.create`);
+      await gate.release();
+    }
     // B17: the agent opens in Home once Home's sync answered, so everything the
     // sync writes is on disk by the time Herdr has a pane there. Herdr spells a
     // pane's folder as the system does, so both sides are read as the wire spells it.
@@ -115,8 +135,7 @@ async function inOpenedHome(page: Page, check: (home: string, herdr: HerdrFixtur
     await recordFailure(page, herdr, daemon);
     throw error;
   } finally {
-    daemon?.stop();
-    herdr.stop();
+    try { daemon?.stop(); } finally { try { await gate?.stop(); } finally { herdr.stop(); } }
   }
 }
 
@@ -145,6 +164,12 @@ test("a start aimed at Home makes ~/hide with its guide files and runs the agent
     await expect(page.locator('nav[aria-label="Location"]')).toHaveText("~/hide");
     await screenshot(page, "home-tab-opened");
   });
+});
+
+test("Home stays selected when its empty registration is listed before its first pane", async ({ page }) => {
+  await inOpenedHome(page, async () => {
+    await expect(page.locator('nav[aria-label="Location"]')).toHaveText("~/hide");
+  }, true);
 });
 
 // @platform: The link Home makes to a project: a symbolic link on macOS and Linux, a junction on Windows.

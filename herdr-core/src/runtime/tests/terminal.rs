@@ -495,6 +495,7 @@ fn a_device_pane_is_searched_on_its_own_herdr() {
                     ssh_alias: "mini".to_owned(),
                 },
                 herdr_socket_path: None,
+                herdr_session: None,
                 host_consent: None,
             });
         runtime.snapshot.status.remote.push(RemoteStatusSnapshot {

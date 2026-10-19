@@ -7,10 +7,12 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 mod agent_areas;
 pub(crate) mod agent_choice;
 mod agent_close;
+mod agent_groups;
 mod agent_sleep;
 mod agents;
 mod attachments;
 mod backlog;
+mod checkout_git;
 mod checks_wait;
 mod clone;
 mod control_lane;
@@ -19,15 +21,17 @@ pub(crate) mod delivery;
 mod detail;
 mod device_catalog;
 mod devices;
+mod direct_observation;
 mod disk_sweep;
 mod documents;
 mod drawn_ahead;
 mod editor;
 mod events;
-mod factory;
 mod first_run;
 mod github_poll;
+pub(crate) mod group_starts;
 mod guardrails;
+mod herdr_profiles;
 mod home;
 mod hosts;
 mod inbound;
@@ -42,6 +46,7 @@ mod memory_verify;
 mod op_timing;
 mod operations;
 pub(crate) mod output_language;
+mod overview_graph;
 mod pane_prediction;
 mod pane_reopen;
 pub(crate) mod project_memory;
@@ -64,20 +69,17 @@ mod tree_close;
 pub(crate) mod usage_ledger;
 mod usage_limit;
 mod view_areas;
-mod view_bookmarks;
+mod view_callers;
 mod view_feedback;
 mod workspace_control;
 mod workspace_view;
 
-pub(crate) use factory::{
-    DormantState, DormantWorker, FactoryPane, FactoryWake, WorkerProbe, factory_herdr_pane,
-    factory_pane_id,
-};
 pub use hosts::WorkspaceRemoteRoute;
 pub(crate) use kit::{DeviceKitAnswer, DeviceKitCall, DeviceKitWork, KitJob};
 pub use snapshot_delta::serialize_snapshot_delta;
 
 use agent_areas::AgentLayoutPayload;
+use agent_groups::AgentGroupPayload;
 use agent_sleep::{AgentSleepSetPayload, AgentWakePayload, SleepingSessionPayload};
 use control_lane::ControlLane;
 pub(crate) use control_lane::LaneStart;
@@ -116,7 +118,8 @@ use crate::sidebar::{SessionSnapshotPayload, project_agents};
 use crate::{environment, files, live, persistence, pet, session_sync, workspace};
 
 fn conversation_agent_kind(kind: &str) -> bool {
-    hide_agent_adapter::adapter(kind).is_some_and(|row| row.conversation.is_some())
+    hide_session::Agent::from_kind(kind)
+        .is_some_and(|agent| agent.format().adapter().conversation.is_some())
 }
 
 /// Which Herdr workspace each tab belongs to, from each workspace's tab order.
@@ -993,12 +996,12 @@ fn remote_pane_source_id<'a>(target_id: &str, projected_id: &'a str) -> Option<&
 }
 
 /// Every pane `session` lists, and the panes on screen: while its machine
-/// is in front, the tab its Herdr has in front and `shown_tabs`, the tabs the
-/// Workspace's other Agent areas show.
+/// is in front, exactly the tabs its selected group shows. Without a core
+/// layout, the legacy Herdr-focused tab supplies the initial canvas.
 fn remote_terminal_pane_sets(
     session: &RemoteSessionSnapshot,
     target_is_active: bool,
-    shown_tabs: &[String],
+    shown_tabs: Option<&[String]>,
 ) -> (HashSet<String>, HashSet<String>) {
     let live_pane_ids = session
         .workspaces
@@ -1025,7 +1028,9 @@ fn remote_terminal_pane_sets(
         .flat_map(|checkout| checkout.tabs.iter())
         .filter(|tab| {
             tab.id.as_deref().is_some_and(|id| {
-                Some(id) == active_tab_id || shown_tabs.iter().any(|shown| shown == id)
+                shown_tabs.map_or(Some(id) == active_tab_id, |shown| {
+                    shown.iter().any(|tab| tab == id)
+                })
             })
         })
         .flat_map(|tab| tab.panes.iter())
@@ -1112,17 +1117,6 @@ pub struct Runtime {
     /// When each observed pane's input was last traced (`delivery.input`).
     delivery_input_traced: HashMap<String, u64>,
     composer_store: Option<crate::composer_store::ComposerStore>,
-    /// Open Factories' code-owned recipients (`factory:<id>`), set by the
-    /// Factory host; a letter to any other `factory:` name has no recipient.
-    /// Each open Factory's id with its stall window (D-30, B24).
-    factory_recipients: std::collections::BTreeMap<String, u64>,
-    /// The panes the open Factories' workers run in, as the Factory host last
-    /// published them: a sleep that closes a pane keeps whose conversation it
-    /// holds (#857).
-    factory_panes: HashMap<String, factory::FactoryPane>,
-    /// The Factory screens' way to the engine thread; `None` when the host
-    /// did not start.
-    factory_screen: Option<crate::factory::ScreenPort>,
     delivery_overflow: HashSet<String>,
     delivery_connected: HashSet<String>,
     /// Each host's Herdr panes as its in-sync replica last published them.
@@ -1202,6 +1196,7 @@ pub struct Runtime {
     last_host_generation: u64,
     /// The device and folder `snapshot.changes` was read for.
     changes_published_key: Option<crate::changes::ChangesKey>,
+    checkout_header: checkout_git::State,
     /// Each device's session as its Herdr reported it, before its projects
     /// are grouped from the helper's facts (`device_catalog`).
     device_raw_sessions: HashMap<String, RemoteSessionSnapshot>,
@@ -1375,6 +1370,7 @@ pub struct Runtime {
     /// Where every router tells what its attempts cost; the usage ledger
     /// worker drains it (`runtime/usage_ledger.rs`).
     ai_usage: Arc<crate::usage_ledger::ai_usage::AiUsageQueue>,
+    product_analytics: Option<Arc<dyn crate::product_analytics::Sink>>,
     /// Whether the diagnostic log last said the order is paused by the limit.
     usage_pause_announced: bool,
     recent_visible_tabs: Vec<String>,
@@ -1385,10 +1381,6 @@ pub struct Runtime {
     /// that as a failure is what put "terminal attach ended" on screen for one
     /// frame every time the operator closed a pane.
     panes_closing: HashSet<String>,
-    /// Closed panes the Factory engine has not taken yet: a worker there
-    /// reads as closing, never as gone, until the engine has paused its Task
-    /// (D-26). The engine takes them on its wake-up and before every tick.
-    factory_closes_sent: HashSet<String>,
     /// Closes of an agent together with its descendants, deepest first
     /// (`tree_close.rs`). At most `TREE_CLOSE_ACTIVE_LIMIT` at once.
     tree_closes: Vec<tree_close::TreeClose>,
@@ -1484,6 +1476,7 @@ pub struct Runtime {
     /// What the link worker was last handed, and its panel reads.
     links_work: links::LinksWork,
     backlog_work: backlog::BacklogWork,
+    issue_detail_work: issues::IssueDetailWork,
     /// The minute the PRs tool's list was last judged against the clock
     /// (`runtime/request_view.rs`, `tick_work_clock`).
     work_clock_minute: u64,
@@ -1572,7 +1565,6 @@ pub struct Runtime {
     /// The tabs Herdr most recently reported active in their own workspaces.
     /// A pane layout remembers a focused pane even while its tab is hidden,
     /// so the layout alone cannot confirm a pane-focus request.
-    herdr_active_tab_ids: BTreeSet<String>,
     /// First moment each currently-unseen pane became unseen. Memory only by
     /// decision (D-21): after a restart snapshot order decides instead.
     pet_unseen_observed: std::collections::BTreeMap<String, u64>,
@@ -1643,6 +1635,9 @@ pub struct Runtime {
     /// id. Kept off the snapshot: an issue body or a request has no business
     /// on the wire after the surface that sent it.
     task_agent_launch: Option<TaskAgentLaunch>,
+    group_start: Option<group_starts::ActiveStart>,
+    task_start_focus: Option<group_starts::TaskStartFocus>,
+    group_start_saves: Vec<group_starts::SaveWaiter>,
     /// How the pane a task created says its shell has finished starting,
     /// by task id, for that task's agent start.
     task_pane_shell: Option<(u64, crate::agent_start::ShellStart)>,
@@ -1703,6 +1698,9 @@ pub struct Runtime {
     node_sleep_shown_tabs: HashMap<String, Vec<String>>,
     /// Panes whose agent would not end, and until when they are left alone (B8).
     agent_sleep_backoff: HashMap<String, agent_sleep::Backoff>,
+    /// When Herdr took each wake's start, for the panes still waking: one
+    /// whose agent has not appeared by the start's deadline failed.
+    agent_wake_started: HashMap<String, u64>,
     /// Panes with a Reopen running or just refused, until the pane connects,
     /// leaves, or stops showing a connection chip (B29). One entry per pane,
     /// so a second press while one runs starts nothing.
@@ -1813,6 +1811,8 @@ pub struct Runtime {
     next_ssh_hosts_id: u64,
     /// The listing `status.ssh_hosts` reports as loading, while its worker runs.
     ssh_hosts_job: Option<ssh_hosts::SshHostsJob>,
+    herdr_profiles_job: Option<herdr_profiles::HerdrProfilesJob>,
+    herdr_profile_endpoints: BTreeMap<String, Result<String, String>>,
     /// The checkout a purpose receipt belongs to. A remote checkout lives in
     /// `status.remote[].session`, not the local navigator, so the operation
     /// carries this target separately from its shell-facing receipt.
@@ -1874,6 +1874,8 @@ impl Runtime {
         let mut snapshot = Snapshot::initial(&options);
         if let Ok(ledger) = &delivery_ledger {
             snapshot.delivery_watches = ledger.watches.iter().map(|watch| watch.view()).collect();
+            snapshot.overview_graph =
+                crate::model::OverviewGraphSnapshot::from_ledger(ledger, unix_milliseconds());
         }
         snapshot.status.environment = environment.statuses;
         let (ui_state, pane_terminal_sizes, disposition) = persistence::load(&state_path);
@@ -2059,9 +2061,6 @@ impl Runtime {
             composer_marks: Vec::new(),
             delivery_input_traced: HashMap::new(),
             composer_store: None,
-            factory_recipients: std::collections::BTreeMap::new(),
-            factory_panes: HashMap::new(),
-            factory_screen: None,
             delivery_overflow: HashSet::new(),
             delivery_connected: HashSet::new(),
             delivery_panes: HashMap::new(),
@@ -2086,6 +2085,7 @@ impl Runtime {
             device_host_retries: HashMap::new(),
             last_host_generation: 0,
             changes_published_key: None,
+            checkout_header: checkout_git::State::default(),
             device_raw_sessions: HashMap::new(),
             device_facts: HashMap::new(),
             device_recent_tabs: HashMap::new(),
@@ -2152,11 +2152,11 @@ impl Runtime {
             usage_popover_open_generation: 0,
             usage_limits: Arc::new(hide_ai::UsageLimits::new()),
             ai_usage: crate::usage_ledger::ai_usage::AiUsageQueue::new(),
+            product_analytics: None,
             usage_pause_announced: false,
             recent_visible_tabs: Vec::new(),
             pending_tab_rename: None,
             panes_closing: HashSet::new(),
-            factory_closes_sent: HashSet::new(),
             tree_closes: Vec::new(),
             next_tree_close_id: 0,
             recent_closed: VecDeque::new(),
@@ -2197,6 +2197,7 @@ impl Runtime {
             archive_detail_load_generation: 0,
             links_work: links::LinksWork::default(),
             backlog_work: backlog::BacklogWork::default(),
+            issue_detail_work: issues::IssueDetailWork::default(),
             work_clock_minute: 0,
             memory_work: Default::default(),
             project_memory: Default::default(),
@@ -2236,7 +2237,6 @@ impl Runtime {
             control_lane: ControlLane::default(),
             last_view_intent_serial: 0,
             next_pane_focus_serial: 0,
-            herdr_active_tab_ids: BTreeSet::new(),
             pet_unseen_observed: std::collections::BTreeMap::new(),
             restore_hint_pending: true,
             last_session_spaces: Vec::new(),
@@ -2265,6 +2265,9 @@ impl Runtime {
             github_search: issues::GithubSearchWork::default(),
             pr_link_checkout: None,
             task_agent_launch: None,
+            group_start: None,
+            task_start_focus: None,
+            group_start_saves: Vec::new(),
             task_pane_shell: None,
             home_links: HashMap::new(),
             last_accepted_catalog: None,
@@ -2282,6 +2285,7 @@ impl Runtime {
             node_sleep_next_decision_unix_ms: HashMap::new(),
             node_sleep_shown_tabs: HashMap::new(),
             agent_sleep_backoff: HashMap::new(),
+            agent_wake_started: HashMap::new(),
             pane_reopens: HashMap::new(),
             fork_sequence: 0,
             listening_ports: crate::model::ListeningPortsSnapshot::default(),
@@ -2319,6 +2323,8 @@ impl Runtime {
             repository_clone_job: None,
             next_ssh_hosts_id: 0,
             ssh_hosts_job: None,
+            herdr_profiles_job: None,
+            herdr_profile_endpoints: BTreeMap::new(),
             purpose_operation_target: None,
             created_purpose_writes_in_flight: HashMap::new(),
             unconfirmed_created_purposes: HashMap::new(),
@@ -2356,12 +2362,6 @@ impl Runtime {
         terminals: Arc<dyn hide_node_link::terminal::TerminalRoutes>,
     ) {
         self.terminals = terminals;
-    }
-
-    /// The hold on this core's outside effects, for a worker that waits on
-    /// it from a thread of its own.
-    pub(crate) fn effects(&self) -> Arc<crate::effects::EffectHold> {
-        Arc::clone(&self.effects)
     }
 
     /// Whether this core still waits for its move's link before it acts
@@ -2426,6 +2426,9 @@ impl Runtime {
 
     pub fn set_live(&mut self, context: LiveContext) {
         self.live_generation = self.live_generation.saturating_add(1);
+        for request in &mut self.tab_focus_requests {
+            request.pane_focus_confirmed = false;
+        }
         self.live = Some(context);
         // A sleeping session can wake only over a connection.
         self.refresh_dormant_rows();
@@ -2625,6 +2628,9 @@ impl Runtime {
         if supersedes_memory && self.snapshot.status.last_error.is_none() {
             self.supersede_memory_navigation();
         }
+        if (chooses_workspace || supersedes_memory) && self.snapshot.status.last_error.is_none() {
+            self.supersede_start_navigation();
+        }
         // A committed visit to another tab wakes what sleeps there (PRD
         // agent-sleep B12); a refused one moved nothing.
         if chooses_workspace && self.snapshot.status.last_error.is_none() {
@@ -2699,11 +2705,27 @@ fn project_layout_panes(
                 .unwrap_or_else(|| fallback_cwd.to_owned());
             let ports = crate::ports::attributed_ports(&cwd, listening_ports);
             PaneSnapshot {
+                start_claim: source.and_then(|source| {
+                    source
+                        .start_claim
+                        .as_deref()
+                        .filter(|label| crate::start_claim::is_reserved(label))
+                        .or_else(|| {
+                            source
+                                .label
+                                .as_deref()
+                                .filter(|label| crate::start_claim::is_reserved(label))
+                        })
+                        .map(str::to_owned)
+                }),
                 terminal_id: source.and_then(|source| source.terminal_id.clone()),
                 failed_terminal_id: source.and_then(|source| source.failed_terminal_id.clone()),
                 id: pane.pane_id.clone(),
-                herdr_label: source.and_then(|source| source.label.clone()),
-                terminal_title: source.and_then(|source| source.terminal_title.clone()),
+                herdr_label: source
+                    .and_then(|source| crate::start_claim::public_label(source.label.as_deref())),
+                terminal_title: source.and_then(|source| {
+                    crate::start_claim::public_label(source.terminal_title.as_deref())
+                }),
                 cwd: cwd.clone(),
                 // This projection cannot see the read record ledger, so both
                 // read-dependent values are refilled from the navigator's
@@ -2968,6 +2990,10 @@ fn unix_milliseconds() -> u64 {
 impl Drop for Runtime {
     fn drop(&mut self) {
         self.cancel_memory_pass();
+        self.input_requests.close();
+        for control in self.input_requests.take_controls() {
+            self.terminals.control(control);
+        }
     }
 }
 

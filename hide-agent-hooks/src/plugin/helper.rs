@@ -6,7 +6,7 @@
 //! same private diagnostic the other hooks use.
 //!
 //! The operations reuse the Claude Code and Codex hook's parts: the letter
-//! intake (`delivery`), the spawn guard and the Factory question guard
+//! intake (`delivery`), the spawn guard
 //! (`spawn_guard`), the pane counts (`counters`, `report`) and Project Memory
 //! (`memory`). What differs is only the transport: these agents have no
 //! command hook, so the script hands over the facts a hook payload would
@@ -16,11 +16,11 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use hide_agent_adapter::{AgentAdapter, Capability, PluginDialect};
+use hide_agent_adapter::{AgentAdapter, PluginDialect};
 use hide_agent_hooks::delivery::{self, Intake, Prompt};
 use hide_agent_hooks::memory::{self, HookMemoryOutcome, MemoryRequest, memory_context_until};
 use hide_agent_hooks::runtime::HookEvent;
-use hide_agent_hooks::spawn_guard::{self as guard, QuestionDecision, Registration};
+use hide_agent_hooks::spawn_guard::{self as guard, Registration};
 use hide_agent_hooks::{counters, guardrails, guidance, report};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -70,10 +70,13 @@ struct Input {
     /// is an agent started in another agent's shell, which a pane variable
     /// it inherited does not make the pane's own (PRD agent-guardrails B22).
     guard_only: bool,
+    /// Transient Post input, consumed by the same owned helper. Never stored
+    /// in the metadata admission request.
+    observation: Option<Value>,
 }
 
 /// The agent a script speaks for: its adapter row and the runtime id the
-/// guard log, the Factory guard and Memory know it by.
+/// guard log and Memory know it by.
 struct Agent {
     adapter: &'static AgentAdapter,
     dialect: PluginDialect,
@@ -117,12 +120,6 @@ impl Agent {
                 .filter(|id| delivery::valid_session(id)),
         }
     }
-
-    /// Whether `tool` is the agent's own question tool, which a Factory worker
-    /// is refused.
-    fn question_tool(&self, tool: &str) -> bool {
-        matches!(self.adapter.factory.direct_ask, Capability::Available(ask) if ask.tools.contains(&tool))
-    }
 }
 
 /// Answers one operation of the script of `agent` (`opencode`, `pi`, `omp`).
@@ -154,6 +151,7 @@ pub fn run(agent: &str, operation: Option<&str>, started: Instant) {
         Some("prompt") => prompt(&home, &agent, input, started + PROMPT_BUDGET),
         Some("confirm") => confirm(&home, input, started + CONFIRM_BUDGET),
         Some("tool") => tool(&home, &agent, input, started + TOOL_BUDGET),
+        Some("observation") => observation(&home, &agent, &input, started),
         Some("letters") if agent.adapter.tool_letters.is_some() => {
             letters(&home, input, started + LETTERS_BUDGET)
         }
@@ -163,6 +161,49 @@ pub fn run(agent: &str, operation: Option<&str>, started: Instant) {
         _ => json!({}),
     };
     answer(&output);
+}
+
+fn observation(home: &Path, agent: &Agent, input: &Input, started: Instant) -> Value {
+    use hide_agent_hooks::observation::{self, ObservationCorrelation, ToolResult};
+    let Some(post) = input.observation.as_ref() else {
+        return json!({});
+    };
+    if input.guard_only {
+        return json!({});
+    }
+    let Some(command) = post["command"].as_str() else {
+        return json!({});
+    };
+    let Some(session) = input.session_id.as_deref() else {
+        return json!({});
+    };
+    let Some(call_id) = post["call_id"].as_str() else {
+        return json!({});
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let parsed = observation::observe(
+        ToolResult {
+            runtime_id: agent.runtime(),
+            session_id: session,
+            call_id,
+            command,
+            correlation_kind: ObservationCorrelation::ToolCall,
+            result: post.get("result"),
+            failed: post["failed"] == true,
+            interrupted: post["interrupted"] == true,
+            truncated: post["truncated"] == true,
+            asynchronous: post["asynchronous"] == true,
+        },
+        now,
+        &|name| std::env::var(name).ok(),
+    );
+    let accepted = parsed
+        .as_ref()
+        .is_some_and(|parsed| observation::send(home, parsed, started + observation::SEND_BUDGET));
+    json!({ "observed": accepted })
 }
 
 fn answer(value: &Value) {
@@ -315,8 +356,7 @@ fn confirm(home: &Path, input: Input, deadline: Instant) -> Value {
 }
 
 /// The project's guardrails for a shell or file tool, the spawn guard for
-/// the shell (`bash`, OpenCode 2's `shell`) and the Factory guard for the
-/// agent's question tool (OpenCode's `question`, omp's `ask`): `deny`
+/// the shell (`bash`, OpenCode 2's `shell`): `deny`
 /// carries the reason the script refuses with, and every other outcome lets
 /// the call run, as the Claude Code and Codex guards do.
 fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
@@ -347,22 +387,6 @@ fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
         return json!({});
     };
     match input.tool.as_deref() {
-        Some(name) if agent.question_tool(name) => {
-            let Some(session) = session(&input) else {
-                return json!({});
-            };
-            match guard::question_decision(&program, runtime, &session, deadline) {
-                QuestionDecision::Worker => {
-                    guard::record_question_refusal(home, runtime, &pane, name);
-                    json!({ "deny": guard::QUESTION_REASON })
-                }
-                QuestionDecision::Allow => json!({}),
-                QuestionDecision::Unreachable(cause) => {
-                    guard::unreachable(home, runtime, cause);
-                    json!({})
-                }
-            }
-        }
         Some("bash" | "shell") => {
             let Some(command) = input.command.as_deref() else {
                 return json!({});

@@ -56,12 +56,12 @@ test("a tab with two agents opens with a line that opens it, takes its name once
   } finally { daemon.stop(); herdr.stop(); }
 });
 
-test("2-1-2 tab segments share one root column right of the kind glyph, with guides under it", async ({ page }) => {
+test("2-1-2 tab segments keep every title on the checkout's own columns with aligned guides, and no collection header without a named group", async ({ page }) => {
   const herdr = await startHerdr();
   let daemon: Awaited<ReturnType<typeof startHided>> | undefined;
   try {
     herdr.run(["tab", "rename", herdr.tab, "작업 묶음 A"]);
-    // The one-agent tab stays unnamed: a named one would draw its line.
+    // B12 keeps an unnamed single-agent tab reachable by its own title too.
     const created = [null, "작업 묶음 B"].map((name) => herdr.run(["tab", "create", "--workspace", herdr.workspace, "--cwd", path.join(herdr.root, "fixture"), "--env", `PATH=${herdr.fixturePath}`, ...(name ? ["--label", name] : []), "--no-focus"]) as { result: { tab: { tab_id: string }; root_pane: { pane_id: string } } });
     const single = created[0]!.result;
     const paired = created[1]!.result;
@@ -73,12 +73,19 @@ test("2-1-2 tab segments share one root column right of the kind glyph, with gui
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await expect(tabButton(page, herdr.tab)).toBeVisible();
-    await expect(tabButton(page, single.tab.tab_id)).toHaveCount(0);
+    await expect(tabButton(page, single.tab.tab_id)).toHaveAccessibleName("Tab 2, 1 agent");
     await expect(tabButton(page, paired.tab.tab_id)).toHaveAccessibleName("작업 묶음 B, 2 agents");
     await page.evaluate(() => document.fonts.ready);
 
-    // Every root's status mark stands on one column, right of the folder glyph, whichever tab holds it.
-    const kind = await position(page.locator("[data-project-list] [data-project-menu] svg").first());
+    // This checkout holds no named group, so it draws no collection header at
+    // all (group-tabs D-14): its tabs and agents stand on the checkout's own
+    // columns, and every tab's guide hangs under the checkout's own glyph. The
+    // fixture's checkout is a plain folder, so its row is the project's.
+    const owner = page.locator("[data-project-list] [data-project-menu]").first();
+    const ownerRow = await position(page.locator("[data-project-list] [data-project-menu] > div").first());
+    await expect(page.locator("[data-project-list] [data-sidebar-named-group]")).toHaveCount(0);
+    await expect(page.locator("[data-project-list] [data-sidebar-group-select]")).toHaveCount(0);
+    const kind = await position(owner.locator("svg").first());
     const marks = await Promise.all((await page.locator("[data-project-list] li[data-pane][data-depth='0'] [data-agent-status-mark]").all()).map(position));
     expect(marks).toHaveLength(5);
     expect(new Set(marks.map((mark) => mark.x)).size).toBe(1);
@@ -87,10 +94,11 @@ test("2-1-2 tab segments share one root column right of the kind glyph, with gui
     const titles = await Promise.all((await page.locator("[data-project-list] li[data-pane][data-depth='0'] [data-agent-title]").all()).map(position));
     expect(titles.map((title) => title.x - marks[0]!.x)).toEqual(titles.map(() => 16));
 
-    // A two-agent segment's guide is 1px, centered under the kind glyph; the unnamed single-agent segment draws none, and the gap between segments is 8px.
+    // B12's tab hierarchy draws a 1px guide for every tab, including the
+    // unnamed single-agent tab, under the checkout's own kind glyph.
     const center = kind.x + kind.width / 2;
-    await expect(guide(page, single.tab.tab_id)).toHaveCount(0);
-    for (const tab of [herdr.tab, paired.tab.tab_id]) {
+    await expect(guide(page, single.tab.tab_id)).toHaveCount(1);
+    for (const tab of [herdr.tab, single.tab.tab_id, paired.tab.tab_id]) {
       const line = await position(guide(page, tab));
       expect(line.width).toBe(1);
       expect(Math.abs(line.x + line.width / 2 - center)).toBeLessThanOrEqual(0.5);
@@ -98,7 +106,7 @@ test("2-1-2 tab segments share one root column right of the kind glyph, with gui
     // A tab line stands inside its guide like a row: the guide starts beside it, its glyph is centered on the status-mark column and its
     // name starts on the title column, so nothing of the tab stands on the checkout glyph's column.
     const mark = marks[0]!;
-    for (const tab of [herdr.tab, paired.tab.tab_id]) {
+    for (const tab of [herdr.tab, single.tab.tab_id, paired.tab.tab_id]) {
       const head = await position(segment(page, tab).locator("[data-sidebar-tab-line] svg"));
       expect(Math.abs(head.x + head.width / 2 - (mark.x + mark.width / 2))).toBeLessThanOrEqual(0.5);
       expect((await position(segment(page, tab).locator("[data-sidebar-tab-name]"))).x).toBe(titles[0]!.x);
@@ -108,11 +116,11 @@ test("2-1-2 tab segments share one root column right of the kind glyph, with gui
     const first = await position(segment(page, herdr.tab));
     const middle = await position(segment(page, single.tab.tab_id));
     const last = await position(segment(page, paired.tab.tab_id));
-    // The first segment hangs 2px under its folder's row, nearer it than the 8px between two segments.
-    const owner = await position(page.locator("[data-project-list] [data-project-menu] > div").first());
-    expect(first.y - owner.y - owner.height).toBe(2);
-    expect(middle.y - first.y - first.height).toBe(8);
-    expect(last.y - middle.y - middle.height).toBe(8);
+    // The first segment hangs 2px under its checkout, and segments are
+    // contiguous: the tab titles provide the boundaries.
+    expect(first.y - ownerRow.y - ownerRow.height).toBe(2);
+    expect(middle.y - first.y - first.height).toBe(0);
+    expect(last.y - middle.y - middle.height).toBe(0);
     expect((await position(segment(page, single.tab.tab_id).locator("li[data-pane]"))).height).toBe(28);
     await rest(page);
     await screenshot(page, "sidebar-tab-segments");
@@ -123,6 +131,8 @@ test("2-1-2 tab segments share one root column right of the kind glyph, with gui
     await expect(segment(page, herdr.tab).locator("[data-agent-open]").first()).toBeFocused();
     await page.keyboard.press("ArrowDown");
     await expect(segment(page, herdr.tab).locator("[data-agent-open]").nth(1)).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(tabButton(page, single.tab.tab_id)).toBeFocused();
     await page.keyboard.press("ArrowDown");
     await expect(segment(page, single.tab.tab_id).locator("[data-agent-open]")).toBeFocused();
     await page.keyboard.press("ArrowDown");

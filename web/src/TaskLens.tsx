@@ -180,6 +180,19 @@ const TaskGroups = memo(function TaskGroups({ list, view, byPane, agents, folds,
   // page keeps them, so the ⌥n numbers read the same drawn order.
   const foldsOpen = useUiStore((s) => s.taskFoldsOpen);
   const toggleFold = useUiStore((s) => s.toggleTaskFold);
+  const focusedRestFold = useMemo(() => {
+    if (focusedPane === null) return null;
+    const containsFocus = ({ card }: TaskEntry) => card.members.includes(focusedPane);
+    if (view === "status") return list.resting.some(containsFocus) ? taskFoldKey("rest", "") : null;
+    const group = list.groups.find((group) => group.resting.some(containsFocus));
+    return group ? taskFoldKey("rest", group.key) : null;
+  }, [focusedPane, list, view]);
+  // Entering a resting task reveals it, including a focused descendant.
+  // Read the current folds only on entry or a change of the containing fold:
+  // an explicit collapse must survive snapshots while focus stays here.
+  useLayoutEffect(() => {
+    if (focusedRestFold !== null && !useUiStore.getState().taskFoldsOpen.includes(focusedRestFold)) toggleFold(focusedRestFold);
+  }, [focusedPane, focusedRestFold, toggleFold]);
   const openFolds = useMemo(() => new Set(foldsOpen), [foldsOpen]);
   const opened = useMemo(() => new Set(folds), [folds]);
   const shown = taskSections(list, view, openFolds);
@@ -199,8 +212,9 @@ const TaskGroups = memo(function TaskGroups({ list, view, byPane, agents, folds,
   const scroller = useRef<HTMLDivElement>(null);
   const revealed = useRef<string | null>(null);
   useLayoutEffect(() => {
+    if (selected === null) { revealed.current = null; return; }
     const row = scroller.current?.querySelector<HTMLElement>('[data-selected="true"]');
-    if (selected === null || selected === revealed.current || !scroller.current || !row) return;
+    if (selected === revealed.current || !scroller.current || !row) return;
     revealed.current = selected;
     revealRow(scroller.current, [row], row);
   }, [selected]);
@@ -338,7 +352,7 @@ function TaskRow({ entry, family, open, selected, number, showProject, disabled,
   // The visible second line follows the button and is read after it, so the name leaves the sentence to it.
   const name = [agent.identity_label, forkLabel(t, agent), agentProductName(agent.agent_kind), words, hideAiWords(t, agent.hide_ai)].filter(Boolean).join(", ");
   return (
-    <EntryContextMenu asChild label={t("taskLens.more", { name: agent.identity_label })} items={menu.items} onSelect={menu.select} disabled={disabled} data-task-context={agent.pane_id}>
+    <EntryContextMenu asChild label={t("taskLens.more", { name: agent.identity_label })} title={agent.identity_label} items={menu.items} onSelect={menu.select} disabled={disabled} data-task-context={agent.pane_id}>
     <li className={cn("group/task relative flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(agent) && "opacity-(--opacity-dimmed)")}
       data-task-row={agent.pane_id} data-task-state={card.state} data-selected={selected ? "true" : undefined} onClick={go}>
       <TreeChevron name={agent.identity_label} open={open} onToggle={toggle} hangs={false} disabled={disabled} data-task-chevron={agent.pane_id} />
@@ -391,10 +405,10 @@ function ArchivedRow({ entry, showProject, disabled, actions }: { entry: Archive
     : row.members.some((member) => member.resume === "queued" || member.resume === "starting") ? t("archive.resuming") : failed ? t("archive.resumeFailed") : null;
   const parts = prMarkParts(row.members.flatMap((member) => member.pulls.map((pull) => ({ pull, state: pull.state }))));
   const items = (): MenuEntry<ArchivedMenuId>[] => [
-    { id: "record", label: t("taskLens.menu.record"), unavailable: null, shortcut: "Space" },
-    { id: "resume", label: t("archive.resume"), unavailable: disabled || pending || away || row.phase === "unknown" ? "" : null },
-    ...(row.phase === "unknown" ? [{ id: "check" as const, label: t("workspace.checkStatus"), unavailable: disabled || away ? "" : null }] : []),
-    { id: "delete", label: t("archive.menu.delete"), unavailable: disabled || pending ? "" : null, separated: true, destructive: true },
+    { id: "record", icon: "record", label: t("taskLens.menu.record"), unavailable: null, shortcut: "Space" },
+    { id: "resume", icon: "resume", label: t("archive.resume"), unavailable: disabled || pending || away || row.phase === "unknown" ? "" : null },
+    ...(row.phase === "unknown" ? [{ id: "check" as const, icon: "refresh" as const, label: t("workspace.checkStatus"), unavailable: disabled || away ? "" : null }] : []),
+    { id: "delete", icon: "delete", label: t("archive.menu.delete"), unavailable: disabled || pending ? "" : null, separated: true, destructive: true },
   ];
   const select = (id: ArchivedMenuId) => {
     if (id === "record") return record();
@@ -406,7 +420,7 @@ function ArchivedRow({ entry, showProject, disabled, actions }: { entry: Archive
   const shown = open ? "opacity-100" : "opacity-0 group-hover/task:opacity-100 group-focus-within/task:opacity-100 hoverless:opacity-100";
   const hidden = open ? "opacity-0" : "group-hover/task:opacity-0 group-focus-within/task:opacity-0 hoverless:opacity-0";
   return (
-    <EntryContextMenu asChild label={label} items={items} onSelect={select} data-archived-context={row.id}>
+    <EntryContextMenu asChild label={label} title={root.title} items={items} onSelect={select} data-archived-context={row.id}>
       <li className={cn("group/task relative flex min-w-0 items-stretch rounded-xs pr-xs hover:bg-accent focus-within:bg-accent", (pending || away) && "opacity-(--opacity-dimmed)")}
         data-archived-row={row.id} data-archived-phase={row.phase} data-archived-resume={failed ? "failed" : pending ? "pending" : undefined} onClick={record}>
         <TreeChevron name={root.title} open={null} onToggle={() => {}} hangs={false} />
@@ -424,7 +438,7 @@ function ArchivedRow({ entry, showProject, disabled, actions }: { entry: Archive
             <span className="grid shrink-0 items-center justify-items-end" onClick={(event) => event.stopPropagation()}>
               <Elapsed since={row.archived_at_unix_ms} className={cn("pointer-events-none col-start-1 row-start-1 text-micro text-muted-foreground tabular-nums", hidden)} />
               <span className={cn("col-start-1 row-start-1 flex items-center", shown)}>
-                <EntryDropdown label={label} items={items} onSelect={select} onOpenChange={setOpen} data-archived-menu={row.id}
+                <EntryDropdown label={label} title={root.title} items={items} onSelect={select} onOpenChange={setOpen} data-archived-menu={row.id}
                   trigger={
                     <button type="button" aria-label={label} data-archived-more={row.id} className="rounded-xs p-xxs text-muted-foreground outline-none hover:bg-secondary focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary">
                       <EllipsisIcon className="size-(--size-icon-sm)" />
@@ -457,12 +471,12 @@ function useTaskMenu(agent: AgentRow, record: (() => void) | null, onPane: () =>
   const { t } = useInterfaceTranslation();
   const items = (): MenuEntry<TaskMenuId>[] => {
     const entries: MenuEntry<TaskMenuId>[] = [
-      { id: "record", label: t("taskLens.menu.record"), unavailable: record ? null : "", shortcut: "Space" },
-      { id: "pane", label: t("taskLens.menu.pane"), unavailable: disabled ? "" : null, shortcut: "↩" },
+      { id: "record", icon: "record", label: t("taskLens.menu.record"), unavailable: record ? null : "", shortcut: "Space" },
+      { id: "pane", icon: "terminal", label: t("taskLens.menu.pane"), unavailable: disabled ? "" : null, shortcut: "↩" },
     ];
-    if (resolvable) entries.push({ id: "resolve", label: t("agentSessions.resolve"), unavailable: disabled ? "" : null });
+    if (resolvable) entries.push({ id: "resolve", icon: "check", label: t("agentSessions.resolve"), unavailable: disabled ? "" : null });
     const archive = root ? archiveOffer(useShellStore.getState().rest, agent, t) : { kind: "hidden" as const };
-    if (archive.kind === "offered") entries.push({ id: "archive", label: t("archive.menu.archive"), unavailable: archive.unavailable, separated: true });
+    if (archive.kind === "offered") entries.push({ id: "archive", icon: "archive", label: t("archive.menu.archive"), unavailable: archive.unavailable, separated: true });
     return entries;
   };
   const select = (id: TaskMenuId) => {
@@ -486,7 +500,7 @@ function TimeSlot({ agent, record, menu }: { agent: AgentRow; record: (() => voi
   const hidden = open ? "opacity-0" : "group-hover/task:opacity-0 group-focus-within/task:opacity-0 hoverless:opacity-0";
   return (
     <span className="grid shrink-0 items-center justify-items-end" onClick={(event) => event.stopPropagation()}>
-      <Elapsed since={agent.state.request_since} className={cn("pointer-events-none col-start-1 row-start-1 text-micro text-muted-foreground tabular-nums", hidden)} />
+      <Elapsed since={agent.last_prompt_at_unix_ms} data-agent-elapsed="true" className={cn("pointer-events-none col-start-1 row-start-1 text-micro text-muted-foreground tabular-nums", hidden)} />
       <span className={cn("col-start-1 row-start-1 flex items-center gap-xxs", shown)}>
         {record ? (
           <Hint label={t("taskLens.menu.record")} shortcut="Space">
@@ -495,7 +509,7 @@ function TimeSlot({ agent, record, menu }: { agent: AgentRow; record: (() => voi
             </button>
           </Hint>
         ) : null}
-        <EntryDropdown label={t("taskLens.more", { name: agent.identity_label })} items={menu.items} onSelect={menu.select} onOpenChange={setOpen} data-task-menu={agent.pane_id}
+        <EntryDropdown label={t("taskLens.more", { name: agent.identity_label })} title={agent.identity_label} items={menu.items} onSelect={menu.select} onOpenChange={setOpen} data-task-menu={agent.pane_id}
           trigger={
             <button type="button" aria-label={t("taskLens.more", { name: agent.identity_label })} data-task-more={agent.pane_id} className="rounded-xs p-xxs text-muted-foreground outline-none hover:bg-secondary focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary">
               <EllipsisIcon className="size-(--size-icon-sm)" />

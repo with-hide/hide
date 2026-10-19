@@ -334,6 +334,52 @@ impl Runtime {
                 retryable: false,
             });
         }
+        // Checkout navigation is core UI state. In particular an empty
+        // checkout or draft must never turn into OpenOwner and start a PTY.
+        if self.separate_view_areas()
+            && let RemoteControlRequest::FocusWorkspace {
+                workspace_id,
+                checkout_id,
+            } = &payload.request
+        {
+            let key = self
+                .catalog_workspaces()
+                .find(|workspace| workspace.device_id == target_id && workspace.id == *workspace_id)
+                .and_then(|workspace| {
+                    workspace
+                        .checkouts
+                        .iter()
+                        .find(|checkout| checkout_id.as_ref().is_none_or(|id| id == &checkout.id))
+                })
+                .map(|checkout| (target_id.clone(), checkout.path.clone()));
+            let Some(key) = key else {
+                fail_request!(
+                    "remote.control.workspace_not_found",
+                    "This checkout is no longer available. Select it again.".to_owned(),
+                    false
+                );
+            };
+            self.reconcile_node_agent_topology(&target_id);
+            let live = self
+                .workspace_views
+                .as_ref()
+                .and_then(|store| store.views.get(&key.0, &key.1))
+                .and_then(|view| {
+                    view.selected_agent_layout()
+                        .active()
+                        .filter(|id| !view.agent_groups.drafts.contains(*id))
+                        .map(str::to_owned)
+                });
+            self.show_agent_workspace_tab(&key, live);
+            self.remember_core_workspace_choice(&target_id, &request_id, key);
+            self.supersede_start_navigation();
+            if self.remote_control_requests.len() == 128 {
+                self.remote_control_requests.pop_front();
+            }
+            self.remote_control_requests
+                .push_back((target_id, request_id));
+            return true;
+        }
         let Some(context) = self.remote_controls.get(&target_id).cloned() else {
             fail_request!(
                 "remote.control.unavailable",
@@ -478,6 +524,30 @@ impl Runtime {
             } if self.separate_view_areas() => self.workspace_key(workspace_id, checkout_id),
             _ => agent_workspace_key,
         };
+        let focused_tab = session
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.checkouts)
+            .flat_map(|checkout| &checkout.tabs)
+            .find(|tab| match &payload.request {
+                RemoteControlRequest::FocusTab { tab_id } => tab.id.as_ref() == Some(tab_id),
+                RemoteControlRequest::FocusPane { pane_id } => {
+                    tab.panes.iter().any(|pane| &pane.id == pane_id)
+                }
+                _ => false,
+            })
+            .and_then(|tab| tab.id.clone().map(|id| (id, tab.delegated)));
+        if let Some(key) = chosen_key.as_ref()
+            && let Some((tab, _)) = focused_tab.as_ref()
+            && self.agent_tab_waiting_in(key, tab)
+        {
+            fail_request!(
+                "agent_layout.display_limit",
+                "This tab is waiting for an Agent area slot. Close a tab before selecting it."
+                    .to_owned(),
+                false
+            );
+        }
         let action = match payload.request {
             RemoteControlRequest::FocusPane { .. } => {
                 RemoteControlAction::Pane(PaneControlAction::Focus {
@@ -690,6 +760,12 @@ impl Runtime {
             }
         };
 
+        let chooses_focus = matches!(
+            action,
+            RemoteControlAction::Pane(PaneControlAction::Focus { .. })
+                | RemoteControlAction::FocusTab { .. }
+                | RemoteControlAction::FocusWorkspace { .. }
+        );
         // A terminal tab chosen on the device's strip takes the surface from
         // a device file the editor shows, as a local tab does (`focus_tab`).
         if matches!(
@@ -719,13 +795,15 @@ impl Runtime {
                 !(operation.scope_id == descriptor.scope_id
                     && matches!(operation.phase.as_str(), "failed" | "refused"))
             });
-            if self.remote_operations.values().any(|operation| {
-                operation.scope_id == descriptor.scope_id
-                    && matches!(
-                        operation.phase.as_str(),
-                        "transmitting" | "awaiting_topology" | "unknown"
-                    )
-            }) {
+            if self.geometry_tab_busy(&descriptor.scope_id)
+                || self.remote_operations.values().any(|operation| {
+                    operation.scope_id == descriptor.scope_id
+                        && matches!(
+                            operation.phase.as_str(),
+                            "transmitting" | "awaiting_topology" | "unknown"
+                        )
+                })
+            {
                 fail_request!(
                     "remote.control.in_progress",
                     format!(
@@ -862,11 +940,18 @@ impl Runtime {
             }
             return true;
         }
-        if focus_device && !self.device_in_front(&target_id) {
-            self.bring_device_forward(target_id.clone());
+        if chooses_focus {
+            self.supersede_start_navigation();
         }
         if let Some(key) = chosen_key {
-            self.choose_when_in_front(&target_id, &dispatched_request_id, key);
+            if let Some((tab, delegated)) = focused_tab {
+                self.reveal_remote_agent_tab(&key, &tab, delegated);
+            } else {
+                self.choose_when_in_front(&target_id, &dispatched_request_id, key);
+            }
+        }
+        if focus_device && !self.device_in_front(&target_id) {
+            self.bring_device_forward(target_id.clone());
         }
         true
     }
@@ -936,15 +1021,7 @@ impl Runtime {
                 || self.limit_reads_usage(),
             popover_open_generation: self.usage_popover_open_generation,
             hidden: self.snapshot.ui_state.usage.hidden.clone(),
-            required: if !self.factory_recipients.is_empty() {
-                // A Factory may choose any supported worker; its admission
-                // reads every declared limit through the same accessor.
-                hide_agent_adapter::ADAPTERS
-                    .iter()
-                    .filter(|row| row.usage.limit_sources().next().is_some())
-                    .map(|row| row.herdr.name.into())
-                    .collect()
-            } else if self.memory_reads_usage() || self.limit_reads_usage() {
+            required: if self.memory_reads_usage() || self.limit_reads_usage() {
                 self.ai_settings
                     .as_ref()
                     .filter(|settings| settings.enabled && settings.chosen)
@@ -1254,7 +1331,25 @@ impl Runtime {
         target_id: &str,
         session: &mut RemoteSessionSnapshot,
     ) -> bool {
-        let focused = session.focused_pane_id.clone();
+        let focused = session.focused_pane_id.clone().filter(|pane| {
+            if self.workspace_views.is_none() {
+                return true;
+            }
+            if !self.device_in_front(target_id) {
+                return false;
+            }
+            self.node_shown_agent_tabs(target_id).is_none_or(|shown| {
+                session
+                    .workspaces
+                    .iter()
+                    .flat_map(|workspace| &workspace.checkouts)
+                    .flat_map(|checkout| &checkout.tabs)
+                    .any(|tab| {
+                        tab.id.as_ref().is_some_and(|id| shown.contains(id))
+                            && tab.panes.iter().any(|entry| &entry.id == pane)
+                    })
+            })
+        });
         let prefix = remote_pane_id_prefix(target_id);
         let live_pane_ids = session
             .workspaces
@@ -2398,7 +2493,8 @@ impl Runtime {
         }
     }
 
-    /// A native-file fork is bound to the admitted live execution, not just its pane.
+    /// A native-file fork is bound to its admitted intent and source session.
+    /// Ordinary activity changes do not replace that execution.
     /// The worker checks this without doing file I/O under Runtime.
     pub(crate) fn fork_request_is_current(
         &self,
@@ -2410,11 +2506,15 @@ impl Runtime {
                 .live
                 .as_ref()
                 .is_some_and(|live| Arc::ptr_eq(&live.api_connector, connector))
-            && request.parent_state_change_seq.is_some()
+            // A later press for the same pane/session cannot authorize this
+            // worker: each admitted fork has its own name.
+            && self
+                .forks_in_flight
+                .get(&request.parent_pane_id)
+                .is_some_and(|pending| pending.name == request.name)
             && self.snapshot.navigator.agents.iter().any(|agent| {
                 agent.pane_id == request.parent_pane_id
                     && hide_agent_adapter::canonical_kind(&agent.agent_kind) == request.agent.kind()
-                    && agent.state_change_seq == request.parent_state_change_seq
                     && agent.session_id.as_deref() == Some(request.session_id.as_str())
                     && agent.row_facts.is_some()
                     && agent
@@ -2507,7 +2607,7 @@ impl Runtime {
         // Only the operator's own press brings the fork forward with the
         // keyboard; any other caller's fork waits where it was put (#1271).
         if fork_origin != super::events::ForkOrigin::Operator {
-            self.discard_input_request(&origin, "not_shown");
+            self.hold_background_fork_input(&origin, press, pane_id);
             return true;
         }
         // A tab the Agent area has no room for waits in the strip, as a new
@@ -2524,7 +2624,7 @@ impl Runtime {
                     format!("A view was chosen after {source_pane_id} was forked; the fork waits where it was put")
                 },
             );
-            self.discard_input_request(&origin, "not_shown");
+            self.hold_background_fork_input(&origin, press, pane_id);
             return true;
         }
         let prior_intent_serial = self.last_view_intent_serial;
@@ -2532,14 +2632,13 @@ impl Runtime {
         // A focus the core refused (a waiting tab, a closing pane) moved
         // nothing: the fork does not hold the keys or count as a move.
         if self.snapshot.focused.pane_id.as_deref() != Some(pane_id) {
-            self.discard_input_request(&origin, "not_shown");
+            self.hold_background_fork_input(&origin, press, pane_id);
             return true;
         }
         if let Some(pending) = self.forks_in_flight.get_mut(source_pane_id) {
             pending.focused = Some(pane_id.to_owned());
         }
-        // The shell keeps typing against the request while the fork's pane
-        // has the keyboard, so nothing reaches its shell first.
+        // Every client's keys wait on the node while the agent starts.
         self.hold_input_request_for(&origin, pane_id);
         self.fork_focus = Some(ForkFocus {
             intent_serial: self.last_view_intent_serial,
@@ -2547,6 +2646,23 @@ impl Runtime {
             press,
         });
         true
+    }
+
+    fn hold_background_fork_input(
+        &mut self,
+        origin: &super::terminal_input::InputOrigin,
+        press: u64,
+        pane_id: &str,
+    ) {
+        // Keys from the abandoned press stay discarded, but later clients
+        // addressing the pane still wait for its agent.
+        self.discard_input_request(origin, "not_shown");
+        self.input_requests.open(
+            &format!("fork-hold-{press}"),
+            origin.clone(),
+            std::time::Instant::now(),
+        );
+        self.hold_input_request_for(origin, pane_id);
     }
 
     /// `Fork agent`'s tab goes right of the source's tab in the source's Agent
@@ -2574,14 +2690,27 @@ impl Runtime {
             return Some(checkout_path);
         };
         let key = (self.node.as_str().to_owned(), checkout_path.clone());
-        let Some((area, index)) = store.views.get(&key.0, &key.1).and_then(|view| {
-            let area = view.agent_layout.tree.area_of(&source_tab)?;
+        let Some((group, area, index)) = store.views.get(&key.0, &key.1).and_then(|view| {
+            let group = view.agent_tab_group(&source_tab)?;
+            let area = view.group_layout(group)?.tree.area_of(&source_tab)?;
             let index = area.displays.iter().position(|tab| tab.id == source_tab)?;
-            Some((area.id.clone(), index + 1))
+            Some((group.map(str::to_owned), area.id.clone(), index + 1))
         }) else {
             return Some(checkout_path);
         };
-        let layout = &mut store.views.entry(&key.0, &key.1).agent_layout;
+        let view = store.views.entry(&key.0, &key.1);
+        if view.agent_tab_group(tab_id).is_some() {
+            let selected = view.agent_groups.selected.clone();
+            let result = view.move_agent_to_group(tab_id, group.as_deref(), unix_milliseconds());
+            view.agent_groups.selected = selected;
+            if let Err(error) = result {
+                self.push_diagnostic("agent_group.fork_placement_failed", format!("{error:?}"));
+                return Some(checkout_path);
+            }
+        }
+        let layout = view
+            .group_layout_mut(group.as_deref())
+            .expect("source group exists");
         // Herdr's session can carry the tab before this answer does; the
         // reconcile appended it then, and it moves next to its source now.
         if layout.tree.display(tab_id).is_some() {
@@ -2605,8 +2734,15 @@ impl Runtime {
         }
         store
             .agent_placements
-            .insert(tab_id.to_owned(), (key, area, Some(index)));
+            .insert(tab_id.to_owned(), (key, group, area, Some(index)));
         Some(checkout_path)
+    }
+
+    /// Readiness affects held keys only. A slow or unreadable agent keeps
+    /// its successful fork and pane; the node reports actual lost bytes.
+    pub(crate) fn discard_fork_input(&mut self, parent_pane_id: &str) {
+        let origin = super::terminal_input::InputOrigin::Fork(parent_pane_id.to_owned());
+        self.discard_input_request(&origin, "unconfirmed");
     }
 
     pub fn ingest_fork_result(
@@ -2645,14 +2781,7 @@ impl Runtime {
                 // Keys typed since the press reach the fork's agent now that
                 // it has started, never its launch command; a fork that did
                 // not take the keyboard was not where they were going.
-                if pending
-                    .as_ref()
-                    .is_some_and(|pending| pending.focused.is_some())
-                {
-                    self.resolve_input_request(&origin, &forked_pane_id);
-                } else {
-                    self.discard_input_request(&origin, "not_shown");
-                }
+                self.resolve_input_request(&origin, &forked_pane_id);
                 true
             }
             Err(message) => {

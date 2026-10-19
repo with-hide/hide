@@ -47,7 +47,7 @@ pub mod stamp;
 pub mod turns;
 pub mod usage;
 
-pub use envelope::{envelope_from_operator, envelope_header, envelope_sender};
+pub use envelope::{envelope_from_operator, envelope_header, envelope_names, envelope_sender};
 pub use refusal::ReadRefusal;
 pub use sightings::{
     MAX_SIGHTINGS_PER_OUTPUT, PrSighting, issue_addresses, pull_request_addresses,
@@ -284,12 +284,13 @@ pub enum Agent {
 }
 
 impl Agent {
-    /// The session formats actually declared by this build, independent of
-    /// whether its launch, hooks or other features are enabled.
+    /// The readable session formats, including retained history for retired
+    /// agents, independent of active launch, hook or provider support.
     pub fn supported() -> impl Iterator<Item = Self> {
         hide_agent_adapter::ADAPTERS
             .iter()
             .filter_map(|row| row.session.map(Self::from_format))
+            .chain(std::iter::once(Self::Cursor))
     }
 
     pub const fn format(self) -> hide_agent_adapter::SessionFormat {
@@ -319,6 +320,10 @@ impl Agent {
     }
 
     pub fn from_kind(kind: &str) -> Option<Self> {
+        // Cursor is retired from active support; its existing history remains readable.
+        if kind.trim().eq_ignore_ascii_case("cursor") {
+            return Some(Self::Cursor);
+        }
         hide_agent_adapter::adapter(kind)?
             .session
             .map(Self::from_format)

@@ -3,7 +3,7 @@
 // D-07): the top row names the device over the rail and the sidebar and
 // carries a Workspace's path and icons; under it the Search row opens the ⌘K
 // palette with the chord as bound, the Overview row opens All projects, the
-// Factory row is a Soon chip until the Factory opens, and no Home row is left;
+// free app has no Factory entry, and no Home row is left;
 // a browser tab offers no Add project; the footer's Help menu opens the
 // shortcut sheet, copies the diagnostics, opens the new-issue page and names
 // the version. Captured in Dark and Light.
@@ -66,13 +66,8 @@ test("the Search row and the Overview row under the device, with no Home row and
     await page.keyboard.press("Enter");
     await expect(palette.locator("[data-palette-input]")).toBeFocused();
     await page.keyboard.press("Escape");
-    // Until the Factory opens (src/factory/launch.ts) its row is the name and a Soon chip that opens nothing, and
-    // ⇧⌘F, its old chord, opens no screen: the palette's chord pressed after it shows the press was handled.
-    const soon = page.locator("[data-sidebar-factory-soon]");
-    await expect(soon).toContainText("Factory");
-    await expect(soon).toContainText("Soon");
-    await expect(soon.locator("button")).toHaveCount(0);
-    await expect(page.locator("[data-sidebar-factory]")).toHaveCount(0);
+    // The free app has no Factory entry or screen.
+    await expect(page.locator("[data-sidebar-factory], [data-sidebar-factory-soon]")).toHaveCount(0);
     await page.keyboard.press(mod("KeyF", { shift: true }));
     await page.keyboard.press(chord("search"));
     await expect(palette.locator("[data-palette-input]")).toBeFocused();
@@ -102,11 +97,11 @@ test("the Search row and the Overview row under the device, with no Home row and
     await page.keyboard.press(chord("new_workspace", "electron"));
     await expect(page.locator("[data-add-project]")).toHaveCount(0);
 
-    // The direct commands focus this one list or open the Overview over the Workspace, on its 백로그 the first time (PRD sidebar-task-lens B38).
+    // The direct commands focus this list or restore the Overview's last tab (overview-redesign B1).
     await page.keyboard.press(chord("sidebar_projects"));
     await expect.poll(() => sidebar.evaluate((node) => node.contains(document.activeElement))).toBe(true);
     await page.keyboard.press(chord("overview"));
-    await expect(modal.locator('[data-main-view="backlog"]')).toBeVisible();
+    await expect(modal.locator('[data-main-view="work"]')).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(sidebar).toHaveAttribute("data-sidebar", "projects");
     await expect(list).toBeVisible();
@@ -145,17 +140,15 @@ test("the window's top row names the device over the rail and the sidebar, and c
       await page.mouse.move(640, 600);
       await screenshot(page, `title-row-workspace-${theme}`);
     }
-    // B18: the checkout's right-click is the path's menu, and the project opens its panel on the Overview's Projects (PRD sidebar-task-lens B41).
+    // The checkout keeps its path menu; a project opens its local home in Projects.
     await center.locator("[data-workspace-location]").click({ button: "right" });
     await expect(page.locator('[role="menu"] [data-menu-item="copy_path"]')).toBeVisible();
     await page.keyboard.press("Escape");
     await project.click();
     const modal = page.getByRole("dialog", { name: "Overview", exact: true });
     await expect(modal.locator('[data-main-view="projects"]')).toBeVisible();
-    await expect(modal.locator('[data-overview-panel="project"] h2')).toHaveText("fixture");
-    // Escape closes the panel first and the Overview after it (B16).
-    await page.keyboard.press("Escape");
-    await expect(modal.locator("[data-overview-panel]")).toHaveCount(0);
+    await expect(modal.locator('[data-overview-project-home] h2').first()).toHaveText("fixture");
+    // The project home is the tab's content, so Escape closes the Overview.
     await page.keyboard.press("Escape");
     await expect(modal).toHaveCount(0);
 

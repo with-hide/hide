@@ -20,10 +20,6 @@ fn shared_skill(fixture: &Fixture) -> PathBuf {
         .join("SKILL.md")
 }
 
-fn cursor_hooks(fixture: &Fixture) -> PathBuf {
-    fixture.home().join(".cursor/hooks.json")
-}
-
 /// A folder the agent makes under the home, such as its settings folder.
 fn set_up(fixture: &Fixture, folder: &str) {
     std::fs::create_dir_all(fixture.home().join(folder)).unwrap();
@@ -79,71 +75,65 @@ fn every_adapter_names_an_official_page_and_a_unique_id() {
 #[test]
 fn an_agent_that_is_not_on_gets_nothing_until_the_operator_switches_it_on() {
     let fixture = Fixture::new();
-    install(&fixture, "cursor-agent", ".cursor");
+    install(&fixture, "grok", ".grok");
 
     let report = apply(&fixture.target, &Scope::automatic());
 
-    let cursor = agent(&report, "cursor");
-    assert!(!cursor.enabled);
-    assert_eq!(cursor.skill.state, ComponentState::Off);
-    assert_eq!(cursor.hook.as_ref().unwrap().state, ComponentState::Off);
-    assert!(!cursor_hooks(&fixture).exists());
+    let grok = agent(&report, "grok");
+    assert!(!grok.enabled);
+    assert_eq!(grok.skill.state, ComponentState::Off);
+    assert_eq!(grok.hook.as_ref().unwrap().state, ComponentState::Off);
+    assert!(!grok_hooks(&fixture).exists());
     assert!(!shared_skill(&fixture).exists());
 
-    let report = apply(&fixture.target, &Scope::agents(["cursor"], []));
+    let report = apply(&fixture.target, &Scope::agents(["grok"], []));
 
-    let cursor = agent(&report, "cursor");
-    assert!(cursor.enabled);
-    assert_eq!(cursor.skill.state, ComponentState::Installed, "{cursor:?}");
+    let grok = agent(&report, "grok");
+    assert!(grok.enabled);
+    assert_eq!(grok.skill.state, ComponentState::Installed, "{grok:?}");
     assert_eq!(
-        cursor.hook.as_ref().unwrap().state,
+        grok.hook.as_ref().unwrap().state,
         ComponentState::Installed,
-        "{cursor:?}"
+        "{grok:?}"
     );
     assert!(shared_skill(&fixture).is_file());
     assert!(
-        std::fs::read_to_string(cursor_hooks(&fixture))
+        std::fs::read_to_string(grok_hooks(&fixture))
             .unwrap()
             .contains(&format!(
                 "hide-guidance@{}",
-                hide_agent_hooks::guidance::GUIDANCE_VERSION
+                hide_agent_hooks::guidance::GuidanceAgent::Grok.version()
             ))
     );
-    assert_eq!(record(&fixture)["agents"]["cursor"], true);
+    assert_eq!(record(&fixture)["agents"]["grok"], true);
 }
 
 #[test]
 fn switching_on_an_agent_that_is_not_installed_here_records_nothing() {
     let fixture = Fixture::new();
 
-    let report = apply(&fixture.target, &Scope::agents(["cursor"], []));
+    let report = apply(&fixture.target, &Scope::agents(["grok"], []));
 
-    let cursor = agent(&report, "cursor");
-    assert_eq!(cursor.availability, Availability::NotInstalled);
+    let grok = agent(&report, "grok");
+    assert_eq!(grok.availability, Availability::NotInstalled);
     assert!(
         record(&fixture).get("agents").is_none(),
         "{}",
         record(&fixture)
     );
-    assert!(!cursor_hooks(&fixture).exists());
+    assert!(!grok_hooks(&fixture).exists());
 }
 
 #[test]
 fn a_program_on_the_home_bin_folder_is_the_agent_being_installed() {
     let fixture = Fixture::new();
-    executable(
-        &fixture.home().join(".local/bin/cursor-agent"),
-        "#!/bin/sh\n",
-    );
+    executable(&fixture.home().join(".local/bin/grok"), "#!/bin/sh\n");
 
     let report = status(&fixture.target);
 
+    assert_eq!(agent(&report, "grok").availability, Availability::Available);
     assert_eq!(
-        agent(&report, "cursor").availability,
-        Availability::Available
-    );
-    assert_eq!(
-        agent(&report, "grok").availability,
+        agent(&report, "pi").availability,
         Availability::NotInstalled
     );
 }
@@ -151,60 +141,54 @@ fn a_program_on_the_home_bin_folder_is_the_agent_being_installed() {
 #[test]
 fn a_second_apply_of_an_agent_that_is_on_changes_nothing() {
     let fixture = Fixture::new();
-    install(&fixture, "cursor-agent", ".cursor");
-    apply(&fixture.target, &Scope::agents(["cursor"], []));
+    install(&fixture, "grok", ".grok");
+    apply(&fixture.target, &Scope::agents(["grok"], []));
     let tree = home_tree(fixture.home());
 
     let report = apply(&fixture.target, &Scope::automatic());
 
     assert_eq!(home_tree(fixture.home()), tree);
-    assert!(agent(&report, "cursor").enabled);
+    assert!(agent(&report, "grok").enabled);
 }
 
 #[test]
 fn removed_by_hand_stays_removed_until_the_operator_reinstalls() {
     let fixture = Fixture::new();
-    install(&fixture, "cursor-agent", ".cursor");
-    apply(&fixture.target, &Scope::agents(["cursor"], []));
-    std::fs::remove_file(cursor_hooks(&fixture)).unwrap();
+    install(&fixture, "grok", ".grok");
+    apply(&fixture.target, &Scope::agents(["grok"], []));
+    std::fs::remove_file(grok_hooks(&fixture)).unwrap();
     std::fs::remove_dir_all(fixture.home().join(".agents")).unwrap();
 
     let report = apply(&fixture.target, &Scope::automatic());
 
-    let cursor = agent(&report, "cursor");
-    assert_eq!(cursor.hook.as_ref().unwrap().state, ComponentState::Removed);
-    assert_eq!(cursor.skill.state, ComponentState::Removed);
-    assert!(!cursor_hooks(&fixture).exists());
+    let grok = agent(&report, "grok");
+    assert_eq!(grok.hook.as_ref().unwrap().state, ComponentState::Removed);
+    assert_eq!(grok.skill.state, ComponentState::Removed);
+    assert!(!grok_hooks(&fixture).exists());
     assert!(!shared_skill(&fixture).exists());
 
-    let report = apply(&fixture.target, &Scope::agents(["cursor"], []));
+    let report = apply(&fixture.target, &Scope::agents(["grok"], []));
 
-    let cursor = agent(&report, "cursor");
-    assert_eq!(
-        cursor.hook.as_ref().unwrap().state,
-        ComponentState::Installed
-    );
-    assert_eq!(cursor.skill.state, ComponentState::Installed);
+    let grok = agent(&report, "grok");
+    assert_eq!(grok.hook.as_ref().unwrap().state, ComponentState::Installed);
+    assert_eq!(grok.skill.state, ComponentState::Installed);
 }
 
 #[test]
 fn an_older_stub_is_replaced_without_the_operator_asking() {
     let fixture = Fixture::new();
-    install(&fixture, "cursor-agent", ".cursor");
-    apply(&fixture.target, &Scope::agents(["cursor"], []));
+    install(&fixture, "grok", ".grok");
+    apply(&fixture.target, &Scope::agents(["grok"], []));
     let path = shared_skill(&fixture);
     let current = std::fs::read_to_string(&path).unwrap();
     std::fs::write(&path, current.replace("hide-skill@1", "hide-skill@0")).unwrap();
 
     let before = status(&fixture.target);
-    assert_eq!(
-        agent(&before, "cursor").skill.state,
-        ComponentState::Outdated
-    );
+    assert_eq!(agent(&before, "grok").skill.state, ComponentState::Outdated);
     let report = apply(&fixture.target, &Scope::automatic());
 
     assert_eq!(
-        agent(&report, "cursor").skill.state,
+        agent(&report, "grok").skill.state,
         ComponentState::Installed
     );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), current);
@@ -213,32 +197,33 @@ fn an_older_stub_is_replaced_without_the_operator_asking() {
 #[test]
 fn switching_an_agent_off_takes_only_hides_pieces_and_keeps_a_folder_another_agent_reads() {
     let fixture = Fixture::new();
-    install(&fixture, "cursor-agent", ".cursor");
+    install(&fixture, "grok", ".grok");
     install(&fixture, "codex", ".codex");
-    let settings = r#"{"version":1,"hooks":{"sessionStart":[{"command":"/opt/other/start.sh"}]}}"#;
-    std::fs::write(cursor_hooks(&fixture), settings).unwrap();
-    apply(&fixture.target, &Scope::agents(["cursor"], []));
+    let settings = r#"{"version":1,"hooks":{"SessionStart":[{"command":"/opt/other/start.sh"}]}}"#;
+    std::fs::create_dir_all(grok_hooks(&fixture).parent().unwrap()).unwrap();
+    std::fs::write(grok_hooks(&fixture), settings).unwrap();
+    apply(&fixture.target, &Scope::agents(["grok"], []));
     assert!(shared_skill(&fixture).is_file());
 
-    let report = apply(&fixture.target, &Scope::agents([], ["cursor"]));
+    let report = apply(&fixture.target, &Scope::agents([], ["grok"]));
 
-    let cursor = agent(&report, "cursor");
-    assert!(!cursor.enabled);
-    assert_eq!(cursor.hook.as_ref().unwrap().state, ComponentState::Off);
+    let grok = agent(&report, "grok");
+    assert!(!grok.enabled);
+    assert_eq!(grok.hook.as_ref().unwrap().state, ComponentState::Off);
     let left: Value =
-        serde_json::from_str(&std::fs::read_to_string(cursor_hooks(&fixture)).unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(grok_hooks(&fixture)).unwrap()).unwrap();
     assert_eq!(left["version"], 1);
-    assert_eq!(left["hooks"]["sessionStart"].as_array().unwrap().len(), 1);
+    assert_eq!(left["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
     assert!(left.to_string().contains("/opt/other/start.sh"));
     assert!(!left.to_string().contains("hide-guidance"));
     // Codex reads the shared folder and is still on.
     assert!(shared_skill(&fixture).is_file());
-    assert_eq!(record(&fixture)["agents"]["cursor"], false);
+    assert_eq!(record(&fixture)["agents"]["grok"], false);
 
     // No later pass puts it back.
     apply(&fixture.target, &Scope::automatic());
     assert!(
-        !std::fs::read_to_string(cursor_hooks(&fixture))
+        !std::fs::read_to_string(grok_hooks(&fixture))
             .unwrap()
             .contains("hide-guidance")
     );
@@ -251,20 +236,20 @@ fn switching_an_agent_off_takes_only_hides_pieces_and_keeps_a_folder_another_age
 #[test]
 fn a_skill_that_hide_did_not_write_is_left_alone_and_reported() {
     let fixture = Fixture::new();
-    install(&fixture, "cursor-agent", ".cursor");
+    install(&fixture, "grok", ".grok");
     let own = shared_skill(&fixture);
     std::fs::create_dir_all(own.parent().unwrap()).unwrap();
     std::fs::write(&own, "---\nname: hide-browser\n---\nmine\n").unwrap();
 
-    let report = apply(&fixture.target, &Scope::agents(["cursor"], []));
+    let report = apply(&fixture.target, &Scope::agents(["grok"], []));
 
-    assert_eq!(agent(&report, "cursor").skill.state, ComponentState::Absent);
-    assert!(!agent(&report, "cursor").needs_attention());
+    assert_eq!(agent(&report, "grok").skill.state, ComponentState::Absent);
+    assert!(!agent(&report, "grok").needs_attention());
     assert_eq!(
         std::fs::read_to_string(&own).unwrap(),
         "---\nname: hide-browser\n---\nmine\n"
     );
-    apply(&fixture.target, &Scope::agents([], ["cursor", "codex"]));
+    apply(&fixture.target, &Scope::agents([], ["grok", "codex"]));
     assert_eq!(
         std::fs::read_to_string(&own).unwrap(),
         "---\nname: hide-browser\n---\nmine\n"
@@ -337,15 +322,15 @@ fn claude_code_and_codex_are_on_without_a_choice_and_off_removes_the_hook_part()
 #[test]
 fn removing_a_machine_takes_every_marked_piece_and_nothing_else() {
     let fixture = Fixture::new();
-    install(&fixture, "cursor-agent", ".cursor");
-    apply(&fixture.target, &Scope::agents(["cursor"], []));
+    install(&fixture, "grok", ".grok");
+    apply(&fixture.target, &Scope::agents(["grok"], []));
 
     let removed = remove(&fixture.target);
 
-    assert!(removed.agents.iter().any(|(code, _)| code == "hook:cursor"));
+    assert!(removed.agents.iter().any(|(code, _)| code == "hook:grok"));
     assert!(!shared_skill(&fixture).exists());
     assert!(
-        !std::fs::read_to_string(cursor_hooks(&fixture))
+        !std::fs::read_to_string(grok_hooks(&fixture))
             .map(|text| text.contains("hide-guidance"))
             .unwrap_or(false)
     );
@@ -355,12 +340,12 @@ fn removing_a_machine_takes_every_marked_piece_and_nothing_else() {
 fn the_shared_stub_goes_when_the_last_agent_reading_it_is_switched_off_even_with_codex_not_installed()
  {
     let fixture = Fixture::new();
-    install(&fixture, "cursor-agent", ".cursor");
-    apply(&fixture.target, &Scope::agents(["cursor"], []));
+    install(&fixture, "grok", ".grok");
+    apply(&fixture.target, &Scope::agents(["grok"], []));
     assert!(shared_skill(&fixture).is_file());
 
     // Codex is on by default but not installed here, so it reads nothing.
-    apply(&fixture.target, &Scope::agents([], ["cursor"]));
+    apply(&fixture.target, &Scope::agents([], ["grok"]));
 
     assert!(!shared_skill(&fixture).exists());
 }
@@ -368,12 +353,12 @@ fn the_shared_stub_goes_when_the_last_agent_reading_it_is_switched_off_even_with
 #[test]
 fn a_switch_off_that_left_hides_stub_behind_does_not_read_as_off() {
     let fixture = Fixture::new();
-    install(&fixture, "cursor-agent", ".cursor");
-    apply(&fixture.target, &Scope::agents(["cursor"], []));
+    install(&fixture, "grok", ".grok");
+    apply(&fixture.target, &Scope::agents(["grok"], []));
     // The choice is off and Hide's stub is still there, as a removal that
     // failed would leave it.
     let mut text = record(&fixture);
-    text["agents"]["cursor"] = serde_json::json!(false);
+    text["agents"]["grok"] = serde_json::json!(false);
     std::fs::write(
         fixture.home().join(".hide/kit/installed.json"),
         text.to_string(),
@@ -382,11 +367,10 @@ fn a_switch_off_that_left_hides_stub_behind_does_not_read_as_off() {
 
     let report = status(&fixture.target);
 
-    let cursor = agent(&report, "cursor");
-    assert_eq!(cursor.skill.state, ComponentState::Failed, "{cursor:?}");
+    let grok = agent(&report, "grok");
+    assert_eq!(grok.skill.state, ComponentState::Failed, "{grok:?}");
     assert!(
-        cursor
-            .skill
+        grok.skill
             .reason
             .as_deref()
             .unwrap()
@@ -410,16 +394,16 @@ fn an_agent_found_only_by_its_program_reports_its_folder_as_not_made_yet() {
 #[test]
 fn a_file_that_only_mentions_the_marker_is_not_hides_stub() {
     let fixture = Fixture::new();
-    install(&fixture, "cursor-agent", ".cursor");
+    install(&fixture, "grok", ".grok");
     let own = shared_skill(&fixture);
     std::fs::create_dir_all(own.parent().unwrap()).unwrap();
     // The marker's words sit in the body, not in the line Hide writes.
     let mine = "---\nname: hide-browser\n---\nsee hide-skill@1 in the docs\n";
     std::fs::write(&own, mine).unwrap();
 
-    let report = apply(&fixture.target, &Scope::agents(["cursor"], []));
-    assert_eq!(agent(&report, "cursor").skill.state, ComponentState::Absent);
-    apply(&fixture.target, &Scope::agents([], ["cursor", "codex"]));
+    let report = apply(&fixture.target, &Scope::agents(["grok"], []));
+    assert_eq!(agent(&report, "grok").skill.state, ComponentState::Absent);
+    apply(&fixture.target, &Scope::agents([], ["grok", "codex"]));
 
     assert_eq!(std::fs::read_to_string(&own).unwrap(), mine);
 }
@@ -427,8 +411,8 @@ fn a_file_that_only_mentions_the_marker_is_not_hides_stub() {
 #[test]
 fn an_edited_stub_is_reported_and_only_reinstall_puts_hides_text_back() {
     let fixture = Fixture::new();
-    install(&fixture, "cursor-agent", ".cursor");
-    apply(&fixture.target, &Scope::agents(["cursor"], []));
+    install(&fixture, "grok", ".grok");
+    apply(&fixture.target, &Scope::agents(["grok"], []));
     let path = shared_skill(&fixture);
     let hide_text = std::fs::read_to_string(&path).unwrap();
     let edited = format!("{hide_text}\nMy own note for this agent.\n");
@@ -436,33 +420,32 @@ fn an_edited_stub_is_reported_and_only_reinstall_puts_hides_text_back() {
 
     // No automatic pass overwrites the operator's change.
     let report = apply(&fixture.target, &Scope::automatic());
-    let cursor = agent(&report, "cursor");
-    assert_eq!(cursor.skill.state, ComponentState::Outdated);
-    assert!(cursor.skill.reason.as_deref().unwrap().contains("edited"));
-    assert!(cursor.needs_attention());
+    let grok = agent(&report, "grok");
+    assert_eq!(grok.skill.state, ComponentState::Outdated);
+    assert!(grok.skill.reason.as_deref().unwrap().contains("edited"));
+    assert!(grok.needs_attention());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), edited);
 
     // Switching the agent off keeps what they wrote as well.
-    let off = apply(&fixture.target, &Scope::agents([], ["cursor", "codex"]));
+    let off = apply(&fixture.target, &Scope::agents([], ["grok", "codex"]));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), edited);
     assert_eq!(
-        agent(&off, "cursor").skill.state,
+        agent(&off, "grok").skill.state,
         ComponentState::Off,
         "an edited stub is the operator's file, so the switch is Off"
     );
 
     // Reinstall (switching on again) restores Hide's text.
-    apply(&fixture.target, &Scope::agents(["cursor"], []));
+    apply(&fixture.target, &Scope::agents(["grok"], []));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), hide_text);
 }
 
 #[test]
 fn a_folder_the_agent_makes_is_not_the_agent_being_installed() {
-    // Each agent's folder alone: an editor makes `~/.cursor` without the
-    // `cursor-agent` CLI, and Pi's installer keeps `~/.pi/agent` around.
+    // Each agent's folder alone: an editor makes `~/.grok` without the
+    // `grok` CLI, and Pi's installer keeps `~/.pi/agent` around.
     for (program, id, folder) in [
         ("pi", "pi", ".pi/agent"),
-        ("cursor-agent", "cursor", ".cursor"),
         ("grok", "grok", ".grok"),
         ("opencode", "opencode", ".config/opencode"),
         ("omp", "omp", ".omp/agent"),
@@ -490,10 +473,10 @@ fn a_folder_the_agent_makes_is_not_the_agent_being_installed() {
 #[test]
 fn an_agent_whose_program_is_gone_keeps_what_hide_put_down_until_it_is_switched_off() {
     let fixture = Fixture::new();
-    install(&fixture, "cursor-agent", ".cursor");
-    apply(&fixture.target, &Scope::agents(["cursor"], []));
+    install(&fixture, "grok", ".grok");
+    apply(&fixture.target, &Scope::agents(["grok"], []));
     assert!(shared_skill(&fixture).is_file());
-    std::fs::remove_file(fixture.home().join(".local/bin/cursor-agent")).unwrap();
+    std::fs::remove_file(fixture.home().join(".local/bin/grok")).unwrap();
     let tree = home_tree(fixture.home());
 
     let report = apply(&fixture.target, &Scope::automatic());
@@ -502,34 +485,34 @@ fn an_agent_whose_program_is_gone_keeps_what_hide_put_down_until_it_is_switched_
     // pieces stay as they were, so the agent is whole again once its
     // program is back.
     assert_eq!(home_tree(fixture.home()), tree);
-    assert_eq!(record(&fixture)["agents"]["cursor"], true);
-    let cursor = agent(&report, "cursor");
-    assert_eq!(cursor.availability, Availability::NotInstalled);
-    assert!(cursor.enabled, "the switch stays so it can be turned off");
+    assert_eq!(record(&fixture)["agents"]["grok"], true);
+    let grok = agent(&report, "grok");
+    assert_eq!(grok.availability, Availability::NotInstalled);
+    assert!(grok.enabled, "the switch stays so it can be turned off");
     assert!(
-        cursor.chosen,
+        grok.chosen,
         "the record holds the operator's choice, which is what keeps the row's switch"
     );
-    assert!(!cursor.needs_attention(), "nothing for Reinstall to do");
-    for piece in [&cursor.skill, cursor.hook.as_ref().unwrap()] {
-        assert_eq!(piece.state, ComponentState::Absent, "{cursor:?}");
+    assert!(!grok.needs_attention(), "nothing for Reinstall to do");
+    for piece in [&grok.skill, grok.hook.as_ref().unwrap()] {
+        assert_eq!(piece.state, ComponentState::Absent, "{grok:?}");
         assert!(
             piece
                 .reason
                 .as_deref()
                 .unwrap()
-                .contains("`cursor-agent` is not found"),
+                .contains("`grok` is not found"),
             "{piece:?}"
         );
     }
 
     // The switch still takes Hide's pieces out.
-    let report = apply(&fixture.target, &Scope::agents([], ["cursor"]));
+    let report = apply(&fixture.target, &Scope::agents([], ["grok"]));
 
-    assert!(!agent(&report, "cursor").enabled);
+    assert!(!agent(&report, "grok").enabled);
     assert!(!shared_skill(&fixture).exists());
     assert!(
-        !std::fs::read_to_string(cursor_hooks(&fixture))
+        !std::fs::read_to_string(grok_hooks(&fixture))
             .map(|text| text.contains("hide-guidance"))
             .unwrap_or(false)
     );
@@ -540,7 +523,7 @@ fn an_agent_on_only_by_default_with_no_program_reports_no_operator_choice() {
     let fixture = Fixture::new();
     // A machine that already has a record, so the first-run hold does not
     // switch the default-on agents off.
-    apply(&fixture.target, &Scope::agents([], ["cursor"]));
+    apply(&fixture.target, &Scope::agents([], ["grok"]));
 
     let report = status(&fixture.target);
 
@@ -549,7 +532,7 @@ fn an_agent_on_only_by_default_with_no_program_reports_no_operator_choice() {
     assert!(codex.enabled, "Codex is on by default");
     assert!(!codex.chosen, "{codex:?}");
     // Switched off by the operator, the choice is on record whatever it is.
-    assert!(agent(&report, "cursor").chosen);
+    assert!(agent(&report, "grok").chosen);
 }
 
 #[test]
@@ -738,25 +721,25 @@ fn agy_is_on_by_default_where_its_program_is_found_and_gets_nothing_where_it_is_
 }
 
 #[test]
-fn cursor_gets_the_guidance_hook_with_the_switch_and_loses_it_with_it() {
-    let file = ".cursor/hooks.json";
+fn grok_gets_the_guidance_hook_with_the_switch_and_loses_it_with_it() {
+    let file = ".grok/hooks/hide.json";
     let fixture = Fixture::new();
-    install(&fixture, "cursor-agent", ".cursor");
+    install(&fixture, "grok", ".grok");
 
-    let report = apply(&fixture.target, &Scope::agents(["cursor"], []));
+    let report = apply(&fixture.target, &Scope::agents(["grok"], []));
 
-    let hook = agent(&report, "cursor").hook.as_ref().unwrap();
+    let hook = agent(&report, "grok").hook.as_ref().unwrap();
     assert_eq!(hook.state, ComponentState::Installed, "{hook:?}");
     let written = std::fs::read_to_string(fixture.home().join(file)).unwrap();
     assert!(written.contains(&format!(
         "hide-guidance@{}",
-        hide_agent_hooks::guidance::GUIDANCE_VERSION
+        hide_agent_hooks::guidance::GuidanceAgent::Grok.version()
     )));
 
-    let report = apply(&fixture.target, &Scope::agents([], ["cursor"]));
+    let report = apply(&fixture.target, &Scope::agents([], ["grok"]));
 
     assert_eq!(
-        agent(&report, "cursor").hook.as_ref().unwrap().state,
+        agent(&report, "grok").hook.as_ref().unwrap().state,
         ComponentState::Off
     );
     // Hide created the file and nothing else was in it, so the file goes.
@@ -764,15 +747,15 @@ fn cursor_gets_the_guidance_hook_with_the_switch_and_loses_it_with_it() {
 }
 
 #[test]
-fn claude_code_and_codex_do_everything_opencode_pi_omp_and_antigravity_collaborate_and_grok_and_cursor_are_partial()
+fn claude_code_and_codex_do_everything_opencode_pi_omp_and_antigravity_collaborate_and_grok_is_partial()
  {
     use crate::agents::Feature::{self, *};
     // The expected rows come from the PRDs and the hook research, not from
     // the table: what Hide does for each agent in this build (D-10, B18;
     // opencode-plugin D-11: OpenCode takes letters and is refused a launch,
-    // so it is no longer Basic, while no bell rings for it; grok-cursor-hooks:
-    // Grok and Cursor get the spawn guard from their official hooks, and Grok
-    // the subagent count (Cursor's hooks never fire for a Task subagent, issue
+    // so it is no longer Basic, while no bell rings for it; grok-grok-hooks:
+    // Grok and Grok get the spawn guard from their official hooks, and Grok
+    // the subagent count (Grok's hooks never fire for a Task subagent, issue
     // 911), take no letters and stay Basic, and Grok discards a
     // session-start hook's output). The session-reader common contract B1/B6
     // enables starts for the five agents besides Claude Code and Codex
@@ -820,13 +803,14 @@ fn claude_code_and_codex_do_everything_opencode_pi_omp_and_antigravity_collabora
         Start,
         Titles,
     ];
-    let expected: [(&str, &[Feature], bool); 8] = [
+    let expected: [(&str, &[Feature], bool); 7] = [
         ("claude-code", &Feature::ALL, false),
         ("codex", &Feature::ALL, false),
         (
             "grok",
             &[
                 Skill,
+                Bell,
                 SpawnGuard,
                 HerdrIntegration,
                 Sleep,
@@ -839,19 +823,6 @@ fn claude_code_and_codex_do_everything_opencode_pi_omp_and_antigravity_collabora
         ("opencode", &opencode, false),
         ("pi", &pi, false),
         ("omp", &omp, false),
-        (
-            "cursor",
-            &[
-                Skill,
-                Guidance,
-                SpawnGuard,
-                HerdrIntegration,
-                Sleep,
-                Start,
-                Titles,
-            ],
-            true,
-        ),
         ("antigravity", &omp, false),
     ];
     assert_eq!(
@@ -877,7 +848,7 @@ fn the_features_the_hook_gives_are_the_ones_a_hook_runtime_exists_for() {
     // Hide's (OpenCode's plugin, Pi's and omp's extension) or agy's hook
     // block, which answers its prompt event,
     // which the hook crate speaks a dialect for; the subagent count and the
-    // spawn guard also come from Grok's and Cursor's own hook files. An agent
+    // spawn guard also come from Grok's and Grok's own hook files. An agent
     // claiming them without a hook would be a popover that says more than
     // the kit installs.
     let with_runtime: Vec<&str> = ADAPTERS
@@ -890,8 +861,11 @@ fn the_features_the_hook_gives_are_the_ones_a_hook_runtime_exists_for() {
         hide_agent_adapter::HookDialect::ALL
             .iter()
             .filter(|dialect| ADAPTERS.iter().any(|row| {
-                hide_agent_adapter::adapter(row.id)
-                    .is_some_and(|adapter| adapter.prompt_hook == Some(**dialect))
+                hide_agent_adapter::adapter(row.id).is_some_and(|adapter| {
+                    adapter
+                        .prompt_hook
+                        .is_some_and(|hook| hook.context && hook.dialect == **dialect)
+                })
             }))
             .count()
     );
@@ -900,7 +874,7 @@ fn the_features_the_hook_gives_are_the_ones_a_hook_runtime_exists_for() {
         // agy's hook entry answers its prompt event, so it carries letters.
         let instrumented = matches!(row.hook, HookSupport::Part(_) | HookSupport::Plugin(_))
             || matches!(row.hook, HookSupport::Guidance(agent)
-                if agent.dialect().is_some() && agent.dialect() == declared.prompt_hook);
+                if agent.dialect().is_some() && agent.dialect() == declared.prompt_hook.filter(|hook| hook.context).map(|hook| hook.dialect));
         assert_eq!(
             row.supports(crate::agents::Feature::Letters),
             instrumented,
@@ -915,7 +889,7 @@ fn the_features_the_hook_gives_are_the_ones_a_hook_runtime_exists_for() {
             row.id
         );
         // The spawn guard needs any hook of Hide's, including Grok's and
-        // Cursor's own hook files, and its own declaration.
+        // Grok's own hook files, and its own declaration.
         let hook = !matches!(row.hook, HookSupport::None);
         assert_eq!(
             row.supports(crate::agents::Feature::SpawnGuard),
@@ -966,6 +940,24 @@ fn grok_gets_its_own_hook_file_beside_the_others_and_only_inside_its_own_folder(
         std::fs::read(fixture.home().join(".grok/hooks/herdr.json")).unwrap(),
         herdr
     );
+
+    // A generated entry for a previous daemon state is safe to refresh;
+    // the operator edit below must still be left alone by an automatic pass.
+    let helper = fixture.target.kit_dir.join("hide-agent-hooks");
+    let previous = fixture.home().join("previous-daemon-state");
+    hide_agent_hooks::guidance::install(
+        hide_agent_hooks::guidance::GuidanceAgent::Grok,
+        fixture.home(),
+        hide_agent_hooks::route::HookTarget::new(&helper, &previous).unwrap(),
+    )
+    .unwrap();
+    let old = std::fs::read_to_string(grok_hooks(&fixture)).unwrap();
+    let report = apply(&fixture.target, &Scope::automatic());
+    assert_eq!(
+        agent(&report, "grok").hook.as_ref().unwrap().state,
+        ComponentState::Installed
+    );
+    assert_ne!(std::fs::read_to_string(grok_hooks(&fixture)).unwrap(), old);
 
     // An entry the operator edited reads Outdated and is theirs until
     // Reinstall, which puts Hide's back (B8).
@@ -1038,7 +1030,13 @@ fn opencode_switched_on_gets_hides_plugin_beside_herdrs_and_reads_installed() {
     assert_eq!(hook.location.as_deref(), opencode_plugin(&fixture).to_str());
     assert_eq!(
         std::fs::read_to_string(opencode_plugin(&fixture)).unwrap(),
-        hide_agent_hooks::opencode::V1.text(&fixture.target.kit_dir.join("hide-agent-hooks"))
+        hide_agent_hooks::opencode::V1.text(
+            hide_agent_hooks::route::HookTarget::new(
+                &fixture.target.kit_dir.join("hide-agent-hooks"),
+                &crate::layout::state_dir_from_process(fixture.home()),
+            )
+            .unwrap()
+        )
     );
     assert_eq!(std::fs::read(&herdr).unwrap(), b"herdr's plugin");
     assert!(

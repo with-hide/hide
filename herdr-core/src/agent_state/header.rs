@@ -10,6 +10,8 @@ pub struct Header {
     pub notice: Option<Notice>,
     /// What waits on the operator in this pane, drawn on its second row.
     pub band: Option<Band>,
+    /// This pane agent's own current working sentence; never a descendant's line.
+    pub progress: Option<String>,
     pub working: bool,
 }
 
@@ -147,6 +149,7 @@ pub(crate) fn of(
         return Header {
             notice,
             band: None,
+            progress: None,
             working: false,
         };
     }
@@ -161,6 +164,7 @@ pub(crate) fn of(
     {
         return Header {
             notice: None,
+            progress: None,
             working: false,
             band: Some(Band {
                 kind: "raised".to_owned(),
@@ -177,14 +181,22 @@ pub(crate) fn of(
         };
     }
     let Some(kind) = own else {
+        let working = agent.state.verb == super::RequestVerb::Working;
         return Header {
             notice: None,
             band: None,
-            working: agent.state.verb == super::RequestVerb::Working,
+            progress: working
+                .then_some(agent.progress.as_deref())
+                .flatten()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_owned),
+            working,
         };
     };
     Header {
         notice: None,
+        progress: None,
         working: false,
         band: Some(Band {
             kind: kind.to_owned(),

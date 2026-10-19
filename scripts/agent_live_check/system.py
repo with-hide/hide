@@ -18,11 +18,14 @@ import shlex
 import shutil
 import signal
 import stat
+import sys
+import time
 
 WINDOWS = os.name == "nt"
 
 # The marker each owned pane's prompt prints once its shell is at a prompt.
 READY = "LIVE_CHECK_READY>"
+PANE_FILE_RELEASE_SECONDS = 5
 
 # Ctrl-C and SIGTERM everywhere; a closed terminal (SIGHUP) on Unix and
 # Ctrl-Break (SIGBREAK) on Windows, which has no SIGHUP.
@@ -100,7 +103,14 @@ class PaneShell:
         """(name, bytes) the private home holds for the shell."""
         if WINDOWS:
             return []
-        return [(".zshrc", f"skip_global_compinit=1\nPS1='{READY} '\n".encode())]
+        # A login shell's global profile can reorder the inherited PATH
+        # (macOS path_helper does). Save each pane's incoming path before
+        # that profile, including the controller's own provider directory,
+        # and restore it before any command resolves an installed CLI.
+        return [(".zshenv", b"journey_pane_path=$PATH\n"),
+                (".zshrc", ("export PATH=${journey_pane_path:?missing pane PATH}\n"
+                            "unset journey_pane_path\n"
+                            f"skip_global_compinit=1\nPS1='{READY} '\n").encode())]
 
     def herdr_config(self):
         """The lines of Herdr's configuration that name the pane shell."""
@@ -111,25 +121,54 @@ class PaneShell:
             raise FileNotFoundError("Windows needs an absolute ComSpec for the pane shell")
         return f"[terminal]\ndefault_shell = {json.dumps(shell)}\n"
 
-    def program(self, argv, output, status):
-        """Runs `argv` with its standard output in `output` and its exit status
-        written last to `status`; standard error is discarded."""
+    def program(self, argv, output, error, status):
+        """Runs `argv` with separate output streams and writes its exit status last."""
         if not WINDOWS:
             command = " ".join(shlex.quote(str(value)) for value in argv)
-            return (f"{command} > {shlex.quote(str(output))} 2>/dev/null; "
+            return (f"{command} > {shlex.quote(str(output))} 2> {shlex.quote(str(error))}; "
                     f"printf '%s' \"$?\" > {shlex.quote(str(status))}")
         # `call echo %^errorlevel%` reads the status when it runs, not when
         # the line is parsed.
         command = " ".join(cmd_quote(value) for value in argv)
-        return f"{command} > {cmd_quote(output)} 2> nul & >{cmd_quote(status)} call echo %^errorlevel%"
+        return f"{command} > {cmd_quote(output)} 2> {cmd_quote(error)} & >{cmd_quote(status)} call echo %^errorlevel%"
 
     def read_variable(self, name, source, ready):
         """Sets `name` in the shell, for what it starts later, from the first
         line of `source`, then creates `ready`."""
         if not WINDOWS:
             return (f"IFS= read -r {name} < {shlex.quote(str(source))}; export {name}; "
-                    f": > {shlex.quote(str(ready))}")
-        return f"set /p {name}=<{cmd_quote(source)} & type nul > {cmd_quote(ready)}"
+                    f"printf 'ready' > {shlex.quote(str(ready))}")
+        return f"set /p {name}=<{cmd_quote(source)} & >{cmd_quote(ready)} echo ready"
+
+
+def remove_pane_files(*paths):
+    """Release only the pane transport's files, including a cmd redirection
+    whose contents became readable just before its writer closed the handle.
+    Windows sharing/lock violations may clear; every other error fails now.
+    Cleanup gets its own five-second bound even after the run was cancelled.
+    """
+    from .processes import ProcessError
+    original = sys.exception()
+    failures = []
+    end = time.monotonic() + PANE_FILE_RELEASE_SECONDS
+    for path in paths:
+        while True:
+            try:
+                path.unlink(missing_ok=True)
+                break
+            except OSError as error:
+                if getattr(error, "winerror", None) not in (32, 33):
+                    failures.append(error)
+                    break
+                remaining = end - time.monotonic()
+                if remaining <= 0:
+                    failures.append(ProcessError("pane_file_release_timeout"))
+                    break
+                time.sleep(min(0.05, remaining))
+    if failures:
+        if original is not None:
+            raise ProcessError(f"{original}; pane_file_cleanup_failed: {failures[0]}") from original
+        raise failures[0]
 
 
 def launcher(path, argv, *, environment=(), unset=(), file_variables=()):
@@ -159,6 +198,14 @@ def launcher(path, argv, *, environment=(), unset=(), file_variables=()):
              " ".join(cmd_quote(value) for value in argv) + " %*"]
     write_private(target, ("\r\n".join(lines) + "\r\n").encode())
     return target
+
+
+def same_path(spelled, path):
+    """Whether `spelled`, a path as Hide or Herdr answers it (`/` between
+    names on every system), names `path`: on Windows either slash and either
+    case name the same folder, so a string comparison with `str(path)` never
+    matches there."""
+    return isinstance(spelled, str) and bool(spelled) and Path(spelled) == Path(path)
 
 
 def remove_tree(path):

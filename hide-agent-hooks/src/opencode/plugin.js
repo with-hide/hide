@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 const HELPER = __HIDE_HELPER__;
+const ROUTE = __HIDE_ROUTE__;
 
 // The prompt budget is Claude Code's prompt hook's; the tool budget is the
 // spawn guard's. OpenCode puts no limit on a hook, so these are the limits.
@@ -26,6 +27,9 @@ const OUTPUT_LIMIT = 64 * 1024;
 // Far inside the helper's 256 KiB input, so a pasted log never costs a prompt its letters.
 const PROMPT_TEXT_LIMIT = 32 * 1024;
 const RUNNING_LIMIT = 8;
+const OBSERVATION_BUDGET_MS = 1500;
+const OBSERVATION_COMMAND_LIMIT = 64 * 1024;
+const OBSERVATION_RESULT_LIMIT = 128 * 1024;
 const SESSION_LIMIT = 512;
 // Any spelling of the reminder tag OpenCode's model reads as one, opening or closing.
 const REMINDER_TAG = /<(\s*\/?\s*system-reminder)/gi;
@@ -108,7 +112,7 @@ function helper(state, operation, input, budgetMs) {
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(HELPER, ["opencode", operation], { stdio: ["pipe", "pipe", "ignore"] });
+      child = spawn(HELPER, ["opencode", operation, ...ROUTE], { stdio: ["pipe", "pipe", "ignore"] });
     } catch {
       resolve(null);
       return;
@@ -328,6 +332,11 @@ async function onEvent(state, client, event) {
   }
   if (type === "message.part.updated") {
     const part = properties.part;
+    // A thrown V1 execute never reaches `tool.execute.after`. Its terminal
+    // error part carries the executed input and call identity instead.
+    if (part?.type === "tool" && part.state?.status === "error") {
+      await observeTool(state, part.sessionID, part.callID, part.tool, part.state.input, null, true);
+    }
     // Hide's own text part is written once; a tool part is updated through its run and carries the letters its
     // result got once it is completed.
     const key = part?.type === "tool" ? (part.state?.status === "completed" ? toolKey(part.sessionID, part.callID) : undefined) : part?.id;
@@ -394,6 +403,7 @@ function holdPending(state, key, entry) {
  * written twice, and the receipt comes with the stored part, before the next result in practice.
  */
 async function onToolResult(state, sessionID, input, output) {
+  await observeTool(state, sessionID, input?.callID, input?.tool, input?.args, output, false);
   if (!sessionID || sessionID !== state.root || typeof input?.callID !== "string") return;
   if (handoverOpen(state)) return;
   const answer = await helper(state, "letters", { session_id: sessionID }, LETTERS_BUDGET_MS);
@@ -404,6 +414,23 @@ async function onToolResult(state, sessionID, input, output) {
   const text = `<system-reminder>\n${answer.context.replace(REMINDER_TAG, "<\u200b$1")}\n</system-reminder>`;
   output.output = typeof output.output === "string" && output.output ? `${output.output}\n\n${text}` : text;
   if (letters.length > 0) holdPending(state, toolKey(sessionID, input.callID), { session: sessionID, letters, text });
+}
+
+/** No pending command map: V1 after/error both include the executed input.
+ * The helper owns its CLI child and deadline; duplicate terminal events
+ * converge in the proof-bound store by actual session and call id. */
+async function observeTool(state, sessionID, callID, tool, args, result, failed) {
+  const command = args?.command;
+  if (tool !== "bash" || typeof command !== "string" || !(command.includes("herdr") || command.includes("HERDR_BIN_PATH"))) return;
+  if (typeof sessionID !== "string" || typeof callID !== "string" || Buffer.byteLength(command, "utf8") > OBSERVATION_COMMAND_LIMIT) { state.lost += 1; return; }
+  const output = typeof result?.output === "string" ? result.output : null;
+  const truncated = (output === null ? 0 : Buffer.byteLength(output, "utf8")) > OBSERVATION_RESULT_LIMIT || result?.metadata?.truncated === true;
+  await helper(state, "observation", {
+    session_id: sessionID,
+    observation: { command, call_id: callID, failed, truncated,
+      asynchronous: Boolean(result?.metadata?.background || result?.metadata?.sessionId),
+      result: truncated ? null : output },
+  }, OBSERVATION_BUDGET_MS);
 }
 
 async function onPrompt(state, client, directory, input, output) {
@@ -465,9 +492,6 @@ async function onTool(state, sessionID, directory, input, output) {
   } else if (FILE_TOOLS.has(tool)) {
     if (!guardrailsOn(state)) return null;
     request = { session_id: sessionID, tool, args: fileArgs(output?.args), cwd: directory };
-  } else if (tool === "question" && !state.guardOnly) {
-    // The core knows the pane by the root session Herdr's integration reports, also for a subagent's call.
-    request = { session_id: rootOf(state, sessionID) ?? sessionID, tool };
   } else {
     return null;
   }

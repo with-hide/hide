@@ -38,7 +38,9 @@ impl Runtime {
     }
 
     fn refresh_agent_scopes_at(&mut self, now: u64) -> bool {
-        self.agent_scope_cache.refresh(&mut self.snapshot, now) | self.refresh_pane_headers()
+        self.agent_scope_cache.refresh(&mut self.snapshot, now)
+            | self.refresh_pane_headers()
+            | self.refresh_overview_graph_sessions()
     }
 
     /// Lays the block on this Mac's rows, whose pull requests come from

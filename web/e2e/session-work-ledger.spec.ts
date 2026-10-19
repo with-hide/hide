@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { continueFixtureTranscript, setFixtureLifecycle, startHerdr } from "./herdr-fixture";
+import { claudeProjects, continueFixtureTranscript, declareParent, labelAgent, labelMarker, setFixtureLifecycle, startHerdr, type FixtureLabel } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { FIRST_GOAL, MISSED, NEXT_GOAL, nextWork, seedFirstWork, workFixture, workRepositoryReady } from "./session-work-fixture";
 import { enterWorkspace, showProjectRow, taskRow } from "./wire";
@@ -83,7 +83,8 @@ test("@platform a native session keeps its tasks, child outputs and missed work 
     const tasks = record.locator('[data-record-work]').first().locator('[data-record-task]');
     await expect(tasks).toHaveCount(1, { timeout: 45_000 });
     await expect(tasks.first().locator('[data-task-state="done"]')).toBeVisible();
-    await expect(record.locator('[data-record-output="pr"]')).toHaveCount(2, { timeout: 45_000 });
+    await record.getByRole('tab', { name: /^PR/ }).click();
+    await expect(record.locator('[data-record-output="pr"]')).toHaveCount(1, { timeout: 45_000 });
     await page.locator(`[data-pane-view="${herdr.panes[0]}"] .xterm-helper-textarea`).focus();
     await page.keyboard.type(NEXT_GOAL);
     await page.keyboard.press("Enter");
@@ -101,21 +102,27 @@ test("@platform a native session keeps its tasks, child outputs and missed work 
     await expect(tasks).toHaveCount(3, { timeout: 45_000 });
     await expect(record).toContainText(FIRST_GOAL);
     await expect(record).toContainText(NEXT_GOAL);
-    await expect(record.locator('[data-record-output="pr"]')).toHaveCount(3, { timeout: 45_000 });
+    await record.getByRole('tab', { name: /^PR/ }).click();
+    await expect(record.locator('[data-record-output="pr"]')).toHaveCount(2, { timeout: 45_000 });
     // First asked first: the finished task, then the split request's two, which share the failed CI of its PR.
     expect(await tasks.evaluateAll((rows) => rows.map((row) => row.querySelector("[data-task-state]")?.getAttribute("data-task-state")))).toEqual(["done", "ci_failed", "ci_failed"]);
     await expect(chip).toHaveText("1/3");
     // The split request's PR mark hangs on its first task; the second says the PR's state in a small word (status-marks B34).
     await pinAndClose(page, herdr.panes[0], ["기록 화면 구현", "이슈와 검색 검증", "좁은 열 줄바꿈 확인"]);
-    // A child is a row that opens its own record in the slot, and the head's ← comes back (PRD sidebar-task-lens B16).
-    await record.locator(`[data-record-child="${child}"]`).click();
-    // The slot swaps the parent's three tasks for the child's one, so wait for that whole list.
+    // Expand the child in place, retaining the parent's tasks and navigation.
+    await record.locator(`[data-record-child="${child}"] > button`).click();
+    const detail = record.locator(`[data-record-child-detail="${child}"]`);
+    await expect(tasks).toHaveCount(3);
+    await expect(detail.locator('[data-record-task]')).toHaveText([/자식 연결 검증/]);
+    // Explicit Open record navigates, and the slot's back action returns.
+    await detail.getByRole('button', { name: 'Open record', exact: false }).click();
     await expect(record.locator("[data-record-task]")).toHaveText([/자식 연결 검증/]);
     await page.locator("[data-detail-back]").click();
     await expect(tasks).toHaveCount(3);
     // An open missed item stands in its own section, named by the task its turn made (PRD record-card-readability B12).
     const missed = record.locator("[data-record-missed] [data-missed-work]", { hasText: MISSED });
-    await expect(missed.locator("[data-missed-note]")).toHaveText(" · 기록 화면 구현");
+    await record.getByRole('tab', { name: /^Findings/ }).click();
+    await expect(missed).toBeVisible();
     // The device's open missed work also folds above the Overview backlog,
     // newest first, and 무시 there closes the same item (PRD sidebar-task-lens B52).
     await openOverview(page, "backlog");
@@ -125,7 +132,7 @@ test("@platform a native session keeps its tasks, child outputs and missed work 
     const rows = group.locator("[data-missed-work]");
     await expect(rows).toHaveCount(2);
     await expect(rows.last()).toContainText(MISSED);
-    await rows.last().getByRole("button", { name: "Dismiss", exact: true }).click();
+    await rows.last().getByRole("button", { name: "Skip", exact: true }).click();
     await expect(rows).toHaveCount(1);
     // Closing the Overview shows the Workspace again, its slot still holding the record.
     await page.getByRole("button", { name: "Close Overview", exact: true }).click();
@@ -144,14 +151,16 @@ test("@platform a native session keeps its tasks, child outputs and missed work 
     await page.keyboard.press("Escape");
     await expect(record.locator('[data-record-task]')).toHaveCount(0);
     await expect(record.locator('[data-missed-work]')).toHaveCount(0);
-    // The parent's two requests; the child's is in its own record, behind its row.
+    // Request history and PR results belong to this session only, also with summaries off.
+    await record.getByRole('tab', { name: /^Request history/ }).click();
     await expect(record.locator('[data-record-request]')).toHaveCount(2);
-    await expect(record.locator('[data-record-output="pr"]')).toHaveCount(3);
+    await record.getByRole('tab', { name: /^PR/ }).click();
+    await expect(record.locator('[data-record-output="pr"]')).toHaveCount(2);
     await expect(record.getByRole('heading', { level: 2 })).toContainText('Claude');
-    await expect(record.locator('[data-record-child]')).toContainText('Claude');
-    // The child's pull request stands on the child's row; the session's own stand beside the title (B15).
-    await expect(record.locator('[data-record-child] [data-record-output="pr"]')).toHaveCount(1);
-    await expect(record.locator('h2 [data-record-output="pr"]')).toHaveCount(2);
+    await expect(record.locator('[data-record-child] > button')).toContainText('Claude');
+    await record.locator(`[data-record-child="${child}"] > button`).click();
+    await expect(record.locator('[data-record-child-detail] [data-record-output="pr"]')).toHaveCount(1);
+    await expect(record.locator('h2 [data-record-output="pr"]')).toHaveCount(0);
     // With summaries off the backlog draws no missed line, though one is still open (B52).
     await openOverview(page, "backlog");
     await expect(page.locator("[data-backlog-section]").first()).toBeVisible();
@@ -159,59 +168,93 @@ test("@platform a native session keeps its tasks, child outputs and missed work 
   } finally { daemon?.stop(); herdr.stop(); }
 });
 
-test("@platform 백로그로 makes one title-only issue, a lost create response converges on retry, and 되돌리기 closes it", async ({ page }) => {
+/**
+ * A session that asks once and delegates finishes its tasks once the child's
+ * PR merges, and the turn its child's report wakes keeps `!` for the question
+ * it ends on, though the merge finished the task first; the child counts done
+ * (PRD task-continuation B1, B3, B16, D-07).
+ */
+test("a report letter's turn keeps the question's mark on the task its sender's merged PR finished", async ({ page }) => {
   const herdr = await startHerdr();
   let daemon: Daemon | undefined;
   try {
-    const github = workFixture(herdr, true);
-    daemon = await startHided(herdr, "session-backlog-retry", undefined, github.env);
+    const github = workFixture(herdr);
+    daemon = await startHided(herdr, "session-work-continuation", undefined, github.env);
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await workRepositoryReady(daemon.stateDir);
+    await enterWorkspace(page, "fixture");
+    const at = Date.now();
+    github.clock(at, at);
+    const goal = "사이드바 두 화면 개선 작업";
+    const session = labelAgent(herdr, herdr.panes[0], {
+      task: goal, at, cwd: path.join(herdr.root, "fixture"), end: "waiting",
+      work: { task: { kind: "new", names: ["쉬는 행 빈 원", "자식 PR 표시"] }, missed: [], resolved: [], output_task_id: null },
+    });
+    labelAgent(herdr, herdr.panes[1], {
+      task: "자식 세션 결과물 연결 검증", at: at + 200, cwd: path.join(herdr.root, "fixture"), end: "waiting", toolOutputs: ["https://github.com/acme/repo/pull/34"],
+    });
+    declareParent(herdr, herdr.panes[1], herdr.panes[0]);
+    const chip = page.locator(`[data-pane-task-chip="${herdr.panes[0]}"]`);
+    const list = page.locator(`[data-pane-task-list="${herdr.panes[0]}"]`);
+    // The child's merged PR finishes the task that spawned it.
+    await expect(chip).toHaveText("2/2", { timeout: 45_000 });
+    await chip.click();
+    await expect(list.locator('[data-task-box="checked"]')).toHaveCount(2);
+    await expect(list.locator("[data-task-asks]")).toHaveCount(0);
+    // The child's report wakes the parent, which ends asking; the envelope
+    // names the child by its agent name, as delivery writes it.
+    const letter: FixtureLabel = { task: goal, at: at + 5_000, end: "question", reply: "앱을 다시 설치할지 정하세요" };
+    fs.appendFileSync(path.join(claudeProjects(herdr), "e2e", `${session}.jsonl`), [
+      { type: "user", sessionId: session, timestamp: new Date(at + 5_000).toISOString(), origin: { kind: "human" }, message: { role: "user", content: `Hide letter letter-1 from two (claude) [report]\n끝났어요\n${labelMarker(letter)}` } },
+      { type: "assistant", sessionId: session, timestamp: new Date(at + 6_000).toISOString(), message: { role: "assistant", content: [{ type: "text", text: labelMarker(letter) }] } },
+    ].map((record) => `${JSON.stringify(record)}\n`).join(""));
+    await setFixtureLifecycle(herdr, herdr.panes[0], "working");
+    await setFixtureLifecycle(herdr, herdr.panes[0], "idle");
+    await expect(list.locator("[data-task-asks]")).toHaveCount(2, { timeout: 45_000 });
+    await expect(chip).toHaveText("2/2");
+    await expect(list.locator('[data-task-box="checked"]')).toHaveCount(2);
+    await expect(list.locator("[data-task-list-children]")).toHaveText("Delegated1· Done 1");
+  } finally { daemon?.stop(); herdr.stop(); }
+});
+
+test("@platform 백로그로 saves a local memo without publishing and 되돌리기 restores the missed work", async ({ page }) => {
+  const herdr = await startHerdr();
+  let daemon: Daemon | undefined;
+  try {
+    const github = workFixture(herdr);
+    daemon = await startHided(herdr, "session-backlog-local", undefined, github.env);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await workRepositoryReady(daemon.stateDir);
     await enterWorkspace(page, "fixture");
     const first = Date.now();
     github.clock(first, first);
-    const { session } = seedFirstWork(herdr, first);
-    const root = await taskRow(page, herdr.panes[0], FIRST_GOAL);
-    // 백로그로 creates only in the repository the ledger proved the session
-    // started in, so wait for that proof as an operator's later press would.
-    await expect.poll(() => originalRepository(daemon!.stateDir, session), { timeout: 30_000 }).toBe("acme/repo");
-    await root.hover();
-    await page.locator(`[data-task-record="${herdr.panes[0]}"]`).click();
-    const missed = page.locator(RECORD).locator("[data-missed-work]", { hasText: MISSED });
-    // PRD overview-device-tasks B43-B45: one press, no form; GitHub made the
-    // issue but its answer was lost, so the line fails, and the retry joins
-    // the issue GitHub already has instead of making a second one.
-    await missed.locator("[data-missed-backlog-add]").click({ timeout: 45_000 });
-    await expect(missed.locator("[data-missed-failed]")).toBeVisible({ timeout: 30_000 });
-    await missed.locator("[data-missed-failed]").getByRole("button", { name: "Retry", exact: true }).click();
-    // The item is made, so the line leaves the record (PRD record-card-readability B13).
+    seedFirstWork(herdr, first);
+    const missed = await openRecord(page, herdr.panes[0]!, FIRST_GOAL);
+    // B16: one press retains the missed text in Hide. A private record is
+    // never automatically published to its session's GitHub repository.
+    await missed.locator("[data-missed-backlog-add]").click();
     await expect(missed).toHaveCount(0, { timeout: 30_000 });
-    const calls = () => fs.readFileSync(github.calls, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
-    const creates = calls().filter((args) => args[0] === "issue" && args[1] === "create");
-    expect(creates).toHaveLength(1);
-    // Title only: nothing of the conversation goes to GitHub (D-10).
-    expect(creates[0]![creates[0]!.indexOf("--title") + 1]).toBe(MISSED);
-    expect(creates[0]![creates[0]!.indexOf("--body") + 1]).toBe("");
-
-    // The item is in the Overview's backlog, whose 되돌리기 closes the issue
-    // and opens the missed line again (B32).
+    expect(createdIn(github.contexts)).toEqual([]);
     await openOverview(page, "backlog");
-    await page.locator('[data-backlog-row="github:acme/repo#77"]').getByRole("button").first().click();
+    const row = page.locator('[data-backlog-row^="local:"]', { hasText: MISSED });
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await row.getByRole("button").first().click();
     const item = page.locator("[data-overview-panel] [data-backlog-item]");
-    await expect(item).toHaveAttribute("data-backlog-item", "github:acme/repo#77");
-    // D-21: #41 is in the same backlog but Hide did not make it, so its
-    // panel has no 되돌리기 and Hide never closes someone else's issue.
+    await expect(item).toContainText(MISSED);
+    await expect(item.locator("[data-item-github]")).toHaveCount(0);
+    // Existing GitHub issues still open with full body/activity and retain
+    // their external ownership: Hide offers no undo for someone else's issue.
+    await item.locator("[data-item-close]").click();
     await page.locator('[data-backlog-row="github:acme/repo#41"]').getByRole("button").first().click();
-    await expect(item).toHaveAttribute("data-backlog-item", "github:acme/repo#41");
-    await expect(item.locator("[data-item-start]")).toBeVisible();
+    await expect(item.locator("[data-item-activity]")).toContainText("실제 fixture 댓글", { timeout: 30_000 });
     await expect(item.locator("[data-item-undo]")).toHaveCount(0);
-    await page.locator('[data-backlog-row="github:acme/repo#77"]').getByRole("button").first().click();
-    await expect(item).toHaveAttribute("data-backlog-item", "github:acme/repo#77");
+    await item.locator("[data-item-close]").click();
+    await row.getByRole("button").first().click();
     await item.locator("[data-item-undo]").click();
-    await expect.poll(() => calls().some((args) => args[0] === "issue" && args[1] === "close" && args[2] === "77"), { timeout: 30_000 }).toBe(true);
-    await page.keyboard.press("Escape");
+    await expect(row).toHaveCount(0, { timeout: 30_000 });
     await page.keyboard.press("Escape");
     await expect(missed).toBeVisible({ timeout: 30_000 });
+    expect(createdIn(github.contexts)).toEqual([]);
   } finally { daemon?.stop(); herdr.stop(); }
 });
 
@@ -219,7 +262,7 @@ test("@platform ⌘⇧M adds a backlog issue from the terminal and hands the key
   const herdr = await startHerdr();
   let daemon: Daemon | undefined;
   try {
-    const github = workFixture(herdr);
+    const github = workFixture(herdr, true);
     daemon = await startHided(herdr, "quick-add", undefined, github.env);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await workRepositoryReady(daemon.stateDir);
@@ -240,10 +283,18 @@ test("@platform ⌘⇧M adds a backlog issue from the terminal and hands the key
     await expect(terminal).toBeFocused();
     // B42: a pasted multi-line text is one line.
     await page.keyboard.press(chord("add_backlog"));
+    await expect(quick.locator("[data-backlog-destination]")).toHaveAttribute("data-backlog-destination", "local");
+    // Publishing requires choosing the named repository before typing.
+    await quick.getByRole("combobox", { name: "Save to", exact: true }).click();
+    await page.getByRole("option", { name: /acme\/repo/ }).click();
     await quick.locator("[data-quick-add-input]").fill("빠른 추가\n두 번째 줄");
     await expect(quick.locator("[data-quick-add-input]")).toHaveValue("빠른 추가 두 번째 줄");
     // B40: Enter makes it, the made line names it, and the input closes on its own.
-    await page.keyboard.press("Enter");
+    await quick.locator("[data-quick-add-input]").press("Enter");
+    // The response is lost after GitHub creates it. Enter retries the same
+    // intent and joins #77 rather than making another external issue.
+    await expect(quick.locator("[data-quick-add-failure]")).toBeVisible({ timeout: 30_000 });
+    await quick.locator("[data-quick-add-input]").press("Enter");
     await expect(quick.locator('[data-quick-add-made="github:acme/repo#77"]')).toBeVisible({ timeout: 30_000 });
     await expect(quick).toHaveCount(0, { timeout: 10_000 });
     await expect(terminal).toBeFocused();
@@ -270,7 +321,7 @@ async function openRecord(page: import("@playwright/test").Page, pane: string, g
   return missed;
 }
 
-test("@platform 백로그로 keeps a session's original repository after a connection edit, and a session started after it creates in the new one", async ({ page }) => {
+test("@platform local missed-work adds survive a repository edit and keep the session origin", async ({ page }) => {
   const herdr = await startHerdr();
   let daemon: Daemon | undefined;
   try {
@@ -284,9 +335,9 @@ test("@platform 백로그로 keeps a session's original repository after a conne
     await expect.poll(() => originalRepository(daemon!.stateDir, original), { timeout: 30_000 }).toBe("acme/repo");
     await connectRepository(page, "acme/override");
     await workRepositoryReady(daemon.stateDir, "acme/override");
-    // The session started in acme/repo; its missed line makes nothing in acme/override.
+    // Local default does not depend on today's remote connection.
     await missed.locator("[data-missed-backlog-add]").click();
-    await expect(missed.locator('[data-missed-failed="repository_changed"]')).toBeVisible({ timeout: 30_000 });
+    await expect(missed).toHaveCount(0, { timeout: 30_000 });
     expect(createdIn(github.contexts)).toEqual([]);
     expect(originalRepository(daemon.stateDir, original)).toBe("acme/repo");
     // A session that starts after the edit belongs to acme/override.
@@ -295,45 +346,36 @@ test("@platform 백로그로 keeps a session's original repository after a conne
     missed = await openRecord(page, herdr.panes[0]!, NEXT_GOAL);
     await missed.locator("[data-missed-backlog-add]").click();
     await expect(missed).toHaveCount(0, { timeout: 30_000 });
-    expect(createdIn(github.contexts)).toEqual(["acme/override"]);
+    expect(createdIn(github.contexts)).toEqual([]);
     expect(originalRepository(daemon.stateDir, original)).toBe("acme/repo");
   } finally { daemon?.stop(); herdr.stop(); }
 });
 
-test("@platform a 백로그로 create in flight across an A-to-B-to-A connection edit makes nothing, and pressing it again makes one", async ({ page }) => {
+test("@platform a local missed-work add finishes while GitHub is unavailable and survives A-to-B-to-A edits", async ({ page }) => {
   const herdr = await startHerdr();
   let daemon: Daemon | undefined;
   try {
     const github = workFixture(herdr);
-    daemon = await startHided(herdr, "backlog-repository-epoch", undefined, github.env);
+    daemon = await startHided(herdr, "backlog-local-offline", undefined, github.env);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await workRepositoryReady(daemon.stateDir);
     await enterWorkspace(page, "fixture");
-    const { session } = seedFirstWork(herdr, Date.now());
+    seedFirstWork(herdr, Date.now());
     const missed = await openRecord(page, herdr.panes[0]!, FIRST_GOAL);
-    await expect.poll(() => originalRepository(daemon!.stateDir, session), { timeout: 30_000 }).toBe("acme/repo");
-    const callsBefore = fs.readFileSync(github.calls, "utf8").trim().split("\n").length;
-    fs.writeFileSync(github.repositoryGate, "hold the external repository read");
+    fs.writeFileSync(github.repositoryUnavailable, "GitHub is unavailable");
     await missed.locator("[data-missed-backlog-add]").click();
-    await expect.poll(() => fs.readFileSync(github.calls, "utf8").trim().split("\n").slice(callsBefore)
-      .some((line) => { const args = JSON.parse(line) as string[]; return args[0] === "repo" && args[1] === "view"; }), { timeout: 30_000 }).toBe(true);
-    try {
-      await connectRepository(page, "acme/temporary");
-      await connectRepository(page, "acme/repo");
-    } finally { fs.rmSync(github.repositoryGate, { force: true }); }
-    // The connection came back to the same name, but the create was asked under the first one.
-    const failed = missed.locator('[data-missed-failed="repository_changed"]');
-    await expect(failed).toBeVisible({ timeout: 30_000 });
-    expect(createdIn(github.contexts)).toEqual([]);
-    // A moved repository is no failure a retry can change: 백로그로 again reads the repository anew.
-    await expect(failed.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
-    await failed.locator("[data-missed-backlog-add]").click();
     await expect(missed).toHaveCount(0, { timeout: 30_000 });
-    expect(createdIn(github.contexts)).toEqual(["acme/repo"]);
+    expect(createdIn(github.contexts)).toEqual([]);
+    fs.rmSync(github.repositoryUnavailable);
+    await connectRepository(page, "acme/temporary");
+    await connectRepository(page, "acme/repo");
+    await openOverview(page, "backlog");
+    await expect(page.locator('[data-backlog-row^="local:"]', { hasText: MISSED })).toBeVisible({ timeout: 30_000 });
+    expect(createdIn(github.contexts)).toEqual([]);
   } finally { daemon?.stop(); herdr.stop(); }
 });
 
-test("@platform a migrated session's unknown original repository refuses 백로그로 in today's repository", async ({ page }) => {
+test("@platform a migrated session with an unknown original repository can retain its missed work locally", async ({ page }) => {
   const herdr = await startHerdr();
   let daemon: Daemon | undefined;
   try {
@@ -357,10 +399,11 @@ test("@platform a migrated session's unknown original repository refuses 백로�
       return { session: label?.native_session_id, goal: label?.goal, end: label?.end };
     }, { message: "completed native label reached disk before migration restart", timeout: 30_000 })
       .toEqual({ session: identity, goal: FIRST_GOAL, end: "done" });
-    // Emulate the version 2 store while this owned daemon is stopped.
+    // Emulate the version 2 store while this owned daemon is stopped,
+    // removing every later table, including passive observations (version 5).
     daemon = await daemon.restart((stateDir) => {
       const db = new DatabaseSync(path.join(stateDir, "links.sqlite3"));
-      try { db.exec("DROP TABLE ledger_session_origins; DROP TABLE ledger_project_connections; DROP TABLE ledger_backlog; DROP TABLE retention_aliases; ALTER TABLE ledger_missed DROP COLUMN backlog_key; PRAGMA user_version=2;"); }
+      try { db.exec("DROP TABLE ledger_session_origins; DROP TABLE ledger_project_connections; DROP TABLE ledger_backlog; DROP TABLE retention_aliases; DROP TABLE direct_observations; ALTER TABLE ledger_missed DROP COLUMN backlog_key; PRAGMA user_version=2;"); }
       finally { db.close(); }
     });
     await page.goto("about:blank");
@@ -368,7 +411,7 @@ test("@platform a migrated session's unknown original repository refuses 백로�
     await enterWorkspace(page, "fixture");
     const missed = await openRecord(page, herdr.panes[0]!, FIRST_GOAL);
     await missed.locator("[data-missed-backlog-add]").click();
-    await expect(missed.locator('[data-missed-failed="repository_changed"]')).toBeVisible({ timeout: 30_000 });
+    await expect(missed).toHaveCount(0, { timeout: 30_000 });
     expect(originalRepository(daemon.stateDir, identity)).toBeNull();
     expect(createdIn(github.contexts)).toEqual([]);
   } finally { daemon?.stop(); herdr.stop(); }

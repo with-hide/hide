@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use hide_agent_hooks::guidance::{GUIDANCE_LINE, GUIDANCE_VERSION, GuidanceAgent};
+use hide_agent_hooks::guidance::{GUIDANCE_LINE, GuidanceAgent};
 use hide_platform::process::OwnedChild;
 
 fn run(home: &Path, runtime: &str, event: &str) -> String {
@@ -16,7 +16,13 @@ fn run_with(home: &Path, runtime: &str, event: &str, extra: &[(&str, &str)]) -> 
     let mut command = Command::new(env!("CARGO_BIN_EXE_hide-agent-hooks"));
     command
         .args(["hook", "--runtime", runtime, "--event", event])
-        .args(["--source", &format!("hide-guidance@{GUIDANCE_VERSION}")])
+        .args([
+            "--source",
+            &format!(
+                "hide-guidance@{}",
+                GuidanceAgent::from_id(runtime).map_or(6, GuidanceAgent::version)
+            ),
+        ])
         .env(hide_platform::host::HOME_VARIABLE, home)
         // No `hide` to ask: the guidance must not need the daemon.
         .env("PATH", home)

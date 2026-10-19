@@ -166,7 +166,7 @@ A reply wait ends when nothing is making the answer, even while the letter is st
 Once the recipient took the letter in and stopped, having answered with a report letter or finished without answering, the sender shows its own state: a dot to read until it is read (green only when its label read the turn as finished), then quiet.
 The recipient's own reply wait is not counted as making the answer, so two agents that wait on each other's answer never both draw a wait: a child that asked its parent by letter waits while the parent has not taken the letter in or works, and the parent never waits on that child.
 The 24-hour answer deadline stays the outer bound, and a turn the sender's session began after the letter went out still ends that letter's wait.
-A recipient the projection cannot vouch for holds no wait, taken in or not: a code-owned recipient (`factory:<id>`), which has no row whose progress Hide can see, an agent on a device that is not connected, whose last state may no longer hold, an agent asleep, which a letter does not wake, and a pane that now runs another session than the one the letter went to.
+A recipient the projection cannot vouch for holds no wait, taken in or not: a code-owned recipient, which has no row whose progress Hide can see, an agent on a device that is not connected, whose last state may no longer hold, an agent asleep, which a letter does not wake, and a pane that now runs another session than the one the letter went to.
 The runtime lays each awaited letter on its sender's row (`lay_awaited_replies`, leaving those recipients out), and the lineage pass decides from the recipients' rows, so a recipient's step reaches the sender on the same projection; publishing the ledger rebuilds the lineage when a letter's sender, recipient or intake changes and not for its other delivery steps.
 
 Mark precedence on a row is the operator's turn, then progress, then a stop to read, then quiet (`RowMark::of`, The mark below).
@@ -224,7 +224,7 @@ The hold ends on every path of the read and has no timer of its own: the read la
 A session no read has proved yet carries no facts, so its first turn end is not held.
 The wait before the label's own verdict (`stopped_unfinished`) is not this gap: that verdict comes from an AI request that takes seconds, and holding the row for it would delay every Done.
 
-Regression owners: `a_turn_end_is_not_a_stop_until_its_session_read_lands`, `a_read_that_finds_no_task_releases_the_turn_end_and_publishes_it`, `a_read_that_fails_releases_the_turn_end_and_says_so`, `a_stop_that_is_not_a_turn_just_ended_is_not_held`, `a_turn_ending_with_a_background_task_is_never_announced_done` and `a_turn_read_as_done_is_announced_done_past_the_background_task_it_left`, then `a_quiet_row_waits_on_children_then_a_proven_device_then_a_reply`, `a_quiet_root_waits_in_working_while_a_descendant_works_and_not_on_one_that_asks`, `a_root_with_finished_children_draws_its_own_state_past_a_request_a_stopped_child_took_in`, `a_child_asking_its_stopped_parent_by_letter_leaves_neither_row_waiting`, `a_letter_to_a_factory_or_to_a_disconnected_device_holds_no_reply_wait`, `a_proven_background_task_keeps_a_stopped_claude_row_waiting`, `a_reply_is_awaited_until_answered_overdue_or_from_another_session`, the adapter contract `adapters::wake_devices` in `hide-session/tests/it` (the stop pairing, the discarded record that may carry a device, the one that cannot and the call too large to keep), the two `wake_devices.*` diagnostics in `herdr-core/src/labels/tests.rs`, and the web `agentRow.test.ts`.
+Regression owners: `a_turn_end_is_not_a_stop_until_its_session_read_lands`, `a_read_that_finds_no_task_releases_the_turn_end_and_publishes_it`, `a_read_that_fails_releases_the_turn_end_and_says_so`, `a_stop_that_is_not_a_turn_just_ended_is_not_held`, `a_turn_ending_with_a_background_task_is_never_announced_done` and `a_turn_read_as_done_is_announced_done_past_the_background_task_it_left`, then `a_quiet_row_waits_on_children_then_a_proven_device_then_a_reply`, `a_quiet_root_waits_in_working_while_a_descendant_works_and_not_on_one_that_asks`, `a_root_with_finished_children_draws_its_own_state_past_a_request_a_stopped_child_took_in`, `a_child_asking_its_stopped_parent_by_letter_leaves_neither_row_waiting`, `a_letter_to_a_disconnected_device_holds_no_reply_wait`, `a_proven_background_task_keeps_a_stopped_claude_row_waiting`, `a_reply_is_awaited_until_answered_overdue_or_from_another_session`, the adapter contract `adapters::wake_devices` in `hide-session/tests/it` (the stop pairing, the discarded record that may carry a device, the one that cannot and the call too large to keep), the two `wake_devices.*` diagnostics in `herdr-core/src/labels/tests.rs`, and the web `agentRow.test.ts`.
 
 ## Where each axis comes from
 
@@ -400,7 +400,7 @@ Regression owners: `a_parent_declared_as_a_pane_token_is_the_lineage`, `a_child_
 ## The descendant mark and the tree popover
 
 `agent_state/escalation.rs::lift` gives each row one `descendant_mark` over its whole subtree (PRD D-40): `raised` with the number of raised descendants if there are any, else `working` with the number of working descendants, else none.
-The shell draws only the `raised` kind, as the turn mark and N, and only where those descendants are hidden: a folded sidebar parent, a 태스크 row whose children are folded, and a Factory card.
+The shell draws only the `raised` kind, as the turn mark and N, and only where those descendants are hidden: a folded sidebar parent, a 태스크 row whose children are folded.
 The `working` kind is still computed and draws nowhere: a parent waiting on its children shows its ring and the working child's line (PRD session-record-redesign D-04).
 Idle, done and unknown descendants add nothing, so a mark never says only that children exist.
 `row.state.tree_rank` orders siblings in every tree: asking or raised, itself or below it, first; then working; then finished and unread; then the rest.
@@ -438,7 +438,7 @@ They remain separate badges or Git indicators and never select the agent status 
 
 ### One meaning across surfaces
 
-Agent rows, focused-agent tab marks, pane headers, the tree popover, the ⌃Tab switcher, the close sheet, ⌘K results, the Sessions tool, the Overview and its task cards, the pull request lens, Factory cards, the View comment menu, the Hide AI home row and the phone draw the same mark and the same words for the same row (status-marks B20), from the core's `mark` and `status_code` (`web/src/components/status-mark.tsx` draws the six shapes in one box of one size, and an empty box for `unknown` and for a slot with no live agent).
+Agent rows, focused-agent tab marks, pane headers, the tree popover, the ⌃Tab switcher, the close sheet, ⌘K results, the Sessions tool, the Overview and its task cards, the pull request lens, the View comment menu, the Hide AI home row and the phone draw the same mark and the same words for the same row (status-marks B20), from the core's `mark` and `status_code` (`web/src/components/status-mark.tsx` draws the six shapes in one box of one size, and an empty box for `unknown` and for a slot with no live agent).
 Working uses a fixed blue status token, independent of the user's accent color; the finished dot uses green, so running and completed work remain distinct.
 
 A read question, approval or block keeps the turn mark and its request line at `--opacity-read-status`, so an unread one stands apart from one already looked at.
@@ -465,7 +465,6 @@ Regression owners: `a_sleep_keeps_its_checkouts_owner_for_the_wake`, `a_sleeping
 A retained unsupported sleeping record stays visible without a Wake action or a loading spinner; only an active transition or status check spins.
 Unknown work survives restart without replaying external effects; an intent saved before close admission can be released without touching a pane.
 `agent_sleep/dormant.rs` owns the bounded archive and row values, while `runtime/agent_sleep/dormant.rs` owns its transitions and exact save/connection/execution fences.
-A Factory worker's sleep is such a record bound to its Factory; Hide's own close of that pane is not an operator close and pauses no Task, and after the wake the record stays unpublished until the Factory has moved the Task's worker to the new pane (`docs/factory.md`, The worker lifecycle).
 
 ### Workspace aggregation
 
@@ -591,7 +590,9 @@ An agent whose adapter declares no subagent count (`subagent_counts: None`: Pi a
 ### Not connected, and what fixes it
 
 A Claude Code or Codex pane whose session Hide does not hear also carries a connection (`PaneChildrenSnapshot.connection`), read from the same observation as the projection above (PRD settings-cleanup D-09, D-11, B26 to B31).
-It is judged by `sidebar::pane_connection` from `uninstrumented_code`, and by nothing else, for an agent that is awake: a sleeping agent has ended its process, so no hook can speak from its pane, and it carries no connection until it wakes.
+It is judged by `sidebar::pane_connection` from `uninstrumented_code` for an awake agent whose native session Herdr has reported.
+A process detected before its native session is not a failed integration and carries no connection judgement yet, without a timer or an assumption that it connected.
+A sleeping agent has ended its process, so no hook can speak from its pane, and it carries no connection until it wakes.
 Settings counts sessions and never these connections, so a pane that needs a Reopen says so only in its own header.
 
 | Instrumentation | Connection |
@@ -674,6 +675,10 @@ A restored answer is stale until a read replaces it: `stale` is set and `last_su
 A file that cannot be read, decoded or is of another schema version is not used and is named in the diagnostic log as `snapshot.discarded`; the next answer replaces it.
 `loading` is true only for a project with no answer to show whose first read has not yet answered; a project the reader answers nothing for is not loading either, and a project with a restored or earlier answer is loading only while an explicit refresh of it is in flight.
 A project's pull requests are two [`gh pr list`](https://cli.github.com/manual/gh_pr_list) calls asked for at the same time, each under the 15-second limit: the 200 newest pull requests of any state without `statusCheckRollup` (with `headRefOid`, `isCrossRepository`, `createdAt`, `closedAt`, `author`, `mergeStateStatus` and `reviewRequests`), and the open ones with `number,statusCheckRollup` only.
+The same open-check rollup also supplies optional `PullRequestWork.check_counts`: total, passed, failed, running, waiting, skipped and unknown, each check counted once.
+Completed success is passed; neutral and skipped remain skipped; failure conclusions are failed; active CheckRuns are running, queued CheckRuns waiting, and an unread or unfamiliar state unknown.
+Legacy StatusContexts keep SUCCESS, FAILURE/ERROR, PENDING and EXPECTED distinct; an absent rollup stays unknown while an explicitly empty rollup has zero checks.
+This adds no GitHub read or polling clock and leaves the existing merge eligibility calculation unchanged.
 The PRs tool (below) adds three reads to the same generation: the signed-in login (`gh api user --jq .login`, once per read of all projects, right after `auth status`), the open pull requests the account was asked to review (`gh pr list --search review-requested:@me`, numbers only), and one GraphQL query for each open pull request's place in the merge queue and the time of its last review request (`HidePrFacts`).
 The pull request list alone decides whether a project's read succeeds (issue #1189, which replaces PRD work-tab-pr-lens D-25's rule that any of the three failing failed the read).
 `gh auth status` failing is still the machine's refusal and fails every project's read.
@@ -780,6 +785,11 @@ The workspace inspector uses the canonical representative agent and disconnected
 
 ## Task identity
 
+Project and Task session rows project a separate `last_prompt_at_unix_ms` from the latest dated actual request in the proven native session, whether sent by the operator or another agent.
+Missing or zero timestamps draw no elapsed time; status changes and daemon restarts never manufacture one.
+The existing `changed_at_unix_ms`, ordering, unread, waiting and escalation clocks keep their state semantics.
+The label worker's restart, rewritten-transcript and helper regressions in `labels/tests.rs`, and `web/e2e/prompt-elapsed.spec.ts`, cover this boundary.
+
 The core publishes one `identity_label` per agent, and every surface calls the agent by it: the sidebar row, the pane header, the ⌘K search row, the ⌃Tab Recent Panels row, the lineage chips, the Overview agent line and the request view.
 The provider fallback reads the shared adapter's sidebar label or canonical Herdr kind after common alias normalization, preserving a raw unknown kind and `Agent` for no kind.
 `sidebar.rs` chooses the first nonempty, sanitized value in one order for every agent:
@@ -838,18 +848,30 @@ Where a program compares names, an unnamed registration is called by its registr
 Where a person reads a name (the bell line, a row) an unnamed agent is called by its title, and by its runtime's name when it has none.
 Nothing publishes a session `name`, reads Codex's first human turn as a title, or renames an agent or tab.
 
-The label is made by the core, not by a plugin and not through pane tokens: `herdr-core/src/labels/` reads each Claude, Codex, Grok, Pi, omp, Cursor or OpenCode pane's conversation, asks the background AI for the session's goal, one line for the turn and how the turn ended (`context_label.v14`), in the core's output language ([AI_PROVIDERS.md](AI_PROVIDERS.md#the-output-language)), and keeps the answer per pane (the architecture is in [ARCHITECTURE.md](ARCHITECTURE.md#agent-labels-in-the-core)).
+The label is made by the core, not by a plugin and not through pane tokens: `herdr-core/src/labels/` reads each Claude, Codex, Grok, Pi, omp, Cursor or OpenCode pane's conversation, asks the background AI for the session's goal, one line for the turn and how the turn ended (`context_label.v18`), in the core's output language ([AI_PROVIDERS.md](AI_PROVIDERS.md#the-output-language)), and keeps the answer per pane (the architecture is in [ARCHITECTURE.md](ARCHITECTURE.md#agent-labels-in-the-core)).
 A session with no goal and no assigned work answers `goal: null`; greetings, identity questions and capability questions create no task and no placeholder title.
 The row uses the existing title priority above, and the next analysis after real work is requested sets its first goal.
 A session started with a goal command is named from that goal like any other request.
 Claude Code's `/goal <text>` is the operator's request with `<text>` as its words, because Claude Code marks its own answer to the command as the operator's turn (`turnOrigin: "human"`); a command it answers without that mark, such as `/model` or `/effort`, is no request, and the mark, not the command's name, decides.
 Codex's `/goal` is the `<codex_internal_context source="user_goal">` message, read as the objective it quotes, or as the message itself when Codex wrote no objective to read; every other `<codex_internal_context>` source, including the `goal` reminder Codex adds to each turn while a goal is active, is Codex's own text and no person's turn.
 A session read before this rule keeps what was read and is named at its next analyzed operator turn.
-A goal already set cannot become null and changes only on an operator turn with `goal_changed: true`, asked at the turn's start or, for a turn that ended before its start was asked, at its end; goals stored by earlier builds are preserved because the record cannot distinguish an invented goal from an actual assignment.
-With `goal_changed: false`, the returned goal value is ignored even when it is null; the turn's `line` and `end` are still applied.
+A goal names the concrete feature, screen or subject and its intended outcome, so neighboring sessions can be told apart; a delegated session names its own assigned part.
+A goal already set cannot become null.
+`goal_update: keep` preserves it verbatim, `refine` gives a vague or misleading name a more specific subject without changing the assignment, and `replace` names a new or larger assignment.
+Refinement is accepted only on an operator turn whose result still belongs to the current turn, including its end; replacement retains the existing first-analysis, turn-start and skipped-start rules and requires an operator turn.
+Another agent's follow-up cannot rename it, and an already specific goal stays stable through implementation, tests, merging and installation.
+A local record keeps at most 800 masked characters of the requests and early replies that establish and clarify its assignment, so a terse follow-up after a restart does not lose the subject; replacing the assignment replaces that evidence, and device marks save none of this text.
+It refreshes only during its original turn; later follow-ups keep that clarification even if bounded history drops the early replies.
+A named legacy record without this evidence has an unknown assignment origin; it keeps rolling from its current goal and latest exchange rather than treating the session's first request as that assignment.
+Evidence is established only at an accepted first or new assignment with one new attributed request; several historical requests do not prove its origin.
+The line names a concrete current action, finding, result or dependency; an acknowledgment such as “proceeding as requested” adds no information and is left empty.
+It prioritizes progress the operator can understand over internal implementation terms, test counts and capture counts; a technical name remains when the operator needs it to identify or act on an issue.
+Rewording preserves the actual scope and pending verification: a test-fixture edit does not become a finished feature, and requested verification does not become a passed check.
+With `keep`, the returned goal value is ignored even when it is null; the turn's `line` and `end` are still applied.
 A line longer than 40 characters (80 in English) is cut between words and ends in `…`; a question or a block keeps its word with the cut line.
 `line` and `end` still describe the current conversation: an answered greeting or identity question with no required next action has an empty line and a stopped end of `done`, while a specific question retains its requested action.
-The call at a turn's start is asked only once the turn has worked 15 seconds (`labels/worker.rs`, `START_DELAY`): a measured 23% of turns end within 15 s and 38% within 30 s (2,384 Claude Code turns, 2026-10-16), and a turn that ends first is asked its end alone, which names the goal as well: a short turn that gives the pane a new job renames it, a short follow-up on the same job keeps the name, the turn costs one request instead of two, and the row keeps its previous line for those first seconds. A pane that has no goal yet is not held: its first turn is asked at once, so a new session is named as soon as the model answers.
+The call at a turn's start is asked only once the turn has worked 15 seconds (`labels/worker.rs`, `START_DELAY`): a measured 23% of turns end within 15 s and 38% within 30 s (2,384 Claude Code turns, 2026-10-16), and a turn that ends first is asked its end alone, which names the goal as well: a short turn that gives the pane a new job renames it, a short follow-up on the same job keeps the name, and the turn costs one request instead of two.
+The old turn's sentence clears when the worker proves the next human turn, including when Herdr stays Working; a pane that has no goal yet is asked at once, so a new session is named as soon as the model answers.
 How the turn ended is asked only once the agent has stopped: the call at a turn's start names the goal and the line and leaves the end `working`, and the call at its end picks the word by whose move is next, `question` (the operator's), `blocked` (stopped on a cause the line can state in one sentence: no disk, a failed CI run, a permission or login it cannot get, a tool that will not run), `waiting` (something other than a pull request still running: a background test, build, CI run or another agent), `unfinished` (nobody's, with the work left undone) or `done` (nobody's, with the work reported finished), taking the first in that order that fits.
 There is no "unsure means done": a turn that did not report its work finished is `unfinished`, and a `blocked` answer with no line is read as `unfinished`.
 A turn that started or handed off work that still runs is `waiting`, even when the turn itself only reported progress or answered something, unless it asks the operator; its line says what it waits for.
@@ -910,7 +932,7 @@ Native plan approval keeps Approval; the typed native wait, rather than a provid
 Reading an AI question skips its demand rung and leaves a dimmed question; menu and plan approval stay in Needs You until answered.
 `row.state.pr` is the row's own PR summary (PRD D-18, D-39): the live PRs it holds the duty of, never a descendant's, with the count, the worst state and each PR worst first, each state the one rule of Pull request visual states decides; a closed PR is not counted.
 Without a label line the row keeps its outline but carries no invented line.
-Delegated children are never tasks of their own: they are drawn under their root through every row the operator expands, at any depth (`sessions_expanded_agent_pane_ids` in core UI state holds each expanded pane), and Factory workers retain their dedicated surface.
+Delegated children are never tasks of their own: they are drawn under their root through every row the operator expands, at any depth (`sessions_expanded_agent_pane_ids` in core UI state holds each expanded pane).
 A Hide AI row for a home is a task only while it is in Needs You, where it draws the home's turn under the agent's own ask or block cause and opens the home when chosen.
 
 Resolve records `resolved_sessions` in core UI state and publishes the hidden row only after the existing coalesced writer acknowledges that exact save.
@@ -925,31 +947,39 @@ Regression owners: `runtime::tests::session_state`, `request_view::tests`, `web/
 ### The session work record
 
 A 태스크 row keeps its live group and navigation and adds a record action that opens the record in the lane's 보기 slot; it carries no missed-work flag.
-The record's title follows the same summary/native/manual rules, with the current status, the PRs the session and every descendant created, the assigned work as a checklist with each direct child under the task that delegated it, the open missed work, and the requests in that order.
-The PRs come from the record's `outputs`, which already hold every descendant's PR with its source session and name; no wire field was added.
+The record's title follows the same summary/native/manual rules, then shows the current status, requested work with the full source requests, tabs for the session's own PRs, open findings and request history, and one flat list of direct children.
+The PRs come from the record's `outputs`, filtered by each source's full session identity; a child's results are available when that child expands, and no wire field was added for this layout.
 The checklist lists tasks first-asked first with the finished count over the total.
 A request that asks for several independent deliverables (a numbered list, separate bullets with their own result) becomes one task per deliverable, one to six, the extras bundled into the last name; a question, an explanation, a progress check, a sub-step or a detail of one deliverable stays one task or none, and a task's name comes from the operator's request, never from the assistant's reply (PRD task-split-checklist D-01, D-02).
-A split request's tasks are one group: a later request that continues any of them continues all of them, and they finish together, so items of one request show one shared state; a missed item names, and the group's pull requests and children hang from, the group's first task (D-03, D-08, D-13).
+A split request's tasks are one group: a later request that continues any of them continues all of them, and they finish together, so items of one request show one shared state; a missed item's task name and the group's pull request and child attribution use the group's first task (D-03, D-08, D-13), independently of the record's flat presentation.
 Records written before requests split keep their one task per request; nothing is split again.
-A child is placed by time alone (PRD record-card-readability D-03): under the task whose time is the latest at or before the child's start, a group counting as its first task, and at the end under `맡긴 일` when it started before every task or has no start time; the checklist's head counts direct children in words (`· 맡긴 일 N`).
-The task box counts direct children as `맡긴 일 N · 끝남 k`: a child is done when its own tasks are done by the task rule, or with no task when its last END is Done; a working or asking child is not done, a grandchild adds no count, and while any direct child has neither a task nor an END the line leaves out `끝남 k`, never a false zero (task-split-checklist D-04, B8).
-A live pane whose session has a task carries the same count as a header chip, and its popover the checklist, the pane's own `지금` box and the children's line ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#agent-panes-and-the-agents-explorer)); with Agent summaries off there are no tasks, so there is no chip, and without a working Hide AI the tasks already judged stay and a turn not judged yet shows as `방금 시킨 것`.
-A missed item belongs to the task of its turn: the turn starts at the request whose offset is the item's `turn_offset`, and that request carries the `task_ids`; items whose turn is not a task or is gone are named by nothing, and descendants' items, named by their session, come last; only open items are drawn (PRD record-card-readability D-07).
-The requests are listed at the record's end, the newest four open; the newest request not yet judged shows as `방금 시킨 것` while the session works.
+The pane-header task popover keeps its direct-child count and uses the spawn turn's `spawn_task` attribution, falling back to start time when absent; the session record instead places children in one flat `함께 진행한 세션` section after the current session's own tasks and tabs.
+The record filters outputs by full source session identity, and findings stay in the record that owns them, so descendants never inflate the current session's tab counts.
+The task box counts direct children as `맡긴 일 N · 끝남 k` (PRD task-continuation D-08): a working child is never done; a resting child is done when it sent its parent a report letter and started no turn after it (the delivery ledger's newest report, which the runtime hands the record with the lineage facts), or when it has a merged pull request and none still open; otherwise it is done when its own tasks are all done by the task rule, or with no task when its last END is Done.
+A grandchild adds no count, and while any direct child is unjudged (neither a task nor an END, or a newest turn that went unjudged and no fact above finishing it) the line leaves out `끝남 k`, never a false zero (task-split-checklist D-04, B8; task-continuation D-09).
+The session record shows each task's full source request and the latest request without a task; raw requests remain available while Hide AI has not judged them or is Off.
+Request history is a tab, newest four initially, and includes full text, author and time.
 A request that orders finished work again ("설치하고 재측정해줘" after that install was done) continues the finished task: the END judgment is shown the tasks of the three newest finished requests beside the open ones, a split request whole and counted once (`LedgerContext.finished_tasks`, newest first), a continued task takes the turn's end, and continuing any task of a request reopens all of them, and so a Done task returns to Doing and is Done again at its next Done END.
-A question, explanation, remark or progress check about a finished task is still no task, and a different deliverable is a new task.
-An assigned task is Done only after its last END is Done and all assigned PRs are merged; review, failed CI, unfinished, blocked and question remain distinct states, while waiting uses Doing.
+A question, explanation, remark or progress check about a finished task is still no task and never reopens it, and a different deliverable is a new task.
+Work that continues a task without being a new request is recorded against it (PRD task-continuation D-01): an answer, approval or choice replying to what the agent asked or proposed continues the task that turn worked on, by the END judgment (D-04); a turn woken by a report, progress or block letter from a descendant this session spawned is recorded by the core against the task group of the turn that spawned that descendant's branch, never one the model picks (D-02).
+A finished task takes such a turn only when its END keeps it finished, so the question of the turn whose merge finished the task keeps its `!` (B3, D-07) and no letter reopens a finished task (B5).
+The letter's sender is matched by the name its envelope carries against the lineage facts' child names, read the way the envelope bounds it; a watch alert, a reply, a letter from outside the lineage or a name two task groups share records nothing, and a lineage read that fails records the turn on no task rather than losing it, a store failure retrying it whole.
+Lineage lives in the links worker's memory, so after a start such a turn waits until the runtime's first lineage facts arrive, which go out even when there are none.
+A turn with no request of its own starts at the input that woke it, so a pull request it made or a child it spawned belongs to the task it continues (D-03).
+An assigned task is Done (PRD task-continuation D-05, D-06): with at least one merged pull request and none still open, while no child its group spawned works in a live pane (a resting child, one whose newest turn went unjudged, or one no pane runs any more holds nothing; B23), whatever its last END says except unfinished or blocked, so a task whose turn ends on a separate question is Done and keeps the `!` before its box while the question stays in the `지금` box (D-07); with no pull request, or only ones closed unmerged, only when its last END is Done.
+Review, failed CI, unfinished, blocked and question remain distinct states of a task that is not Done, while waiting uses Doing.
+When the session's newest turn went unjudged (a failed END, or a request seen with summaries off), a task that is not Done carries `unjudged` and draws its empty box with no word until a later turn is judged; Done still comes from the facts and the last judged END, and only a turn that can move a task (the operator's or the parent's request, or a descendant's report, progress or block) leaves an unknown when its END fails, so a watch alert's or a reply's does not (D-09, B4).
 Descendant results can hold the parent's assigned task open, but do not duplicate the child's chapters or requests in the parent's own work.
-A task's mark is a checkbox, with `!` only while a live session asks (PRD record-card-readability D-05); a child row is an agent row with its status mark and logo, and opens its own record.
+A task's mark is a checkbox, with `!` only while a live session asks (PRD record-card-readability D-05), including on a Done task whose last END is a question (task-continuation D-07); a child row names its agent product and expands in place, with an explicit action to open its own record.
 
 A missed item is work nobody holds once the session closes: a problem the agent reported finding outside its assigned task, or a separate task or issue with a different result that it proposed and nobody has taken.
 Measuring, checking or verifying the assigned task's result, even when the agent calls it a follow-up, the task's own remainder, merge, install and app replacement steps stay with the task verdict, the pull request and CI, and are not missed work; neither is anything already recorded in an issue or pull request by number or link.
 Records written before `context_label.v10` may still hold such an item with the `leftover` kind.
 Missed items are durable Open, Resolved, Issue or Dismissed records.
-Dismiss can be undone and a resolved item reopened; a closed item stays in the record as one muted line under its task with its status word.
+Dismiss can be undone and a resolved item reopened through the existing backlog actions; the session record itself shows only open findings.
 An open missed item is read in its session's record, within the project's Copied history window (90 days by default); the 태스크 list draws no missed-work group (PRD sidebar-task-lens D-16).
 
-With summaries Off, the same record shows native/manual title, native status, outputs, children and every saved raw request oldest first, the last five open and the earlier ones behind `이전 요청 N`.
+With summaries Off, the same record shows native/manual title, native status, outputs, children and every saved raw request oldest first, the last four open and the earlier ones behind `이전 N턴`.
 It hides verdicts, chapters, tasks, END labels, missed items and their actions; turning summaries on restores old judgments and leaves the Off-period requests unjudged.
 This record does not change the phone surface or the 태스크 list's grouping rules.
 Regression owners: `links::store::ledger::tests`, `labels::tests`, `runtime::tests::session_work`, `web/src/sessionWork.test.ts`, `web/src/SessionRecord.test.tsx`, the command-record tests in `hide-session/tests/it/conversation_cursor.rs`, and the isolated session-work-ledger browser and desktop flows.
@@ -959,7 +989,7 @@ Regression owners: `links::store::ledger::tests`, `labels::tests`, `runtime::tes
 `agent_state/escalation.rs` reads the existing doorbell and watch decisions rather than adding delivery clocks.
 A child rises when its letter is held by a blocked parent or operator draft, when three bells are exhausted and the parent is again eligible after thirty quiet seconds, when the letter becomes undelivered after sixty minutes, when the child's own pane is Herdr blocked, or when the first watch warning has had no parent response for sixty minutes.
 An idle or done parent still owns the child; only a closed parent pane or absent parent agent invokes the existing orphan-root rule.
-`escalation::lift` carries every raised descendant to its lineage root (PRD D-10, D-27) as a `RaisedAsk`: the verb, what to do, the agent named, the pane Open goes to, since when, the titles from the root and the checkout.
+`escalation::lift` carries every raised descendant to its lineage root (PRD D-10, D-27) as a `RaisedAsk`: the verb, what to do, the originating title, the agent named, the pane Open goes to, since when, the titles from the root and the checkout.
 The verb is Approval for a blocked child (Answer when it is blocked on a native question, with that question as what to do), Answer for an undelivered or unanswered letter, Confirm for an unanswered watch and Draft for a letter held by the parent's input, which names and opens that parent; a blocked parent stands for itself and adds no ask.
 An Answer also names the parent that has not received the letter.
 The root's asks are ordered by verb, then by age; the root enters Needs You and its second line is the lead ask, unless its own demand comes first, which an AI question or a block the operator has read no longer is.
@@ -976,20 +1006,23 @@ Regression owners: `agent_state::escalation::tests`, `runtime::tests::lineage`, 
 
 ### Quiet pane headers
 
-`agent_state/header.rs` publishes three things per pane: a working-line flag, at most one notice, and at most one band.
+`agent_state/header.rs` publishes a working-line flag, at most one notice, at most one band, and the current pane agent's own live Working progress when it has a nonblank sentence.
 The notice says why the terminal is not live and is drawn in the pane's body: the device away first, then Herdr's restoration failure, sleep, and the stream's own state (ended with its exit code, released, closing, unavailable, starting, or a wheel another client holds); a device's unavailable pane reads `reconnecting` or `helper_not_allowed` by what its link waits for.
-A pane with a notice takes no answer, so it has no band and no working line.
+A pane with a notice takes no answer, so it has no band, progress or working line.
 The band is the operator's turn and nothing else: the pane's own Approval, Answer or Blocked first, then the lead raised descendant, then the pane's own Stopped.
-A pull request's verb (Fix, Review, Merge) and a finished turn (Result) have no band: the header's PR mark and status mark already say them; Working has a thin blue line, while CI wait, child wait and Idle have nothing.
+A pull request's verb (Fix, Review, Merge) and a finished turn (Result) have no band: the header's PR mark and status mark already say them; Working has a thin blue line and can show its own progress, while CI wait, child wait and Idle have nothing.
 A band stays until it is answered, not until it is read: `Band.read` says the operator has had the pane focused since it arrived, and a question the operator read but did not answer keeps its Answer band although the row's verb has left Answer.
-An ask band is quiet text on the secondary fill with a warning rail (PRD D-43): the pane's own ask starts with its verb and says what is asked (for an Answer, the row's second line, so a native question reads as itself), and a raised descendant's `RaisedAsk` starts with that agent's name, the path, checkout and wait in its hover, then the verb, what to do, the unreceived parent for an Answer, the elapsed time, and Open.
+An ask band is quiet text on the secondary fill with a warning rail (PRD D-43): the pane's own ask starts with its verb and says what is asked (for an Answer, the row's second line, so a native question reads as itself).
+A raised descendant's `RaisedAsk` starts with its verb, then the originating agent's name and `(자식)` for a direct child or `(하위 세션)` for a deeper descendant, what to do, the unreceived parent for an Answer, the elapsed time, and Open.
+Its hover gives the originating agent's product, path, checkout and wait when known; a draft names the originating child but opens the parent holding the input draft.
 The duplicate `외 N건` is absent when the children button supplies raised-tree access, and remains as a fallback otherwise.
 An Approval band carries no reason: the core reads no approval command and a generated sentence is not one, so the band shows the ask's own default words.
 What Hide could not read, such as an approval command, is not written on the band, since the operator cannot act on its absence (design principle #13).
-The band and the children row overlay the terminal so state changes never resize its PTY grid.
+The band and progress row overlay the terminal so state changes never resize its PTY grid.
 The identity row reads the ancestor path, the status mark, the agent's logo, title, the letters-waiting pill from `row.letters_waiting`, the pane's own PR mark from `row.state.pr`, the Not connected chip and the existing controls; the ancestors' names drop first when narrow, leaving `›` and the accessible name.
-A parent's second row keeps the children button at its right end; without a band the rest of the row names each live direct child with its row's mark, a child with news first, and with a band the ask takes that place.
-An unavailable device anywhere in that known subtree replaces the names with the existing connection reason and drops the button's raised count, while preserving topology access.
+A parent's second row keeps the tree icon, direct-child count and chevron at its left; without a band the rest of the row shows its own valid Working progress, or no text when it has none.
+Child names and states remain in the tree popover, while the button's accessible name and tooltip describe the live count and state counts.
+An unavailable device anywhere in that known subtree preserves the last topology count and connection reason in the button's name and tooltip; without a band, it also shows that reason beside any progress.
 Pending or failed relationship navigation stays visible at its popover, ancestor step or band's Open with retry where available, and in the retained Agent-area status when the source pane is no longer on screen.
 Regression owners: `runtime::tests::session_state`, `runtime::tests::device_kit`, `web/src/PaneHeaderBand.test.tsx`, `web/src/PaneNotice.test.tsx`, `web/e2e/sidebar-status.spec.ts`, and the pane/lineage desktop checks.
 
@@ -1096,7 +1129,7 @@ Sentences keep their original language in every mode.
 | Unread (unread) mark and second line | The green dot only for a finished verdict, the plain dot for work left or an unproven wait; the line leads with `끝남` or `일 남음` (an unproven wait is work left, D-17) and then `expected_reply`, otherwise `progress`, ending with `· 백그라운드 N` when a finished turn left background tasks (D-19). A turn that ended on its pull request's running checks is in progress until they end, and their end is the line. | The plain dot, no line; the word Stopped is said only on hover, in accessible names and in notifications. No inferred unfinished verdict; proven waits, running checks included, still prevent a premature stop. |
 | Seen second line | A read unresolved demand keeps its sentence; a read completion, idle or unknown row has none. | A native unresolved question keeps its question; ordinary read completion, idle and unknown rows have no sentence. |
 | Whether a root enters Needs You | Native question/approval/block, an unread AI question or named block, or one of the explicit delegated escalations. Working and Done alone do not enter it. | Native question/approval/block and the same explicit escalations; a plain-text end question alone does not enter it. |
-| App icon count | Number of root Needs You rows across devices while the desktop Needs You switch is on; Done contributes zero. | The same count rule, with fewer inferred demands. macOS uses the Dock, Linux a supported launcher, Windows a taskbar dot with the count in its description. |
+| App icon count | Sum of root Needs You rows while its desktop switch is on and unread Done rows while its own switch is on, across devices and including folded rows. Reading Done removes it from the count. | The same count rule, with fewer inferred demands. macOS uses the Dock, Linux a supported launcher, Windows a taskbar dot with the count in its description. |
 | Desktop notification title | The root's row title, capped by the host at 120 characters. | The root's row title by the off priority above, with the same cap. |
 | Desktop notification body | With `detail`: translated row `status_code` word ` · ` exact `detail` ` · ` project. Examples: `Question · Choose staging? · my-app`, `Approval · Review the plan · my-app`, `Blocked · Login required · my-app`, `Done · Build fixed · my-app`, `Unfinished · Three tests remain · my-app`, `Stopped · my-app` for a stop no label judged. Without `detail` the row's word and the project (`Approval · my-app`); a frame with no `status_code` says its section (`Needs You · my-app`, `Unread · my-app`). | The same composition. Native question: `Question · Choose staging? · my-app`. Approval without a sentence: `Approval · my-app`. Plain-text end question on an unread completed turn: `Done · my-app`. |
 | Phone push title and body | Title is the same root row title. With `detail`, the phone language's row status word, exact sentence and project use the desktop format. Without `detail`, the row's word and the project; a payload with no `status_code` says the section (`내 차례 · my-app`, `읽을 것 · my-app` in Korean). | The same composition from native facts only. Native question in Korean: `질문 · Choose staging? · my-app`; approval without text: `승인 · my-app`; a plain-text question on an unread completed turn: `끝남 · my-app`. |
@@ -1104,7 +1137,7 @@ Sentences keep their original language in every mode.
 The status prefix is the row's translated `status_code`, not a new classification: English uses Question, Approval, Blocked, Done and Stopped; Korean uses 질문, 승인 대기, 막힘, 완료 and 멈춤.
 An empty project omits its separator, and the desktop host's existing 400-character body cap still applies.
 Both transports copy the root's published `detail`, even when the phone's compact row hides that detail; neither recomputes a sentence or takes a descendant's text as its root's.
-Each desktop group has its own switch: Needs You enables demands and its icon count, Done enables completions, and either enables the permission/test row; the phone keeps its independent push mode.
+Each desktop group has its own switch: Needs You enables demands and its icon count, Done enables completions and its unread icon count, and either enables the permission/test row; the phone keeps its independent push mode.
 Only a transition into an enabled group announces anything: a sentence changing by itself sends no second notification, and replacement tags, withdrawal, the desktop backlog of 16 and each channel's existing mode and focus rules are unchanged.
 
 This is the operator-approved reversal (2026-10-13) of mobile-companion's “never a sentence” rule: a phone lock-screen preview can now show the agent's or generated sentence, according to the phone's preview setting.
@@ -1121,8 +1154,6 @@ Regression owners: `hided/src/desktop_notices.rs`, `hided/src/mobile/push.rs`, `
 `agent_state/tally/scope.rs` publishes `agent_scope` on the navigator, each device, each project and each checkout.
 Physical group totals preserve every reported row; Overview members use the first checkout owner and deduplicate a pane within each project, while checkout marks retain the existing last-owner rule.
 Physical row references include an occurrence index so duplicate pane IDs keep their distinct labels and states; Overview and task membership retain the first source occurrence.
-The scope projection reads Factory worker panes from the current summary’s column cards, excludes them from the device's tasks and the Overview attention count, and keeps them in physical agent lists.
-A changed Factory summary refreshes the scope in the same publication; unchanged worker membership reuses the cache.
 The retained request projection keeps its previous internal scope semantics.
 The device's tasks separately take delegated children only under their root.
 Disconnected devices have empty physical totals but retain their last Overview members, matching the existing rail and board behavior.

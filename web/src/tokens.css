@@ -306,6 +306,7 @@
   --size-overview-panel-breakpoint: 1280px;
   --size-pane-parent-breakpoint: 640px;
   --size-pane-state-example: 144px;
+  --size-pane-narrow-example: 440px;
   --size-usage-cell: 12px;
   --size-usage-cell-gap: 3px;
   --size-usage-bar-plot: 66px;
@@ -314,6 +315,34 @@
   --opacity-usage-level-3: 0.66;
   --opacity-usage-level-4: 0.88;
   --size-usage-year: 800px;
+  --size-owl-onboarding: 64px;
+  --size-owl-intro: 64px;
+  --size-owl-empty: 144px;
+  --size-brand-flight: 800px;
+  --size-brand-clearance: 160px;
+  --size-brand-word: 104px;
+  --size-brand-word-min: 62px;
+  --tracking-brand: -7px;
+  --size-brand-track: 144px;
+  --size-brand-track-h: 3px;
+  --motion-brand-sweep: 1.8;
+  --size-overview-projects-min: 960px;
+  --size-overview-usage-content: 1120px;
+  --size-overview-usage-plot: 180px;
+  --size-overview-graph-root-width: 188px;
+  --size-overview-graph-root-height: 200px;
+  --size-overview-graph-child-width: 152px;
+  --size-overview-graph-child-height: 160px;
+  --size-overview-graph-group-width: 360px;
+  --size-overview-graph-group-height: 170px;
+  --size-overview-graph-header: 110px;
+  --size-overview-graph-padding: 24px;
+  --size-overview-graph-gap: 24px;
+  --size-overview-graph-project-gap: 90px;
+  --size-overview-graph-root-orb: 56px;
+  --size-overview-graph-child-orb: 36px;
+  --size-checkout-header-commit-min: 540px;
+  --size-checkout-header-time-min: 800px;
 }
 
 .interface-scale-exempt {

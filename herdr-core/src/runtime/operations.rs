@@ -103,8 +103,17 @@ pub(super) struct PendingPaneOperation {
 /// answering; the next is refused and logged (D-10, engineering 15).
 pub(super) const GEOMETRY_QUEUE_LIMIT: usize = 8;
 
+/// A start holds the tab through creation, durable identity saves, unzoom,
+/// move and authoritative confirmation. Bound each wait/lease by the existing
+/// two-minute agent-start effect budget, rather than a single five-second RPC.
+pub(super) const CHECKOUT_START_GEOMETRY_TIMEOUT_MS: u64 = 120_000;
+
 #[derive(Clone, Debug)]
 pub(super) enum GeometryRequest {
+    Task {
+        task: u64,
+        ready: std::sync::mpsc::SyncSender<Result<String, String>>,
+    },
     /// A split, zoom or resize, sent as this action.
     Pane(PaneControlAction),
     /// The operator's close of one pane, started through the ordinary close
@@ -553,9 +562,11 @@ impl Runtime {
         via: RemoteSettle,
     ) -> bool {
         let mut changed = false;
+        let mut scopes = Vec::new();
         for key in completed {
             if let Some(operation) = self.remote_operations.remove(&key) {
                 changed = true;
+                scopes.push(operation.scope_id.clone());
                 self.push_diagnostic(
                     "remote.control.topology_confirmed",
                     format!(
@@ -569,6 +580,9 @@ impl Runtime {
             }
         }
         if changed {
+            for scope in scopes {
+                self.pump_geometry_queue(&scope);
+            }
             self.sync_async_operations();
         }
         changed
@@ -818,6 +832,170 @@ impl Runtime {
                     .cloned()
                     .unwrap_or_else(|| Self::model_layout_signature(layout))
             })
+    }
+
+    fn checkout_start_geometry_context(
+        &self,
+        task: u64,
+        pane_id: &str,
+    ) -> Option<(String, PaneTopologySignature, u64)> {
+        let task = self
+            .snapshot
+            .task_operation
+            .as_ref()
+            .filter(|operation| operation.id == task && operation.phase == "working")?;
+        if let Some(device) = task.device_id.as_deref() {
+            let session = self
+                .snapshot
+                .status
+                .remote
+                .iter()
+                .find(|status| status.target_id == device && status.state == "connected")?
+                .session
+                .as_ref()?;
+            let layout = session
+                .pane_layouts
+                .iter()
+                .find(|layout| layout.frames.iter().any(|frame| frame.pane_id == pane_id))?;
+            let mut pane_ids = layout
+                .frames
+                .iter()
+                .map(|frame| frame.pane_id.clone())
+                .collect::<Vec<_>>();
+            pane_ids.sort();
+            return Some((
+                layout.tab_id.clone(),
+                PaneTopologySignature {
+                    zoomed: layout.zoomed,
+                    focused_pane_id: layout.focused_pane_id.clone(),
+                    pane_ids,
+                    ..Default::default()
+                },
+                self.remote_connection_generations
+                    .get(device)
+                    .copied()
+                    .unwrap_or(0),
+            ));
+        }
+        Some((
+            self.pane_operation_scope(pane_id)?,
+            self.pane_operation_baseline(pane_id)?,
+            self.live_generation,
+        ))
+    }
+
+    /// Reserves the existing tab FIFO without drawing or sending a mutation.
+    /// Only the receiver's successful answer authorizes the worker to begin.
+    pub(crate) fn queue_checkout_start_geometry(
+        &mut self,
+        task: u64,
+        pane_id: &str,
+    ) -> Result<std::sync::mpsc::Receiver<Result<String, String>>, String> {
+        if !self.group_start_target_is_current(task) {
+            return Err("Checkout start target is no longer current".into());
+        }
+        let (scope, baseline, generation) = self
+            .checkout_start_geometry_context(task, pane_id)
+            .ok_or("Checkout start task or target pane is no longer current")?;
+        if self.pane_operations.values().any(|operation| {
+            matches!(operation.request, GeometryRequest::Task { task: queued, .. } if queued == task)
+        }) {
+            return Err("Checkout start already has a geometry reservation".into());
+        }
+        if !self.admit_to_geometry_queue(&scope, "checkout.start", pane_id) {
+            return Err("The target tab's geometry queue is full".into());
+        }
+        let (ready, receiver) = std::sync::mpsc::sync_channel(1);
+        let id = self.insert_queued_geometry(
+            "checkout.start",
+            pane_id.to_owned(),
+            scope.clone(),
+            baseline,
+            GeometryRequest::Task { task, ready },
+            None,
+        );
+        let operation = self.pane_operations.get_mut(&id).expect("inserted above");
+        operation.connection_generation = generation;
+        operation.deadline_at_unix_ms =
+            Some(unix_milliseconds().saturating_add(CHECKOUT_START_GEOMETRY_TIMEOUT_MS));
+        self.pump_geometry_queue(&scope);
+        self.sync_async_operations();
+        Ok(receiver)
+    }
+
+    fn checkout_start_geometry_target_is_current(
+        &self,
+        task: u64,
+        operation: &PendingPaneOperation,
+    ) -> bool {
+        self.group_start_target_is_current(task)
+            && operation
+                .deadline_at_unix_ms
+                .is_some_and(|deadline| deadline > unix_milliseconds())
+            && self
+                .checkout_start_geometry_context(task, &operation.target_id)
+                .is_some_and(|(scope, _, generation)| {
+                    scope == operation.scope_id && generation == operation.connection_generation
+                })
+    }
+
+    /// Checked before every effect, including effects after a durable save.
+    pub(crate) fn checkout_start_geometry_is_current(&self, task: u64, id: &str) -> bool {
+        self.pane_operations.get(id).is_some_and(|operation| {
+            matches!(operation.request, GeometryRequest::Task { task: held, .. } if held == task)
+                && operation.phase == "transmitting"
+                && self.checkout_start_geometry_target_is_current(task, operation)
+        })
+    }
+
+    /// Only exact authoritative joined topology permits a successful finish.
+    /// A failure/unknown result abandons followers, just like a refused split.
+    pub(crate) fn finish_checkout_start_geometry(
+        &mut self,
+        task: u64,
+        id: &str,
+        result: Result<(), String>,
+    ) {
+        let Some(operation) = self.pane_operations.get(id) else {
+            return;
+        };
+        if !matches!(operation.request, GeometryRequest::Task { task: held, .. } if held == task) {
+            return;
+        }
+        let success = result.is_ok() && self.checkout_start_geometry_is_current(task, id);
+        let operation = self.pane_operations.remove(id).expect("checked above");
+        if !success && let GeometryRequest::Task { ready, .. } = &operation.request {
+            let _ = ready.try_send(Err(result
+                .err()
+                .unwrap_or_else(|| "Checkout start geometry reservation ended".into())));
+        }
+        if success {
+            self.pump_geometry_queue(&operation.scope_id);
+        } else {
+            self.drop_geometry_followers(
+                &operation.scope_id,
+                Some(operation.sequence),
+                "checkout_start_failed",
+            );
+        }
+        self.request_republish();
+        self.sync_async_operations();
+    }
+
+    /// Acquisition timed out before the caller received its id. This also
+    /// revokes a grant racing with that timeout, before the worker can use it.
+    pub(crate) fn cancel_checkout_start_geometry(&mut self, task: u64) {
+        let id = self.pane_operations.values().find_map(|operation| {
+            matches!(operation.request, GeometryRequest::Task { task: held, .. } if held == task)
+                .then(|| operation.id.clone())
+        });
+        if let Some(id) = id {
+            self.finish_checkout_start_geometry(
+                task,
+                &id,
+                Err("Checkout start geometry wait cancelled".into()),
+            );
+        }
     }
 
     /// Admits a split, zoom or resize into its tab's line and sends it when
@@ -1105,6 +1283,12 @@ impl Runtime {
                     operation.phase.as_str(),
                     "preparing" | "transmitting" | "awaiting_topology"
                 )
+        }) || self.remote_operations.values().any(|operation| {
+            operation.scope_id == scope_id
+                && matches!(
+                    operation.phase.as_str(),
+                    "transmitting" | "awaiting_topology" | "unknown"
+                )
         })
     }
 
@@ -1388,6 +1572,32 @@ impl Runtime {
             }
             moved = true;
             match request {
+                GeometryRequest::Task { task, ready } => {
+                    if !self
+                        .checkout_start_geometry_target_is_current(task, &self.pane_operations[&id])
+                    {
+                        self.finish_checkout_start_geometry(
+                            task,
+                            &id,
+                            Err("Checkout start target changed while waiting for geometry".into()),
+                        );
+                        break;
+                    }
+                    let operation = self.pane_operations.get_mut(&id).expect("queued above");
+                    operation.phase = "transmitting".into();
+                    operation.stage = "checkout_start".into();
+                    operation.deadline_at_unix_ms = Some(
+                        unix_milliseconds().saturating_add(CHECKOUT_START_GEOMETRY_TIMEOUT_MS),
+                    );
+                    if ready.try_send(Ok(id.clone())).is_err() {
+                        self.finish_checkout_start_geometry(
+                            task,
+                            &id,
+                            Err("Checkout start stopped waiting for geometry".into()),
+                        );
+                    }
+                    break;
+                }
                 GeometryRequest::Pane(action) => {
                     self.send_pane_operation(&id, action);
                     break;
@@ -1479,16 +1689,29 @@ impl Runtime {
     /// layout returns to what Herdr confirmed and keys typed for a dropped
     /// split reach no pane.
     pub(super) fn drop_geometry_queue(&mut self, scope_id: &str, reason: &str) {
+        self.drop_geometry_followers(scope_id, None, reason);
+    }
+
+    fn drop_geometry_followers(&mut self, scope_id: &str, after: Option<u64>, reason: &str) {
         let dropped = self
             .pane_operations
             .values()
-            .filter(|operation| operation.scope_id == scope_id && operation.phase == "queued")
+            .filter(|operation| {
+                operation.scope_id == scope_id
+                    && operation.phase == "queued"
+                    && after.is_none_or(|sequence| operation.sequence > sequence)
+            })
             .map(|operation| operation.id.clone())
             .collect::<Vec<_>>();
         for id in dropped {
             let Some(operation) = self.pane_operations.remove(&id) else {
                 continue;
             };
+            if let GeometryRequest::Task { ready, .. } = &operation.request {
+                let _ = ready.try_send(Err(format!(
+                    "Checkout start geometry queue dropped: {reason}"
+                )));
+            }
             self.op_timings.finish(&id, "dropped");
             self.discard_input_request(
                 &super::terminal_input::InputOrigin::Split(id.clone()),
@@ -1587,7 +1810,9 @@ impl Runtime {
         let Some(operation) = self.pane_operations.get(id).cloned() else {
             return false;
         };
-        if operation.phase != "transmitting" {
+        if operation.phase != "transmitting"
+            || matches!(operation.request, GeometryRequest::Task { .. })
+        {
             return false;
         }
         if operation
@@ -1727,6 +1952,11 @@ impl Runtime {
         operation: &PendingPaneOperation,
         current: &PaneTopologySignature,
     ) -> bool {
+        // An unzoom or unrelated split is an intermediate observation. Only
+        // the start worker can confirm that its exact new pane joined the tab.
+        if matches!(operation.request, GeometryRequest::Task { .. }) {
+            return false;
+        }
         if !current.pane_ids.contains(&operation.target_id) {
             return false;
         }
@@ -1962,6 +2192,15 @@ impl Runtime {
                 continue;
             };
             if deadline > now_unix_ms {
+                continue;
+            }
+            if let GeometryRequest::Task { task, .. } = operation.request {
+                self.finish_checkout_start_geometry(
+                    task,
+                    &id,
+                    Err("Checkout start geometry deadline expired; no mutation was resent".into()),
+                );
+                changed = true;
                 continue;
             }
             let Some(current) = self.pane_operations.get_mut(&id) else {

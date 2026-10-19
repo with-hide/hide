@@ -1,5 +1,4 @@
 use super::*;
-use Capability::{Available, Unavailable, Unconfirmed};
 use usage::{
     AbsenceKind, Attribution, AttributionFrom, CostBasis, LimitDeclaration, LimitSource, ModelFrom,
     Support, TokenSource, UsageDeclaration, absent, not_built,
@@ -9,6 +8,14 @@ use usage::{
 pub const ADAPTERS: &[AgentAdapter] = &[
     AgentAdapter {
         key: AgentId::ClaudeCode,
+        fake_home: journey::FakeHome::Proven {
+            key_env: "ANTHROPIC_API_KEY",
+            auto_update: journey::AutoUpdate::Environment {
+                name: "DISABLE_AUTOUPDATER",
+                value: "1",
+            },
+            evidence: "https://code.claude.com/docs/en/settings-reference",
+        },
         id: "claude-code",
         label: "Claude Code",
         picker_label: "Claude",
@@ -24,11 +31,16 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             folder: &[".claude"],
         },
         default_on: true,
-        prompt_hook: Some(HookDialect::ClaudeCode),
+        prompt_hook: Some(PromptHook {
+            dialect: HookDialect::ClaudeCode,
+            context: true,
+        }),
         spawn_guard: Some(HookDialect::ClaudeCode),
         subagent_counts: Some(HookDialect::ClaudeCode),
         memory: Some(HookDialect::ClaudeCode),
         bell: true,
+        bell_names_inbox: false,
+        turn_end_letters: None,
         tool_letters: None,
         session: Some(SessionFormat::Claude),
         sleep: Some(LaunchDialect::Claude),
@@ -60,20 +72,18 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         doc_url: "https://code.claude.com/docs/en/skills",
         install_url: "https://code.claude.com/docs/en/setup",
         logo_id: "claude-code",
-        factory: FactoryCapabilities {
-            direct_ask: Available(DirectAsk {
-                tools: &["AskUserQuestion", "ExitPlanMode"],
-                denial: HookDialect::ClaudeCode,
-            }),
-            user_turn: Available(SessionFormat::Claude),
-            turn_end_and_answer: Available(SessionFormat::Claude),
-            startup_guidance: Available(HookInstall::Runtime(HookDialect::ClaudeCode)),
-            resume: Available(LaunchDialect::Claude),
-            next_prompt_letters: Available(HookDialect::ClaudeCode),
-        },
     },
     AgentAdapter {
         key: AgentId::Codex,
+        fake_home: journey::FakeHome::Proven {
+            key_env: "JOURNEY_FAKE_KEY",
+            auto_update: journey::AutoUpdate::Config {
+                path: ".codex/config.toml",
+                key: "check_for_update_on_startup",
+                value: "false",
+            },
+            evidence: "https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/core/config.schema.json",
+        },
         id: "codex",
         label: "Codex",
         picker_label: "Codex",
@@ -89,11 +99,16 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             folder: &[".codex"],
         },
         default_on: true,
-        prompt_hook: Some(HookDialect::Codex),
+        prompt_hook: Some(PromptHook {
+            dialect: HookDialect::Codex,
+            context: true,
+        }),
         spawn_guard: Some(HookDialect::Codex),
         subagent_counts: Some(HookDialect::Codex),
         memory: Some(HookDialect::Codex),
         bell: true,
+        bell_names_inbox: true,
+        turn_end_letters: None,
         tool_letters: None,
         session: Some(SessionFormat::Codex),
         sleep: Some(LaunchDialect::Codex),
@@ -125,20 +140,17 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         doc_url: "https://learn.chatgpt.com/docs/build-skills",
         install_url: "https://learn.chatgpt.com/docs/codex/cli",
         logo_id: "codex",
-        factory: FactoryCapabilities {
-            direct_ask: Available(DirectAsk {
-                tools: &["request_user_input", "request_user_input_async"],
-                denial: HookDialect::Codex,
-            }),
-            user_turn: Available(SessionFormat::Codex),
-            turn_end_and_answer: Available(SessionFormat::Codex),
-            startup_guidance: Available(HookInstall::Runtime(HookDialect::Codex)),
-            resume: Available(LaunchDialect::Codex),
-            next_prompt_letters: Available(HookDialect::Codex),
-        },
     },
     AgentAdapter {
         key: AgentId::Grok,
+        fake_home: journey::FakeHome::Proven {
+            key_env: "JOURNEY_FAKE_KEY",
+            auto_update: journey::AutoUpdate::Environment {
+                name: "GROK_DISABLE_AUTOUPDATER",
+                value: "1",
+            },
+            evidence: "https://docs.x.ai/build/settings/reference.md",
+        },
         id: "grok",
         label: "Grok",
         picker_label: "Grok",
@@ -154,15 +166,18 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             folder: &[".grok"],
         },
         default_on: false,
-        // Grok discards what a prompt hook prints, so a new prompt's letters
-        // stay with `hide inbox` and its bell stays off; while it works, its
-        // own `PreToolUse` hook hands the due letters over as the tool's
-        // added context (`tool_letters`).
-        prompt_hook: None,
+        // The prompt hook records submission and recognizes a bell; its
+        // output is discarded. Tool and turn-end hooks carry the letters.
+        prompt_hook: Some(PromptHook {
+            dialect: HookDialect::Grok,
+            context: false,
+        }),
         spawn_guard: Some(HookDialect::Grok),
         subagent_counts: Some(HookDialect::Grok),
         memory: None,
-        bell: false,
+        bell: true,
+        bell_names_inbox: true,
+        turn_end_letters: Some(HookDialect::Grok),
         tool_letters: Some(HookDialect::Grok),
         session: Some(SessionFormat::Grok),
         sleep: Some(LaunchDialect::Grok),
@@ -202,17 +217,18 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         doc_url: "https://docs.x.ai/build/features/skills-plugins-marketplaces",
         install_url: "https://github.com/xai-org/grok-build",
         logo_id: "grok",
-        factory: FactoryCapabilities {
-            direct_ask: Unconfirmed,
-            user_turn: Unconfirmed,
-            turn_end_and_answer: Unconfirmed,
-            startup_guidance: Unavailable,
-            resume: Unconfirmed,
-            next_prompt_letters: Unavailable,
-        },
     },
     AgentAdapter {
         key: AgentId::OpenCode,
+        fake_home: journey::FakeHome::Proven {
+            key_env: "JOURNEY_FAKE_KEY",
+            auto_update: journey::AutoUpdate::Config {
+                path: ".config/opencode/opencode.json",
+                key: "update",
+                value: "\"disable\"",
+            },
+            evidence: "https://opencode.ai/v2/docs/config/",
+        },
         id: "opencode",
         label: "OpenCode",
         picker_label: "OpenCode",
@@ -228,13 +244,18 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             folder: &[".config", "opencode"],
         },
         default_on: false,
-        prompt_hook: Some(HookDialect::OpenCode),
+        prompt_hook: Some(PromptHook {
+            dialect: HookDialect::OpenCode,
+            context: true,
+        }),
         spawn_guard: Some(HookDialect::OpenCode),
         subagent_counts: Some(HookDialect::OpenCode),
         memory: Some(HookDialect::OpenCode),
         // A bell's Enter in OpenCode's session picker opens another session
         // (measured 2026-10-07); letters reach it on its next prompt instead.
         bell: false,
+        bell_names_inbox: false,
+        turn_end_letters: None,
         tool_letters: Some(HookDialect::OpenCode),
         session: Some(SessionFormat::OpenCode),
         sleep: Some(LaunchDialect::OpenCode),
@@ -278,20 +299,17 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         doc_url: "https://opencode.ai/docs/skills/",
         install_url: "https://opencode.ai/docs/",
         logo_id: "opencode",
-        factory: FactoryCapabilities {
-            direct_ask: Available(DirectAsk {
-                tools: &["question"],
-                denial: HookDialect::OpenCode,
-            }),
-            user_turn: Unconfirmed,
-            turn_end_and_answer: Unconfirmed,
-            startup_guidance: Available(HookInstall::Plugin(PluginDialect::OpenCode)),
-            resume: Unconfirmed,
-            next_prompt_letters: Available(HookDialect::OpenCode),
-        },
     },
     AgentAdapter {
         key: AgentId::Pi,
+        fake_home: journey::FakeHome::Proven {
+            key_env: "JOURNEY_FAKE_KEY",
+            auto_update: journey::AutoUpdate::Environment {
+                name: "PI_OFFLINE",
+                value: "1",
+            },
+            evidence: "https://unpkg.com/@earendil-works/pi-coding-agent@1.0.4/docs/models.md",
+        },
         id: "pi",
         label: "Pi",
         picker_label: "Pi",
@@ -307,7 +325,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             folder: &[".pi", "agent"],
         },
         default_on: false,
-        prompt_hook: Some(HookDialect::Pi),
+        prompt_hook: Some(PromptHook {
+            dialect: HookDialect::Pi,
+            context: true,
+        }),
         spawn_guard: Some(HookDialect::Pi),
         // Pi runs no subagents.
         subagent_counts: None,
@@ -317,6 +338,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         // picks the highlighted item (measured 2026-10-07). Letters reach it on
         // its next prompt instead.
         bell: false,
+        bell_names_inbox: false,
+        turn_end_letters: None,
         tool_letters: Some(HookDialect::Pi),
         session: Some(SessionFormat::Pi),
         sleep: Some(LaunchDialect::Pi),
@@ -360,18 +383,18 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         doc_url: "https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/skills.md",
         install_url: "https://pi.dev/",
         logo_id: "pi",
-        factory: FactoryCapabilities {
-            // Pi has no built-in tool that asks the operator.
-            direct_ask: Unavailable,
-            user_turn: Unconfirmed,
-            turn_end_and_answer: Unconfirmed,
-            startup_guidance: Available(HookInstall::Plugin(PluginDialect::Pi)),
-            resume: Unconfirmed,
-            next_prompt_letters: Available(HookDialect::Pi),
-        },
     },
     AgentAdapter {
         key: AgentId::Omp,
+        fake_home: journey::FakeHome::Proven {
+            key_env: "JOURNEY_FAKE_KEY",
+            auto_update: journey::AutoUpdate::Config {
+                path: ".omp/agent/config.yml",
+                key: "startup",
+                value: "{\"checkUpdate\":false}",
+            },
+            evidence: "https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/coding-agent/src/main.ts",
+        },
         id: "omp",
         label: "omp",
         picker_label: "omp",
@@ -387,7 +410,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             folder: &[".omp", "agent"],
         },
         default_on: false,
-        prompt_hook: Some(HookDialect::Omp),
+        prompt_hook: Some(PromptHook {
+            dialect: HookDialect::Omp,
+            context: true,
+        }),
         spawn_guard: Some(HookDialect::Omp),
         subagent_counts: Some(HookDialect::Omp),
         memory: Some(HookDialect::Omp),
@@ -395,6 +421,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         // resumes another session (measured 2026-10-07). Letters reach it on
         // its next prompt instead.
         bell: false,
+        bell_names_inbox: false,
+        turn_end_letters: None,
         tool_letters: Some(HookDialect::Omp),
         session: Some(SessionFormat::Omp),
         sleep: Some(LaunchDialect::Omp),
@@ -438,123 +466,16 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         doc_url: "https://omp.sh/docs/skills",
         install_url: "https://omp.sh/docs/quickstart",
         logo_id: "omp",
-        factory: FactoryCapabilities {
-            direct_ask: Available(DirectAsk {
-                tools: &["ask"],
-                denial: HookDialect::Omp,
-            }),
-            user_turn: Unconfirmed,
-            turn_end_and_answer: Unconfirmed,
-            startup_guidance: Available(HookInstall::Plugin(PluginDialect::Omp)),
-            resume: Unconfirmed,
-            next_prompt_letters: Available(HookDialect::Omp),
-        },
-    },
-    AgentAdapter {
-        key: AgentId::Cursor,
-        id: "cursor",
-        label: "Cursor",
-        picker_label: "Cursor",
-        sidebar_label: None,
-        terminal_click: false,
-        aliases: &[],
-        executables: &["cursor-agent"],
-        skill_location: SkillLocation::Shared,
-        hook: HookInstall::Guidance(GuidanceDialect::Cursor),
-        herdr: HerdrIntegration {
-            name: "cursor",
-            target: "cursor",
-            folder: &[".cursor"],
-        },
-        default_on: false,
-        // Cursor documents no context a prompt hook may add, so a new
-        // prompt's letters stay with `hide inbox` and its bell stays off;
-        // while it works, its own `preToolUse` hook hands the due letters
-        // over as the tool's added context (`tool_letters`).
-        prompt_hook: None,
-        spawn_guard: Some(HookDialect::Cursor),
-        // Cursor CLI 2026.10.01 runs `subagentStart` and `subagentStop` only
-        // when its agent server asks for them, and none did for a Task
-        // subagent (issue 911). Its chat store does keep each subagent as a
-        // store of its own, but nothing in it marks a subagent still running,
-        // so no count is better than a zero it cannot stand behind.
-        subagent_counts: None,
-        memory: None,
-        bell: false,
-        tool_letters: Some(HookDialect::Cursor),
-        session: Some(SessionFormat::Cursor),
-        sleep: Some(LaunchDialect::Cursor),
-        fork: None,
-        resume: Some(LaunchDialect::Cursor),
-        conversation: Some(SessionFormat::Cursor),
-        titles: None,
-        start: Some(LaunchDialect::Cursor),
-        find: None,
-        usage: UsageDeclaration {
-            limits: LimitDeclaration {
-                five_hour: absent(
-                    AbsenceKind::Excluded,
-                    "Reading limits requires credentials outside the supported usage boundary.",
-                    "An official delegated usage reader becomes available.",
-                ),
-                weekly: absent(
-                    AbsenceKind::Excluded,
-                    "Reading limits requires credentials outside the supported usage boundary.",
-                    "An official delegated usage reader becomes available.",
-                ),
-                scoped: absent(
-                    AbsenceKind::Excluded,
-                    "Reading limits requires credentials outside the supported usage boundary.",
-                    "An official delegated usage reader becomes available.",
-                ),
-                monthly: absent(
-                    AbsenceKind::Excluded,
-                    "Reading limits requires credentials outside the supported usage boundary.",
-                    "An official delegated usage reader becomes available.",
-                ),
-            },
-            tokens: absent(
-                AbsenceKind::NoSuchData,
-                "No supported local usage record is available.",
-                "The agent provides a documented local usage record.",
-            ),
-            cost: absent(
-                AbsenceKind::NoSuchData,
-                "No supported local usage record is available.",
-                "The agent provides a documented local usage record.",
-            ),
-            models: absent(
-                AbsenceKind::NoSuchData,
-                "No supported local usage record is available.",
-                "The agent provides a documented local usage record.",
-            ),
-            attribution: Attribution {
-                session: absent(
-                    AbsenceKind::NoSuchData,
-                    "No supported local usage record is available.",
-                    "The agent provides a documented local usage record.",
-                ),
-                project: absent(
-                    AbsenceKind::NoSuchData,
-                    "No supported local usage record is available.",
-                    "The agent provides a documented local usage record.",
-                ),
-            },
-        },
-        doc_url: "https://cursor.com/docs/context/skills",
-        install_url: "https://cursor.com/docs/cli/installation",
-        logo_id: "cursor",
-        factory: FactoryCapabilities {
-            direct_ask: Unavailable,
-            user_turn: Unavailable,
-            turn_end_and_answer: Unavailable,
-            startup_guidance: Available(HookInstall::Guidance(GuidanceDialect::Cursor)),
-            resume: Available(LaunchDialect::Cursor),
-            next_prompt_letters: Unavailable,
-        },
     },
     AgentAdapter {
         key: AgentId::Antigravity,
+        fake_home: journey::FakeHome::Exception {
+            auto_update: Some(journey::AutoUpdate::Environment {
+                name: "AGY_CLI_DISABLE_AUTO_UPDATE",
+                value: "1",
+            }),
+            reason: "The installer cannot select a pinned release.",
+        },
         id: "antigravity",
         label: "Antigravity",
         picker_label: "Antigravity",
@@ -572,7 +493,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         // On by default like Claude Code and Codex: the operator's amendment
         // to PRD antigravity-first-class B1/D-14 (2026-10-16).
         default_on: true,
-        prompt_hook: Some(HookDialect::Antigravity),
+        prompt_hook: Some(PromptHook {
+            dialect: HookDialect::Antigravity,
+            context: true,
+        }),
         spawn_guard: Some(HookDialect::Antigravity),
         subagent_counts: Some(HookDialect::Antigravity),
         memory: Some(HookDialect::Antigravity),
@@ -584,6 +508,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         // `PreInvocation` hook runs before and Hide answers with the letters
         // due as an injected system message (`tool_letters`).
         bell: false,
+        bell_names_inbox: false,
+        turn_end_letters: None,
         tool_letters: Some(HookDialect::Antigravity),
         session: Some(SessionFormat::Antigravity),
         sleep: Some(LaunchDialect::Antigravity),
@@ -627,19 +553,100 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         doc_url: "https://antigravity.google/docs/skills/",
         install_url: "https://antigravity.google/docs/install?tab=cli",
         logo_id: "antigravity",
-        factory: FactoryCapabilities {
-            direct_ask: Available(DirectAsk {
-                tools: &["ask_question"],
-                denial: HookDialect::Antigravity,
-            }),
-            // agy's transcript names no call on a tool step and no record of
-            // a question still waiting was measured, so the wait cannot be
-            // read; Factory still gets the question through `direct_ask`.
-            user_turn: Unconfirmed,
-            turn_end_and_answer: Available(SessionFormat::Antigravity),
-            startup_guidance: Available(HookInstall::Guidance(GuidanceDialect::Antigravity)),
-            resume: Available(LaunchDialect::Antigravity),
-            next_prompt_letters: Available(HookDialect::Antigravity),
-        },
     },
 ];
+
+/// Historical descriptor retained for stored Cursor conversations and retirement only.
+/// Active support and installation always iterate `ADAPTERS`.
+pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
+    key: AgentId::Cursor,
+    fake_home: journey::FakeHome::Exception {
+        auto_update: None,
+        reason: "The API-key environment and auto-update policy have not been proven.",
+    },
+    id: "cursor",
+    label: "Cursor",
+    picker_label: "Cursor",
+    sidebar_label: None,
+    terminal_click: false,
+    aliases: &[],
+    executables: &["cursor-agent"],
+    skill_location: SkillLocation::Shared,
+    hook: HookInstall::None,
+    herdr: HerdrIntegration {
+        name: "cursor",
+        target: "cursor",
+        folder: &[".cursor"],
+    },
+    default_on: false,
+    prompt_hook: None,
+    spawn_guard: None,
+    subagent_counts: None,
+    memory: None,
+    bell: false,
+    bell_names_inbox: false,
+    turn_end_letters: None,
+    tool_letters: None,
+    session: Some(SessionFormat::Cursor),
+    sleep: None,
+    fork: None,
+    resume: None,
+    conversation: Some(SessionFormat::Cursor),
+    titles: None,
+    start: None,
+    find: None,
+    usage: UsageDeclaration {
+        limits: LimitDeclaration {
+            five_hour: absent(
+                AbsenceKind::Excluded,
+                "Reading limits requires credentials outside the supported usage boundary.",
+                "An official delegated usage reader becomes available.",
+            ),
+            weekly: absent(
+                AbsenceKind::Excluded,
+                "Reading limits requires credentials outside the supported usage boundary.",
+                "An official delegated usage reader becomes available.",
+            ),
+            scoped: absent(
+                AbsenceKind::Excluded,
+                "Reading limits requires credentials outside the supported usage boundary.",
+                "An official delegated usage reader becomes available.",
+            ),
+            monthly: absent(
+                AbsenceKind::Excluded,
+                "Reading limits requires credentials outside the supported usage boundary.",
+                "An official delegated usage reader becomes available.",
+            ),
+        },
+        tokens: absent(
+            AbsenceKind::NoSuchData,
+            "No supported local usage record is available.",
+            "The agent provides a documented local usage record.",
+        ),
+        cost: absent(
+            AbsenceKind::NoSuchData,
+            "No supported local usage record is available.",
+            "The agent provides a documented local usage record.",
+        ),
+        models: absent(
+            AbsenceKind::NoSuchData,
+            "No supported local usage record is available.",
+            "The agent provides a documented local usage record.",
+        ),
+        attribution: Attribution {
+            session: absent(
+                AbsenceKind::NoSuchData,
+                "No supported local usage record is available.",
+                "The agent provides a documented local usage record.",
+            ),
+            project: absent(
+                AbsenceKind::NoSuchData,
+                "No supported local usage record is available.",
+                "The agent provides a documented local usage record.",
+            ),
+        },
+    },
+    doc_url: "https://cursor.com/docs/context/skills",
+    install_url: "https://cursor.com/docs/cli/installation",
+    logo_id: "cursor",
+};

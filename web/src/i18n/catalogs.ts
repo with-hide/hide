@@ -1,3 +1,9 @@
+import { groupTabsCatalogs, groupTabsEnglish } from "./resources/groupTabs";
+import { overviewBacklogCatalogs, overviewBacklogEnglish } from "../overviewBacklogMessages";
+import { overviewUsageCatalogs, overviewUsageEnglish } from "../overviewUsageMessages";
+import { overviewHistoryCatalogs, overviewHistoryEnglish } from "../overviewHistoryMessages";
+import { overviewGraphCatalogs, overviewGraphEnglish } from "../overviewGraphMessages";
+import { menusCatalogs, menusEnglish } from "./resources/menus";
 import { projectSettingsCatalogs, projectSettingsEnglish } from "./resources/projectSettings";
 import { usageCatalogs, usageEnglish } from "./resources/usage";
 import { commandsCatalogs, commandsEnglish } from "./resources/commands";
@@ -26,7 +32,6 @@ import { mobileSetupCatalogs, mobileSetupEnglish } from "./resources/mobileSetup
 import { coreMoveCatalogs, coreMoveEnglish } from "./resources/coreMove";
 import { nativeCatalogs, nativeEnglish } from "./resources/native";
 import { overviewCatalogs, overviewEnglish } from "./resources/overview";
-import { factoryCatalogs, factoryEnglish } from "./resources/factory";
 import { firstRunCatalogs, firstRunEnglish } from "./resources/firstRun";
 import { memoryCatalogs, memoryEnglish } from "./resources/memory";
 import { prWorkCatalogs, prWorkEnglish } from "./resources/prWork";
@@ -37,13 +42,22 @@ import { feedbackCatalogs, feedbackEnglish } from "./resources/feedback";
 import { requestsCatalogs, requestsEnglish } from "./resources/requests";
 import { settingsCatalogs, settingsEnglish } from "./resources/settings";
 import { workspaceCatalogs, workspaceEnglish } from "./resources/workspace";
+import { checkoutGitCatalogs, checkoutGitEnglish } from "./resources/checkoutGit";
 import type { Catalogs } from "./schema";
 import { sessionWorkCatalogs, sessionWorkEnglish } from "./resources/sessionWork";
 import { deviceOverviewCatalogs, deviceOverviewEnglish } from "./resources/deviceOverview";
+import { overviewRedesignCatalogs, overviewRedesignEnglish } from "./resources/overviewRedesign";
 
 export const english = {
+  ...groupTabsEnglish,
+  ...menusEnglish,
   ...sessionWorkEnglish,
   ...deviceOverviewEnglish,
+  ...overviewRedesignEnglish,
+  ...overviewBacklogEnglish,
+  ...overviewUsageEnglish,
+  ...overviewHistoryEnglish,
+  ...overviewGraphEnglish,
   ...agentSessionsEnglish,
   ...taskLensEnglish,
   ...archiveEnglish,
@@ -67,6 +81,7 @@ export const english = {
   ...mobileSetupEnglish,
   ...coreMoveEnglish,
   ...workspaceEnglish,
+  ...checkoutGitEnglish,
   ...issueSettingsEnglish,
   ...hideAiEnglish,
   ...agentsEnglish,
@@ -79,7 +94,6 @@ export const english = {
   ...linksEnglish,
   ...feedbackEnglish,
   ...overviewEnglish,
-  ...factoryEnglish,
   ...firstRunEnglish,
   ...memoryEnglish,
   ...projectSettingsEnglish,
@@ -90,8 +104,15 @@ export type MessageKey = keyof typeof english;
 export const catalogs = {
   en: english,
   ko: {
+    ...groupTabsCatalogs.ko,
+    ...menusCatalogs.ko,
     ...sessionWorkCatalogs.ko,
     ...deviceOverviewCatalogs.ko,
+    ...overviewRedesignCatalogs.ko,
+    ...overviewBacklogCatalogs.ko,
+    ...overviewUsageCatalogs.ko,
+    ...overviewHistoryCatalogs.ko,
+    ...overviewGraphCatalogs.ko,
     ...agentSessionsCatalogs.ko,
     ...taskLensCatalogs.ko,
     ...archiveCatalogs.ko,
@@ -115,6 +136,7 @@ export const catalogs = {
     ...mobileSetupCatalogs.ko,
     ...coreMoveCatalogs.ko,
     ...workspaceCatalogs.ko,
+    ...checkoutGitCatalogs.ko,
     ...issueSettingsCatalogs.ko,
     ...hideAiCatalogs.ko,
     ...agentsCatalogs.ko,
@@ -127,14 +149,20 @@ export const catalogs = {
     ...linksCatalogs.ko,
     ...feedbackCatalogs.ko,
     ...overviewCatalogs.ko,
-    ...factoryCatalogs.ko,
     ...firstRunCatalogs.ko,
     ...memoryCatalogs.ko,
     ...projectSettingsCatalogs.ko,
   },
   "zh-CN": {
+    ...groupTabsCatalogs["zh-CN"],
+    ...menusCatalogs["zh-CN"],
     ...sessionWorkCatalogs["zh-CN"],
     ...deviceOverviewCatalogs["zh-CN"],
+    ...overviewRedesignCatalogs["zh-CN"],
+    ...overviewBacklogCatalogs["zh-CN"],
+    ...overviewUsageCatalogs["zh-CN"],
+    ...overviewHistoryCatalogs["zh-CN"],
+    ...overviewGraphCatalogs["zh-CN"],
     ...agentSessionsCatalogs["zh-CN"],
     ...taskLensCatalogs["zh-CN"],
     ...archiveCatalogs["zh-CN"],
@@ -158,6 +186,7 @@ export const catalogs = {
     ...mobileSetupCatalogs["zh-CN"],
     ...coreMoveCatalogs["zh-CN"],
     ...workspaceCatalogs["zh-CN"],
+    ...checkoutGitCatalogs["zh-CN"],
     ...issueSettingsCatalogs["zh-CN"],
     ...hideAiCatalogs["zh-CN"],
     ...agentsCatalogs["zh-CN"],
@@ -170,14 +199,20 @@ export const catalogs = {
     ...linksCatalogs["zh-CN"],
     ...feedbackCatalogs["zh-CN"],
     ...overviewCatalogs["zh-CN"],
-    ...factoryCatalogs["zh-CN"],
     ...firstRunCatalogs["zh-CN"],
     ...memoryCatalogs["zh-CN"],
     ...projectSettingsCatalogs["zh-CN"],
   },
   ja: {
+    ...groupTabsCatalogs.ja,
+    ...menusCatalogs.ja,
     ...sessionWorkCatalogs.ja,
     ...deviceOverviewCatalogs.ja,
+    ...overviewRedesignCatalogs.ja,
+    ...overviewBacklogCatalogs.ja,
+    ...overviewUsageCatalogs.ja,
+    ...overviewHistoryCatalogs.ja,
+    ...overviewGraphCatalogs.ja,
     ...agentSessionsCatalogs.ja,
     ...taskLensCatalogs.ja,
     ...archiveCatalogs.ja,
@@ -201,6 +236,7 @@ export const catalogs = {
     ...mobileSetupCatalogs.ja,
     ...coreMoveCatalogs.ja,
     ...workspaceCatalogs.ja,
+    ...checkoutGitCatalogs.ja,
     ...issueSettingsCatalogs.ja,
     ...hideAiCatalogs.ja,
     ...agentsCatalogs.ja,
@@ -213,7 +249,6 @@ export const catalogs = {
     ...linksCatalogs.ja,
     ...feedbackCatalogs.ja,
     ...overviewCatalogs.ja,
-    ...factoryCatalogs.ja,
     ...firstRunCatalogs.ja,
     ...memoryCatalogs.ja,
     ...projectSettingsCatalogs.ja,

@@ -115,6 +115,7 @@ fn starting_herdr(
     std::sync::mpsc::Receiver<(String, serde_json::Value)>,
 ) {
     let (sent, starts) = std::sync::mpsc::channel();
+    let observed = std::sync::Mutex::new(json!({}));
     let herdr = FakeHerdr::start_with_errors(name, move |method, params| match method {
         "pane.process_info" => Ok(json!({"type": "pane_process_info", "process_info": {
             "pane_id": params["pane_id"], "shell_pid": 42, "foreground_process_group_id": 42,
@@ -125,7 +126,13 @@ fn starting_herdr(
             "workspace_id": "w-order", "tab_id": "w-order:t2", "focused": false,
             "agent_status": "idle", "revision": 1
         }})),
+        "agent.get" => Ok(json!({"type":"agent_info", "agent": *observed.lock().unwrap()})),
         "agent.start" => {
+            *observed.lock().unwrap() = json!({
+                "pane_id":params["pane_id"], "terminal_id":"term", "workspace_id":"w-order",
+                "tab_id":"w-order:t2", "name":params["name"], "agent":params["kind"],
+                "interactive_ready":true, "focused":false, "agent_status":"idle", "revision":3
+            });
             sent.send((
                 params["pane_id"].as_str().unwrap().to_owned(),
                 params["args"].clone(),
@@ -287,7 +294,8 @@ fn a_fork_starts_with_the_model_and_effort_its_source_was_started_with() {
             vec!["--model", "gpt-6-luna", "-c", "model_reasoning_effort=low"],
         ),
     ] {
-        let (runtime, _folder) = started(kind, Some(&launch));
+        let (mut runtime, _folder) = started(kind, Some(&launch));
+        let terminals = record_terminals(&mut runtime);
         let (herdr, starts) = starting_herdr("launch-choice-fork");
         let shared = SharedRuntime::new(runtime);
         {
@@ -299,6 +307,13 @@ fn a_fork_starts_with_the_model_and_effort_its_source_was_started_with() {
                 "fork_pane",
                 json!({"pane_id": AGENT, "placement": "side", "origin": "operator"})
             )));
+            assert!(
+                terminals.take().iter().any(|control| matches!(
+                    control,
+                    TerminalControl::RequestOpen { fork: true, .. }
+                )),
+                "an id-less fork must open a fork holder on the node"
+            );
         }
         assert_eq!(
             next_start(&starts),
@@ -526,6 +541,7 @@ fn launch_records_leave_with_their_device_and_stop_at_the_cap() {
                 ssh_alias: device.to_owned(),
             },
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         });
     let remote = format!("remote:{device}:pane:w1:p1");

@@ -57,6 +57,7 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
   let closed = false;
   let backoff = 500;
   let healthFails = 0;
+  let accessReported = false;
   let revision = 0;
   // The core that numbered `revision`, and the one the last daemon frame
   // named: a revision counts only on the core that gave it, so the second
@@ -97,6 +98,13 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
     }
     socket.send(JSON.stringify(event));
     return true;
+  };
+
+  const reportAccess = (drawn: boolean) => {
+    if (!accessReported && drawn && useShellStore.getState().connection === "live") {
+      // Once per page lifetime, after the first accepted state is usable.
+      accessReported = dispatch({ schema_version: 2, kind: "product_analytics_connected", payload: {} }) === true;
+    }
   };
 
   /** Attachment bytes ride the same socket as binary frames (PRD B14). */
@@ -184,6 +192,7 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
         const nodeHolds = !drawn && useShellStore.getState().coreLink !== null;
         if (moveUnderWay(view.state) || nodeHolds) useShellStore.getState().setConnection("moving");
         else if (drawn && useShellStore.getState().connection === "moving") useShellStore.getState().setConnection("live");
+        reportAccess(drawn);
         return;
       }
       if (frame.type === "agent_notice") {
@@ -229,7 +238,9 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
       terminalSequence = useShellStore.getState().terminalSequence;
       terminalEpoch = useShellStore.getState().terminalEpoch;
       handlers.onChunks(chunks, frame.type === "snapshot");
-      if (frame.type === "snapshot" || frame.type === "delta") drawn = true;
+      if (frame.type === "snapshot" || frame.type === "delta") {
+        drawn = true;
+      }
       // A refusal before anything was drawn (a move's screen refusing an
       // event) leaves the window where it is.
       if (frame.type === "error" && !drawn) return;
@@ -238,6 +249,7 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
       // the move's own frame releases it (W1).
       const { coreMove } = useShellStore.getState();
       if (coreMove === null || !moveUnderWay(coreMove.state)) useShellStore.getState().setConnection("live");
+      if (frame.type === "snapshot" || frame.type === "delta") reportAccess(drawn);
       backoff = 500;
       healthFails = 0;
     });

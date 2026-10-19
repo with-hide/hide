@@ -1,8 +1,9 @@
 """The live check's Windows forms, run on Windows (docs/VERIFICATION.md, Agent
 journey): a child's job ends its whole tree when the owner dies, every cap
 is the Unix guardian's and a crossed one is a named failure, private files
-admit only this account, and the pane shell's commands and the launchers
-carry their arguments and exit status.
+admit only this account, the pane shell's commands and the launchers carry
+their arguments and exit status, and the run's folder leaves the account's
+Path as it found it.
 
 No Herdr, hided or agent is needed; `agent-journey.yml` runs this file on a
 Windows runner. Elsewhere every test is skipped.
@@ -23,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_live_check import processes
 from agent_live_check.processes import OwnedProcesses, ProcessError, ProcessSafetyError
 from agent_live_check.protection import private, private_directory, write_private
-from agent_live_check.system import WINDOWS, PaneShell, launcher, remove_tree
+from agent_live_check.system import WINDOWS, PaneShell, launcher, remove_pane_files, remove_tree, same_path
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 WAIT_SECONDS = 10
@@ -122,19 +123,54 @@ class JobOwnership(unittest.TestCase):
                     time.sleep(600)
                 """), env=dict(os.environ), check=False)
 
-    def test_memory_past_the_cap_is_a_named_failure(self):
+    def test_resident_memory_past_the_cap_is_a_named_failure(self):
         cap = 256 * 1024 * 1024
         with patch.object(processes, "MAX_RSS_BYTES", cap):
             self.owner = OwnedProcesses()
-            with self.assertRaisesRegex(ProcessSafetyError, rf'owned_processes_over_budget:\{{"memory_bytes":{cap}\}}'):
+            with self.assertRaises(ProcessSafetyError) as raised:
+                # Every page written, so it is resident, as the Unix guardian counts RSS.
+                self.owner.run(self.python(f"""
+                    import time
+                    held = b"x" * {2 * cap}
+                    time.sleep(600)
+                """), env=dict(os.environ), check=False)
+        reason, _, measured = str(raised.exception).partition(":")
+        self.assertEqual(reason, "owned_processes_over_budget")
+        measured = json.loads(measured)
+        self.assertGreater(measured["rss_bytes"], cap)
+        self.assertEqual(measured["largest"][0]["executable"].lower(), Path(sys.executable).name.lower())
+
+    def test_memory_committed_past_the_hard_stop_is_a_named_failure(self):
+        committed = 256 * 1024 * 1024
+        with patch.object(processes, "MAX_COMMITTED_BYTES", committed):
+            self.owner = OwnedProcesses()
+            with self.assertRaisesRegex(ProcessSafetyError,
+                                        rf'owned_processes_over_budget:\{{"committed_bytes":{committed}\}}'):
+                # Refused by Windows at the allocation, before any of it is resident.
                 self.owner.run(self.python(f"""
                     import time
                     try:
-                        held = bytearray({2 * cap})
+                        held = bytearray({2 * committed})
                     except MemoryError:
                         pass
                     time.sleep(600)
                 """), env=dict(os.environ), check=False)
+
+    def test_memory_committed_but_never_touched_is_within_the_cap(self):
+        cap = 256 * 1024 * 1024
+        with patch.object(processes, "MAX_RSS_BYTES", cap):
+            self.owner = OwnedProcesses()
+            # Committed and never written: Windows charges it, RSS does not hold it.
+            code, _, stderr = self.owner.run(self.python(f"""
+                import ctypes, time
+                VirtualAlloc = ctypes.windll.kernel32.VirtualAlloc
+                VirtualAlloc.restype = ctypes.c_void_p
+                VirtualAlloc.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_ulong, ctypes.c_ulong]
+                if not VirtualAlloc(None, {2 * cap}, 0x1000, 0x04):  # MEM_COMMIT, PAGE_READWRITE
+                    raise SystemExit("VirtualAlloc failed")
+                time.sleep(1)
+            """), env=dict(os.environ), check=False)
+        self.assertEqual(code, 0, stderr)
 
     def test_output_past_the_cap_ends_the_command(self):
         with self.assertRaisesRegex(ProcessError, "command_output_over_budget"):
@@ -200,12 +236,13 @@ class ShellForms(unittest.TestCase):
         return subprocess.run(f'"{shell}" /d /s /c "{line}"', capture_output=True, timeout=60)
 
     def test_a_pane_command_keeps_its_output_and_exit_status(self):
-        output, status = self.folder / "pane out", self.folder / "status"
+        output, error, status = self.folder / "pane out", self.folder / "pane err", self.folder / "status"
         program = [sys.executable, "-c", "import sys; print(sys.argv[1:]); sys.stderr.write('noise'); sys.exit(3)",
                    "two words", "it's"]
-        ran = self.cmd(PaneShell().program(program, output, status))
+        ran = self.cmd(PaneShell().program(program, output, error, status))
         self.assertEqual(ran.stderr, b"")
         self.assertEqual(output.read_text().strip(), str(["two words", "it's"]))
+        self.assertEqual(error.read_text(), "noise")
         self.assertEqual(status.read_text().strip(), "3")
 
     def test_a_variable_read_from_a_file_reaches_what_the_shell_starts(self):
@@ -215,7 +252,40 @@ class ShellForms(unittest.TestCase):
                        + f' & "{sys.executable}" -c "import os; print(os.environ[\'HIDE_CAP_REF\'])"')
         self.assertEqual(ran.returncode, 0, ran.stderr)
         self.assertEqual(ran.stdout.decode().strip(), "C:/private/pane capabilities/reference.json")
-        self.assertTrue(ready.is_file())
+        self.assertEqual(ready.read_text().strip(), "ready")
+
+    def test_a_readable_completion_marker_is_released_after_its_writer_closes(self):
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                      wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        marker = self.folder / "reference-ready"
+        marker.write_text("ready")
+        # Read sharing, without delete sharing, as cmd's redirect can hold
+        # after its completion bytes are visible to the controller.
+        handle = kernel.CreateFileW(str(marker), 0x40000000, 1, None, 3, 0, None)
+        self.assertNotEqual(handle, ctypes.c_void_p(-1).value)
+        unlink = os.unlink
+
+        def release_after_refusal(*args, **kwargs):
+            nonlocal handle
+            try:
+                return unlink(*args, **kwargs)
+            except PermissionError:
+                kernel.CloseHandle(handle)
+                handle = None
+                raise
+        try:
+            self.assertEqual(marker.read_text(), "ready")
+            with patch("os.unlink", release_after_refusal):
+                remove_pane_files(marker)
+            self.assertFalse(marker.exists())
+        finally:
+            if handle is not None:
+                kernel.CloseHandle(handle)
 
     def test_the_pane_shell_is_the_one_herdr_is_told_to_start(self):
         config = PaneShell().herdr_config()
@@ -242,6 +312,13 @@ class ShellForms(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "cmd.exe cannot carry"):
                 launcher(self.folder / "bin/agent", argv, environment=environment)
 
+    def test_a_path_hide_spells_with_slashes_names_the_same_folder(self):
+        folder = self.folder / "Worktrees" / "codex"
+        self.assertTrue(same_path(folder.as_posix(), folder))
+        self.assertTrue(same_path(str(folder).lower(), folder))
+        self.assertFalse(same_path((self.folder / "worktrees/claude").as_posix(), folder))
+        self.assertFalse(same_path(None, folder))
+
     def test_a_tree_with_read_only_files_is_removed(self):
         folder = self.folder / "checkout/.git/objects"
         folder.mkdir(parents=True)
@@ -249,6 +326,59 @@ class ShellForms(unittest.TestCase):
         (folder / "object").chmod(0o444)
         remove_tree(self.folder / "checkout")
         self.assertFalse((self.folder / "checkout").exists())
+
+
+@unittest.skipUnless(WINDOWS, "the Windows forms run on Windows")
+class UserPathHold(unittest.TestCase):
+    """The account's Path in the registry, where a Herdr pane reads its PATH."""
+
+    def read(self):
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            try:
+                return winreg.QueryValueEx(key, "Path")
+            except FileNotFoundError:
+                return None
+
+    def write(self, value):
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE) as key:
+            if value is None:
+                winreg.DeleteValue(key, "Path")
+            else:
+                winreg.SetValueEx(key, "Path", 0, value[1], value[0])
+
+    def test_the_run_folder_comes_first_and_leaves_what_changed_meanwhile(self):
+        from agent_live_check.windows import UserPath
+        before = self.read()
+        self.addCleanup(self.write, before)
+        folder = Path(tempfile.gettempdir()) / "journey-run/bin"
+        held = UserPath(folder)
+        value, kind = self.read()
+        self.assertEqual(value.split(";")[0], str(folder))
+        # An installer adds its own folder while the run holds the Path.
+        self.write((value + ";C:\\installed\\bin", kind))
+        held.close()
+        expected = ";".join(filter(None, [before[0] if before else "", "C:\\installed\\bin"]))
+        self.assertEqual(self.read(), (expected, before[1] if before else kind))
+
+    def test_it_is_refused_outside_a_ci_runner(self):
+        from agent_live_check.protection import ProtectionError
+        from agent_live_check.windows import UserPath
+        before = self.read()
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}):
+            with self.assertRaisesRegex(ProtectionError, "only_on_a_ci_runner"):
+                UserPath(Path(tempfile.gettempdir()) / "journey-run/bin")
+        self.assertEqual(self.read(), before)
+
+    def test_a_path_that_did_not_exist_is_removed_again(self):
+        from agent_live_check.windows import UserPath
+        before = self.read()
+        self.addCleanup(self.write, before)
+        if before is not None:
+            self.write(None)
+        UserPath(Path(tempfile.gettempdir()) / "journey-run/bin").close()
+        self.assertIsNone(self.read())
 
 
 if __name__ == "__main__":

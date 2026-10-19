@@ -28,23 +28,34 @@ fixture="${HOME%/*}"
 echo "$@" >> "$fixture/hide-calls"
 mode="$(/bin/cat "$fixture/mode")"
 # A daemon with no letter for the pane answers a tool event's ask with nothing.
-if [ "$1 $2" = "inbox --hook" ] && [ "$mode" != letters ]; then
+if [ "$1 $2" = "inbox --hook" ] && [ "$mode" != letters ] && [ "$mode" != letters-once ] && [ "$mode" != letters-confirm-fails ]; then
   echo '{"ok":true,"result":{"context":"","ids":[],"remaining":0}}'
   exit 0
 fi
 case "$mode" in
   registered) echo '{"ok":true,"reference":"/x"}' ;;
-  worker) echo '{"type":"workspace_result","ok":true,"result":{"deny":true}}' ;;
-  nonworker) echo '{"type":"workspace_result","ok":true,"result":{"deny":false}}' ;;
-  incomplete) echo '{"type":"workspace_result","ok":true,"result":{"deny":"true"}}' ;;
-  refused) echo '{"type":"workspace_result","ok":false,"reason":"factory_guard_native_changed"}' ;;
-  oversized) printf '%20000s' x ;;
   unregistered) echo checkout_not_registered >&2; exit 2 ;;
   down) echo hide_unavailable >&2; exit 2 ;;
   mute) exit 2 ;;
   bridge) echo bridge_unavailable >&2; exit 2 ;;
   later) echo a_reason_a_later_build_adds >&2; exit 2 ;;
   slow) echo $$ > "$fixture/cli-pid"; exec /bin/sleep 30 ;;
+  letters-once|letters-confirm-fails)
+    case "$*" in
+      "inbox --hook"*)
+        if [ -f "$fixture/confirmed" ]; then
+          echo '{"ok":true,"result":{"context":"","ids":[],"remaining":0}}'
+        else
+          echo '{"ok":true,"result":{"context":"BODY-ONCE","ids":["letter-1"],"remaining":0}}'
+        fi ;;
+      "inbox --confirm"*)
+        if [ "$mode" = letters-confirm-fails ]; then
+          echo '{"ok":true,"result":{"confirmed":[]}}'
+          exit 0
+        fi
+        echo yes > "$fixture/confirmed"
+        echo '{"ok":true,"result":{"confirmed":["letter-1"]}}' ;;
+    esac ;;
   letters)
     case "$*" in
       "inbox --hook"*) printf '%s\n' '{"ok":true,"result":{"context":"Hide letter letter-1 from lead (claude) [request]\nBODY-1\n","ids":["letter-1"],"remaining":0}}' ;;
@@ -216,101 +227,8 @@ impl Machine {
 pub(crate) const START: &str = "herdr agent start set-g --kind claude --pane w1:p9 -- --model opus";
 
 #[test]
-fn current_factory_worker_questions_are_redirected_through_one_authenticated_query() {
-    for (runtime, tool) in [
-        ("claude-code", "AskUserQuestion"),
-        ("claude-code", "ExitPlanMode"),
-        ("codex", "request_user_input"),
-        ("codex", "request_user_input_async"),
-    ] {
-        let machine = Machine::new("worker");
-        let run = machine.run(runtime, &machine.question(tool), Some(PANE), &[]);
-        assert!(run.status_ok, "{runtime}/{tool}");
-        assert_eq!(run.stderr, "");
-        assert!(machine.reason(&run).contains("hide factory ask"));
-        assert_eq!(
-            machine.calls(),
-            [format!(
-                "workspace factory-question-guard --session s1 --runtime {runtime}"
-            )]
-        );
-        let log = machine.guard_log();
-        assert!(log.contains("factory_question.refused") && log.contains(tool));
-        assert!(!log.contains("private-question-text") && !log.contains("s1"));
-    }
-}
-
-/// A session named by its file path passes 256 bytes in a deep checkout; the
-/// guard asks about any session a letter pull takes, up to its bound.
-#[test]
-fn a_worker_question_from_a_session_path_past_256_bytes_is_redirected() {
-    for bytes in [300, hide_agent_hooks::delivery::SESSION_LIMIT] {
-        let session = format!("/{}.jsonl", "s".repeat(bytes - 7));
-        let machine = Machine::new("worker");
-        let payload = machine.question_in(&session, "AskUserQuestion");
-        let run = machine.run("claude-code", &payload, Some(PANE), &[]);
-        assert!(run.status_ok, "{bytes}");
-        assert!(machine.reason(&run).contains("hide factory ask"), "{bytes}");
-        assert_eq!(
-            machine.calls(),
-            [format!(
-                "workspace factory-question-guard --session {session} --runtime claude-code"
-            )],
-            "{bytes}"
-        );
-    }
-}
-
-#[test]
-fn nonworker_and_unproven_question_answers_let_the_native_tool_run() {
-    for mode in ["nonworker", "incomplete", "refused", "down", "oversized"] {
-        let machine = Machine::new(mode);
-        let run = machine.run(
-            "claude-code",
-            &machine.question("AskUserQuestion"),
-            Some(PANE),
-            &[],
-        );
-        assert!(run.status_ok, "{mode}");
-        assert_eq!(run.stdout, "", "{mode}");
-        assert_eq!(run.stderr, "", "{mode}");
-        assert_eq!(machine.calls().len(), 1, "{mode}");
-        if mode == "nonworker" {
-            assert_eq!(machine.guard_log(), "");
-        } else {
-            assert!(machine.guard_log().contains("daemon.unreachable"), "{mode}");
-        }
-    }
-}
-
-#[test]
-fn an_unanswered_question_is_allowed_and_its_query_child_is_reaped() {
-    let machine = Machine::new("slow");
-    let run = machine.run(
-        "codex",
-        &machine.question("request_user_input"),
-        Some(PANE),
-        &[],
-    );
-    assert!(run.status_ok);
-    assert_eq!(run.stdout, "");
-    assert_eq!(run.stderr, "");
-    assert!(run.elapsed < Duration::from_secs(6), "{:?}", run.elapsed);
-    assert!(machine.guard_log().contains("\"cause\":\"deadline\""));
-    let pid = std::fs::read_to_string(machine.root.join("cli-pid"))
-        .unwrap()
-        .trim()
-        .parse::<u32>()
-        .unwrap();
-    assert!(
-        hide_platform::process::start_time(pid).is_err(),
-        "query child {pid} survived"
-    );
-}
-
-#[test]
 fn questions_without_native_identity_or_from_another_runtime_never_query() {
-    let machine = Machine::new("worker");
+    let machine = Machine::new("registered");
     for (runtime, payload) in [
         ("codex", machine.question("AskUserQuestion")),
         ("claude-code", machine.question("request_user_input")),

@@ -1,3 +1,5 @@
+import { clientI18n } from "../i18n/translator";
+import { requireInterfaceLanguage } from "../i18n/locale";
 import { StrictMode } from "react";
 import type { Root } from "react-dom/client";
 import { Gallery, GalleryFrame } from "./Gallery";
@@ -5,11 +7,11 @@ import { CmdkScene, cmdkSceneParams } from "./CmdkScene";
 import { GALLERY, type Section } from "./manifest";
 import { ServerSessionScene } from "./ServerSessionScene";
 import { RightLaneScene, rightLaneSceneParams } from "./RightLaneScene";
+import { GroupTabsScene } from "./GroupTabsScene";
 import { ViewFeedbackScene, viewFeedbackSceneParams } from "./ViewFeedbackScene";
 import { sceneParams, SidebarScene } from "./SidebarScene";
 import { AreaFocusScene } from "./AreaFocusScene";
 import { OnboardingScene, onboardingSceneParams } from "./OnboardingScene";
-import { FactoryScene, factorySceneParams } from "./FactoryScene";
 import { SessionWorkflowScene } from "./SessionWorkflowScene";
 import { CoreMoveScene, coreMoveSceneParams } from "./CoreMoveScene";
 import { NodeProjectScene, nodeProjectSceneParams } from "./NodeProjectScene";
@@ -19,6 +21,7 @@ import { OverviewScene, overviewSceneParams } from "./OverviewScene";
 import { UsageScene } from "./UsageScene";
 import { ProjectSettingsScene } from "./ProjectSettingsScene";
 import { SessionWorkScene } from "./SessionWorkScene";
+import { PrCardScene } from "./PrCardScene";
 import { PALETTE_HIDE_CLASS } from "../theme";
 
 export function mountGallery(root: Root) {
@@ -26,10 +29,25 @@ export function mountGallery(root: Root) {
   // draws (hide-color-theme D-10), though it shares the page whose first paint is Hide.
   document.documentElement.classList.remove(PALETTE_HIDE_CLASS);
   const params = new URLSearchParams(window.location.search);
+  const language = params.get("lang");
+  if (language) {
+    const selected = requireInterfaceLanguage(language);
+    void clientI18n.changeLanguage(selected);
+    document.documentElement.lang = selected;
+  }
   const scene = params.get("scene");
   if (scene !== null) {
+    if (scene === "group-tabs") {
+      document.title = "hide · Group tabs scene";
+      root.render(<StrictMode><GroupTabsScene params={params} /></StrictMode>);
+      return;
+    }
     if (scene === "project-settings") {
       root.render(<StrictMode><ProjectSettingsScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "pr-card") {
+      root.render(<StrictMode><PrCardScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "session-record") {
@@ -53,7 +71,7 @@ export function mountGallery(root: Root) {
       return;
     }
     // A scene seeds the app's own stores, so it is one document per scene.
-    if (scene === "workspace-servers") {
+    if (scene === "workspace-servers" || scene === "checkout-git") {
       root.render(<StrictMode><ServerSessionScene scene={scene} {...sceneParams(params)}/></StrictMode>);
       return;
     }
@@ -92,11 +110,6 @@ export function mountGallery(root: Root) {
       // No StrictMode here: its simulated unmount runs the lane record's
       // leave, which closes the record a production build keeps open.
       root.render(<OverviewScene {...overviewSceneParams(params)} />);
-      return;
-    }
-    if (scene === "factory") {
-      document.title = "hide · Factory scene";
-      root.render(<StrictMode><FactoryScene {...factorySceneParams(params)} /></StrictMode>);
       return;
     }
     if (scene === "core-move" || scene === "core-move-window") {

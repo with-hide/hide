@@ -75,6 +75,22 @@ static int fit_schema(char *label, int argc, char **argv) {
   int plain;
   const char *schema = request_schema(argc, argv, &plain);
   if (!schema) return 1;
+  /* Native reader fixtures keep their recorded marker. Adapt its old goal
+     decision at the provider boundary, not in the product's strict parser. */
+  char *legacy = strstr(label, ",\"goal_changed\":");
+  if (strstr(schema, "\"goal_update\"") && legacy) {
+    const char *value = legacy + strlen(",\"goal_changed\":");
+    int changed = strncmp(value, "true,", 5) == 0;
+    if (!changed && strncmp(value, "false,", 6) != 0) return 0;
+    const char *replacement = changed ? ",\"goal_update\":\"replace\"" : ",\"goal_update\":\"keep\"";
+    size_t old_length = (size_t)(value - legacy) + (changed ? 4 : 5);
+    size_t new_length = strlen(replacement);
+    size_t length = strlen(label);
+    size_t capacity = sizeof prompt - (size_t)(label - prompt);
+    if (length - old_length + new_length >= capacity) return 0;
+    memmove(legacy + new_length, legacy + old_length, strlen(legacy + old_length) + 1);
+    memcpy(legacy, replacement, new_length);
+  }
   if (strstr(schema, "\"end\"")) {
     /* Recorded native-format fixtures retain their old label marker. This
        controlled provider gives that unrelated reader journey no work judgment
@@ -195,14 +211,14 @@ static int run_as_codex(const char *argv0) {
 
 #include "live-check.h"
 
-// A Factory question fixture needs the existing owned-command runner's native
+// An agent pane fixture needs the existing owned-command runner's native
 // session report and sentinel command. Provider/auth/model requests above keep
 // using this shim; only an explicitly configured interactive pane hands off.
-static int factory_question_runner(void) {
+static int agent_pane_runner(void) {
   const char *root = getenv("HIDE_E2E_ROOT");
   if (!root) return 0;
   char filename[4096], runner[4096];
-  if (snprintf(filename, sizeof filename, "%s/factory-question-runner.config", root) >= (int)sizeof filename) return 1;
+  if (snprintf(filename, sizeof filename, "%s/agent-pane-runner.config", root) >= (int)sizeof filename) return 1;
   FILE *file = fopen(filename, "rb");
   if (!file) return errno == ENOENT ? 0 : 1;
   size_t count = fread(runner, 1, sizeof runner - 1, file);
@@ -319,14 +335,26 @@ int main(int argc, char **argv) {
   }
   if (getenv("HIDE_E2E_JOURNEY")) return journey(argc, argv);
   if (native_session(argc, argv) != 0) return 1;
-  if (factory_question_runner() != 0) return 1;
+  if (agent_pane_runner() != 0) return 1;
   const char *log_path = getenv("HIDE_E2E_INPUT_LOG");
   int flags = O_WRONLY | O_CREAT | O_APPEND;
 #ifdef _WIN32
   flags |= _O_BINARY;
 #endif
+  char fork_log[4096];
+  const int forked = has_option(argc, argv, "--fork-session");
+  if (forked) {
+    const char *root = getenv("HIDE_E2E_ROOT");
+    if (!root || snprintf(fork_log, sizeof fork_log, "%s/fork-input.log", root) >= (int)sizeof fork_log) return 1;
+    log_path = fork_log;
+  }
   int log = log_path ? open(log_path, flags, 0644) : -1;
+  if (forked && log < 0) return 1;
   raw_terminal();
+  if (forked) {
+    static const char ready[] = "\r\nFORK_INPUT_READY\r\n";
+    if (terminal_write(ready, sizeof ready - 1) != (fixture_count_t)(sizeof ready - 1)) return 1;
+  }
   if (run_as_codex(argv[0])) {
     static const char composer[] = "\xe2\x80\xba Ask Codex to do anything\r\n";
     if (terminal_write(composer, sizeof composer - 1) != (fixture_count_t)(sizeof composer - 1)) return 1;

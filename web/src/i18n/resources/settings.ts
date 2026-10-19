@@ -1,6 +1,10 @@
 import type { Catalog, Catalogs } from "../schema";
 
 export const settingsEnglish = {
+  "settings.tabs.privacy": "Privacy",
+  "settings.productAnalytics": "Share usage statistics",
+  "settings.productAnalyticsDetail": "Collects connection and AI call counts. No conversations or code are sent.",
+
   "settings.close": "Close Settings",
   "settings.section": "Settings section",
   "settings.tabs.general": "General",
@@ -120,6 +124,10 @@ export const settingsEnglish = {
 } as const;
 
 const ko = {
+  "settings.tabs.privacy": "개인정보",
+  "settings.productAnalytics": "사용 통계 보내기",
+  "settings.productAnalyticsDetail": "접속과 AI 호출 횟수를 수집합니다. 대화와 코드는 보내지 않습니다.",
+
   "settings.close": "설정 닫기",
   "settings.section": "설정 항목",
   "settings.tabs.general": "일반",
@@ -239,6 +247,10 @@ const ko = {
 } satisfies Catalog<typeof settingsEnglish>;
 
 const ja = {
+  "settings.tabs.privacy": "プライバシー",
+  "settings.productAnalytics": "利用統計を送信",
+  "settings.productAnalyticsDetail": "接続と AI の呼び出し回数を収集します。会話やコードは送信しません。",
+
   "settings.close": "設定を閉じる",
   "settings.section": "設定項目",
   "settings.tabs.general": "一般",
@@ -358,6 +370,10 @@ const ja = {
 } satisfies Catalog<typeof settingsEnglish>;
 
 const zhCN = {
+  "settings.tabs.privacy": "隐私",
+  "settings.productAnalytics": "发送使用统计",
+  "settings.productAnalyticsDetail": "收集连接和 AI 调用次数。不发送对话或代码。",
+
   "settings.close": "关闭设置",
   "settings.section": "设置分类",
   "settings.tabs.general": "常规",

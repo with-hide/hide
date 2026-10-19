@@ -13,12 +13,12 @@ import { redact } from "./redact";
 
 type Translate = TFunction<"translation">;
 
-export type SettingsTab = "general" | "notifications" | "usage" | "devices" | "shortcuts" | "agents" | "hideAi" | "mobile" | "github" | "about";
+export type SettingsTab = "general" | "notifications" | "usage" | "devices" | "shortcuts" | "agents" | "hideAi" | "mobile" | "github" | "about" | "privacy";
 
 /**
  * The Settings list, top to bottom (PRD settings-left-nav B2): the App group,
- * then the group this window's machine names (This Mac), then About apart at
- * the foot. A group's name is a label, never a page.
+ * then the group this window's machine names (This Mac), then About and Privacy
+ * apart at the foot. A group's name is a label, never a page.
  */
 export const SETTINGS_GROUPS: readonly { id: "app" | "machine"; tabs: readonly SettingsTab[] }[] = [
   { id: "app", tabs: ["general", "notifications", "usage", "devices", "shortcuts"] },

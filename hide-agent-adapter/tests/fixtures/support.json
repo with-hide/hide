@@ -20,14 +20,6 @@
       "start",
       "titles"
     ],
-    "factory": {
-      "direct_ask": "available",
-      "user_turn": "available",
-      "turn_end_and_answer": "available",
-      "startup_guidance": "available",
-      "resume": "available",
-      "next_prompt_letters": "available"
-    },
     "usage": {
       "five_hour": "claude_usage_text",
       "weekly": "claude_usage_text",
@@ -61,14 +53,6 @@
       "start",
       "titles"
     ],
-    "factory": {
-      "direct_ask": "available",
-      "user_turn": "available",
-      "turn_end_and_answer": "available",
-      "startup_guidance": "available",
-      "resume": "available",
-      "next_prompt_letters": "available"
-    },
     "usage": {
       "five_hour": "codex_usage",
       "weekly": "codex_usage",
@@ -91,6 +75,7 @@
     },
     "features": [
       "skill",
+      "bell",
       "spawn_guard",
       "herdr_integration",
       "sleep",
@@ -98,14 +83,6 @@
       "start",
       "titles"
     ],
-    "factory": {
-      "direct_ask": "unconfirmed",
-      "user_turn": "unconfirmed",
-      "turn_end_and_answer": "unconfirmed",
-      "startup_guidance": "unavailable",
-      "resume": "unconfirmed",
-      "next_prompt_letters": "unavailable"
-    },
     "usage": {
       "five_hour": "no_such_data",
       "weekly": "not_built:5",
@@ -138,14 +115,6 @@
       "start",
       "titles"
     ],
-    "factory": {
-      "direct_ask": "available",
-      "user_turn": "unconfirmed",
-      "turn_end_and_answer": "unconfirmed",
-      "startup_guidance": "available",
-      "resume": "unconfirmed",
-      "next_prompt_letters": "available"
-    },
     "usage": {
       "five_hour": "excluded",
       "weekly": "excluded",
@@ -178,14 +147,6 @@
       "start",
       "titles"
     ],
-    "factory": {
-      "direct_ask": "unavailable",
-      "user_turn": "unconfirmed",
-      "turn_end_and_answer": "unconfirmed",
-      "startup_guidance": "available",
-      "resume": "unconfirmed",
-      "next_prompt_letters": "available"
-    },
     "usage": {
       "five_hour": "no_such_data",
       "weekly": "no_such_data",
@@ -218,14 +179,6 @@
       "start",
       "titles"
     ],
-    "factory": {
-      "direct_ask": "available",
-      "user_turn": "unconfirmed",
-      "turn_end_and_answer": "unconfirmed",
-      "startup_guidance": "available",
-      "resume": "unconfirmed",
-      "next_prompt_letters": "available"
-    },
     "usage": {
       "five_hour": "no_such_data",
       "weekly": "no_such_data",
@@ -236,43 +189,6 @@
       "models": "usage_record",
       "session": "usage_record",
       "project": "usage_record"
-    }
-  },
-  {
-    "id": "cursor",
-    "hook": {
-      "sample": "hide-agent-adapter/tests/fixtures/cursor-guidance.json"
-    },
-    "session": {
-      "sample": "hide-session/tests/fixtures/cursor-2026.10.01/graph.json"
-    },
-    "features": [
-      "skill",
-      "guidance",
-      "spawn_guard",
-      "herdr_integration",
-      "sleep",
-      "start",
-      "titles"
-    ],
-    "factory": {
-      "direct_ask": "unavailable",
-      "user_turn": "unavailable",
-      "turn_end_and_answer": "unavailable",
-      "startup_guidance": "available",
-      "resume": "available",
-      "next_prompt_letters": "unavailable"
-    },
-    "usage": {
-      "five_hour": "excluded",
-      "weekly": "excluded",
-      "scoped": "excluded",
-      "monthly": "excluded",
-      "tokens": "no_such_data",
-      "cost": "no_such_data",
-      "models": "no_such_data",
-      "session": "no_such_data",
-      "project": "no_such_data"
     }
   },
   {
@@ -295,14 +211,6 @@
       "start",
       "titles"
     ],
-    "factory": {
-      "direct_ask": "available",
-      "user_turn": "unconfirmed",
-      "turn_end_and_answer": "available",
-      "startup_guidance": "available",
-      "resume": "available",
-      "next_prompt_letters": "available"
-    },
     "usage": {
       "five_hour": "no_such_data",
       "weekly": "antigravity_usage",
