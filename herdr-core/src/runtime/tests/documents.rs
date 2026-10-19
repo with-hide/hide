@@ -994,6 +994,7 @@ fn withdrawing_consent_drops_a_save_waiting_for_the_helper() {
                     ssh_alias: DEVICE.to_owned(),
                 },
                 herdr_socket_path: None,
+                herdr_session: None,
                 host_consent: None,
             });
         runtime.set_host_consent(DEVICE, false);
@@ -1042,6 +1043,7 @@ fn withdrawing_consent_lets_a_running_save_land() {
                     ssh_alias: DEVICE.to_owned(),
                 },
                 herdr_socket_path: None,
+                herdr_session: None,
                 host_consent: None,
             });
         runtime.set_host_consent(DEVICE, false);
@@ -1553,6 +1555,7 @@ fn studio_connecting(runtime: &mut Runtime) {
                 ssh_alias: DEVICE.to_owned(),
             },
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent,
         });
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {

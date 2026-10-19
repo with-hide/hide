@@ -18,6 +18,28 @@ use hide_session::label_transcript::{
 use hide_session::turns::{Waiting, WakeLoss};
 use hide_session::{Agent, PrSighting};
 
+#[test]
+fn retiring_cursor_keeps_its_history_reader_without_restoring_active_support() {
+    let readers: Vec<_> = Agent::supported().collect();
+    let expected = [
+        Agent::Claude,
+        Agent::Codex,
+        Agent::Grok,
+        Agent::OpenCode,
+        Agent::Pi,
+        Agent::Omp,
+        Agent::Antigravity,
+        Agent::Cursor,
+    ];
+    assert_eq!(readers.len(), expected.len());
+    for agent in expected {
+        assert_eq!(readers.iter().filter(|reader| **reader == agent).count(), 1);
+    }
+    assert_eq!(Agent::from_kind("cursor"), Some(Agent::Cursor));
+    assert!(hide_agent_adapter::adapter("cursor").is_none());
+    assert!(hide_agent_adapter::start_kind("cursor").is_none());
+}
+
 /// 2026-10-03T01:00:00Z, when every fixture's conversation starts.
 pub(crate) const START: u64 = 1_790_989_200_000;
 

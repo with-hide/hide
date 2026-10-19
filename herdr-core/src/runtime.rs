@@ -21,6 +21,7 @@ pub(crate) mod delivery;
 mod detail;
 mod device_catalog;
 mod devices;
+mod direct_observation;
 mod disk_sweep;
 mod documents;
 mod drawn_ahead;
@@ -30,6 +31,7 @@ mod first_run;
 mod github_poll;
 pub(crate) mod group_starts;
 mod guardrails;
+mod herdr_profiles;
 mod home;
 mod hosts;
 mod inbound;
@@ -116,7 +118,8 @@ use crate::sidebar::{SessionSnapshotPayload, project_agents};
 use crate::{environment, files, live, persistence, pet, session_sync, workspace};
 
 fn conversation_agent_kind(kind: &str) -> bool {
-    hide_agent_adapter::adapter(kind).is_some_and(|row| row.conversation.is_some())
+    hide_session::Agent::from_kind(kind)
+        .is_some_and(|agent| agent.format().adapter().conversation.is_some())
 }
 
 /// Which Herdr workspace each tab belongs to, from each workspace's tab order.
@@ -1808,6 +1811,8 @@ pub struct Runtime {
     next_ssh_hosts_id: u64,
     /// The listing `status.ssh_hosts` reports as loading, while its worker runs.
     ssh_hosts_job: Option<ssh_hosts::SshHostsJob>,
+    herdr_profiles_job: Option<herdr_profiles::HerdrProfilesJob>,
+    herdr_profile_endpoints: BTreeMap<String, Result<String, String>>,
     /// The checkout a purpose receipt belongs to. A remote checkout lives in
     /// `status.remote[].session`, not the local navigator, so the operation
     /// carries this target separately from its shell-facing receipt.
@@ -2318,6 +2323,8 @@ impl Runtime {
             repository_clone_job: None,
             next_ssh_hosts_id: 0,
             ssh_hosts_job: None,
+            herdr_profiles_job: None,
+            herdr_profile_endpoints: BTreeMap::new(),
             purpose_operation_target: None,
             created_purpose_writes_in_flight: HashMap::new(),
             unconfirmed_created_purposes: HashMap::new(),

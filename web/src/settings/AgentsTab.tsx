@@ -15,7 +15,7 @@ import { useAgentsDemand } from "./useAgentsDemand";
 import { useErrorSince } from "./useErrorSince";
 
 /**
- * Agents (PRD settings-cleanup D-06 to D-13): the eight supported agents of one
+ * Agents (PRD settings-cleanup D-06 to D-13): the seven supported agents of one
  * machine at a time, the machine chosen at the top when there is more than
  * one. Installed agents carry a switch and what Hide hears from their
  * sessions; the rest wait in a folded list with the link to install them.

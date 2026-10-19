@@ -684,8 +684,7 @@ fn original_words(
         .ok()?
         .into_iter()
         .find(|source| source.id == human.session_id && source.provider == human.provider)?;
-    let agent =
-        hide_session::Agent::from_format(hide_agent_adapter::adapter(&source.provider)?.session?);
+    let agent = hide_session::Agent::from_kind(&source.provider)?;
     let scope = hide_session::SessionReadScope {
         id: source.id,
         cwd: source.checkout_path,
@@ -751,6 +750,84 @@ fn original_words(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn persisted_retired_source_replays_only_its_proven_native_words() {
+        let temp = tempfile::tempdir().unwrap();
+        let cwd = temp.path().join("checkout");
+        std::fs::create_dir(&cwd).unwrap();
+        let id = "a1b2c3d4-0000-4000-8000-000000000001";
+        let bucket = format!("{:x}", md5::compute(cwd.to_str().unwrap().as_bytes()));
+        let path = temp
+            .path()
+            .join(".cursor/chats")
+            .join(bucket)
+            .join(id)
+            .join("store.db");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let graph: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../hide-session/tests/fixtures/cursor-2026.10.01/graph.json"
+        ))
+        .unwrap();
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute_batch("PRAGMA user_version=1; CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT); CREATE TABLE blobs(id TEXT PRIMARY KEY,data BLOB);").unwrap();
+        let metadata = json!({"agentId":id,"latestRootBlobId":graph["roots"]["first"],"createdAt":1_790_989_200_000_u64});
+        db.execute(
+            "INSERT INTO meta VALUES ('0',?1)",
+            [hex::encode(metadata.to_string())],
+        )
+        .unwrap();
+        for (id, value) in graph["blobs"].as_object().unwrap() {
+            db.execute(
+                "INSERT INTO blobs VALUES (?1,?2)",
+                rusqlite::params![id, hex::decode(value.as_str().unwrap()).unwrap()],
+            )
+            .unwrap();
+        }
+        drop(db);
+        std::fs::write(path.with_file_name("meta.json"), json!({"schemaVersion":1,"createdAtMs":1_790_989_200_000_u64,"hasConversation":true,"cwd":cwd}).to_string()).unwrap();
+        let store = MemoryStore::open(&temp.path().join("memory.sqlite3")).unwrap();
+        store.ensure_project("project", &cwd, "local").unwrap();
+        let mut source = hide_memory::SessionSourceRecord {
+            id: id.into(),
+            project_id: "project".into(),
+            provider: "cursor".into(),
+            locator: path.to_str().unwrap().into(),
+            checkout_path: cwd.to_str().unwrap().into(),
+            started_at_unix_ms: None,
+            updated_at_unix_ms: 1,
+            unavailable_reason: None,
+        };
+        store.upsert_session_source(&source).unwrap();
+        let human = hide_memory::MemorySource {
+            provider: "cursor".into(),
+            session_id: id.into(),
+            event_offset: 0,
+            content_hash: "retained".into(),
+            available: true,
+            human: true,
+            at_unix_ms: None,
+        };
+        let node = hide_node::Local::new(Some(temp.path().to_path_buf()));
+        let before = std::fs::read(&path).unwrap();
+        assert_eq!(
+            original_words(&store, &node, "project", &human).as_deref(),
+            Some("Read this conversation")
+        );
+        source.checkout_path = temp
+            .path()
+            .join("another-checkout")
+            .to_str()
+            .unwrap()
+            .into();
+        store.upsert_session_source(&source).unwrap();
+        assert!(original_words(&store, &node, "project", &human).is_none());
+        source.checkout_path = cwd.to_str().unwrap().into();
+        store.upsert_session_source(&source).unwrap();
+        std::fs::remove_file(path.with_file_name("meta.json")).unwrap();
+        assert!(original_words(&store, &node, "project", &human).is_none());
+        assert_eq!(std::fs::read(path).unwrap(), before);
+    }
 
     #[test]
     fn bounded_reverification_accepts_only_paths_and_quotes_actually_sent() {

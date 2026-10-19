@@ -9,7 +9,7 @@ import { useInterfaceTranslation } from "../i18n/client";
 import { useShellStore } from "../store";
 import { absenceReason, accountWindows, hasLimits, limitValue, windowLabel } from "../usage";
 
-/** The declaration supplies all eight rows; the core owns every saved edit. */
+/** The declaration supplies all seven rows; the core owns every saved edit. */
 export function UsageTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const preferences = useShellStore((s) => s.rest?.ui_state?.usage);

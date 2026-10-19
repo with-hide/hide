@@ -141,50 +141,6 @@ fn antigravity_uri(cwd: &std::path::Path) -> String {
     format!("file://{slash}{}", wire.replace(' ', "%20"))
 }
 
-/// The pinned Cursor CLI's ordinary route and independently encoded graph.
-/// The fixture owns its writer; production readers never create these files.
-#[cfg(test)]
-pub(crate) fn cursor_session(
-    home: &std::path::Path,
-    cwd: &std::path::Path,
-    id: &str,
-) -> std::path::PathBuf {
-    let bucket = format!("{:x}", md5::compute(cwd.to_str().unwrap().as_bytes()));
-    let folder = home.join(".cursor/chats").join(bucket).join(id);
-    std::fs::create_dir_all(&folder).unwrap();
-    std::fs::write(
-        folder.join("meta.json"),
-        serde_json::json!({"schemaVersion":1,"cwd":cwd,"createdAtMs":1790989200000u64,
-            "hasConversation":true,"isSubagent":false})
-        .to_string(),
-    )
-    .unwrap();
-    let graph: serde_json::Value = serde_json::from_str(include_str!(
-        "../../hide-session/tests/fixtures/cursor-2026.10.01/graph.json"
-    ))
-    .unwrap();
-    let database = folder.join("store.db");
-    let connection = rusqlite::Connection::open(&database).unwrap();
-    connection.execute_batch("PRAGMA user_version=1; CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT); CREATE TABLE blobs(id TEXT PRIMARY KEY,data BLOB);").unwrap();
-    let meta = serde_json::json!({"agentId":id,"latestRootBlobId":graph["roots"]["first"],"createdAt":1790989200000u64});
-    connection
-        .execute(
-            "INSERT INTO meta VALUES('0',?1)",
-            [hex::encode(meta.to_string())],
-        )
-        .unwrap();
-    for (key, value) in graph["blobs"].as_object().unwrap() {
-        connection
-            .execute(
-                "INSERT INTO blobs VALUES(?1,?2)",
-                rusqlite::params![key, hex::decode(value.as_str().unwrap()).unwrap()],
-            )
-            .unwrap();
-    }
-    drop(connection);
-    database
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct FixturePlan {
     pub workspace_name: String,

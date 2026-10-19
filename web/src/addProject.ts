@@ -133,6 +133,14 @@ function validHost(host: string): boolean {
   return host.length > 0 && /^[A-Za-z0-9._\-[\]:]+$/.test(host);
 }
 
+/** Only a complete URL without authentication material may become a shared setup draft. Git still receives the form's original input. */
+export function cloneUrlDraft(raw: string): string {
+  const value = raw.trim();
+  if (value.length > 4096 || /[?#]/.test(value) || !parseCloneUrl(value).ok) return "";
+  const authority = value.includes("://") ? value.split("://")[1]!.split("/")[0]! : value.split(":")[0]!;
+  return authority.includes("@") ? "" : value;
+}
+
 /**
  * Where Create new project puts its folder at first: beside the most recently
  * added project on this Mac (registrations are kept in the order they were

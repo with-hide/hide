@@ -16,7 +16,7 @@ vi.hoisted(() => {
 });
 
 const piece = (state: KitPiece["state"], reason: string | null = null): KitPiece => ({ state, reason, location: null });
-const LABELS: Record<string, string> = { "claude-code": "Claude Code", codex: "Codex", grok: "Grok", opencode: "OpenCode", pi: "Pi", omp: "omp", cursor: "Cursor" };
+const LABELS: Record<string, string> = { "claude-code": "Claude Code", codex: "Codex", grok: "Grok", opencode: "OpenCode", pi: "Pi", omp: "omp", antigravity: "Antigravity" };
 const FEATURES: KitFeatureId[] = ["skill", "guidance", "letters", "bell", "memory", "spawn_guard", "herdr_integration", "sleep", "fork", "start", "titles"];
 
 const agent = (id: string, over: Partial<KitAgent> = {}): KitAgent => ({
@@ -52,7 +52,7 @@ const SEVEN = [
   agent("opencode", { enabled: false, sessions: null }),
   agent("pi", { availability: "not_installed" }),
   agent("omp", { availability: "not_installed" }),
-  partial("cursor", { availability: "not_installed" }),
+  agent("antigravity", { availability: "not_installed" }),
 ];
 
 const kit = (agents: KitAgent[], over: Partial<Kit> = {}): Kit => ({ unavailable: null, busy: false, components: [], agents, offers_reinstall: false, shares_account_with: null, ...over });
@@ -97,7 +97,7 @@ it("lists the installed agents in the supported order with a switch each, and fo
     "local:opencode:off",
     "pi:not-installed",
     "omp:not-installed",
-    "cursor:not-installed",
+    "antigravity:not-installed",
   ]);
   expect(text()).toContain("Installed 4");
   expect(text()).toContain("Not installed 3");
@@ -107,7 +107,7 @@ it("lists the installed agents in the supported order with a switch each, and fo
   expect(all("[data-agent-install]").map((link) => link.getAttribute("href"))).toEqual([
     "https://pi.dev/",
     "https://omp.sh/docs/quickstart",
-    "https://cursor.com/docs/cli/installation",
+    "https://antigravity.google/docs/install?tab=cli",
   ]);
   // Docs is on each installed row (shown on hover or focus) and points at this build's page for the agent, never the kit's `doc_url`.
   expect(q('[data-agent-docs="codex"]')?.getAttribute("href")).toBe("https://learn.chatgpt.com/docs/build-skills");
@@ -115,9 +115,10 @@ it("lists the installed agents in the supported order with a switch each, and fo
   expect(q("[data-agents-machines]")).toBeNull();
   // Gemini CLI is not supported: a row an older helper still reports is not drawn (B1, B9).
   await unmount();
-  const older = await mount(state([device("local", { kit: kit([...SEVEN, partial("gemini-cli", { label: "Gemini CLI", herdr: null })]) })]));
+  const older = await mount(state([device("local", { kit: kit([...SEVEN, partial("gemini-cli", { label: "Gemini CLI", herdr: null }), partial("cursor", { label: "Cursor", herdr: null })]) })]));
   expect(older.all("[data-agent-row]")).toHaveLength(7);
   expect(older.text()).not.toContain("Gemini");
+  expect(older.text()).not.toContain("Cursor");
   await older.unmount();
 });
 
@@ -125,7 +126,6 @@ it("shows a status only for an agent that is on: Ready, how many sessions run, a
   const set = [
     agent("claude-code", { sessions: 2 }),
     agent("codex", { sessions: 0 }),
-    partial("cursor", { enabled: true, sessions: null }),
     partial("grok", { sessions: 3 }),
   ];
   const { q, text, unmount } = await mount(state([device("local", { kit: kit(set) })]));
@@ -135,10 +135,8 @@ it("shows a status only for an agent that is on: Ready, how many sessions run, a
   expect(q('[data-agent-row="local:claude-code:on"] button:not([role="switch"])')).toBeNull();
   expect(text()).not.toContain("connected");
   // Partial: the chip only, on or off, never a count.
-  expect(q('[data-agent-partial="cursor"]')).not.toBeNull();
   expect(q('[data-agent-partial="grok"]')).not.toBeNull();
   expect(q('[data-agent-row="local:grok:off"] [data-agent-status]')).toBeNull();
-  expect(q('[data-agent-row="local:cursor:on"] [data-agent-status]')).toBeNull();
   // A Full agent never wears the chip.
   expect(q('[data-agent-partial="codex"]')).toBeNull();
   await unmount();

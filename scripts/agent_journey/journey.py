@@ -97,8 +97,7 @@ class Journey:
         self.pane = self.agent = self.session = self.reference = self.checkout = None
         # Every pane this journey's spawns and fork opened, which close() ends.
         self.opened = []
-        # A model reaches the agent only through the product's own model flag.
-        self.model_args = [part.replace("{}", model) for part in contract_row["model_flag"]] if model else []
+        self.model = model
 
     # Evidence -----------------------------------------------------------
 
@@ -226,11 +225,14 @@ class Journey:
         CLI's own wait running out while the spawn continues, so the same intent
         is asked again until it answers (it converges on one agent)."""
         flag = self.row["prompt_flag"]
-        # The route's arguments are the wrapper's, on every start of the agent.
-        native = [*self.model_args, flag, prompt_text]
         args = ["agent", "spawn", "--parent", "here", "--name", name, "--intent", name,
                 "--kind", self.kind, "--repo", str(repository),
-                "--branch", branch, "--path", str(path), "--", *native]
+                "--branch", branch, "--path", str(path)]
+        # The product retains its launch choice for Wake, Fork and reopen;
+        # native arguments after -- reach only this first start.
+        if self.model:
+            args.extend(["--model", self.model])
+        args.extend(["--", flag, prompt_text])
         attempts = []
         end = time.monotonic() + SPAWN_SECONDS
         while True:

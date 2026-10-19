@@ -85,11 +85,7 @@ fn collect(value: &Value, found: &mut Vec<String>) {
 
 #[test]
 fn active_agents_capture_the_daemon_route_and_preserve_operator_edits() {
-    for agent in [
-        GuidanceAgent::Grok,
-        GuidanceAgent::Cursor,
-        GuidanceAgent::Antigravity,
-    ] {
+    for agent in GuidanceAgent::LIVE {
         let fixture = Fixture::new(agent);
         let state = fixture.home().join("daemon ' $경로");
         let target = HookTarget::new(&fixture.helper, &state).unwrap();
@@ -693,6 +689,8 @@ fn grok_writes_its_own_file_of_the_events_its_documentation_names() {
             "UserPromptSubmit",
             "SessionStart",
             "PreToolUse",
+            "PostToolUse",
+            "PostToolUseFailure",
             "SubagentStart",
             "SubagentStop",
             "Stop"
@@ -705,7 +703,7 @@ fn grok_writes_its_own_file_of_the_events_its_documentation_names() {
         assert_eq!(hook["timeout"], 8, "{event}");
         let command = hook["command"].as_str().unwrap();
         assert!(command.starts_with("if [ -x '"), "{command}");
-        assert!(command.contains("hide-guidance@8"), "{command}");
+        assert!(command.contains("hide-guidance@9"), "{command}");
         assert!(
             command.contains(&format!("--runtime grok --event {event} ")),
             "{command}"
@@ -727,7 +725,7 @@ fn grok_writes_its_own_file_of_the_events_its_documentation_names() {
     );
     let old = fs::read_to_string(&path)
         .unwrap()
-        .replace("hide-guidance@8", "hide-guidance@6");
+        .replace("hide-guidance@9", "hide-guidance@6");
     fs::write(&path, old).unwrap();
     assert!(matches!(
         status(GuidanceAgent::Grok, fixture.home()),
@@ -909,27 +907,31 @@ fn removing_version_twos_cursor_hook_takes_the_retired_entries_too() {
 
 #[test]
 fn a_retired_agent_gets_no_new_hook_and_its_old_entry_comes_out() {
-    for agent in [GuidanceAgent::Qwen, GuidanceAgent::Gemini] {
+    for agent in [
+        GuidanceAgent::Qwen,
+        GuidanceAgent::Gemini,
+        GuidanceAgent::Cursor,
+    ] {
         let fixture = Fixture::new(agent);
         let failure = super::install(agent, fixture.home(), &fixture.helper);
         assert!(failure.is_err(), "{agent:?}");
         assert!(!agent.config_path(fixture.home()).exists(), "{agent:?}");
         install_any(agent, fixture.home(), &fixture.helper).unwrap();
         let removed = remove(agent, fixture.home()).unwrap();
-        assert_eq!(removed.removed_entries, 1, "{agent:?}");
+        assert_eq!(
+            removed.removed_entries,
+            if agent == GuidanceAgent::Cursor { 2 } else { 1 },
+            "{agent:?}"
+        );
         // A hook entry an earlier build left runs nothing.
         assert_eq!(GuidanceAgent::from_id(agent.id()), None, "{agent:?}");
         assert!(GuidanceAgent::is_retired_id(agent.id()), "{agent:?}");
     }
     assert_eq!(
         GuidanceAgent::LIVE,
-        [
-            GuidanceAgent::Grok,
-            GuidanceAgent::Cursor,
-            GuidanceAgent::Antigravity
-        ]
+        [GuidanceAgent::Grok, GuidanceAgent::Antigravity]
     );
-    assert!(!GuidanceAgent::is_retired_id("cursor"));
+    assert!(GuidanceAgent::is_retired_id("cursor"));
     assert!(!GuidanceAgent::is_retired_id("grok"));
 }
 
@@ -951,6 +953,10 @@ fn agy_tool_answer(script: Option<&str>) -> (std::process::Output, Value) {
         &fs::read_to_string(GuidanceAgent::Antigravity.config_path(home.path())).unwrap(),
     )
     .unwrap();
+    assert_eq!(
+        document["hide"]["PreToolUse"][0]["matcher"],
+        "run_command|view_file|write_to_file|replace_file_content|multi_replace_file_content"
+    );
     let command = document["hide"]["PreToolUse"][0]["hooks"][0]["command"]
         .as_str()
         .unwrap();

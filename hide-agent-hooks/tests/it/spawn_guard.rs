@@ -34,11 +34,6 @@ if [ "$1 $2" = "inbox --hook" ] && [ "$mode" != letters ] && [ "$mode" != letter
 fi
 case "$mode" in
   registered) echo '{"ok":true,"reference":"/x"}' ;;
-  worker) echo '{"type":"workspace_result","ok":true,"result":{"deny":true}}' ;;
-  nonworker) echo '{"type":"workspace_result","ok":true,"result":{"deny":false}}' ;;
-  incomplete) echo '{"type":"workspace_result","ok":true,"result":{"deny":"true"}}' ;;
-  refused) echo '{"type":"workspace_result","ok":false,"reason":"factory_guard_native_changed"}' ;;
-  oversized) printf '%20000s' x ;;
   unregistered) echo checkout_not_registered >&2; exit 2 ;;
   down) echo hide_unavailable >&2; exit 2 ;;
   mute) exit 2 ;;
@@ -233,7 +228,7 @@ pub(crate) const START: &str = "herdr agent start set-g --kind claude --pane w1:
 
 #[test]
 fn questions_without_native_identity_or_from_another_runtime_never_query() {
-    let machine = Machine::new("worker");
+    let machine = Machine::new("registered");
     for (runtime, payload) in [
         ("codex", machine.question("AskUserQuestion")),
         ("claude-code", machine.question("request_user_input")),

@@ -1112,19 +1112,10 @@ impl AiRouter {
 
     fn cached_availability(&self, backend: &dyn AiBackend) -> Availability {
         let provider = backend.id();
-        if let Some((state, checked)) = self.lock().availability.get(&provider) {
-            // A sign-in failure on an agent whose sign-in cannot be checked
-            // is only ever learned by asking it, and its next probe would say
-            // "ready" again: it is kept for the cooldown, so a request is not
-            // repeated at it every few seconds.
-            let ttl = if matches!(state, Availability::NeedsLogin) && !provider.login_probe() {
-                self.config.default_cooldown
-            } else {
-                self.config.availability_ttl
-            };
-            if (self.now)().saturating_duration_since(*checked) < ttl {
-                return state.clone();
-            }
+        if let Some((state, checked)) = self.lock().availability.get(&provider)
+            && (self.now)().saturating_duration_since(*checked) < self.config.availability_ttl
+        {
+            return state.clone();
         }
         let state = backend.availability();
         self.lock()
@@ -2276,18 +2267,13 @@ mod tests {
         );
     }
 
-    /// An agent with a sign-in check is asked again once the availability
-    /// window passes, because its probe will say whether the login came. One
-    /// without a check (Gemini CLI) would answer "ready" to that probe, so a
-    /// request would be made at it every window: its failure is kept for the
-    /// cooldown instead.
+    /// Every remaining provider checks sign-in, so a login failure can be
+    /// re-read once its ordinary availability window passes.
     #[test]
-    fn a_sign_in_failure_of_an_agent_with_no_check_is_kept_for_the_cooldown() {
-        let window = RouterConfig::default().availability_ttl;
-        let cooldown = RouterConfig::default().default_cooldown;
-        let tried_after = |provider: ProviderId, wait: Duration| {
+    fn a_sign_in_failure_is_rechecked_after_the_availability_window() {
+        for provider in crate::PROVIDERS {
             let agent = Scripted::new(
-                provider,
+                *provider,
                 vec![Err(AiError::NotAuthenticated), ok("signed in")],
             );
             let clock = ManualClock::new();
@@ -2297,26 +2283,16 @@ mod tests {
                 router.execute(&request("p1", "x"), &CancelToken::new()),
                 Err(AiError::NotAuthenticated)
             );
-            clock.advance(wait);
-            let _ = router.execute(&request("p2", "y"), &CancelToken::new());
-            agent.calls()
-        };
-
-        assert_eq!(
-            tried_after(ProviderId::CODEX, window + Duration::from_secs(1)),
-            2,
-            "a probed agent is asked again when the window passes"
-        );
-        assert_eq!(
-            tried_after(ProviderId::GEMINI, window + Duration::from_secs(1)),
-            1,
-            "an unprobed agent is not asked again every window"
-        );
-        assert_eq!(
-            tried_after(ProviderId::GEMINI, cooldown + Duration::from_secs(1)),
-            2,
-            "and is asked once the cooldown has passed"
-        );
+            clock.advance(RouterConfig::default().availability_ttl + Duration::from_secs(1));
+            assert_eq!(
+                router
+                    .execute(&request("p2", "y"), &CancelToken::new())
+                    .unwrap()
+                    .value["summary"],
+                "signed in"
+            );
+            assert_eq!(agent.calls(), 2, "{provider}");
+        }
     }
 
     /// The screen shows a code only; the cause of a list that could not be
@@ -2986,7 +2962,7 @@ mod tests {
             })],
         );
         let unsupported = Scripted::with_availability(
-            ProviderId::CURSOR,
+            ProviderId::OPENCODE,
             Availability::Unsupported {
                 reason: "cannot_guarantee_read_only".to_owned(),
             },
@@ -3018,9 +2994,9 @@ mod tests {
             "out of usage is not a reason to hide it"
         );
         assert!(by(ProviderId::CODEX).parked_for.is_some());
-        assert!(!by(ProviderId::CURSOR).selectable);
+        assert!(!by(ProviderId::OPENCODE).selectable);
         assert_eq!(
-            by(ProviderId::CURSOR).availability,
+            by(ProviderId::OPENCODE).availability,
             Availability::Unsupported {
                 reason: "cannot_guarantee_read_only".to_owned()
             }
@@ -3320,7 +3296,7 @@ mod tests {
         let told = Arc::new(Told::default());
         let router = counting_router(
             vec![Metered::new(
-                ProviderId::GEMINI,
+                ProviderId::GROK,
                 vec![
                     answered(json!({"summary": "a"}), Vec::new()),
                     Err(AiError::NotAuthenticated),

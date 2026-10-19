@@ -126,7 +126,7 @@ pub fn status(runtime: AgentRuntime, home: &Path) -> HookStatus {
     };
     let mut lowest: Option<u32> = None;
     let mut missing_event = false;
-    for event in HookEvent::ALL {
+    for event in runtime.events() {
         let groups = hooks.get(event.name()).and_then(Value::as_array);
         // An entry of Hide's that selects other tools than the ones Hide
         // writes today is outdated whatever its version says: the file does
@@ -183,7 +183,7 @@ pub fn install<'a>(
     let before = document.value.clone();
     let hooks = hooks_object_mut(&mut document, &path)?;
     let mut preserved = 0usize;
-    for event in HookEvent::ALL {
+    for event in runtime.events() {
         let groups = event_array_mut(hooks, event, &path)?;
         // Remove Hide's own entries first so a second install converges on
         // one entry per event rather than appending another
@@ -215,7 +215,7 @@ pub fn matches_install<'a>(
     let Ok(Some(document)) = read_document(&runtime.config_path(home)) else {
         return false;
     };
-    HookEvent::ALL.into_iter().all(|event| {
+    runtime.events().all(|event| {
         let Some(groups) = document
             .get(HOOKS_KEY)
             .and_then(|hooks| hooks.get(event.name()))
@@ -366,6 +366,7 @@ fn hook_group<'a>(
 /// tool, measured 2026-10-15), so each question tool is named.
 pub(crate) fn hook_matcher(runtime: AgentRuntime, event: HookEvent) -> Option<&'static str> {
     match (runtime, event) {
+        (_, HookEvent::PostToolUse | HookEvent::PostToolUseFailure) => Some("Bash|PowerShell"),
         (AgentRuntime::ClaudeCode, HookEvent::PreToolUse) => {
             Some("Bash|AskUserQuestion|ExitPlanMode|Edit|Write|MultiEdit|NotebookEdit|Read")
         }
@@ -379,7 +380,10 @@ pub(crate) fn hook_matcher(runtime: AgentRuntime, event: HookEvent) -> Option<&'
 /// The arguments the helper runs with, after its path. The guard reads no
 /// Memory, so its entry does not ask for the Memory input.
 fn helper_arguments(helper: HookTarget<'_>, runtime: AgentRuntime, event: HookEvent) -> String {
-    let memory = if event == HookEvent::PreToolUse {
+    let memory = if matches!(
+        event,
+        HookEvent::PreToolUse | HookEvent::PostToolUse | HookEvent::PostToolUseFailure
+    ) {
         ""
     } else {
         " --memory-injection"
@@ -910,7 +914,7 @@ mod tests {
         // And removal works without the binary, because it reads the file.
         let outcome = remove(runtime, fixture.home()).unwrap();
         assert!(outcome.changed);
-        assert_eq!(outcome.removed_entries, HookEvent::ALL.len());
+        assert_eq!(outcome.removed_entries, runtime.events().count());
         assert!(matches!(
             status(runtime, fixture.home()),
             HookStatus::NotInstalled
@@ -1009,7 +1013,7 @@ mod tests {
             .unwrap();
         assert!(session_start_command.contains("--runtime codex"));
         assert!(session_start_command.contains("--memory-injection"));
-        assert!(session_start_command.contains("--source hide-subagents@9"));
+        assert!(session_start_command.contains("--source hide-subagents@10"));
         let guard = if cfg!(windows) {
             "if (Test-Path -LiteralPath '"
         } else {
@@ -1032,12 +1036,12 @@ mod tests {
             (
                 AgentRuntime::ClaudeCode,
                 HookEvent::SessionStart,
-                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime claude-code --event SessionStart --memory-injection --source hide-subagents@9; fi","timeout":8}"#,
+                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime claude-code --event SessionStart --memory-injection --source hide-subagents@10; fi","timeout":8}"#,
             ),
             (
                 AgentRuntime::Codex,
                 HookEvent::Stop,
-                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime codex --event Stop --memory-injection --source hide-subagents@9; fi","timeout":8}"#,
+                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime codex --event Stop --memory-injection --source hide-subagents@10; fi","timeout":8}"#,
             ),
         ];
         for (runtime, event, bytes) in pinned {
@@ -1068,7 +1072,7 @@ mod tests {
         let quoted = "'C:\\Users\\example\\a b''c\\it\u{2019}\u{2019}s\\hide-agent-hooks.exe'";
         let guard = |runtime: &str| {
             format!(
-                "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ & {quoted} hook --runtime {runtime} --event Stop --memory-injection --source hide-subagents@9 }}"
+                "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ & {quoted} hook --runtime {runtime} --event Stop --memory-injection --source hide-subagents@10 }}"
             )
         };
         let codex = windows_hook(helper, AgentRuntime::Codex, HookEvent::Stop);
@@ -1121,7 +1125,7 @@ mod tests {
             "a converged install writes nothing"
         );
         assert_eq!(fixture.read(AgentRuntime::Codex), first);
-        for event in HookEvent::ALL {
+        for event in AgentRuntime::Codex.events() {
             let groups = first["hooks"][event.name()].as_array().unwrap();
             assert_eq!(
                 owned_versions(groups).len(),
@@ -1142,7 +1146,7 @@ mod tests {
         let path = helper(&fixture);
         install(AgentRuntime::Codex, fixture.home(), &path).unwrap();
         let written = fixture.read(AgentRuntime::Codex);
-        for event in HookEvent::ALL {
+        for event in AgentRuntime::Codex.events() {
             let group = &written["hooks"][event.name()][0];
             assert_eq!(
                 group["hooks"][0]["command"],
@@ -1217,7 +1221,7 @@ mod tests {
             assert!(!second.changed, "a second install writes nothing");
             assert_eq!(fixture.read(runtime), after);
             let removed = remove(runtime, fixture.home()).unwrap();
-            assert_eq!(removed.removed_entries, HookEvent::ALL.len());
+            assert_eq!(removed.removed_entries, runtime.events().count());
             let left = fixture.read(runtime);
             assert_eq!(
                 left["hooks"]["PreToolUse"].as_array().unwrap().len(),
@@ -1322,7 +1326,10 @@ mod tests {
 
         let outcome = remove(AgentRuntime::Codex, fixture.home()).unwrap();
         assert!(outcome.changed);
-        assert_eq!(outcome.removed_entries, HookEvent::ALL.len());
+        assert_eq!(
+            outcome.removed_entries,
+            AgentRuntime::Codex.events().count()
+        );
         assert_eq!(outcome.preserved_entries, 3);
 
         let after = fixture.read(AgentRuntime::Codex);
@@ -1362,7 +1369,7 @@ mod tests {
         let helper_path = helper(&fixture);
         let quoted = Quoting::NATIVE.quote(&helper_path.display().to_string());
         let mut document = serde_json::json!({ "hooks": {} });
-        for event in HookEvent::ALL {
+        for event in AgentRuntime::Codex.events() {
             document["hooks"][event.name()] = serde_json::json!([{
                 "hooks": [{
                     "type": "command",

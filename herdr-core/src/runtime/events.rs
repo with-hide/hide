@@ -293,6 +293,8 @@ pub(super) struct RegisterDevicePayload {
     /// The device's Herdr socket when its server is not at the default path.
     #[serde(default)]
     pub(super) herdr_socket_path: Option<String>,
+    #[serde(default)]
+    pub(super) herdr_session: Option<String>,
     /// The operator allowed Hide's helper on the device in the same form
     /// (PRD S5.5 B50); absent or false registers it without file access.
     #[serde(default)]
@@ -1185,6 +1187,15 @@ pub(super) struct KitCheckPayload {}
 #[derive(Debug, Deserialize)]
 pub(super) struct SshHostsListPayload {}
 
+#[derive(Debug, Deserialize)]
+pub(super) struct HerdrProfilesListPayload {}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct HerdrProfileConnectPayload {
+    pub(super) profile_id: String,
+    pub(super) host_consent: bool,
+}
+
 /// Whether any window draws this daemon's snapshot, sent by hided as its
 /// first window arrives and its last one leaves. Without one, the readers
 /// that only feed what a window draws (ports, worktrees, pull requests,
@@ -1296,6 +1307,20 @@ pub(super) struct FirstRunAdvancePayload {
     /// to leave it as it is.
     #[serde(default)]
     pub(super) notifications: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FirstRunBackPayload {
+    pub(super) from: crate::model::FirstRunStep,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FirstRunDraftPayload {
+    pub(super) agents: Option<Vec<String>>,
+    pub(super) devices: Option<Vec<String>>,
+    pub(super) project_device: Option<String>,
+    pub(super) project_path: Option<String>,
+    pub(super) project_form: Option<crate::model::FirstRunProjectForm>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1531,6 +1556,8 @@ pub(super) enum Event {
     CodexDaemonDisable(CodexDaemonDisablePayload),
     KitCheck(KitCheckPayload),
     SshHostsList(SshHostsListPayload),
+    HerdrProfilesList(HerdrProfilesListPayload),
+    HerdrProfileConnect(HerdrProfileConnectPayload),
     UiAttached(UiAttachedPayload),
     AiSettings(AiSettingsPayload),
     TerminalResize(TerminalResizePayload),
@@ -1550,6 +1577,8 @@ pub(super) enum Event {
     UsageHiddenSet(UsageHiddenSetPayload),
     AgentOnboardingApply(AgentOnboardingApplyPayload),
     FirstRunAdvance(FirstRunAdvancePayload),
+    FirstRunBack(FirstRunBackPayload),
+    FirstRunDraft(FirstRunDraftPayload),
     DesktopNotificationsSet(DesktopNotificationsSetPayload),
     DesktopNotificationsDoneSet(DesktopNotificationsDoneSetPayload),
     ScreenIntroSeen(ScreenIntroSeenPayload),
@@ -1798,6 +1827,8 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "codex_daemon_disable" => decode!(CodexDaemonDisablePayload, CodexDaemonDisable),
         "kit_check" => decode!(KitCheckPayload, KitCheck),
         "ssh_hosts_list" => decode!(SshHostsListPayload, SshHostsList),
+        "herdr_profiles_list" => decode!(HerdrProfilesListPayload, HerdrProfilesList),
+        "herdr_profile_connect" => decode!(HerdrProfileConnectPayload, HerdrProfileConnect),
         "ui_attached" => decode!(UiAttachedPayload, UiAttached),
         "ai_settings" => decode!(AiSettingsPayload, AiSettings),
         "terminal_resize" => decode!(TerminalResizePayload, TerminalResize),
@@ -1817,6 +1848,8 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "interface_language_set" => decode!(InterfaceLanguageSetPayload, InterfaceLanguageSet),
         "agent_onboarding_apply" => decode!(AgentOnboardingApplyPayload, AgentOnboardingApply),
         "first_run_advance" => decode!(FirstRunAdvancePayload, FirstRunAdvance),
+        "first_run_back" => decode!(FirstRunBackPayload, FirstRunBack),
+        "first_run_draft" => decode!(FirstRunDraftPayload, FirstRunDraft),
         "desktop_notifications_set" => {
             decode!(DesktopNotificationsSetPayload, DesktopNotificationsSet)
         }
@@ -2161,6 +2194,10 @@ impl Runtime {
             ),
             Event::KitCheck(_) => self.request_kit_check(),
             Event::SshHostsList(_) => self.request_ssh_hosts(),
+            Event::HerdrProfilesList(_) => self.request_herdr_profiles(),
+            Event::HerdrProfileConnect(payload) => {
+                self.connect_herdr_profile(&payload.profile_id, payload.host_consent)
+            }
             // Nothing drawn changes; the coordinator reads it on its next wake.
             Event::UiAttached(payload) => {
                 self.ui_attached = payload.attached;
@@ -2773,6 +2810,19 @@ impl Runtime {
                     .map(str::trim)
                     .filter(|path| !path.is_empty())
                     .map(str::to_owned);
+                if payload
+                    .herdr_session
+                    .as_deref()
+                    .is_some_and(|session| !hide_node_link::device::valid_herdr_session(session))
+                    || (payload.herdr_session.is_some() && herdr_socket_path.is_some())
+                {
+                    self.set_error(
+                        "device.invalid",
+                        "Choose one valid Herdr session or an explicit socket",
+                        false,
+                    );
+                    return true;
+                }
                 if herdr_socket_path
                     .as_deref()
                     .is_some_and(|path| !crate::remote::valid_remote_socket_path(path))
@@ -2809,6 +2859,7 @@ impl Runtime {
                         ssh_alias: ssh_alias.clone(),
                     },
                     herdr_socket_path,
+                    herdr_session: payload.herdr_session,
                     host_consent: payload.host_consent.then(|| self.new_host_consent()),
                 };
                 self.snapshot
@@ -3886,6 +3937,8 @@ impl Runtime {
             Event::FirstRunAdvance(payload) => {
                 self.advance_first_run(payload.from, payload.notifications)
             }
+            Event::FirstRunBack(payload) => self.back_first_run(payload.from),
+            Event::FirstRunDraft(payload) => self.update_first_run_draft(payload),
             Event::DesktopNotificationsSet(payload) => self
                 .set_desktop_notification_preferences(Some(payload.enabled), payload.done_enabled),
             Event::DesktopNotificationsDoneSet(payload) => {
@@ -4207,6 +4260,7 @@ impl Runtime {
                     // The wizard's own events own its progress, the
                     // notification switch and the introductions seen.
                     first_run: current.first_run,
+                    first_run_choices: current.first_run_choices,
                     desktop_notifications: current.desktop_notifications,
                     product_analytics_enabled: current.product_analytics_enabled,
                     desktop_notifications_done: current.desktop_notifications_done,

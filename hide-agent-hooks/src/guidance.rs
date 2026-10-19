@@ -1,18 +1,9 @@
-//! Hide's hook for the agents beyond Claude Code and Codex whose official
-//! documentation gives command hooks: Cursor and Grok (issue #517, PRD
-//! grok-cursor-hooks), and agy (PRD antigravity-first-class).
+//! Hide's command hooks for Grok and Antigravity, plus the ownership layouts
+//! retained only to remove retired agents' marked hooks.
 //!
-//! Claude Code and Codex are instrumented: their hooks count subagents,
-//! read Project Memory and pull letters (`install`, `runtime`). Cursor and
-//! Grok are the basic tier: neither documents a prompt hook that adds text,
-//! so they get no letters, Memory or bell. What they do document is a
-//! refusal of a shell call and the start and end of a subagent, so their
-//! hooks carry the spawn guard and the subagent count, and Cursor's session
-//! start also prints Hide's guidance in the field its documentation names
-//! (Grok discards what a session-start hook prints). This is a separate
-//! module with its own marker rather than more variants of
-//! [`crate::AgentRuntime`], whose six-event file, Memory and diagnosis these
-//! agents never feed (engineering rule 5, 13).
+//! Grok carries its spawn guard, subagent count and letter routes, while
+//! Antigravity's session and invocation events can add context.
+//! Cursor is retired: no new hook is installed and an old entry runs nothing.
 //!
 //! The rules are the ones `install` states for the other hooks: a file that
 //! does not parse is never written, what another tool wrote is never
@@ -31,7 +22,7 @@
 //! | Gemini CLI (retired) | `~/.gemini/settings.json` | `hooks.SessionStart[{matcher, hooks[{name, type, command, timeout ms}]}]` |
 //! | Qwen Code (retired) | `~/.qwen/settings.json` | `hooks.SessionStart[{hooks[{name, type, command, timeout s}]}]` |
 //! | Factory Droid (retired) | `~/.factory/hooks.json`, else the `hooks` key of `settings.json` | `SessionStart[{hooks[{type, command, timeout s}]}]` |
-//! | Cursor | `~/.cursor/hooks.json` | `{version 1, hooks.<camelCase event>[{command, timeout s, matcher?}]}` |
+//! | Cursor (retired) | `~/.cursor/hooks.json` | `{version 1, hooks.<camelCase event>[{command, timeout s, matcher?}]}` |
 //! | Grok | `~/.grok/hooks/hide.json`, Hide's own | `hooks.<Event>[{matcher?, hooks[{type, command, timeout s}]}]` |
 //! | agy | `~/.gemini/config/hooks.json`, the `hide` block | `hide.<Event>[{type, command, timeout s}]`, `hide.PreToolUse[{matcher, hooks[...]}]` |
 //!
@@ -95,7 +86,8 @@ impl GuidanceAgent {
     /// Antigravity commands encoded across its Windows Go-to-cmd boundary.
     pub const fn version(self) -> u32 {
         match self {
-            Self::Grok | Self::Antigravity => 8,
+            Self::Grok => 9,
+            Self::Antigravity => 10,
             Self::Cursor => 7,
             Self::Gemini
             | Self::Qwen
@@ -138,7 +130,7 @@ impl GuidanceAgent {
     }
 
     /// The agents Hide still writes a hook for, in Settings order.
-    pub const LIVE: [GuidanceAgent; 3] = [Self::Grok, Self::Cursor, Self::Antigravity];
+    pub const LIVE: [GuidanceAgent; 2] = [Self::Grok, Self::Antigravity];
 
     /// The agents whose hook an earlier build wrote and this one only removes.
     pub fn is_retired(self) -> bool {
@@ -150,7 +142,6 @@ impl GuidanceAgent {
     pub fn from_id(id: &str) -> Option<Self> {
         use hide_agent_adapter::{GuidanceDialect, HookInstall};
         match hide_agent_adapter::adapter(id)?.hook {
-            HookInstall::Guidance(GuidanceDialect::Cursor) => Some(Self::Cursor),
             HookInstall::Guidance(GuidanceDialect::Grok) => Some(Self::Grok),
             HookInstall::Guidance(GuidanceDialect::Antigravity) => Some(Self::Antigravity),
             _ => None,
@@ -161,7 +152,6 @@ impl GuidanceAgent {
     /// A retired agent has none: its entries run nothing.
     pub fn dialect(self) -> Option<hide_agent_adapter::HookDialect> {
         match self {
-            Self::Cursor => Some(hide_agent_adapter::HookDialect::Cursor),
             Self::Grok => Some(hide_agent_adapter::HookDialect::Grok),
             Self::Antigravity => Some(hide_agent_adapter::HookDialect::Antigravity),
             _ => None,
@@ -189,6 +179,16 @@ impl GuidanceAgent {
             // letters due while the agent works go at any call's gap (PRD
             // letters-to-busy-agents B6).
             Slot::new(HookEvent::PreToolUse, "PreToolUse", None),
+            Slot::new(
+                HookEvent::PostToolUse,
+                "PostToolUse",
+                Some("run_terminal_command|Bash"),
+            ),
+            Slot::new(
+                HookEvent::PostToolUseFailure,
+                "PostToolUseFailure",
+                Some("run_terminal_command|Bash"),
+            ),
             Slot::new(HookEvent::SubagentStart, "SubagentStart", None),
             Slot::new(HookEvent::SubagentStop, "SubagentStop", None),
             Slot::new(HookEvent::Stop, "Stop", None),
@@ -196,16 +196,17 @@ impl GuidanceAgent {
         // agy's events: the first prompt of a conversation, every model call
         // (the helper reads it as the prompt hook), the tool call and the
         // turn's end. The matcher is a regular expression on the whole tool
-        // name: the shell, the file tools the guardrails judge and the
-        // question a Factory worker is refused (agy 1.3.6's CLI toolset).
+        // name: the shell and the file tools the guardrails judge
+        // (agy 1.3.6's CLI toolset).
         const ANTIGRAVITY: &[Slot] = &[
             Slot::new(HookEvent::SessionStart, "SessionStart", None),
             Slot::new(HookEvent::UserPromptSubmit, "PreInvocation", None),
+            Slot::new(HookEvent::PostToolUse, "PostToolUse", Some("run_command")),
             Slot::new(
                 HookEvent::PreToolUse,
                 "PreToolUse",
                 Some(
-                    "run_command|view_file|write_to_file|replace_file_content|multi_replace_file_content|ask_question",
+                    "run_command|view_file|write_to_file|replace_file_content|multi_replace_file_content",
                 ),
             ),
             Slot::new(HookEvent::Stop, "Stop", None),

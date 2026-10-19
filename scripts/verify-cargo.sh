@@ -25,6 +25,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# System helpers must start even when the caller names an unavailable locale.
+# macOS Perl can panic before acquiring fixture locks under LANG=C.UTF-8.
+export LC_ALL=C LANG=C
+
 . scripts/toolchain-env.sh
 
 export CARGO_TARGET_DIR="$PWD/target"

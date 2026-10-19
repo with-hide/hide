@@ -68,7 +68,7 @@ describe("the model menu (B36)", () => {
     expect(modelsFailed(provider("claude", { models_unavailable_reason: "claude_models_unreadable:exit=2" }))).toBe(true);
     expect(modelsFailed(provider("claude", { models_unavailable_reason: "not_asked" }))).toBe(false);
     expect(modelsFailed(provider("claude", { models_unavailable_reason: "not_observed" }))).toBe(false);
-    expect(modelsFailed(provider("gemini", { models_fixed: true, models_unavailable_reason: "fixed" }))).toBe(false);
+    expect(modelsFailed(provider("legacy-provider", { models_fixed: true, models_unavailable_reason: "fixed" }))).toBe(false);
     expect(modelsFailed(provider("claude"))).toBe(false);
   });
 });
@@ -77,11 +77,10 @@ describe("who can be chosen (B34, B35, B38)", () => {
   const rows = [
     provider("claude"),
     provider("codex"),
-    provider("gemini", { state: "needs_login", selectable: false }),
+    provider("antigravity", { state: "needs_login", selectable: false }),
     provider("grok", { installed: false, state: "not_installed", selectable: false }),
     provider("opencode", { state: "unsupported", message: "cannot_guarantee_read_only", selectable: false }),
     provider("pi", { state: "unread", selectable: false }),
-    provider("cursor", { state: "unsupported", message: "cannot_guarantee_read_only", installed: false, selectable: false }),
   ];
 
   it("lists only agents the core would accept in Runs on", () => {
@@ -99,7 +98,7 @@ describe("who can be chosen (B34, B35, B38)", () => {
   });
 
   it("dims the installed agents it cannot use, and leaves out the uninstalled and the unread", () => {
-    expect(unusableProviders(ai(rows)).map((row) => row.id)).toEqual(["gemini", "opencode"]);
+    expect(unusableProviders(ai(rows)).map((row) => row.id)).toEqual(["antigravity", "opencode"]);
   });
 
   it("says nobody is signed in only after every row has been read", () => {
@@ -112,7 +111,7 @@ describe("who can be chosen (B34, B35, B38)", () => {
 
 describe("what a state reads as", () => {
   it("separates the read-only refusal from other unsupported agents", () => {
-    expect(providerReason(provider("cursor", { state: "unsupported", message: "cannot_guarantee_read_only" }))).toBe("read_only");
+    expect(providerReason(provider("opencode", { state: "unsupported", message: "cannot_guarantee_read_only" }))).toBe("read_only");
     expect(providerReason(provider("x", { state: "unsupported", message: null }))).toBe("unsupported");
     expect(providerReason(provider("x", { state: "something_new" }))).toBe("unavailable");
   });
@@ -122,13 +121,13 @@ describe("the first-run rule (D-18, B45, B46)", () => {
   const rows = [
     provider("claude", { state: "needs_login", selectable: false }),
     provider("codex"),
-    provider("gemini-cli", { agent: "gemini-cli", login_checked: false }),
+    provider("legacy-provider", { login_checked: false }),
   ];
 
   it("takes the first agent in the fixed order that is switched on and signed in", () => {
-    expect(firstRunAgent(ai(rows), new Set(["claude-code", "codex", "gemini-cli"]))?.id).toBe("codex");
-    // Gemini CLI has no sign-in probe: it is selectable by hand, never picked for the operator.
-    expect(firstRunAgent(ai(rows), new Set(["gemini-cli"]))).toBeNull();
+    expect(firstRunAgent(ai(rows), new Set(["claude-code", "codex", "legacy-provider"]))?.id).toBe("codex");
+    // A compatible older peer may report a provider whose sign-in cannot be checked.
+    expect(firstRunAgent(ai(rows), new Set(["legacy-provider"]))).toBeNull();
   });
 
   it("names nobody when no chosen agent is signed in, and while the probe has not been read", () => {

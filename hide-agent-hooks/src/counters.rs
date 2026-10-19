@@ -196,7 +196,10 @@ impl<'a> Change<'a> {
     pub fn of(runtime: Option<AgentRuntime>, event: HookEvent, input: &'a SubagentInput) -> Self {
         match event {
             HookEvent::SessionStart => Self::SessionStarted,
-            HookEvent::UserPromptSubmit | HookEvent::PreToolUse => Self::None,
+            HookEvent::UserPromptSubmit
+            | HookEvent::PreToolUse
+            | HookEvent::PostToolUse
+            | HookEvent::PostToolUseFailure => Self::None,
             HookEvent::SubagentStart => Self::Started(input.subagent.as_deref()),
             HookEvent::SubagentStop => Self::Stopped(input.subagent.as_deref()),
             // A subagent's own turn end is not the session's.

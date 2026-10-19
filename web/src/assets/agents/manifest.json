@@ -11,20 +11,13 @@
     },
     {
       "id": "cursor",
+      "history_only": true,
+      "note": "Retired from active support; retained for stored Cursor sessions read by hide-session/src/cursor.rs.",
       "file": "cursor.svg",
       "source_url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/cursor.svg",
       "license": "simple-icons file, CC0; data source is the vendor's brand page https://cursor.com/brand; trademark rights stay with Cursor",
       "modification": "as published",
       "plate": true,
-      "retrieved": "2026-10-06"
-    },
-    {
-      "id": "gemini-cli",
-      "file": "gemini-cli.png",
-      "source_url": "https://raw.githubusercontent.com/google-gemini/gemini-cli/main/packages/vscode-ide-companion/assets/icon.png",
-      "license": "Apache-2.0 (repository license) covers the file and grants no trademark rights; Google's brand terms ask for a request before a Google logo is used and forbid altering one (https://partnermarketinghub.withgoogle.com/brands/google/trademarks-and-terms/); the vendor publishes no SVG and no brand page for this mark",
-      "modification": "as published: the 1645 px palette PNG (47 KB), not resized, since the terms forbid altering the mark",
-      "note": "No longer an agent the kit lists; kept because Hide AI's Gemini CLI provider draws it (hide-ai/src/registry.rs, agent gemini-cli).",
       "retrieved": "2026-10-06"
     },
     {

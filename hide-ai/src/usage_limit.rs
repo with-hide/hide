@@ -297,7 +297,7 @@ mod tests {
         );
         let order = [ProviderId::CLAUDE, ProviderId::CODEX];
         assert!(gate.all_past(&order, 0));
-        assert!(!gate.all_past(&[ProviderId::CLAUDE, ProviderId::GEMINI], 0));
+        assert!(!gate.all_past(&[ProviderId::CLAUDE, ProviderId::GROK], 0));
         assert!(!gate.all_past(&[], 0), "an empty order is not a pause");
     }
 

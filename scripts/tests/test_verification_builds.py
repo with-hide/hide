@@ -102,6 +102,23 @@ class RealVerificationBuilds(BuildFixture):
     def output(self, root, binary):
         return subprocess.check_output([str(root / 'target/release' / binary)], text=True).strip()
 
+    def test_tests_can_start_the_system_lock_holder_with_an_unsupported_caller_locale(self):
+        root = self.workspace('locale', 41)
+        self.env.pop('LC_ALL', None)
+        self.env.pop('LC_CTYPE', None)
+        self.env['LANG'] = 'C.UTF-8'
+        (root / 'herdr-core/src/lib.rs').write_text('''
+pub fn fixture_value() -> i32 { 41 }
+#[test]
+fn system_lock_holder_starts() {
+    let status = std::process::Command::new("perl")
+        .args(["-MFcntl=:flock", "-e", "exit 0;"])
+        .status().unwrap();
+    assert!(status.success(), "the system lock holder failed before opening its lock");
+}
+''')
+        self.run_wrapper(root, 'test')
+
     def test_warm_builds_observe_core_and_test_changes_and_propagate_failures(self):
         root = self.workspace('one', 41)
         self.run_wrapper(root, 'test')

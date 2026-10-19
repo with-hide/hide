@@ -32,10 +32,10 @@ const device = (patch: Partial<Device> & { agents?: KitAgent[]; unavailable?: st
 };
 
 describe("the agents of a machine (B8, B9, D-06)", () => {
-  it("lists the eight supported agents in their order and nothing a machine still reports from before", () => {
+  it("lists the seven supported agents in their order and nothing a machine still reports from before", () => {
     const reported = ["cursor", "kiro", "gemini-cli", "omp", "claude-code", "amp", "pi", "codex"].map((id) => agent(id));
-    expect(supportedAgents(reported).map((row) => row.id)).toEqual(["claude-code", "codex", "pi", "omp", "cursor"]);
-    expect(SUPPORTED_AGENTS).toEqual(["claude-code", "codex", "grok", "opencode", "pi", "omp", "cursor", "antigravity"]);
+    expect(supportedAgents(reported).map((row) => row.id)).toEqual(["claude-code", "codex", "pi", "omp"]);
+    expect(SUPPORTED_AGENTS).toEqual(["claude-code", "codex", "grok", "opencode", "pi", "omp", "antigravity"]);
   });
 
   it("calls an agent installed only when its program was found; an agent the operator switched on keeps its switch after its program goes (B9)", () => {
@@ -113,6 +113,7 @@ describe("the agents of a machine (B8, B9, D-06)", () => {
   it("opens each agent's installation guide and none for an agent Hide does not support", () => {
     for (const id of SUPPORTED_AGENTS) expect(installDocUrl(id)).toMatch(/^https:\/\//);
     expect(installDocUrl("kiro")).toBeNull();
+    expect(installDocUrl("cursor")).toBeNull();
     expect(installDocUrl("gemini-cli")).toBeNull();
     expect(installDocUrl("omp")).toBe("https://omp.sh/docs/quickstart");
     expect(docsUrl("omp")).toBe("https://omp.sh/docs/skills");

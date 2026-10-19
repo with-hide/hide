@@ -67,6 +67,14 @@ pub struct Capability {
 }
 
 impl Capability {
+    /// Only a pane-bound credential carries an attested terminal identity.
+    pub(crate) fn pane_terminal(&self) -> Option<&str> {
+        match &self.binding {
+            Binding::Pane { terminal_id, .. } => Some(terminal_id),
+            Binding::Checkout => None,
+        }
+    }
+
     pub(crate) fn same_identity(&self, other: &Self) -> bool {
         (self.binding == Binding::Checkout || self.pane_id == other.pane_id)
             && self.context == other.context

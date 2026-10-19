@@ -1383,9 +1383,17 @@ export type KitComponentState = "installed" | "outdated" | "not_installed" | "re
 export type KitAgentAvailability = "available" | "not_installed" | "unsupported_system";
 
 /** The first-run wizard's steps (`contracts/snapshot-wire-enums.json`: `first_run_step`). */
-export type FirstRunStep = "agents" | "notifications" | "project" | "done";
+export type FirstRunStep = "agents" | "devices" | "notifications" | "project" | "done";
 
 export type FirstRun = { version: number; step: FirstRunStep };
+export type FirstRunProjectForm = { view?: "add" | "clone" | "create" | ""; url?: string; parent?: string; name?: string };
+export type FirstRunChoices = { agents?: string[] | null; devices?: string[]; project_device?: string | null; project_path?: string; project_form?: FirstRunProjectForm; notifications_answered?: boolean };
+export type HerdrProfile = {
+  id: string; label: string; target: string; session: string; enabled: boolean;
+  added_as: string | null; problem: string | null; device_id: string | null;
+  connect_state: string; connect_error: string | null;
+};
+export type HerdrProfiles = { state: "idle" | "loading" | "ready" | "failed"; error: string | null; profiles: HerdrProfile[]; truncated: boolean };
 
 /** The flow version this build draws; the core keeps the same number (`FIRST_RUN_VERSION`). */
 export const FIRST_RUN_VERSION = 1;
@@ -1576,7 +1584,7 @@ export type CoreDiagnostic = { kind: string; message: string; occurred_at: numbe
 export type AiProvider = {
   id: string;
   label: string;
-  /** The id the logos key the same agent by: the install kit's adapter id (`claude-code`, `codex`, `grok`, `opencode`, `pi`, `cursor`), or `gemini-cli` for Gemini CLI, which Hide AI still uses though the kit no longer lists it. */
+  /** The id the logos key the same agent by: the install kit's adapter id (`claude-code`, `codex`, `grok`, `opencode`, `pi`, `antigravity`). */
   agent: string;
   /** `ready`, `needs_login`, `usage_limited`, `not_installed`, `unavailable`, `unsupported`, or `unread`. */
   state: string;
@@ -1589,12 +1597,12 @@ export type AiProvider = {
   selectable: boolean;
   /** When a usage limit ends (unix ms), when the agent said. */
   retry_at_ms: number | null;
-  /** False when the agent has no sign-in check (Gemini CLI): `ready` then only means its program was found; absent from an older daemon. */
+  /** Every current provider checks sign-in; false or absent remains readable from older peers. */
   login_checked?: boolean;
   /** The model it is asked for; empty is the CLI's own default. */
   model: string;
   models: string[];
-  /** The list is the CLI's documented one and cannot be asked for (Gemini CLI). */
+  /** The list is documented rather than queried, as an older peer may report. */
   models_fixed: boolean;
   /** "CLI default" can be chosen: the agent is asked with no `--model`. */
   cli_default: boolean;
@@ -1966,7 +1974,7 @@ export type ArchivedMember = {
   reason: string | null;
 };
 
-/** Metadata from the retained delivery ledger, with current session proof from the core. No bodies. */
+/** Retained letter and passive direct-input metadata with exact session proof. No bodies. */
 export type OverviewGraphParty = { device_id: string; pane_id: string; session: string };
 export type OverviewGraphLetter = { id: string; sender: OverviewGraphParty; recipient: OverviewGraphParty; kind: string; at_unix_ms: number };
 export type OverviewGraphMetadata = {
@@ -1976,6 +1984,7 @@ export type OverviewGraphMetadata = {
   truncated: boolean;
   retention_ms: number;
   letters: OverviewGraphLetter[];
+  direct_inputs?: { id: string; sender: OverviewGraphParty; recipient: OverviewGraphParty; at_unix_ms: number }[];
   sessions: { device_id: string; pane_id: string; session_digest: string; launch_model: string | null }[];
 };
 
@@ -2060,6 +2069,7 @@ export type SnapshotRest = {
     agent_onboarding_agents?: string[];
     /** The first-run wizard's progress (PRD first-run-onboarding D-07): absent on a Mac that never had one; another flow `version` is not this build's to show. */
     first_run?: FirstRun | null;
+    first_run_choices?: FirstRunChoices;
     /** Settings > Notifications' Notify me when an agent needs me (D-21); the desktop app shows agent notifications only while it is on. */
     desktop_notifications?: boolean;
     product_analytics_enabled?: boolean;
@@ -2097,6 +2107,7 @@ export type SnapshotRest = {
     background_ai?: BackgroundAi;
     /** The Host entries Add device lists, read on an `ssh_hosts_list` event (PRD settings-cleanup D-19). */
     ssh_hosts?: SshHosts;
+    herdr_profiles?: HerdrProfiles;
     diagnostics?: CoreDiagnostic[];
     async_operations?: AsyncOperation[];
     tab_rename?: { request_id: string; tab_id: string; label: string; phase: "pending" | "succeeded" | "failed" } | null;

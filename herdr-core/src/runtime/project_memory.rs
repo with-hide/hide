@@ -1373,8 +1373,14 @@ pub(crate) fn card_kind(kind: hide_memory::CandidateKind) -> MemoryCardKind {
 /// A source's runtime as the screens name it; a card `hide memory add`
 /// wrote names the agent that added it only by Hide.
 fn provider_label(provider: &str) -> String {
-    match hide_agent_adapter::adapter(provider) {
-        Some(_) => crate::sidebar::provider_name(Some(provider)),
+    match hide_session::Agent::from_kind(provider) {
+        Some(agent) => {
+            let descriptor = agent.format().adapter();
+            descriptor
+                .sidebar_label
+                .unwrap_or(descriptor.herdr.name)
+                .to_owned()
+        }
         None => "Hide".to_owned(),
     }
 }
@@ -1386,6 +1392,9 @@ mod tests {
 
     #[test]
     fn a_read_shows_the_expanded_card_with_its_sources_and_the_search_answer() {
+        assert_eq!(provider_label("manual"), "Hide");
+        assert_eq!(provider_label("unknown-runtime"), "Hide");
+        assert_eq!(provider_label("codex"), "Codex");
         // P1-2: the row expanded in place and the screen's search.
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("project");
@@ -1408,7 +1417,7 @@ mod tests {
                 &AnalysisBatch {
                     id: "b".to_owned(),
                     project_id: identity.id.clone(),
-                    provider: "codex".to_owned(),
+                    provider: "cursor".to_owned(),
                     analysis_provider: "codex".to_owned(),
                     session_id: "s-1".to_owned(),
                     content_hash: "h".to_owned(),
@@ -1454,7 +1463,7 @@ mod tests {
                 body: "Run tests with nextest before a merge".to_owned(),
                 cited_paths: vec!["docs/TESTING.md".to_owned()],
                 sources: vec![MemorySourceSnapshot {
-                    provider_label: "Codex".to_owned(),
+                    provider_label: "cursor".to_owned(),
                     at_unix_ms: Some(77),
                     human: true,
                 }],

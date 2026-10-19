@@ -55,6 +55,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   const [hovered, setHovered] = useState<string | null>(null);
   const [focused, setFocused] = useState<string | null>(null);
   const [mail, setMail] = useState(true);
+  const [direct, setDirect] = useState(true);
   const [folded, setFolded] = useState<Set<string>>(() => new Set());
   const [edgeFocus, setEdgeFocus] = useState<string | null>(null);
   const [edgeHover, setEdgeHover] = useState<string | null>(null);
@@ -87,7 +88,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   useEscapeLayer(selection !== null, close);
   const agent = [...model.agents, ...model.visible].find((row) => row.id === (selection?.kind === "session" ? selection.id : null));
   const bundle = selection?.kind === "letters" ? model.communication.find((row) => row.id === selection.id) : undefined;
-  useEffect(() => { if (selection && (selection.kind === "session" ? !agent : !bundle || !mail)) close(); }, [selection, agent, bundle, mail, close]);
+  useEffect(() => { if (selection && (selection.kind === "session" ? !agent : !bundle || !(bundle.kind === "herdr_direct" ? direct : mail))) close(); }, [selection, agent, bundle, mail, direct, close]);
   const emphasized = (id: string) => id === hovered || id === focused || selection?.kind === "session" && id === selection.id;
   const related = new Set([hovered, focused, selection?.kind === "session" ? selection.id : null]);
   for (const edge of model.lineage) if (emphasized(edge.from) || emphasized(edge.to)) { related.add(edge.from); related.add(edge.to); }
@@ -101,15 +102,17 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     for (const group of model.projects) {
       const box = placed.groups.get(group.id);
       if (!box) continue;
-      const project: ProjectNode = { id: group.id, type: "project", position: { x: box.x, y: box.y }, width: box.width, height: box.height, style: { width: box.width, height: box.height }, data: { group, toggle, frameless: model.singleProject, highlight }, draggable: false, connectable: false, focusable: false, selectable: false, zIndex: 0 };
+      const project: ProjectNode = { id: group.id, type: "project", position: { x: box.x, y: box.y }, width: box.width, height: box.height, measured: { width: box.width, height: box.height }, style: { width: box.width, height: box.height }, data: { group, toggle, frameless: model.singleProject, highlight }, draggable: false, connectable: false, focusable: false, selectable: false, zIndex: 0 };
       nodes.push(project);
     }
     for (const row of model.visible) {
       const point = placed.nodes.get(row.id);
       if (!point) continue;
       const root = !model.lineage.some((edge) => edge.to === row.id);
-      // ELK owns these fixed coordinates; drag extents would clamp against a stale parent measurement.
-      const node: SessionNode = { id: row.id, parentId: row.projectId, type: "session", position: { x: point.x, y: point.y }, width: root ? size.rootWidth : size.childWidth, height: root ? size.rootHeight : size.childHeight, selected: selection?.kind === "session" && selection.id === row.id, data: { row, root, progress: progressFor(row), context: model.context.has(row.id), highlighted: related.has(row.id), quietCount: model.quietBranches.get(row.id) ?? 0, folded: model.folded.has(row.id), fold, highlight, choose: chooseSession }, draggable: false, connectable: false, focusable: false, selectable: false, zIndex: 2 };
+      // ELK owns these fixed dimensions. Retaining them also preserves React Flow's
+      // measured handle bounds when hover/focus replaces a controlled node object.
+      const measured = { width: root ? size.rootWidth : size.childWidth, height: root ? size.rootHeight : size.childHeight };
+      const node: SessionNode = { id: row.id, parentId: row.projectId, type: "session", position: { x: point.x, y: point.y }, ...measured, measured, selected: selection?.kind === "session" && selection.id === row.id, data: { row, root, progress: progressFor(row), context: model.context.has(row.id), highlighted: related.has(row.id), quietCount: model.quietBranches.get(row.id) ?? 0, folded: model.folded.has(row.id), fold, highlight, choose: chooseSession }, draggable: false, connectable: false, focusable: false, selectable: false, zIndex: 2 };
       nodes.push(node);
     }
   }
@@ -122,11 +125,16 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     if (group) return group.x + group.width / 2;
     return (placed?.groups.get(projectOf.get(id) ?? "")?.x ?? 0) + (placed?.nodes.get(id)?.x ?? 0);
   };
-  edges.push(...(mail ? model.communication : []).map((edge): LetterEdge => {
+  const pairKey = (edge: Communication) => JSON.stringify([edge.source, edge.target].sort());
+  const directPairs = new Set(model.communication.filter((edge) => edge.kind === "herdr_direct").map(pairKey));
+  const letterPairs = new Set(model.communication.filter((edge) => edge.kind === "letters").map(pairKey));
+  edges.push(...model.communication.filter((edge) => edge.kind === "herdr_direct" ? direct : mail).map((edge): LetterEdge => {
     const active = emphasized(edge.source) || emphasized(edge.target) || edgeHover === edge.id || edgeFocus === edge.id || selection?.kind === "letters" && selection.id === edge.id;
     const leftward = endpointX(edge.source) > endpointX(edge.target);
-    const label = `${names.get(edge.source)} ${edge.directions.length > 1 ? "↔" : "→"} ${names.get(edge.target)}: ${t("overviewGraph.letters", { count: edge.count })}`;
-    return { id: edge.id, source: edge.source, target: edge.target, sourceHandle: leftward ? "source-left" : "source-right", targetHandle: leftward ? "target-right" : "target-left", type: "letters", className: `og-communication${active ? " og-emphasized" : ""}`, ariaLabel: label, data: { bundle: edge, label, emphasized: active, highlight: highlightLetter, choose: chooseLetters }, markerEnd: arrow, markerStart: edge.directions.length > 1 ? arrow : undefined, selected: selection?.kind === "letters" && selection.id === edge.id, animated: !reduced && active, focusable: false, selectable: false, zIndex: 3 };
+    const label = `${names.get(edge.source)} ${edge.directions.length > 1 ? "↔" : "→"} ${names.get(edge.target)}: ${t(edge.kind === "herdr_direct" ? "overviewGraph.directInputs" : "overviewGraph.letters", { count: edge.count })}`;
+    const paired = directPairs.has(pairKey(edge)) && letterPairs.has(pairKey(edge));
+    const laneOffset = (size?.spacing.betweenNodes ?? 0) * (edge.kind === "herdr_direct" ? -1 : paired ? 1 : 0);
+    return { id: edge.id, source: edge.source, target: edge.target, sourceHandle: leftward ? "source-left" : "source-right", targetHandle: leftward ? "target-right" : "target-left", type: "letters", className: `og-communication${edge.kind === "herdr_direct" ? " og-direct-input" : ""}${active ? " og-emphasized" : ""}`, ariaLabel: label, data: { bundle: edge, label, emphasized: active, paired, laneOffset, highlight: highlightLetter, choose: chooseLetters }, markerEnd: edge.kind === "herdr_direct" ? { ...arrow, color: "var(--primary)" } : arrow, markerStart: edge.directions.length > 1 ? (edge.kind === "herdr_direct" ? { ...arrow, color: "var(--primary)" } : arrow) : undefined, selected: selection?.kind === "letters" && selection.id === edge.id, animated: edge.kind === "letters" && !reduced && active, focusable: false, selectable: false, zIndex: 3 };
   }));
   const known = new Set(nodes.map((node) => node.id));
   const visibleEdges = edges.filter((edge) => known.has(edge.source) && known.has(edge.target));
@@ -140,6 +148,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
       <div role="group" aria-label={t("overviewGraph.filter")}>{(["all", "turn", "working", "results"] as const).map((value) => <Button key={value} variant={focus === value ? "secondary" : "ghost"} size="sm" aria-pressed={focus === value} onClick={() => setFocus(value)}>{t(`overviewGraph.focus.${value}`)} <span>{model.counts[value]}</span></Button>)}</div>
       <label><input type="checkbox" checked={includeResting} onChange={(event) => setIncludeResting(event.target.checked)} />{t("overviewGraph.includeResting")}</label>
       <label><input type="checkbox" checked={mail} onChange={(event) => setMail(event.target.checked)} />{t("overviewGraph.showLetters")}</label>
+      <label><input type="checkbox" checked={direct} onChange={(event) => setDirect(event.target.checked)} />{t("overviewGraph.showDirectInputs")}</label>
     </div>
     {model.omitted.length > 0 ? <details className="og-omitted"><summary>{t("overviewGraph.omitted", { count: model.omitted.length })}</summary><ul>{model.omitted.map((group) => <li key={group.id}><span><strong>{group.project.workspace.label}</strong> · {t(`overviewGraph.omitted.${group.reason}`, { count: group.count })}</span><Button variant="ghost" size="sm" onClick={() => { setFocus("all"); setIncludeResting(true); useUiStore.getState().setOverview({ projectId: group.project.workspace.id }); }}>{t("overviewGraph.showProject")}</Button></li>)}</ul></details> : null}
     {model.limited ? <p className="og-notice" role="status">{t("overviewGraph.limit", { count: LAYOUT_NODE_LIMIT })}</p> : null}
@@ -186,9 +195,10 @@ function SessionPreview({ row, family, progress, actions, openRecord, close }: {
 
 function Correspondence({ bundle, names, close }: { bundle: Communication; names: ReadonlyMap<string, string>; close: () => void }) {
   const { t, i18n } = useInterfaceTranslation();
-  return <aside className="og-details overview-narrow:absolute overview-narrow:inset-y-0 overview-narrow:right-0 overview-narrow:shadow-lg" aria-label={t("overviewGraph.communication")} data-graph-correspondence="true">
-    <div className="og-details-head"><strong>{t("overviewGraph.communication")}</strong><Hint label={t("overviewGraph.close")}><Button variant="ghost" size="icon-sm" onClick={close}><XIcon /></Button></Hint></div>
-    {bundle.directions.map((direction) => <p key={`${direction.from}:${direction.to}`} className="og-direction"><span>{names.get(direction.from)} → {names.get(direction.to)}</span><b>{t("overviewGraph.letters", { count: direction.count })}</b></p>)}
+  return <aside className="og-details overview-narrow:absolute overview-narrow:inset-y-0 overview-narrow:right-0 overview-narrow:shadow-lg" aria-label={t(bundle.kind === "herdr_direct" ? "overviewGraph.directKind" : "overviewGraph.communication")} data-graph-correspondence="true">
+    <div className="og-details-head"><strong>{t(bundle.kind === "herdr_direct" ? "overviewGraph.directKind" : "overviewGraph.communication")}</strong><Hint label={t("overviewGraph.close")}><Button variant="ghost" size="icon-sm" onClick={close}><XIcon /></Button></Hint></div>
+    {bundle.directions.map((direction) => <p key={`${direction.from}:${direction.to}`} className="og-direction"><span>{names.get(direction.from)} → {names.get(direction.to)}</span><b>{t(bundle.kind === "herdr_direct" ? "overviewGraph.directInputs" : "overviewGraph.letters", { count: direction.count })}</b></p>)}
+    {bundle.kind === "herdr_direct" ? <p className="og-context">{t("overviewGraph.directMeaning")}</p> : null}
     <dl>{Object.entries(bundle.kinds).map(([kind, count]) => <div key={kind}><dt>{letterKind(t, kind)}</dt><dd>{count}</dd></div>)}<div><dt>{t("overviewGraph.latest")}</dt><dd>{formatDateTime(requireInterfaceLanguage(i18n.language), bundle.latest, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</dd></div></dl>
   </aside>;
 }

@@ -290,7 +290,7 @@ Closing that shell while it is the tab's only pane, or Close tab… at any time,
 An unnamed tab, a delegated child's tab, a pane whose terminal Herdr could not restore and a sleep's own close behave as any other close.
 Reopen closed tab and a wake give a tab back the name it had, named again only when the operator had named it, so a tab never named comes back unnamed rather than named after the agent it showed.
 An agent that quits on its own leaves its shell in the pane, as Herdr starts agents inside the pane's shell, so its named tab stays without Hide doing anything.
-A provider whose sleep closes its pane (Pi, OpenCode, Cursor and omp; [ARCHITECTURE.md](ARCHITECTURE.md#agent-sleep)) still takes a named tab whose only pane it is while it sleeps, and its wake opens a new tab under the same name.
+A provider whose sleep closes its pane (Pi, OpenCode and omp; [ARCHITECTURE.md](ARCHITECTURE.md#agent-sleep)) still takes a named tab whose only pane it is while it sleeps, and its wake opens a new tab under the same name.
 
 ### View areas
 
@@ -511,10 +511,10 @@ A plain shell, and an agent pane whose session is not known yet, keeps the plain
 Over a narrow window the record shows in the lane floating over the panes (`web/src/PaneHeaderBand.tsx`, `PaneRecordButton`).
 The provider logo is drawn on a pane's own header, and in the heads and places that are about the agent or its provider itself: the start picker, Settings, the footer's usage chips and the Usage pages, the session record's head, the tree popover's head, the last-words popover's head, the phone's detail head, the Memory tab's Hide AI chip, the first-run tiles, and the selected View's toolbar ([View openers and comments](#view-openers-and-comments)).
 The sidebar's 프로젝트 and 태스크 rows and the Agent tabs draw it only by the operator's choice or while ⌥ is held ([Agent logo view mode](#agent-logo-view-mode)); ⌘K and the recent-pane list and the phone's list lead with the status mark alone in both modes (PRD agent-mark-quiet); a session record's children and the PR card's session rows draw the logo after the status mark in both modes (PRD record-card-readability D-06, D-09).
-A pane header draws exactly one logo, the pane's own agent, for each of the eight supported agents: Claude Code, Codex, Grok, OpenCode, Pi, omp, Cursor and Antigravity, the same logo Settings and the first-run choice draw.
+A pane header draws exactly one logo, the pane's own agent, for each of the seven supported agents: Claude Code, Codex, Grok, OpenCode, Pi, omp and Antigravity, the same logo Settings and the first-run choice draw.
 A row without a logo names its agent by product name (`Claude Code`, `Codex`, the adapter's label, never the raw kind) in its hover hint and its accessible name, and the pane header's logo and title say it the same way.
 Only a plain shell and an agent Hide does not support draw the neutral `>_`.
-A logo drawn dark on a transparent ground (Grok, Cursor) sits on the light plate so it stays visible on the dark theme; the others are drawn as published ([BRAND.md](BRAND.md#third-party-agent-marks)).
+A logo drawn dark on a transparent ground (Grok) sits on the light plate so it stays visible on the dark theme; the others are drawn as published ([BRAND.md](BRAND.md#third-party-agent-marks)).
 A child pane's ancestor path names each ancestor from the root to its parent, `›` between them, and each name opens that pane; a root has none.
 The names drop before current identity or actions when the pane narrows, leaving `›` with its accessible name.
 The PR mark is the one the 태스크 row of the same agent draws: a pane without children shows its own PRs, and a parent shows the PRs over itself and every descendant (the `#number` when that is one PR, each state's count when several), pressing which lists each PR with who holds it, so a child's pull request is seen from the pane that delegated it.
@@ -694,7 +694,7 @@ Hide's hook keeps a `working` and a `done` count per pane and reports them as th
 docs/agent-hooks.md owns the hook.
 `working` is how many subagents run now, and `done` is how many this session has finished; a new session in the pane starts both again from zero, so `done` is a running tally of the session.
 Each count is separately knowable, and a count the core cannot read is `None`, never zero, because a zero would claim the agent works alone; an agent whose adapter declares no count has none to read.
-Claude Code, Codex, Grok, OpenCode and omp report a count, and Pi (it runs no subagents) and Cursor (its hooks never fired for a Task subagent) declare none; the declaration is `subagent_counts` in `hide-agent-adapter/src/declarations.rs`, and no agent reports a blocked subagent.
+Claude Code, Codex, Grok, OpenCode and omp report a count, and Pi (it runs no subagents) declares none; the declaration is `subagent_counts` in `hide-agent-adapter/src/declarations.rs`, and no agent reports a blocked subagent.
 Settings > Agents lists no subagent count either: the kit's feature table has no `subagents` entry.
 
 ### Closing an agent that spawned others
@@ -914,6 +914,13 @@ A filtered-empty view offers Show all sessions, distinct from no current session
 Each agent shows its canonical task identity, agent, state and actual current progress; a model is shown only when the current launch proves it.
 Edges distinguish delegation from retained deliveries, whose graph metadata is direction, kind, time and count; no letter subject or body reaches this projection.
 An unresolved endpoint is never joined by a similar name or pane number.
+Herdr direct input has its own visibility switch, short dotted directional line, input count and latest submission time, separate from long-dashed letters and solid delegation.
+When the same endpoints have both letters and direct input, each uses a separate curved lane with its own visible label and keyboard target, without moving the sessions.
+Its details label the relationship `Herdr direct input` and explain that observed submission proves neither a model read nor a completed answer.
+Only independently proven device, pane and native-session endpoints join current rows; missing results, stale sessions and unproven recipients create no confirmed edge.
+Direct input never creates inbox items, watches, lineage, read marks, letter notifications or phone pushes.
+The bounded 30-day observation metadata carries no command or prompt content; its appearance or visibility changes no graph coordinates, poller or subscription.
+Letters and direct inputs share one newest-2,000-record graph budget.
 Group folds aggregate the facts of their members and never invent progress or an inferred relationship.
 The list is paged at fifty rows and stays usable when graph layout fails; the graph offers Retry beside that failure.
 The existing circular provider logos, StatusMark, root and child sizes, rings, delegation dashes, identity and progress stay intact.
@@ -1730,10 +1737,25 @@ The ready Home with no projects carries the ai owl.
 Core owner: `herdr-core/src/runtime/first_run.rs`, `herdr-core/src/runtime/kit.rs` (`apply_agent_onboarding`). Web owner: `web/src/FirstRunWizard.tsx`, `web/src/firstRun.ts`, `web/src/NotificationControls.tsx`, `web/src/agentNotices.ts`, `web/src/ScreenIntro.tsx`. Desktop owner: `desktop/src/main/notify.ts`, `desktop/src/main/notificationPermission.ts`, `desktop/src/main/host.ts` (`showBadge`, `openNotification`), `desktop/static/status.html`.
 
 The desktop app shows `Starting Hide…` while it reaches Hide, and never the word hided; a failure shows its reason in one line with Retry and `Copy diagnostics`, which copies the app's build, the reason code and where the host log is, and shows the same text to select by hand when the clipboard refuses it (PRD first-run-onboarding B1, B2).
-On a Mac whose kit has never run, the first-run wizard opens over the shell: a three-part progress bar with `1 of 3`, then the agents, the notifications and the first project (D-01, B3).
+On a machine whose kit has never run, the first-run wizard opens over the shell: Agents, saved Herdr Devices when present, Notifications and the first Project.
+The progress bar names the actual route, with three steps after a successful empty profile discovery and four while saved profiles are present or their discovery is loading or failed.
+Each step after Agents has Back; Back changes the core-owned step alone and never repeats an installation, reconnect, permission request or test notification.
+The core saves the agent selection, checked device profiles, project machine and path alongside progress, so returning or reloading retains explicitly disabled agents and the earlier notification choice.
+Only complete clone URLs without user information, queries or fragments are saved as setup drafts; other clone input stays in the open form and is still passed unchanged to Git when Clone is pressed.
+Finishing setup clears its project draft.
 Nothing but each step's own buttons moves it: Escape, a click outside and a close button do nothing, and the step on screen is the core's (`ui_state.first_run`), so quitting, reloading or a failed save reopens the step not yet finished, and the wizard never returns once its last step is done or skipped (B5, B6).
 Each step's main button sits at the footer's right with its keycap, `⌘↵` (`Ctrl+Enter` off macOS), which presses it from anywhere in the step; Enter on the step itself presses it too, while tiles, links and buttons keep their own keys; while macOS blocks Hide with the switch off that button is `Turn on notifications` (B40).
 The agents step is the first-run agent choice (Settings: each machine's install kit, below); the core moves the wizard on once this Mac's kit pass for it has landed with every chosen agent in place.
+Returning to Agents shows the saved choice, or the machine's enabled agents when no draft exists; installed agents start enabled only for the unanswered initial choice.
+An old installation or discovery answer can settle its own operation but cannot advance a different step.
+Devices reads only the saved Herdr machine configuration, without probing SSH or contacting a listed machine.
+Loading, a failed read with Retry, a proven empty result, disabled or invalid profiles and already-added machines are distinct states; only the proven empty result skips Devices.
+Every profile starts unchecked and names its label, SSH target and Herdr session, including when these need to wrap.
+Checking a device changes the draft alone; Connect selected explicitly allows Hide's helper, command and selected agent integrations on those checked devices through the existing Add device connector and install owner.
+Existing Herdr sessions, tabs and workspaces stay in place.
+Connecting and installing hold the Connect control; per-device failures remain available for explicit Retry, while successful machines remain added and are not connected again by Back or re-entry.
+Not now continues with this machine, and failed discovery can be skipped without treating it as proof that no profiles exist.
+Project reuses Add project's host selector and folder, clone and create views; adding a remote folder offers the enabled agents from that remote machine's kit and never borrows this machine's sign-in state.
 Its What changes opens a list with one row per place Hide writes, the path in mono with the agents it is for and the piece (`Codex, OpenCode, Pi · Skill`), so a skill folder agents share is one row, and the `hide` command's link last (B11).
 A chosen agent that did not go in keeps the step with `<agent> was not set up: <reason>` and Try again (B12).
 A pass that could not run (the kit link failed, or the pass listed no agent) keeps the step, says `Hide could not set up agents on this Mac:` with the reason, leaves the choice unanswered, and reads the agents again; the step says the same whenever the kit could not run here, as after a relaunch, and never that no agent is installed; `Try again` then records nothing and only has the agents read again, and once they are back Continue sends the choice anew; the walk Help reopens does the same, staying on the agents step with that line and no banner (B12, B44).
@@ -1749,7 +1771,8 @@ Settings > Notifications' desktop group has independent `Notify me when an agent
 `Not now` goes on with both switches off, even after `Turn on notifications` was pressed while macOS still asks, in the same event that leaves the step, and `Also on your phone →` opens Settings > Mobile over the wizard, which returns to the step when it closes (B21).
 The project step is Add a project under `Add your first project`, with its Host select, Browse folder, Clone from URL and Create new project, its refusals and its clone progress, and `Skip for now` (B22, B25); its Host list has no Add device, which would take the wizard's place, and only a project on the chosen host counts as the one added.
 The first project added ends the wizard and opens the start panel once, on that project, with the first agent that is on and signed in (in the order Claude Code, Codex, Grok, Pi), else the first agent that is on, and the keyboard in its text box; with no agent on it opens no panel and the wizard closes to the empty Home, whose Start an agent is the way on; a later project opens nothing (D-15, B23, B24).
-The start panel says `! Not signed in` right after its agent menu whenever that agent is one whose sign-in Hide checks and its last read was signed out (B23, D-06).
+For a target on the core's own machine, the start panel says `! Not signed in` right after its agent menu whenever that agent is one whose sign-in Hide checks and its last read was signed out (B23, D-06).
+A remote target never uses the core machine's login result; its kit reports installation and enablement, without claiming remote sign-in (B37).
 A browser tab shows the agents step alone, with no progress bar, and Continue there ends the wizard; the notifications and project steps are the desktop app's (D-14, B26).
 The desktop app's Help > Set up Hide opens the same steps from the first as this window's own walk: the agents step starts from the agents switched on now and its Continue switches only the agents whose switch changed, the way Settings > Agents does; Escape and the close button end it, and a step not continued changes nothing (B45, B46).
 
@@ -1888,7 +1911,7 @@ Opened while Settings is up, it takes Settings' place: Settings closes and the t
 Under the text are the target, the agent kind and the model menus, a `⏎` keycap and `시작`; Enter or `시작` sends one `agent_start_in_checkout` with a fresh request id, the text as the agent's first instruction, handed to the CLI as its own argument (ARCHITECTURE.md, the first prompt).
 The target defaults to what is in front: the checkout of the Workspace in front (a worktree when that is it), a project's main checkout while the Overview is filtered to that project, and the front device's Home while the Overview with no project chip or Settings is; a device's surface in front makes that device the target's.
 The target menu lists the front device's Home and checkouts, then each other device's Home and checkouts prefixed with its name, with a separator between devices and a check on the chosen item; a device that is not connected is listed disabled with `연결 안 됨`.
-The kind menu holds Claude Code, Codex, Grok, OpenCode, Pi, omp, Cursor and Antigravity with their provider marks; the model menu is `CLI 기본값` then the chosen kind's catalog (Antigravity's from `agy models`, started with `--model`), and changing the kind takes that kind's list and the model last chosen for it.
+The kind menu holds Claude Code, Codex, Grok, OpenCode, Pi, omp and Antigravity with their provider marks; the model menu is `CLI 기본값` then the chosen kind's catalog (Antigravity's from `agy models`, started with `--model`), and changing the kind takes that kind's list and the model last chosen for it.
 OpenCode's start takes no model, so with OpenCode chosen no model menu is drawn here or in a Factory's worker candidate, and a model remembered for it from before is not sent.
 While the catalog is being read or cannot be read, the model menu shows the remembered model or `CLI 기본값`, is disabled, and gives the reason in its tooltip; starting is never held back by it.
 Every supported agent start, here or in a dialog, is remembered by the core with its model, `CLI 기본값` included, so the next open preselects that kind and its model with no `recent` mark; the target is not remembered and follows what is in front on every open.
@@ -1905,7 +1928,7 @@ Settings > Agents > Starting work has no default agent of its own.
 
 Web owner: `web/src/components/usage.tsx`, `web/src/components/usage-history.tsx`, `web/src/components/usage-history-table.tsx`, `web/src/components/usage-amount.tsx`, `web/src/UsageOverview.tsx`, `web/src/usageHistory.ts`, `web/src/usage.ts`, `web/src/settings/UsageTab.tsx`.
 The core owns account windows and shared preferences (`usage`, `ui_state.usage`); all limits refer to the core's own node, even with a remote device in front.
-The declaration lists all eight agents; only agents with a declared limit source appear in the footer and popover.
+The declaration lists all seven agents; only agents with a declared limit source appear in the footer and popover.
 
 The footer draws up to three pinned account windows at its left edge, and the View menu, Help and Settings at its right edge.
 Defaults pin the weekly window of each agent that is on by default and reports one (Claude Code and Codex), leaving a slot for the operator's own pin.
@@ -2208,7 +2231,7 @@ The second, Phone, is the push to a paired phone, the dropdown Settings > Mobile
 ### Usage
 
 Usage follows Notifications in the App group, with a gauge mark and the localized Usage title.
-The page walks the shared adapter declaration so all eight agents appear even before a read.
+The page walks the shared adapter declaration so all seven agents appear even before a read.
 An agent with limit support has one card: its mark and name with Hide, then a row for each declared account window with its current value and a pin switch.
 A window the account reports as not offered has no row or switch.
 When a fresh reading explicitly marks a window not offered or unreadable, the core removes its saved pin so an invisible row cannot hold a chip slot; loading, failed and retained readings preserve choices.
@@ -2217,7 +2240,7 @@ At three pins, an unselected switch is disabled with “The sidebar shows at mos
 Every window switch stays in one right-aligned column beside the first line of its label; a long value wraps below the label, including unavailable and refused-fourth-pin rows.
 Hide folds the card to its header, Hidden and Show, preserves the pins, and removes the agent from chips and the popover.
 The five agents without supported limits appear in No limit reading with a reason from the adapter declaration, without Hide or switches.
-Grok's weekly reader is not built, OpenCode Go would need an API key Hide does not hold, Pi and omp count toward their signed-in account, and Cursor would require its stored sign-in.
+Grok's weekly reader is not built, OpenCode Go would need an API key Hide does not hold, Pi and omp count toward their signed-in account.
 The page reuses the settings group, row and switch parts; loading is an ellipsis and a missing reading is Unavailable, never an invented zero.
 
 ### GitHub
@@ -2307,7 +2330,7 @@ A move is one dialog over Settings whose body turns with the move, and every for
 The dialog only asks; the supervisor's `core_move` frame says where the move is, so a window that closed it and opens Settings again finds the same form, and a request another move holds is answered `다른 이동이 진행 중이에요`.
 In Korean the particle after the machine's name follows its last sound, as Korean reads the name (`Mac mini로` but `집으로`, `web/src/i18n/koParticle.ts`).
 
-Settings > Agents shows the eight agents Hide supports, Claude Code, Codex, Grok, OpenCode, Pi, omp, Cursor and Antigravity, in that order, for one machine at a time (PRD settings-cleanup B8 to B20, B67).
+Settings > Agents shows the seven agents Hide supports, Claude Code, Codex, Grok, OpenCode, Pi, omp and Antigravity, in that order, for one machine at a time (PRD settings-cleanup B8 to B20, B67).
 With a device registered, a switch at the top chooses This Mac or a device and the list below is that machine's; with none there is no switch.
 This Mac comes first, as in Devices, and each machine is listed once.
 `Checking this machine's agents…` shows only while a read runs or before the machine's first answer; a machine whose kit answered without listing an agent (another Hide held its account, a retirement it refused) says `Hide couldn't read this machine's agents.` with Check again.
@@ -2318,9 +2341,9 @@ An agent installed where Hide has nothing to attach to on that machine's system 
 `Not installed N` is a folded list of the rest, each with its official mark, its name and `Install ↗`, which opens the vendor's installation guide (`web/src/settings/agentRows.ts`); an agent with no program has no switch.
 A row is the agent's official mark (the same in light and dark), its name and a switch, with no line about what the switch puts there; `Docs ↗` to the kit's skills page for the agent shows only while the row is hovered or has keyboard focus, and always on a screen with no hover.
 The switch is that machine's: turning an agent on installs its skill and hook and the Herdr integration there, turning it off takes out only what Hide installed (docs/agent-hooks.md), and an agent that is off wears no status.
-A Claude Code, Codex, Grok, Pi, omp, Cursor or Antigravity row that is on, whose sessions Hide counts from their session files, says one of two things: `N sessions` for its sessions running on that machine now, or `Ready` when it is set up and has none; a sleeping agent is not running and is not counted.
+A Claude Code, Codex, Grok, Pi, omp or Antigravity row that is on, whose sessions Hide counts from their session files, says one of two things: `N sessions` for its sessions running on that machine now, or `Ready` when it is set up and has none; a sleeping agent is not running and is not counted.
 The count is all the row says about sessions: it lists none and does not say whether Hide hears each one, because a session that runs without Hide is fixed from its own pane header (docs/status-model.md).
-Grok and Cursor wear a `Basic` chip (`기본`, `基础`, `基本`), on or off; Claude Code, Codex, OpenCode, Pi, omp and Antigravity have both prompt intake and spawn refusal and wear no chip.
+Grok wears a `Basic` chip (`기본`, `基础`, `基本`), on or off; Claude Code, Codex, OpenCode, Pi, omp and Antigravity have both prompt intake and spawn refusal and wear no chip.
 Every other agent's row shows no status, on or off.
 The chip opens a popover with every feature of the kit's feature table, grouped under Herdr basics, session reading and multi-agent collaboration, with a heading, `✓ Works` or `– Not available` rather than color alone.
 The chip, headings and feature text wrap within the popover in every interface language.
@@ -2336,7 +2359,8 @@ Grok has native titles, Sleep and Fork from its complete session reader beside t
 At rest its bell opens a turn that takes letters at the first tool call or at Stop; while working it takes due letters at either hook without a bell.
 It has no new-prompt letter context or Memory, so its row keeps the Basic chip.
 Its `/rename` title wins over a generated goal, an unanswered `ask_user_question` enters the question state with bounded text and choices, and a plan awaiting approval enters the approval state with the plan text.
-Cursor has conversation, search, exact resume and Sleep from its ordinary native chat reader, with generated goal then provider as its title; it has no native title, Fork, Memory extraction, subagent count, structured question/plan wait or tool-output PR discovery.
+Cursor is retired from new agent choice, onboarding and installation.
+Its retained native chat reader preserves existing conversations, search and minute-precision timestamps without enabling a new start, resume or Sleep action.
 Its Basic chip and existing guidance and spawn-guard facts remain, and it offers no model or effort choice.
 Archive resume sends the selected source path to the core, which decides whether the native reader requires that exact file proof before starting.
 OpenCode has native titles, Sleep and Fork from its database reader beside letters, Memory, subagents and the spawn guard from Hide's plugin; an unanswered native `question` enters the existing question state with its text and choices even with summaries off.
@@ -2351,9 +2375,9 @@ There is no row or switch for Codex per pane, no per-agent CLI group (that is Hi
 Idle agents (`Sleep after`) and Starting work (`Link the issue in pull requests`) follow the list.
 
 The first-run agent choice is the first step of the first-run wizard (see First run below), PRD agent-adapters-onboarding and PRD first-run-onboarding, shown when this Mac's kit has never run.
-It lists the eight agents Hide supports, Claude Code, Codex, Grok, OpenCode, Pi, omp, Cursor and Antigravity in that order, as tiles in a grid, each with the agent's own mark (or a two-letter monogram where no official mark is bundled, `docs/BRAND.md`) and its state: the agents installed here are on and show a check, an agent not installed is dimmed, has no switch and links its official install page (`Install ↗`), an agent installed on a system where Hide has nothing to attach to yet (the kit's `unsupported_system`) is dimmed and says `Not on Windows yet` with that system's name, with no switch, no install link and no entry under `What changes` (D-25, B49), and a tile is a switch (`role="switch"`) pressed with Space or Enter.
+It lists the seven agents Hide supports, Claude Code, Codex, Grok, OpenCode, Pi, omp and Antigravity in that order, as tiles in a grid, each with the agent's own mark (or a two-letter monogram where no official mark is bundled, `docs/BRAND.md`) and its state: the agents installed here are on and show a check, an agent not installed is dimmed, has no switch and links its official install page (`Install ↗`), an agent installed on a system where Hide has nothing to attach to yet (the kit's `unsupported_system`) is dimmed and says `Not on Windows yet` with that system's name, with no switch, no install link and no entry under `What changes` (D-25, B49), and a tile is a switch (`role="switch"`) pressed with Space or Enter.
 Claude Code and Codex are on when they are installed; every other installed agent is on too, since the operator chose the full set, and `Continue` installs what is left on.
-Under each name the tile says what Hide knows: `Checking…`, then `Ready` or `Not signed in` for the agents whose sign-in Hide checks (Claude Code, Codex, Grok, Pi and Antigravity; Antigravity says `Installed` until Hide AI's folder for it is made, because Hide reads agy's sign-in only once that folder is ready), and `Installed` for OpenCode, omp and Cursor, whose sign-in Hide cannot read (`tileStatus` in `web/src/firstRun.ts`).
+Under each name the tile says what Hide knows: `Checking…`, then `Ready` or `Not signed in` for the agents whose sign-in Hide checks (Claude Code, Codex, Grok, Pi and Antigravity; Antigravity says `Installed` until Hide AI's folder for it is made, because Hide reads agy's sign-in only once that folder is ready), and `Installed` for OpenCode and omp, whose sign-in Hide cannot read (`tileStatus` in `web/src/firstRun.ts`).
 With no agent installed, one line says so and links Claude Code's and Codex's install pages, and Continue still goes on.
 One sentence above the tiles says that Hide adds its own entries to each agent turned on and changes nothing before Continue, and `What changes` opens the list of what Continue writes for each agent left on (its hook file, skill, plugin or extension, and Herdr integration, at the places the kit reports, with the account home written as `~` on every system) and the `hide` command's link; the list follows each flip (B11, D-26).
 `Continue` is the only button and the only way on: Escape, a click outside and a close button do nothing, so a stray key cannot finish a choice that leaves Claude Code and Codex off with no hooks; with every tile off, Continue installs nothing and moves on.
@@ -2377,7 +2401,7 @@ Every value is the core's `status.background_ai`; the tab sends `ai_settings` ev
   Everything below it dims and is out of reach (`inert`), and the stored values stay as they were, so turning it on resumes with them.
 - **Runs on** has an Agent select and a Model select.
   The Agent select lists only agents the core would accept (`selectable`: installed, signed in, a Hide AI backend, a call that cannot change files) with each official mark, and the chosen agent stays in it with its state even when it has a problem; the same row shows its state as symbol and words (Signed in, Not signed in, Out of usage until 3:10 PM).
-  The Model select lists what the agent reported, with `CLI default` first where the agent can be asked without a model, and a marker "Fixed list" for an agent whose list cannot be asked (Gemini CLI); the stored model is always offered, and a list that failed to load leaves it in place with one line.
+  The Model select lists what the agent reported, with `CLI default` first where the agent can be asked without a model, and a marker "Fixed list" when an older peer reports that catalog form; the stored model is always offered, and a list that failed to load leaves it in place with one line.
 - **If <Runs on> can't answer** lists the agents the operator added, in the order added, each with a number, its mark and state, its own model select and a remove ×; there is no switch and no reordering, so an empty list is no fallback and a different order is a remove and an add.
   `+ Add agent` opens a menu of selectable agents not yet used; installed agents Hide AI cannot use yet are listed under "Hide AI can't use these yet", dimmed, each with its reason (not signed in, can't guarantee it only reads, not supported yet), and an agent that is not installed is not listed.
   With nothing to offer the button is disabled.

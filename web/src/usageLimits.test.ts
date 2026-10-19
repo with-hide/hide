@@ -7,11 +7,11 @@ import { absenceReason, accountWindows, hasLimits, limitValue, usageChips } from
 const t = initializeInterfaceI18n("en").getFixedT(null, "translation");
 const read = (outcome: WindowOutcome): LimitCell => ({ state: "reading", freshness: "fresh", observed_at_ms: 1000, value: { windows: [{ kind: "five_hour", scope: { kind: "all" }, outcome }] } });
 
-it("offers only declared account windows and leaves the five unsupported agents with reasons", () => {
+it("offers only declared account windows and leaves the four unsupported agents with reasons", () => {
   expect(accountWindows(agentAdapter("codex")!, read({ state: "not_offered" }))).toEqual(["weekly"]);
   expect(accountWindows(agentAdapter("codex")!, read({ state: "not_started" }))).toEqual(["five_hour", "weekly"]);
   const unsupported = AGENT_ADAPTERS.filter((adapter) => !hasLimits(adapter));
-  expect(unsupported.map((adapter) => adapter.id)).toEqual(["grok", "opencode", "pi", "omp", "cursor"]);
+  expect(unsupported.map((adapter) => adapter.id)).toEqual(["grok", "opencode", "pi", "omp"]);
   for (const adapter of unsupported) {
     expect(accountWindows(adapter, undefined)).toEqual([]);
     expect(absenceReason(adapter, t)).not.toBe("");

@@ -235,47 +235,43 @@ fn a_native_dormant_journey_refuses_a_changed_route_before_close_wake_or_start()
     }
 }
 
+/// A retained conversation survives retirement, without acquiring a new
+/// wake, pane or provider integration in this build.
 #[test]
-#[cfg(unix)]
-fn cursor_durable_sleep_wakes_exactly_once_and_refuses_a_lost_native_owner() {
-    const CHILD: &str = "HIDE_TEST_CURSOR_SLEEP_CHILD";
-    if std::env::var_os(CHILD).is_none() {
-        // The native fixture owns a default-root account, independent of any
-        // Cursor roots exported by the test runner. Never mutate the shared
-        // process environment after the reader has captured its startup roots.
-        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-        command
-            .args([
-                "--exact",
-                "runtime::tests::agent_sleep::cursor_durable_sleep_wakes_exactly_once_and_refuses_a_lost_native_owner",
-                "--nocapture",
-                "--test-threads=1",
-            ])
-            .env(CHILD, "1")
-            .env_remove("CURSOR_CONFIG_DIR")
-            .env_remove("XDG_CONFIG_HOME");
-        let output = hide_platform::process::run_to_end(
-            &mut command,
-            Duration::from_secs(60),
-            &std::sync::atomic::AtomicBool::new(false),
-        )
-        .unwrap();
-        assert!(
-            output.succeeded(),
-            "private default-root sleep test failed:\n{}\n{}",
-            output.stdout,
-            output.stderr
-        );
-        return;
-    }
-    for phase in [
-        "none",
-        "missing-source-before-close",
-        "missing-source-before-wake",
-        "missing-source-before-start",
-    ] {
-        durable_dormant_journey("cursor", phase);
-    }
+fn a_retired_cursor_sleep_record_is_preserved_but_cannot_wake() {
+    use crate::agent_sleep::DormantPhase;
+    let mut runtime = close_pane_runtime("pi");
+    assert!(runtime.begin_dormant_sleep(SLEEPER, 1));
+    let (id, native_id) = {
+        let (id, record) = runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .dormant
+            .iter_mut()
+            .next()
+            .unwrap();
+        record.kind = "cursor".into();
+        record.label_owner =
+            hide_session::label_reference_token("cursor", "id", &record.native_session_id).unwrap();
+        record.validate().unwrap();
+        record.closed = true;
+        record.phase = DormantPhase::Sleeping;
+        (id.clone(), record.native_session_id.clone())
+    };
+    runtime.close_operations.clear();
+    runtime.refresh_dormant_rows();
+    assert!(!runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
+    assert!(runtime.request_dormant_wake(&id));
+    assert_eq!(
+        runtime.snapshot.status.last_error.as_ref().unwrap().kind,
+        "agent_sleep.wake_unavailable"
+    );
+    let retained = &runtime.snapshot.ui_state.agent_sleep.dormant[&id];
+    assert_eq!(retained.kind, "cursor");
+    assert_eq!(retained.native_session_id, native_id);
+    assert!(retained.wake_pane_id.is_none());
+    assert!(runtime.close_operations.is_empty());
 }
 
 /// OpenCode's proof reads its database row: a session moved to another
@@ -448,9 +444,7 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
             path,
         }
     } else {
-        let native_path = if kind == "cursor" {
-            crate::fixture::cursor_session(home.path(), Path::new(&cwd), native_id)
-        } else {
+        let native_path = {
             let folder = crate::fixture::native_session_folder(
                 home.path(),
                 if kind == "omp" { "omp" } else { "pi" },
@@ -483,13 +477,9 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
     let native = Arc::new(native);
     let native_folder = native.folder.clone();
     let backup_path = native_folder.join(format!("date_{native_id}-alias.jsonl.123.bak"));
-    let backup_bytes = if kind == "cursor" {
-        String::new()
-    } else {
-        String::from_utf8(native.other.clone())
-            .unwrap()
-            .replace(native_id, "different-native-owner")
-    };
+    let backup_bytes = String::from_utf8(native.other.clone())
+        .unwrap()
+        .replace(native_id, "different-native-owner");
     if kind != "claude" {
         runtime.own_node = Arc::new(hide_node::Local::new(Some(home.path().to_path_buf())));
         runtime.live.as_mut().unwrap().node = runtime.own_node();
@@ -694,20 +684,6 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
                 "tab_id":"w-order:t3","focused":false,"agent_status":"idle","revision":1
             }})
         }
-        // The one agent whose resume runs no session hook has the core say
-        // which session the woken pane resumed; no other kind is reported for.
-        "pane.report_agent_session" => {
-            assert_eq!(
-                kind, "cursor",
-                "only a kind whose resume reports no session"
-            );
-            assert_eq!(params["pane_id"], "w-order:t3:p");
-            assert_eq!(
-                params["agent_session_id"],
-                "11111111-2222-3333-4444-555555555555"
-            );
-            serde_json::json!({"type":"ok"})
-        }
         other => panic!("unexpected dormant effect: {other}"),
     });
     runtime.live.as_mut().unwrap().api_connector = Arc::new(herdr.connector());
@@ -844,17 +820,6 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
         observed.recv_timeout(Duration::from_secs(5)).unwrap(),
         "start"
     );
-    if kind == "cursor" {
-        // Herdr publishes the woken pane's session only after the core's
-        // report, which follows the start on the wake's own worker and is
-        // fenced on the saved intent, so the record is confirmed after it.
-        wait_for("the resumed session's report", || {
-            herdr
-                .methods()
-                .iter()
-                .any(|method| method == "pane.report_agent_session")
-        });
-    }
     {
         let mut runtime = shared.lock().unwrap();
         let work = crate::agent_sleep_herdr::DormantWork {
@@ -933,7 +898,7 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
             .iter()
             .filter(|called| called.as_str() == "pane.report_agent_session")
             .count(),
-        usize::from(kind == "cursor"),
+        0,
         "{calls:?}"
     );
     for method in ["pane.close", "layout.apply", "agent.start"] {

@@ -56,7 +56,12 @@ test("three usage chips, View, Help and Settings fit the minimum native window i
       const settings = page.locator('[data-usage-settings]');
       await settings.getByText("Grok", { exact: true }).scrollIntoViewIfNeeded();
       await capture(`usage-settings-unsupported-${language}-electron`);
-      await settings.getByText("Cursor", { exact: true }).scrollIntoViewIfNeeded();
+      // Retired agents have no settings row; omp is the last current row.
+      await expect(settings.getByText("Cursor", { exact: true })).toHaveCount(0);
+      for (const label of ["Grok", "OpenCode", "Pi", "omp"]) {
+        await expect(settings.locator("[data-usage-unsupported]").getByText(label, { exact: true })).toHaveCount(1);
+      }
+      await settings.getByText("omp", { exact: true }).scrollIntoViewIfNeeded();
       expect(await settings.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
       await capture(`usage-settings-bottom-${language}-electron`);
       await page.keyboard.press("Escape");

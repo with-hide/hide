@@ -65,7 +65,10 @@ fn a_pass_that_installs_the_codex_hook_has_codex_trust_it_and_a_repeat_asks_for_
         "{report:?}"
     );
     assert_eq!(codex_part(&report).reason, None);
-    assert_eq!(held_keys(&fixture), hide_agent_hooks::HookEvent::ALL.len());
+    assert_eq!(
+        held_keys(&fixture),
+        hide_agent_hooks::AgentRuntime::Codex.events().count()
+    );
     assert_eq!(calls(&fixture, "config/batchWrite"), 1);
 
     // The same pass again checks, and writes nothing (B7).
@@ -212,7 +215,10 @@ fn a_failure_is_the_codex_parts_reason_only_and_status_keeps_it_until_a_pass_suc
     assert_eq!(codex_part(&report).reason, None);
     let read = status(&fixture.target);
     assert_eq!(codex_part(&read).state, ComponentState::Installed);
-    assert_eq!(held_keys(&fixture), hide_agent_hooks::HookEvent::ALL.len());
+    assert_eq!(
+        held_keys(&fixture),
+        hide_agent_hooks::AgentRuntime::Codex.events().count()
+    );
 }
 
 #[test]
@@ -284,7 +290,10 @@ fn the_first_run_pass_that_switches_codex_on_has_codex_trust_the_hook_in_that_pa
         ComponentState::Installed,
         "{report:?}"
     );
-    assert_eq!(held_keys(&fixture), hide_agent_hooks::HookEvent::ALL.len());
+    assert_eq!(
+        held_keys(&fixture),
+        hide_agent_hooks::AgentRuntime::Codex.events().count()
+    );
 }
 
 #[test]
@@ -309,7 +318,10 @@ fn a_changed_hook_is_trusted_in_the_pass_that_replaces_it() {
     );
     let after = std::fs::read_to_string(codex_file(&fixture, "fake-trust.json")).unwrap();
     assert_ne!(after, before, "the new entries' hashes were recorded");
-    assert_eq!(held_keys(&fixture), hide_agent_hooks::HookEvent::ALL.len());
+    assert_eq!(
+        held_keys(&fixture),
+        hide_agent_hooks::AgentRuntime::Codex.events().count()
+    );
     assert_eq!(calls(&fixture, "config/batchWrite"), 2);
 }
 
@@ -465,7 +477,7 @@ fn a_fresh_machine_has_codex_trust_herdrs_entry_with_hides_in_the_pass_that_inst
     assert!(trusted(&fixture, &command));
     assert_eq!(
         held_keys(&fixture),
-        hide_agent_hooks::HookEvent::ALL.len() + 1
+        hide_agent_hooks::AgentRuntime::Codex.events().count() + 1
     );
     // One check, one write, for both (B1).
     assert_eq!(calls(&fixture, "initialize"), 1);
@@ -507,7 +519,10 @@ fn an_integration_the_operator_installed_first_is_not_trusted_and_stays_untouche
     );
     assert!(learned(&fixture).is_empty());
     assert!(!trusted(&fixture, &command));
-    assert_eq!(held_keys(&fixture), hide_agent_hooks::HookEvent::ALL.len());
+    assert_eq!(
+        held_keys(&fixture),
+        hide_agent_hooks::AgentRuntime::Codex.events().count()
+    );
 }
 
 #[test]
@@ -527,7 +542,7 @@ fn a_look_alike_of_herdrs_command_beside_the_real_one_is_not_trusted() {
     assert!(!trusted(&fixture, &format!("{command} && true")));
     assert_eq!(
         held_keys(&fixture),
-        hide_agent_hooks::HookEvent::ALL.len() + 1
+        hide_agent_hooks::AgentRuntime::Codex.events().count() + 1
     );
 }
 
@@ -587,7 +602,7 @@ fn a_refused_record_is_the_codex_parts_reason_and_the_next_pass_trusts_both() {
     assert!(trusted(&fixture, &herdr_command(&fixture)));
     assert_eq!(
         held_keys(&fixture),
-        hide_agent_hooks::HookEvent::ALL.len() + 1
+        hide_agent_hooks::AgentRuntime::Codex.events().count() + 1
     );
 }
 
@@ -651,7 +666,7 @@ fn an_entry_another_writer_adds_after_herdrs_install_is_not_recorded_or_trusted(
     assert!(!trusted(&fixture, "bash /foreign/late.sh"));
     assert_eq!(
         held_keys(&fixture),
-        hide_agent_hooks::HookEvent::ALL.len() + 1
+        hide_agent_hooks::AgentRuntime::Codex.events().count() + 1
     );
 }
 
@@ -677,7 +692,10 @@ fn an_install_that_added_a_pile_of_entries_teaches_nothing() {
     assert!(!trusted(&fixture, &herdr_command(&fixture)));
     assert!(!trusted(&fixture, "bash /extra/0.sh"));
     // Hide's own entries are trusted whatever Herdr's install did.
-    assert_eq!(held_keys(&fixture), hide_agent_hooks::HookEvent::ALL.len());
+    assert_eq!(
+        held_keys(&fixture),
+        hide_agent_hooks::AgentRuntime::Codex.events().count()
+    );
 }
 
 #[test]
