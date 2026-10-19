@@ -335,7 +335,8 @@ An official release requires:
 
 - The source commit's own `verify` push run on main passed, including its full Rust, web, desktop and package lanes.
 - The [agent journey](docs/VERIFICATION.md#agent-journey) ran on the source with the signed-in agents on the Mac and with the public candidate's stand-in, fake-model and configured signed-in CI lanes.
-  A failed cell stops the release unless the operator explicitly approves it for that version; every unmeasured cell and its reason is shown in the version approval.
+  A failed local journey cell stops the release unless the operator explicitly approves and records that exception for this version; every unmeasured cell and its reason is shown in the version approval.
+  The public candidate and the source's main `verify` run must succeed; operator approval cannot bypass either failed CI gate.
   Stand-ins and fake models do not prove a provider or a login.
 - The candidate's Linux and Windows installers pass their installation, packaged-app and local-feed update checks.
   The official macOS app and dmg pass Developer ID signing, notarization, mounting and isolated packaged-app checks, including the app expanded from its update zip.
