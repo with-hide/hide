@@ -764,7 +764,7 @@ Eligible rows have checkboxes; selecting one to five shows `N selected · up to 
 The row's single-card action uses the same batch path.
 While any row is selected, per-row promotion and dismissal buttons are hidden; unknown-authority answer buttons remain so those comparisons can be settled before selection.
 Promotion reasons omit zero counts and use short source-session counts.
-Started single or batch promotions remain in To ask, in the same two-line format as the questions: a PR mark in the checkbox slot, card numbers, the first title and `+N` for additional cards, then the status and links.
+Started single or batch promotions remain in To ask, in the same two-line format as the questions: a PR mark in the checkbox slot, the first title and `+N` for additional cards with the disclosure indicator, then the status, elapsed time where measured, subdued card numbers and links.
 Before a PR exists the row says Writing PR with the durable attempt's elapsed time; cards bound to the same running agent and attempt share a row.
 After confirmation, cards with the same PR number share a row, and `PR <number>` opens the existing PR panel.
 The catalog's failed checks use destructive text, requested changes and an agent asking the operator use warning text, and writing or awaiting review is neutral.
@@ -774,7 +774,8 @@ This applies equally to promotions already open before upgrade; PR numbers remai
 Every To ask row expands from its title, reason or empty space, or its single disclosure button with Enter or Space; the chevron only indicates expansion.
 Checkboxes, links and action buttons perform only their own actions.
 An ordinary question opens its current body, cited files and sources below its action buttons, while a document disagreement opens Compare content.
-A progress row opens each card's title and a two-line body preview, followed by Open PR and Open agent where their real targets are available.
+A progress row opens a two-line body preview aligned with its title and status; a single card does not repeat its title, while a batch labels each preview with its card number and title.
+PR and agent actions appear once, in the status line, and an expanded row also exposes its known agent there when the collapsed status does not need that link.
 Merged promotions leave To ask and become document pointers; closed-unmerged promotions leave To ask as ordinary cards and are not suggested again at that revision.
 A promotion row whose agent is alive is also in Needs You while the operator has something to do (`PR #n 리뷰` or `CI 실패`), and choosing that row opens this tab with it open (Work Hide AI does for a home); the row here still shows the progress, the pull request and the agent link whether or not it is in Needs You.
 When the pull request merges or closes, its agent ends and its worktree goes with the branch kept, so a closed attempt's `Agent ↗` link leaves with the pane.

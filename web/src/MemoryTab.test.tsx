@@ -301,9 +301,11 @@ describe("the Memory tab", () => {
     expect(unconfirmed?.textContent).not.toContain("Retry");
     // A merged card no file was named for shows the pull request it went in by.
     expect(container.querySelector("[data-memory-card='4'] [data-pr-mark]")?.textContent).toContain("931");
-    expect(container.querySelector("[data-memory-running='7']")?.textContent).toBe("Writing PRAgent ↗");
+    expect(container.querySelector("[data-memory-running='7']")?.textContent).toContain("Writing PR");
+    expect(container.querySelector("[data-memory-agent='7']")?.textContent).toBe("Agent ↗");
     // An agent not seen yet: no name, and nothing it would follow.
-    expect(container.querySelector("[data-memory-running='6']")?.textContent).toBe("Writing PR");
+    expect(container.querySelector("[data-memory-running='6']")?.textContent).toContain("Writing PR");
+    expect(container.querySelector("[data-memory-agent='6']")).toBeNull();
     expect(container.querySelector("[data-memory-pr-group='924']")?.textContent).toContain("924");
     const merged = container.querySelector("[data-memory-card='8']");
     expect(merged?.className).toContain("opacity-");

@@ -10,7 +10,7 @@ import { useShellStore } from "../store";
 import { Lane } from "../Tools";
 import type { LaneFrame, LaneSizes, WorkspaceView } from "../workspace";
 
-export const MEMORY_SCENE_STATES = ["workspace", "off", "ai_not_ready", "analyzing", "empty", "unreadable", "promote", "failed", "start_failed", "not_processed", "building", "unbuilt", "forgotten", "verifying", "reconsent", "checking", "check_budget_exhausted"] as const;
+export const MEMORY_SCENE_STATES = ["workspace", "off", "ai_not_ready", "analyzing", "empty", "unreadable", "promote", "writing", "writing_batch", "failed", "start_failed", "not_processed", "building", "unbuilt", "forgotten", "verifying", "reconsent", "checking", "check_budget_exhausted"] as const;
 export type MemorySceneState = (typeof MEMORY_SCENE_STATES)[number];
 export type MemorySceneLanguage = "en" | "ko" | "zh-CN" | "ja";
 export type MemorySceneParams = { theme: "light" | "dark"; state: MemorySceneState; width: number; language: MemorySceneLanguage };
@@ -69,7 +69,17 @@ export function memorySceneProject(state: MemorySceneState): ProjectMemory {
     case "analyzing": return { ...base, analysis: "analyzing" };
     case "empty": return { ...base, rows: [], usable_cards: 0 };
     case "unreadable": return { ...base, unavailable: { reason: "unreadable" }, rows: [] };
-    case "promote": return { ...base, rows: ROWS.slice(1, 4) };
+    case "promote": return { ...base, rows: ROWS.slice(1, 4).map((card, index) => ({ ...card, body_preview: [
+      "설치된 앱을 교체하기 전 운영자의 요청과 현재 버전을 확인하고 기존 앱을 백업한다.",
+      "저장소는 공개로 유지하며 라이선스 변경 내용은 저장소의 라이선스 파일에 반영한다.",
+      "릴리스 노트는 게시 전 운영자에게 보여주고 확인받은 내용으로 올린다.",
+    ][index] })) };
+    case "writing":
+    case "writing_batch": {
+      const promotion = { ...ROWS[1]!.promotion!, started_at_unix_ms: Date.now() - 4 * MINUTE };
+      const writing = { ...ROWS[1]!, promotion, body_preview: "설치된 앱은 운영자가 요청했을 때만 교체한다. 교체 전 버전을 확인하고 기존 앱을 백업한다." };
+      return { ...base, rows: state === "writing" ? [writing] : [writing, { ...ROWS[6]!, promotion, body_preview: "Rust 검증은 저장소가 제공하는 검증 스크립트로 실행한다." }] };
+    }
     case "failed": return { ...base, rows: [ROWS[3]!], questions: [{ kind: "failed", number: 8, title: ROWS[3]!.title, start_failure: null }] };
     case "start_failed": return { ...base, rows: [ROWS[3]!], questions: [{ kind: "failed", number: 8, title: ROWS[3]!.title, start_failure: { code: "shell_starting", detail: "[oh-my-zsh] Would you like to update? [Y/n]" } }] };
     case "not_processed": return { ...base, rows: [UNBUILT, ROWS[6]!], expanded: { number: 14, body: UNBUILT.title, cited_paths: [], sources: [], previous: null }, questions: [{ kind: "failed", number: 14, title: UNBUILT.title, start_failure: { code: "card_not_processed", detail: "백로그와 메모가 아직 main 앱에 없어 문서를 고치지 않았습니다." } }] };
@@ -89,7 +99,15 @@ const FRAME: LaneFrame = { mode: "docked", field: "panel_width", agents: 0, widt
 const SIZES: LaneSizes = { agentMin: 480, laneMin: 360, laneIdeal: 520, lanePage: 900, treeMin: 180, treeIdeal: 240, divider: 8 };
 
 export function MemoryScene({ theme, state, width, language }: MemorySceneParams) {
-  const actions = useMemo(() => createActions(() => true), []);
+  const actions = useMemo(() => createActions((event) => {
+    if (event.kind === "memory_expand") {
+      const project = useShellStore.getState().memory?.project;
+      if (!project) return false;
+      const card = project.rows.find((row) => row.number === event.payload.number);
+      useShellStore.setState({ memory: { project: { ...project, expanded: card ? { number: card.number, body: card.body_preview ?? card.title, cited_paths: [], sources: [], previous: null } : null } } });
+    }
+    return true;
+  }), []);
   const rest = useMemo(() => ({
     navigator: {
       focused_device_id: "local", focused_checkout_id: "main", focused_workspace_id: "herdr-ide",

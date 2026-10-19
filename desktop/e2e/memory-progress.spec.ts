@@ -94,7 +94,7 @@ test("Memory progress expands whole rows and follows the live promotion agent th
     await clickText(progress, progress.locator('[title="Run checks before merging"]'));
     await expect(progress.locator("[data-memory-preview]")).toHaveCount(2);
     await expect(progress.locator('[data-memory-preview="2"]')).toContainText("Use a pooled connection for writes");
-    await progress.locator('[data-memory-open-agent="1"]').click();
+    await progress.locator('[data-memory-agent="1"]').click();
     await expect(page.locator(`[data-pane-view="${placed.pane}"]`)).toHaveAttribute("data-focused", "true");
     expect(sent.get("focus_pane")?.pane_id).toBe(placed.pane);
     await showTool(page, "memory");
