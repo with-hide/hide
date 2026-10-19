@@ -2867,6 +2867,10 @@ mod tests {
 
     #[test]
     fn a_worker_s_first_prompt_follows_the_flag_its_agent_declares() {
+        assert!(
+            AgentRuntime::parse("cursor").is_none(),
+            "retired agents cannot be workers"
+        );
         for (agent, flag) in [
             ("claude", "--"),
             ("codex", "--"),
@@ -2874,7 +2878,6 @@ mod tests {
             ("opencode", "--prompt"),
             ("pi", "--"),
             ("omp", "--"),
-            ("cursor", "--"),
         ] {
             let runtime = AgentRuntime::parse(agent).expect(agent);
             let [first, prompt] =
@@ -3373,7 +3376,6 @@ mod tests {
             ("pi", true),
             ("omp", true),
             ("opencode", false),
-            ("cursor", false),
         ] {
             job.runtime = AgentRuntime::parse(agent).expect(agent);
             let answer = port.sleep(&worker(&job));
@@ -3395,7 +3397,6 @@ mod tests {
             ("omp", true),
             ("grok", false),
             ("opencode", false),
-            ("cursor", false),
         ] {
             let state = Arc::new(Mutex::new(WorkerState::default()));
             let mut port = CoreWorkers {

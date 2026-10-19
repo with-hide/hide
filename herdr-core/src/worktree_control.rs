@@ -4141,7 +4141,6 @@ mod tests {
             ("opencode", "--prompt", false, None),
             ("pi", "--", false, Some("fixture-model")),
             ("omp", "--", true, Some("fixture-model")),
-            ("cursor", "--", true, Some("fixture-model")),
         ] {
             let server = server(vec![
                 shell_ready(),

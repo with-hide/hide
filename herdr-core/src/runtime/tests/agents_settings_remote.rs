@@ -595,7 +595,6 @@ fn the_snapshot_carries_the_choice_the_providers_and_their_models() {
             "grok",
             "opencode",
             "pi",
-            "cursor",
             "antigravity"
         ],
         "every registered provider is a row, in the registry order"
@@ -699,9 +698,23 @@ fn an_agent_that_cannot_be_chosen_is_refused_as_runs_on_and_as_a_fallback() {
     assert!(runtime.dispatch_json(&ai_event(serde_json::json!({"provider": "claude"}))));
     runtime.take_ai_settings_save();
 
-    for payload in [
-        serde_json::json!({"provider": "cursor"}),
-        serde_json::json!({"fallback_add": "cursor"}),
+    for (payload, expected) in [
+        (
+            serde_json::json!({"provider": "opencode"}),
+            "ai_settings.provider_not_selectable",
+        ),
+        (
+            serde_json::json!({"fallback_add": "opencode"}),
+            "ai_settings.provider_not_selectable",
+        ),
+        (
+            serde_json::json!({"provider": "cursor"}),
+            "ai_settings.unknown_provider",
+        ),
+        (
+            serde_json::json!({"fallback_add": "cursor"}),
+            "ai_settings.unknown_provider",
+        ),
     ] {
         assert!(runtime.dispatch_json(&ai_event(payload)));
         assert_eq!(
@@ -712,7 +725,7 @@ fn an_agent_that_cannot_be_chosen_is_refused_as_runs_on_and_as_a_fallback() {
                 .as_ref()
                 .expect("the refusal is visible")
                 .kind,
-            "ai_settings.provider_not_selectable"
+            expected
         );
     }
     assert!(runtime.take_ai_settings_save().is_none());
