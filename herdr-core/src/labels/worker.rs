@@ -32,9 +32,9 @@ use serde_json::json;
 
 use super::analysis::{AnalysisFailure, LabelEnd};
 use super::analysis::{
-    AnalysisPhase, analysis_context, analysis_phase, context_fingerprint, interrupted,
-    new_human_turns, newest_user_is_last, retain_bounded, rolling_analysis_context,
-    task_input_cursor, turn_key,
+    AnalysisPhase, GoalUpdate, analysis_context, analysis_phase, context_fingerprint,
+    goal_evidence, interrupted, new_human_turns, newest_user_is_last, retain_bounded,
+    rolling_analysis_context, task_input_cursor, turn_key,
 };
 use super::analyzer::{AnalysisJob, AnalysisResult, LabelAnalyzer};
 use super::context_label;
@@ -225,6 +225,9 @@ struct AnalysisMeta {
     phase: AnalysisPhase,
     task_input_cursor: Option<u64>,
     initial_context: bool,
+    goal_evidence: Option<String>,
+    goal_evidence_start: Option<u64>,
+    goal_evidence_refresh: Option<String>,
     /// The turn began with the operator's request, so it may move the goal
     /// (D-09).
     operator_turn: bool,
@@ -1469,7 +1472,11 @@ impl LabelWorker {
         // short turns end first, and their end call names the goal. A pane
         // with no goal yet is named at once: nothing shows its work until
         // the first answer lands.
-        if phase == AnalysisPhase::TurnStart && !initial_context && !self.start_delay.is_zero() {
+        if phase == AnalysisPhase::TurnStart
+            && record.goal.is_some()
+            && record.task_input_cursor.is_some()
+            && !self.start_delay.is_zero()
+        {
             let due = match pane.start_held {
                 Some((held, due)) if held == turn => due,
                 _ => {
@@ -1502,15 +1509,56 @@ impl LabelWorker {
             .is_some_and(operator);
         let start_skipped =
             phase == AnalysisPhase::TurnEnd && record.analysis_turn_start != Some(turn);
-        let mut context = if initial_context {
+        let mut delta = new_human_turns(events, record.task_input_cursor);
+        delta.retain(operator);
+        // Only one newly assigned request has a known origin. A first read
+        // containing several historical requests cannot prove which one
+        // established the current goal; never label the oldest as its origin.
+        let evidence_events: &[LabelEvent] = if delta.len() == 1
+            && events
+                .iter()
+                .rfind(|event| event.kind == LabelEventKind::Human)
+                .is_some_and(|event| event.offset == delta[0].offset)
+        {
+            let first = &delta[0];
+            let start = events
+                .iter()
+                .position(|event| event.offset == first.offset)
+                .expect("delta is from these events");
+            &events[start..]
+        } else {
+            &[]
+        };
+        let evidence = goal_evidence(evidence_events, &operator);
+        let evidence_start = evidence_events
+            .iter()
+            .find(|event| event.kind == LabelEventKind::Human && operator(event))
+            .map(|event| event.offset);
+        // A start can precede the agent's explanation of a path-only brief.
+        // Refresh only from that same assignment's original request, never
+        // from a later narrow follow-up. Once another turn begins, retention
+        // may keep the original request but prune its replies: the saved
+        // clarification remains authoritative then.
+        let evidence_refresh = record
+            .goal_evidence_start
+            .and_then(|offset| events.iter().position(|event| event.offset == offset))
+            .filter(|start| {
+                !events[start + 1..]
+                    .iter()
+                    .any(|event| event.kind == LabelEventKind::Human)
+            })
+            .and_then(|start| goal_evidence(&events[start..], &operator));
+        let mut context = if initial_context && record.goal.is_none() {
             analysis_context(events, &operator)
         } else {
-            let mut delta = new_human_turns(events, record.task_input_cursor);
-            delta.retain(operator);
             // An end whose start was never asked sees the requests the
             // start would have, so it can tell a new job from a follow-up.
             rolling_analysis_context(
                 record.goal.as_deref().unwrap_or_default(),
+                evidence_refresh
+                    .as_deref()
+                    .or(record.goal_evidence.as_deref())
+                    .unwrap_or_default(),
                 if phase == AnalysisPhase::TurnStart || start_skipped {
                     &delta
                 } else {
@@ -1667,6 +1715,9 @@ impl LabelWorker {
             phase,
             task_input_cursor: task_input_cursor(events),
             initial_context,
+            goal_evidence: evidence,
+            goal_evidence_start: evidence_start,
+            goal_evidence_refresh: evidence_refresh,
             operator_turn,
             start_skipped,
             context_chars: context.chars().count(),
@@ -1744,20 +1795,32 @@ impl LabelWorker {
             Ok((provider, analysis)) => {
                 let record = self.records.get_mut(pane_id).expect("checked above");
                 let previous_goal = record.goal.clone();
-                // A first goal or the start of a turn the operator asked
-                // for may move the goal (D-09), and so may the end of one
-                // whose start was never asked (label-judgment-fixes D-04).
-                // With goal_changed false, the provider's goal value is
-                // ignored, including null.
+                // A new assignment still belongs to the operator's first
+                // boundary. A clearer name for that same assignment may
+                // arrive at its end; another agent's letter cannot rename it.
                 let may_update_goal = previous_goal.is_none()
+                    || (outcome.operator_turn
+                        && !stale_display
+                        && analysis.goal_update == GoalUpdate::Refine)
                     || ((outcome.initial_context
                         || outcome.phase == AnalysisPhase::TurnStart
                         || outcome.start_skipped)
                         && outcome.operator_turn
-                        && analysis.goal_changed);
+                        && analysis.goal_update == GoalUpdate::Replace);
                 let goal_changed = may_update_goal && previous_goal != analysis.goal;
                 if goal_changed {
                     record.goal = analysis.goal.clone();
+                }
+                if record.goal.is_some()
+                    && (previous_goal.is_none()
+                        || (may_update_goal && analysis.goal_update == GoalUpdate::Replace))
+                {
+                    record.goal_evidence.clone_from(&outcome.goal_evidence);
+                    record.goal_evidence_start = outcome.goal_evidence_start;
+                } else if record.goal.is_some() && outcome.goal_evidence_refresh.is_some() {
+                    record
+                        .goal_evidence
+                        .clone_from(&outcome.goal_evidence_refresh);
                 }
                 if let Some(session) = outcome.ledger_session.clone()
                     && let Some(client) = self.ledger.lock().ok().and_then(|client| client.clone())

@@ -844,15 +844,26 @@ Where a program compares names, an unnamed registration is called by its registr
 Where a person reads a name (the bell line, a row) an unnamed agent is called by its title, and by its runtime's name when it has none.
 Nothing publishes a session `name`, reads Codex's first human turn as a title, or renames an agent or tab.
 
-The label is made by the core, not by a plugin and not through pane tokens: `herdr-core/src/labels/` reads each Claude, Codex, Grok, Pi, omp, Cursor or OpenCode pane's conversation, asks the background AI for the session's goal, one line for the turn and how the turn ended (`context_label.v15`), in the core's output language ([AI_PROVIDERS.md](AI_PROVIDERS.md#the-output-language)), and keeps the answer per pane (the architecture is in [ARCHITECTURE.md](ARCHITECTURE.md#agent-labels-in-the-core)).
+The label is made by the core, not by a plugin and not through pane tokens: `herdr-core/src/labels/` reads each Claude, Codex, Grok, Pi, omp, Cursor or OpenCode pane's conversation, asks the background AI for the session's goal, one line for the turn and how the turn ended (`context_label.v18`), in the core's output language ([AI_PROVIDERS.md](AI_PROVIDERS.md#the-output-language)), and keeps the answer per pane (the architecture is in [ARCHITECTURE.md](ARCHITECTURE.md#agent-labels-in-the-core)).
 A session with no goal and no assigned work answers `goal: null`; greetings, identity questions and capability questions create no task and no placeholder title.
 The row uses the existing title priority above, and the next analysis after real work is requested sets its first goal.
 A session started with a goal command is named from that goal like any other request.
 Claude Code's `/goal <text>` is the operator's request with `<text>` as its words, because Claude Code marks its own answer to the command as the operator's turn (`turnOrigin: "human"`); a command it answers without that mark, such as `/model` or `/effort`, is no request, and the mark, not the command's name, decides.
 Codex's `/goal` is the `<codex_internal_context source="user_goal">` message, read as the objective it quotes, or as the message itself when Codex wrote no objective to read; every other `<codex_internal_context>` source, including the `goal` reminder Codex adds to each turn while a goal is active, is Codex's own text and no person's turn.
 A session read before this rule keeps what was read and is named at its next analyzed operator turn.
-A goal already set cannot become null and changes only on an operator turn with `goal_changed: true`, asked at the turn's start or, for a turn that ended before its start was asked, at its end; goals stored by earlier builds are preserved because the record cannot distinguish an invented goal from an actual assignment.
-With `goal_changed: false`, the returned goal value is ignored even when it is null; the turn's `line` and `end` are still applied.
+A goal names the concrete feature, screen or subject and its intended outcome, so neighboring sessions can be told apart; a delegated session names its own assigned part.
+A goal already set cannot become null.
+`goal_update: keep` preserves it verbatim, `refine` gives a vague or misleading name a more specific subject without changing the assignment, and `replace` names a new or larger assignment.
+Refinement is accepted only on an operator turn whose result still belongs to the current turn, including its end; replacement retains the existing first-analysis, turn-start and skipped-start rules and requires an operator turn.
+Another agent's follow-up cannot rename it, and an already specific goal stays stable through implementation, tests, merging and installation.
+A local record keeps at most 800 masked characters of the requests and early replies that establish and clarify its assignment, so a terse follow-up after a restart does not lose the subject; replacing the assignment replaces that evidence, and device marks save none of this text.
+It refreshes only during its original turn; later follow-ups keep that clarification even if bounded history drops the early replies.
+A named legacy record without this evidence has an unknown assignment origin; it keeps rolling from its current goal and latest exchange rather than treating the session's first request as that assignment.
+Evidence is established only at an accepted first or new assignment with one new attributed request; several historical requests do not prove its origin.
+The line names a concrete current action, finding, result or dependency; an acknowledgment such as “proceeding as requested” adds no information and is left empty.
+It prioritizes progress the operator can understand over internal implementation terms, test counts and capture counts; a technical name remains when the operator needs it to identify or act on an issue.
+Rewording preserves the actual scope and pending verification: a test-fixture edit does not become a finished feature, and requested verification does not become a passed check.
+With `keep`, the returned goal value is ignored even when it is null; the turn's `line` and `end` are still applied.
 A line longer than 40 characters (80 in English) is cut between words and ends in `…`; a question or a block keeps its word with the cut line.
 `line` and `end` still describe the current conversation: an answered greeting or identity question with no required next action has an empty line and a stopped end of `done`, while a specific question retains its requested action.
 The call at a turn's start is asked only once the turn has worked 15 seconds (`labels/worker.rs`, `START_DELAY`): a measured 23% of turns end within 15 s and 38% within 30 s (2,384 Claude Code turns, 2026-10-16), and a turn that ends first is asked its end alone, which names the goal as well: a short turn that gives the pane a new job renames it, a short follow-up on the same job keeps the name, and the turn costs one request instead of two.
