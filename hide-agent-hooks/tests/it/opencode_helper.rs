@@ -150,6 +150,38 @@ fn a_complete_opencode_native_result_reaches_admission_as_metadata() {
 }
 
 #[test]
+fn a_complete_omp_timed_result_reaches_admission_as_metadata() {
+    let machine = Machine::new();
+    let server = json!({"id":"cli:agent:prompt", "result":{"type":"agent_prompted",
+        "agent":{"pane_id":"w1:p2", "terminal_id":"term-target",
+            "agent_session":{"agent":"pi", "source":"herdr:pi", "kind":"path", "value":"/fixture/pi-session.jsonl"}}}});
+    let result = machine.run_as(
+        "omp",
+        "observation",
+        &json!({"version":hide_agent_hooks::pi_extension::VERSION, "session_id":"native-omp",
+        "observation":{"command":"herdr agent prompt w1:p2 private-body", "call_id":"call-native",
+            "result":{"content":[{"type":"text", "text":format!("{server}\n\n\nWall time: 0.34 seconds")}]},
+            "truncated":false, "failed":false, "asynchronous":false}}),
+        true,
+    );
+    assert_eq!(result["observed"], true);
+    let bytes = std::fs::read(machine.home.parent().unwrap().join("observation")).unwrap();
+    let fact: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(fact["runtime_id"], "omp");
+    assert_eq!(fact["session_id"], "native-omp");
+    assert_eq!(fact["call_id"], "call-native");
+    assert_eq!(fact["reason"], "complete");
+    assert_eq!(fact["target"]["terminal_id"], "term-target");
+    assert_eq!(
+        fact["target"]["native_session"]["value"],
+        "/fixture/pi-session.jsonl"
+    );
+    let wire = String::from_utf8(bytes).unwrap();
+    assert!(!wire.contains("private-body"));
+    assert!(!wire.contains("Wall time"));
+}
+
+#[test]
 fn a_prompt_takes_the_panes_letters_for_this_session_and_confirms_nothing() {
     let machine = Machine::new();
     let answer = machine.run(

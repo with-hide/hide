@@ -183,7 +183,13 @@ pub fn observe(
             .result
             .filter(|_| call.runtime_id == "grok")
             .and_then(grok_raw_output);
-        let parsed = raw_output.as_ref().or(call.result).and_then(herdr_answer);
+        let parsed = raw_output.as_ref().or(call.result).and_then(|result| {
+            herdr_answer(result).or_else(|| {
+                (call.runtime_id == "omp")
+                    .then(|| omp_timed_answer(result))
+                    .flatten()
+            })
+        });
         match parsed {
             Some(answer) if answer.get("error").is_some() => {
                 // Only the exact server validation refusal proves no input.
@@ -304,6 +310,39 @@ fn grok_raw_output(response: &Value) -> Option<Value> {
         .map(|value| u8::try_from(value.as_u64()?).ok())
         .collect::<Option<Vec<_>>>()?;
     String::from_utf8(bytes).ok().map(Value::String)
+}
+
+/// omp 18.7.0's completed Bash result has no separate raw stdout field.
+/// Its tool appends two newlines and `formatWallTimeNotice` (toFixed(2))
+/// to stdout. Accept only that pinned envelope around one complete JSON
+/// answer; clipping notices, other text parts and arbitrary suffixes fail.
+fn omp_timed_answer(response: &Value) -> Option<Value> {
+    if response.as_object()?.len() != 1 {
+        return None;
+    }
+    let parts = response["content"].as_array()?;
+    if parts.len() != 1 || parts[0]["type"] != "text" {
+        return None;
+    }
+    let text = parts[0]["text"].as_str()?;
+    if text.len() > RESULT_LIMIT {
+        return None;
+    }
+    let (output, notice) = text.rsplit_once("\n\nWall time: ")?;
+    let seconds = notice.strip_suffix(" seconds")?;
+    let (whole, fraction) = seconds.split_once('.')?;
+    if whole.is_empty()
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || (whole.len() > 1 && whole.starts_with('0'))
+        || fraction.len() != 2
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let answer = serde_json::from_str::<Value>(output.trim()).ok()?;
+    (answer["id"] == "cli:agent:prompt")
+        .then(|| herdr_answer(&answer))
+        .flatten()
 }
 
 /// Native command-hook payloads. Post has the actual executed input, so no
@@ -689,6 +728,64 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn omp_complete_native_timing_envelope_preserves_server_metadata() {
+        // omp 18.7.0's actual completed Bash callback contains one text
+        // part: stdout's newline, two notice separators and this exact footer.
+        let result = json!({"content":[{"type":"text",
+            "text":format!("{}\n\n\nWall time: 0.34 seconds", answer())}]});
+        let mut input = call("herdr agent prompt worker hi", &result);
+        input.runtime_id = "omp";
+        let fact = observe(input, 1, &|_| None).unwrap();
+        assert_eq!(fact.reason, ObservationReason::Complete);
+        assert_eq!(
+            fact.target.unwrap().native_session.unwrap().value,
+            "recipient-native"
+        );
+    }
+
+    #[test]
+    fn omp_timing_envelope_never_recovers_uncertain_or_competing_output() {
+        let text = format!("{}\n\n\nWall time: 0.34 seconds", answer());
+        let complete = json!({"content":[{"type":"text", "text":text}]});
+        for runtime in ["claude-code", "codex", "grok", "opencode", "pi"] {
+            let mut input = call("herdr agent prompt worker hi", &complete);
+            input.runtime_id = runtime;
+            let fact = observe(input, 1, &|_| None).unwrap();
+            assert!(fact.target.is_none(), "{runtime}");
+        }
+        for result in [
+            json!({"content":[{"type":"text", "text":format!("{text}\nwarning") }]}),
+            json!({"content":[{"type":"text", "text":format!("prefix\n{text}") }]}),
+            json!({"content":[{"type":"text", "text":format!("{}\n{text}", answer()) }]}),
+            json!({"content":[{"type":"text", "text":text}, {"type":"text", "text":"warning"}]}),
+            json!({"content":[{"type":"text", "text":text}], "stderr":"warning"}),
+            json!({"content":[{"type":"text", "text":format!("{{\"id\":\"cli:agent:prompt\"\n\nWall time: 0.34 seconds") }]}),
+            json!({"content":[{"type":"text", "text":format!("{}\n[Some lines truncated to fit]...\n\nWall time: 0.34 seconds", answer()) }]}),
+            json!({"content":[{"type":"text", "text":text.replace("0.34", "-0.34") }]}),
+            json!({"content":[{"type":"text", "text":text.replace("0.34", "0.3") }]}),
+            json!({"content":[{"type":"text", "text":text.replace("0.34", "00.34") }]}),
+            json!({"content":[{"type":"text", "text":text.replace("0.34", "NaN") }]}),
+        ] {
+            let mut input = call("herdr agent prompt worker hi", &result);
+            input.runtime_id = "omp";
+            let fact = observe(input, 1, &|_| None).unwrap();
+            assert_eq!(fact.reason, ObservationReason::ResultMissing, "{result}");
+            assert!(fact.target.is_none());
+        }
+        for flag in 0..4 {
+            let mut input = call("herdr agent prompt worker hi", &complete);
+            input.runtime_id = "omp";
+            match flag {
+                0 => input.truncated = true,
+                1 => input.failed = true,
+                2 => input.interrupted = true,
+                _ => input.asynchronous = true,
+            }
+            assert!(observe(input, 1, &|_| None).unwrap().target.is_none());
+        }
     }
 
     #[test]

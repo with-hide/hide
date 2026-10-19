@@ -996,6 +996,9 @@ No observation adds a Pre request, persistent command spool, polling thread, or 
 Only a complete pinned Herdr `agent_prompted` response from a no-wait canonical call supplies a server-reported target candidate.
 Grok's Bash result supplies raw UTF-8 bytes in `output`; the adapter requires their length to match `total_bytes` and honors the native truncation, timeout, signal and background flags.
 Its decorated `output_for_prompt` and output-file path are never used to recover a missing or incomplete result.
+omp's pinned [completed Bash implementation](https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/coding-agent/src/tools/bash.ts) returns decorated text without a separate raw stdout field.
+For omp alone, the parser accepts one complete Herdr JSON response followed by the exact two-newline `Wall time: <seconds with two decimal places> seconds` notice emitted by its [native formatter](https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/tui/src/tools/bash.ts).
+Other suffixes, competing text parts, clipping notices and truncated, failed, interrupted or asynchronous results remain uncertain; the parser never searches for a JSON substring inside arbitrary output.
 Success means PTY submission was observed, never model intake, reply, work completion, a Hide letter receipt, lineage or a watch.
 Missing native references remain incomplete; wait snapshots, compounds, redirection, foreign routes, truncation, interruption and background results cannot create a confirmed recipient.
 Only the exact `agent_blocked` server refusal is classified as an observed rejection.
