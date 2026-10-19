@@ -14,7 +14,7 @@ import { WorkspaceScreen } from "../WorkspaceScreen";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 import { sceneParams, type SceneParams } from "./SidebarScene";
 
-const STATES = ["closed", "overlay", "pinned", "tree-overlay", "tree-only", "expanded", "prs", "narrow"] as const;
+const STATES = ["closed", "overlay", "pinned", "tree-overlay", "tree-only", "expanded", "prs", "memory", "changes", "narrow"] as const;
 type LaneState = (typeof STATES)[number];
 type Lane = { tool: Tool | null; pinned: boolean; tree: boolean; documents: boolean; expanded: boolean };
 
@@ -26,6 +26,8 @@ const LANES: Record<LaneState, Lane> = {
   "tree-only": { tool: "files", pinned: true, tree: false, documents: false, expanded: false },
   expanded: { tool: "files", pinned: false, tree: true, documents: true, expanded: true },
   prs: { tool: "prs", pinned: true, tree: false, documents: true, expanded: false },
+  memory: { tool: "memory", pinned: true, tree: false, documents: true, expanded: false },
+  changes: { tool: "changes", pinned: true, tree: false, documents: true, expanded: false },
   narrow: { tool: "files", pinned: true, tree: false, documents: true, expanded: false },
 };
 
@@ -37,7 +39,7 @@ View를 열어도 왼쪽 터미널의 폭과 pane 배치는 그대로다. 핀을
 
 ## 2. 찾기
 
-파일은 위 경로를 눌러 트리를 켜고 찾는다. 트리는 끌 때까지 남고, View가 그만큼 넓어져 문서는 작아지지 않는다.
+파일은 헤더 왼쪽 탐색기 버튼을 눌러 트리를 켜고 찾는다. 트리는 끌 때까지 남고, View가 그만큼 넓어져 문서는 작아지지 않는다.
 
 ## 3. 읽기
 

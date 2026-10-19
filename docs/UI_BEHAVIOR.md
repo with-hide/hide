@@ -71,12 +71,14 @@ There is no Work tool; its Sessions list is the sidebar's 태스크 list and its
 A rail icon is drawn pressed, with a primary bar at the rail's edge, while the lane shows its tool; pressing it opens the lane on that tool, and pressing the pressed one closes the lane.
 Each icon's hint names the tool and its scope and ends with its chord (`Memory · herdr-ide  ⇧⌘L`, `PRs · all of hide  ⇧⌘R`, `Files · settings-ui  ⇧⌘E`, `Changes · settings-ui  ⇧⌘G`).
 A short rule between PRs and Files marks where the Project's tools end and the checkout's begin (PRD work-tab-pr-lens D-37); it is derived from each tool's scope, so a tool of the other scope moves it.
-The lane header names the tool, then its scope behind one small icon, a folder for the Project (Memory, PRs) and a branch for the checkout (Files, Changes), in the scope text's colour; the icon is decoration, and the accessible name stays the hint's `name · scope`.
+Memory, PRs and Changes headers name the tool, then its scope behind one small icon, a folder for the Project (Memory, PRs) and a branch for the checkout (Changes), in the scope text's colour; the icon is decoration.
+Files omits the title, branch icon and branch name from its header; its rail hint still names the tool and checkout scope.
 While the lane does not show Files, its icon carries a badge counting the views open, also given as its accessible description; Memory's carries a dot while its Project has questions waiting, and PRs' a warning-coloured number counting the PRs tool's Needs You rows (folded rows not counted, a session's Needs You never).
 While the 보기 slot holds something, a fifth button stands above Memory with the mark of what it holds, a pull request as its PR mark in its state's icon and colour or a record as a page, and one short rule under it sets it apart from the tools (see The 보기 slot).
 The rail's `…` menu holds Toggle File Tree with its chord, Pin or Unpin, and Expand.
 A Workspace seen for the first time shows Agent Views alone, its lane closed.
-The lane's header names its tool and scope, `Memory · <project>`, `PRs · all of <project>`, `Files · <checkout>` and `Changes · <checkout>`, with Pin, Expand and Close at its right; a new checkout in front renames the Files and Changes scopes and leaves Memory and PRs as they are.
+The lane's header has Pin, Expand and Close at its right.
+Memory, PRs and Changes name their tool and scope, `Memory · <project>`, `PRs · all of <project>` and `Changes · <checkout>`; a new checkout in front updates the checkout scopes in Changes and the Files rail hint and leaves Memory and PRs as they are.
 
 Unpinned, the lane opens over Agent Views at their right edge, set apart by a shadow and a left border in both themes; the terminals under it keep their grid and layout, are not dimmed, and keep their input and output.
 An unpinned lane stays up until the operator takes it down: a click on a terminal pane, choosing an agent or a tab, another Workspace in front and a restart all leave it as it was.
@@ -92,7 +94,7 @@ A close keeps the tool the lane showed, so ⌘E and Show right lane bring it bac
 
 The files tool shows the View areas below, with their tabs, splits, previews and browser displays, each page inside its area's bounds.
 The active document's header starts with the checkout's name, then the path in ` › ` steps, cutting a long path at its start so the file name stays.
-The Files top header keeps one folder-and-Explorer toggle, with localized text, pressed background and accessible pressed state.
+The Files top header starts at its left edge with one folder-and-Explorer toggle, with localized text, pressed background and accessible pressed state.
 It stays visible with no View and is disabled while the tree alone must remain.
 Document and page toolbars retain their path or address and controls, without another tree toggle.
 The tree button or ⌘⇧E (`Toggle File Tree`) turns the file tree, the Explorer, on and off, the button pressed while it is on; ⌘⇧E while the lane does not show Files opens it on Files with the tree.
@@ -178,7 +180,7 @@ A browser page's own new target, bound to its area, does not open the lane.
 
 Each checkout has an ungrouped collection and up to 32 named groups, one level deep.
 Existing tabs, named or unnamed, stay ungrouped; a tab name never creates a group.
-The group selector, actual tabs, New tab and Add agent share the existing tab-bar row, with no additional group header above the canvas.
+The group selector, actual tabs and New tab share the existing tab-bar row, with no Add agent button and no additional group header above the canvas, on local and connected devices.
 Each group owns its Agent area tree, tab order and selection; selecting a group restores that tree, while Files keeps the checkout's own View tree and per-tab bookmarks.
 The selector offers Create group, Rename group and Ungroup, and the tab menu can create a group around a tab, move it to another group or remove it from its group.
 A move puts the whole tab at the end of the destination's active area and selects it; its panes, processes, conversations and bookmarks stay with it.
@@ -191,7 +193,8 @@ New tab creates a core-owned draft in the chosen area's bar without starting a s
 An empty group creates its first draft when a start is requested.
 Empty groups and grouped or ungrouped drafts show the instruction field, the shared provider/model picker and Start, with a terminal icon and secondary `Start with terminal` button always visible beside that start flow.
 Terminal start needs neither an instruction nor an agent selection.
-The first start fills that draft's position with the live tab; Add agent on a live tab starts another pane in that same tab.
+The first start fills that draft's position with the live tab.
+Existing starts that add a pane to a live tab retain their progress, failure and recovery form; New tab remains the tab bar's creation entry point.
 Starting in an enlarged pane returns that tab to its split layout and keeps its existing terminals running.
 While a start is being confirmed its temporary terminal occupies the existing reservation and does not appear as another tab.
 The internal creation label is never shown as a pane or tab name and is not copied into a reopened terminal.

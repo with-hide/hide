@@ -8,7 +8,7 @@ import { herdrHasFocus, startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { herdrGate } from "./herdr-gate";
 import { herdrTabs } from "./failure-dump";
 import { startHided, type Daemon } from "./hided-fixture";
-import { countSent, enterWorkspace, screenshot } from "./wire";
+import { countSent, enterWorkspace, screenshot, sendEvent } from "./wire";
 import { quietFor } from "./wait";
 import { chord } from "./chords";
 
@@ -195,7 +195,7 @@ test("a late global start stays behind after returning to an empty group or draf
   }
 });
 
-test("adding an agent keeps the live tab and its existing pane, with the chosen model and prompt", async ({ page }) => {
+test("New tab starts an agent with its chosen model and prompt without an Add agent button", async ({ page }) => {
   const herdr = await startHerdr({ agents: false });
   let daemon: Daemon | null = null;
   try {
@@ -209,7 +209,8 @@ test("adding an agent keeps the live tab and its existing pane, with the chosen 
     const tab = (await stripTabs(page).getAttribute("data-tab"))!;
     const originalPane = (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!;
     const originalTabs = topology(herdr);
-    await page.locator(`[data-add-agent="${tab}"]`).click();
+    await expect(page.getByRole("button", { name: "Add agent", exact: true })).toHaveCount(0);
+    await page.locator("[data-new-agent-tab=true]").click();
     await expect(blank(page)).toBeVisible();
     await blank(page).locator("[data-agent-kind]").click();
     await expect(page.locator('[data-agent-kind-option="claude"]')).toBeEnabled({ timeout: 20_000 });
@@ -218,18 +219,20 @@ test("adding an agent keeps the live tab and its existing pane, with the chosen 
     await expect(model).toBeEnabled();
     await model.click();
     await page.locator('[data-agent-model-option="opus"]').click();
-    await blank(page).getByRole("textbox").fill("같은 탭의 새 에이전트");
+    await blank(page).getByRole("textbox").fill("새 탭의 에이전트");
     await page.locator("[data-group-start-agent=true]").click();
     await expect(blank(page)).toHaveCount(0, { timeout: 30_000 });
-    await expect(page.locator("[data-pane-view]")).toHaveCount(2);
-    await expect(page.locator(`[data-pane-view="${originalPane}"]`)).toBeVisible();
-    expect(topology(herdr)).toEqual(originalTabs);
+    await expect(stripTabs(page)).toHaveCount(2);
+    await expect(page.locator(`[data-agent-tab-bar] [data-tab="${tab}"]`)).toBeVisible();
+    expect(topology(herdr)).toHaveLength(originalTabs.length + 1);
     const added = (await page.locator("[data-pane-view]").evaluateAll((panes) => panes.map((pane) => pane.getAttribute("data-pane-view")!))).find((id) => id !== originalPane)!;
     await expect.poll(() => {
       const info = herdr.run(["pane", "process-info", "--pane", added]) as { result: { process_info: { foreground_processes: { argv?: string[] | null }[] } } };
       return info.result.process_info.foreground_processes.map((process) => process.argv);
-    }, { timeout: 30_000 }).toContainEqual([expect.stringMatching(/(?:^|[/\\])claude(?:\.exe)?$/), "--model", "opus", "--", "같은 탭의 새 에이전트"]);
-    await screenshot(page, "group-tabs-agent-added");
+    }, { timeout: 30_000 }).toContainEqual([expect.stringMatching(/(?:^|[/\\])claude(?:\.exe)?$/), "--model", "opus", "--", "새 탭의 에이전트"]);
+    await page.locator(`[data-agent-tab-bar] [data-tab="${tab}"]`).click();
+    await expect(page.locator(`[data-pane-view="${originalPane}"]`)).toBeVisible();
+    await screenshot(page, "group-tabs-new-agent-tab");
   } finally { try { daemon?.stop(); } finally { herdr.stop(); } }
 });
 
@@ -287,7 +290,7 @@ test("a lost join answer preserves the existing zoomed tab and all three shells 
   try {
     daemon = await startHided(herdr, "group-join-recover", undefined, { HERDR_SOCKET_PATH: gate.socket });
     await open(page, daemon);
-    await createGroup(page, "Join recovery");
+    const group = await createGroup(page, "Join recovery");
     await terminal(page).click();
     await expect(blank(page)).toHaveCount(0, { timeout: 30_000 });
     const tab = (await stripTabs(page).getAttribute("data-tab"))!;
@@ -302,9 +305,10 @@ test("a lost join answer preserves the existing zoomed tab and all three shells 
     const originals = [identity(first), identity(second)];
     const originalTabs = topology(herdr);
     herdr.run(["pane", "zoom", "--pane", first, "--on"]);
-    await page.locator(`[data-add-agent="${tab}"]`).click();
+    // D-01 removes the entry button. Seed an existing add-pane request at
+    // the public event boundary to retain its independent recovery contract.
     const held = gate.arm("pane.move");
-    await terminal(page).click();
+    await sendEvent(page, daemon, "agent_start_in_checkout", { checkout_path: path.join(herdr.root, "fixture"), provider: "terminal", request_id: "start-join-recovery", target: { group_id: group, area_id: "a1", tab_id: tab, add_pane: true } });
     await held;
     await expect(stripTabs(page)).toHaveCount(1);
     const move = gate.params("pane.move")[0];
