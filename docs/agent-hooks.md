@@ -595,6 +595,10 @@ A bell target requires a prompt hook and measured menu behavior on the pinned, i
 Add independent hook and session samples, or an explicit absence reason when that format is unsupported, in `hide-agent-adapter/tests/fixtures/support.json`, and add the logo or monogram to its manifest.
 Add the owner's dialect tests and feature-gate cases, including aliases, without changing the pre-migration hook-byte fixtures.
 Generate `contracts/agent-adapters.json` with the `export_web_contract` example as described in [contracts/README.md](../contracts/README.md#agent-adapters).
+Generate `contracts/agent-journey.json` with `export_journey_contract` too.
+Add the CLI pin and the local-isolation, CI-login and fake-model routes; `scripts/tests/test_agent_journey_contract.py` rejects a registered agent missing any of them.
+Every active adapter automatically participates in the full fake-model journey without a second agent list, and the lane rejects any missing row or declared cell that did not pass, including title and usage; see [VERIFICATION.md: The CI lanes](VERIFICATION.md#the-ci-lanes).
+Choose automatic or operator-named title measurement explicitly for a new session format; the exhaustive match in `hide-agent-adapter/src/journey.rs` prevents an unknown format from inheriting automatic-title behavior.
 The leaf contract tests reject missing samples, links, logos, inconsistent capability combinations and generated-contract drift, and the existing feature and isolated-Herdr e2e suites must still pass.
 
 ### What the kit puts down

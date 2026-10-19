@@ -198,10 +198,19 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             Some(dialect) if dialect.closes_pane_when_sleeping() => JourneyWake::SleepingSession,
             _ => JourneyWake::Pane,
         });
-        let title = cells.title.then_some(match row.titles {
-            Some(super::SessionFormat::Pi) => JourneyTitle::Named("/name"),
-            _ => JourneyTitle::Automatic,
-        });
+        let title = row
+            .titles
+            .filter(|_| cells.title)
+            .map(|format| match format {
+                super::SessionFormat::Pi => JourneyTitle::Named("/name"),
+                super::SessionFormat::Claude
+                | super::SessionFormat::Codex
+                | super::SessionFormat::Grok
+                | super::SessionFormat::Omp
+                | super::SessionFormat::Cursor
+                | super::SessionFormat::OpenCode
+                | super::SessionFormat::Antigravity => JourneyTitle::Automatic,
+            });
         JourneyAdapter {
             id: row.id,
             fake_home: row.fake_home,

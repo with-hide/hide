@@ -10,11 +10,31 @@ lane = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(lane)
 
 
+def passing_table():
+    return {row["id"]: {name: {"status": "pass" if declared else "N/A", "reason": "adapter declaration"}
+                        for name, declared in row["cells"].items()}
+            for row in lane.active_rows(lane.load_contract(SCRIPT.parents[1]))}
+
+
 def report(table, agents, **extra):
-    return {"fixture": False, "cleanup": {"confirmed": True}, "failures": [], "table": table, "agents": agents, **extra}
+    complete = passing_table()
+    for key, cells in table.items():
+        complete[key] = {**complete.get(key, {}), **cells}
+    return {"fixture": False, "cleanup": {"confirmed": True}, "failures": [], "table": complete, "agents": agents, **extra}
 
 
 class Login(unittest.TestCase):
+    def test_missing_rows_and_cells_are_not_a_login_exception(self):
+        for row in lane.active_rows(lane.load_contract(SCRIPT.parents[1])):
+            for defect in ("row", "cell"):
+                with self.subTest(agent=row["id"], defect=defect):
+                    value = report({}, [])
+                    if defect == "row":
+                        del value["table"][row["id"]]
+                    else:
+                        del value["table"][row["id"]]["title"]
+                    self.assertFalse(lane.judge(value, "login")[0])
+
     def test_a_spent_day_passes_as_not_measured_for_the_nightly_report(self):
         quota_reason = "provider quota exhausted (RequestsPerDay)"
         passed, notes = lane.judge(report(
@@ -87,10 +107,9 @@ class Fixture(unittest.TestCase):
 
 class FakeModel(unittest.TestCase):
     def table(self, **override):
-        cells = {name: {"status": "pass", "reason": ""} for name in lane.BUILT_CELLS}
-        return {agent: {**cells, **override} for agent in lane.FIXTURE_AGENTS}
+        return {agent: {**cells, **override} for agent, cells in passing_table().items()}
 
-    def test_every_built_cell_passing_passes(self):
+    def test_every_declared_cell_passing_passes(self):
         self.assertEqual(lane.judge(report(self.table(), [], fake_model=True), "fake"), (True, []))
 
     def test_the_folder_question_a_stand_in_cannot_ask_must_pass(self):
@@ -98,8 +117,8 @@ class FakeModel(unittest.TestCase):
         passed, notes = lane.judge(report(self.table(start_untrusted={"status": "not measured", "reason": "x"}), [],
                                           fake_model=True), "fake")
         self.assertFalse(passed)
-        self.assertIn("::error title=agent journey claude-code::start_untrusted is not measured, the fake model lane "
-                      "stands in for the stand-in only when it passes: x", notes)
+        self.assertIn("::error title=agent journey claude-code::start_untrusted is not measured, the fake lane "
+                      "requires pass from the adapter declaration: x", notes)
 
     def test_a_missing_cli_fails(self):
         passed, _ = lane.judge(report(self.table(), [{"id": "grok", "cli_missing": "grok"}], fake_model=True), "fake")
@@ -115,13 +134,61 @@ class FakeModel(unittest.TestCase):
 
     def test_a_report_without_a_row_the_lane_stands_for_fails(self):
         # Every row it has passes, but Codex's is not there to pass.
-        table = self.table()
-        del table["codex"]
         for name, flag in (("fake", "fake_model"), ("fixture", "fixture")):
             with self.subTest(name):
-                passed, notes = lane.judge(report(table, [], **{flag: True}), name)
+                value = report(self.table(), [], **{flag: True})
+                del value["table"]["codex"]
+                passed, notes = lane.judge(value, name)
                 self.assertFalse(passed)
                 self.assertIn("::error title=agent journey codex::the report has no codex row", notes)
+
+    def test_every_registered_agent_and_declared_cell_is_required(self):
+        # A release must not be green when any supported adapter is absent,
+        # or when its declared behavior was skipped or incorrectly called N/A.
+        for row in lane.active_rows(lane.load_contract(SCRIPT.parents[1])):
+            key = row["id"]
+            with self.subTest(agent=key, defect="missing row"):
+                value = report({}, [], fake_model=True)
+                del value["table"][key]
+                self.assertFalse(lane.judge(value, "fake")[0])
+            for name, declared in row["cells"].items():
+                if not declared:
+                    continue
+                for status in ("not measured", "N/A", "pending", None):
+                    with self.subTest(agent=key, cell=name, status=status):
+                        value = report({}, [], fake_model=True)
+                        if status is None:
+                            del value["table"][key][name]
+                        else:
+                            value["table"][key][name] = {"status": status, "reason": "omitted"}
+                        self.assertFalse(lane.judge(value, "fake")[0])
+    def test_a_new_registration_automatically_becomes_required(self):
+        rows = lane.load_contract(SCRIPT.parents[1])
+        added = {**rows[0], "id": "newly-registered-agent"}
+        value = report({}, [], fake_model=True)
+        passed, notes = lane.judge(value, "fake", [*rows, added])
+        self.assertFalse(passed)
+        self.assertIn("::error title=agent journey newly-registered-agent::the report has no newly-registered-agent row", notes)
+
+    def test_an_undeclared_cell_cannot_be_reported_as_proven(self):
+        for row in lane.active_rows(lane.load_contract(SCRIPT.parents[1])):
+            for name, declared in row["cells"].items():
+                if not declared:
+                    with self.subTest(agent=row["id"], cell=name):
+                        value = report({}, [], fake_model=True)
+                        value["table"][row["id"]][name] = {"status": "pass", "reason": "claimed support"}
+                        self.assertFalse(lane.judge(value, "fake")[0])
+
+
+class MalformedReport(unittest.TestCase):
+    def test_missing_tables_or_invalid_cells_fail_with_an_annotation(self):
+        for table in (None, [], {"codex": None}, {"codex": {"title": {}}},
+                      {"codex": {"title": {"status": "pass"}}}):
+            with self.subTest(table=table):
+                value = {**report({}, [], fake_model=True), "table": table}
+                passed, notes = lane.judge(value, "fake")
+                self.assertFalse(passed)
+                self.assertTrue(any(note.startswith("::error ") for note in notes))
 
 
 if __name__ == "__main__":
