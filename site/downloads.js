@@ -121,6 +121,7 @@ function mountDownloads() {
   }
 
   function render() {
+    renderHero();
     validated.hidden = true;
     for (const link of [archive, checksum, second, secondChecksum, notes]) link.removeAttribute("href");
     second.hidden = true;
@@ -199,7 +200,6 @@ function mountDownloads() {
       clearTimeout(timer);
       request = null;
       render();
-      renderHero();
     }
   }
 
