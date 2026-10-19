@@ -38,8 +38,9 @@ export function FirstRunDevices({ actions, primary, onBack, onNext }: {
     if (sent.has(profile.id) || ["connecting", "connected", "failed"].includes(profile.connect_state)) {
       if (kit?.busy) return "installing";
       if (kit?.unavailable || kit?.refused || kit?.components.some((part) => part.state === "failed") || kit?.agents.some((agent) => agent.enabled && [agent.skill, agent.hook, agent.herdr].some((piece) => piece?.state === "failed"))) return "failed";
-      if (profile.connect_state === "failed" || (remote && !["connected", "connecting", "not_connected"].includes(remote.state)) || (remote?.state === "not_connected" && remote.message)) return "failed";
       if (remote?.state === "connected" && kit && !kit.busy) return "connected";
+      if (remote?.state === "connecting") return "connecting";
+      if (profile.connect_state === "failed" || (remote && !["connected", "not_connected"].includes(remote.state)) || (remote?.state === "not_connected" && remote.message)) return "failed";
       if (pressedAt === revision || profile.connect_state === "connecting" || remote?.state === "connecting" || !remote) return "connecting";
     }
     if (profile.added_as) return "added";

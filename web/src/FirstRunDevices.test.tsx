@@ -75,3 +75,32 @@ it("keeps a successful device while Retry sends only the failed selected profile
   expect(view.events.filter((event) => event.kind === "herdr_profile_connect").map((event) => event.payload)).toEqual([{ profile_id: "bad", host_consent: true }]);
   await view.unmount();
 });
+
+it("follows a recovered live connection over an earlier profile failure while keeping current failures actionable", async () => {
+  const row = profile("recovered", { device_id: "dev", added_as: "Recovered", connect_state: "failed", connect_error: "Earlier SSH failure" });
+  const profiles: HerdrProfiles = { state: "ready", error: null, profiles: [row], truncated: false };
+  const view = await mount(profiles, [row.id]);
+  const update = async (remoteState: string, failedKit = false) => act(async () => useShellStore.setState((current) => ({
+    revision: current.revision + 1,
+    rest: {
+      ui_state: { first_run_choices: { devices: [row.id] } },
+      status: { herdr_profiles: profiles, remote: [{ target_id: "dev", state: remoteState }] },
+      navigator: { devices: [{ id: "dev", kit: { agents: [], components: [{ id: "helper", state: failedKit ? "failed" : "installed" }], busy: false } }] },
+    },
+  }) as never));
+  const shown = () => document.querySelector('[data-first-run-device="recovered"]')?.getAttribute("data-device-state");
+  await update("connecting");
+  expect(shown()).toBe("connecting");
+  expect(button("device-connect").disabled).toBe(true);
+  await update("connected");
+  expect(shown()).toBe("connected");
+  expect(document.querySelector('[data-first-run-device-retry="recovered"]')).toBeNull();
+  expect(document.querySelector<HTMLButtonElement>("#herdr-profile-recovered")?.disabled).toBe(true);
+  await update("error");
+  expect(shown()).toBe("failed");
+  await update("connected", true);
+  expect(shown()).toBe("failed");
+  expect(document.querySelector('[data-first-run-device-retry="recovered"]')).not.toBeNull();
+  expect(view.events).toEqual([]);
+  await view.unmount();
+});
