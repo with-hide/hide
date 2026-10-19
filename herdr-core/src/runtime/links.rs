@@ -184,9 +184,7 @@ pub(crate) fn spawn_worker(
 
 /// A session file's agent name for a Hide agent kind.
 pub(super) fn session_agent(kind: &str) -> Option<&'static str> {
-    hide_agent_adapter::adapter(kind)?
-        .session
-        .map(|format| format.adapter().herdr.name)
+    hide_session::Agent::from_kind(kind).map(|agent| agent.as_str())
 }
 
 impl Runtime {
@@ -1197,6 +1195,27 @@ fn link_pr(
 #[cfg(test)]
 mod history_tests {
     use super::*;
+
+    #[test]
+    fn retained_history_keeps_its_native_search_presence() {
+        let mut runtime = crate::runtime::tests::runtime();
+        let payload = crate::sidebar::owned_label_fixture(serde_json::json!({
+            "agents": [{
+                "pane_id":"w1:p1", "workspace_label":"History", "agent":"cursor",
+                "agent_status":"idle",
+                "tokens":{"status_idle":"○", "activity":"000000000000"}
+            }]
+        }))
+        .unwrap();
+        let mut agents = crate::sidebar::project_agents(payload).agents;
+        agents[0].session_id = Some("retained-native-id".into());
+        runtime.snapshot.navigator.agents = agents;
+        let presence = runtime.session_search_presence();
+        assert_eq!(presence.len(), 1);
+        assert_eq!(presence[0].session.agent, "cursor");
+        assert_eq!(presence[0].session.session_id, "retained-native-id");
+        assert!(session_agent("unknown-reader").is_none());
+    }
 
     #[test]
     fn history_late_search_answer_cannot_replace_the_new_request_or_its_cursor() {

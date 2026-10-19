@@ -2035,7 +2035,9 @@ fn wake_loss_diagnostic(pane_id: &str, cause: hide_session::turns::WakeLoss) -> 
 }
 
 fn provider(kind: Option<&str>) -> Option<Agent> {
-    let adapter = hide_agent_adapter::adapter(kind?)?;
+    let agent = Agent::from_kind(kind?)?;
+    // History readers survive retirement from active launch and hook support.
+    let adapter = agent.format().adapter();
     adapter
         .titles
         .or(adapter.conversation)

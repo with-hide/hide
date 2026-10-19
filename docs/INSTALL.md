@@ -139,6 +139,7 @@ The agent journey evidence below is [run 39152230964](https://github.com/with-hi
 Its three `report.json` tables each show 76 passing cells, no failed or unmeasured selected cell, and confirmed cleanup: eleven cells each for Claude Code, Codex, OpenCode, Pi, omp and Antigravity, and ten for Grok, whose `guidance_memory` is `N/A` because its adapter does not declare it.
 Cursor is retired from active support; existing conversations remain readable.
 The session-reader inventory and helper advertisements retain its history format independently of active agent selection, hooks and providers.
+Labels, phone and desktop conversations, archived session identity, and replay or display of persisted Memory sources use those retained reader capabilities; they grant no new launch, Sleep, hook, direct-observation or Memory extraction capability.
 These are real CLIs with Hide's kit and Herdr's integration against a keyless fake model; support in these cells does not prove a signed-in provider, physical input, a desktop window or delivery during a running tool ([VERIFICATION.md: Agent journey](VERIFICATION.md#agent-journey)).
 
 | | macOS (Apple Silicon, 14 or later) | Windows x64 | Linux x64 |

@@ -122,7 +122,8 @@ use crate::sidebar::{SessionSnapshotPayload, project_agents};
 use crate::{environment, files, live, persistence, pet, session_sync, workspace};
 
 fn conversation_agent_kind(kind: &str) -> bool {
-    hide_agent_adapter::adapter(kind).is_some_and(|row| row.conversation.is_some())
+    hide_session::Agent::from_kind(kind)
+        .is_some_and(|agent| agent.format().adapter().conversation.is_some())
 }
 
 /// Which Herdr workspace each tab belongs to, from each workspace's tab order.
