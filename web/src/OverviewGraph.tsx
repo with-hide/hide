@@ -102,15 +102,17 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     for (const group of model.projects) {
       const box = placed.groups.get(group.id);
       if (!box) continue;
-      const project: ProjectNode = { id: group.id, type: "project", position: { x: box.x, y: box.y }, width: box.width, height: box.height, style: { width: box.width, height: box.height }, data: { group, toggle, frameless: model.singleProject, highlight }, draggable: false, connectable: false, focusable: false, selectable: false, zIndex: 0 };
+      const project: ProjectNode = { id: group.id, type: "project", position: { x: box.x, y: box.y }, width: box.width, height: box.height, measured: { width: box.width, height: box.height }, style: { width: box.width, height: box.height }, data: { group, toggle, frameless: model.singleProject, highlight }, draggable: false, connectable: false, focusable: false, selectable: false, zIndex: 0 };
       nodes.push(project);
     }
     for (const row of model.visible) {
       const point = placed.nodes.get(row.id);
       if (!point) continue;
       const root = !model.lineage.some((edge) => edge.to === row.id);
-      // ELK owns these fixed coordinates; drag extents would clamp against a stale parent measurement.
-      const node: SessionNode = { id: row.id, parentId: row.projectId, type: "session", position: { x: point.x, y: point.y }, width: root ? size.rootWidth : size.childWidth, height: root ? size.rootHeight : size.childHeight, selected: selection?.kind === "session" && selection.id === row.id, data: { row, root, progress: progressFor(row), context: model.context.has(row.id), highlighted: related.has(row.id), quietCount: model.quietBranches.get(row.id) ?? 0, folded: model.folded.has(row.id), fold, highlight, choose: chooseSession }, draggable: false, connectable: false, focusable: false, selectable: false, zIndex: 2 };
+      // ELK owns these fixed dimensions. Retaining them also preserves React Flow's
+      // measured handle bounds when hover/focus replaces a controlled node object.
+      const measured = { width: root ? size.rootWidth : size.childWidth, height: root ? size.rootHeight : size.childHeight };
+      const node: SessionNode = { id: row.id, parentId: row.projectId, type: "session", position: { x: point.x, y: point.y }, ...measured, measured, selected: selection?.kind === "session" && selection.id === row.id, data: { row, root, progress: progressFor(row), context: model.context.has(row.id), highlighted: related.has(row.id), quietCount: model.quietBranches.get(row.id) ?? 0, folded: model.folded.has(row.id), fold, highlight, choose: chooseSession }, draggable: false, connectable: false, focusable: false, selectable: false, zIndex: 2 };
       nodes.push(node);
     }
   }
