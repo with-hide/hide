@@ -762,7 +762,7 @@ mod tests {
             json!({"content":[{"type":"text", "text":format!("{}\n{text}", answer()) }]}),
             json!({"content":[{"type":"text", "text":text}, {"type":"text", "text":"warning"}]}),
             json!({"content":[{"type":"text", "text":text}], "stderr":"warning"}),
-            json!({"content":[{"type":"text", "text":format!("{{\"id\":\"cli:agent:prompt\"\n\nWall time: 0.34 seconds") }]}),
+            json!({"content":[{"type":"text", "text":"{\"id\":\"cli:agent:prompt\"\n\nWall time: 0.34 seconds"}]}),
             json!({"content":[{"type":"text", "text":format!("{}\n[Some lines truncated to fit]...\n\nWall time: 0.34 seconds", answer()) }]}),
             json!({"content":[{"type":"text", "text":text.replace("0.34", "-0.34") }]}),
             json!({"content":[{"type":"text", "text":text.replace("0.34", "0.3") }]}),
