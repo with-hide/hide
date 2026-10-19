@@ -114,6 +114,8 @@ Dependabot proposes that pull request (`.github/dependabot.yml`), checking every
 ## Two entrypoints
 
 `scripts/verify-cargo.sh` and `scripts/verify-web.sh` are the only way a check script or the PRD harness builds this repository.
+The Cargo entrypoint uses the portable `C` locale for its subprocesses, so an unavailable caller locale cannot crash system helpers before a test starts.
+`scripts/tests/test_verification_builds.py` exercises this boundary with the real system Perl under a caller's `LANG=C.UTF-8`.
 The harness runs a verify command with no shell, so an `ENV=value cargo ...` binding fails with ENOENT at verify time, when a sealed run can no longer be amended; a script is the only place that environment decision can live.
 A check script calls these scripts rather than cargo or pnpm directly, so the target directory and toolchain decisions are made once.
 
