@@ -4,7 +4,7 @@ import type { OverviewGraphModel } from "./overviewGraphModel";
 import { useShellStore } from "./store";
 
 type Dimensions = { rootWidth: number; rootHeight: number; childWidth: number; childHeight: number; groupWidth: number; groupHeight: number; spacing: CompoundSpacing };
-export type GraphLayout = { key: string; phase: "loading" | "ready" | "failed"; placement: CompoundPlacement | null };
+export type GraphLayout = { key: string; phase: "loading" | "ready" | "failed"; placement: CompoundPlacement | null; size: Dimensions | null };
 
 /** Geometry comes from the same numeric authority as the rest of Overview. */
 function dimensions(element: HTMLElement, scale: number): Dimensions {
@@ -40,12 +40,12 @@ function useGraphScale(): number {
 export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObject<HTMLDivElement | null>, retry: number) {
   const latest = useRef(model);
   latest.current = model;
-  const [layout, setLayout] = useState<GraphLayout>({ key: "", phase: "loading", placement: null });
+  const [layout, setLayout] = useState<GraphLayout>({ key: "", phase: "loading", placement: null, size: null });
   const scale = useGraphScale();
   const key = `${model.structure}:${scale}`;
   useEffect(() => {
     const controller = new AbortController();
-    setLayout((previous) => ({ key, phase: "loading", placement: previous.placement }));
+    setLayout((previous) => ({ key, phase: "loading", placement: previous.placement, size: previous.size }));
     async function run() {
       if (!host.current) throw new Error("overview graph has no layout host");
       const size = dimensions(host.current, scale);
@@ -62,16 +62,16 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
         };
       });
       const placement = await placeCompoundWithin(groups, { ...size.spacing, header: input.singleProject ? 0 : size.spacing.header }, controller.signal);
-      if (!controller.signal.aborted) setLayout({ key, phase: "ready", placement });
+      if (!controller.signal.aborted) setLayout({ key, phase: "ready", placement, size });
     }
     void run().catch((error: unknown) => {
       if (controller.signal.aborted) return;
       useShellStore.getState().noteDiagnostic(`overview_graph.layout_failed projects=${latest.current.projects.length} visible=${latest.current.visible.length} cause=${error instanceof Error ? error.message : String(error)}`);
-      setLayout({ key, phase: "failed", placement: null });
+      setLayout({ key, phase: "failed", placement: null, size: null });
     });
     return () => controller.abort();
   }, [key, host, retry, scale]);
-  return layout.key === key ? layout : { key, phase: "loading" as const, placement: layout.placement };
+  return layout.key === key ? layout : { key, phase: "loading" as const, placement: layout.placement, size: layout.size };
 }
 
 /** No polling clock or retained observer survives the graph's owner. */

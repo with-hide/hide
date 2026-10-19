@@ -96,11 +96,12 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   // React Flow requires parents before their relative-positioned children.
   const nodes: Node[] = [];
   const placed = layout.placement;
-  if (placed) {
+  const size = layout.size;
+  if (placed && size) {
     for (const group of model.projects) {
       const box = placed.groups.get(group.id);
       if (!box) continue;
-      const project: ProjectNode = { id: group.id, type: "project", position: { x: box.x, y: box.y }, style: { width: box.width, height: box.height }, data: { group, toggle, frameless: model.singleProject, highlight }, draggable: false, connectable: false, focusable: false, selectable: false, zIndex: 0 };
+      const project: ProjectNode = { id: group.id, type: "project", position: { x: box.x, y: box.y }, width: box.width, height: box.height, style: { width: box.width, height: box.height }, data: { group, toggle, frameless: model.singleProject, highlight }, draggable: false, connectable: false, focusable: false, selectable: false, zIndex: 0 };
       nodes.push(project);
     }
     for (const row of model.visible) {
@@ -108,7 +109,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
       if (!point) continue;
       const root = !model.lineage.some((edge) => edge.to === row.id);
       // ELK owns these fixed coordinates; drag extents would clamp against a stale parent measurement.
-      const node: SessionNode = { id: row.id, parentId: row.projectId, type: "session", position: { x: point.x, y: point.y }, style: { width: `calc(var(--size-overview-graph-${root ? "root" : "child"}-width) * max(1, var(--interface-scale, 1)))`, height: `calc(var(--size-overview-graph-${root ? "root" : "child"}-height) * max(1, var(--interface-scale, 1)))` }, selected: selection?.kind === "session" && selection.id === row.id, data: { row, root, progress: progressFor(row), context: model.context.has(row.id), highlighted: related.has(row.id), quietCount: model.quietBranches.get(row.id) ?? 0, folded: model.folded.has(row.id), fold, highlight, choose: chooseSession }, draggable: false, connectable: false, focusable: false, selectable: false, zIndex: 2 };
+      const node: SessionNode = { id: row.id, parentId: row.projectId, type: "session", position: { x: point.x, y: point.y }, width: root ? size.rootWidth : size.childWidth, height: root ? size.rootHeight : size.childHeight, selected: selection?.kind === "session" && selection.id === row.id, data: { row, root, progress: progressFor(row), context: model.context.has(row.id), highlighted: related.has(row.id), quietCount: model.quietBranches.get(row.id) ?? 0, folded: model.folded.has(row.id), fold, highlight, choose: chooseSession }, draggable: false, connectable: false, focusable: false, selectable: false, zIndex: 2 };
       nodes.push(node);
     }
   }

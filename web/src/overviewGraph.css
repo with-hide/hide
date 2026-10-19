@@ -90,7 +90,7 @@
 .og-session[data-context="true"] .og-session-target { opacity: var(--opacity-dimmed); }
 .og-session[data-highlighted="true"] .og-orb { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
 .overview-graph .og-emphasized .react-flow__edge-path { opacity: 1; stroke-width: var(--graph-edge-flow-width); }
-.og-fold { position: absolute; top: 100%; left: 0; width: 100%; background: var(--background); color: var(--muted-foreground); border: var(--size-hairline) solid var(--border); border-radius: var(--radius-sm); font-size: var(--text-micro); cursor: pointer; }
+.og-fold { position: absolute; top: 100%; left: 0; width: 100%; background: var(--background); color: var(--muted-foreground); border: var(--size-hairline) solid var(--border); border-radius: var(--radius-sm); font-size: var(--text-micro); cursor: pointer; pointer-events: auto; }
 .og-fold:focus-visible, .og-omitted summary:focus-visible { outline: var(--size-hairline) solid var(--ring); }
 .og-list > button[aria-pressed="true"] { background: var(--accent); }
 .og-toolbar-actions { flex-wrap: wrap; }
