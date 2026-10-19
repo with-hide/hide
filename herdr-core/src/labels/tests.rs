@@ -2563,7 +2563,7 @@ fn a_label_request_carries_its_language_and_that_languages_lengths() {
             assert!(
                 asked
                     .system
-                    .contains(&format!("line is one line of at most {line} characters"))
+                    .contains(&format!("at most {line} characters"))
             );
             for name in ["English", "Korean", "Chinese", "Japanese"] {
                 assert!(
