@@ -15,9 +15,10 @@ test("product usage defaults on and an opt-out stays off after a daemon restart 
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await page.locator("[data-open-settings]").click();
+    await page.locator('[data-settings-tab="privacy"]').click();
     const toggle = page.locator("[data-product-analytics]");
     await expect(toggle).toBeChecked();
-    await expect(page.locator('[data-settings-group="privacy"]')).toContainText("PostHog");
+    await expect(page.locator('[data-settings-group="privacy"]')).toContainText("No conversations or code are sent.");
     await toggle.click();
     await expect(toggle).not.toBeChecked();
     const saved = path.join(daemon.stateDir, "core-state.json");
@@ -29,6 +30,7 @@ test("product usage defaults on and an opt-out stays off after a daemon restart 
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await page.locator("[data-open-settings]").click();
+    await page.locator('[data-settings-tab="privacy"]').click();
     await expect(toggle).toBeEnabled();
     await expect(toggle).not.toBeChecked();
     await toggle.click();

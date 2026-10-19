@@ -348,7 +348,7 @@ Everything Hide owns on a machine is under `~/.hide`:
 
 Every folder Hide makes there is private to your account (0700; on Windows an access list naming only your account).
 When a build has product statistics configured, the state folder also holds `product-analytics-id`, a private random installation UUID unrelated to account or hardware identity.
-Settings > General > Privacy turns usage statistics off; [product usage statistics](ARCHITECTURE.md#product-usage-statistics) lists the exact fields sent to PostHog US and the shutdown boundary.
+Settings > Privacy turns usage statistics off; [product usage statistics](ARCHITECTURE.md#product-usage-statistics) lists the exact fields sent to PostHog US and the shutdown boundary.
 Creating `~/.hide/product-analytics-disabled` before startup prevents the external worker from starting, independently of the saved setting; test fixtures use the same disable-only switch.
 The daemon makes its state folder private each time it starts: a folder of your account that an earlier build left open, as a device's helper left `~/.hide/state` at 0755, is closed and the log records `state.made_private`; a state folder that is a link or belongs to another account is refused, no daemon starts on it, and `hide connect` answers `start_failed` naming the folder.
 

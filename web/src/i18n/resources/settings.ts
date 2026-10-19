@@ -1,9 +1,9 @@
 import type { Catalog, Catalogs } from "../schema";
 
 export const settingsEnglish = {
-  "settings.privacy": "Privacy",
+  "settings.tabs.privacy": "Privacy",
   "settings.productAnalytics": "Share usage statistics",
-  "settings.productAnalyticsDetail": "Sends Hide connections and Hide AI call counts, with a random installation ID and time, to PostHog (US). No conversations, code or file names.",
+  "settings.productAnalyticsDetail": "Collects connection and AI call counts. No conversations or code are sent.",
 
   "settings.close": "Close Settings",
   "settings.section": "Settings section",
@@ -124,9 +124,9 @@ export const settingsEnglish = {
 } as const;
 
 const ko = {
-  "settings.privacy": "개인정보",
+  "settings.tabs.privacy": "개인정보",
   "settings.productAnalytics": "사용 통계 보내기",
-  "settings.productAnalyticsDetail": "Hide 접속과 Hide AI 호출 횟수를 임의의 설치 ID·시각과 함께 PostHog(미국)로 보냅니다. 대화·코드·파일명은 보내지 않습니다.",
+  "settings.productAnalyticsDetail": "접속과 AI 호출 횟수를 수집합니다. 대화와 코드는 보내지 않습니다.",
 
   "settings.close": "설정 닫기",
   "settings.section": "설정 항목",
@@ -247,9 +247,9 @@ const ko = {
 } satisfies Catalog<typeof settingsEnglish>;
 
 const ja = {
-  "settings.privacy": "プライバシー",
+  "settings.tabs.privacy": "プライバシー",
   "settings.productAnalytics": "利用統計を送信",
-  "settings.productAnalyticsDetail": "Hide の接続と Hide AI の呼び出し回数を、ランダムなインストール ID・時刻とともに PostHog（米国）に送信します。会話・コード・ファイル名は送りません。",
+  "settings.productAnalyticsDetail": "接続と AI の呼び出し回数を収集します。会話やコードは送信しません。",
 
   "settings.close": "設定を閉じる",
   "settings.section": "設定項目",
@@ -370,9 +370,9 @@ const ja = {
 } satisfies Catalog<typeof settingsEnglish>;
 
 const zhCN = {
-  "settings.privacy": "隐私",
+  "settings.tabs.privacy": "隐私",
   "settings.productAnalytics": "发送使用统计",
-  "settings.productAnalyticsDetail": "将 Hide 连接和 Hide AI 调用次数连同随机安装 ID 和时间发送至 PostHog（美国）。不发送对话、代码或文件名。",
+  "settings.productAnalyticsDetail": "收集连接和 AI 调用次数。不发送对话或代码。",
 
   "settings.close": "关闭设置",
   "settings.section": "设置分类",

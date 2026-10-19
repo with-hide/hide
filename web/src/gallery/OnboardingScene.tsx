@@ -98,7 +98,7 @@ export function onboardingSceneParams(params: URLSearchParams): OnboardingSceneP
   const scale = Number(params.get("scale") ?? "1");
   if (!(scale > 0)) throw new Error(`Scene scale must be a positive number, got ${params.get("scale")}`);
   const page = params.get("page") ?? "notifications";
-  if (!SETTINGS_GROUPS.some((group) => group.tabs.includes(page as SettingsTab)) && page !== "about") throw new Error(`Unknown Settings page ${page}`);
+  if (!SETTINGS_GROUPS.some((group) => group.tabs.includes(page as SettingsTab)) && page !== "about" && page !== "privacy") throw new Error(`Unknown Settings page ${page}`);
   const update = params.get("update");
   if (update !== null && !(update in SCENE_UPDATES)) throw new Error(`Unknown update state ${update}`);
   return { theme: params.get("theme") === "light" ? "light" : "dark", state: state as OnboardingState, system, language, scale, page: page as SettingsTab, update: update === null ? undefined : SCENE_UPDATES[update] };

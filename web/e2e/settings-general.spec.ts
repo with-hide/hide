@@ -1,7 +1,7 @@
 // Settings' list and its General, GitHub and About pages on an isolated
 // pinned Herdr and hided (PRD settings-cleanup B1-B6, B23, B24;
 // settings-left-nav B2-B5, B8, B9, B12, B13): the list in its groups, General's
-// Appearance and Privacy, the GitHub row, About with its closed Details, the real
+// Appearance, separate Privacy, the GitHub row, About with its closed Details, the real
 // Herdr version and protocol of a healthy connection, and the settings that
 // moved into Agents and Hide AI.
 
@@ -24,18 +24,19 @@ test("Settings lists its pages in two groups with About apart, and About shows t
     const sheet = page.locator('[data-settings="true"]');
     await expect(sheet).toBeVisible();
 
-    // B2: App, then This Mac, each with its pages in order, and About apart at the foot of the list.
+    // The user's Privacy-tab follow-up puts Privacy last, after About at the foot.
     await expect(sheet.locator('[data-settings-nav-group="app"]')).toHaveText(/^App/);
     await expect(sheet.locator('[data-settings-nav-group="app"] [data-settings-tab]')).toHaveText(["General", "Notifications", "Usage", "Devices", "Shortcuts"]);
     await expect(sheet.locator('[data-settings-nav-group="machine"]')).toHaveText(/^This (Mac|PC|computer)/);
     await expect(sheet.locator('[data-settings-nav-group="machine"] [data-settings-tab]')).toHaveText(["Agents", "Hide AI", "Mobile", "GitHub"]);
-    await expect(sheet.locator("[data-settings-tab]")).toHaveText(["General", "Notifications", "Usage", "Devices", "Shortcuts", "Agents", "Hide AI", "Mobile", "GitHub", "About"]);
+    await expect(sheet.locator("[data-settings-tab]")).toHaveText(["General", "Notifications", "Usage", "Devices", "Shortcuts", "Agents", "Hide AI", "Mobile", "GitHub", "About", "Privacy"]);
     const tabs = sheet.locator("[data-settings-tab]");
     const githubBox = (await sheet.locator('[data-settings-tab="github"]').boundingBox())!;
     const aboutBox = (await sheet.locator('[data-settings-tab="about"]').boundingBox())!;
+    const privacyBox = (await sheet.locator('[data-settings-tab="privacy"]').boundingBox())!;
     const listBox = (await sheet.locator('[role="tablist"]').boundingBox())!;
     expect(aboutBox.y - (githubBox.y + githubBox.height)).toBeGreaterThan(githubBox.height);
-    expect(listBox.y + listBox.height - (aboutBox.y + aboutBox.height)).toBeLessThan(aboutBox.height);
+    expect(listBox.y + listBox.height - (privacyBox.y + privacyBox.height)).toBeLessThan(privacyBox.height);
     await expect(tabs.first()).toHaveAttribute("data-state", "active");
 
     // B3, B4: Down moves through the list and shows each page under its title alone; a group name is never a stop.
@@ -53,10 +54,10 @@ test("Settings lists its pages in two groups with About apart, and About shows t
     await expect(sheet.locator("[data-settings-page-title]")).toHaveText("Shortcuts");
     await sheet.locator('[data-settings-tab="general"]').click();
 
-    // General includes Appearance and the explicit product analytics control.
+    // General keeps Appearance; the usage switch has its own Privacy page.
     const appearance = sheet.locator('[data-settings-group="appearance"]');
-    await expect(sheet.locator("[data-settings-page] [data-settings-group]")).toHaveCount(2);
-    await expect(sheet.locator("[data-product-analytics]")).toBeChecked();
+    await expect(sheet.locator("[data-settings-page] [data-settings-group]")).toHaveCount(1);
+    await expect(sheet.locator("[data-product-analytics]")).toHaveCount(0);
     await expect(appearance.locator("[data-interface-language]")).toBeVisible();
     await expect(appearance.locator("[data-theme-choice]")).toBeVisible();
     await expect(appearance.locator("[data-accent]")).toHaveCount(4);
@@ -211,10 +212,9 @@ test("General and About read without sideways scrolling in Korean and English, l
       await expect.poll(() => panel.evaluate((node) => node.scrollTop + node.clientHeight - node.scrollHeight)).toBeGreaterThanOrEqual(-1);
       expect((await sheet.locator('[role="tablist"]').boundingBox())!.y).toBe(list.y);
       await expect(sheet.locator("[data-copy-diagnostics]")).toBeInViewport();
-      // The whole list fits beside the page, About included, without a scroll of its own.
-      await expect(sheet.locator('[data-settings-tab="about"]')).toBeInViewport({ ratio: 1 });
+      // Privacy stays reachable at the foot; the grouped pages may scroll.
+      await expect(sheet.locator('[data-settings-tab="privacy"]')).toBeInViewport({ ratio: 1 });
       expect(await sheet.locator("nav").evaluate((node) => node.scrollHeight - node.clientHeight)).toBeLessThanOrEqual(0);
-      expect(await sheet.locator("[data-settings-page-list]").evaluate(node => node.scrollHeight - node.clientHeight)).toBeLessThanOrEqual(0);
       await screenshot(page, `settings-about-details-${language}-${theme}-narrow`);
     }
 
@@ -235,14 +235,15 @@ test("General and About read without sideways scrolling in Korean and English, l
       const pages = sheet.locator("[data-settings-page-list]");
       expect(await pages.evaluate(node => node.scrollHeight - node.clientHeight)).toBeGreaterThan(0);
       await sheet.locator('[data-settings-tab="general"]').focus();
-      for (const name of ["general", "notifications", "usage", "devices", "shortcuts", "agents", "hideAi", "mobile", "github", "about"]) {
+      for (const name of ["general", "notifications", "usage", "devices", "shortcuts", "agents", "hideAi", "mobile", "github", "about", "privacy"]) {
         const tab = sheet.locator(`[data-settings-tab="${name}"]`);
         await expect(tab).toBeFocused();
         await expect(tab).toBeInViewport({ ratio: 1 });
         await expect(about).toBeInViewport({ ratio: 1 });
         expect((await about.boundingBox())!.y).toBe(foot);
-        if (name !== "about") await page.keyboard.press("ArrowDown");
+        if (name !== "privacy") await page.keyboard.press("ArrowDown");
       }
+      await sheet.locator('[data-settings-tab="about"]').click();
       if (!(await details.evaluate(node => (node as HTMLDetailsElement).open))) await details.locator("summary").click();
       const listScroll = await pages.evaluate(node => node.scrollTop);
       await panel.evaluate(node => node.scrollTo({ top: node.scrollHeight }));
