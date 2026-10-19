@@ -417,6 +417,18 @@ fn shown_facts(
     payload.agents.remove(0).facts
 }
 
+fn shown_row(worker: &LabelWorker, agent: &ObservedAgent) -> crate::model::SidebarAgentSnapshot {
+    let (kind, value) = agent.reference.clone().unwrap();
+    let mut payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [{
+        "pane_id": agent.pane_id, "agent": agent.agent, "agent_status": agent.status,
+        "state_change_seq": agent.state_change_seq,
+        "agent_session": {"kind": kind, "value": value},
+    }]}))
+    .unwrap();
+    worker.overlay().apply(&mut payload);
+    crate::sidebar::project_agents(payload).agents.remove(0)
+}
+
 fn task(label: Option<AgentLabel>) -> Option<String> {
     label.and_then(|label| label.task)
 }
@@ -2694,6 +2706,10 @@ fn a_device_panes_label_is_read_through_its_helper() {
         task(shown(&worker, &idle)).as_deref(),
         Some("미니 배치 실행 작업")
     );
+    assert_eq!(
+        shown_row(&worker, &idle).last_prompt_at_unix_ms,
+        Some(turn_at(0))
+    );
 }
 
 /// B14: while the device cannot be reached its pane keeps the last label,
@@ -2964,6 +2980,9 @@ fn a_request_the_operator_submitted_is_theirs_and_survives_a_restart_without_a_r
         facts.reply.as_ref().unwrap().text,
         "만들었습니다\nPR을 열었어요"
     );
+    let row = shown_row(&worker, &idle);
+    assert_eq!(row.last_prompt_at_unix_ms, Some(turn_at(2)));
+    assert_ne!(row.changed_at_unix_ms, row.last_prompt_at_unix_ms);
 
     // A restarted daemon has no submits and reads nothing for an unchanged
     // pane; what it shows is what was stored.
@@ -2981,6 +3000,57 @@ fn a_request_the_operator_submitted_is_theirs_and_survives_a_restart_without_a_r
         "{reads} reads before"
     );
     assert_eq!(harness.store().target(LOCAL_TARGET)["w1:p1"].facts, facts);
+    let restored = shown_row(&restarted, &idle);
+    assert_eq!(restored.last_prompt_at_unix_ms, row.last_prompt_at_unix_ms);
+    assert_eq!(restored.last_activity, row.last_activity);
+}
+
+#[test]
+fn a_rewritten_transcript_removes_a_missing_request_without_changing_the_owner() {
+    let harness = Harness::new();
+    let store = harness.store();
+    let (mut worker, woken, _) = harness.worker(Arc::clone(&store));
+    let turns = [
+        ("user", "요청 보기 만들어줘"),
+        ("assistant", "만들었습니다"),
+        (
+            "user",
+            "Hide letter r1 from ci-lead (claude) [request]\nCI 다시 봐줘",
+        ),
+    ];
+    let path = harness.session("a", "native-a", &turns);
+    harness.input.record("w1:p1", turn_at(0) - 300, false);
+    harness.backend.answer("요청 보기", "done", "");
+    observe(&mut worker, &agent(&path, "idle", 3));
+    settle(&mut worker, &woken);
+    assert_eq!(
+        shown_row(&worker, &agent(&path, "idle", 3)).last_prompt_at_unix_ms,
+        Some(turn_at(2))
+    );
+
+    // The shorter native file no longer contains the other sender's request.
+    harness.session("a", "native-a", &turns[..2]);
+    harness.backend.answer("요청 보기", "done", "");
+    let shortened = agent(&path, "idle", 4);
+    observe(&mut worker, &shortened);
+    settle_with_ticks(&mut worker, &woken);
+    let facts = shown_facts(&worker, &shortened).unwrap();
+    assert_eq!(facts.operator_request.unwrap().text, turns[0].1);
+    assert!(facts.other_request.is_none());
+    assert_eq!(
+        shown_row(&worker, &shortened).last_prompt_at_unix_ms,
+        Some(turn_at(0))
+    );
+
+    // Metadata/assistant output alone cannot retain either request's time.
+    harness.session("a", "native-a", &[("assistant", "보관된 응답")]);
+    let no_prompt = agent(&path, "working", 5);
+    observe(&mut worker, &no_prompt);
+    settle_with_ticks(&mut worker, &woken);
+    assert_eq!(shown_row(&worker, &no_prompt).last_prompt_at_unix_ms, None);
+    let facts = shown_facts(&worker, &no_prompt).unwrap();
+    assert!(facts.operator_request.is_none());
+    assert!(facts.other_request.is_none());
 }
 
 #[test]
