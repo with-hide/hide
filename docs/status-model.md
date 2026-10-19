@@ -842,7 +842,7 @@ Where a program compares names, an unnamed registration is called by its registr
 Where a person reads a name (the bell line, a row) an unnamed agent is called by its title, and by its runtime's name when it has none.
 Nothing publishes a session `name`, reads Codex's first human turn as a title, or renames an agent or tab.
 
-The label is made by the core, not by a plugin and not through pane tokens: `herdr-core/src/labels/` reads each Claude, Codex, Grok, Pi, omp, Cursor or OpenCode pane's conversation, asks the background AI for the session's goal, one line for the turn and how the turn ended (`context_label.v16`), in the core's output language ([AI_PROVIDERS.md](AI_PROVIDERS.md#the-output-language)), and keeps the answer per pane (the architecture is in [ARCHITECTURE.md](ARCHITECTURE.md#agent-labels-in-the-core)).
+The label is made by the core, not by a plugin and not through pane tokens: `herdr-core/src/labels/` reads each Claude, Codex, Grok, Pi, omp, Cursor or OpenCode pane's conversation, asks the background AI for the session's goal, one line for the turn and how the turn ended (`context_label.v17`), in the core's output language ([AI_PROVIDERS.md](AI_PROVIDERS.md#the-output-language)), and keeps the answer per pane (the architecture is in [ARCHITECTURE.md](ARCHITECTURE.md#agent-labels-in-the-core)).
 A session with no goal and no assigned work answers `goal: null`; greetings, identity questions and capability questions create no task and no placeholder title.
 The row uses the existing title priority above, and the next analysis after real work is requested sets its first goal.
 A session started with a goal command is named from that goal like any other request.
@@ -859,6 +859,8 @@ It refreshes only during its original turn; later follow-ups keep that clarifica
 A named legacy record without this evidence has an unknown assignment origin; it keeps rolling from its current goal and latest exchange rather than treating the session's first request as that assignment.
 Evidence is established only at an accepted first or new assignment with one new attributed request; several historical requests do not prove its origin.
 The line names a concrete current action, finding, result or dependency; an acknowledgment such as “proceeding as requested” adds no information and is left empty.
+It prioritizes progress the operator can understand over internal implementation terms, test counts and capture counts; a technical name remains when the operator needs it to identify or act on an issue.
+Rewording preserves the actual scope and pending verification: a test-fixture edit does not become a finished feature, and requested verification does not become a passed check.
 With `keep`, the returned goal value is ignored even when it is null; the turn's `line` and `end` are still applied.
 A line longer than 40 characters (80 in English) is cut between words and ends in `…`; a question or a block keeps its word with the cut line.
 `line` and `end` still describe the current conversation: an answered greeting or identity question with no required next action has an empty line and a stopped end of `done`, while a specific question retains its requested action.

@@ -19,7 +19,7 @@ use std::time::Duration;
 pub(crate) const FEATURE_ID: &str = "context_label";
 /// Bumped whenever a prompt or a schema changes, so a log line can be read
 /// against the pair that produced it.
-pub(crate) const SCHEMA_VERSION: &str = "context_label.v16";
+pub(crate) const SCHEMA_VERSION: &str = "context_label.v17";
 /// The effort a label asks of Codex, whether it is the first agent or the
 /// fallback (PRD label-judgment-fixes D-12): measured on gpt-5.6-luna over
 /// 104 label answers, `medium` turned no question into done, while the
@@ -65,6 +65,8 @@ const GOAL: &str = concat!(
 
 const LINE: &str = concat!(
     "Use a concrete action, finding, result or dependency from this turn. Name the affected part when the goal alone cannot identify it. ",
+    "Prefer the progress the operator can understand: the behavior being changed, the result, the remaining work, the blocking cause or whose result is awaited. Explain internal implementation terms through the affected behavior when the evidence supports that connection; retain a technical name when the operator needs it to identify or act on the issue. ",
+    "Internal edits, test counts and capture counts are secondary to that useful fact. A test or fixture edit is not completion of the feature itself: preserve the actual scope and any pending verification. Do not turn 'requested verification' into 'verification passed'. ",
     "Do not spend the line on an acknowledgement or a promise such as 'proceeding as requested', 'working on improvements' or 'checking the assigned work'. ",
     "When the turn provides no additional useful fact, line is empty; never fill it with invented progress. "
 );
