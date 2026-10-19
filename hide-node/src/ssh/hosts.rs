@@ -214,13 +214,13 @@ impl IncludeBudget {
             let entry = entry
                 .map_err(|error| format!("SSH configuration Include could not be read: {error}"))?;
             let filename = entry.file_name();
-            if let Some(candidate) = filename.to_str() {
-                if wildcard_match(name, candidate, self)? {
-                    if matched.len() >= MAX_CONFIG_FILES {
-                        return Err("SSH configuration exceeds the Include file limit".to_owned());
-                    }
-                    matched.push(entry.path());
+            if let Some(candidate) = filename.to_str()
+                && wildcard_match(name, candidate, self)?
+            {
+                if matched.len() >= MAX_CONFIG_FILES {
+                    return Err("SSH configuration exceeds the Include file limit".to_owned());
                 }
+                matched.push(entry.path());
             }
         }
         matched.sort();
