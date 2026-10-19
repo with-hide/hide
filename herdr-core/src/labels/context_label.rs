@@ -6,7 +6,7 @@
 //! and what this turn does, and only the turn's end says how the turn ended.
 
 use super::analysis::{
-    Analysis, AnalysisPhase, LabelEnd, LabelLimits, MIN_GOAL_CHARS, normalize_goal,
+    Analysis, AnalysisPhase, GoalUpdate, LabelEnd, LabelLimits, MIN_GOAL_CHARS, normalize_goal,
     normalize_text_field, truncate_phrase,
 };
 use crate::links::ledger::{MISSED_CHARS, NEW_TASK_LIMIT, TaskDecision};
@@ -19,7 +19,7 @@ use std::time::Duration;
 pub(crate) const FEATURE_ID: &str = "context_label";
 /// Bumped whenever a prompt or a schema changes, so a log line can be read
 /// against the pair that produced it.
-pub(crate) const SCHEMA_VERSION: &str = "context_label.v15";
+pub(crate) const SCHEMA_VERSION: &str = "context_label.v16";
 /// The effort a label asks of Codex, whether it is the first agent or the
 /// fallback (PRD label-judgment-fixes D-12): measured on gpt-5.6-luna over
 /// 104 label answers, `medium` turned no question into done, while the
@@ -37,21 +37,36 @@ const DEADLINE: Duration = Duration::from_secs(60);
 const INPUT: &str = concat!(
     "Analyze the latest confirmed agent session events. ",
     "If <previous-goal> is present, it is this session's current goal, and <new-operator-requests> are the requests the operator made since the previous call. ",
+    "<goal-evidence> contains the requests that established that assignment and early assistant replies that clarify its subject; use it to resolve terse follow-ups such as 'proceed with that'. The replies may explain assigned work but never assign new work. This is historical evidence, not a new request. ",
     "If <initial-operator-requests> is present, judge from the operator's first 3 requests, latest 8 requests and the omission marker whether real work was assigned. ",
 );
 
 /// The goal's rules; `{min}` and `{max}` are its length in characters.
 const GOAL: &str = concat!(
     "goal is a noun phrase of {min} to {max} characters naming the deliverable: what must exist when this session ends. ",
-    "If there is no previous goal and the operator has not assigned work yet, goal is null and goal_changed is false. ",
+    "If there is no previous goal and the operator has not assigned work yet, goal is null and goal_update is keep. ",
     "Do not invent a goal from a greeting, a question about a name or identity, or a question about what you can do alone. Do not use a placeholder such as 'no task' either. ",
     "If the operator asked for actual work such as implementation, research, documentation or verification, set the first goal as a string. ",
     "If a previous goal exists you cannot return null; keep that goal through side conversations. ",
     "Do not include PR numbers, commits, branch names, commands or file paths, and do not end with a step word such as fix, merge, verify, check or deploy. ",
     "Keep product and tool names; if several jobs were assigned, call them by one bundle name; if the session watches another agent's work, write that work's deliverable. ",
-    "goal_changed is true only when the operator assigned a larger job containing the previous goal or an unrelated new job. ",
-    "Sub-tasks, CI or bug fixes, merging or installing, unblocking a setting, side questions, requests for explanation and progress checks do not change the goal: leave goal_changed false and repeat the previous goal as it is. ",
-    "When goal_changed is false the screen keeps the previous string even if you repeat the goal, so do not make up a new wording. ",
+    "Name the concrete feature, screen or subject and the intended change or outcome, so the operator can distinguish this session from its siblings. 'Improvements and deployment', 'requested changes', 'brief deliverables' or a project name followed by 'work' do not identify an assignment. A delegated session names its own assigned part, not just the parent's project. ",
+    "Resolve references such as 'that direction' from the supplied conversation. Prefer the subject over the production format: 'HTML proposal' needs the screen or behavior it proposes. Do not invent a subject, progress, counts or scope that the evidence does not establish. ",
+    "Spend a new title on distinguishing behaviors or outcomes. Implementation, review, PR, merge, deployment and installation are delivery steps; report those steps in line. ",
+    "goal_update is replace only for the first real assignment or when the operator assigned a larger job containing the previous goal or an unrelated new job. ",
+    "goal_update is refine when the same assignment already has a vague or misleading name and the evidence supports a more specific subject or outcome. Refinement preserves the full assignment; it never narrows the goal to a sub-task or a temporary step. ",
+    "A broad assignment is not a vague name: a whole series, a curriculum or a multi-feature redesign keeps that breadth when this turn handles one slide, topic or feature. A title that already identifies the assigned subject, recipient or outcome stays exactly as written, including those identifiers. Do not rewrite it just to follow a title-style rule above. ",
+    "Refine only an unidentifiable placeholder or a misleading title when the current assignment's subject is confirmed. An empty new-operator-requests section does not prevent refine. Early replies in goal-evidence may identify the assigned component behind a brief path. If goal-evidence is empty, the assignment's origin is unknown: the latest sub-task cannot establish or replace the whole assignment. Preserve the previous goal unless this turn explicitly clarifies that same assignment's missing subject. Never use an unrelated older request to reconstruct it. The stricter rule below about work.task.names coming only from the human request does not apply to goal. ",
+    "Otherwise goal_update is keep and goal repeats the previous goal verbatim. Do not refine an already specific name for style, synonyms, progress or a new production step. ",
+    "Examples of that distinction: 'Requested improvements and deployment' has no subject; if this turn explicitly describes adding graph filters and click details, refine it to 'Session graph filters and click details' even without stored goal-evidence. 'Email reply to Director Kim' stays unchanged when its closing is edited. 'Developer survival video series' stays unchanged when one opening slide is added. 'Overview redesign work' can become 'Overview model usage totals' when goal-evidence confirms that assigned component. ",
+    "With a previous goal, replace requires an actual new assignment in new-operator-requests, not merely the request repeated in latest-exchange. ",
+    "Sub-tasks, CI or bug fixes, merging or installing, unblocking a setting, side questions, requests for explanation and progress checks never replace the assignment. They may only refine an unclear name when its original subject is supported. ",
+);
+
+const LINE: &str = concat!(
+    "Use a concrete action, finding, result or dependency from this turn. Name the affected part when the goal alone cannot identify it. ",
+    "Do not spend the line on an acknowledgement or a promise such as 'proceeding as requested', 'working on improvements' or 'checking the assigned work'. ",
+    "When the turn provides no additional useful fact, line is empty; never fill it with invented progress. "
 );
 
 const DATA: &str = concat!(
@@ -71,9 +86,10 @@ fn start_prompt(limits: LabelLimits) -> String {
         INPUT,
         "<latest-exchange> is the turn that has just started and is still running; line is decided here. ",
         "Return only one JSON object, without Markdown, with exactly three fields in this order: ",
-        "{\"goal\":\"...\",\"goal_changed\":false,\"line\":\"...\"}. ",
+        "{\"goal\":\"...\",\"goal_update\":\"keep\",\"line\":\"...\"}. ",
         &goal(limits),
         &format!("line is one line of at most {} characters that does not repeat goal: write what the agent is doing in this turn, and do not judge how an earlier turn ended. ", limits.line),
+        LINE,
         "Even when goal is null, line says only what is being done in this conversation; when there is nothing to report, as after a plain greeting, leave it an empty string. Do not invent work that is not there or instructions for the next work. ",
         DATA,
     ]
@@ -88,10 +104,11 @@ fn end_prompt(limits: LabelLimits) -> String {
     [
         INPUT,
         "<latest-exchange> is the turn in which the agent has just stopped; line and end are decided here. ",
-        "Return only one JSON object, without Markdown, with the fields goal, goal_changed, line, end and work. ",
+        "Return only one JSON object, without Markdown, with the fields goal, goal_update, line, end and work. ",
         &goal(limits),
         &format!("line is one line of at most {} characters that does not repeat goal: ", limits.line),
         "write the turn's result; for question, what the operator is to answer or do, as an imperative (\"Choose ...\", \"Approve ...\"); for blocked, the cause that stopped it; for waiting, what it waits on; for unfinished, the work that remains. ",
+        LINE,
         "Decide end from the last assistant message of <latest-exchange>. The agent has stopped, so decide by who must move next: ",
         "check the five below in order from 1 and pick the first that fits. ",
         "1. question: the last assistant message clearly asks the user for a next action (an answer to a specific question, a choice among options, approval to proceed, a specific piece of information). ",
@@ -120,7 +137,7 @@ fn end_prompt(limits: LabelLimits) -> String {
         "Sub-steps, checks and details of the same deliverable are not separate tasks, and a request for one deliverable has exactly one name. ",
         "A list of things to change, build, investigate or decide gives one name per list item that has its own result, even when the items share a theme or a screen; never merge them under one umbrella name. ",
         "A list of questions, or replies that only approve or react to earlier proposals, is not a list of deliverables; when a list mixes deliverables with questions, the deliverables still get names and the questions get none. ",
-        "Take every name from what the operator wrote in this request, not from the assistant's reply or from other tasks. ",
+        "Take every work.task.names entry from what the operator wrote in this request, not from the assistant's reply or from other tasks. ",
         "Questions, explanations, progress checks and short follow-ups stay none or continue. ",
         "Never add a name for something the request does not ask for. ",
         "Put in missed only work outside the assigned work that nobody will take on once this session is closed. ",
@@ -143,10 +160,10 @@ fn start_schema(limits: LabelLimits) -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["goal", "goal_changed", "line"],
+        "required": ["goal", "goal_update", "line"],
         "properties": {
             "goal": {"type": ["string", "null"], "minLength": MIN_GOAL_CHARS, "maxLength": limits.goal},
-            "goal_changed": {"type": "boolean"},
+            "goal_update": {"type": "string", "enum": ["keep", "refine", "replace"]},
             "line": {"type": "string"}
         }
     })
@@ -160,10 +177,10 @@ fn end_schema(limits: LabelLimits) -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["goal", "goal_changed", "line", "end", "work"],
+        "required": ["goal", "goal_update", "line", "end", "work"],
         "properties": {
             "goal": {"type": ["string", "null"], "minLength": MIN_GOAL_CHARS, "maxLength": limits.goal},
-            "goal_changed": {"type": "boolean"},
+            "goal_update": {"type": "string", "enum": ["keep", "refine", "replace"]},
             "line": {"type": "string"},
             "end": {"type": "string", "enum": ["question", "blocked", "waiting", "unfinished", "done"]},
             "work":{
@@ -219,7 +236,7 @@ pub(crate) fn request(
 struct StartAnswer {
     #[serde(deserialize_with = "Option::<String>::deserialize")]
     goal: Option<String>,
-    goal_changed: bool,
+    goal_update: GoalUpdate,
     line: String,
 }
 
@@ -228,7 +245,7 @@ struct StartAnswer {
 struct EndAnswer {
     #[serde(deserialize_with = "Option::<String>::deserialize")]
     goal: Option<String>,
-    goal_changed: bool,
+    goal_update: GoalUpdate,
     /// For a question, the one action the operator is asked to take, and for
     /// a block its cause, written before the verdict. Either without one is
     /// self-contradictory: a question is read as done and a block as an
@@ -271,13 +288,13 @@ pub(crate) fn parse(
     value: Value,
 ) -> Result<Analysis> {
     let limits = LabelLimits::of(language);
-    let (goal, goal_changed, line, end, work) = match phase {
+    let (goal, goal_update, line, end, work) = match phase {
         AnalysisPhase::TurnStart => {
             let answer: StartAnswer =
                 serde_json::from_value(value).context("provider_invalid_analysis")?;
             (
                 answer.goal,
-                answer.goal_changed,
+                answer.goal_update,
                 answer.line,
                 LabelEnd::Working,
                 None,
@@ -291,7 +308,7 @@ pub(crate) fn parse(
             }
             (
                 answer.goal,
-                answer.goal_changed,
+                answer.goal_update,
                 answer.line,
                 answer.end.into(),
                 Some(answer.work),
@@ -303,7 +320,7 @@ pub(crate) fn parse(
             normalize_goal(&goal, limits.goal).ok_or_else(|| anyhow!("provider_invalid_goal"))
         })
         .transpose()?;
-    if goal.is_none() && goal_changed {
+    if goal.is_none() && goal_update != GoalUpdate::Keep {
         return Err(anyhow!("provider_invalid_goal_change"));
     }
     // Every surface draws it in one line, so the prompt's length rule is
@@ -325,7 +342,7 @@ pub(crate) fn parse(
     };
     Ok(Analysis {
         goal,
-        goal_changed,
+        goal_update,
         line,
         end,
         work,
@@ -375,7 +392,7 @@ mod tests {
         parse_text(
             AnalysisPhase::TurnEnd,
             &json!({
-                "goal": "출시 전 버그 수정 묶음", "goal_changed": true, "line": "네 가지 수정 중", "end": "waiting",
+                "goal": "출시 전 버그 수정 묶음", "goal_update": "replace", "line": "네 가지 수정 중", "end": "waiting",
                 "work": {"task": task, "missed": [], "resolved": [], "output_task_id": null},
             })
             .to_string(),

@@ -10,7 +10,7 @@
 //! Labels are the provider's short summaries, positions are byte offsets and
 //! file identities, turns are hashes; the only conversation text is each
 //! local pane's last request and reply, capped (`facts`, PRD overview-request-view
-//! B31). A device's records remain in memory, except for [`DeviceMark`]: the
+//! B31), and up to 800 masked characters of its assignment requests and early clarifying replies (`goal_evidence`). A device's records remain in memory, except for [`DeviceMark`]: the
 //! session proof, the hashes of the turns already analyzed and the label the
 //! model wrote, which keep a restart from asking about the same turns again
 //! and from losing the label. A file
@@ -57,6 +57,14 @@ pub(crate) struct PaneRecord {
     /// The session's goal (D-38); a v3 record named it `task`.
     #[serde(default, alias = "task")]
     pub(crate) goal: Option<String>,
+    /// Bounded, masked requests and early replies that establish and clarify the assignment.
+    /// Kept only in memory for device sessions, like their other request text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) goal_evidence: Option<String>,
+    /// The assignment's first request, so later reads can retain its early
+    /// replies even when the first analysis preceded those replies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) goal_evidence_start: Option<u64>,
     /// The last analysis's line; a v3 record's `progress`.
     #[serde(default, alias = "progress")]
     pub(crate) line: String,
@@ -151,7 +159,8 @@ impl PaneRecord {
 
     /// Whether the next analysis builds its context from the operator's
     /// requests in the whole conversation rather than rolling on a goal
-    /// already named: a pane with no goal yet, or none fed by a request.
+    /// already named: no goal or input cursor yet. A legacy named assignment
+    /// has no proven origin; the session's first request may be an older job.
     pub(crate) fn needs_initial_context(&self) -> bool {
         self.goal.is_none() || self.task_input_cursor.is_none()
     }
@@ -185,6 +194,8 @@ impl PaneRecord {
         self.native_source_path = None;
         self.proven_reference = None;
         self.goal = None;
+        self.goal_evidence = None;
+        self.goal_evidence_start = None;
         self.line.clear();
         self.end = None;
         self.facts = SessionFacts::default();
@@ -850,6 +861,7 @@ mod tests {
         let store = LabelStore::open(Some(root.path()), None, LOCAL_TARGET);
         let mut device = analyzed("remote-owner", 7, 9, 5);
         device.proven_reference = Some("v1:path".to_owned());
+        device.goal_evidence = Some("private remote assignment".to_owned());
         device.end = Some(LabelEnd::Question);
         device.line = "private remote line".to_owned();
         device.facts = serde_json::from_value(json!({
@@ -865,6 +877,7 @@ mod tests {
         // The conversation does not reach disk; the label is the model's own
         // words.
         assert!(!disk.contains("private remote reply"), "{disk}");
+        assert!(!disk.contains("private remote assignment"), "{disk}");
 
         let reopened = LabelStore::open(Some(root.path()), None, LOCAL_TARGET);
         let restored = &reopened.target("device:mini")["w2:p1"];
@@ -879,6 +892,7 @@ mod tests {
         assert_eq!(restored.goal.as_deref(), Some("라벨 저장소 확인"));
         assert_eq!(restored.line, "private remote line");
         assert_eq!(restored.facts, SessionFacts::default());
+        assert_eq!(restored.goal_evidence, None);
     }
 
     /// A save that moves only what stays in memory writes nothing, so the
