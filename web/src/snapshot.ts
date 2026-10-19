@@ -122,8 +122,10 @@ export type AgentRow = {
   message?: string | null;
   /** Native unanswered question/plan, bounded and session/state-proven by the core. */
   user_turn?: UserTurnFact;
-  /** When the core last saw this agent change state (epoch ms); the shell counts the elapsed time from it. `null` before the core observed it. */
+  /** When the core last saw this agent change state (epoch ms), retained for state ordering. */
   changed_at_unix_ms: number | null;
+  /** Latest actual native request in the proven session (epoch ms). Absent when unknown; never fall back to state observation time. */
+  last_prompt_at_unix_ms?: number | null;
   /** The core's ordering key: `changed_at_unix_ms` as thirteen digits, else Herdr's state sequence zero-padded, so it sorts as text. */
   last_activity?: string;
   emphasized: boolean;
