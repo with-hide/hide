@@ -60,6 +60,10 @@ on:
         default: none
   workflow_call:
     inputs:
+      source-sha:
+        description: Explicit public source commit, or the caller commit when omitted.
+        type: string
+        default: ''
       systems:
         description: The systems to run, as a JSON array of `linux`, `macos` and `windows`.
         type: string
@@ -127,6 +131,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         timeout-minutes: 5
+        with:
+          ref: ${{ inputs.source-sha || github.sha }}
       - uses: Swatinem/rust-cache@v2
         timeout-minutes: 10
         with:
@@ -197,6 +203,8 @@ jobs:
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
         timeout-minutes: 5
+        with:
+          ref: ${{ inputs.source-sha || github.sha }}
       - uses: actions/setup-python@v5
         timeout-minutes: 5
         with:
@@ -237,6 +245,7 @@ jobs:
       - uses: actions/checkout@v7
         timeout-minutes: 5
         with:
+          ref: ${{ inputs.source-sha || github.sha }}
           persist-credentials: false
       - uses: Swatinem/rust-cache@v2
         timeout-minutes: 10
@@ -393,6 +402,7 @@ jobs:
         with:
           # The keyed steps never need the repository token.
           persist-credentials: false
+          ref: ${{ inputs.source-sha || github.sha }}
       - uses: Swatinem/rust-cache@v2
         timeout-minutes: 10
         if: ${{ steps.agents.outputs.kinds != '' }}
