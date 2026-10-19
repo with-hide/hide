@@ -12,6 +12,16 @@ use serde::{Deserialize, Serialize};
 pub const HOST_KEY_CHANGED: &str = "host key changed";
 pub const HOST_KEY_UNKNOWN: &str = "host key unknown";
 
+/// Herdr's named-session grammar, before a route is stored or dispatched.
+pub fn valid_herdr_session(session: &str) -> bool {
+    !session.is_empty()
+        && session.len() <= 64
+        && !matches!(session, "." | "..")
+        && session
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+}
+
 /// Which trust or sign-in step a connection failure names, read off the
 /// words this module wrote into it: a changed host key, an unknown one, or a
 /// refused authentication (PRD S5.5 B38). Any other failure is `None`.
@@ -493,6 +503,24 @@ pub struct SshHostListing {
     pub truncated: bool,
 }
 
+/// Saved client configuration, never evidence of a reachable server.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct HerdrProfile {
+    pub id: String,
+    pub label: String,
+    pub target: String,
+    pub session: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct HerdrProfileListing {
+    pub profiles: Vec<HerdrProfile>,
+    /// Config-only resolution for profile and already registered targets.
+    pub endpoints: std::collections::BTreeMap<String, Result<String, String>>,
+    pub truncated: bool,
+}
+
 /// Opens the transport to a registered device. The node that holds the SSH
 /// configuration and keys implements it (`hide_node::ssh`); the core asks it
 /// by alias and never reads `~/.ssh` itself (PRD core-host-node D-21).
@@ -507,6 +535,34 @@ pub trait DeviceConnector: Send + Sync {
         alias: &str,
         herdr_socket: Option<String>,
     ) -> Result<std::sync::Arc<dyn DialedTransport>, String>;
+
+    /// An explicit session must never silently use the default server.
+    fn transport_session(
+        &self,
+        home: &std::path::Path,
+        node: &str,
+        target: &str,
+        herdr_socket: Option<String>,
+        session: Option<String>,
+    ) -> Result<std::sync::Arc<dyn DialedTransport>, String> {
+        if session.is_some() {
+            return Err("This connector cannot select a saved Herdr session".to_owned());
+        }
+        self.transport(home, node, target, herdr_socket)
+    }
+
+    /// Reads local client profiles only, without connecting to any target.
+    fn herdr_profiles(
+        &self,
+        _home: &std::path::Path,
+        _registered: &[String],
+        _stop: &std::sync::atomic::AtomicBool,
+    ) -> Result<HerdrProfileListing, String> {
+        Err(
+            "Saved Herdr machines are unavailable on this node. Retry after reconnecting"
+                .to_owned(),
+        )
+    }
 
     /// The concrete Host aliases of the SSH configuration of the account at
     /// `home` and where each leads, with the address of each of
@@ -534,6 +590,10 @@ pub trait DeviceTransport: Send + Sync {
     fn herdr_api_connector(&self) -> std::sync::Arc<dyn hide_herdr_client::ApiConnector>;
     /// The Herdr version the device reported last, if it has.
     fn cached_herdr_version(&self) -> Option<String>;
+    /// The exact socket already resolved for this transport, without I/O.
+    fn cached_herdr_socket(&self) -> Option<String> {
+        None
+    }
     /// The concrete transport, for the shell that built it and reaches parts
     /// the core does not use (browser and return-route forwards).
     fn into_any(self: std::sync::Arc<Self>) -> std::sync::Arc<dyn std::any::Any + Send + Sync>;

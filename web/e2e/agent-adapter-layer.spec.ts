@@ -16,8 +16,8 @@ test("Basic chips expose three accessible groups in all four languages and retur
   let daemon: Daemon | undefined;
   try {
     const home = path.join(fs.mkdtempSync(path.join(herdr.root, "ad-")), "home");
-    for (const folder of [".claude", ".codex", ".cursor", ".local/bin", ".hide/kit"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
-    for (const program of ["claude", "codex", "grok", "opencode", "pi", "omp", "cursor-agent", "agy"]) fs.writeFileSync(path.join(home, ".local/bin", program), "#!/bin/sh\n", { mode: 0o755 });
+    for (const folder of [".claude", ".codex", ".grok", ".local/bin", ".hide/kit"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
+    for (const program of ["claude", "codex", "grok", "opencode", "pi", "omp", "agy"]) fs.writeFileSync(path.join(home, ".local/bin", program), "#!/bin/sh\n", { mode: 0o755 });
     fs.writeFileSync(path.join(home, ".hide/kit/installed.json"), JSON.stringify({ format: 1, installed: [] }));
     daemon = await startHided(herdr, "adapter-groups", home, {}, true);
     await page.setViewportSize({ width: 560, height: 1000 });
@@ -26,11 +26,11 @@ test("Basic chips expose three accessible groups in all four languages and retur
     await page.locator("[data-open-settings]").click();
     await page.locator('[data-settings-tab="agents"]').click();
     const list = page.locator(`[data-agents-machine-list="${daemon.node}"]`);
-    await expect(list.locator("[data-agent-row]")).toHaveCount(8, { timeout: 60_000 });
+    await expect(list.locator("[data-agent-row]")).toHaveCount(7, { timeout: 60_000 });
     // OpenCode, Pi and omp take letters through Hide's plugin or extension, and Antigravity through Hide's hook
     // block, and are refused a launch, so they are not Basic (PRD opencode-plugin D-11, pi-omp-extension,
     // antigravity-first-class).
-    await expect(list.locator("[data-agent-partial]")).toHaveCount(2);
+    await expect(list.locator("[data-agent-partial]")).toHaveCount(1);
     for (const id of ["claude-code", "codex", "opencode", "pi", "omp", "antigravity"]) await expect(list.locator(`[data-agent-partial="${id}"]`)).toHaveCount(0);
     for (const [language, word, headings] of [
       ["en", "Basic", ["Herdr basics", "Session reading", "Multi-agent collaboration"]],
@@ -46,18 +46,18 @@ test("Basic chips expose three accessible groups in all four languages and retur
         await page.locator(`[data-theme-option="${theme}"]`).click();
         await expect(page.locator("[data-theme-choice]")).toHaveAttribute("data-theme-choice", theme);
         await page.locator('[data-settings-tab="agents"]').click();
-        for (const id of ["grok", "cursor"]) await expect(list.locator(`[data-agent-partial="${id}"]`)).toHaveText(word);
-        const chip = list.locator('[data-agent-partial="cursor"]');
+        for (const id of ["grok"]) await expect(list.locator(`[data-agent-partial="${id}"]`)).toHaveText(word);
+        const chip = list.locator('[data-agent-partial="grok"]');
         await chip.focus();
         await page.keyboard.press("Enter");
-        const popover = page.locator('[data-agent-partial-popover="cursor"]');
+        const popover = page.locator('[data-agent-partial-popover="grok"]');
         await expect(popover).toBeVisible();
         await expect(popover.getByRole("heading")).toHaveText([...headings]);
         await expect(popover.locator("[data-agent-feature]")).toHaveCount(11);
         await expect(popover.locator('[data-agent-feature="herdr_integration:yes"]')).toContainText("✓");
         await expect(popover.locator('[data-agent-feature="letters:no"]')).toContainText("–");
         await expect(popover.locator('[data-agent-feature="sleep:yes"]')).toContainText("✓");
-        await expect(popover.locator('[data-agent-feature="fork:no"]')).toContainText("–");
+        await expect(popover.locator('[data-agent-feature="fork:yes"]')).toContainText("–");
         await expect(popover.locator('[data-agent-feature="titles:yes"]')).toContainText("✓");
         const bounds = await popover.evaluate((node) => {
           const rect = node.getBoundingClientRect();

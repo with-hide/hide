@@ -40,13 +40,14 @@ export function cloneRunning(clone: RepositoryClone | null | undefined): boolean
 type Following = { id: number } | { after: number; at: number; path: string };
 
 /** `pickParent`: the native folder picker shows the core's folders, which it does only in a window on the core's machine. */
-export function CloneFromUrl({ actions, registrations, pickParent, onBack }: { actions: Actions; registrations: readonly WorkspaceRegistration[]; pickParent: boolean; onBack: () => void }) {
+export function CloneFromUrl({ actions, registrations, pickParent, onBack, draft, onDraft }: { actions: Actions; registrations: readonly WorkspaceRegistration[]; pickParent: boolean; onBack: () => void; draft?: { url?: string; parent?: string }; onDraft?: (draft: { url?: string; parent?: string }) => void }) {
   const { t, i18n } = useInterfaceTranslation();
   const slot = useShellStore((s) => s.rest?.repository_clone ?? null);
   const target = useShellStore((s) => s.cloneTarget);
   const pathRefusal = useShellStore((s) => s.pathRefusal);
-  const [url, setUrl] = useState("");
-  const [parent, setParent] = useState(() => defaultProjectParent(registrations, localDeviceId(useShellStore.getState().rest)));
+  const [url, setUrl] = useState(draft?.url ?? "");
+  const [parent, setParent] = useState(() => draft?.parent || defaultProjectParent(registrations, localDeviceId(useShellStore.getState().rest)));
+  const chooseParent = (parent: string) => { setParent(parent); onDraft?.({ parent }); };
   const [following, setFollowing] = useState<Following | null>(() => {
     const running = useShellStore.getState().rest?.repository_clone;
     return running && cloneRunning(running) ? { id: running.id } : null;
@@ -94,7 +95,7 @@ export function CloneFromUrl({ actions, registrations, pickParent, onBack }: { a
 
   const browse = async () => {
     const folder = await actions.pickFolder();
-    if (folder !== null) setParent(trimFolder(folder));
+    if (folder !== null) chooseParent(trimFolder(folder));
   };
 
   return (
@@ -122,7 +123,7 @@ export function CloneFromUrl({ actions, registrations, pickParent, onBack }: { a
             autoCorrect="off"
             aria-invalid={url.trim() !== "" && !parsed.ok}
             data-clone-url="true"
-            onChange={(event) => setUrl(event.target.value)}
+            onChange={(event) => { setUrl(event.target.value); onDraft?.({ url: event.target.value }); }}
             onKeyDown={(event) => {
               if (event.nativeEvent.isComposing || event.key !== "Enter") return;
               event.preventDefault();
@@ -147,7 +148,7 @@ export function CloneFromUrl({ actions, registrations, pickParent, onBack }: { a
               disabled={running}
               spellCheck={false}
               data-clone-parent="true"
-              onChange={(event) => setParent(event.target.value)}
+              onChange={(event) => chooseParent(event.target.value)}
             />
             {pickParent ? (
               <Button variant="secondary" size="icon" disabled={running} aria-label={t("addProject.clone.chooseParent")} onClick={() => void browse()} data-clone-browse="true">

@@ -881,11 +881,11 @@ fn use_hide_ai_off_stops_every_model_use_and_keeps_the_choice() {
 fn the_first_signed_in_agent_that_is_switched_on_is_chosen_by_itself() {
     let mut runtime = runtime();
     runtime.ingest_ai_settings(hide_ai::AiSettings::default(), None);
-    switch_on(&mut runtime, &["codex", "cursor"]);
+    switch_on(&mut runtime, &["codex", "opencode"]);
     let asked = runtime.ai_request();
     assert_eq!(
         asked.selecting.iter().copied().collect::<Vec<_>>(),
-        vec![hide_ai::ProviderId::CODEX, hide_ai::ProviderId::CURSOR],
+        vec![hide_ai::ProviderId::CODEX, hide_ai::ProviderId::OPENCODE],
         "only agents that are on are asked, while nobody has chosen"
     );
 
@@ -895,7 +895,7 @@ fn the_first_signed_in_agent_that_is_switched_on_is_chosen_by_itself() {
     assert!(runtime.take_ai_settings_save().is_none());
 
     // Login is noticed later with no setting touched (B47).
-    assert!(runtime.ingest_background_ai(ready_read(&["codex", "cursor"])));
+    assert!(runtime.ingest_background_ai(ready_read(&["codex", "opencode"])));
     assert_eq!(
         runtime.snapshot.status.background_ai.provider.as_deref(),
         Some("codex"),

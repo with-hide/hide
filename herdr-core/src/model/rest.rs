@@ -142,6 +142,7 @@ section!(StatusSections, StatusSnapshot, s, {
     agent_hooks: AgentHooksSnapshot => s.agent_hooks,
     background_ai: BackgroundAiSnapshot => s.background_ai,
     ssh_hosts: SshHostsSnapshot => s.ssh_hosts,
+    herdr_profiles: HerdrProfilesSnapshot => s.herdr_profiles,
     diagnostics: Vec<DiagnosticSnapshot> => s.diagnostics,
     last_error: Option<LastErrorSnapshot> => s.last_error,
     async_operations: Vec<AsyncOperationSnapshot> => s.async_operations,

@@ -372,12 +372,14 @@ fn serve_in(
                             cli_dir,
                             herdr_socket,
                             retirement_projects,
+                            preserve_herdr_server,
                         } => handle_in(
                             Call::Kit {
                                 action,
                                 cli_dir,
-                                herdr_socket: kit_herdr_socket(herdr_socket, link.herdr_socket()),
+                                herdr_socket: if preserve_herdr_server { herdr_socket } else { kit_herdr_socket(herdr_socket, link.herdr_socket()) },
                                 retirement_projects,
+                                preserve_herdr_server,
                             },
                             env,
                         ),
@@ -1072,11 +1074,13 @@ pub fn handle_with_progress(
             cli_dir,
             herdr_socket,
             retirement_projects,
+            preserve_herdr_server,
         } => crate::kit::handle(
             action,
             &cli_dir,
             herdr_socket.as_deref(),
             &retirement_projects,
+            preserve_herdr_server,
             env,
         ),
         Call::WorktreesRegistered { root } => to_value(

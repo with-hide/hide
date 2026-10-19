@@ -81,6 +81,7 @@ pub(crate) struct DeviceKitCall {
     pub(crate) channel: Arc<dyn NodeLink>,
     pub(crate) cli_dir: String,
     pub(crate) herdr_socket: Option<String>,
+    pub(crate) preserve_herdr_server: bool,
     pub(crate) retirement_projects: Vec<String>,
     /// The run of the shared-server turn-off this call carries, if any.
     pub(crate) daemon_off_run: Option<u64>,
@@ -587,12 +588,19 @@ impl Runtime {
             self.local_kit_check_requested = true;
             return true;
         }
+        // The next newly connected device receives the most recently accepted
+        // choice, including a choice revised in Help after first run ended.
+        let preference_changed = self.snapshot.ui_state.agent_onboarding_agents != agents;
+        if preference_changed {
+            self.snapshot.ui_state.agent_onboarding_agents = agents.clone();
+            self.persist_ui_state();
+        }
         let changed = if answer {
             self.finish_agent_onboarding(agents.clone())
         } else {
             self.switch_agents_here(&agents)
         };
-        changed | self.wait_for_first_run_apply(agents, finish, answer)
+        preference_changed | changed | self.wait_for_first_run_apply(agents, finish, answer)
     }
 
     /// Switches every agent installed on this Mac to what `on` says, through
@@ -1012,7 +1020,8 @@ impl Runtime {
                     .as_ref()
                     .and_then(|consent| consent.cli_dir.clone())
                     .unwrap_or_else(|| self.host_cli_dir.clone()),
-                herdr_socket: registration.herdr_socket_path.clone(),
+                herdr_socket: self.device_kit_socket(&registration),
+                preserve_herdr_server: registration.herdr_session.is_some(),
                 retirement_projects: Vec::new(),
                 daemon_off_run: None,
             },
@@ -1067,6 +1076,7 @@ impl Runtime {
         };
         // A node that dials in has no consent, so it links `hide` where a
         // device would by default, in its own home.
+        let herdr_socket = self.device_kit_socket(&registration);
         let cli_dir = registration
             .host_consent
             .and_then(|consent| consent.cli_dir)
@@ -1082,10 +1092,21 @@ impl Runtime {
             work: DeviceKitWork::Job(job),
             channel,
             cli_dir,
-            herdr_socket: registration.herdr_socket_path,
+            herdr_socket,
+            preserve_herdr_server: registration.herdr_session.is_some(),
             retirement_projects: self.retirement_projects(device_id),
             daemon_off_run,
         })
+    }
+
+    fn device_kit_socket(&self, registration: &crate::model::DeviceRegistration) -> Option<String> {
+        if registration.herdr_session.is_some() {
+            self.remote_connections
+                .get(&registration.id)
+                .and_then(|connection| connection.transport.device().cached_herdr_socket())
+        } else {
+            registration.herdr_socket_path.clone()
+        }
     }
 
     /// Stores what a device's kit call answered. A call that failed keeps

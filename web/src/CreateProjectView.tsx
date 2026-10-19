@@ -20,10 +20,10 @@ import { useShellStore } from "./store";
 import { useInterfaceTranslation } from "./i18n/client";
 
 /** `pickParent`: the native folder picker shows the core's folders, which it does only in a window on the core's machine. */
-export function CreateProjectView({ actions, registrations, pickParent, onBack }: { actions: Actions; registrations: readonly WorkspaceRegistration[]; pickParent: boolean; onBack: () => void }) {
+export function CreateProjectView({ actions, registrations, pickParent, onBack, draft, onDraft }: { actions: Actions; registrations: readonly WorkspaceRegistration[]; pickParent: boolean; onBack: () => void; draft?: { name?: string; parent?: string }; onDraft?: (draft: { name?: string; parent?: string }) => void }) {
   const { t } = useInterfaceTranslation();
-  const [parent, setParent] = useState(() => defaultProjectParent(registrations, localDeviceId(useShellStore.getState().rest)));
-  const [typed, setTyped] = useState("");
+  const [parent, setParent] = useState(() => draft?.parent || defaultProjectParent(registrations, localDeviceId(useShellStore.getState().rest)));
+  const [typed, setTyped] = useState(draft?.name ?? "");
   const registration = useRegistration(registrations);
   const { pending, shown } = registration;
   const name = typed.trim();
@@ -55,7 +55,7 @@ export function CreateProjectView({ actions, registrations, pickParent, onBack }
     if (pending) return;
     const folder = await actions.pickFolder();
     // A cancelled pick keeps the folder that was there.
-    if (folder !== null) setParent(folder);
+    if (folder !== null) { setParent(folder); onDraft?.({ parent: folder }); }
   };
 
   return (
@@ -89,7 +89,7 @@ export function CreateProjectView({ actions, registrations, pickParent, onBack }
             className="mt-xxs"
             aria-invalid={problem !== null || undefined}
             data-create-project-name="true"
-            onChange={(event) => setTyped(event.target.value)}
+            onChange={(event) => { setTyped(event.target.value); onDraft?.({ name: event.target.value }); }}
           />
         </label>
         {pickParent ? (

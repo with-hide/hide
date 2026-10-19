@@ -244,6 +244,24 @@ async function opencode(t) {
   return host;
 }
 
+test("completed and failed shell observations route through the session terminal without replacing its result", async (t) => {
+  answer({ observation: {} });
+  const host = await opencode(t);
+  host.create("ses_observed", null);
+  host.terminal("w1:p1", { type: "session", sessionID: "ses_observed" });
+  const instance = host.instances.get(PROJECT);
+  for (const status of ["completed", "error"]) {
+    const event = { tool: "shell", sessionID: "ses_observed", id: `call_${status}`, status,
+      input: { command: "herdr agent prompt worker hi" }, result: { content: [{ type: "text", text: "RAW RESULT" }] } };
+    const original = structuredClone(event.result);
+    await instance.hooks["tool.execute.after"](event);
+    assert.deepEqual(event.result, original);
+  }
+  const observed = await until("observation", 2);
+  assert.deepEqual(observed.map((item) => item.input.observation.failed), [false, true]);
+  assert.ok(observed.every((item) => item.input.session_id === "ses_observed"));
+});
+
 /** Waits until the terminal attached to `root`. */
 async function attached(view, root) {
   for (let waited = 0; waited < 2000; waited += 20) {

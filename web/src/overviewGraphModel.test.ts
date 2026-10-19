@@ -21,6 +21,40 @@ function metadata(parties: OverviewGraphParty[], letters: OverviewGraphMetadata[
 }
 
 describe("current sessions in the Overview graph", () => {
+  it("keeps Herdr input count and direction separate from letters and delegation", () => {
+    const p = project("one", [agent("a"), agent("b")]);
+    const facts = metadata([party("a"), party("b")], [letter("mail", party("a"), party("b"))]);
+    facts.direct_inputs = [
+      { id: "direct-1", sender: party("a"), recipient: party("b"), at_unix_ms: 20 },
+      { id: "direct-2", sender: party("a"), recipient: party("b"), at_unix_ms: 30 },
+      { id: "direct-3", sender: party("b"), recipient: party("a"), at_unix_ms: 40 },
+      { id: "old-session", sender: party("a", "previous-digest"), recipient: party("b"), at_unix_ms: 50 },
+      { id: "other-server-device", sender: party("a", "digest-a", "other-server-device"), recipient: party("b"), at_unix_ms: 60 },
+    ];
+    const graph = overviewGraphModel([p], facts, new Set([graphProjectId(p)]), null);
+    const direct = graph.communication.find((row) => row.kind === "herdr_direct")!;
+    expect(direct.count).toBe(3);
+    expect(direct.latest).toBe(40);
+    expect(direct.directions.map((row) => row.count).sort()).toEqual([1, 2]);
+    expect(direct.kinds).toEqual({ herdr_direct: 3 });
+    expect(graph.communication.find((row) => row.kind === "letters")?.count).toBe(1);
+    expect(graph.lineage).toEqual([]);
+    expect(overviewGraphModel([p], { ...facts, direct_inputs: [] }, new Set([graphProjectId(p)]), null).structure).toBe(graph.structure);
+    expect(overviewGraphModel([p], { ...facts, sessions: [] }, new Set([graphProjectId(p)]), null).communication).toEqual([]);
+    const withoutLetters = overviewGraphModel([p], { ...facts, available: false }, new Set([graphProjectId(p)]), null);
+    expect(withoutLetters.communication.map((row) => row.kind)).toEqual(["herdr_direct"]);
+  });
+
+  it("shares one newest-record cap across letters and direct inputs", () => {
+    const p = project("one", [agent("a"), agent("b")]);
+    const facts = metadata([party("a"), party("b")], Array.from({ length: 2000 }, (_, index) => letter(`letter-${index}`, party("a"), party("b"), "request", index)));
+    facts.direct_inputs = [{ id: "direct", sender: party("a"), recipient: party("b"), at_unix_ms: 2000 }];
+    const graph = overviewGraphModel([p], facts, new Set([graphProjectId(p)]), null);
+    expect(graph.communication.reduce((count, row) => count + row.count, 0)).toBe(2000);
+    expect(graph.communication.find((row) => row.kind === "herdr_direct")?.count).toBe(1);
+    expect(graph.communication.find((row) => row.kind === "letters")?.count).toBe(1999);
+  });
+
   it("keeps core-verified lineage in both cross-device directions and counts descendants by current session", () => {
     const local = project("local", [agent("local-parent"), agent("local-child", { lineage_parent_pane_id: "remote:mini:pane:parent" }), agent("local-grandchild", { lineage_parent_pane_id: "remote:mini:pane:child" })]);
     const remote = project("remote", [agent("remote:mini:pane:parent", { device_id: "mini" }), agent("remote:mini:pane:child", { device_id: "mini", lineage_parent_pane_id: "local-parent" }), agent("remote:mini:pane:fork", { device_id: "mini", forked_from: { pane_id: "local-parent", label: "source" } })], "mini");

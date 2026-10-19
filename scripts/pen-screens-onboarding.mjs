@@ -66,7 +66,7 @@ export function onboardingBoards(tokens, root, {themedXref, screenButton, screen
   // -- copy -------------------------------------------------------------------------
 
   const EN = {
-    of: n => `${n} of 3`,
+    of: (n, total = 3) => `${n} of ${total}`,
     s1Title: 'Choose your agents',
     s1Sub: 'Hide adds its own entries to each agent you turn on, so it can tell when an agent needs you. Nothing changes until you continue.',
     ready: 'Ready', nosign: 'Not signed in', checking: 'Checking…', installed: 'Installed', none: 'Not installed', install: 'Install ↗',
@@ -88,7 +88,7 @@ export function onboardingBoards(tokens, root, {themedXref, screenButton, screen
     unreadable: 'Hide can’t read the notification setting', phone: 'Also on your phone →',
   };
   const KO = {
-    of: n => `${n} / 3`,
+    of: (n, total = 3) => `${n} / ${total}`,
     s1Title: '함께 쓸 에이전트를 고르세요',
     s1Sub: '켠 에이전트마다 Hide가 자기 항목을 더해, 에이전트가 나를 부르는 순간을 알아챕니다. 계속을 누르기 전에는 아무것도 바꾸지 않습니다.',
     ready: '준비됨', nosign: '로그인 필요', checking: '확인 중…', installed: '설치됨', none: '설치 안 됨', install: '설치 ↗',
@@ -116,11 +116,11 @@ export function onboardingBoards(tokens, root, {themedXref, screenButton, screen
 
   // -- agents (step 1) -------------------------------------------------------------
 
-  const AGENT_LABEL = {'claude-code': 'Claude Code', codex: 'Codex', grok: 'Grok', opencode: 'OpenCode', pi: 'Pi', omp: 'omp', cursor: 'Cursor'};
+  const AGENT_LABEL = {'claude-code': 'Claude Code', codex: 'Codex', grok: 'Grok', opencode: 'OpenCode', pi: 'Pi', omp: 'omp', antigravity: 'Antigravity'};
   // The order the kit lists; each state is one the system can answer (D-06).
   const MIXED = [
     ['claude-code', 'ready', true], ['codex', 'nosign', true], ['grok', 'none', false], ['opencode', 'installed', true],
-    ['pi', 'checking', true], ['omp', 'installed', false], ['cursor', 'none', false],
+    ['pi', 'checking', true], ['omp', 'installed', false], ['antigravity', 'none', false],
   ];
   const NOTHING = Object.keys(AGENT_LABEL).map(id => [id, 'none', false]);
 
@@ -183,7 +183,7 @@ export function onboardingBoards(tokens, root, {themedXref, screenButton, screen
       pi: win ? [[skill(['.agents', 'skills']), L.skill], [home('.pi', 'agent'), L.herdr]]
         : [[home('.pi', 'agent', 'extensions', 'hide.ts'), L.extension], [skill(['.agents', 'skills']), L.skill], [home('.pi', 'agent'), L.herdr]],
       omp: [[home('.omp', 'agent', 'extensions', 'hide.ts'), L.extension], [skill(['.agents', 'skills']), L.skill], [home('.omp', 'agent'), L.herdr]],
-      cursor: [[home('.cursor', 'hooks.json'), L.hook], [skill(['.agents', 'skills']), L.skill], [home('.cursor'), L.herdr]],
+      antigravity: [[home('.gemini', 'config', 'hooks.json'), L.hook], [home('.gemini', 'config', 'skills', 'hide-browser', 'SKILL.md'), L.skill], [home('.gemini', 'config'), L.herdr]],
     };
     // Agents that share one skill file (~/.agents/skills) share its row.
     const byPath = new Map();
@@ -213,31 +213,43 @@ export function onboardingBoards(tokens, root, {themedXref, screenButton, screen
 
   // -- the wizard surface: a dialog over the dimmed shell ---------------------------
 
-  function progress(p, step) {
-    return F(p, `${step} of 3`, {layout: 'horizontal', gap: '$--spacing-sm', alignItems: 'center'}, [
-      F(`${p}-bar`, 'Segments', {layout: 'horizontal', gap: 4}, [1, 2, 3].map(i => F(`${p}-s${i}`, `Segment ${i}`, {width: 24, height: 4, cornerRadius: 2, fill: i <= step ? '$--primary' : '$--secondary'}, []))),
-      T(`${p}-t`, L.of(step), {size: 'caption', fill: '$--muted-foreground'}),
+  function progress(p, step, total = 3) {
+    return F(p, `${step} of ${total}`, {layout: 'horizontal', gap: '$--spacing-sm', alignItems: 'center'}, [
+      F(`${p}-bar`, 'Segments', {layout: 'horizontal', gap: 4}, Array.from({length: total}, (_, n) => n + 1).map(i => F(`${p}-s${i}`, `Segment ${i}`, {width: 24, height: 4, cornerRadius: 2, fill: i <= step ? '$--primary' : '$--secondary'}, []))),
+      T(`${p}-t`, L.of(step, total), {size: 'caption', fill: '$--muted-foreground'}),
     ]);
   }
 
-  function wizard(p, {step, title, desc, body = [], footLeft = [], actions = [], close = false, width = DW}) {
+  function wizard(p, {step, total = 3, title, desc, body = [], footLeft = [], actions = [], close = false, width = DW}) {
     return F(p, `Wizard · step ${step}`, {
       width, layout: 'vertical', gap: '$--spacing-md', padding: '$--spacing-lg', cornerRadius: '$--radius-lg', fill: '$--popover',
       stroke: '$--border', strokeWidth: 1, strokeAlignment: 'inner', effect: SHADOW,
     }, [
       F(`${p}-hdr`, 'Header', {layout: 'vertical', gap: '$--spacing-sm', width: 'fill_container'}, [
         ...(step ? [F(`${p}-top`, 'Top', {layout: 'horizontal', alignItems: 'center', width: 'fill_container'}, [
-          progress(`${p}-prog`, step), spacer(`${p}-topsp`), owl(`${p}-owl`, step === 1 ? 'agents' : step === 2 ? 'devices' : 'ai', '$--size-owl-onboarding'), ...(close ? [iconBtn(`${p}-x`, 'x')] : []),
+          progress(`${p}-prog`, step, total), spacer(`${p}-topsp`), owl(`${p}-owl`, step === 1 ? 'agents' : step === 2 ? 'devices' : 'ai', '$--size-owl-onboarding'), ...(close ? [iconBtn(`${p}-x`, 'x')] : []),
         ])] : []),
         T(`${p}-title`, title, {size: 'headline', weight: '600'}),
         ...(desc ? [T(`${p}-desc`, desc, {fill: '$--subtle-foreground', width: width - 2 * PAD})] : []),
       ]),
       ...body,
-      F(`${p}-ftr`, 'Footer', {layout: 'horizontal', gap: '$--spacing-sm', alignItems: 'center', width: 'fill_container'}, [...footLeft, spacer(`${p}-ftrsp`), ...actions]),
+      F(`${p}-ftr`, 'Footer', {layout: 'horizontal', gap: '$--spacing-sm', alignItems: 'center', width: 'fill_container'}, [...(step > 1 ? [btn(`${p}-back`, L === KO ? '뒤로' : 'Back', {variant: 'ghost'})] : []), ...footLeft, spacer(`${p}-ftrsp`), ...actions]),
     ]);
   }
 
   const continueKeys = (p, label = L.cont, variant = 'default') => [btn(`${p}-go`, label, {variant}), kbd(`${p}-gok`, K().enter)];
+
+  function devicesStep(p, state = 'saved') {
+    const rows = [['Build server', 'build@work.example · Session work', state === 'partial' ? 'Connected' : 'Saved in Herdr'], ['Research server', 'research@work.example · Session experiments', state === 'partial' ? 'Could not connect · Retry' : 'Saved in Herdr']];
+    return wizard(p, {step: 2, total: 4, title: 'Bring your Herdr devices into Hide', desc: 'Choose devices saved in Herdr. Saving a device does not prove it is reachable.', body: [
+      ...(state === 'loading' || state === 'failed' ? [status(`${p}-read`, state === 'failed' ? 'error' : 'pending', state === 'failed' ? 'Could not read saved devices. Retry' : 'Reading saved Herdr devices…')] : rows.map(([label, route, line], i) => F(`${p}-r${i}`, label, {layout: 'horizontal', width: 'fill_container', padding: '$--spacing-sm', gap: '$--spacing-sm', alignItems: 'start', stroke: '$--border', strokeWidth: 1, cornerRadius: '$--radius-md'}, [
+        themedXref(`${p}-cb${i}`, 'chk-m', 'Unchecked'), F(`${p}-rt${i}`, 'Profile', {layout: 'vertical', gap: '$--spacing-xs', width: 'fill_container'}, [T(`${p}-label${i}`, label, {weight: '500'}), T(`${p}-route${i}`, route, {size: 'caption', mono: true, fill: '$--muted-foreground', width: INNER - 64}), status(`${p}-status${i}`, line === 'Connected' ? 'ok' : line.includes('Retry') ? 'error' : 'muted', line)]),
+      ]))),
+      T(`${p}-hint`, 'No device is contacted until you choose Connect. Existing sessions and tabs stay in place.', {size: 'caption', fill: '$--muted-foreground', width: INNER}),
+      T(`${p}-consent`, 'Connect installs Hide’s helper, the hide command, and the agent integrations you selected on each checked device.', {width: INNER}),
+      link(`${p}-terms`, 'What gets installed'),
+    ], actions: [btn(`${p}-skip`, 'Not now', {variant: 'ghost'}), ...continueKeys(p, state === 'saved' ? 'Continue' : L.cont)]});
+  }
 
   function step1(p, {agents = MIXED, open = false, failed = false, close = false, hideAi = true} = {}) {
     const empty = agents === NOTHING;
@@ -516,19 +528,20 @@ export function onboardingBoards(tokens, root, {themedXref, screenButton, screen
   }
 
   const onSystem = (os, fn) => { const was = OS; OS = os; try { return fn(); } finally { OS = was; } };
-  // Windows tiles: OpenCode and Cursor are installed but nothing of Hide's can be
+  // Windows tiles: OpenCode is installed but nothing of Hide's can be
   // written for them there (availability unsupported_system), omp not installed.
   const WINDOWS = [
     ['claude-code', 'ready', true], ['codex', 'nosign', true], ['grok', 'none', false], ['opencode', 'unsupported', false],
-    ['pi', 'checking', true], ['omp', 'none', false], ['cursor', 'unsupported', false],
+    ['pi', 'checking', true], ['omp', 'none', false], ['antigravity', 'none', false],
   ];
 
   const boards = [
+    board('b01b-herdr-devices', '01b · Saved Herdr devices and Back', 'Conditional route: Agents → Devices → Notifications → Project. A proven empty discovery uses three steps. Back is navigation only and keeps choices and completed effects. Saved profiles are unchecked; explicit Connect accepts installation for the checked profiles. Loading, failed discovery with Retry, disabled/already-added profiles, and partial connection success stay distinct. The production gallery carries the long 32-profile and keyboard cases.', t => [shellWithDialog(`hd-${t}`, devicesStep(`hd-${t}-w`)), grid(`hd-states-${t}`, [[cell(`hd-loading-${t}`, 'Reading saved configuration only', devicesStep(`hd-loading-${t}-w`, 'loading')), cell(`hd-failed-${t}`, 'Discovery failed · Retry or Not now', devicesStep(`hd-failed-${t}-w`, 'failed'))], [cell(`hd-partial-${t}`, 'One connected, one failed · Retry only that device', devicesStep(`hd-partial-${t}-w`, 'partial'))]])]),
     board('b01a-frame-A', '01 · The wizard: a dialog over the dimmed shell',
       'The wizard is a dialog over Home with the three-segment bar and "1 of 3" on top, today’s first-run dialog grown into three steps. The shell stays in sight behind the scrim, so the first sight of Hide is Hide.',
       t => [shellWithDialog(`a-${t}`, step1(`a-${t}-w`))]),
     board('b02-step1-agents', '02 · Step 1, agents',
-      'Seven tiles in the kit’s order. States drawn: Claude Code Ready (on), Codex Not signed in (on), Grok Not installed with Install ↗, OpenCode Installed (on), Pi Checking… (on), omp Installed (off), Cursor Not installed. "What changes" open lists each location as KitAgentSnapshot reports it, home shown as ~: hooks and plugins by their file, skills by their SKILL.md (agents sharing ~/.agents/skills share one row), each agent\u2019s Herdr integration by the folder Herdr installs into ("<agent> · Herdr integration"), and ~/.local/bin/hide; turning omp on adds its lines. The Hide AI line sits left of Continue. Extra states: apply failed for one agent (B12: the reason line and Try again in Continue’s place), no agent installed (B9: one line with two install links, Continue unchanged), and the wizard reopened from Help > Set up Hide (B46: a close button).',
+      'Seven tiles in the kit’s order. States drawn: Claude Code Ready (on), Codex Not signed in (on), Grok Not installed with Install ↗, OpenCode Installed (on), Pi Checking… (on), omp Installed (off), Antigravity Not installed. "What changes" open lists each location as KitAgentSnapshot reports it, home shown as ~: hooks and plugins by their file, skills by their SKILL.md (agents sharing ~/.agents/skills share one row), each agent\u2019s Herdr integration by the folder Herdr installs into ("<agent> · Herdr integration"), and ~/.local/bin/hide; turning omp on adds its lines. The Hide AI line sits left of Continue. Extra states: apply failed for one agent (B12: the reason line and Try again in Continue’s place), no agent installed (B9: one line with two install links, Continue unchanged), and the wizard reopened from Help > Set up Hide (B46: a close button).',
       t => [
         shellWithDialog(`s1-${t}`, step1(`s1-${t}-w`, {open: true})),
         grid(`s1x-${t}`, [[
@@ -618,7 +631,7 @@ export function onboardingBoards(tokens, root, {themedXref, screenButton, screen
         cell(`ehp1-${t}`, 'Projects, no agent', sidebarWindow(`ehp1-${t}`, {projects: ONE})),
       ]])])),
     onSystem('win', () => board('b15-step1-windows', '15 · Step 1 on Windows, "What changes" open',
-      'Each location as KitAgentSnapshot reports it on Windows, home shown as ~ with backslashes: each skill as its SKILL.md, the command as hide.cmd, and each agent\u2019s Herdr integration by its folder. On Windows only Claude Code (hook and skill), Codex (hook) and Pi (skill) get Hide\u2019s own pieces; OpenCode and Cursor are installed but Hide writes nothing for them there (availability unsupported_system), so their tiles read "Not on Windows yet" and cannot be switched on. Continue reads Ctrl+Enter.',
+      'Each location as KitAgentSnapshot reports it on Windows, home shown as ~ with backslashes: each skill as its SKILL.md, the command as hide.cmd, and each agent\u2019s Herdr integration by its folder. On Windows only Claude Code (hook and skill), Codex (hook) and Pi (skill) get Hide\u2019s own pieces; OpenCode is installed but Hide writes nothing for it there (availability unsupported_system), so their tiles read "Not on Windows yet" and cannot be switched on. Continue reads Ctrl+Enter.',
       t => [shellWithDialog(`w1-${t}`, step1(`w1-${t}-w`, {agents: WINDOWS, open: true}))])),
 
     board('b17-sidebar-add-project', '17 · Sidebar Add project: + on the Projects label',

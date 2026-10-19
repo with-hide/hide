@@ -197,7 +197,10 @@ use crate::error::HostError;
 /// 49: the owning node's shell recipe declares Integrated or Plain readiness.
 /// Older helpers cannot preserve ordinary shell starts and their readiness;
 /// Hello refuses them until the existing helper replacement upgrades them.
-pub const PROTOCOL_VERSION: u32 = 49;
+/// 50: kit calls distinguish attaching to a saved Herdr session from server
+/// replacement consent, and pane proofs carry passive hook observations.
+/// Older helpers could replace the selected server or reject its observation.
+pub const PROTOCOL_VERSION: u32 = 50;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -454,6 +457,9 @@ pub enum Call {
         action: KitAction,
         cli_dir: String,
         herdr_socket: Option<String>,
+        /// A saved Herdr profile grants attachment, without server replacement.
+        #[serde(default)]
+        preserve_herdr_server: bool,
         /// Known registered checkout roots on this helper's device only.
         #[serde(default)]
         retirement_projects: Vec<String>,

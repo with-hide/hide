@@ -55,6 +55,8 @@ fn step(runtime: &Runtime) -> Option<FirstRunStep> {
 }
 
 fn report_here(runtime: &mut Runtime, report: &KitReport) {
+    // Existing cases exercise the original no-saved-devices route.
+    runtime.snapshot.status.herdr_profiles.state = "ready".to_owned();
     let node = runtime.node.clone();
     runtime.ingest_kit_report(node.as_str(), report);
 }
@@ -611,8 +613,8 @@ fn a_reopened_first_step_switches_only_what_it_changed() {
     let mut runtime = runtime();
     let mut omp = agent("omp", false, ComponentState::Off);
     omp.availability = Availability::Available;
-    let mut cursor = agent("cursor", true, ComponentState::Installed);
-    cursor.availability = Availability::NotInstalled;
+    let mut antigravity = agent("antigravity", true, ComponentState::Installed);
+    antigravity.availability = Availability::NotInstalled;
     report_here(
         &mut runtime,
         &pass(
@@ -621,7 +623,7 @@ fn a_reopened_first_step_switches_only_what_it_changed() {
                 agent("claude-code", true, ComponentState::Installed),
                 agent("codex", true, ComponentState::Installed),
                 omp,
-                cursor,
+                antigravity,
             ],
         ),
     );
@@ -639,6 +641,7 @@ fn a_reopened_first_step_switches_only_what_it_changed() {
         "an agent that is not installed here has no switch, so it stays on"
     );
     assert_eq!(step(&runtime), None);
+    assert_eq!(runtime.snapshot.ui_state.agent_onboarding_agents, ["claude-code", "omp"], "the next imported device uses the revised Help choice");
 }
 
 /// D-21, B30, B43: the notification switch and the screens introduced once
@@ -741,4 +744,77 @@ fn the_old_shared_choice_migrates_and_each_notification_choice_survives_restart(
             assert_eq!(runtime.snapshot().ui_state.desktop_notifications_done, done);
         }
     }
+}
+
+#[test]
+fn back_preserves_choices_and_never_queues_an_install_or_changes_notifications() {
+    let folder = scratch_dir("herdr-core-first-run-back-");
+    let path = folder.path().join("state.json");
+    let mut runtime = runtime_at(&path);
+    report_here(&mut runtime, &first_run_pass());
+    runtime.dispatch_json(&event("agent_onboarding_apply", serde_json::json!({"agents": ["claude-code"]})));
+    run_queued_pass(&mut runtime, &pass(false, vec![agent("claude-code", true, ComponentState::Installed), agent("codex", false, ComponentState::Off)]));
+    runtime.dispatch_json(&event("first_run_advance", serde_json::json!({"from": "notifications", "notifications": false})));
+    runtime.dispatch_json(&event("first_run_draft", serde_json::json!({"project_device": "studio", "project_path": "~/my-project", "project_form": {"view": "clone", "url": "https://example.test/repo.git", "parent": "~/work", "name": "my-project"}})));
+    assert!(runtime.dispatch_json(&event("first_run_back", serde_json::json!({"from": "project"}))));
+    assert!(!runtime.dispatch_json(&event("first_run_back", serde_json::json!({"from": "project"}))), "a stale Back cannot move the next step");
+    assert!(runtime.dispatch_json(&event("first_run_back", serde_json::json!({"from": "notifications"}))));
+    assert_eq!(step(&runtime), Some(FirstRunStep::Agents));
+    assert!(!runtime.snapshot.ui_state.desktop_notifications);
+    assert!(runtime.take_local_kit_job(Instant::now()).is_none());
+    drop(runtime);
+    let restarted = runtime_at(&path);
+    assert_eq!(step(&restarted), Some(FirstRunStep::Agents));
+    let choices = &restarted.snapshot.ui_state.first_run_choices;
+    assert_eq!(choices.agents.as_deref(), Some(["claude-code".to_owned()].as_slice()));
+    assert_eq!(choices.project_device.as_deref(), Some("studio"));
+    assert_eq!(choices.project_path, "~/my-project");
+    assert_eq!(choices.project_form.view, "clone");
+    assert_eq!(choices.project_form.url, "https://example.test/repo.git");
+    assert!(choices.notifications_answered);
+}
+
+#[test]
+fn only_a_successful_empty_discovery_skips_devices_and_back_follows_that_route() {
+    let mut runtime = runtime();
+    runtime.snapshot.ui_state.first_run = Some(FirstRun { version: crate::model::FIRST_RUN_VERSION, step: FirstRunStep::Devices });
+    for state in ["idle", "loading", "failed"] {
+        runtime.snapshot.status.herdr_profiles.state = state.to_owned();
+        assert!(!runtime.settle_first_run_devices(), "{state} is not an empty saved list");
+        assert_eq!(step(&runtime), Some(FirstRunStep::Devices));
+    }
+    runtime.snapshot.status.herdr_profiles.state = "ready".to_owned();
+    assert!(runtime.settle_first_run_devices());
+    assert_eq!(step(&runtime), Some(FirstRunStep::Notifications));
+    assert!(runtime.dispatch_json(&event("first_run_back", serde_json::json!({"from": "notifications"}))));
+    assert_eq!(step(&runtime), Some(FirstRunStep::Agents));
+}
+
+#[test]
+fn an_in_flight_apply_keeps_its_choice_and_a_late_report_cannot_move_another_step() {
+    let mut runtime = runtime();
+    report_here(&mut runtime, &first_run_pass());
+    runtime.dispatch_json(&event("agent_onboarding_apply", serde_json::json!({"agents": ["claude-code"]})));
+    assert!(!runtime.dispatch_json(&event("first_run_draft", serde_json::json!({"agents": ["codex"]}))));
+    assert_eq!(runtime.snapshot.ui_state.first_run_choices.agents, Some(vec!["claude-code".to_owned()]));
+    // A different accepted navigation owner superseded this pass while it ran.
+    runtime.snapshot.ui_state.first_run.as_mut().unwrap().step = FirstRunStep::Project;
+    run_queued_pass(&mut runtime, &pass(false, vec![agent("claude-code", true, ComponentState::Installed)]));
+    assert_eq!(step(&runtime), Some(FirstRunStep::Project));
+}
+
+#[test]
+fn a_saved_profile_keeps_the_devices_route_even_when_disabled() {
+    let mut runtime = runtime();
+    report_here(&mut runtime, &first_run_pass());
+    runtime.snapshot.status.herdr_profiles.profiles.push(crate::model::HerdrProfileSnapshot {
+        id: "disabled".to_owned(), label: "Build server".to_owned(), target: "build.example".to_owned(), session: "review".to_owned(), enabled: false, added_as: None, problem: Some("disabled".to_owned()), device_id: None, connect_state: "saved".to_owned(), connect_error: None,
+    });
+    runtime.dispatch_json(&event("agent_onboarding_apply", serde_json::json!({"agents": ["claude-code"]})));
+    run_queued_pass(&mut runtime, &pass(false, vec![agent("claude-code", true, ComponentState::Installed)]));
+    assert_eq!(step(&runtime), Some(FirstRunStep::Devices));
+    assert!(runtime.dispatch_json(&event("first_run_advance", serde_json::json!({"from": "devices"}))));
+    assert!(runtime.dispatch_json(&event("first_run_back", serde_json::json!({"from": "notifications"}))));
+    assert_eq!(step(&runtime), Some(FirstRunStep::Devices));
+    assert!(runtime.snapshot.ui_state.device_registrations.is_empty());
 }

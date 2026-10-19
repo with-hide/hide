@@ -216,7 +216,9 @@ with open(path, "w") as f:
     json.dump(document, f, indent=2)
 PY
       fi ;;
-    uninstall) rm -f "$dir/$3" ;;
+    uninstall)
+      if [ -e "$HOME/herdr-uninstall-fails" ]; then echo "disk full" >&2; exit 1; fi
+      rm -f "$dir/$3" ;;
   esac
   exit 0
 fi

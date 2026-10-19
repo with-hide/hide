@@ -1667,6 +1667,31 @@ pub(crate) fn delivery_agent(value: Value) -> Result<DeliveryAgent, String> {
     }
 }
 
+/// Exact native reference of a pane re-read on its already-proven server.
+/// This does not resolve a past target by name or prove model intake.
+pub(crate) fn direct_observation_agent(
+    value: Value,
+) -> Result<
+    (
+        DeliveryAgent,
+        Option<hide_agent_hooks::observation::ObservationNativeSession>,
+    ),
+    String,
+> {
+    let native = match response(value.clone(), "observation_agent_format")? {
+        res::ResponseResult::AgentInfo { agent } => agent.agent_session.map(|session| {
+            hide_agent_hooks::observation::ObservationNativeSession {
+                source: session.source,
+                agent: session.agent,
+                kind: session.kind.to_string(),
+                value: session.value,
+            }
+        }),
+        _ => return Err("observation_agent_format".into()),
+    };
+    Ok((delivery_agent(value)?, native))
+}
+
 pub(crate) fn delivery_prompt_params(pane: &str, text: &str) -> Result<Value, String> {
     params(req::AgentPromptParams {
         target: pane.into(),

@@ -20,6 +20,10 @@ pub(crate) const OBSERVATION_LIMIT: usize = 2048;
 pub(crate) struct Observation {
     pub actor: Actor,
     pub raw_pane_id: String,
+    /// This incarnation must already have been observed before a passive
+    /// post-tool event can name it. A freshness TTL alone proves no identity.
+    pub observed_since_unix_ms: u64,
+    pub terminal_id: Option<String>,
     pub status: String,
     pub state_change_seq: Option<u64>,
     pub status_changed_at_unix_ms: u64,
@@ -68,6 +72,8 @@ impl Observation {
     pub(crate) fn code_owned(actor: Actor) -> Self {
         Self {
             raw_pane_id: actor.pane_id.clone(),
+            observed_since_unix_ms: 0,
+            terminal_id: None,
             actor,
             status: "idle".into(),
             state_change_seq: None,
@@ -95,6 +101,11 @@ impl Runtime {
         labels: Option<&LabelOverlay>,
     ) {
         let now = unix_milliseconds();
+        let terminals: std::collections::HashMap<_, _> = payload
+            .panes
+            .iter()
+            .map(|pane| (pane.pane_id.as_str(), pane.terminal_id.as_deref()))
+            .collect();
         let mut present = HashSet::new();
         let mut excess = false;
         for agent in &payload.agents {
@@ -138,6 +149,24 @@ impl Runtime {
                 .delivery_observations
                 .get(&pane_id)
                 .filter(|old| old.actor.same_identity(&actor));
+            let terminal_id = terminals.get(pane).copied().flatten().map(str::to_owned);
+            let observed_since_unix_ms = previous
+                .filter(|old| {
+                    old.terminal_id == terminal_id
+                        && old.host_scope.as_deref() == host_scope
+                        && hide_agent_adapter::canonical_kind(&old.actor.kind)
+                            == hide_agent_adapter::canonical_kind(&actor.kind)
+                        && old.session.as_ref().map(|reference| {
+                            (
+                                reference.reference_kind.as_str(),
+                                reference.reference_value.as_str(),
+                            )
+                        }) == agent
+                            .agent_session
+                            .as_ref()
+                            .map(|reference| (reference.kind.as_str(), reference.value.as_str()))
+                })
+                .map_or(now, |old| old.observed_since_unix_ms);
             let persisted = self.delivery_ledger.as_ref().ok().and_then(|ledger| {
                 ledger.watches.iter().find(|watch| {
                     watch.target.same_identity(&actor)
@@ -187,6 +216,8 @@ impl Runtime {
             let observation = Observation {
                 actor,
                 raw_pane_id: pane.to_owned(),
+                observed_since_unix_ms,
+                terminal_id,
                 status: status.to_owned(),
                 state_change_seq: agent.state_change_seq,
                 status_changed_at_unix_ms: changed_at,
@@ -847,7 +878,8 @@ impl Runtime {
                 .matches_ledger(previous, &ledger, now)
         });
         if graph_changed {
-            let mut graph = crate::model::OverviewGraphSnapshot::from_ledger(&ledger, now);
+            let mut graph = crate::model::OverviewGraphSnapshot::from_ledger(&ledger, now)
+                .with_direct_inputs(self.links_work.direct_inputs.clone());
             graph.sessions = std::mem::take(&mut self.snapshot.overview_graph.sessions);
             self.snapshot.overview_graph = graph;
         }

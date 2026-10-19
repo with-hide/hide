@@ -38,6 +38,7 @@ mod attachments;
 mod device;
 pub mod host;
 pub mod hosts;
+pub mod profiles;
 pub mod transfer;
 pub mod upstream;
 
@@ -160,6 +161,48 @@ impl AgentSocket {
 }
 
 impl SshAlias {
+    /// A saved target may be an SSH alias, `user@host`, or an SSH URI.
+    /// Resolve configuration without making a connection or running ssh.
+    pub fn from_target_file(path: &Path, target: &str) -> RemoteResult<Self> {
+        let contents = profiles::ssh_config(path).map_err(|error| alias_error(target, error))?;
+        Self::from_target_contents(target, &contents, path.with_file_name("known_hosts"))
+    }
+
+    fn from_target_contents(
+        target: &str,
+        contents: &str,
+        known_hosts: PathBuf,
+    ) -> RemoteResult<Self> {
+        let parsed = profiles::Target::parse(target).map_err(|error| alias_error(target, error))?;
+        let config = russh_config::parse(contents, &parsed.host)
+            .map_err(|error| alias_error(target, error.to_string()))?;
+        if config
+            .host_config
+            .proxy_command
+            .as_deref()
+            .is_some_and(|value| value != "none")
+            || config
+                .host_config
+                .proxy_jump
+                .as_deref()
+                .is_some_and(|value| value != "none")
+        {
+            return Err(alias_error(
+                target,
+                "This SSH target requires a proxy route the device connector cannot use",
+            ));
+        }
+        let mut alias = Self::from_config_contents(&parsed.host, contents, known_hosts)?;
+        if let Some(user) = parsed.user {
+            alias.user = user;
+        }
+        if let Some(port) = parsed.port {
+            alias.port = port;
+        }
+        alias.alias = target.to_owned();
+        alias.host_id = format!("ssh:{target}");
+        Ok(alias)
+    }
     pub fn from_config_contents(
         alias: &str,
         contents: &str,
@@ -479,6 +522,12 @@ pub enum RemoteReadCommand {
         /// device-herdr-update D-10), when the build brought one there.
         helper_root: Option<String>,
     },
+    /// A saved profile's exact named server. Explicit CLI session selection
+    /// wins over any environment the remote account happens to carry.
+    HerdrSessionStatus {
+        session: String,
+        helper_root: Option<String>,
+    },
 }
 
 /// Where a non-login SSH exec finds `herdr` on the remote host: the
@@ -520,19 +569,32 @@ impl RemoteReadCommand {
     fn operation_id(&self) -> &'static str {
         match self {
             Self::GitStatus { .. } => "remote-git-status",
-            Self::HerdrServerStatus { .. } => "remote-herdr-status",
+            Self::HerdrServerStatus { .. } | Self::HerdrSessionStatus { .. } => {
+                "remote-herdr-status"
+            }
         }
     }
 
     fn stage(&self) -> RemoteStage {
         match self {
             Self::GitStatus { .. } => RemoteStage::Git,
-            Self::HerdrServerStatus { .. } => RemoteStage::Herdr,
+            Self::HerdrServerStatus { .. } | Self::HerdrSessionStatus { .. } => RemoteStage::Herdr,
         }
     }
 
     fn command_line(&self) -> RemoteResult<String> {
         match self {
+            Self::HerdrSessionStatus {
+                session,
+                helper_root,
+            } => {
+                profiles::validate_session(session).map_err(|error| alias_error(session, error))?;
+                Ok(format!(
+                    "PATH=\"{}\" herdr --session {} status server --json",
+                    remote_herdr_path(helper_root.as_deref()),
+                    shell_quote(session)
+                ))
+            }
             Self::HerdrServerStatus {
                 socket: None,
                 helper_root,
@@ -726,6 +788,7 @@ pub struct RusshRemoteClient {
     /// The Herdr socket the device registration names, for a host whose
     /// server does not listen at its default path.
     herdr_socket: Option<String>,
+    herdr_session: Option<String>,
     /// The helper root Hide installs under on the device, whose pinned Herdr
     /// the status read asks first.
     helper_root: Option<String>,
@@ -1054,6 +1117,7 @@ impl RusshRemoteClient {
             runtime,
             herdr_status: Arc::new(Mutex::new(None)),
             herdr_socket: None,
+            herdr_session: None,
             helper_root: None,
         })
     }
@@ -1186,6 +1250,11 @@ impl RusshRemoteClient {
         self
     }
 
+    pub fn with_herdr_session(mut self, session: Option<String>) -> Self {
+        self.herdr_session = session;
+        self
+    }
+
     /// Asks the pinned Herdr under `root` on the host first, when there is
     /// one (PRD device-herdr-update D-10).
     pub fn with_helper_root(mut self, root: Option<String>) -> Self {
@@ -1203,14 +1272,27 @@ impl RusshRemoteClient {
         if let Some(status) = lock_recover(&self.herdr_status).clone() {
             return Ok(status.socket);
         }
-        let output = self.exec_read_only(RemoteReadCommand::HerdrServerStatus {
-            socket: self.herdr_socket.clone(),
-            helper_root: self.helper_root.clone(),
-        })?;
+        let command = match &self.herdr_session {
+            Some(session) => RemoteReadCommand::HerdrSessionStatus {
+                session: session.clone(),
+                helper_root: self.helper_root.clone(),
+            },
+            None => RemoteReadCommand::HerdrServerStatus {
+                socket: self.herdr_socket.clone(),
+                helper_root: self.helper_root.clone(),
+            },
+        };
+        let output = self.exec_read_only(command)?;
         let status = parse_herdr_server_status(&self.host.host_id, &output)?;
         let socket = status.socket.clone();
         *lock_recover(&self.herdr_status) = Some(status);
         Ok(socket)
+    }
+
+    pub(crate) fn cached_herdr_socket(&self) -> Option<String> {
+        lock_recover(&self.herdr_status)
+            .as_ref()
+            .map(|status| status.socket.clone())
     }
 
     pub(crate) fn cached_herdr_version(&self) -> Option<String> {

@@ -138,6 +138,8 @@ struct StoredUiState {
     #[serde(default)]
     first_run: Option<crate::model::FirstRun>,
     #[serde(default)]
+    first_run_choices: crate::model::FirstRunChoices,
+    #[serde(default)]
     desktop_notifications: bool,
     /// Absent in a store from before the split: keep the old shared choice.
     #[serde(default)]
@@ -484,6 +486,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             agent_onboarding: stored.agent_onboarding,
             agent_onboarding_agents: stored.agent_onboarding_agents,
             first_run: stored.first_run,
+            first_run_choices: stored.first_run_choices,
             desktop_notifications: stored.desktop_notifications,
             desktop_notifications_done: stored
                 .desktop_notifications_done
@@ -654,6 +657,7 @@ pub fn save(
         agent_onboarding: state.agent_onboarding,
         agent_onboarding_agents: state.agent_onboarding_agents.clone(),
         first_run: state.first_run,
+        first_run_choices: state.first_run_choices.clone(),
         desktop_notifications: state.desktop_notifications,
         desktop_notifications_done: Some(state.desktop_notifications_done),
         screen_intros_seen: state.screen_intros_seen.clone(),

@@ -530,115 +530,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         },
     },
     AgentAdapter {
-        key: AgentId::Cursor,
-        fake_home: journey::FakeHome::Exception {
-            auto_update: None,
-            reason: "The API-key environment and auto-update policy have not been proven.",
-        },
-        id: "cursor",
-        label: "Cursor",
-        picker_label: "Cursor",
-        sidebar_label: None,
-        terminal_click: false,
-        aliases: &[],
-        executables: &["cursor-agent"],
-        skill_location: SkillLocation::Shared,
-        hook: HookInstall::Guidance(GuidanceDialect::Cursor),
-        herdr: HerdrIntegration {
-            name: "cursor",
-            target: "cursor",
-            folder: &[".cursor"],
-        },
-        default_on: false,
-        // Cursor documents no context a prompt hook may add, so a new
-        // prompt's letters stay with `hide inbox` and its bell stays off;
-        // while it works, its own `preToolUse` hook hands the due letters
-        // over as the tool's added context (`tool_letters`).
-        prompt_hook: None,
-        spawn_guard: Some(HookDialect::Cursor),
-        // Cursor CLI 2026.10.01 runs `subagentStart` and `subagentStop` only
-        // when its agent server asks for them, and none did for a Task
-        // subagent (issue 911). Its chat store does keep each subagent as a
-        // store of its own, but nothing in it marks a subagent still running,
-        // so no count is better than a zero it cannot stand behind.
-        subagent_counts: None,
-        memory: None,
-        bell: false,
-        bell_names_inbox: false,
-        turn_end_letters: None,
-        tool_letters: Some(HookDialect::Cursor),
-        session: Some(SessionFormat::Cursor),
-        sleep: Some(LaunchDialect::Cursor),
-        fork: None,
-        resume: Some(LaunchDialect::Cursor),
-        conversation: Some(SessionFormat::Cursor),
-        titles: None,
-        start: Some(LaunchDialect::Cursor),
-        find: None,
-        usage: UsageDeclaration {
-            limits: LimitDeclaration {
-                five_hour: absent(
-                    AbsenceKind::Excluded,
-                    "Reading limits requires credentials outside the supported usage boundary.",
-                    "An official delegated usage reader becomes available.",
-                ),
-                weekly: absent(
-                    AbsenceKind::Excluded,
-                    "Reading limits requires credentials outside the supported usage boundary.",
-                    "An official delegated usage reader becomes available.",
-                ),
-                scoped: absent(
-                    AbsenceKind::Excluded,
-                    "Reading limits requires credentials outside the supported usage boundary.",
-                    "An official delegated usage reader becomes available.",
-                ),
-                monthly: absent(
-                    AbsenceKind::Excluded,
-                    "Reading limits requires credentials outside the supported usage boundary.",
-                    "An official delegated usage reader becomes available.",
-                ),
-            },
-            tokens: absent(
-                AbsenceKind::NoSuchData,
-                "No supported local usage record is available.",
-                "The agent provides a documented local usage record.",
-            ),
-            cost: absent(
-                AbsenceKind::NoSuchData,
-                "No supported local usage record is available.",
-                "The agent provides a documented local usage record.",
-            ),
-            models: absent(
-                AbsenceKind::NoSuchData,
-                "No supported local usage record is available.",
-                "The agent provides a documented local usage record.",
-            ),
-            attribution: Attribution {
-                session: absent(
-                    AbsenceKind::NoSuchData,
-                    "No supported local usage record is available.",
-                    "The agent provides a documented local usage record.",
-                ),
-                project: absent(
-                    AbsenceKind::NoSuchData,
-                    "No supported local usage record is available.",
-                    "The agent provides a documented local usage record.",
-                ),
-            },
-        },
-        doc_url: "https://cursor.com/docs/context/skills",
-        install_url: "https://cursor.com/docs/cli/installation",
-        logo_id: "cursor",
-        factory: FactoryCapabilities {
-            direct_ask: Unavailable,
-            user_turn: Unavailable,
-            turn_end_and_answer: Unavailable,
-            startup_guidance: Available(HookInstall::Guidance(GuidanceDialect::Cursor)),
-            resume: Available(LaunchDialect::Cursor),
-            next_prompt_letters: Unavailable,
-        },
-    },
-    AgentAdapter {
         key: AgentId::Antigravity,
         fake_home: journey::FakeHome::Exception {
             auto_update: Some(journey::AutoUpdate::Environment {
@@ -740,3 +631,106 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         },
     },
 ];
+
+/// Historical descriptor retained for stored Cursor conversations and retirement only.
+/// Active support and installation always iterate `ADAPTERS`.
+pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
+    key: AgentId::Cursor,
+    fake_home: journey::FakeHome::Exception {
+        auto_update: None,
+        reason: "The API-key environment and auto-update policy have not been proven.",
+    },
+    id: "cursor",
+    label: "Cursor",
+    picker_label: "Cursor",
+    sidebar_label: None,
+    terminal_click: false,
+    aliases: &[],
+    executables: &["cursor-agent"],
+    skill_location: SkillLocation::Shared,
+    hook: HookInstall::None,
+    herdr: HerdrIntegration {
+        name: "cursor",
+        target: "cursor",
+        folder: &[".cursor"],
+    },
+    default_on: false,
+    prompt_hook: None,
+    spawn_guard: None,
+    subagent_counts: None,
+    memory: None,
+    bell: false,
+    bell_names_inbox: false,
+    turn_end_letters: None,
+    tool_letters: None,
+    session: Some(SessionFormat::Cursor),
+    sleep: None,
+    fork: None,
+    resume: None,
+    conversation: Some(SessionFormat::Cursor),
+    titles: None,
+    start: None,
+    find: None,
+    usage: UsageDeclaration {
+        limits: LimitDeclaration {
+            five_hour: absent(
+                AbsenceKind::Excluded,
+                "Reading limits requires credentials outside the supported usage boundary.",
+                "An official delegated usage reader becomes available.",
+            ),
+            weekly: absent(
+                AbsenceKind::Excluded,
+                "Reading limits requires credentials outside the supported usage boundary.",
+                "An official delegated usage reader becomes available.",
+            ),
+            scoped: absent(
+                AbsenceKind::Excluded,
+                "Reading limits requires credentials outside the supported usage boundary.",
+                "An official delegated usage reader becomes available.",
+            ),
+            monthly: absent(
+                AbsenceKind::Excluded,
+                "Reading limits requires credentials outside the supported usage boundary.",
+                "An official delegated usage reader becomes available.",
+            ),
+        },
+        tokens: absent(
+            AbsenceKind::NoSuchData,
+            "No supported local usage record is available.",
+            "The agent provides a documented local usage record.",
+        ),
+        cost: absent(
+            AbsenceKind::NoSuchData,
+            "No supported local usage record is available.",
+            "The agent provides a documented local usage record.",
+        ),
+        models: absent(
+            AbsenceKind::NoSuchData,
+            "No supported local usage record is available.",
+            "The agent provides a documented local usage record.",
+        ),
+        attribution: Attribution {
+            session: absent(
+                AbsenceKind::NoSuchData,
+                "No supported local usage record is available.",
+                "The agent provides a documented local usage record.",
+            ),
+            project: absent(
+                AbsenceKind::NoSuchData,
+                "No supported local usage record is available.",
+                "The agent provides a documented local usage record.",
+            ),
+        },
+    },
+    doc_url: "https://cursor.com/docs/context/skills",
+    install_url: "https://cursor.com/docs/cli/installation",
+    logo_id: "cursor",
+    factory: FactoryCapabilities {
+        direct_ask: Unavailable,
+        user_turn: Unavailable,
+        turn_end_and_answer: Unavailable,
+        startup_guidance: Unavailable,
+        resume: Unavailable,
+        next_prompt_letters: Unavailable,
+    },
+};

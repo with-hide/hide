@@ -330,6 +330,11 @@ export function overviewFocusWorld(now: number, content: string): OverviewWorld 
   }
   world.rest.navigator!.workspaces!.push(...extraProjects);
   if (content === "resting") for (const row of agents) Object.assign(row, { mark: "quiet", group: "seen", state: { ...get("h-r1").state } });
+  if (content === "direct") world.rest.overview_graph!.direct_inputs = [
+    { id: "fixture-direct-one", sender: { device_id: "local", pane_id: "h-a1c1", session: "fixture-h-a1c1" }, recipient: { device_id: "local", pane_id: "h-a1", session: "fixture-h-a1" }, at_unix_ms: now - MINUTE },
+    { id: "fixture-direct-two", sender: { device_id: "local", pane_id: "h-a1c1", session: "fixture-h-a1c1" }, recipient: { device_id: "local", pane_id: "h-a1", session: "fixture-h-a1" }, at_unix_ms: now - 2 * MINUTE },
+    { id: "fixture-direct-cross-project", sender: { device_id: "local", pane_id: "b-1", session: "fixture-b-1" }, recipient: { device_id: "local", pane_id: "h-a3", session: "fixture-h-a3" }, at_unix_ms: now - 3 * MINUTE },
+  ];
   world.rest.overview_graph!.sessions = agents.map((row) => ({ device_id: "local", pane_id: row.pane_id, session_digest: `fixture-${row.pane_id}`, launch_model: row.agent_kind === "codex" ? "model-c" : "model-a" }));
   return world;
 }

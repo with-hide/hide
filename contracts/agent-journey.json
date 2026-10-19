@@ -251,42 +251,6 @@
     }
   },
   {
-    "id": "cursor",
-    "herdr_kind": "cursor",
-    "herdr_source": "herdr:cursor",
-    "home_folder": [
-      ".cursor"
-    ],
-    "prompt_flag": "--",
-    "model_flag": [
-      "--model",
-      "{}"
-    ],
-    "untitled": "cursor",
-    "cells": {
-      "start": true,
-      "start_untrusted": true,
-      "reply": true,
-      "integration": true,
-      "guidance_memory": false,
-      "letter": true,
-      "sleep_wake": true,
-      "resume": true,
-      "fork": false,
-      "title": false,
-      "usage": false
-    },
-    "letter": "tool",
-    "wake": "sleeping_session",
-    "title": null,
-    "request_budget": 12,
-    "fake_home": {
-      "status": "exception",
-      "auto_update": null,
-      "reason": "The API-key environment and auto-update policy have not been proven."
-    }
-  },
-  {
     "id": "antigravity",
     "herdr_kind": "agy",
     "herdr_source": "herdr:antigravity_cli",

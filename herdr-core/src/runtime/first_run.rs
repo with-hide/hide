@@ -19,6 +19,76 @@ pub(super) struct FirstRunApply {
 }
 
 impl Runtime {
+    /// Discovery proves saved configuration only. Unknown and failed reads
+    /// keep a step with loading/retry; only an actual empty result skips it.
+    pub(super) fn first_run_has_devices(&self) -> bool {
+        let profiles = &self.snapshot.status.herdr_profiles;
+        profiles.state != "ready" || !profiles.profiles.is_empty()
+    }
+
+    pub(super) fn settle_first_run_devices(&mut self) -> bool {
+        if self.first_run_step() == Some(FirstRunStep::Devices) && !self.first_run_has_devices() {
+            return self.move_first_run(FirstRunStep::Devices, FirstRunStep::Notifications);
+        }
+        false
+    }
+
+    /// Navigation has no installation, permission or reconnect side effect.
+    pub(super) fn back_first_run(&mut self, from: FirstRunStep) -> bool {
+        if self.first_run_step() != Some(from) {
+            return false;
+        }
+        let to = match from {
+            FirstRunStep::Devices => FirstRunStep::Agents,
+            FirstRunStep::Notifications if self.first_run_has_devices() => FirstRunStep::Devices,
+            FirstRunStep::Notifications => FirstRunStep::Agents,
+            FirstRunStep::Project => FirstRunStep::Notifications,
+            FirstRunStep::Agents | FirstRunStep::Done => return false,
+        };
+        self.move_first_run(from, to)
+    }
+
+    /// Bounded draft data goes through the existing coalesced UI save owner.
+    /// A pending agent apply owns its selection until that pass settles.
+    pub(super) fn update_first_run_draft(&mut self, payload: super::events::FirstRunDraftPayload) -> bool {
+        let ids_fit = |ids: &[String]| ids.len() <= 128 && ids.iter().all(|id| !id.is_empty() && id.len() <= 256);
+        if payload.agents.as_ref().is_some_and(|ids| !ids_fit(ids))
+            || payload.devices.as_ref().is_some_and(|ids| !ids_fit(ids))
+            || payload.project_device.as_ref().is_some_and(|id| id.is_empty() || id.len() > 256)
+            || payload.project_path.as_ref().is_some_and(|path| path.len() > 4096)
+            || payload.project_form.as_ref().is_some_and(|form| !["", "add", "clone", "create"].contains(&form.view.as_str()) || [&form.url, &form.parent, &form.name].iter().any(|value| value.len() > 4096))
+        {
+            self.set_error("first_run.draft_invalid", "The setup choice could not be saved. Choose again.", false);
+            return true;
+        }
+        let before = self.snapshot.ui_state.first_run_choices.clone();
+        let pending = self.first_run_apply_in_flight();
+        let draft = &mut self.snapshot.ui_state.first_run_choices;
+        if let Some(mut agents) = payload.agents.filter(|_| !pending) {
+            agents.sort();
+            agents.dedup();
+            draft.agents = Some(agents);
+        }
+        if let Some(mut devices) = payload.devices {
+            devices.sort();
+            devices.dedup();
+            draft.devices = devices;
+        }
+        if let Some(device) = payload.project_device {
+            draft.project_device = Some(device);
+        }
+        if let Some(path) = payload.project_path {
+            draft.project_path = path;
+        }
+        if let Some(form) = payload.project_form {
+            draft.project_form = form;
+        }
+        if before == *draft {
+            return false;
+        }
+        self.persist_ui_state();
+        true
+    }
     /// The step the wizard opens on, or `None` when it does not open: a Mac
     /// that was never asked, or progress saved by another flow version.
     fn first_run_step(&self) -> Option<FirstRunStep> {
@@ -79,6 +149,7 @@ impl Runtime {
         notifications: Option<bool>,
     ) -> bool {
         let to = match from {
+            FirstRunStep::Devices => FirstRunStep::Notifications,
             FirstRunStep::Notifications => FirstRunStep::Project,
             FirstRunStep::Project => FirstRunStep::Done,
             FirstRunStep::Agents
@@ -109,6 +180,9 @@ impl Runtime {
         if let (Some(enabled), FirstRunStep::Notifications) = (notifications, from) {
             self.set_desktop_notification_preferences(Some(enabled), (!enabled).then_some(false));
         }
+        if from == FirstRunStep::Notifications {
+            self.snapshot.ui_state.first_run_choices.notifications_answered = true;
+        }
         self.move_first_run(from, to)
     }
 
@@ -131,10 +205,12 @@ impl Runtime {
             return false;
         }
         self.first_run_apply = Some(FirstRunApply {
-            agents,
+            agents: agents.clone(),
             finish,
             answer,
         });
+        self.snapshot.ui_state.first_run_choices.agents = Some(agents);
+        self.persist_ui_state();
         self.settle_first_run_apply()
     }
 
@@ -203,7 +279,7 @@ impl Runtime {
         let to = if apply.finish {
             FirstRunStep::Done
         } else {
-            FirstRunStep::Notifications
+            if self.first_run_has_devices() { FirstRunStep::Devices } else { FirstRunStep::Notifications }
         };
         self.move_first_run(FirstRunStep::Agents, to)
     }

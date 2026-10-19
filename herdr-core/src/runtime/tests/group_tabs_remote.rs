@@ -51,6 +51,7 @@ fn setup(origin: LinkOrigin, path: &str) -> (Runtime, tempfile::TempDir) {
             label: "Group device".into(),
             origin,
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         });
     runtime

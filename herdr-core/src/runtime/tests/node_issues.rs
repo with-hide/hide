@@ -199,6 +199,7 @@ fn node_runtime_with(
             label: "MacBook".to_owned(),
             origin: crate::model::LinkOrigin::Inbound,
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         });
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
@@ -1852,6 +1853,7 @@ fn a_node_s_worktree_with_no_pane_keeps_its_id_from_before_the_move_and_folds_wh
             label: "MacBook".to_owned(),
             origin: crate::model::LinkOrigin::Inbound,
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         },
         old_owner_herdr_socket: "/tmp/macbook-herdr.sock".to_owned(),

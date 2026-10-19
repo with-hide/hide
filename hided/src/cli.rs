@@ -67,6 +67,8 @@ pub enum CommandKind {
     },
     WorkspaceInfo,
     WorkspaceHookInfo,
+    /// Private post-tool transport. Its bounded metadata is read from stdin.
+    ObservationHook,
     ViewList,
     ViewStatus {
         view_id: String,
@@ -158,6 +160,10 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         Some("factory") if args[2..] == ["help"] => Ok(CommandKind::FactoryHelp),
         Some("factory") => crate::factory_cli::parse(iter).map(CommandKind::Factory),
         Some("browser") => parse_browser(iter),
+        Some("observation") => match (iter.next().map(String::as_str), iter.next()) {
+            (Some("--hook"), None) => Ok(CommandKind::ObservationHook),
+            _ => Err("usage: hide observation --hook".into()),
+        },
         Some("workspace") => match iter.next().map(String::as_str) {
             Some("factory-question-guard") => {
                 let words: Vec<&str> = iter.map(String::as_str).collect();
@@ -507,6 +513,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::Factory(_)
                     | CommandKind::WorkspaceInfo
                     | CommandKind::WorkspaceHookInfo
+                    | CommandKind::ObservationHook
                     | CommandKind::ViewList
                     | CommandKind::ViewStatus { .. }
                     | CommandKind::BrowserOpen { .. }
@@ -577,6 +584,33 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
             )?;
             println!("{answer}");
             Ok(())
+        }
+        CommandKind::ObservationHook => {
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            std::io::stdin()
+                .lock()
+                .take((hide_node_link::panes::OBSERVATION_ITEM_LIMIT + 1) as u64)
+                .read_to_end(&mut bytes)
+                .map_err(|_| "observation_input_unavailable")?;
+            if bytes.len() > hide_node_link::panes::OBSERVATION_ITEM_LIMIT {
+                return Err("observation_input_too_large".into());
+            }
+            let observation =
+                serde_json::from_slice(&bytes).map_err(|_| "observation_input_invalid")?;
+            let answer = crate::workspace_cli::request_hook(
+                &env,
+                hide_node_link::panes::HookCommand::Observation { observation },
+            )?;
+            println!("{answer}");
+            if answer["ok"] == true {
+                Ok(())
+            } else {
+                Err(answer["reason"]
+                    .as_str()
+                    .unwrap_or("observation_unavailable")
+                    .into())
+            }
         }
         CommandKind::FactoryQuestionGuard { session, runtime } => {
             let credential = crate::workspace_cli::Credential::acquire(&env)?;

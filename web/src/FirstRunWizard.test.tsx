@@ -7,6 +7,7 @@ import { FirstRunWizard, useSetupWalk } from "./FirstRunWizard";
 import { TooltipProvider } from "./components/ui/tooltip";
 import type { KitAgent } from "./snapshot";
 import { useShellStore } from "./store";
+import { useStartPanel } from "./startDraft";
 import type { DispatchFn } from "./ws";
 
 // The shell's modules reach xterm, which asks jsdom for a canvas it lacks.
@@ -39,13 +40,54 @@ const state = (pending: boolean, agents: KitAgent[], providers: ReturnType<typeo
 });
 
 /** What the gate sent for the operator's choice: the sign-in probe it asks for while open is not part of it. */
-const choices = (events: Parameters<DispatchFn>[0][]) => events.filter((event) => event.kind !== "ai_settings");
+const choices = (events: Parameters<DispatchFn>[0][]) => events.filter((event) => !["ai_settings", "first_run_draft", "herdr_profiles_list"].includes(event.kind));
 
 const tile = (id: string, on: string) => document.querySelector(`[data-onboarding-tile="${id}:${on}"]`) as HTMLElement | null;
 const continueButton = () => document.querySelector("[data-onboarding-apply]") as HTMLButtonElement;
 
 afterEach(() => {
+  useSetupWalk.getState().close();
+  delete window.hideHost;
+  useStartPanel.getState().close();
   document.body.innerHTML = "";
+});
+
+it("reopens the agent step with the saved disabled choice after reload", async () => {
+  const next = state(true, AGENTS);
+  Object.assign(next.rest.ui_state, { first_run_choices: { agents: ["claude-code"] } });
+  const { events, unmount } = await mount(next);
+  expect(tile("claude-code", "on")).not.toBeNull();
+  expect(tile("codex", "off")).not.toBeNull();
+  await act(async () => continueButton().click());
+  expect(choices(events).at(-1)?.payload).toEqual({ agents: ["claude-code"], finish: true });
+  await unmount();
+});
+
+it("Back from notifications sends navigation alone and preserves an earlier skip despite granted permission", async () => {
+  const permission = vi.fn(async () => "granted");
+  const notify = vi.fn();
+  window.hideHost = { kind: "electron", platform: "darwin", notificationPermission: permission, notify } as never;
+  const next = state(false, AGENTS);
+  Object.assign(next.rest.ui_state, { first_run: { version: 1, step: "notifications" }, first_run_choices: { notifications_answered: true }, desktop_notifications: false });
+  const { events, unmount } = await mount(next);
+  await act(async () => (document.querySelector("[data-first-run-back]") as HTMLButtonElement).click());
+  expect(choices(events)).toEqual([{ schema_version: 2, kind: "first_run_back", payload: { from: "notifications" } }]);
+  expect(notify).not.toHaveBeenCalled();
+  expect(events.some((event) => event.kind === "desktop_notifications")).toBe(false);
+  await unmount();
+});
+
+it("opens a remote project's first agent from that device's kit, regardless of local sign-in and installation", async () => {
+  window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
+  const next = state(false, AGENTS, [provider("claude", "Claude Code", "claude-code", true)]);
+  Object.assign(next.rest.ui_state, { first_run: { version: 1, step: "project" }, first_run_choices: { project_device: "build" }, workspace_registrations: [] });
+  Object.assign(next.rest.navigator, { focused_device_id: "build" });
+  next.rest.navigator.devices.push({ id: "build", kind: "remote", label: "Build server", kit: { agents: [agent("opencode", "OpenCode", "available"), agent("claude-code", "Claude Code", "not_installed")].map((row) => ({ ...row, enabled: true })), components: [], busy: false } } as never);
+  const { events, unmount } = await mount(next);
+  await act(async () => useShellStore.setState((current) => ({ revision: current.revision + 1, rest: { ...current.rest, ui_state: { ...current.rest?.ui_state, workspace_registrations: [{ id: "remote-project", label: "project", path: "~/project", device_id: "build" }] } } }) as never));
+  expect(useStartPanel.getState().preset).toEqual({ projectId: "remote-project", kind: "opencode" });
+  expect(events.find((event) => event.kind === "first_run_advance")?.payload).toEqual({ from: "project" });
+  await unmount();
 });
 
 async function mount(next: ReturnType<typeof state>) {
@@ -64,17 +106,17 @@ async function mount(next: ReturnType<typeof state>) {
   return { events, unmount: async () => { await act(async () => root.unmount()); useShellStore.setState(saved, true); } };
 }
 
-const AGENTS = [agent("claude-code", "Claude Code", "available"), agent("cursor", "Cursor", "not_installed"), agent("codex", "Codex", "available")];
+const AGENTS = [agent("claude-code", "Claude Code", "available"), agent("antigravity", "Antigravity", "not_installed"), agent("codex", "Codex", "available")];
 
 it("shows every agent as a tile, the set-up ones on and the others dimmed with an install link, and continues with what is left on", async () => {
   const { events, unmount } = await mount(state(true, AGENTS));
   expect(tile("claude-code", "on")).not.toBeNull();
   expect(tile("codex", "on")).not.toBeNull();
-  expect(tile("cursor", "unavailable")).not.toBeNull();
-  expect(tile("cursor", "unavailable")?.getAttribute("role")).toBeNull();
+  expect(tile("antigravity", "unavailable")).not.toBeNull();
+  expect(tile("antigravity", "unavailable")?.getAttribute("role")).toBeNull();
   // B9: the official install page of an agent that is not installed.
-  expect(document.querySelector('[data-onboarding-install="cursor"]')?.getAttribute("href")).toMatch(/^https:\/\//);
-  // A logo or a monogram, never nothing: Cursor has a bundled mark, an agent without one a monogram.
+  expect(document.querySelector('[data-onboarding-install="antigravity"]')?.getAttribute("href")).toMatch(/^https:\/\//);
+  // A logo or a monogram, never nothing: Antigravity has a bundled mark, an agent without one a monogram.
   expect(document.querySelectorAll("[data-agent-logo], [data-agent-monogram]").length).toBe(3);
 
   await act(async () => { tile("codex", "on")!.click(); });
@@ -167,17 +209,17 @@ it("has Continue as its only way out: Escape and a second button do nothing (the
   await empty.unmount();
 });
 
-it("draws what Continue sends: an agent that becomes available while it is open shows on, and the operator's flips survive the refresh", async () => {
+it("draws what Continue sends: an explicit choice survives availability refreshes without adding another agent", async () => {
   const { events, unmount } = await mount(state(true, AGENTS));
   await act(async () => { tile("codex", "on")!.click(); });
-  // A later poll finds Cursor set up on the machine.
+  // A later poll finds another agent installed after the explicit choice.
   await act(async () => {
-    useShellStore.setState(state(true, AGENTS.map((entry) => (entry.id === "cursor" ? { ...entry, availability: "available" as const } : entry))) as never);
+    useShellStore.setState(state(true, AGENTS.map((entry) => (entry.id === "antigravity" ? { ...entry, availability: "available" as const } : entry))) as never);
   });
-  expect(tile("cursor", "on")).not.toBeNull();
+  expect(tile("antigravity", "off")).not.toBeNull();
   expect(tile("codex", "off")).not.toBeNull();
   await act(async () => { continueButton().click(); });
-  expect(choices(events)).toEqual([{ schema_version: 2, kind: "agent_onboarding_apply", payload: { agents: ["claude-code", "cursor"], finish: true } }]);
+  expect(choices(events)).toEqual([{ schema_version: 2, kind: "agent_onboarding_apply", payload: { agents: ["claude-code"], finish: true } }]);
   await unmount();
 });
 

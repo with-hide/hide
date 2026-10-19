@@ -451,3 +451,14 @@ fn the_question_guard_wire_admits_exactly_the_agents_whose_direct_ask_is_declare
         .collect();
     assert_eq!(wire, declared);
 }
+
+// B31 removes new support while the typed historical descriptor stays available.
+#[test]
+fn cursor_is_retired_from_active_support_and_launches() {
+    use hide_agent_adapter::{AgentId, SessionFormat, start_kind};
+    assert!(adapter("cursor").is_none());
+    assert!(start_kind("cursor").is_none());
+    assert!(ADAPTERS.iter().all(|row| row.id != "cursor"));
+    assert_eq!(SessionFormat::Cursor.adapter().id, "cursor");
+    assert_eq!(AgentId::Antigravity.adapter().id, "antigravity");
+}

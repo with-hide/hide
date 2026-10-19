@@ -24,6 +24,7 @@ use std::hash::{Hash, Hasher};
 #[derive(Default)]
 pub(super) struct LinksWork {
     pub(super) client: Option<LinkClient>,
+    pub(super) direct_inputs: Vec<crate::model::GraphDirectInput>,
     projects_print: Option<u64>,
     panes: Arc<Vec<PaneFact>>,
     parents: Arc<Vec<ParentFact>>,
@@ -91,6 +92,15 @@ impl RuntimeSink {
 }
 
 impl Sink for RuntimeSink {
+    fn direct_observations(&self, facts: Vec<crate::links::observation::DirectFact>) {
+        let mut inputs: Vec<_> = facts.iter().filter_map(|fact| fact.graph_input()).collect();
+        inputs.sort_unstable_by(|a, b| {
+            b.at_unix_ms
+                .cmp(&a.at_unix_ms)
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        self.apply(move |runtime| runtime.ingest_direct_observations(inputs));
+    }
     fn record(&self, generation: u64, answer: Result<SessionRecord, String>) {
         self.apply(move |runtime| runtime.ingest_session_record(generation, answer));
     }
@@ -180,6 +190,32 @@ pub(super) fn session_agent(kind: &str) -> Option<&'static str> {
 }
 
 impl Runtime {
+    /// The proof owner obtains a handle under the lock, then admits off-lock.
+    pub fn direct_observation_client(&self) -> Option<LinkClient> {
+        self.links_work.client.clone()
+    }
+
+    fn ingest_direct_observations(&mut self, inputs: Vec<crate::model::GraphDirectInput>) -> bool {
+        if self.links_work.direct_inputs == inputs {
+            return false;
+        }
+        self.links_work.direct_inputs = inputs.clone();
+        let mut graph = self
+            .delivery_ledger
+            .as_ref()
+            .map_or_else(
+                |_| crate::model::OverviewGraphSnapshot::default(),
+                |ledger| {
+                    crate::model::OverviewGraphSnapshot::from_ledger(ledger, unix_milliseconds())
+                },
+            )
+            .with_direct_inputs(inputs);
+        graph.sessions = std::mem::take(&mut self.snapshot.overview_graph.sessions);
+        let changed = self.snapshot.overview_graph != graph;
+        self.snapshot.overview_graph = graph;
+        changed
+    }
+
     pub(super) fn open_session_record(&mut self, payload: RecordOpenPayload) -> bool {
         self.links_work.record_generation += 1;
         let mut record = SessionRecordSnapshot {

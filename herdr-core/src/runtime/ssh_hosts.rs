@@ -115,6 +115,11 @@ impl Runtime {
                 let added_as = registrations
                     .iter()
                     .find(|registration| {
+                        // Add device's SSH aliases select the default server;
+                        // another named session on the host is a separate row.
+                        if registration.herdr_socket_path.is_some()
+                            || registration.herdr_session.as_deref().is_some_and(|session| session != "default")
+                        { return false; }
                         let Some(alias) = registration.origin.ssh_alias() else {
                             return false;
                         };

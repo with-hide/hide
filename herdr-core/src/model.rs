@@ -2813,6 +2813,7 @@ pub struct FirstRun {
 #[serde(rename_all = "snake_case")]
 pub enum FirstRunStep {
     Agents,
+    Devices,
     Notifications,
     Project,
     Done,
@@ -2822,11 +2823,34 @@ impl FirstRunStep {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Agents => "agents",
+            Self::Devices => "devices",
             Self::Notifications => "notifications",
             Self::Project => "project",
             Self::Done => "done",
         }
     }
+}
+
+/// Choices are independent of navigation: Back, reload and Help never redo
+/// an effect or restore the initial installed-agent defaults.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct FirstRunChoices {
+    pub agents: Option<Vec<String>>,
+    pub devices: Vec<String>,
+    pub project_device: Option<String>,
+    pub project_path: String,
+    pub project_form: FirstRunProjectForm,
+    pub notifications_answered: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct FirstRunProjectForm {
+    pub view: String,
+    pub url: String,
+    pub parent: String,
+    pub name: String,
 }
 
 /// A screen whose one-line introduction shows on the first visit only
@@ -3696,6 +3720,8 @@ pub struct UiStateSnapshot {
     /// The first-run wizard's progress; `None` on a Mac that was never asked.
     #[serde(default)]
     pub first_run: Option<FirstRun>,
+    #[serde(default)]
+    pub first_run_choices: FirstRunChoices,
     /// Whether the desktop app shows an OS notification when a root agent
     /// newly needs the operator (Settings > Notifications).
     #[serde(default)]
@@ -4512,6 +4538,7 @@ impl Default for UiStateSnapshot {
             agent_onboarding: None,
             agent_onboarding_agents: Vec::new(),
             first_run: None,
+            first_run_choices: FirstRunChoices::default(),
             desktop_notifications: false,
             desktop_notifications_done: false,
             screen_intros_seen: BTreeSet::new(),
@@ -4573,6 +4600,9 @@ pub struct DeviceRegistration {
     /// The Herdr socket on the device, for a host whose server does not
     /// listen at its default path; absent reads the host's default server.
     pub herdr_socket_path: Option<String>,
+    /// A saved profile selects this named Herdr server, never an implicit
+    /// fallback to the account's default session.
+    pub herdr_session: Option<String>,
     /// The operator's one consent for Hide's helper on this device (PRD S5.5
     /// D-20, D-23). Absent until given; a device registered before consent
     /// existed asks before its first file or Git use.
@@ -4635,6 +4665,8 @@ struct StoredDeviceRegistration {
     ssh_alias: Option<String>,
     #[serde(default)]
     herdr_socket_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    herdr_session: Option<String>,
     #[serde(default)]
     host_consent: Option<HostConsent>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -4666,6 +4698,7 @@ impl TryFrom<StoredDeviceRegistration> for DeviceRegistration {
             label: stored.label,
             origin,
             herdr_socket_path: stored.herdr_socket_path,
+            herdr_session: stored.herdr_session,
             host_consent: stored.host_consent,
         })
     }
@@ -4679,6 +4712,7 @@ impl From<DeviceRegistration> for StoredDeviceRegistration {
             label: registration.label,
             ssh_alias: registration.origin.ssh_alias().map(str::to_owned),
             herdr_socket_path: registration.herdr_socket_path,
+            herdr_session: registration.herdr_session,
             host_consent: registration.host_consent,
             inbound,
         }
@@ -5629,6 +5663,7 @@ pub struct StatusSnapshot {
     pub background_ai: BackgroundAiSnapshot,
     /// The Host entries Add device offers (Settings › Devices).
     pub ssh_hosts: SshHostsSnapshot,
+    pub herdr_profiles: HerdrProfilesSnapshot,
     pub diagnostics: Vec<DiagnosticSnapshot>,
     pub last_error: Option<LastErrorSnapshot>,
     /// Core-owned operations which are waiting for a transport result or an
@@ -5681,6 +5716,34 @@ pub struct SshHostSnapshot {
     pub added_as: Option<String>,
     /// Why there is no address: `ssh_missing`, `ssh_failed` or `timed_out`.
     pub problem: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HerdrProfilesSnapshot {
+    pub state: String,
+    pub error: Option<String>,
+    pub profiles: Vec<HerdrProfileSnapshot>,
+    pub truncated: bool,
+}
+
+impl Default for HerdrProfilesSnapshot {
+    fn default() -> Self {
+        Self { state: "idle".to_owned(), error: None, profiles: Vec::new(), truncated: false }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HerdrProfileSnapshot {
+    pub id: String,
+    pub label: String,
+    pub target: String,
+    pub session: String,
+    pub enabled: bool,
+    pub added_as: Option<String>,
+    pub problem: Option<String>,
+    pub device_id: Option<String>,
+    pub connect_state: String,
+    pub connect_error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -6189,6 +6252,7 @@ impl Snapshot {
                 agent_hooks: AgentHooksSnapshot::default(),
                 background_ai: BackgroundAiSnapshot::unread(),
                 ssh_hosts: SshHostsSnapshot::default(),
+                herdr_profiles: HerdrProfilesSnapshot::default(),
                 diagnostics: Vec::new(),
                 last_error: None,
                 async_operations: Vec::new(),
@@ -6243,7 +6307,7 @@ mod overview_graph;
 /// Owned copy retained by the runtime to stamp revisions by comparison, so
 /// no mutation site needs dirty-tracking discipline.
 mod rest;
-pub use overview_graph::{GraphSession, OverviewGraphSnapshot};
+pub use overview_graph::{GraphDirectInput, GraphParty, GraphSession, OverviewGraphSnapshot};
 pub use rest::{RestSections, RestWire};
 
 /// One delta response taken from the runtime, holding everything the wire
@@ -7177,6 +7241,7 @@ mod wire_enum_tests {
 
         let first_run = [
             FirstRunStep::Agents,
+            FirstRunStep::Devices,
             FirstRunStep::Notifications,
             FirstRunStep::Project,
             FirstRunStep::Done,
@@ -7184,6 +7249,7 @@ mod wire_enum_tests {
         for variant in first_run {
             match variant {
                 FirstRunStep::Agents
+                | FirstRunStep::Devices
                 | FirstRunStep::Notifications
                 | FirstRunStep::Project
                 | FirstRunStep::Done => {}

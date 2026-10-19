@@ -30,6 +30,7 @@ fn dialed_link(runtime: &mut Runtime, device: &str, host: Arc<dyn crate::node_ac
                     ssh_alias: "fixture-host".to_owned(),
                 },
                 herdr_socket_path: None,
+                herdr_session: None,
                 host_consent: None,
             });
     }
@@ -420,6 +421,7 @@ fn inbound_nodes_are_capped_and_their_labels_are_plain_text() {
                     label: format!("node {index}"),
                     origin: crate::model::LinkOrigin::Inbound,
                     herdr_socket_path: None,
+                    herdr_session: None,
                     host_consent: None,
                 });
         }

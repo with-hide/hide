@@ -77,6 +77,16 @@ fn main() -> ExitCode {
     };
     match arguments.first().map(String::as_str) {
         Some("hook") => {
+            if argument_value("--event", &arguments)
+                .is_some_and(|event| matches!(event.as_str(), "PostToolUse" | "PostToolUseFailure"))
+            {
+                if std::panic::catch_unwind(|| run_observation_hook(&arguments, started)).is_err()
+                    && let Some(home) = home_directory()
+                {
+                    hide_agent_hooks::delivery::diagnose(&home, "format");
+                }
+                return ExitCode::SUCCESS;
+            }
             // Grok and Cursor have no Memory: their hooks carry the spawn
             // guard, subagent counts and letters at their declared gaps.
             // Cursor adds session guidance; Grok observes bell submissions
@@ -162,16 +172,65 @@ fn main() -> ExitCode {
     }
 }
 
+/// Post observation never prints a permission/context decision or alters the
+/// original tool's result. Ordinary calls do no new daemon/Herdr lookup.
+fn run_observation_hook(arguments: &[String], started: Instant) {
+    use hide_agent_hooks::observation;
+    let Some(runtime) = argument_value("--runtime", arguments) else {
+        return;
+    };
+    if !matches!(
+        runtime.as_str(),
+        "claude-code" | "codex" | "grok" | "antigravity"
+    ) {
+        return;
+    }
+    if runtime == "claude-code"
+        && hide_agent_hooks::runtime::ForeignOrigin::detect(|name| std::env::var_os(name)).is_some()
+    {
+        return;
+    }
+    if std::env::var_os("HERDR_PANE_ID").is_none() {
+        return;
+    }
+    let Some(home) = home_directory() else {
+        return;
+    };
+    let Some((payload, truncated)) = read_stdin_before_deadline(started + GUARD_PAYLOAD_BUDGET)
+    else {
+        hide_agent_hooks::delivery::diagnose(&home, "deadline");
+        return;
+    };
+    if truncated {
+        hide_agent_hooks::delivery::diagnose(&home, "format");
+        return;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let failure = argument_value("--event", arguments).as_deref() == Some("PostToolUseFailure");
+    if let Some(observed) = observation::native(&runtime, &payload, false, failure, now, &|name| {
+        std::env::var(name).ok()
+    }) {
+        observation::send(
+            &home,
+            &observed,
+            started + GUARD_PAYLOAD_BUDGET + observation::SEND_BUDGET,
+        );
+    }
+}
+
 fn usage() -> String {
     "usage: hide-agent-hooks hook --runtime <claude-code|codex> \
-     --event <SessionStart|UserPromptSubmit|SubagentStart|SubagentStop|Stop|PreToolUse> \
+     --event <SessionStart|UserPromptSubmit|SubagentStart|SubagentStop|Stop|PreToolUse|PostToolUse|PostToolUseFailure> \
      [--memory-injection] [--source <install marker>]\n       \
-     hide-agent-hooks hook --runtime <grok|cursor> \
-     --event <SessionStart|UserPromptSubmit|PreToolUse|SubagentStart|SubagentStop|Stop> \
+     hide-agent-hooks hook --runtime grok \
+     --event <SessionStart|UserPromptSubmit|PreToolUse|PostToolUse|PostToolUseFailure|SubagentStart|SubagentStop|Stop> \
      [--source <install marker>]\n       \
      hide-agent-hooks hook --runtime antigravity \
-     --event <SessionStart|UserPromptSubmit|PreToolUse|Stop> [--source <install marker>]\n       \
-     hide-agent-hooks <opencode|pi|omp> <start|prompt|confirm|tool|letters|subagents>\n       \
+     --event <SessionStart|UserPromptSubmit|PreToolUse|PostToolUse|Stop> [--source <install marker>]\n       \
+     hide-agent-hooks <opencode|pi|omp> <start|prompt|confirm|tool|observation|letters|subagents>\n       \
      hide-agent-hooks doctor [--json]"
         .to_owned()
 }
@@ -509,7 +568,14 @@ fn antigravity_event(event: HookEvent, started: Instant) {
         (HookEvent::Stop, None) => {
             report_count(&home, event, Change::None, reporter(&conversation), true)
         }
-        (HookEvent::PreToolUse | HookEvent::SubagentStart | HookEvent::SubagentStop, None) => {}
+        (
+            HookEvent::PreToolUse
+            | HookEvent::PostToolUse
+            | HookEvent::PostToolUseFailure
+            | HookEvent::SubagentStart
+            | HookEvent::SubagentStop,
+            None,
+        ) => {}
     }
 }
 
@@ -669,7 +735,13 @@ fn count_basic(dialect: HookDialect, event: HookEvent, payload: Option<&(Vec<u8>
             }
         }
         (_, HookEvent::Stop) => Change::Settled { running: 0 },
-        (_, HookEvent::UserPromptSubmit | HookEvent::PreToolUse) => return,
+        (
+            _,
+            HookEvent::UserPromptSubmit
+            | HookEvent::PreToolUse
+            | HookEvent::PostToolUse
+            | HookEvent::PostToolUseFailure,
+        ) => return,
     };
     let Some(home) = home_directory() else { return };
     // Neither agent's hook input is read for its session here, so the file

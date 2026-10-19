@@ -7,7 +7,7 @@
 //! the one search the install kit uses too. Nothing else in the
 //! workspace keeps a list of them; settings, the router and the core's
 //! Settings reader all iterate this one, in this order (D-06, D-18): Claude
-//! Code, Codex, Gemini CLI, Grok, OpenCode, Pi, Cursor, Antigravity.
+//! Code, Codex, Gemini CLI, Grok, OpenCode, Pi, Antigravity.
 //!
 //! The id is a string the registry owns, not a closed enum, so a file written
 //! by a newer Hide that names an agent this build does not know is read, and
@@ -36,7 +36,6 @@ impl ProviderId {
     pub const GROK: Self = Self("grok");
     pub const OPENCODE: Self = Self("opencode");
     pub const PI: Self = Self("pi");
-    pub const CURSOR: Self = Self("cursor");
     pub const ANTIGRAVITY: Self = Self("antigravity");
 
     pub fn as_str(self) -> &'static str {
@@ -127,7 +126,6 @@ pub const PROVIDERS: &[ProviderId] = &[
     ProviderId::GROK,
     ProviderId::OPENCODE,
     ProviderId::PI,
-    ProviderId::CURSOR,
     ProviderId::ANTIGRAVITY,
 ];
 
@@ -202,14 +200,6 @@ const DESCRIPTORS: &[ProviderDescriptor] = &[
         efforts: &[],
     },
     ProviderDescriptor {
-        id: ProviderId::CURSOR,
-        label: "Cursor",
-        agent: "cursor",
-        login_probe: true,
-        default_model: CLI_DEFAULT_MODEL,
-        efforts: &[],
-    },
-    ProviderDescriptor {
         id: ProviderId::ANTIGRAVITY,
         label: "Antigravity",
         agent: "antigravity",
@@ -275,7 +265,6 @@ mod tests {
                 "Grok",
                 "OpenCode",
                 "Pi",
-                "Cursor",
                 "Antigravity"
             ]
         );

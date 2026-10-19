@@ -66,10 +66,10 @@ pub(crate) fn read_aliases(home: &Path) -> ConfigAliases {
     reader.found
 }
 
-struct Reader<'a> {
-    home: &'a Path,
-    files: usize,
-    found: ConfigAliases,
+pub(super) struct Reader<'a> {
+    pub(super) home: &'a Path,
+    pub(super) files: usize,
+    pub(super) found: ConfigAliases,
 }
 
 impl Reader<'_> {
@@ -126,7 +126,7 @@ impl Reader<'_> {
     /// The files an `Include` argument names: `~` is the account's home, a
     /// relative path is under `~/.ssh`, and `*` or `?` in the last component
     /// match the folder's files, sorted by name as `ssh` reads them.
-    fn expand_include(&self, argument: &str) -> Vec<PathBuf> {
+    pub(super) fn expand_include(&self, argument: &str) -> Vec<PathBuf> {
         let path = if let Some(rest) = argument.strip_prefix("~/") {
             self.home.join(rest)
         } else if Path::new(argument).is_absolute() {
@@ -180,7 +180,7 @@ fn wildcard_match(pattern: &str, candidate: &str) -> bool {
 /// One config line as `ssh` reads it: a keyword, then its arguments, which
 /// are separated by blanks or a single `=`, may be double-quoted, and end at
 /// an unquoted `#`. A blank or comment line has none.
-fn split_line(line: &str) -> Option<(String, Vec<String>)> {
+pub(super) fn split_line(line: &str) -> Option<(String, Vec<String>)> {
     let line = line.trim_start();
     if line.is_empty() || line.starts_with('#') {
         return None;

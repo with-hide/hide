@@ -44,7 +44,7 @@ export function absenceReason(adapter: UsageAdapter, t: TFunction<"translation">
   switch (weekly.detail.kind.kind) {
     case "not_built": return t("usage.reason.notBuilt", { agent: adapter.label });
     case "no_such_data": return t("usage.reason.account");
-    case "excluded": return t(adapter.id === "opencode" ? "usage.reason.opencode" : "usage.reason.cursor");
+    case "excluded": return t("usage.reason.opencode");
   }
   return weekly.detail.reason;
 }

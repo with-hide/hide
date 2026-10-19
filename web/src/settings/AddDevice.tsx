@@ -96,7 +96,7 @@ export function AddDevice({ actions, devices, helperRoot, cliDir }: { actions: A
           />
         </Row>
         <Disclosure title={t("devices.advanced")} data-add-device-advanced="true">
-          <Row label={<span className="text-subhead text-subtle-foreground">{t("devices.whatInstalls")}</span>} detail={<Installs helperRoot={helperRoot} cliDir={cliDir} />} />
+              <Row label={<span className="text-subhead text-subtle-foreground">{t("devices.whatInstalls")}</span>} detail={<DeviceInstallTerms helperRoot={helperRoot} cliDir={cliDir} />} />
           <Row label={t("devices.herdrSocket")} detail={socketProblem(socket, t) ? <Note tone="warn">{socketProblem(socket, t)}</Note> : <Note>{t("devices.socketDescription")}</Note>}>
             <Input
               mono
@@ -144,7 +144,7 @@ function HostRow({ choice, disabled }: { choice: HostChoice; disabled: boolean }
 }
 
 /** What Hide puts on the device: three lines, said where the person agrees to them (B53). */
-function Installs({ helperRoot, cliDir }: { helperRoot: string | null; cliDir: string | null }) {
+export function DeviceInstallTerms({ helperRoot, cliDir }: { helperRoot: string | null; cliDir: string | null }) {
   const { t } = useInterfaceTranslation();
   return (
     <ul className="list-disc space-y-xs pl-md text-body text-subtle-foreground" data-add-device-installs="true">

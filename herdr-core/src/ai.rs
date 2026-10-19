@@ -941,7 +941,7 @@ mod tests {
         assert!(!missing.installed);
 
         let unsupported = project(
-            ProviderId::CURSOR,
+            ProviderId::OPENCODE,
             Some(&status(
                 Availability::Unsupported {
                     reason: "cannot_guarantee_read_only".to_owned(),
@@ -975,7 +975,7 @@ mod tests {
         );
         let row = |found: Option<&BTreeSet<ProviderId>>| {
             project(
-                ProviderId::CURSOR,
+                ProviderId::OPENCODE,
                 Some(&unsupported),
                 None,
                 &models(),
@@ -983,7 +983,7 @@ mod tests {
                 found,
             )
         };
-        let found: BTreeSet<ProviderId> = [ProviderId::CURSOR].into();
+        let found: BTreeSet<ProviderId> = [ProviderId::OPENCODE].into();
         let missing: BTreeSet<ProviderId> = [ProviderId::CODEX].into();
 
         let on_this_mac = row(Some(&found));

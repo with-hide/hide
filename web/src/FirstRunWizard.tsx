@@ -1,5 +1,5 @@
 // The first-run wizard (PRD first-run-onboarding D-01): 1 agents, 2
-// notifications, 3 the first project, then the start panel. The step on
+// saved devices when present, notifications, the first project, then the start panel. The step on
 // screen is the core's (`ui_state.first_run`), so a reload or a restart
 // reopens the step the operator was on, and nothing closes it but the steps'
 // own buttons (B5, B6). A browser tab shows the first step alone (B26).
@@ -17,12 +17,13 @@ import { create } from "zustand";
 import type { Actions } from "./actions";
 import { AddProjectViews } from "./AddProjectDialog";
 import { agentLogo, monogram } from "./agentLogos";
-import { appliedAgents, hideAiFirstRunKey, selection, tileSwitchable, type TileStart } from "./agentOnboardingRules";
+import { hideAiFirstRunKey, selection, tileSwitchable } from "./agentOnboardingRules";
 import { Note, Status } from "./components/settings-rows";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Kbd } from "./components/ui/kbd";
-import { accountHome, failedAgents, firstRunStep, firstStartAgent, noAgentInstalled, SUGGESTED_INSTALLS, tileStatus, whatChanges, type TileStatus, type WizardStep } from "./firstRun";
+import { accountHome, failedAgents, firstRunStep, firstStartAgent, noAgentInstalled, SUGGESTED_INSTALLS, tileStatus, whatChanges, wizardSteps, type TileStatus, type WizardStep } from "./firstRun";
+import { FirstRunDevices } from "./FirstRunDevices";
 import { firstRunAgent } from "./hideAi";
 import { BrandOwl } from "./components/brand-owl";
 import { hostBridge, keySystem } from "./host";
@@ -51,7 +52,6 @@ export const useSetupWalk = create<SetupWalk>((set) => ({
   close: () => set({ step: null }),
 }));
 
-const STEPS: readonly WizardStep[] = ["agents", "notifications", "project"];
 const NO_REGISTRATIONS: WorkspaceRegistration[] = [];
 
 export function FirstRunWizard({ actions }: { actions: Actions }) {
@@ -70,11 +70,27 @@ export function FirstRunWizard({ actions }: { actions: Actions }) {
 
 function Wizard({ actions, step, reopened, desktop }: { actions: Actions; step: WizardStep; reopened: boolean; desktop: boolean }) {
   const { t } = useInterfaceTranslation();
+  const profiles = useShellStore((s) => s.rest?.status?.herdr_profiles);
+  const saved = useShellStore((s) => s.rest?.ui_state?.first_run_choices);
+  const [chosen, setChosen] = useState<readonly string[] | null>(() => reopened ? null : saved?.agents ?? null);
+  const [answered, setAnswered] = useState(false);
+  const steps = wizardSteps(profiles);
+  // Read saved configuration once per walk. This does not connect a device.
+  useEffect(() => { if (desktop) actions.listHerdrProfiles(); }, [actions, desktop]);
   const primary = useRef<(() => void) | null>(null);
   // Each render's step names its own main button; a step without one (the project step) leaves Enter to its controls.
   primary.current = null;
   const close = () => useSetupWalk.getState().close();
-  const number = STEPS.indexOf(step) + 1;
+  const number = Math.max(steps.indexOf(step), 0) + 1;
+  const back = step === "agents" ? undefined : () => {
+    if (reopened) useSetupWalk.getState().go(steps[Math.max(steps.indexOf(step) - 1, 0)]!);
+    else actions.backFirstRun(step);
+  };
+  const nextAgents = () => useSetupWalk.getState().go(desktop && steps.includes("devices") ? "devices" : "notifications");
+  const choose = (agents: readonly string[]) => {
+    setChosen(agents);
+    actions.saveFirstRunDraft({ agents: [...agents] });
+  };
   // Enter on the step itself, or ⌘↵ (Ctrl+Enter off macOS) anywhere in it, presses its main button; a control with its own Enter keeps it (B40).
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
@@ -110,21 +126,23 @@ function Wizard({ actions, step, reopened, desktop }: { actions: Actions; step: 
         {desktop ? (
           <div className="flex flex-wrap items-center gap-sm" data-first-run-progress={number}>
             <div className="flex gap-xs" aria-hidden="true">
-              {STEPS.map((row, index) => (
+              {steps.map((row, index) => (
                 <span key={row} className={cn("h-xs w-xl rounded-full", index < number ? "bg-primary" : "bg-secondary")} />
               ))}
             </div>
-            <span className="text-caption text-muted-foreground">{t("firstRun.progress", { step: number })}</span>
+            <span className="text-caption text-muted-foreground">{t("firstRun.progress", { step: number, total: steps.length })}</span>
           </div>
         ) : null}
             <BrandOwl key={step} pose={step === "agents" ? "agents" : step === "notifications" ? "devices" : "ai"} className="ml-auto h-(--size-owl-onboarding) w-(--size-owl-onboarding)" />
           </div>
         {step === "agents" ? (
-          <AgentsStep actions={actions} reopened={reopened} desktop={desktop} primary={primary} />
+          <AgentsStep actions={actions} reopened={reopened} desktop={desktop} primary={primary} chosen={chosen} onChoose={choose} onNext={nextAgents} />
+        ) : step === "devices" ? (
+          <FirstRunDevices actions={actions} primary={primary} onBack={back!} onNext={() => reopened ? useSetupWalk.getState().go("notifications") : actions.advanceFirstRun("devices")} />
         ) : step === "notifications" ? (
-          <NotificationsStep actions={actions} reopened={reopened} primary={primary} />
+          <NotificationsStep actions={actions} reopened={reopened} primary={primary} onBack={back!} answered={answered || saved?.notifications_answered === true} onAnswered={() => setAnswered(true)} />
         ) : (
-          <ProjectStep actions={actions} reopened={reopened} />
+          <ProjectStep actions={actions} reopened={reopened} onBack={back!} />
         )}
       </DialogContent>
     </Dialog>
@@ -143,15 +161,13 @@ function MainButton({ variant = "default", ...props }: ComponentProps<typeof But
 
 type StepProps = { actions: Actions; reopened: boolean; primary: { current: (() => void) | null } };
 
-function AgentsStep({ actions, reopened, desktop, primary }: StepProps & { desktop: boolean }) {
+function AgentsStep({ actions, reopened, desktop, primary, chosen, onChoose, onNext }: StepProps & { desktop: boolean; chosen: readonly string[] | null; onChoose: (agents: readonly string[]) => void; onNext: () => void }) {
   const { t } = useInterfaceTranslation();
   const kit = useShellStore((s) => s.rest?.navigator?.devices?.find((device) => device.kind !== "remote")?.kit ?? null);
   const agents = useMemo(() => supportedAgents(kit?.agents), [kit?.agents]);
   const providers = useShellStore((s) => s.rest?.status?.background_ai?.providers);
   const ai = useShellStore((s) => s.rest?.status?.background_ai);
-  const start: TileStart = reopened ? "enabled" : "installed";
-  // Only the operator's flips are state; what is on is read from the live kit each render.
-  const [flipped, setFlipped] = useState<ReadonlySet<string>>(new Set());
+  const answered = useShellStore((s) => s.rest?.ui_state?.agent_onboarding === "done");
   const [showChanges, setShowChanges] = useState(false);
   // The agents the last Continue sent: a failure names those (B12).
   const [sent, setSent] = useState<string[] | null>(null);
@@ -162,7 +178,7 @@ function AgentsStep({ actions, reopened, desktop, primary }: StepProps & { deskt
   const revision = useShellStore((s) => s.revision);
   const [pressedAt, setPressedAt] = useState<number | null>(null);
   const pressed = pressedAt !== null && pressedAt === revision;
-  const on = selection(agents, flipped, start);
+  const on = chosen === null ? selection(agents, new Set(), reopened || answered ? "enabled" : "installed") : new Set(agents.filter((agent) => tileSwitchable(agent) && chosen.includes(agent.id)).map((agent) => agent.id));
   // The sign-in probe runs only while a page asks for it.
   useAgentsDemand(actions, false);
   const hideAi = firstRunAgent(ai, on);
@@ -177,27 +193,35 @@ function AgentsStep({ actions, reopened, desktop, primary }: StepProps & { deskt
   // The pass stopped before changing anything: the step says what stopped it, and Try again runs the
   // same pass again, which checks again; nothing is chosen until it runs and the tiles are back.
   const refused = !applying ? (kit?.refused ?? null) : null;
-  const toggle = (id: string) =>
-    setFlipped((current) => {
-      const next = new Set(current);
-      if (!next.delete(id)) next.add(id);
-      return next;
-    });
+  const toggle = (id: string) => {
+    const next = new Set(on);
+    if (!next.delete(id)) next.add(id);
+    onChoose(agents.filter((agent) => next.has(agent.id)).map((agent) => agent.id));
+  };
   const proceed = () => {
     if (applying || (agents.length === 0 && !unavailable && !refused)) return;
-    const chosen = appliedAgents(agents, flipped, start);
-    setSent(chosen);
-    if (reopened) {
-      // Help's walk switches only what changed, the way Settings > Agents does, and moves on at once;
-      // while the kit cannot run here it stays with its reason and only has the agents read again (B12).
-      actions.applyAgentOnboarding(chosen);
-      if (!unavailable && !refused) useSetupWalk.getState().go("notifications");
+    const picked = agents.filter((agent) => on.has(agent.id)).map((agent) => agent.id);
+    const unchanged = !unavailable && !refused && agents.every((agent) => !tileSwitchable(agent) || (
+      agent.enabled === on.has(agent.id) && (!agent.enabled || [agent.skill, agent.hook, agent.herdr].every((piece) => !piece || !["outdated", "not_installed", "removed", "failed"].includes(piece.state)))
+    ));
+    // The core queues no work for a healthy unchanged Help choice, so there
+    // will be no later kit report to wait for.
+    if (reopened && unchanged) {
+      actions.applyAgentOnboarding(picked, !desktop && !reopened);
+      onNext();
       return;
     }
+    setSent(picked);
     setPressedAt(revision);
     // A browser tab's wizard is this step alone, so it ends with it (B26).
-    actions.applyAgentOnboarding(chosen, !desktop);
+    actions.applyAgentOnboarding(picked, !desktop && !reopened);
   };
+  // Help waits for the same kit result as first run; an old completion never
+  // navigates another step. An unchanged, healthy choice queues no install.
+  useEffect(() => {
+    if (!reopened || sent === null || applying || unavailable || refused || failures.length > 0) return;
+    onNext();
+  }, [reopened, sent, applying, unavailable, refused, failures.length]);
   primary.current = proceed;
   const label = applying ? t("firstRun.agents.applying") : failures.length > 0 || unavailable || refused ? t("firstRun.agents.retry") : t("firstRun.agents.continue");
   return (
@@ -372,18 +396,19 @@ function AgentTile({ agent, on, status, disabled, onToggle }: { agent: KitAgent;
   );
 }
 
-function NotificationsStep({ actions, reopened, primary }: StepProps) {
+function NotificationsStep({ actions, reopened, primary, onBack, answered, onAnswered }: StepProps & { onBack: () => void; answered: boolean; onAnswered: () => void }) {
   const { t } = useInterfaceTranslation();
   const control = useNotificationControl(actions, "wizard", usePermission());
   const state = control?.state ?? "off";
   const enabled = control?.enabled ?? false;
   // On a Mac that already allows Hide the step opens on, and Continue is what turns the switch on (B16).
-  const allowedOff = !enabled && state === "on";
+  const allowedOff = !enabled && state === "on" && !answered;
   // Where nothing can be shown the step only says so and goes on (B47); until the switch is on it offers Turn on and Not now.
-  const goesOn = (enabled && state !== "asking") || allowedOff || state === "no_service";
+  const goesOn = answered || (enabled && state !== "asking") || allowedOff || state === "no_service";
   // Continue on a Mac that already allows Hide turns the switch on (B16); Not now leaves it off,
   // even after Turn on was pressed while macOS still asks (B21).
   const leave = (notifications: boolean | undefined) => {
+    onAnswered();
     if (reopened) {
       if (notifications !== undefined) actions.setDesktopNotifications(notifications, notifications ? undefined : false);
       useSetupWalk.getState().go("project");
@@ -407,6 +432,7 @@ function NotificationsStep({ actions, reopened, primary }: StepProps) {
         </DialogBody>
       ) : null}
       <DialogFooter className={cn(!control || state === "off" ? "pt-md" : null)}>
+        <Button variant="ghost" onClick={onBack} data-first-run-back="true">{t("firstRun.back")}</Button>
         <button type="button" onClick={() => useUiStore.getState().openSettings("mobile")} className="mr-auto rounded-xs text-body font-medium text-foreground outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" data-first-run-phone="true">
           {t("firstRun.notifications.phone")}
         </button>
@@ -433,7 +459,7 @@ function NotificationsStep({ actions, reopened, primary }: StepProps) {
   );
 }
 
-function ProjectStep({ actions, reopened }: { actions: Actions; reopened: boolean }) {
+function ProjectStep({ actions, reopened, onBack }: { actions: Actions; reopened: boolean; onBack: () => void }) {
   const { t } = useInterfaceTranslation();
   const registrations = useShellStore((s) => s.rest?.ui_state?.workspace_registrations ?? NO_REGISTRATIONS);
   // The projects that were there when the step opened; the first one after them is the operator's (B23).
@@ -450,15 +476,17 @@ function ProjectStep({ actions, reopened }: { actions: Actions; reopened: boolea
     finish();
     // The start panel opens once, on this project, with the first agent D-15 picks (B23, B24); with no agent on it does not open.
     const rest = useShellStore.getState().rest;
-    const agents = rest?.navigator?.devices?.find((device) => device.kind !== "remote")?.kit?.agents ?? [];
-    const kind = firstStartAgent(supportedAgents(agents), rest?.status?.background_ai?.providers);
+    const device = rest?.navigator?.devices?.find((device) => device.id === added.device_id);
+    const agents = device?.kit?.agents ?? [];
+    const kind = firstStartAgent(supportedAgents(agents), device?.kind === "remote" ? undefined : rest?.status?.background_ai?.providers);
     if (kind) useStartPanel.getState().open(false, { projectId: added.id, kind });
     // `finish` reads only the store; the project appearing is the one trigger.
   }, [added?.id]);
   return (
     <>
-      <AddProjectViews actions={actions} title={(translate) => translate("firstRun.project.title")} onHost={setHost} />
+      <AddProjectViews actions={actions} title={(translate) => translate("firstRun.project.title")} onHost={setHost} draft={{ device: useShellStore.getState().rest?.ui_state?.first_run_choices?.project_device, path: useShellStore.getState().rest?.ui_state?.first_run_choices?.project_path, form: useShellStore.getState().rest?.ui_state?.first_run_choices?.project_form }} onDraft={actions.saveFirstRunDraft} />
       <DialogFooter>
+        <Button variant="ghost" onClick={onBack} data-first-run-back="true">{t("firstRun.back")}</Button>
         <Button variant="ghost" onClick={finish} data-first-run-skip="true">
           {t("firstRun.project.skip")}
         </Button>

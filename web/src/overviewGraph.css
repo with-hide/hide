@@ -96,4 +96,7 @@
 .og-toolbar-actions { flex-wrap: wrap; }
 .og-empty { flex-wrap: wrap; }
 
-.og-letter-label[data-emphasized="false"] { opacity: 0; pointer-events: none; }
+.og-letter-label[data-emphasized="false"]:not([data-paired="true"]):not(:focus-visible) { opacity: 0; pointer-events: none; }
+
+.overview-graph .og-direct-input .react-flow__edge-path { stroke: var(--primary); stroke-dasharray: var(--size-hairline) var(--spacing-xs); stroke-linecap: round; }
+.og-letter-label[data-kind="herdr_direct"] { color: var(--primary); border-color: var(--primary); }

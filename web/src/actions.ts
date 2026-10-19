@@ -1290,8 +1290,20 @@ export function createActions(send: DispatchFn) {
      * off for Not now (B21), absent to leave it as it is. The agent step leaves this way only while this Mac's pass is refused: the
      * wizard closes with the question unanswered.
      */
-    advanceFirstRun(from: "agents" | "notifications" | "project", notifications?: boolean) {
+    advanceFirstRun(from: "agents" | "devices" | "notifications" | "project", notifications?: boolean) {
       dispatch({ schema_version: 2, kind: "first_run_advance", payload: notifications === undefined ? { from } : { from, notifications } });
+    },
+    backFirstRun(from: "devices" | "notifications" | "project") {
+      dispatch({ schema_version: 2, kind: "first_run_back", payload: { from } });
+    },
+    saveFirstRunDraft(draft: { agents?: string[]; devices?: string[]; project_device?: string; project_path?: string; project_form?: import("./snapshot").FirstRunProjectForm }) {
+      dispatch({ schema_version: 2, kind: "first_run_draft", payload: draft });
+    },
+    listHerdrProfiles() {
+      dispatch({ schema_version: 2, kind: "herdr_profiles_list", payload: {} });
+    },
+    connectHerdrProfile(profileId: string) {
+      dispatch({ schema_version: 2, kind: "herdr_profile_connect", payload: { profile_id: profileId, host_consent: true } });
     },
 
     /** Needs You, with an optional Done choice for the reopened wizard's Not now. */

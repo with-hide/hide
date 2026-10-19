@@ -150,6 +150,6 @@ it("keeps a folder's Git protections off and unavailable, and names the agents t
     expect(document.querySelector("[data-project-guard-uncovered]")).toBeNull();
   });
   await withScene("lang=en&state=guard-uncovered", async () => {
-    expect(document.querySelector("[data-project-guard-uncovered]")?.textContent).toContain("Guardrails don't apply to Codex, Cursor.");
+    expect(document.querySelector("[data-project-guard-uncovered]")?.textContent).toContain("Guardrails don't apply to Codex, Grok.");
   });
 });

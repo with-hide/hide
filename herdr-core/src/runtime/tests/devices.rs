@@ -681,6 +681,7 @@ fn a_device_id_holding_a_colon_is_refused_and_never_connected() {
                     ssh_alias: alias.to_owned(),
                 },
                 herdr_socket_path: None,
+                herdr_session: None,
                 host_consent: None,
             });
     }

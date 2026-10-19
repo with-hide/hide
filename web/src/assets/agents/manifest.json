@@ -11,6 +11,8 @@
     },
     {
       "id": "cursor",
+      "history_only": true,
+      "note": "Retired from active support; retained for stored Cursor sessions read by hide-session/src/cursor.rs.",
       "file": "cursor.svg",
       "source_url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/cursor.svg",
       "license": "simple-icons file, CC0; data source is the vendor's brand page https://cursor.com/brand; trademark rights stay with Cursor",

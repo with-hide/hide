@@ -2983,7 +2983,7 @@ mod tests {
             })],
         );
         let unsupported = Scripted::with_availability(
-            ProviderId::CURSOR,
+            ProviderId::OPENCODE,
             Availability::Unsupported {
                 reason: "cannot_guarantee_read_only".to_owned(),
             },
@@ -3015,9 +3015,9 @@ mod tests {
             "out of usage is not a reason to hide it"
         );
         assert!(by(ProviderId::CODEX).parked_for.is_some());
-        assert!(!by(ProviderId::CURSOR).selectable);
+        assert!(!by(ProviderId::OPENCODE).selectable);
         assert_eq!(
-            by(ProviderId::CURSOR).availability,
+            by(ProviderId::OPENCODE).availability,
             Availability::Unsupported {
                 reason: "cannot_guarantee_read_only".to_owned()
             }

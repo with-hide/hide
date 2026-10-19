@@ -13,6 +13,7 @@ mod codex_launch;
 mod composer_store;
 pub mod coordination;
 pub mod delivery;
+pub mod direct_observation;
 mod device_catalog;
 pub mod diagnostics;
 mod disk;

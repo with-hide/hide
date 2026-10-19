@@ -319,6 +319,10 @@ impl Agent {
     }
 
     pub fn from_kind(kind: &str) -> Option<Self> {
+        // Cursor is retired from active support; its existing history remains readable.
+        if kind.trim().eq_ignore_ascii_case("cursor") {
+            return Some(Self::Cursor);
+        }
         hide_agent_adapter::adapter(kind)?
             .session
             .map(Self::from_format)

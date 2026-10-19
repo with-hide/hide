@@ -240,43 +240,6 @@
     }
   },
   {
-    "id": "cursor",
-    "hook": {
-      "sample": "hide-agent-adapter/tests/fixtures/cursor-guidance.json"
-    },
-    "session": {
-      "sample": "hide-session/tests/fixtures/cursor-2026.10.01/graph.json"
-    },
-    "features": [
-      "skill",
-      "guidance",
-      "spawn_guard",
-      "herdr_integration",
-      "sleep",
-      "start",
-      "titles"
-    ],
-    "factory": {
-      "direct_ask": "unavailable",
-      "user_turn": "unavailable",
-      "turn_end_and_answer": "unavailable",
-      "startup_guidance": "available",
-      "resume": "available",
-      "next_prompt_letters": "unavailable"
-    },
-    "usage": {
-      "five_hour": "excluded",
-      "weekly": "excluded",
-      "scoped": "excluded",
-      "monthly": "excluded",
-      "tokens": "no_such_data",
-      "cost": "no_such_data",
-      "models": "no_such_data",
-      "session": "no_such_data",
-      "project": "no_such_data"
-    }
-  },
-  {
     "id": "antigravity",
     "hook": {
       "sample": "hide-agent-hooks/tests/fixtures/antigravity-pre-tool-use.json"
