@@ -617,7 +617,7 @@ impl Runtime {
 
     /// Whether a Factory can put this worker to sleep (D-28): its adapter
     /// declares a sleep, and one that closes its pane to sleep is bound back
-    /// to its worker only for Pi and omp (#857). Grok, OpenCode and Cursor
+    /// to its worker only for Pi and omp (#857). Grok and OpenCode
     /// close their pane too but keep working through a pause until a task of
     /// their own settles that.
     pub fn sleeps(self) -> bool {
@@ -2231,17 +2231,20 @@ mod summary_tests {
 
     #[test]
     fn factory_sleep_follows_the_sleep_the_adapter_declares() {
-        for (kind, supported) in [
+        let active = [
             ("claude", true),
             ("codex", true),
             ("pi", true),
             ("omp", true),
             ("grok", false),
             ("opencode", false),
-            ("cursor", false),
-        ] {
+            ("antigravity", true),
+        ];
+        assert_eq!(Runtime::all().count(), active.len());
+        for (kind, supported) in active {
             assert_eq!(Runtime::parse(kind).unwrap().sleeps(), supported, "{kind}");
         }
+        assert_eq!(Runtime::parse("cursor"), None, "Cursor is retired");
         // Their manual sleep is declared and closes the pane, so the guard,
         // not a missing declaration, keeps Factory from sleeping them.
         for kind in ["pi", "omp", "opencode"] {
