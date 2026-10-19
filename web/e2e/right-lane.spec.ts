@@ -89,7 +89,9 @@ function savedViewFacts(read: SavedRead, fixture: string): unknown {
         } else { visit(node.split.first, depth + 1); visit(node.split.second, depth + 1); }
       };
       visit(value.root, 0);
-      return { active_area: identity(value.active_area), display_count: areas.reduce((count, area) => count + area.displays.length, 0), areas };
+      const activeArea = areas.find((area) => area.id === identity(value.active_area));
+      const active_basename = activeArea?.displays.find((display) => display.id === activeArea.active)?.basename ?? null;
+      return { active_area: identity(value.active_area), active_basename, display_count: areas.reduce((count, area) => count + area.displays.length, 0), areas };
     };
     return { ...metadata, status: "read", schema_version: saved.schema_version, tool: view.tool, pinned: view.pinned, views: layout(view.view_layout), agents: layout(view.agent_layout) };
   } catch (error) {
@@ -249,13 +251,17 @@ test("the pin docks the lane once, keeps it through a terminal click, a tool and
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
     await expect(page.locator('[data-view-tab-bar] [role="tab"]')).toHaveCount(2);
 
+    // Windows stops the fixture forcibly. A rendered selection does not
+    // prove the asynchronous save the next process will restore has landed.
+    const fixture = path.join(lane.herdr.root, "fixture");
+    const stored = () => savedViewFacts(readSavedViews(lane.daemon.stateDir), fixture);
+    await expect.poll(stored).toMatchObject({ status: "read", tool: "files", pinned: true, views: { display_count: 2, active_basename: "b.md" } });
     const savedBeforeExit = readSavedViews(lane.daemon.stateDir);
     let savedAfterExit: SavedRead | undefined;
     try {
       lane.daemon = await lane.daemon.restart((stateDir) => { savedAfterExit = readSavedViews(stateDir); });
     } finally {
       if (savedAfterExit) {
-        const fixture = path.join(lane.herdr.root, "fixture");
         await test.info().attach("first-restart-saved-views", { contentType: "application/json", body: JSON.stringify({ before_exit: savedViewFacts(savedBeforeExit, fixture), after_exit: savedViewFacts(savedAfterExit, fixture) }, null, 2) });
       }
     }
@@ -268,6 +274,7 @@ test("the pin docks the lane once, keeps it through a terminal click, a tool and
     // back there: the operator never took it down.
     await page.locator("[data-lane-pin]").click();
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await expect.poll(stored).toMatchObject({ status: "read", tool: "files", pinned: false, views: { display_count: 2, active_basename: "b.md" } });
     lane.daemon = await lane.daemon.restart();
     await page.goto("about:blank");
     await page.goto(`${lane.daemon.origin}/?probe=1#token=${lane.daemon.token}`);
