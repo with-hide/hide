@@ -243,11 +243,11 @@ function Questions({ project, actions, busy }: { project: ProjectMemory; actions
 
 /** A native button behind the read view makes the whole row one disclosure,
  * while sibling controls keep their own pointer and keyboard actions. */
-function AskRow({ number, expanded, onToggle, children }: { number: number; expanded: boolean; onToggle: () => void; children: ReactNode }) {
+function AskRow({ number, expanded, onToggle, children, className }: { number: number; expanded: boolean; onToggle: () => void; children: ReactNode; className?: string }) {
   const { t } = useInterfaceTranslation();
   return <div className="relative min-w-0">
     <button type="button" className="absolute inset-0 rounded-xs outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" aria-label={t(expanded ? "memory.collapse" : "memory.expand", { card: cardName(number) })} aria-expanded={expanded} onClick={onToggle} data-memory-row-toggle={number} />
-    <div className="pointer-events-none relative grid min-w-0 grid-cols-[auto_1fr] gap-x-sm gap-y-xs py-sm">{children}</div>
+    <div className={cn("pointer-events-none relative grid min-w-0 grid-cols-[auto_1fr] gap-x-sm gap-y-xs py-sm", className)}>{children}</div>
   </div>;
 }
 
@@ -265,29 +265,28 @@ function ProgressRow({ group, pull, agents, project, actions }: { group: MemoryP
   const status = memoryProgressStatus(group, pull, agent);
   const reason = [t(status.key), promotion?.github_failure && promotion.github_failure !== "no_github_remote" ? t(`memory.github.${promotion.github_failure}`) : null].filter(Boolean).join(" · ");
   return <div className="min-w-0 border-b border-border" data-memory-card={first.number} data-memory-progress="true" data-memory-pr-group={group.pr ?? undefined}>
-    <AskRow number={first.number} expanded={expanded} onToggle={() => actions.memoryExpand(project.workspace_id, expanded ? null : first.number)}>
+    <AskRow number={first.number} expanded={expanded} onToggle={() => actions.memoryExpand(project.workspace_id, expanded ? null : first.number)} className="px-md py-md">
       <PrMark className="mt-xxs" state={pull?.state ?? "pending"} compact />
       <div className="flex min-w-0 items-center gap-sm">
-        <span className="max-w-1/2 shrink-0 truncate font-mono text-caption text-muted-foreground" title={group.cards.map((row) => cardName(row.number)).join(" · ")}>{group.cards.map((row) => cardName(row.number)).join(" · ")}</span>
         <span className="min-w-0 flex-1 truncate text-body" title={first.title}>{first.title}</span>
         {group.cards.length > 1 ? <span className="shrink-0 text-caption text-muted-foreground">+{group.cards.length - 1}</span> : null}
-      </div>
-      <div className="col-start-2 flex min-w-0 items-center gap-sm text-caption" data-memory-running={promotion?.state === "running" ? first.number : undefined} data-memory-unconfirmed={promotion?.state === "unconfirmed" ? "true" : undefined}>
-        {group.pr !== null ? <button type="button" disabled={!group.url} className="pointer-events-auto shrink-0 text-subtle-foreground hover:text-foreground disabled:opacity-50" onClick={() => group.url && actions.openSessionPullRequest({ workspace_id: project.workspace_id, number: group.pr!, url: group.url })} data-memory-open-pr={group.pr}>{t("memory.progress.pr", { number: String(group.pr) })}</button> : null}
-        <span className={cn("min-w-0 flex-1 truncate", status.tone)} title={reason}>{reason}</span>
-        {promotion?.state === "running" && group.pr === null ? <Elapsed since={promotion.started_at_unix_ms} className="shrink-0 text-muted-foreground" data-memory-elapsed={first.number} /> : null}
-        {status.agentLink && pane ? <button type="button" className="pointer-events-auto shrink-0 text-subtle-foreground hover:text-foreground" onClick={() => actions.openAgent(pane)} data-memory-agent={first.number}>{t("memory.progress.agent")}</button> : null}
         <AskChevron expanded={expanded} />
       </div>
+      <div className="col-start-2 flex min-w-0 items-center gap-sm text-caption" data-memory-running={promotion?.state === "running" ? first.number : undefined}>
+        {group.pr !== null ? <button type="button" disabled={!group.url} className="pointer-events-auto shrink-0 text-subtle-foreground hover:text-foreground disabled:opacity-50" onClick={() => group.url && actions.openSessionPullRequest({ workspace_id: project.workspace_id, number: group.pr!, url: group.url })} data-memory-open-pr={group.pr}>{t("memory.progress.pr", { number: String(group.pr) })}</button> : null}
+        <span className={cn("min-w-0 truncate", status.tone)} title={reason} data-memory-unconfirmed={promotion?.state === "unconfirmed" ? "true" : undefined}>{reason}</span>
+        {promotion?.state === "running" && group.pr === null ? <Elapsed since={promotion.started_at_unix_ms} className="shrink-0 text-muted-foreground" data-memory-elapsed={first.number} /> : null}
+        <span className="max-w-1/3 shrink-0 truncate font-mono text-muted-foreground" title={group.cards.map((row) => cardName(row.number)).join(" · ")}>{group.cards.map((row) => cardName(row.number)).join(" · ")}</span>
+        {(status.agentLink || expanded) && pane ? <button type="button" className="pointer-events-auto ml-auto shrink-0 text-subtle-foreground hover:text-foreground" aria-label={t("memory.progress.openAgent")} onClick={() => actions.openAgent(pane)} data-memory-agent={first.number}>{t("memory.progress.agent")}</button> : null}
+      </div>
     </AskRow>
-    {expanded ? <div className="flex min-w-0 flex-col gap-sm pb-sm pl-lg" data-memory-progress-detail={first.number}>
-      {group.cards.map((row) => <div key={row.number} className="min-w-0" data-memory-preview={row.number}>
-        <p className="break-words text-caption text-subtle-foreground"><span className="font-mono text-muted-foreground">{cardName(row.number)}</span> · {row.title}</p>
-        {row.body_preview ? <p className="line-clamp-2 whitespace-pre-wrap break-words text-caption text-muted-foreground">{row.body_preview}</p> : null}
-      </div>)}
-      <div className="flex flex-wrap items-center gap-sm">
-        {group.pr !== null ? <Button size="sm" variant="outline" disabled={!group.url} onClick={() => group.url && actions.openSessionPullRequest({ workspace_id: project.workspace_id, number: group.pr!, url: group.url })} data-memory-open-pr={group.pr}>{t("memory.openPr", { number: String(group.pr) })}</Button> : null}
-        {pane ? <Button size="sm" variant="ghost" onClick={() => actions.openAgent(pane)} data-memory-open-agent={first.number}>{t("memory.progress.openAgent")}</Button> : null}
+    {expanded ? <div className="grid min-w-0 grid-cols-[auto_1fr] gap-x-sm px-md pt-sm pb-md" data-memory-progress-detail={first.number}>
+      <span aria-hidden="true" className="size-(--size-pr-icon)" />
+      <div className="flex min-w-0 flex-col gap-sm">
+        {group.cards.map((row) => <div key={row.number} className="min-w-0" data-memory-preview={row.number}>
+          {group.cards.length > 1 ? <p className="break-words text-caption text-subtle-foreground"><span className="font-mono text-muted-foreground">{cardName(row.number)}</span> · {row.title}</p> : null}
+          {row.body_preview ? <p className="line-clamp-2 whitespace-pre-wrap break-words text-caption text-muted-foreground">{row.body_preview}</p> : null}
+        </div>)}
       </div>
     </div> : null}
   </div>;
