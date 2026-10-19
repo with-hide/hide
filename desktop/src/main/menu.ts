@@ -12,7 +12,6 @@
 import type { MenuItemConstructorOptions } from "electron";
 import type { TFunction } from "i18next";
 import { commandTitle } from "../../../web/src/commandTitle";
-import { FACTORY_OPEN } from "../../../web/src/factory/launch";
 import { CHECK_UPDATES_COMMAND, SETUP_COMMAND } from "../../../web/src/host";
 import { AREA_COMMANDS, LANE_TOOL_COMMANDS, effectiveRegistry, isCycleCommand, isNumberedCommand, REGISTRY, systemRegistry, type Chord, type Command, type CommandId, type EffectiveRegistry, type KeySystem } from "../../../web/src/shortcuts";
 
@@ -71,7 +70,6 @@ export const MENU_LAYOUT: Readonly<Record<"app" | "File" | "Edit" | "View" | "Pa
     "toggle_sidebar_lens",
     "overview",
     "add_backlog",
-    ...(FACTORY_OPEN ? (["factory_open"] as const) : []),
     "sidebar_projects",
     "toggle_device_rail",
     "toggle_lane",

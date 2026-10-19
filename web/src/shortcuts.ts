@@ -33,7 +33,6 @@
 // each with its reason; docs/UI_BEHAVIOR.md (Keyboard shortcuts per system)
 // lists the whole table on both systems.
 
-import { FACTORY_OPEN } from "./factory/launch";
 import type { HostKind } from "./host";
 import { TOOLS, type Tool } from "./laneTools";
 
@@ -119,7 +118,6 @@ export type CommandId =
   | "open_file"
   | "toggle_left_sidebar"
   | "overview"
-  | "factory_open"
   | "sidebar_projects"
   | "add_backlog"
   | "toggle_device_rail"
@@ -271,8 +269,6 @@ export const REGISTRY: readonly Command[] = [
   { id: "overview", title: "Overview", group: "Navigate", browser: { code: "KeyO", meta: true, shift: true }, electron: { code: "KeyO", meta: true, shift: true }, moved: false },
   // Chrome keeps ⌘⇧M for the profile menu, so the browser form is ⌥⇧M (PRD overview-device-tasks B37).
   { id: "add_backlog", title: "Add to backlog", group: "Navigate", browser: { code: "KeyM", alt: true, shift: true }, electron: { code: "KeyM", meta: true, shift: true }, moved: true },
-  // Until the Factory opens, nothing claims ⇧⌘F and no sheet or menu lists it (`factory/launch.ts`).
-  ...(FACTORY_OPEN ? [{ id: "factory_open", title: "Open Factory", group: "Navigate", browser: { code: "KeyF", meta: true, shift: true }, electron: { code: "KeyF", meta: true, shift: true }, moved: false } satisfies Command] : []),
   { id: "sidebar_projects", title: "Focus sidebar", group: "Panels", browser: { code: "KeyP", meta: true, shift: true }, electron: { code: "KeyP", meta: true, shift: true }, moved: false },
   { id: "toggle_device_rail", title: "Toggle device rail", group: "Panels", browser: null, electron: null, moved: false },
   { id: "toggle_lane", title: "Toggle right lane", group: "Panels", browser: { code: "KeyE", meta: true }, electron: { code: "KeyE", meta: true }, moved: false },

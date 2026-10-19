@@ -1416,13 +1416,11 @@ fn release_attempt(
         }
         crate::node_access::call_as::<()>(
             node,
-            Call::Factory {
-                call: hide_node_link::factory::FactoryCall::RemoveWorktree {
-                    root: repo.to_owned(),
-                    checkout: path,
-                    branch: branch.to_owned(),
-                    discard: true,
-                },
+            Call::WorktreeRetire {
+                root: repo.to_owned(),
+                checkout: path,
+                branch: branch.to_owned(),
+                discard: true,
             },
             NODE_TIMEOUT,
         )
@@ -1604,13 +1602,11 @@ fn retire_attempt(
         )?;
         crate::node_access::call_as::<()>(
             node,
-            Call::Factory {
-                call: hide_node_link::factory::FactoryCall::RemoveWorktree {
-                    root: repo.to_owned(),
-                    checkout: path,
-                    branch: retire.branch.clone(),
-                    discard: false,
-                },
+            Call::WorktreeRetire {
+                root: repo.to_owned(),
+                checkout: path,
+                branch: retire.branch.clone(),
+                discard: false,
             },
             NODE_TIMEOUT,
         )
@@ -2998,7 +2994,6 @@ mod tests {
             call: hide_node_link::protocol::Call,
             _timeout: std::time::Duration,
         ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
-            use hide_node_link::factory::FactoryCall;
             use hide_node_link::git::GitCommand;
             use hide_node_link::protocol::Call;
             let mut repository = self.0.lock().unwrap();
@@ -3015,11 +3010,8 @@ mod tests {
                 } else {
                     ""
                 }),
-                Call::Factory {
-                    call:
-                        FactoryCall::RemoveWorktree {
-                            branch, discard, ..
-                        },
+                Call::WorktreeRetire {
+                    branch, discard, ..
                 } => {
                     repository.removals.push((branch.clone(), discard));
                     repository.worktrees.remove(&branch);

@@ -1021,15 +1021,7 @@ impl Runtime {
                 || self.limit_reads_usage(),
             popover_open_generation: self.usage_popover_open_generation,
             hidden: self.snapshot.ui_state.usage.hidden.clone(),
-            required: if !self.factory_recipients.is_empty() {
-                // A Factory may choose any supported worker; its admission
-                // reads every declared limit through the same accessor.
-                hide_agent_adapter::ADAPTERS
-                    .iter()
-                    .filter(|row| row.usage.limit_sources().next().is_some())
-                    .map(|row| row.herdr.name.into())
-                    .collect()
-            } else if self.memory_reads_usage() || self.limit_reads_usage() {
+            required: if self.memory_reads_usage() || self.limit_reads_usage() {
                 self.ai_settings
                     .as_ref()
                     .filter(|settings| settings.enabled && settings.chosen)

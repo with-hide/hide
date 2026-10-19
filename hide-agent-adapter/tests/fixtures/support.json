@@ -20,14 +20,6 @@
       "start",
       "titles"
     ],
-    "factory": {
-      "direct_ask": "available",
-      "user_turn": "available",
-      "turn_end_and_answer": "available",
-      "startup_guidance": "available",
-      "resume": "available",
-      "next_prompt_letters": "available"
-    },
     "usage": {
       "five_hour": "claude_usage_text",
       "weekly": "claude_usage_text",
@@ -61,14 +53,6 @@
       "start",
       "titles"
     ],
-    "factory": {
-      "direct_ask": "available",
-      "user_turn": "available",
-      "turn_end_and_answer": "available",
-      "startup_guidance": "available",
-      "resume": "available",
-      "next_prompt_letters": "available"
-    },
     "usage": {
       "five_hour": "codex_usage",
       "weekly": "codex_usage",
@@ -99,14 +83,6 @@
       "start",
       "titles"
     ],
-    "factory": {
-      "direct_ask": "unconfirmed",
-      "user_turn": "unconfirmed",
-      "turn_end_and_answer": "unconfirmed",
-      "startup_guidance": "unavailable",
-      "resume": "unconfirmed",
-      "next_prompt_letters": "unavailable"
-    },
     "usage": {
       "five_hour": "no_such_data",
       "weekly": "not_built:5",
@@ -139,14 +115,6 @@
       "start",
       "titles"
     ],
-    "factory": {
-      "direct_ask": "available",
-      "user_turn": "unconfirmed",
-      "turn_end_and_answer": "unconfirmed",
-      "startup_guidance": "available",
-      "resume": "unconfirmed",
-      "next_prompt_letters": "available"
-    },
     "usage": {
       "five_hour": "excluded",
       "weekly": "excluded",
@@ -179,14 +147,6 @@
       "start",
       "titles"
     ],
-    "factory": {
-      "direct_ask": "unavailable",
-      "user_turn": "unconfirmed",
-      "turn_end_and_answer": "unconfirmed",
-      "startup_guidance": "available",
-      "resume": "unconfirmed",
-      "next_prompt_letters": "available"
-    },
     "usage": {
       "five_hour": "no_such_data",
       "weekly": "no_such_data",
@@ -219,14 +179,6 @@
       "start",
       "titles"
     ],
-    "factory": {
-      "direct_ask": "available",
-      "user_turn": "unconfirmed",
-      "turn_end_and_answer": "unconfirmed",
-      "startup_guidance": "available",
-      "resume": "unconfirmed",
-      "next_prompt_letters": "available"
-    },
     "usage": {
       "five_hour": "no_such_data",
       "weekly": "no_such_data",
@@ -256,14 +208,6 @@
       "start",
       "titles"
     ],
-    "factory": {
-      "direct_ask": "unavailable",
-      "user_turn": "unavailable",
-      "turn_end_and_answer": "unavailable",
-      "startup_guidance": "available",
-      "resume": "available",
-      "next_prompt_letters": "unavailable"
-    },
     "usage": {
       "five_hour": "excluded",
       "weekly": "excluded",
@@ -296,14 +240,6 @@
       "start",
       "titles"
     ],
-    "factory": {
-      "direct_ask": "available",
-      "user_turn": "unconfirmed",
-      "turn_end_and_answer": "available",
-      "startup_guidance": "available",
-      "resume": "available",
-      "next_prompt_letters": "available"
-    },
     "usage": {
       "five_hour": "no_such_data",
       "weekly": "antigravity_usage",

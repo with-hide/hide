@@ -2,8 +2,7 @@
 """The core decides and keeps state; it never touches a machine (PRD
 core-host-node D-21). Files, processes, the Herdr socket and session files
 are a node's, reached through `NodeLink`; this check fails when production
-code under `herdr-core/src`, or under `hide-factory/src`, the Software
-Factory engine the core runs (D-01), reaches one directly.
+code under `herdr-core/src` reaches one directly.
 
 Test code is exempt: test-only files, a module file its parent declares
 behind `#[cfg(test)]`, and every item behind `#[cfg(test)]`. The core's own
@@ -22,8 +21,8 @@ CORE = ROOT / "herdr-core" / "src"
 
 
 def scanned() -> list:
-    """The production trees the core runs: its own, and the Factory engine's."""
-    return [CORE, ROOT / "hide-factory" / "src"]
+    """The public core production tree."""
+    return [CORE]
 
 # What reaching a machine looks like, with what to do instead.
 BANNED = [
@@ -97,21 +96,6 @@ STORES = {
         "reads and writes the operator's AI choice, a core store beside the "
         "core's state file (`hide_ai::settings`)",
     ),
-    "herdr-core/src/factory.rs": (
-        2,
-        "opens the Factory's store when one exists and reads the operator's "
-        "AI choice, both core stores beside the core's state file",
-    ),
-    "hide-factory/src/store.rs": (
-        13,
-        "the Factory's store, which the core keeps beside its state file, and"
-        " the one copy of a schema 1 store its migration keeps beside it",
-    ),
-    "hide-factory/src/engine.rs": (
-        1,
-        "reads a Task's attached PRD, a file in the Factory's own store, "
-        "in `attached_prd`, which every engine reader of it calls",
-    ),
     "herdr-core/src/node_migration.rs": (
         15,
         "converts the core's own stores to node ids once, where they were "
@@ -126,8 +110,8 @@ STORES = {
         "settings (PRD overview-device-tasks D-20)",
     ),
     "herdr-core/src/node_migration/reown.rs": (
-        5,
-        "converts a moved copy of the core's own link, Factory and Project "
+        4,
+        "converts a moved copy of the core's own link and Project "
         "Memory stores to the receiving node's ids, before a core starts on "
         "it, and carries "
         "the retired session-search store's retention to them (PRD "

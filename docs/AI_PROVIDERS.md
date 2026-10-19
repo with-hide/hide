@@ -1,7 +1,7 @@
 # Background AI providers
 
 `hide-ai/` is the one boundary through which a Hide feature asks a language model for something in the background.
-Its consumers are the core's agent label analyzer (`herdr-core/src/labels/analyzer.rs`), Project Memory extraction under `hide-memory/`, the Software Factory's judgments (see [The Factory's judgments](#the-factorys-judgments)), and the Start dialog's worktree name; later features reuse the same boundary rather than a provider client of their own.
+Its consumers are the core's agent label analyzer (`herdr-core/src/labels/analyzer.rs`), Project Memory extraction under `hide-memory/`, and the Start dialog's worktree name; later features reuse the same boundary rather than a provider client of their own.
 This guide owns the boundary's rules; the code under `hide-ai/src/` and the tests under `hide-ai/tests/` are its executable authority.
 
 ## Ownership split
@@ -19,7 +19,7 @@ No feature's prompt names a language of its own, and `scripts/check-ai-prompt-la
 The language is part of the duplicate key, so a request made after the language changed never joins one from before it and is never handed an answer in the old language.
 The core decides it in one place, `Runtime::output_language` (`herdr-core/src/runtime/output_language.rs`): the explicit interface language (`ui_state.interface_language`, English for a stored value that is invalid), else this machine's primary language as a shell resolves it ([LOCALIZATION.md](LOCALIZATION.md)), else English, with `language.system_fallback` in the diagnostic log.
 The machine's language is read once per daemon before the runtime exists, because macOS answers it through a child process; a request that runs on a connected device carries the core's language, never the device's.
-Labels with their missed work, pull request summaries, Memory's extraction, re-verification and promotion check, the Memory promotion agent's reasons and the Factory's judgments ask in that language; the Start dialog's worktree name asks in none, because a Git name is lowercase ASCII whatever the operator reads.
+Labels with their missed work, pull request summaries, Memory's extraction, re-verification and promotion check, the Memory promotion agent's reasons ask in that language; the Start dialog's worktree name asks in none, because a Git name is lowercase ASCII whatever the operator reads.
 A text already written stays in the language it was written in, and only what is asked after a change follows the new language.
 The answer is checked against its schema only: an answer in another language is shown as it is, never refused or asked again.
 
@@ -127,7 +127,7 @@ A request reports progress once a second while it runs, and a cancel in the core
   `PlainJson` drops the flag, names the schema in the system prompt and reads the one object from the `result` text (plain, in a code fence, or the span from the first `{` to the last `}`, the same reader as the text-mode CLIs); a `result` that holds no JSON is `InvalidOutput`, retried like any other, and the router validates the object against the schema either way.
   Measured on claude 2.1.301 with the same label-style input, `Schema` made two API turns, wrote 2,826 cache tokens and printed 184 output tokens on sonnet, and `PlainJson` made one turn, wrote 2,264 and printed 84.
   The schema rides in the system prompt, which is an argument of the child, so `PlainJson` is for short schemas only.
-  Agent summaries, pull request summaries and worktree names ask `PlainJson`, because their answers are a few short fields; Project Memory and the Factory keep `Schema`, whose answers are long and strictly shaped.
+  Agent summaries, pull request summaries and worktree names ask `PlainJson`, because their answers are a few short fields; Project Memory keeps `Schema`, whose answers are long and strictly shaped.
   The mode is one contract for every provider that has a schema surface, not a Claude setting: Codex honours it the same way.
   In `Schema` mode Codex attaches the schema to the turn as `outputSchema`, which the Responses API enforces in strict mode; in `PlainJson` mode it names the schema in the thread's base instructions, sends no `outputSchema`, and reads the object from the agent message with the same reader.
   Strict mode is why: measured on codex-cli 0.163.0, a schema that uses `oneOf` or `uniqueItems` (the agent summary's turn-end schema uses both) fails every turn with HTTP 400 `invalid_json_schema`, so a `PlainJson` feature that sent its schema there never got an answer from Codex.
@@ -193,7 +193,7 @@ A `result` whose `status` is not `SUCCESS` is classified from its `error` text b
 Every child gets the login variables, `AGY_CLI_DISABLE_AUTO_UPDATE=1`, and a `PATH` naming a folder that does not exist: a signed-out agy would open the operator's browser to sign in through a program it finds on `PATH`, and with nothing there every hook, the operator's global ones included, fails to start its shell, which agy also reads as a refused tool (B32).
 
 Every agy child Hide starts (a request, `agy models` and the `/usage` read below) writes its log to one file per kind in `~/.hide/ai/antigravity-logs/` (`request.log`, `models.log`, `usage.log`), which Hide empties before the child starts, so the folder holds the last runs of each kind and never more.
-Two children of one kind can overlap (a label request and a Factory request, or two model-list probes), and the later one's emptying can then drop lines the earlier one wrote; nothing reads these logs, so they are not serialized for it.
+Two children of one kind can overlap (a label request and a Memory request, or two model-list probes), and the later one's emptying can then drop lines the earlier one wrote; nothing reads these logs, so they are not serialized for it.
 Without `--log-file` agy leaves a log of about 20 KB in `~/.gemini/antigravity-cli/log/` for every process and never removes one: measured on agy 1.4.0 from 2026-10-16 to 10-18, the five-minute `/usage` read alone left 226 there.
 agy appends to a file it is given, which is why Hide empties it rather than only naming it; it is emptied in place, so a child of the same kind still running keeps writing to it.
 `--log-file` has been run against agy 1.4.0 on macOS only (`agy models` and `-p /usage`, 2026-10-18); on Windows and Linux it is unverified ([INSTALL.md](INSTALL.md#what-each-system-supports)).
@@ -319,14 +319,6 @@ A request that completes under the cap clears the restart count; three consecuti
 On a platform without the kernel query the measurement is `Unavailable`: the process caps are not enforced and the log line says `measurement=unavailable` rather than a zero.
 The label worker treats `OverBudget` as an environmental failure: it keeps the goal, drops the turn's line and end, and asks again after ten minutes, the same as any other environmental failure (`AnalysisFailure::retry_after`).
 
-## The Factory's judgments
-
-The Software Factory asks for its intake review, drift check, natural-language checks, watch and environment diagnosis through `hide-ai`, and [factory.md](factory.md#intake-review-and-judgments) owns what each asks.
-The Factory does not share the label analyzer's router: it has its own `AiRouter` (`herdr-core/src/ai.rs`, `factory_router`) and its own queue on a judgment thread, so a Factory request never waits behind a label and a label never waits behind a Factory request.
-The queue's terms are one request in flight, intake reviews before every other judgment, and 16 waiting judgments per Factory; a request that does not fit, or that fails, is handed to a person and is never read as a pass.
-Each request has a 180 second deadline and a schema version, and the router keeps its default caps.
-Because the routers are independent, they share the account's usage and the machine's CPU but not a queue; label latency has to be measured with a Factory running under load before the two are called independent.
-
 ## Usage capability declarations
 
 `hide-agent-adapter/src/usage.rs` declares all nine usage cells for every adapter: four limit scopes, tokens, cost, model breakdown, session attribution and project attribution.
@@ -402,7 +394,7 @@ An offline response keeps a non-expired success for at most 15 minutes; Codex ca
 
 The registry schedules one read per declared source, deduplicated across its windows.
 Non-hidden providers are first read one second after launch, every five minutes while a shell window is visible, and at once when the popover opens on a read older than a minute.
-A hidden provider stops scheduling unless Memory or Factory needs its limits; these consumers use the same `weekly()` and `exhausted_until()` accessors.
+A hidden provider stops scheduling unless Memory needs its limits; these consumers use the same `weekly()` and `exhausted_until()` accessors.
 The driver cancels and joins its workers when the coordinator ends, outside the runtime lock.
 The web shell reports its page visibility and its popover through the two `ui_state_update` hints `contracts/hided-ws.schema.json` declares as `uiStateUsageHints`.
 The previous Claude `.usage-cache.json` input is not read.
@@ -453,10 +445,10 @@ The price worker is joined on shutdown, and diagnostics contain fixed codes and 
 
 ## Counting Hide AI's own usage
 
-Hide AI's background calls (agent summaries, Memory, Factory judgments, pull request summaries and worktree names) run through the provider CLIs without leaving a session file, so the historical readers above never see them.
+Hide AI's background calls (agent summaries, Memory, pull request summaries and worktree names) run through the provider CLIs without leaving a session file, so the historical readers above never see them.
 Each router built for one of those features carries an `AiUsageSink`, and the router tells it once per attempt that reached a provider.
 The Settings probe has no sink: it asks a CLI whether it is ready and is not a feature call.
-An agent pane that Hide starts (a Factory worker, a Memory promotion) is a native session, so its own transcript already counts it and the sink never hears of it.
+An agent pane that Hide starts (a Memory promotion) is a native session, so its own transcript already counts it and the sink never hears of it.
 
 What counts is the attempt, not the request:
 
@@ -563,7 +555,7 @@ One setting, `usage_limit` (`hide-ai/src/usage_limit.rs`), says how much of an a
 An agent whose weekly figure is at or past the limit cannot answer such a request, so the router moves on to the next agent of the same priority list as for any agent that cannot, and logs the move as `ai.usage_limit` with `reason=usage_limit`, the agent, its usage, the limit and `action=fallback` or `action=paused`, never any content.
 It is not a second order and not a second list.
 The judgment is a request-time check against a shared `UsageLimits` cell, not a flag on `AiRequest` (which crosses to the node): the core writes the limit and each agent's reading when either moves, a router reads them on its own worker thread, and a router built without the cell, or a request that names its agent with `pick`, is never judged.
-The routers for what the operator waits on (worktree names, issue intake review), `hide memory add` and the Factory's judgments are built without the cell, so the limit never delays them (PRD hide-ai-usage-limit D-03).
+The routers for what the operator waits on (worktree names, issue intake review), `hide memory add` are built without the cell, so the limit never delays them (PRD hide-ai-usage-limit D-03).
 `statuses()` and `availability()` stay ungated, so Settings still lists a past-limit agent as signed in; only `active` in `provider_state()` skips it.
 
 The figures are the weekly rows the toolbar's usage read already produces (`usage` through `weekly_reading()`, the seven-day account window with a percent and a future reset); no new read command exists.
@@ -596,7 +588,7 @@ The router emits `ai.attempt`, `ai.request.finished`, `ai.request.joined`, `ai.f
 A line carries the request id, feature id, provider, outcome class, attempt, duration, input length, output tokens and schema version; an `ai.attempt` line also carries `thinking_tokens` when the provider reported some above zero, and `effort` when the attempt asked its provider for one.
 Every `ai.request.finished` of a provider that declares itself measurable (`AiBackend::measurable()`, today only codex, whose app-server is resident) also carries the app-server pid and the process measurement (`app_server_pid`, `descendants`, `rss_bytes`), or `measurement=unavailable` where the platform cannot measure it.
 It never carries the prompt, the input, the generated text, a token, a file path from a transcript, or a provider thread id.
-Hide's core writes the events of its own routers and backends (the label analyzer, the Factory's judgments, the Settings probe and Project Memory) to its diagnostic log, `Logs/core.jsonl` beside `state.json`, as records with `component` `ai` and the event name as `kind`.
+Hide's core writes the events of its own routers and backends (the label analyzer, the Settings probe and Project Memory) to its diagnostic log, `Logs/core.jsonl` beside `state.json`, as records with `component` `ai` and the event name as `kind`.
 A backend's events are produced on the node; the node holds at most 256 of them per backend and returns them with the next answer to that backend, where the core writes them, and a held overflow arrives as one `ai.log.dropped` event with its count.
 
 ## Known gaps

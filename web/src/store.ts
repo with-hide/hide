@@ -97,9 +97,6 @@ export type Frame = {
     link_summaries?: import("./snapshot").LinkSummaries;
     session_record?: import("./snapshot").SessionRecordSection | null;
     session_work_search?: import("./snapshot").SessionWorkSearch | null;
-    factory?: import("./factory/model").FactorySection;
-    /** Null when the open Task page closed. */
-    factory_task?: import("./factory/model").FactoryTaskSection | null;
     find?: PaneFind;
     chunks?: TerminalChunk[];
   } & Partial<DirectoryList> &
@@ -174,14 +171,6 @@ type Store = {
   linkSummaries: import("./snapshot").LinkSummaries | null;
   sessionRecord: import("./snapshot").SessionRecordSection | null;
   sessionWorkSearch: import("./snapshot").SessionWorkSearch | null;
-  /**
-   * The Factory screens' section (`factory`): the engine's summary and the
-   * answers to this screen's requests. The core sends it only when the engine
-   * moved, so a delta without it keeps what the store holds.
-   */
-  factory: import("./factory/model").FactorySection | null;
-  /** The Task page the screen opened (`factory_task`); a delta's null closes it. */
-  factoryTask: import("./factory/model").FactoryTaskSection | null;
   agents: AgentRow[];
   /**
    * The keyboard-focus pane of the context on screen: the core's
@@ -323,8 +312,6 @@ export const useShellStore = create<Store>((set, get) => ({
   linkSummaries: null,
   sessionRecord: null,
   sessionWorkSearch: null,
-  factory: null,
-  factoryTask: null,
   agents: [],
   focusedPaneId: null,
   operatorFocusSent: 0,
@@ -419,8 +406,6 @@ export const useShellStore = create<Store>((set, get) => ({
         linkSummaries: payload.link_summaries ?? null,
         sessionRecord: payload.session_record ?? null,
         sessionWorkSearch: payload.session_work_search ?? null,
-        factory: payload.factory ?? null,
-        factoryTask: payload.factory_task ?? null,
       });
     } else if (
       payload.editor !== undefined ||
@@ -428,8 +413,7 @@ export const useShellStore = create<Store>((set, get) => ({
       payload.documents !== undefined ||
       payload.memory !== undefined ||
       payload.link_panel !== undefined || payload.link_summaries !== undefined ||
-      payload.session_record !== undefined || payload.session_work_search !== undefined ||
-      payload.factory !== undefined || payload.factory_task !== undefined
+      payload.session_record !== undefined || payload.session_work_search !== undefined
     ) {
       set({
         editor: payload.editor ?? get().editor,
@@ -440,8 +424,6 @@ export const useShellStore = create<Store>((set, get) => ({
         linkSummaries: payload.link_summaries ? share(get().linkSummaries, payload.link_summaries) : get().linkSummaries,
         sessionRecord: payload.session_record !== undefined ? payload.session_record && share(get().sessionRecord, payload.session_record) : get().sessionRecord,
         sessionWorkSearch: payload.session_work_search !== undefined ? payload.session_work_search && share(get().sessionWorkSearch, payload.session_work_search) : get().sessionWorkSearch,
-        factory: payload.factory ? share(get().factory, payload.factory) : get().factory,
-        factoryTask: payload.factory_task !== undefined ? payload.factory_task && share(get().factoryTask, payload.factory_task) : get().factoryTask,
       });
     }
     if (frame.type === "directory_list") {

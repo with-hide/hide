@@ -148,8 +148,6 @@ export function currentSurface(rest: SnapshotRest | null, viewInUse: boolean): S
  */
 export function currentEntry(screen: Screen | null, rest: SnapshotRest | null, viewInUse: boolean): RecentEntry | null {
   if (screen?.kind === "main") return screenVisit(screen, frontDeviceId(rest));
-  // The Factory screen is reached by its own row and shortcut, not the recent order.
-  if (screen?.kind === "factory") return null;
   return currentSurface(rest, viewInUse);
 }
 

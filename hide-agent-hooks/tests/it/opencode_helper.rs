@@ -264,24 +264,6 @@ fn a_file_tool_on_a_protected_path_is_refused_for_opencode_pi_and_omp() {
 }
 
 #[test]
-fn the_question_tool_asks_the_factory_guard_as_opencode() {
-    let machine = Machine::new();
-    let answer = machine.run(
-        "tool",
-        &json!({"session_id": "ses_root", "tool": "question"}),
-        true,
-    );
-    assert_eq!(
-        answer["deny"],
-        hide_agent_hooks::spawn_guard::QUESTION_REASON
-    );
-    assert_eq!(
-        machine.calls(),
-        ["workspace factory-question-guard --session ses_root --runtime opencode"]
-    );
-}
-
-#[test]
 fn outside_a_pane_or_with_unreadable_input_the_helper_answers_nothing_and_asks_nothing() {
     let machine = Machine::new();
     assert_eq!(

@@ -2672,7 +2672,7 @@ fn records(fixture: &Fixture, kind: &str) -> Result<Vec<Value>> {
 /// This watches what such a core reaches from this process: the device its
 /// copy registers (a listener its SSH config names) and Mobile's
 /// `tailscale`. The bell, watch warnings, human notices, provider calls,
-/// GitHub reads and the Factory are held inside the core, each tested there.
+/// GitHub reads are held inside the core, each tested there.
 #[test]
 fn a_pending_core_does_nothing_outside_until_its_link_commits() -> Result<()> {
     const INTENT: &str = "move-fixture";

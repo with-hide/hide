@@ -20,8 +20,8 @@ export const PROBE_PATHS_CHANNEL = "hide:probe-paths";
 export const OPEN_PATH_CHANNEL = "hide:open-path";
 
 /**
- * System notifications (PRD factory-observer D-50, first-run-onboarding
- * D-10): the shell asks for a notification about one Factory item or agent
+ * System notifications (PRD first-run-onboarding D-10): the shell asks
+ * for a notification about one agent
  * (renderer -> main), and a click on it hands that id back (main -> renderer).
  */
 export const NOTIFY_CHANNEL = "hide:notify";

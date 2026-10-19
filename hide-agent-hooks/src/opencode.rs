@@ -4,7 +4,7 @@
 //!
 //! OpenCode 1.x loads `hide.js`, which asks the helper
 //! (`hide-agent-hooks opencode <operation>`) on each root prompt, each shell
-//! or `question` tool call, each file tool call while a project guardrail is
+//! tool call, each file tool call while a project guardrail is
 //! on, and each change of a subagent's state. OpenCode 2 loads `hide.js` as a
 //! plugin that does nothing, and the `hide-opencode` folder beside it: one
 //! shared server runs every session of the machine, so its half
@@ -26,7 +26,7 @@ pub const V1: PluginFile = PluginFile {
     agent: "OpenCode",
     noun: "plugin",
     source_name: "hide-opencode-plugin",
-    version: 7,
+    version: 8,
     config: CONFIG,
     folder: "plugins",
     own_folder: None,
@@ -39,7 +39,7 @@ pub const SERVER: PluginFile = PluginFile {
     agent: "OpenCode",
     noun: "plugin",
     source_name: "hide-opencode-server",
-    version: 2,
+    version: 3,
     config: CONFIG,
     folder: "plugins",
     own_folder: Some(FOLDER),
