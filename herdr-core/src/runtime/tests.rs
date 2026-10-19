@@ -21,6 +21,7 @@ mod appearance;
 mod backlog;
 #[path = "tests/birth_cwd.rs"]
 mod birth_cwd;
+mod checkout_git;
 #[path = "tests/control_order.rs"]
 mod control_order;
 #[path = "tests/detail.rs"]

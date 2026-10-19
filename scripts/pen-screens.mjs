@@ -44,6 +44,7 @@ import {projectSettingsScreens} from './pen-screens-project-settings.mjs';
 import {sessionScreens} from './pen-screens-sessions.mjs';
 import {overviewScreens} from './pen-screens-overview.mjs';
 import {AGENT_TREE_MASTERS, PR_STATES} from './pen-agent-tree.mjs';
+import {checkoutHeaderBoards} from './pen-screens-checkout-git.mjs';
 
 const LOCAL_TOKEN = /^\$--[A-Za-z0-9_-]+$/;
 const THEMED_PROPS = ['fill', 'stroke'];
@@ -1066,6 +1067,7 @@ function buildWorkspace(tokens) {
     const section = result.children.find(node => node.name === name);
     if (!section) throw new Error(`Workspace lacks ${name} section`);
     section.children.push(...laneBoards(tokens, {themedXref, template, alias: ALIAS}, suffix), sessionDesign(tokens).headerBoard(suffix), sessionDesign(tokens).edgeBoard(suffix), sessionDesign(tokens).taskBoard(suffix));
+    section.children.push(...checkoutHeaderBoards(tokens, {screenButton, screenIconButton}, suffix));
   }
   for (const state of buildWorkspaceSupplemental()) {
     const parent = nodes(result).find(node => node.id === state.parent);

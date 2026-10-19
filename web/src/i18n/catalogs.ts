@@ -43,6 +43,7 @@ import { feedbackCatalogs, feedbackEnglish } from "./resources/feedback";
 import { requestsCatalogs, requestsEnglish } from "./resources/requests";
 import { settingsCatalogs, settingsEnglish } from "./resources/settings";
 import { workspaceCatalogs, workspaceEnglish } from "./resources/workspace";
+import { checkoutGitCatalogs, checkoutGitEnglish } from "./resources/checkoutGit";
 import type { Catalogs } from "./schema";
 import { sessionWorkCatalogs, sessionWorkEnglish } from "./resources/sessionWork";
 import { deviceOverviewCatalogs, deviceOverviewEnglish } from "./resources/deviceOverview";
@@ -81,6 +82,7 @@ export const english = {
   ...mobileSetupEnglish,
   ...coreMoveEnglish,
   ...workspaceEnglish,
+  ...checkoutGitEnglish,
   ...issueSettingsEnglish,
   ...hideAiEnglish,
   ...agentsEnglish,
@@ -136,6 +138,7 @@ export const catalogs = {
     ...mobileSetupCatalogs.ko,
     ...coreMoveCatalogs.ko,
     ...workspaceCatalogs.ko,
+    ...checkoutGitCatalogs.ko,
     ...issueSettingsCatalogs.ko,
     ...hideAiCatalogs.ko,
     ...agentsCatalogs.ko,
@@ -186,6 +189,7 @@ export const catalogs = {
     ...mobileSetupCatalogs["zh-CN"],
     ...coreMoveCatalogs["zh-CN"],
     ...workspaceCatalogs["zh-CN"],
+    ...checkoutGitCatalogs["zh-CN"],
     ...issueSettingsCatalogs["zh-CN"],
     ...hideAiCatalogs["zh-CN"],
     ...agentsCatalogs["zh-CN"],
@@ -236,6 +240,7 @@ export const catalogs = {
     ...mobileSetupCatalogs.ja,
     ...coreMoveCatalogs.ja,
     ...workspaceCatalogs.ja,
+    ...checkoutGitCatalogs.ja,
     ...issueSettingsCatalogs.ja,
     ...hideAiCatalogs.ja,
     ...agentsCatalogs.ja,

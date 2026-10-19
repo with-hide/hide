@@ -2197,5 +2197,62 @@
       "Do circular logos, root rings, dashed delegation and status marks retain the existing graph identity?",
       "Are Korean filters and explicit selection legible at narrow widths and large text? Native input is separate evidence."
     ]
+  },
+  "checkout-git": {
+    "description": "Approved A: quiet whole-checkout changes, upstream, current HEAD and exact-SHA CI.",
+    "file": "design/hide-screens.pen",
+    "sheet": "screen-workspace",
+    "scene": "checkout-git",
+    "selector": "[data-workspace-toolbar]",
+    "frames": [
+      {
+        "node": "checkout-git-light",
+        "referenceNode": "q4mS0",
+        "theme": "light",
+        "width": 1220,
+        "scale": 1,
+        "content": "reference",
+        "state": "rest"
+      },
+      {
+        "node": "checkout-git-dark",
+        "referenceNode": "djrF3",
+        "theme": "dark",
+        "width": 1220,
+        "scale": 1,
+        "content": "reference",
+        "state": "rest"
+      }
+    ],
+    "conditions": {
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "widths": [
+        1220,
+        720
+      ],
+      "contents": [
+        "reference",
+        "long"
+      ],
+      "scales": [
+        1,
+        1.3076923076923077
+      ]
+    },
+    "states": {
+      "rest": "Changed checkout with upstream and HEAD checks"
+    },
+    "rules": {
+      "noOverlap": true,
+      "noSidewaysOverflow": true
+    },
+    "judgment": [
+      "Does the header preserve A’s neutral count and quiet hierarchy?",
+      "Do path, count and right tools remain usable at narrow widths?"
+    ],
+    "measurement": "web/e2e/checkout-git-geometry.mjs"
   }
 }

@@ -3,6 +3,24 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The front checkout's small, whole-repository header read. Unlike the
+/// catalog this includes ordinary file edits even while Changes is closed.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CheckoutGit {
+    pub head_sha: Option<String>,
+    pub subject: Option<String>,
+    pub commit_unix_seconds: Option<u64>,
+    pub changed_files: u32,
+    pub conflicts: u32,
+    pub upstream: Option<String>,
+    /// `none`, `gone`, or `tracked`; an unsuccessful read is an error.
+    pub upstream_state: String,
+    pub ahead: Option<u32>,
+    pub behind: Option<u32>,
+    pub last_fetch_unix_ms: Option<u64>,
+    pub origin_url: Option<String>,
+}
+
 /// One linked worktree as Git registers it, read with NUL porcelain so no
 /// folder name is interpreted.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

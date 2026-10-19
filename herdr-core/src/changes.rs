@@ -191,6 +191,8 @@ impl ChangesPump {
             .name("changes-pump".into())
             .spawn(move || {
                 let mut reader = ChangesReader::new();
+                let mut git = crate::checkout_git::git_reader();
+                let mut ci = crate::checkout_git::ci_reader();
                 // The closed view's empty projection has landed: until
                 // something shows the view again there is nothing to read.
                 let mut resting = false;
@@ -201,6 +203,38 @@ impl ChangesPump {
                     let Some(runtime) = runtime.upgrade() else {
                         break;
                     };
+                    let Ok((git_request, target_changed)) = runtime
+                        .lock()
+                        .map(|mut runtime| runtime.prepare_checkout_header())
+                    else {
+                        break;
+                    };
+                    let git_answer = git.poll(git_request).flatten();
+                    let Ok((ci_request, git_changed)) = runtime.lock().map(|mut runtime| {
+                        let changed = git_answer.is_some_and(|answer| {
+                            runtime.ingest_checkout_git(answer, std::time::Instant::now())
+                        });
+                        (runtime.checkout_ci_request(), changed)
+                    }) else {
+                        break;
+                    };
+                    let ci_answer = ci.poll(ci_request).flatten();
+                    let Ok(header_changed) = runtime.lock().map(|mut runtime| {
+                        let ci_changed = ci_answer.is_some_and(|answer| {
+                            runtime.ingest_checkout_ci(answer, std::time::Instant::now())
+                        });
+                        let aged = runtime.age_checkout_header(std::time::Instant::now());
+                        let changed = target_changed || git_changed || ci_changed || aged;
+                        if changed {
+                            runtime.refresh_checkout_header();
+                        }
+                        changed
+                    }) else {
+                        break;
+                    };
+                    if header_changed {
+                        notifier.notify();
+                    }
                     let Ok(request) = runtime.lock().map(|mut runtime| runtime.changes_request())
                     else {
                         break;
@@ -223,6 +257,8 @@ impl ChangesPump {
                         notifier.notify();
                     }
                 }
+                git.join_pending();
+                ci.join_pending();
             })?;
         Ok(Self {
             stop,
