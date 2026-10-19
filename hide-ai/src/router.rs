@@ -815,6 +815,9 @@ impl AiRouter {
             } else {
                 request
             };
+            if let Some(sink) = &self.config.usage_sink {
+                sink.started();
+            }
             let result = backend.execute(attempt_request, cancel);
             // Before the schema judges the answer: a rejected answer was paid
             // for all the same.
@@ -3121,9 +3124,16 @@ mod tests {
     /// Remembers every attempt the router told it, as (feature, provider,
     /// models told).
     #[derive(Debug, Default)]
-    struct Told(Mutex<Vec<(String, ProviderId, Vec<crate::ModelTokens>)>>);
+    struct Told(
+        Mutex<Vec<(String, ProviderId, Vec<crate::ModelTokens>)>>,
+        std::sync::atomic::AtomicUsize,
+    );
 
     impl AiUsageSink for Told {
+        fn started(&self) {
+            self.1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+
         fn attempt(&self, feature_id: &str, provider: ProviderId, models: &[crate::ModelTokens]) {
             self.0
                 .lock()
@@ -3261,6 +3271,30 @@ mod tests {
         let all = told.all();
         assert_eq!(all.len(), 1);
         assert_eq!((all[0].1, all[0].2[0].input), (ProviderId::CLAUDE, 7));
+        assert_eq!(
+            told.1.load(std::sync::atomic::Ordering::Relaxed),
+            3,
+            "product usage counts every backend invocation, including refusals and retries"
+        );
+    }
+
+    #[test]
+    fn a_cancelled_request_starts_no_extra_provider_call() {
+        let told = Arc::new(Told::default());
+        let router = counting_router(
+            vec![Metered::new(
+                ProviderId::CLAUDE,
+                vec![answered(json!({"summary": "ok"}), Vec::new())],
+            )],
+            &told,
+        );
+        router
+            .execute(&request("p1", "x"), &CancelToken::new())
+            .unwrap();
+        let cancelled = CancelToken::new();
+        cancelled.cancel();
+        assert!(router.execute(&request("p2", "y"), &cancelled).is_err());
+        assert_eq!(told.1.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
     #[test]

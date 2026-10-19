@@ -27,6 +27,8 @@ pub const HIDE_KEEP_ALIVE: &str = "HIDE_KEEP_ALIVE";
 pub const HIDE_VITE_ORIGIN: &str = "HIDE_VITE_ORIGIN";
 pub const HIDE_PORT: &str = "HIDE_PORT";
 pub const HIDE_IDLE_SECS: &str = "HIDE_IDLE_SECS";
+/// Optional, public build input; never read from the operator's runtime environment.
+pub const HIDE_POSTHOG_PROJECT_TOKEN: &str = "HIDE_POSTHOG_PROJECT_TOKEN";
 /// `HOME`, or `USERPROFILE` on Windows.
 pub const HOME: &str = host::HOME_VARIABLE;
 pub const HIDE_OPEN_COMMAND: &str = "HIDE_OPEN_COMMAND";
@@ -59,6 +61,12 @@ pub const HIDE_BUILD_ORDER_OVERRIDE: &str = "HIDE_BUILD_ORDER_OVERRIDE";
 pub const FIXTURE_HOME_MARKER: &str = hide_kit::layout::FIXTURE_HOME_MARKER;
 
 pub const REGISTRY: &[EnvKey] = &[
+    EnvKey {
+        key: HIDE_POSTHOG_PROJECT_TOKEN,
+        required: false,
+        format: "build-time public PostHog project token: phc_ and ASCII letters, digits or underscores, 20..128 bytes; empty disables transport",
+        absent_behavior: "No external product analytics transport",
+    },
     EnvKey {
         key: HERDR_SOCKET_PATH,
         required: false,
@@ -695,6 +703,16 @@ pub fn fixture_fails_build(build: &str) -> bool {
 pub fn fixture_core_stop_hangs() -> bool {
     std::env::var_os(HIDE_FIXTURE_CORE_STOP).as_deref() == Some(std::ffi::OsStr::new("hang"))
         && hide_platform::host::home_dir().is_ok_and(|home| fixture_home(&home))
+}
+
+/// Public ingestion token embedded by build.rs; runtime cannot replace it.
+pub(crate) fn product_analytics_token() -> Option<String> {
+    let token = env!("HIDE_POSTHOG_PROJECT_TOKEN");
+    if token.is_empty() {
+        None
+    } else {
+        Some(token.to_owned())
+    }
 }
 
 #[cfg(test)]

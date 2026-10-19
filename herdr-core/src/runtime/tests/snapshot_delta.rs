@@ -211,7 +211,9 @@ fn one_daemon_creates_the_core_once_and_never_replaces_it() {
             if line.starts_with("//") {
                 continue;
             }
-            if line.contains("Core::create(") {
+            if line.contains("Core::create(")
+                || line.contains("Core::create_with_product_analytics(")
+            {
                 creations.push(format!("{name}: {line}"));
             }
         }
@@ -219,7 +221,7 @@ fn one_daemon_creates_the_core_once_and_never_replaces_it() {
     assert_eq!(
         creations.len(),
         1,
-        "the daemon must call Core::create from one place: {creations:?}"
+        "the daemon must create the core from one place: {creations:?}"
     );
     assert!(
         creations[0].starts_with("hided/src/core.rs"),

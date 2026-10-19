@@ -815,6 +815,12 @@ mod tests {
     #[test]
     fn a_staging_copy_holds_the_brain_state_and_only_it() {
         let source = folder();
+        let analytics_id = "223e4567-e89b-42d3-a456-426614174000";
+        std::fs::write(
+            hide_kit::layout::product_analytics_id(source.path()),
+            analytics_id,
+        )
+        .unwrap();
         let staging = source.path().join("move-staging/i1");
         let manifest = stage(source.path(), &staging, &settings(source.path())).unwrap();
         let names: Vec<&str> = manifest.files.keys().map(String::as_str).collect();
@@ -826,8 +832,13 @@ mod tests {
                 "labels.json",
                 "links.sqlite3",
                 "node.json",
+                "product-analytics-id",
                 "session-search.sqlite3"
             ]
+        );
+        assert_eq!(
+            std::fs::read_to_string(hide_kit::layout::product_analytics_id(&staging)).unwrap(),
+            analytics_id
         );
         let copy = rusqlite::Connection::open(staging.join("links.sqlite3")).unwrap();
         let rows: i64 = copy

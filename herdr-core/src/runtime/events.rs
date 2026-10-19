@@ -1336,6 +1336,11 @@ pub(super) struct InterfaceLanguageSetPayload {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct ProductAnalyticsSetPayload {
+    pub(super) enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct ThemeSetPayload {
     pub(super) theme: crate::model::ThemePreference,
 }
@@ -1535,6 +1540,8 @@ pub(super) enum Event {
     PaneFindOpen(PaneFindOpenPayload),
     PaneTextScale(PaneTextScalePayload),
     EditorTextScale(EditorTextScalePayload),
+    ProductAnalyticsSet(ProductAnalyticsSetPayload),
+    ProductAnalyticsConnected,
     ThemeSet(ThemeSetPayload),
     AgentLogoModeSet(AgentLogoModeSetPayload),
     ColorThemeSet(ColorThemeSetPayload),
@@ -1800,6 +1807,8 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "pane_find_open" => decode!(PaneFindOpenPayload, PaneFindOpen),
         "pane_text_scale" => decode!(PaneTextScalePayload, PaneTextScale),
         "editor_text_scale" => decode!(EditorTextScalePayload, EditorTextScale),
+        "product_analytics_set" => decode!(ProductAnalyticsSetPayload, ProductAnalyticsSet),
+        "product_analytics_connected" => Ok(Event::ProductAnalyticsConnected),
         "theme_set" => decode!(ThemeSetPayload, ThemeSet),
         "agent_logo_mode_set" => decode!(AgentLogoModeSetPayload, AgentLogoModeSet),
         "color_theme_set" => decode!(ColorThemeSetPayload, ColorThemeSet),
@@ -3943,6 +3952,23 @@ impl Runtime {
                 self.persist_ui_state();
                 true
             }
+            Event::ProductAnalyticsConnected => {
+                if let Some(sink) = &self.product_analytics {
+                    sink.capture(crate::product_analytics::Event::Connected);
+                }
+                false
+            }
+            Event::ProductAnalyticsSet(payload) => {
+                if self.snapshot.ui_state.product_analytics_enabled == payload.enabled {
+                    return false;
+                }
+                if let Some(sink) = &self.product_analytics {
+                    sink.set_enabled(payload.enabled);
+                }
+                self.snapshot.ui_state.product_analytics_enabled = payload.enabled;
+                self.persist_ui_state();
+                true
+            }
             Event::ThemeSet(payload) => {
                 if self.snapshot.ui_state.theme == payload.theme {
                     return false;
@@ -4182,6 +4208,7 @@ impl Runtime {
                     // notification switch and the introductions seen.
                     first_run: current.first_run,
                     desktop_notifications: current.desktop_notifications,
+                    product_analytics_enabled: current.product_analytics_enabled,
                     desktop_notifications_done: current.desktop_notifications_done,
                     screen_intros_seen: current.screen_intros_seen,
                     // A width outside the drag's range keeps the last one; the

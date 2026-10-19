@@ -215,6 +215,22 @@ impl Core {
         terminals: std::sync::Arc<dyn hide_node_link::terminal::TerminalRoutes>,
         reports: crate::terminal_reports::TerminalReports,
     ) -> Option<Box<Self>> {
+        Self::create_with_product_analytics(
+            options, own_node, own_herdr, devices, terminals, reports, None,
+        )
+    }
+
+    /// The daemon's optional content-free statistics transport, installed
+    /// before any background router starts. Its owner must outlive this core.
+    pub fn create_with_product_analytics(
+        options: CoreOptions,
+        own_node: Arc<dyn crate::node_access::NodeLink>,
+        own_herdr: Option<Arc<dyn hide_herdr_client::ApiConnector>>,
+        devices: Arc<dyn crate::remote::DeviceConnector>,
+        terminals: Arc<dyn hide_node_link::terminal::TerminalRoutes>,
+        reports: crate::terminal_reports::TerminalReports,
+        analytics: Option<Arc<dyn crate::product_analytics::Sink>>,
+    ) -> Option<Box<Self>> {
         if validate_options(&options).is_err()
             || options.herdr_socket_path.is_some() != own_herdr.is_some()
         {
@@ -250,6 +266,9 @@ impl Core {
             Arc::clone(&own_node),
             devices,
         )));
+        if let Some(sink) = analytics {
+            lock_recover(&runtime).install_product_analytics(sink);
+        }
         lock_recover(&runtime).set_system_language(system_language);
         let notifier = ChangeNotifier::new();
         lock_recover(&runtime).install_worker_context(Arc::downgrade(&runtime), notifier.clone());

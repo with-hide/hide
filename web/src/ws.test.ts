@@ -114,6 +114,11 @@ it("a screen closed as fallen behind fails its read and reattaches at the first 
   expect(useShellStore.getState().connection).toBe("live");
   expect(states).toContain("reconnecting");
   expect(states).not.toContain("gone");
+  const accessEvents = [first, again].flatMap((socket) => socket.sent)
+    .map((message) => JSON.parse(message) as { kind?: string; payload?: unknown })
+    .filter((message) => message.kind === "product_analytics_connected");
+  expect(accessEvents).toHaveLength(1);
+  expect(accessEvents[0]?.payload).toEqual({});
   stop();
   shell.close();
 });
@@ -235,6 +240,21 @@ it("a frame a role sends while the move is under way keeps the window held", asy
   node.frame({ type: "core_move", payload: { state: "done", direction: "forward", device: "mini", node: "mbp", sent: 2, total: 2, failed: [], step: "reattach", cause: null, intent: "i" } });
   expect(useShellStore.getState().connection).toBe("live");
   expect(shell.dispatch({ schema_version: 2, kind: "pane_input", payload: {} })).toBe(true);
+  shell.close();
+});
+
+it("a new held page reports access when its first snapshot releases the hold", () => {
+  const shell = connectShell({ onChunks: () => {} });
+  const first = made(0);
+  first.open();
+  first.frame({ type: "core_link", payload: { phase: "waiting", machine: null, alias: "mini" } });
+  first.frame({ type: "core_move", payload: { state: "idle", direction: null, device: null, node: null, sent: 0, total: 0, failed: [], step: null, cause: null, intent: null } });
+  expect(useShellStore.getState().connection).toBe("moving");
+  first.frame({ type: "snapshot", payload: { revision: 1, rest: {} } });
+  expect(useShellStore.getState().connection).toBe("live");
+  expect(first.sent.map((entry) => JSON.parse(entry)).filter((entry) => entry.kind === "product_analytics_connected")).toEqual([
+    { schema_version: 2, kind: "product_analytics_connected", payload: {} },
+  ]);
   shell.close();
 });
 

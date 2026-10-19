@@ -3693,6 +3693,9 @@ pub struct UiStateSnapshot {
     /// newly needs the operator (Settings > Notifications).
     #[serde(default)]
     pub desktop_notifications: bool,
+    /// Content-free product statistics, shared by every window of this core.
+    #[serde(default = "default_panel_visible")]
+    pub product_analytics_enabled: bool,
     /// Done notifications are independent of Needs You; a fresh install
     /// leaves them off. Persistence migrates the former shared switch.
     #[serde(default)]
@@ -4500,6 +4503,7 @@ impl Default for UiStateSnapshot {
             agent_onboarding_agents: Vec::new(),
             first_run: None,
             desktop_notifications: false,
+            product_analytics_enabled: true,
             desktop_notifications_done: false,
             screen_intros_seen: BTreeSet::new(),
             sidebar_width: default_sidebar_width(),
