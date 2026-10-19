@@ -54,6 +54,6 @@ GitHub에 붙여넣은 이미지는 user-attachments로 인라인 렌더링됩�
 
 <details><summary>Verification record</summary>
 
-<!-- PRD 경로, base/head SHA, 실행한 suite와 결과, 리뷰 subagent의 Fix now·Follow-up, 등록된 증거 목록, 변경 경로. Sasu `/ship`이 채웁니다. 손으로 여는 PR이면 이 블록을 지우세요. -->
+<!-- PRD 경로, base/head SHA, 실행한 suite와 결과, 리뷰 subagent의 Fix now·Follow-up, 등록된 증거 목록, 변경 경로. `ship` 스킬이 채웁니다. 이 블록을 유지하고, PR 생성·갱신과 승인된 머지는 `ship` 스킬로 진행하세요. -->
 
 </details>

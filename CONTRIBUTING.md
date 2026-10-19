@@ -110,7 +110,10 @@ python3 scripts/check-herdr-schema.py             # needs a Herdr CLI on PATH or
 bash scripts/verify-cargo.sh test-scoped -p hide-platform -p hide-herdr-client # the OS contract and the client's own tests; add HIDE_E2E_HERDR_BIN=<pinned herdr> and `--test it -- --ignored` to run the client against it
 ```
 
-Then open the pull request against `main` and answer the template.
+For coding-agent work, use the installed `ship` skill to open or update the pull request against `main` and answer the template.
+Use that skill for an approved merge too, subject to [Merging into main](#merging-into-main); a delegated session never merges.
+Do not open a pull request by hand with `gh pr create`: that path has skipped the `pr-assets` upload step and left UI changes without images.
+Follow the skill's verification prerequisites, and use its `screenshots` command to upload cropped UI evidence and put the returned image lines under Summary before publishing.
 Write the issue it finishes on the `Closes #N` line and nothing else there; a big issue split across several pull requests gets one sub-issue per piece, and each pull request closes its own.
 `Related:` names only the PRD path and the pull requests this one follows or depends on, because Hide and GitHub relate a pull request to an issue only through a closing keyword.
 
@@ -158,7 +161,7 @@ Above it, a pull request that closes no issue gets a reminder, not a refusal: Hi
 
 The check does not prove a behavior that only the two changes together break, which only the unit and end-to-end suites would see.
 Main's push run is the net for that: a push to main plans every lane, and in a burst of merges GitHub keeps one pending run, which checks the merges' combined state.
-Whoever merges watches the first completed push run that contains the merge.
+Whoever merges uses the `ship` skill and watches the first completed push run that contains the merge.
 
 ### Which green pull request merges first
 
