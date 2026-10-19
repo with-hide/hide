@@ -100,23 +100,51 @@ fn declarations_match_independent_support_samples() {
     assert!(adapter("future-agent").is_none());
 }
 
+fn absence(value: hide_agent_adapter::CapabilityAbsence) {
+    assert!(!value.reason.trim().is_empty(), "missing absence reason");
+    assert!(
+        !value.would_change.trim().is_empty(),
+        "missing closure condition"
+    );
+    let path = value.evidence.split('#').next().unwrap();
+    assert!(!path.trim().is_empty(), "missing absence evidence");
+    assert!(
+        Path::new(path)
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_))),
+        "evidence must stay inside the repository: {path}"
+    );
+    assert!(root().join(path).is_file(), "missing evidence: {path}");
+}
+
+#[test]
+fn absence_evidence_rejects_absolute_and_parent_paths_even_when_the_file_exists() {
+    for evidence in [
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/agent-hooks.md"),
+        "hide-agent-adapter/../docs/agent-hooks.md",
+    ] {
+        let value = hide_agent_adapter::CapabilityAbsence {
+            reason: "The host discards this context.",
+            evidence,
+            would_change: "Implement a measured context route.",
+        };
+        assert!(
+            root().join(evidence).is_file(),
+            "negative fixture must exist"
+        );
+        assert!(
+            std::panic::catch_unwind(|| absence(value)).is_err(),
+            "invalid evidence path was accepted: {evidence}"
+        );
+    }
+}
+
 /// Expectations are the established host/session fixtures, independent of the
 /// declaration. An installed hook does not imply its output reaches the model.
 #[test]
 fn context_and_title_support_require_matching_routes_or_documented_absences() {
     use hide_agent_adapter::usage::Support;
-    use hide_agent_adapter::{AgentId, CapabilityAbsence, ContextRoute};
-
-    fn absence(value: CapabilityAbsence) {
-        assert!(!value.reason.trim().is_empty(), "missing absence reason");
-        assert!(
-            !value.would_change.trim().is_empty(),
-            "missing closure condition"
-        );
-        let path = value.evidence.split('#').next().unwrap();
-        assert!(!path.trim().is_empty(), "missing absence evidence");
-        assert!(root().join(path).is_file(), "missing evidence: {path}");
-    }
+    use hide_agent_adapter::{AgentId, ContextRoute};
 
     let fixtures: Vec<Value> =
         serde_json::from_str(include_str!("../fixtures/support.json")).unwrap();

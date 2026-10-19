@@ -593,6 +593,8 @@ Here `memory` means automatic injection into the model's context, independently 
 `ContextRoute` distinguishes a native hook, a guidance hook whose output reaches the model, and a plugin's prompt event; the latter carries the start guidance and Memory index on the first prompt rather than a native `SessionStart`.
 The independent context matrix and installed-command fixtures reject a different agent's route or title reader, discarded context, missing evidence and missing native start/prompt commands or Memory invocation flags.
 Plugin host suites check first and later prompt delivery, and the generated-contract drift checks preserve the Settings and journey projections.
+The journey export refuses a startable guidance-only declaration until a probe for that combination is implemented: today's combined probe proves injection through a private Memory-card token, so it cannot silently mark guidance-only support `N/A` or attest Memory support.
+The Settings `Feature::Titles` still describes readable session features; `titles` selects the native-title reader used before a background label is available, and is a separate decision.
 The required `observation` field selects `ObservationSupport::Native(HookDialect)` or `ObservationSupport::Plugin(PluginDialect)`, or `Unsupported` with a meaningful reason.
 For native support, add a payload, the required Post events and independent neutral metadata expectations to `hide-agent-hooks/tests/fixtures/observation-native.json`.
 The shared `adapter_contract` suite checks those events in the installed configuration and the fixture output, then executes the supported native and plugin routes through the built helper on Unix.
