@@ -50,15 +50,35 @@ impl Runtime {
 
     /// Bounded draft data goes through the existing coalesced UI save owner.
     /// A pending agent apply owns its selection until that pass settles.
-    pub(super) fn update_first_run_draft(&mut self, payload: super::events::FirstRunDraftPayload) -> bool {
-        let ids_fit = |ids: &[String]| ids.len() <= 128 && ids.iter().all(|id| !id.is_empty() && id.len() <= 256);
+    pub(super) fn update_first_run_draft(
+        &mut self,
+        payload: super::events::FirstRunDraftPayload,
+    ) -> bool {
+        let ids_fit = |ids: &[String]| {
+            ids.len() <= 128 && ids.iter().all(|id| !id.is_empty() && id.len() <= 256)
+        };
         if payload.agents.as_ref().is_some_and(|ids| !ids_fit(ids))
             || payload.devices.as_ref().is_some_and(|ids| !ids_fit(ids))
-            || payload.project_device.as_ref().is_some_and(|id| id.is_empty() || id.len() > 256)
-            || payload.project_path.as_ref().is_some_and(|path| path.len() > 4096)
-            || payload.project_form.as_ref().is_some_and(|form| !["", "add", "clone", "create"].contains(&form.view.as_str()) || [&form.url, &form.parent, &form.name].iter().any(|value| value.len() > 4096))
+            || payload
+                .project_device
+                .as_ref()
+                .is_some_and(|id| id.is_empty() || id.len() > 256)
+            || payload
+                .project_path
+                .as_ref()
+                .is_some_and(|path| path.len() > 4096)
+            || payload.project_form.as_ref().is_some_and(|form| {
+                !["", "add", "clone", "create"].contains(&form.view.as_str())
+                    || [&form.url, &form.parent, &form.name]
+                        .iter()
+                        .any(|value| value.len() > 4096)
+            })
         {
-            self.set_error("first_run.draft_invalid", "The setup choice could not be saved. Choose again.", false);
+            self.set_error(
+                "first_run.draft_invalid",
+                "The setup choice could not be saved. Choose again.",
+                false,
+            );
             return true;
         }
         let before = self.snapshot.ui_state.first_run_choices.clone();
@@ -187,7 +207,10 @@ impl Runtime {
             self.set_desktop_notification_preferences(Some(enabled), (!enabled).then_some(false));
         }
         if from == FirstRunStep::Notifications {
-            self.snapshot.ui_state.first_run_choices.notifications_answered = true;
+            self.snapshot
+                .ui_state
+                .first_run_choices
+                .notifications_answered = true;
         }
         self.move_first_run(from, to)
     }
@@ -285,7 +308,11 @@ impl Runtime {
         let to = if apply.finish {
             FirstRunStep::Done
         } else {
-            if self.first_run_has_devices() { FirstRunStep::Devices } else { FirstRunStep::Notifications }
+            if self.first_run_has_devices() {
+                FirstRunStep::Devices
+            } else {
+                FirstRunStep::Notifications
+            }
         };
         self.move_first_run(FirstRunStep::Agents, to)
     }

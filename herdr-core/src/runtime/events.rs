@@ -2199,7 +2199,9 @@ impl Runtime {
             Event::KitCheck(_) => self.request_kit_check(),
             Event::SshHostsList(_) => self.request_ssh_hosts(),
             Event::HerdrProfilesList(_) => self.request_herdr_profiles(),
-            Event::HerdrProfileConnect(payload) => self.connect_herdr_profile(&payload.profile_id, payload.host_consent),
+            Event::HerdrProfileConnect(payload) => {
+                self.connect_herdr_profile(&payload.profile_id, payload.host_consent)
+            }
             // Nothing drawn changes; the coordinator reads it on its next wake.
             Event::UiAttached(payload) => {
                 self.ui_attached = payload.attached;
@@ -2812,9 +2814,17 @@ impl Runtime {
                     .map(str::trim)
                     .filter(|path| !path.is_empty())
                     .map(str::to_owned);
-                if payload.herdr_session.as_deref().is_some_and(|session| !hide_node_link::device::valid_herdr_session(session))
-                    || (payload.herdr_session.is_some() && herdr_socket_path.is_some()) {
-                    self.set_error("device.invalid", "Choose one valid Herdr session or an explicit socket", false);
+                if payload
+                    .herdr_session
+                    .as_deref()
+                    .is_some_and(|session| !hide_node_link::device::valid_herdr_session(session))
+                    || (payload.herdr_session.is_some() && herdr_socket_path.is_some())
+                {
+                    self.set_error(
+                        "device.invalid",
+                        "Choose one valid Herdr session or an explicit socket",
+                        false,
+                    );
                     return true;
                 }
                 if herdr_socket_path

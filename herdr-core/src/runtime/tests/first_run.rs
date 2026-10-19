@@ -641,7 +641,11 @@ fn a_reopened_first_step_switches_only_what_it_changed() {
         "an agent that is not installed here has no switch, so it stays on"
     );
     assert_eq!(step(&runtime), None);
-    assert_eq!(runtime.snapshot.ui_state.agent_onboarding_agents, ["claude-code", "omp"], "the next imported device uses the revised Help choice");
+    assert_eq!(
+        runtime.snapshot.ui_state.agent_onboarding_agents,
+        ["claude-code", "omp"],
+        "the next imported device uses the revised Help choice"
+    );
 }
 
 /// D-21, B30, B43: the notification switch and the screens introduced once
@@ -752,13 +756,40 @@ fn back_preserves_choices_and_never_queues_an_install_or_changes_notifications()
     let path = folder.path().join("state.json");
     let mut runtime = runtime_at(&path);
     report_here(&mut runtime, &first_run_pass());
-    runtime.dispatch_json(&event("agent_onboarding_apply", serde_json::json!({"agents": ["claude-code"]})));
-    run_queued_pass(&mut runtime, &pass(false, vec![agent("claude-code", true, ComponentState::Installed), agent("codex", false, ComponentState::Off)]));
-    runtime.dispatch_json(&event("first_run_advance", serde_json::json!({"from": "notifications", "notifications": false})));
+    runtime.dispatch_json(&event(
+        "agent_onboarding_apply",
+        serde_json::json!({"agents": ["claude-code"]}),
+    ));
+    run_queued_pass(
+        &mut runtime,
+        &pass(
+            false,
+            vec![
+                agent("claude-code", true, ComponentState::Installed),
+                agent("codex", false, ComponentState::Off),
+            ],
+        ),
+    );
+    runtime.dispatch_json(&event(
+        "first_run_advance",
+        serde_json::json!({"from": "notifications", "notifications": false}),
+    ));
     runtime.dispatch_json(&event("first_run_draft", serde_json::json!({"project_device": "studio", "project_path": "~/my-project", "project_form": {"view": "clone", "url": "https://example.test/repo.git", "parent": "~/work", "name": "my-project"}})));
-    assert!(runtime.dispatch_json(&event("first_run_back", serde_json::json!({"from": "project"}))));
-    assert!(!runtime.dispatch_json(&event("first_run_back", serde_json::json!({"from": "project"}))), "a stale Back cannot move the next step");
-    assert!(runtime.dispatch_json(&event("first_run_back", serde_json::json!({"from": "notifications"}))));
+    assert!(runtime.dispatch_json(&event(
+        "first_run_back",
+        serde_json::json!({"from": "project"})
+    )));
+    assert!(
+        !runtime.dispatch_json(&event(
+            "first_run_back",
+            serde_json::json!({"from": "project"})
+        )),
+        "a stale Back cannot move the next step"
+    );
+    assert!(runtime.dispatch_json(&event(
+        "first_run_back",
+        serde_json::json!({"from": "notifications"})
+    )));
     assert_eq!(step(&runtime), Some(FirstRunStep::Agents));
     assert!(!runtime.snapshot.ui_state.desktop_notifications);
     assert!(runtime.take_local_kit_job(Instant::now()).is_none());
@@ -766,7 +797,10 @@ fn back_preserves_choices_and_never_queues_an_install_or_changes_notifications()
     let restarted = runtime_at(&path);
     assert_eq!(step(&restarted), Some(FirstRunStep::Agents));
     let choices = &restarted.snapshot.ui_state.first_run_choices;
-    assert_eq!(choices.agents.as_deref(), Some(["claude-code".to_owned()].as_slice()));
+    assert_eq!(
+        choices.agents.as_deref(),
+        Some(["claude-code".to_owned()].as_slice())
+    );
     assert_eq!(choices.project_device.as_deref(), Some("studio"));
     assert_eq!(choices.project_path, "~/my-project");
     assert_eq!(choices.project_form.view, "clone");
@@ -792,29 +826,53 @@ fn setup_url_drafts_never_publish_or_restore_credentials_and_keep_clean_urls() {
         "https://alice:draft-password@",
         "draft-password",
     ] {
-        runtime.dispatch_json(&event("first_run_draft", serde_json::json!({
-            "project_form": {"view": "clone", "url": url, "parent": "~/work"}
-        })));
-        let clean = matches!(url, "https://example.test/team/repo.git" | "example.test:team/repo.git" | "file:///work/repo.git");
+        runtime.dispatch_json(&event(
+            "first_run_draft",
+            serde_json::json!({
+                "project_form": {"view": "clone", "url": url, "parent": "~/work"}
+            }),
+        ));
+        let clean = matches!(
+            url,
+            "https://example.test/team/repo.git"
+                | "example.test:team/repo.git"
+                | "file:///work/repo.git"
+        );
         let expected = if clean { url } else { "" };
         let snapshot = serde_json::to_value(runtime.snapshot()).unwrap();
-        assert_eq!(snapshot["ui_state"]["first_run_choices"]["project_form"]["url"], expected);
+        assert_eq!(
+            snapshot["ui_state"]["first_run_choices"]["project_form"]["url"],
+            expected
+        );
         drop(runtime);
         let stored = std::fs::read_to_string(&path).unwrap();
         assert!(!stored.contains("draft-password") && !stored.contains("draft-token"));
         runtime = runtime_at(&path);
-        assert_eq!(runtime.snapshot.ui_state.first_run_choices.project_form.url, expected);
+        assert_eq!(
+            runtime.snapshot.ui_state.first_run_choices.project_form.url,
+            expected
+        );
     }
 
     // A store from before this boundary is sanitized before the first snapshot.
     drop(runtime);
-    let mut legacy: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    legacy["first_run_choices"]["project_form"]["url"] = serde_json::json!("https://alice:draft-password@example.test/repo.git?token=draft-token");
+    let mut legacy: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    legacy["first_run_choices"]["project_form"]["url"] =
+        serde_json::json!("https://alice:draft-password@example.test/repo.git?token=draft-token");
     std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
     let restarted = runtime_at(&path);
     let published = serde_json::to_string(restarted.snapshot()).unwrap();
     assert!(!published.contains("draft-password") && !published.contains("draft-token"));
-    assert!(restarted.snapshot.ui_state.first_run_choices.project_form.url.is_empty());
+    assert!(
+        restarted
+            .snapshot
+            .ui_state
+            .first_run_choices
+            .project_form
+            .url
+            .is_empty()
+    );
 }
 
 #[test]
@@ -822,34 +880,52 @@ fn finishing_setup_clears_the_project_draft_before_saving() {
     let folder = scratch_dir("herdr-core-first-run-finished-draft-");
     let path = folder.path().join("state.json");
     let mut runtime = runtime_at(&path);
-    runtime.snapshot.ui_state.first_run = Some(FirstRun { version: crate::model::FIRST_RUN_VERSION, step: FirstRunStep::Project });
+    runtime.snapshot.ui_state.first_run = Some(FirstRun {
+        version: crate::model::FIRST_RUN_VERSION,
+        step: FirstRunStep::Project,
+    });
     runtime.dispatch_json(&event("first_run_draft", serde_json::json!({
         "project_device": "build", "project_path": "~/work/repo",
         "project_form": {"view": "clone", "url": "https://example.test/repo.git", "parent": "~/work", "name": "repo"}
     })));
-    runtime.dispatch_json(&event("first_run_advance", serde_json::json!({"from": "project"})));
+    runtime.dispatch_json(&event(
+        "first_run_advance",
+        serde_json::json!({"from": "project"}),
+    ));
     drop(runtime);
     let restarted = runtime_at(&path);
     let choices = &restarted.snapshot.ui_state.first_run_choices;
     assert_eq!(step(&restarted), Some(FirstRunStep::Done));
     assert_eq!(choices.project_device, None);
     assert!(choices.project_path.is_empty());
-    assert_eq!(choices.project_form, crate::model::FirstRunProjectForm::default());
+    assert_eq!(
+        choices.project_form,
+        crate::model::FirstRunProjectForm::default()
+    );
 }
 
 #[test]
 fn only_a_successful_empty_discovery_skips_devices_and_back_follows_that_route() {
     let mut runtime = runtime();
-    runtime.snapshot.ui_state.first_run = Some(FirstRun { version: crate::model::FIRST_RUN_VERSION, step: FirstRunStep::Devices });
+    runtime.snapshot.ui_state.first_run = Some(FirstRun {
+        version: crate::model::FIRST_RUN_VERSION,
+        step: FirstRunStep::Devices,
+    });
     for state in ["idle", "loading", "failed"] {
         runtime.snapshot.status.herdr_profiles.state = state.to_owned();
-        assert!(!runtime.settle_first_run_devices(), "{state} is not an empty saved list");
+        assert!(
+            !runtime.settle_first_run_devices(),
+            "{state} is not an empty saved list"
+        );
         assert_eq!(step(&runtime), Some(FirstRunStep::Devices));
     }
     runtime.snapshot.status.herdr_profiles.state = "ready".to_owned();
     assert!(runtime.settle_first_run_devices());
     assert_eq!(step(&runtime), Some(FirstRunStep::Notifications));
-    assert!(runtime.dispatch_json(&event("first_run_back", serde_json::json!({"from": "notifications"}))));
+    assert!(runtime.dispatch_json(&event(
+        "first_run_back",
+        serde_json::json!({"from": "notifications"})
+    )));
     assert_eq!(step(&runtime), Some(FirstRunStep::Agents));
 }
 
@@ -857,12 +933,27 @@ fn only_a_successful_empty_discovery_skips_devices_and_back_follows_that_route()
 fn an_in_flight_apply_keeps_its_choice_and_a_late_report_cannot_move_another_step() {
     let mut runtime = runtime();
     report_here(&mut runtime, &first_run_pass());
-    runtime.dispatch_json(&event("agent_onboarding_apply", serde_json::json!({"agents": ["claude-code"]})));
-    assert!(!runtime.dispatch_json(&event("first_run_draft", serde_json::json!({"agents": ["codex"]}))));
-    assert_eq!(runtime.snapshot.ui_state.first_run_choices.agents, Some(vec!["claude-code".to_owned()]));
+    runtime.dispatch_json(&event(
+        "agent_onboarding_apply",
+        serde_json::json!({"agents": ["claude-code"]}),
+    ));
+    assert!(!runtime.dispatch_json(&event(
+        "first_run_draft",
+        serde_json::json!({"agents": ["codex"]})
+    )));
+    assert_eq!(
+        runtime.snapshot.ui_state.first_run_choices.agents,
+        Some(vec!["claude-code".to_owned()])
+    );
     // A different accepted navigation owner superseded this pass while it ran.
     runtime.snapshot.ui_state.first_run.as_mut().unwrap().step = FirstRunStep::Project;
-    run_queued_pass(&mut runtime, &pass(false, vec![agent("claude-code", true, ComponentState::Installed)]));
+    run_queued_pass(
+        &mut runtime,
+        &pass(
+            false,
+            vec![agent("claude-code", true, ComponentState::Installed)],
+        ),
+    );
     assert_eq!(step(&runtime), Some(FirstRunStep::Project));
 }
 
@@ -870,14 +961,43 @@ fn an_in_flight_apply_keeps_its_choice_and_a_late_report_cannot_move_another_ste
 fn a_saved_profile_keeps_the_devices_route_even_when_disabled() {
     let mut runtime = runtime();
     report_here(&mut runtime, &first_run_pass());
-    runtime.snapshot.status.herdr_profiles.profiles.push(crate::model::HerdrProfileSnapshot {
-        id: "disabled".to_owned(), label: "Build server".to_owned(), target: "build.example".to_owned(), session: "review".to_owned(), enabled: false, added_as: None, problem: Some("disabled".to_owned()), device_id: None, connect_state: "saved".to_owned(), connect_error: None,
-    });
-    runtime.dispatch_json(&event("agent_onboarding_apply", serde_json::json!({"agents": ["claude-code"]})));
-    run_queued_pass(&mut runtime, &pass(false, vec![agent("claude-code", true, ComponentState::Installed)]));
+    runtime
+        .snapshot
+        .status
+        .herdr_profiles
+        .profiles
+        .push(crate::model::HerdrProfileSnapshot {
+            id: "disabled".to_owned(),
+            label: "Build server".to_owned(),
+            target: "build.example".to_owned(),
+            session: "review".to_owned(),
+            enabled: false,
+            added_as: None,
+            problem: Some("disabled".to_owned()),
+            device_id: None,
+            connect_state: "saved".to_owned(),
+            connect_error: None,
+        });
+    runtime.dispatch_json(&event(
+        "agent_onboarding_apply",
+        serde_json::json!({"agents": ["claude-code"]}),
+    ));
+    run_queued_pass(
+        &mut runtime,
+        &pass(
+            false,
+            vec![agent("claude-code", true, ComponentState::Installed)],
+        ),
+    );
     assert_eq!(step(&runtime), Some(FirstRunStep::Devices));
-    assert!(runtime.dispatch_json(&event("first_run_advance", serde_json::json!({"from": "devices"}))));
-    assert!(runtime.dispatch_json(&event("first_run_back", serde_json::json!({"from": "notifications"}))));
+    assert!(runtime.dispatch_json(&event(
+        "first_run_advance",
+        serde_json::json!({"from": "devices"})
+    )));
+    assert!(runtime.dispatch_json(&event(
+        "first_run_back",
+        serde_json::json!({"from": "notifications"})
+    )));
     assert_eq!(step(&runtime), Some(FirstRunStep::Devices));
     assert!(runtime.snapshot.ui_state.device_registrations.is_empty());
 }
