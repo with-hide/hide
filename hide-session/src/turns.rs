@@ -327,7 +327,7 @@ pub struct TurnTracker {
     #[serde(
         default,
         skip_serializing_if = "Vec::is_empty",
-        deserialize_with = "deserialize_work"
+        deserialize_with = "deserialize_ended_work"
     )]
     ended_work: Vec<WakeDevice>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -384,6 +384,19 @@ where
         }
     }
     deserializer.deserialize_seq(Work(std::marker::PhantomData))
+}
+
+fn deserialize_ended_work<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<WakeDevice>, D::Error> {
+    let records: Vec<WakeDevice> = deserialize_work(deserializer)?;
+    if records
+        .iter()
+        .any(|record| record.state == WorkState::Running)
+    {
+        return Err(serde::de::Error::custom("internal_work_history_running"));
+    }
+    Ok(records)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1290,6 +1303,14 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("internal_work_capacity")
+        );
+        assert!(
+            serde_json::from_value::<TurnTracker>(serde_json::json!({
+                "booted": true, "ended_work": [{"id":"not-proven-live"}]
+            }))
+            .unwrap_err()
+            .to_string()
+            .contains("internal_work_history_running")
         );
     }
 
