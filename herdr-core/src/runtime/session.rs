@@ -5036,6 +5036,7 @@ impl Runtime {
             );
             return true;
         };
+        let request_id = operation.request_id.clone();
         let device = operation.device_id.clone();
         let workspaces = match device.as_deref() {
             Some(device) => self
@@ -5058,10 +5059,11 @@ impl Runtime {
                 .any(|pane| pane.id == pane_id)
         });
         if !pane_listed {
-            self.set_error(
+            self.set_request_error(
                 "task_operation.agent_retry_pane_gone",
                 "The pane the agent was meant to start in is gone",
                 false,
+                request_id.as_deref(),
             );
             return true;
         }
@@ -5072,7 +5074,12 @@ impl Runtime {
         let context = match context {
             Ok(context) => context,
             Err(message) => {
-                self.set_error("task_operation.agent_retry_offline", message, true);
+                self.set_request_error(
+                    "task_operation.agent_retry_offline",
+                    message,
+                    true,
+                    request_id.as_deref(),
+                );
                 return true;
             }
         };

@@ -18,8 +18,7 @@ import { allAgents } from "./navigation";
 import { checkSummary, timeline, type Milestone, type TimelineEntry } from "./prCardModel";
 import { recordTitle } from "./sessionWork";
 import { catalogOf, localDeviceId, type LinkPanel, type PullRequest, type Workspace } from "./snapshot";
-import { startAnswer, startRequestId } from "./startAnswer";
-import { startReasonText } from "./startReason";
+import { useSessionResume } from "./useSessionResume";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -42,9 +41,6 @@ import { useUiStore } from "./ui";
 const RAIL = "before:absolute before:top-(--size-sidebar-line) before:bottom-(--size-sidebar-line) before:left-[calc(var(--spacing-xs)+var(--size-agent-mark)/2)] before:w-(--size-hairline) before:bg-border";
 /** A timeline row's mark on the page's ground, over the rail. */
 const ON_RAIL = "relative inline-flex rounded-full bg-background";
-
-/** How long a resume waits for the core's answer before it says so; a device start can take a Home sync and a tab. */
-const RESUME_TIMEOUT_MS = 90_000;
 
 export function LinkTimeline({
   panel,
@@ -169,46 +165,6 @@ function NowRow({ running, pr }: { running: number; pr: PullRequest | null }) {
   return <SessionRow mark={<span className={ON_RAIL}><StatusMark mark={running > 0 ? "waiting" : null} /></span>} title={summary ? `${t("work.card.now")} · ${t(summary.key, summary.values)}` : running > 0 ? `${t("work.card.now")} · ${t("work.card.why.ci", { count: running })}` : t("work.card.now")} data-timeline-now={running} />;
 }
 
-/** A resume in flight: the request it sent, then the core's refusal if it came. */
-type Resume = { request: string | null; failure: string | null };
-
-/**
- * Follows one resume to its answer (B12, B14): a tab that opened moves the
- * screen to its pane, a refusal or a failure stays on the line with Retry.
- */
-function useResume(): { resume: Resume; start: (send: (request: string) => void) => void } {
-  const { t } = useInterfaceTranslation();
-  const [resume, setResume] = useState<Resume>({ request: null, failure: null });
-  const request = resume.request;
-  const phase = useShellStore((s) => (request ? startAnswer(s.rest, request).phase : null));
-  useEffect(() => {
-    if (!request || !phase || phase === "pending") return;
-    const answer = startAnswer(useShellStore.getState().rest, request);
-    if (answer.phase === "ready") {
-      const ui = useUiStore.getState();
-      if (answer.agentPhase) ui.setWatchedTask(answer.taskId);
-      if (answer.paneId) ui.setFocusWhenListed(answer.paneId);
-      const reason = answer.agentMessage ? startReasonText(answer.agentMessage, t) : "";
-      setResume({ request: null, failure: answer.agentPhase === "failed" ? reason : null });
-    } else if (answer.phase === "refused" || answer.phase === "failed") {
-      setResume({ request: null, failure: answer.message ?? "" });
-    }
-  }, [request, phase, t]);
-  useEffect(() => {
-    if (!request) return undefined;
-    const timer = window.setTimeout(() => setResume({ request: null, failure: t("shell.startTimeout") }), RESUME_TIMEOUT_MS);
-    return () => window.clearTimeout(timer);
-  }, [request, t]);
-  return {
-    resume,
-    start: (send) => {
-      const id = startRequestId();
-      setResume({ request: id, failure: null });
-      send(id);
-    },
-  };
-}
-
 /**
  * The title of a session row (B7): the live agent's label, else the session
  * record's title as the Sessions list shows it, else the agent's product
@@ -234,14 +190,14 @@ function SessionLineView({ entry, project, checkoutBranch, opener, actions }: { 
   const checkout = resumeCheckout(line, catalogOf(workspaces, remote), checkoutBranch, node);
   const viewOff = viewBlock(line, devices, node);
   const resumeOff = resumeBlock(line, checkout, devices, node);
-  const { resume, start } = useResume();
+  const { resume, start } = useSessionResume();
   const gone = line.file === "missing";
   const asked = live?.kind === "question" ? rowLine(live.agent)?.text : null;
   const view = () => actions.openSessionConversation({ device_id: line.device_id, agent: line.agent, session_id: line.id });
   const resumeLine = () => {
     const provider = resumeProvider(line.agent);
     if (!checkout || !provider) return;
-    start((requestId) => actions.startAgent({ target: { checkoutPath: checkout.path }, deviceId: line.device_id === node ? undefined : line.device_id, provider, resumeSessionId: line.id, resumeSessionPath: line.path ?? undefined, requestId }));
+    start((requestId, confirmOnly) => actions.startAgent({ target: { checkoutPath: checkout.path }, deviceId: line.device_id === node ? undefined : line.device_id, provider, resumeSessionId: line.id, resumeSessionPath: line.path ?? undefined, requestId, confirmOnly }));
   };
   const agent = agentProductName(line.agent);
   // The tooltip carries what the row leaves out (B9): the request, who delegated it, how many sessions it joins, which device.
@@ -265,7 +221,8 @@ function SessionLineView({ entry, project, checkoutBranch, opener, actions }: { 
     </Button>
   ) : null;
   const viewButton = <LineButton icon={<MessageSquareIcon aria-hidden="true" />} label={t("links.view")} blocked={viewOff} onClick={view} data="view" id={line.id} />;
-  const resumeButton = <LineButton icon={resume.request ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : <PlayIcon aria-hidden="true" />} label={resume.request ? t("links.resuming") : t("links.resume")} blocked={resumeOff} busy={resume.request !== null} onClick={resumeLine} data="resume" id={line.id} />;
+  const resuming = resume.request !== null && !resume.uncertain;
+  const resumeButton = <LineButton icon={resuming ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : <PlayIcon aria-hidden="true" />} label={t(resume.uncertain ? "groups.confirm" : resuming ? "links.resuming" : "links.resume")} blocked={resumeOff} busy={resuming} onClick={resumeLine} data="resume" id={line.id} />;
   // A live row keeps its one button under the line (B8); an ended row reveals its two in the time's place.
   const below = live?.kind === "question" ? (
     <Button size="sm" onClick={() => actions.openAgent(live.agent.pane_id)} data-link-answer={line.id}>
@@ -294,12 +251,13 @@ function SessionLineView({ entry, project, checkoutBranch, opener, actions }: { 
       data-link-request={line.request ?? undefined}
     >
       {gone ? <MissingFile path={line.path} id={line.id} /> : null}
+      {resume.uncertain ? <span role="status" className="text-caption text-muted-foreground">{t("links.resumeUnknown")}</span> : null}
       {resume.failure !== null ? (
         <span role="alert" className="flex items-center gap-xs text-caption text-warning" data-link-resume-failed={line.id}>
-          <span className="min-w-0 break-words">{resume.failure ? t("links.resumeFailed", { reason: resume.failure }) : t("links.resumeFailedPlain")}</span>
-          <Button variant="ghost" size="sm" onClick={resumeLine} data-link-resume-retry={line.id}>
+          <span className="min-w-0 break-words">{resume.uncertain ? resume.failure : resume.failure ? t("links.resumeFailed", { reason: resume.failure }) : t("links.resumeFailedPlain")}</span>
+          {!resume.uncertain ? <Button variant="ghost" size="sm" onClick={resumeLine} data-link-resume-retry={line.id}>
             {t("common.retry")}
-          </Button>
+          </Button> : null}
         </span>
       ) : null}
     </SessionRow>

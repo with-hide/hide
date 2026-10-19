@@ -579,6 +579,7 @@ The words come from the same declaration (`LaunchDialect::choice_arguments`): th
 A pane with no record (an agent started on the CLI's defaults, or by a build before the record existed) restarts on its resume arguments alone, as before.
 Every start supported by the shared adapter writes that kind and the kind's model into `ui_state.agent_start`, which every start surface preselects next; `terminal` is never remembered, and a store written before this choice existed seeds the kind once from the retired `issue_settings.default_agent`, which the next save drops.
 A start carries the surface's `request_id`, stamped on the task receipt and on a refusal's `last_error`, so each surface reads only its own answer.
+Retry refusals retain that request identity, including when the original pane is gone or its device is offline.
 A group start additionally names `target { group_id, area_id, tab_id, add_pane }`; the checkout and device qualify that target, because different groups can each have an area named `a1`.
 Without an explicit target the start reserves a new draft in the checkout's selected group, preserving the independent meaning of the global start panel.
 `runtime/group_starts.rs` keeps the stable request's receipt in `WorkspaceView.agent_starts`: its group, area, draft/live tab, pane, recovery marker, provider kind and completion phase, with no instruction text or agent launch arguments.
