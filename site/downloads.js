@@ -44,6 +44,27 @@ export function validateRelease(release) {
   return { status: "ready", tag, releaseUrl, downloads };
 }
 
+/**
+ * The hero's one-click download: a validated release's installer for an OS that has exactly one, offered only while the
+ * processor the browser reports (Chromium's architecture hint; `""` when it gives none) is not one that installer
+ * excludes. Linux has two packages and every other setup goes to the chooser.
+ */
+export function heroOffer(state, os, arch) {
+  if (state.status !== "ready") return null;
+  const setup = os === "macos" && arch !== "x86" ? "macos-arm64"
+    : os === "windows" && arch !== "arm" ? "windows-x64" : null;
+  if (!setup) return null;
+  const [file] = state.downloads[setup].files;
+  return {
+    label: os === "macos" ? "Download for macOS" : "Download for Windows",
+    detail: os === "macos" ? "Apple Silicon · macOS 14 or later" : "x64",
+    url: file.url,
+    checksumUrl: file.checksumUrl,
+    releaseUrl: state.releaseUrl,
+    tag: state.tag,
+  };
+}
+
 function mountDownloads() {
   const os = document.getElementById("os");
   const cpu = document.getElementById("cpu");
@@ -59,7 +80,10 @@ function mountDownloads() {
   const secondChecksum = document.getElementById("second-checksum-link");
   const notes = document.getElementById("version-link");
   const retry = document.getElementById("retry-release");
+  const heroButton = document.getElementById("hero-download");
+  const heroNote = document.getElementById("hero-note");
   let state = { status: "loading" };
+  let arch = "";
   let request = null;
 
   // OS is only a hint. Browser identity cannot establish the processor.
@@ -71,8 +95,33 @@ function mountDownloads() {
     os.value = osHint;
     hint.textContent = "Your browser suggested an OS. Confirm it and choose your processor; either can be changed.";
   }
+  navigator.userAgentData?.getHighEntropyValues?.(["architecture"])
+    .then(values => { arch = values.architecture ?? ""; renderHero(); })
+    .catch(() => {});
+
+  // The hero offers its one installer with the release's notes and checksum beside it, or keeps pointing to the chooser.
+  function renderHero() {
+    const offer = heroOffer(state, osHint, arch);
+    heroNote.replaceChildren();
+    heroNote.hidden = !offer;
+    if (!offer) {
+      heroButton.href = "#download";
+      heroButton.firstChild.textContent = "Get hide ";
+      heroButton.lastChild.textContent = "↓";
+      return;
+    }
+    heroButton.href = offer.url;
+    heroButton.firstChild.textContent = `${offer.label} `;
+    heroButton.lastChild.textContent = "↗";
+    const link = (href, text) => Object.assign(document.createElement("a"), { href, textContent: text });
+    heroNote.append(
+      `${offer.detail} · `, link(offer.releaseUrl, offer.tag), " · ", link(offer.checksumUrl, "SHA-256"), " · ",
+      link("#download", "Other systems"),
+    );
+  }
 
   function render() {
+    renderHero();
     validated.hidden = true;
     for (const link of [archive, checksum, second, secondChecksum, notes]) link.removeAttribute("href");
     second.hidden = true;
