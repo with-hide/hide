@@ -25,7 +25,7 @@ function useRevealNode(id: string) {
 
 export type ProjectNode = Node<{ group: GraphProject; current: boolean; highlighted: boolean; highlight: (id: string | null, focus: boolean) => void; toggle: (id: string) => void }, "project">;
 export type SessionNode = Node<{ row: GraphAgent; root: boolean; compact: boolean; progress: WorkProgress | null; context: boolean; highlighted: boolean; current: boolean; quietCount: number; folded: boolean; fold: (id: string) => void; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target: HTMLElement) => void }, "session">;
-export type LetterEdge = Edge<{ bundle?: Communication; lineage?: { from: string; to: string; count: number }; label: string; playback: number; emphasized: boolean; paired: boolean; laneOffset: number; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target?: HTMLElement) => void }, "letters">;
+export type LetterEdge = Edge<{ bundle?: Communication; lineage?: { from: string; to: string; count: number }; label: string; playback: number; emphasized: boolean; paired: boolean; laneOffset: number; labelLaneStep: number; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target?: HTMLElement) => void }, "letters">;
 
 /** Handles are invisible routing anchors; no connection can be edited. */
 function Ports() {
@@ -82,7 +82,9 @@ export function SessionGraphNode({ id, data, selected }: NodeProps<SessionNode>)
 export function CommunicationGraphEdge(props: EdgeProps<LetterEdge>) {
   const { t } = useInterfaceTranslation();
   const flow = useReactFlow();
-  let [path, x, y] = getBezierPath(props);
+  let [path] = getBezierPath(props);
+  let x = (props.sourceX + props.targetX) / 2;
+  let y = (props.sourceY + props.targetY) / 2;
   const bundle = props.data?.bundle;
   if (!props.data) return null;
   const offset = props.data?.laneOffset ?? 0;
@@ -95,20 +97,20 @@ export function CommunicationGraphEdge(props: EdgeProps<LetterEdge>) {
     const startY = props.sourceY + offset * 4 / 3;
     const endY = props.targetY + offset * 4 / 3;
     path = `M ${props.sourceX},${props.sourceY} C ${startX},${startY} ${endX},${endY} ${props.targetX},${props.targetY}`;
-    x = (props.sourceX + 3 * startX + 3 * endX + props.targetX) / 8;
-    y = (props.sourceY + props.targetY) / 2 + offset;
   }
-  // Labels may sit beside the curve, but never on either endpoint's task text.
-  // Only two endpoint rectangles are inspected, keeping this work constant per edge.
-  const endpoints = [props.source, props.target].map((id) => flow.getInternalNode(id)).filter((node) => node !== undefined);
+  // All kinds share one pair anchor, reserving the entire three-label stack.
+  // Clearing each curved midpoint separately could collapse different kinds
+  // onto the same endpoint boundary and hide their counts.
+  // Only two sorted endpoint rectangles are inspected: constant work per edge.
+  const endpoints = [props.source, props.target].sort().map((id) => flow.getInternalNode(id)).filter((node) => node !== undefined);
   const labelWidth = Math.min(...endpoints.map((node) => node.measured.width ?? 0));
   const labelHeight = Math.min(...endpoints.map((node) => node.measured.height ?? 0)) / 5;
   const bounds = endpoints.map((node) => {
     const point = node.internals.positionAbsolute;
     const left = point.x - labelWidth / 2;
     const right = point.x + (node.measured.width ?? 0) + labelWidth / 2;
-    const top = point.y - labelHeight / 2;
-    const bottom = point.y + (node.measured.height ?? 0) + labelHeight / 2;
+    const top = point.y - labelHeight / 2 - props.data!.labelLaneStep;
+    const bottom = point.y + (node.measured.height ?? 0) + labelHeight / 2 + props.data!.labelLaneStep;
     return { left, right, top, bottom };
   });
   const clear = (point: { x: number; y: number }) => bounds.every((box) => point.x <= box.left || point.x >= box.right || point.y <= box.top || point.y >= box.bottom);
@@ -117,11 +119,12 @@ export function CommunicationGraphEdge(props: EdgeProps<LetterEdge>) {
     const closest = choices.sort((a, b) => Math.hypot(a.x - x, a.y - y) - Math.hypot(b.x - x, b.y - y))[0]!;
     x = closest.x; y = closest.y;
   }
+  y += offset;
   return <>
     <path className="og-edge-underlay" d={path} fill="none" />
     <BaseEdge key={props.data.playback} id={props.id} path={path} interactionWidth={20} style={props.style} markerEnd={props.markerEnd} markerStart={props.markerStart} />
     <path key={`flow:${props.data.playback}`} className="og-flow-tracer" d={path} fill="none" />
-    <EdgeLabelRenderer><button type="button" className="og-letter-label nodrag nopan" data-kind={bundle?.kind ?? "lineage"} data-paired={props.data?.paired} data-emphasized={props.data?.emphasized} onPointerEnter={() => props.data?.highlight(props.id, false)} onPointerLeave={() => props.data?.highlight(null, false)} onFocus={() => props.data?.highlight(props.id, true)} onBlur={() => props.data?.highlight(null, true)} style={{ transform: `translate(-50%, -50%) translate(${x}px, ${y}px)` }} aria-pressed={props.selected} aria-label={props.data?.label} onClick={(event) => props.data?.choose(props.id, event.currentTarget)}>{bundle && bundle.directions.length > 1 ? "↔" : "→"} {bundle ? t(bundle.kind === "herdr_direct" ? "overviewGraph.directInputs" : "overviewGraph.letters", { count: bundle.count }) : t("overviewGraph.delegations", { count: props.data.lineage?.count ?? 1 })}</button></EdgeLabelRenderer>
+    <EdgeLabelRenderer><button type="button" className="og-letter-label nodrag nopan" data-kind={bundle?.kind ?? "lineage"} data-pair={JSON.stringify([props.source, props.target].sort())} data-paired={props.data?.paired} data-emphasized={props.data?.emphasized} onPointerEnter={() => props.data?.highlight(props.id, false)} onPointerLeave={() => props.data?.highlight(null, false)} onFocus={() => props.data?.highlight(props.id, true)} onBlur={() => props.data?.highlight(null, true)} style={{ transform: `translate(-50%, -50%) translate(${x}px, ${y}px)` }} aria-pressed={props.selected} aria-label={props.data?.label} onClick={(event) => props.data?.choose(props.id, event.currentTarget)}>{bundle && bundle.directions.length > 1 ? "↔" : "→"} {bundle ? t(bundle.kind === "herdr_direct" ? "overviewGraph.directInputs" : "overviewGraph.letters", { count: bundle.count }) : t("overviewGraph.delegations", { count: props.data.lineage?.count ?? 1 })}</button></EdgeLabelRenderer>
   </>;
 }
 

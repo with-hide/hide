@@ -942,6 +942,7 @@ Click, Enter or Space selects one session and opens its details beside the graph
 Escape closes details first; changing filter or scope clears a selection that no longer matches.
 Delegation has a solid parent-to-child arrow, letters have long dashes, and direct input has short dots; all retain arrow clearance and a contrasting underlay.
 All three kinds have separate curved lanes and real count labels, including aggregated project endpoints.
+Their labels share one endpoint-safe anchor with stable kind lanes, so clearing task text cannot place two counts on top of each other.
 Selecting a session or relationship strengthens related paths and dims the others; labels are keyboard targets that open the corresponding safe metadata.
 Selection and Replay flow trigger one finite token-timed flow animation; the motion switch and reduced motion disable it, and no decorative animation runs at idle.
 Mail visibility, hover, focus and selection do not enter the layout key or change node coordinates.

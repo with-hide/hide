@@ -108,7 +108,11 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     const point = current ? layout.placement?.nodes.get(current.id) : undefined;
     if (current && group && point && layout.size) {
       const canvas = host.current?.querySelector(".og-canvas")?.getBoundingClientRect();
-      const zoom = canvas ? Math.min(0.95, canvas.width / (group.width + layout.size.spacing.padding * 2), canvas.height / (group.height + layout.size.spacing.padding * 2)) : 0.8;
+      // Endpoint-safe relationship labels can extend above the member footprint.
+      // Include their full kind stack when framing the readable current cluster.
+      const labelMargin = Math.max(layout.size.spacing.betweenNodes, layout.size.compactHeight / 3) * 2 + layout.size.rootHeight / 5;
+      const padding = Math.max(layout.size.spacing.padding, labelMargin);
+      const zoom = canvas ? Math.min(0.95, canvas.width / (group.width + padding * 2), canvas.height / (group.height + padding * 2)) : 0.8;
       if (zoom >= 0.6) {
         void flow.setCenter(group.x + group.width / 2 + (offsets.get(current.projectId)?.x ?? 0), group.y + group.height / 2 + (offsets.get(current.projectId)?.y ?? 0), { zoom, duration: 0 });
         return;
@@ -210,6 +214,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   const hasEmphasis = Boolean(activeSession || hovered || focused || activeEdge || edgeHover || edgeFocus);
   const edgeClass = (active: boolean) => `${active ? " og-emphasized" : hasEmphasis ? " og-muted" : ""}${playing && (!hasEmphasis || active) ? " og-playing" : ""}`;
   const arrow = { type: MarkerType.ArrowClosed, color: "var(--agent-working)", width: 24, height: 24, orient: "auto-start-reverse" };
+  const labelLaneStep = size ? Math.max(size.spacing.betweenNodes, size.compactHeight / 3) : 0;
   const handles = (source: string, target: string) => {
     const leftward = positionOf(source).x > positionOf(target).x;
     return { sourceHandle: leftward ? "source-left" : "source-right", targetHandle: leftward ? "target-right" : "target-left" };
@@ -219,7 +224,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     const active = emphasized(edge.from) || emphasized(edge.to) || edgeHover === id || edgeFocus === id || activeEdge === id;
     const label = `${t("overviewGraph.lineage")}: ${names.get(edge.from)} → ${names.get(edge.to)}`;
     return { id, source: edge.from, target: edge.to, ...handles(edge.from, edge.to), type: "letters", className: `og-lineage${edgeClass(active)}`, ariaLabel: label,
-      data: { lineage: edge, label, playback, emphasized: active, paired: false, laneOffset: 0, highlight: highlightLetter, choose: chooseLetters },
+      data: { lineage: edge, label, playback, emphasized: active, paired: false, laneOffset: 0, labelLaneStep, highlight: highlightLetter, choose: chooseLetters },
       markerEnd: { ...arrow, color: "var(--primary)" }, selected: activeEdge === id, focusable: false, selectable: false, zIndex: 0 };
   });
   const pairKey = (edge: Communication) => JSON.stringify([edge.source, edge.target].sort());
@@ -229,8 +234,8 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     const active = emphasized(edge.source) || emphasized(edge.target) || edgeHover === edge.id || edgeFocus === edge.id || selection?.kind === "letters" && selection.id === edge.id;
     const label = `${names.get(edge.source)} ${edge.directions.length > 1 ? "↔" : "→"} ${names.get(edge.target)}: ${t(edge.kind === "herdr_direct" ? "overviewGraph.directInputs" : "overviewGraph.letters", { count: edge.count })}`;
     const paired = directPairs.has(pairKey(edge)) && letterPairs.has(pairKey(edge));
-    const laneOffset = (size ? Math.max(size.spacing.betweenNodes, size.compactHeight / 3) : 0) * (edge.kind === "herdr_direct" ? -1 : 1);
-    return { id: edge.id, source: edge.source, target: edge.target, ...handles(edge.source, edge.target), type: "letters", className: `og-communication${edge.kind === "herdr_direct" ? " og-direct-input" : ""}${edgeClass(active)}`, ariaLabel: label, data: { bundle: edge, label, playback, emphasized: active, paired, laneOffset, highlight: highlightLetter, choose: chooseLetters }, markerEnd: edge.kind === "herdr_direct" ? { ...arrow, color: "var(--primary)" } : arrow, markerStart: edge.directions.length > 1 ? (edge.kind === "herdr_direct" ? { ...arrow, color: "var(--primary)" } : arrow) : undefined, selected: selection?.kind === "letters" && selection.id === edge.id, focusable: false, selectable: false, zIndex: 0 };
+    const laneOffset = labelLaneStep * (edge.kind === "herdr_direct" ? -1 : 1);
+    return { id: edge.id, source: edge.source, target: edge.target, ...handles(edge.source, edge.target), type: "letters", className: `og-communication${edge.kind === "herdr_direct" ? " og-direct-input" : ""}${edgeClass(active)}`, ariaLabel: label, data: { bundle: edge, label, playback, emphasized: active, paired, laneOffset, labelLaneStep, highlight: highlightLetter, choose: chooseLetters }, markerEnd: edge.kind === "herdr_direct" ? { ...arrow, color: "var(--primary)" } : arrow, markerStart: edge.directions.length > 1 ? (edge.kind === "herdr_direct" ? { ...arrow, color: "var(--primary)" } : arrow) : undefined, selected: selection?.kind === "letters" && selection.id === edge.id, focusable: false, selectable: false, zIndex: 0 };
   }));
   const moveNodes = (changes: NodeChange[]) => {
     const moves = changes.filter((change) => change.type === "position" && change.position);
