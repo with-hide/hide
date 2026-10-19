@@ -14,6 +14,8 @@ import { animationsFinished, quietFor } from "./wait";
 
 test.describe.configure({ timeout: 180_000 });
 
+const promptNow = Date.parse("2026-10-03T09:00:00Z");
+
 function git(cwd: string, args: string[]): void {
   execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.invalid", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "ignore" });
 }
@@ -29,7 +31,7 @@ async function prompt(herdr: HerdrFixture, pane: string): Promise<void> {
 }
 
 /** A Herdr workspace at `cwd`, with a fake `claude` agent titled `task` unless it is null. */
-async function workspaceAt(herdr: HerdrFixture, cwd: string, task: string | null): Promise<string> {
+async function workspaceAt(herdr: HerdrFixture, cwd: string, task: string | null, at?: number): Promise<string> {
   const created = herdr.run(["workspace", "create", "--cwd", cwd, "--label", path.basename(cwd), "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as {
     result: { root_pane: { pane_id: string } };
   };
@@ -37,7 +39,7 @@ async function workspaceAt(herdr: HerdrFixture, cwd: string, task: string | null
   await prompt(herdr, pane);
   if (task) {
     herdr.run(["agent", "start", `agent-${path.basename(cwd)}`, "--kind", "claude", "--pane", pane]);
-    labelAgent(herdr, pane, { task });
+    labelAgent(herdr, pane, { task, at });
   }
   return pane;
 }
@@ -111,8 +113,8 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     fs.mkdirSync(notes);
 
     const mainPane = await workspaceAt(herdr, repo, "메인 체크아웃 정리");
-    const rowsPane = await workspaceAt(herdr, worktree, "사이드바 행 구현");
-    const notesPane = await workspaceAt(herdr, notes, "회의록 요약 정리");
+    const rowsPane = await workspaceAt(herdr, worktree, "사이드바 행 구현", promptNow - 3 * 3_600_000);
+    const notesPane = await workspaceAt(herdr, notes, "회의록 요약 정리", promptNow - 2 * 86_400_000);
 
     daemon = await startHided(herdr, "projects-sidebar");
     const last = new Map<string, Record<string, unknown>>();
@@ -309,9 +311,11 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     await expect(folderToggle).toHaveAttribute("aria-expanded", "true");
     await expect(featureToggle).toHaveAttribute("aria-expanded", "true");
     await expect(folder.locator(`[data-checkout-agents-open] [data-pane="${notesPane}"]`)).toBeVisible();
-    // B7: an agent's elapsed time counts from the state change the core saw.
-    await expect(folder.locator(`[data-pane="${notesPane}"] [data-agent-elapsed]`)).toHaveText(/^\d+[sm]$/);
-    await expect(feature.locator(`[data-pane="${rowsPane}"] [data-agent-elapsed]`)).toHaveText(/^\d+[sm]$/);
+    // Prompt elapsed B1: exact native request ages, independent of state and daemon age.
+    await page.clock.setFixedTime(promptNow);
+    await expect(folder.locator(`[data-pane="${notesPane}"] [data-agent-elapsed]`)).toHaveText("2d");
+    await expect(feature.locator(`[data-pane="${rowsPane}"] [data-agent-elapsed]`)).toHaveText("3h");
+    await page.clock.setSystemTime(Date.now());
     await folderToggle.click();
     await expect(folder.locator("[data-checkout-agents-open]")).toHaveCount(0);
 
