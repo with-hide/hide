@@ -75,6 +75,22 @@ static int fit_schema(char *label, int argc, char **argv) {
   int plain;
   const char *schema = request_schema(argc, argv, &plain);
   if (!schema) return 1;
+  /* Native reader fixtures keep their recorded marker. Adapt its old goal
+     decision at the provider boundary, not in the product's strict parser. */
+  char *legacy = strstr(label, ",\"goal_changed\":");
+  if (strstr(schema, "\"goal_update\"") && legacy) {
+    const char *value = legacy + strlen(",\"goal_changed\":");
+    int changed = strncmp(value, "true,", 5) == 0;
+    if (!changed && strncmp(value, "false,", 6) != 0) return 0;
+    const char *replacement = changed ? ",\"goal_update\":\"replace\"" : ",\"goal_update\":\"keep\"";
+    size_t old_length = (size_t)(value - legacy) + (changed ? 4 : 5);
+    size_t new_length = strlen(replacement);
+    size_t length = strlen(label);
+    size_t capacity = sizeof prompt - (size_t)(label - prompt);
+    if (length - old_length + new_length >= capacity) return 0;
+    memmove(legacy + new_length, legacy + old_length, strlen(legacy + old_length) + 1);
+    memcpy(legacy, replacement, new_length);
+  }
   if (strstr(schema, "\"end\"")) {
     /* Recorded native-format fixtures retain their old label marker. This
        controlled provider gives that unrelated reader journey no work judgment
