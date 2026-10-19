@@ -322,6 +322,10 @@ They never enter a commit; write them under `agents/runs/<slug>/`, which is igno
 
 ## Releases
 
+A manual [unsigned release candidate](docs/BUILD.md#unsigned-release-candidates) can prepare verified public Linux and Windows packages without creating a tag or publishing anything.
+It also runs the full existing agent journey on that source; the candidate receipt is produced only after both gates pass.
+This preparation workflow leaves the active tag-triggered publisher and the release procedure here unchanged.
+
 A release is a tag on a commit that is already on `main`, never on a branch.
 Pushing a stable `vX.Y.Z` tag publishes that version when every gate passes, with nothing for a person to do (operator decision 2026-10-12, `release.yml`).
 A `vX.Y.Z-rc.N` tag runs the same gates and publishes a pre-release that is never the latest, for trying a signed build before its stable release ([docs/BUILD.md](docs/BUILD.md#release-asset-gate)).
