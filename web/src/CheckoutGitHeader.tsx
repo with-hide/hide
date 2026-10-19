@@ -22,7 +22,7 @@ export function CheckoutFileCount({ header, actions }: { header: Header | null |
   const state = !live ? "stale" : header?.state ?? "loading";
   const facts = header?.facts;
   const abnormal = state !== "fresh";
-  const label = abnormal ? t(`checkoutGit.${state}`) : facts && facts.conflicts > 0 ? t("checkoutGit.conflicts", { count: facts.conflicts }) : t("checkoutGit.files", { count: facts?.changed_files ?? 0 });
+  const label = abnormal ? t(`checkoutGit.${state}`) : [t("checkoutGit.files", { count: facts?.changed_files ?? 0 }), facts && facts.conflicts > 0 ? t("checkoutGit.conflicts", { count: facts.conflicts }) : null].filter(Boolean).join(" · ");
   if (!abnormal && facts?.changed_files === 0) return null;
   const Icon = state === "loading" ? LoaderCircleIcon : state === "unavailable" ? TriangleAlertIcon : abnormal ? ClockIcon : facts && facts.conflicts > 0 ? TriangleAlertIcon : FileDiffIcon;
   return <Hint label={`${label} · ${t("checkoutGit.countMeaning")}`}><Button variant="ghost" size="sm" className="h-(--size-control-sm) gap-xs px-xs text-caption font-normal" aria-label={`${label} · ${t("checkoutGit.countMeaning")}`} data-checkout-files={state} data-keyboard-stays="true" onMouseDown={(event) => event.preventDefault()} onClick={() => actions.showTool("changes")}><Icon className={iconClass} />{facts ? <span className="tabular-nums">{facts.changed_files}</span> : <span>?</span>}</Button></Hint>;
@@ -30,8 +30,9 @@ export function CheckoutFileCount({ header, actions }: { header: Header | null |
 
 export function CheckoutUpstream({ header }: { header: Header | null | undefined }) {
   const { t, i18n } = useInterfaceTranslation();
+  const live = useShellStore((state) => state.connection === "live");
   const facts = header?.facts;
-  if (!facts || header?.state !== "fresh") return null;
+  if (!live || !facts || header?.state !== "fresh") return null;
   const label = facts.upstream_state === "tracked" ? t("checkoutGit.sync", { target: facts.upstream, ahead: facts.ahead, behind: facts.behind }) : t(`checkoutGit.upstream.${facts.upstream_state}`);
   if (facts.upstream_state === "tracked" && facts.ahead === 0 && facts.behind === 0) return null;
   return <Detail label={label} data-checkout-upstream={facts.upstream_state} mark={facts.upstream_state === "tracked" ? <>{facts.ahead ? <><ArrowUpIcon className={iconClass} /><span>{facts.ahead}</span></> : null}{facts.behind ? <><ArrowDownIcon className={iconClass} /><span>{facts.behind}</span></> : null}</> : <GitCompareArrowsIcon className={iconClass} />}>
@@ -52,8 +53,8 @@ export function CheckoutCommit({ header, view, actions, title, time }: { header:
   const ciLabel = t(`checkoutGit.ci.${state}`);
   const CiIcon = ({ loading: LoaderCircleIcon, passing: CheckIcon, failed: XIcon, pending: LoaderCircleIcon, none: CircleMinusIcon, unknown: CircleHelpIcon, unavailable: TriangleAlertIcon, stale: ClockIcon })[state];
   const commitLabel = t("checkoutGit.commit", { subject: facts.subject });
-  return <div className="flex min-w-0 items-center gap-xs" data-checkout-commit-group="true">
-    <Detail key={head} label={commitLabel} className="shrink" data-checkout-commit={head} mark={<><GitCommitHorizontalIcon className={iconClass} />{title ? <span className="min-w-0 truncate" data-checkout-subject="true">{facts.subject}</span> : null}{time && elapsed ? <span className="shrink-0 text-muted-foreground" data-checkout-age="true">{t("checkoutGit.ago", { time: elapsed })}</span> : null}</>}>
+  return <>
+    <Detail key={head} label={commitLabel} className="min-w-(--size-control-sm) shrink" data-checkout-commit={head} mark={<><GitCommitHorizontalIcon className={iconClass} />{title ? <span className="min-w-0 truncate" data-checkout-subject="true">{facts.subject}</span> : null}{time && elapsed ? <span className="shrink-0 text-muted-foreground" data-checkout-age="true">{t("checkoutGit.ago", { time: elapsed })}</span> : null}</>}>
       <p className="font-medium">{facts.subject}</p><p className="font-mono">{head.slice(0, 12)}</p><p>{facts.commit_unix_seconds == null ? t("checkoutGit.notKnown") : new Date(facts.commit_unix_seconds * 1000).toLocaleString(i18n.language)}</p>{header?.state !== "fresh" || !live ? <p role="status">{t("checkoutGit.stale")}</p> : null}
     </Detail>
     <Detail key={`${head}:ci`} label={ciLabel} data-checkout-ci={state} mark={<><CiIcon className={iconClass} /><span>CI</span></>}>
@@ -63,5 +64,5 @@ export function CheckoutCommit({ header, view, actions, title, time }: { header:
         if (current?.device_id === view.device_id && current.path === view.path && current.git?.facts?.head_sha === head && current.git.ci?.url === ci.url) actions.openBrowser(ci.url!, { device_id: view.device_id, path: view.path });
       }}>{t("checkoutGit.openChecks")}</Button> : null}
     </Detail>
-  </div>;
+  </>;
 }

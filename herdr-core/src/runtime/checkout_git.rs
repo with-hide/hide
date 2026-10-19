@@ -11,6 +11,7 @@ pub(super) struct State {
     pub(super) target: Option<GitRequest>,
     generation: u64,
     pub(super) header: Option<Header>,
+    repository: Option<String>,
     last_git: Option<Instant>,
     last_ci: Option<Instant>,
 }
@@ -58,6 +59,7 @@ impl Runtime {
             });
             self.checkout_header.last_git = None;
             self.checkout_header.last_ci = None;
+            self.checkout_header.repository = None;
         }
         self.checkout_header.target.clone()
     }
@@ -69,13 +71,7 @@ impl Runtime {
             return None;
         }
         let facts = header.facts.as_ref()?;
-        let repository = facts
-            .origin_url
-            .as_deref()
-            .and_then(hide_node_link::gh::repository_of_remote)?;
-        if !hide_node_link::gh::is_repository(&repository) {
-            return None;
-        }
+        let repository = self.checkout_header.repository.clone()?;
         Some(CiRequest {
             git: git.clone(),
             repository,
@@ -99,18 +95,24 @@ impl Runtime {
             .as_mut()
             .expect("an active target has a header");
         match answer {
-            Ok(facts) => {
-                if header.facts.as_ref().is_none_or(|previous| {
-                    previous.head_sha != facts.head_sha || previous.origin_url != facts.origin_url
-                }) {
-                    let readable = facts
-                        .origin_url
-                        .as_deref()
-                        .and_then(hide_node_link::gh::repository_of_remote)
-                        .is_some_and(|repository| hide_node_link::gh::is_repository(&repository));
+            Ok(mut facts) => {
+                // The node needs the configured URL; the renderer must never receive
+                // its userinfo. Keep only the validated provider identity privately.
+                let repository = facts
+                    .origin_url
+                    .take()
+                    .as_deref()
+                    .and_then(hide_node_link::gh::repository_of_remote)
+                    .filter(|repository| hide_node_link::gh::is_repository(repository));
+                if self.checkout_header.repository != repository
+                    || header
+                        .facts
+                        .as_ref()
+                        .is_none_or(|previous| previous.head_sha != facts.head_sha)
+                {
                     header.ci = facts.head_sha.as_ref().map(|sha| Ci {
                         sha: sha.clone(),
-                        state: if readable {
+                        state: if repository.is_some() {
                             CiState::Loading
                         } else {
                             CiState::Unavailable
@@ -120,6 +122,7 @@ impl Runtime {
                     });
                     self.checkout_header.last_ci = None;
                 }
+                self.checkout_header.repository = repository;
                 header.facts = Some(facts);
                 header.state = GitState::Fresh;
                 header.reason = None;

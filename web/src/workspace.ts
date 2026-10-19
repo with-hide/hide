@@ -81,7 +81,6 @@ export type CheckoutGitHeader = {
     ahead: number | null;
     behind: number | null;
     last_fetch_unix_ms: number | null;
-    origin_url: string | null;
   } | null;
   ci: {
     sha: string;

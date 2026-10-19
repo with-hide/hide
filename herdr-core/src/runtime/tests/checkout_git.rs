@@ -92,3 +92,45 @@ fn header_fences_late_git_ci_and_reconnect_results_and_ages_without_false_clean(
         GitState::Fresh
     );
 }
+
+#[test]
+fn header_keeps_provider_identity_without_exposing_origin_credentials_to_the_renderer() {
+    let mut runtime = runtime();
+    let request = target(&runtime, 1);
+    runtime.checkout_header.target = Some(request.clone());
+    runtime.checkout_header.header = Some(Header {
+        state: GitState::Loading,
+        facts: None,
+        reason: None,
+        ci: None,
+    });
+    let facts = CheckoutGit {
+        head_sha: Some("a".repeat(40)),
+        origin_url: Some(
+            "https://fixture-user:fixture-secret@github.com/example/fixture.git".into(),
+        ),
+        ..Default::default()
+    };
+    let node_wire = serde_json::to_string(&facts).unwrap();
+    assert!(
+        node_wire.contains("fixture-secret"),
+        "node answers retain the configured URL until core ingestion"
+    );
+    assert!(runtime.ingest_checkout_git((request.clone(), Ok(facts.clone())), Instant::now()));
+    assert_eq!(
+        runtime.checkout_ci_request().unwrap().repository,
+        "example/fixture"
+    );
+    let public = serde_json::to_value(
+        runtime
+            .checkout_header_snapshot(&(request.root.device_id.clone(), request.root.path.clone()))
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(public["facts"].get("origin_url").is_none());
+    assert!(!public.to_string().contains("fixture-secret"));
+    assert!(
+        !runtime.ingest_checkout_git((request, Ok(facts)), Instant::now()),
+        "repeated node answers still publish no duplicate frame"
+    );
+}

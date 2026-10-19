@@ -18,6 +18,7 @@ pub struct CheckoutGit {
     pub ahead: Option<u32>,
     pub behind: Option<u32>,
     pub last_fetch_unix_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub origin_url: Option<String>,
 }
 

@@ -32,7 +32,7 @@ export function ServerSessionScene({ scene: kind, theme, scale, content, state =
       workspace.is_home = state === "home";
       scene.rest.workspace_view.git = {
         state: state === "loading" ? "loading" : state === "unavailable" ? "unavailable" : state === "stale" ? "stale" : "fresh", reason: null,
-        facts: ["loading","unavailable"].includes(state) ? null : {head_sha: state === "unborn" ? null : head,subject:content === "long" ? "매우 긴 커밋 제목과 English commit subject that needs truncation without hiding the path and file count" : "탭 전환 시 포커스 유지",commit_unix_seconds:Math.floor(Date.now()/1000)-720,changed_files:state === "clean" ? 0 : 5,conflicts:state === "conflict" ? 2 : 0,upstream:"origin/main",upstream_state:state === "no-upstream" ? "none" : state === "gone" ? "gone" : "tracked",ahead:0,behind:state === "clean" ? 0 : 3,last_fetch_unix_ms:Date.now()-3600000,origin_url:"https://github.com/example/fixture.git"},
+        facts: ["loading","unavailable"].includes(state) ? null : {head_sha: state === "unborn" ? null : head,subject:content === "long" ? "매우 긴 커밋 제목과 English commit subject that needs truncation without hiding the path and file count" : "탭 전환 시 포커스 유지",commit_unix_seconds:Math.floor(Date.now()/1000)-720,changed_files:state === "clean" ? 0 : 5,conflicts:state === "conflict" ? 2 : 0,upstream:"origin/main",upstream_state:state === "no-upstream" ? "none" : state === "gone" ? "gone" : "tracked",ahead:0,behind:state === "clean" ? 0 : 3,last_fetch_unix_ms:Date.now()-3600000},
         ci:{sha:head,state:state === "pending" || state === "failed" || state === "none" || state === "unknown" ? state : "passing",checked_at_unix_ms:Date.now(),url:null},
       };
     }

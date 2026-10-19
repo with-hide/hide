@@ -22,6 +22,8 @@ Its detail names the target SHA and read time, excludes uncommitted edits explic
 An incomplete check-run list beyond the bounded read is unknown, never a partial success.
 Changing device, checkout, connection or HEAD fences old results; the front checkout's file status refreshes independently of the Changes lane and stale data is labelled.
 On narrow widths the relative age disappears before the subject, then the subject contracts to the commit icon, preserving the path, count and trailing tools; details remain keyboard reachable and Escape returns to their triggers.
+Compact commit and CI buttons keep their own icon and text footprint even when the open sidebar leaves less space than the window width; they never overflow into Overview or Open server.
+When the shell disconnects, retained upstream claims disappear until the connection is live again, and a conflict count's accessible name identifies the total changed records before the conflicted subset.
 Home and ordinary folders carry no Git header.
 Web owners: `WorkspaceTitleBar` in `web/src/WorkspaceScreen.tsx` and `web/src/CheckoutGitHeader.tsx`; core owner: `herdr-core/src/runtime/checkout_git.rs`, read by `herdr-core/src/checkout_git.rs` on the existing Changes pump.
 Its right end holds two tool icons, in this order: Overview and `Open server`; the lane's tools are on the rail (see The right lane).

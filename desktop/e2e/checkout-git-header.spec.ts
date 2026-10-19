@@ -10,11 +10,13 @@ import { captureNativeWindow } from "./native-window";
 
 test("checkout Git header fits the isolated native candidate at 720 by 480", async () => {
   const herdr = await startHerdr();
-  const fixture = checkoutGitFixture(herdr);
-  git(fixture.root, ["branch", "-m", "feature/매우-긴-한글과-English-checkout-name"]);
-  const run = isolate(herdr, "checkout-header");
+  let run: ReturnType<typeof isolate> | undefined;
   let app: ElectronApplication | undefined;
+  const errors: unknown[] = [];
   try {
+    const fixture = checkoutGitFixture(herdr);
+    git(fixture.root, ["branch", "-m", "feature/매우-긴-한글과-English-checkout-name"]);
+    run = isolate(herdr, "checkout-header");
     const opened = await launchShell(run.env);
     app = opened.app;
     const page = opened.page;
@@ -36,9 +38,40 @@ test("checkout Git header fits the isolated native candidate at 720 by 480", asy
       expect(await toolbar.evaluate(node => node.scrollWidth > node.clientWidth)).toBe(false);
       // The 32px owning row includes its 1px border; the toolbar fills its content box.
       expect(await page.locator('[data-title-row]').evaluate(node => node.getBoundingClientRect().height)).toBe(32);
-      await captureNativeWindow(app, `checkout-header-native-720-${theme}`, { sha: fixture.sha, provider: "private synthetic check-runs and commit statuses", home: run.env.HOME, socket: herdr.socket, state: run.env.HIDE_STATE_DIR });
+      const geometry = await toolbar.evaluate(node => {
+        const controls = ["data-checkout-commit", "data-checkout-ci", "data-open-overview", "data-open-server"].map(attribute => {
+          const button = node.querySelector<HTMLButtonElement>(`[${attribute}]`)!;
+          const box = button.getBoundingClientRect();
+          const children = [...button.children].map(child => child.getBoundingClientRect());
+          return { attribute, left: box.left, right: box.right, width: box.width, contentRight: Math.max(...children.map(child => child.right)), hit: button.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)) };
+        });
+        return { toolbarWidth: node.getBoundingClientRect().width, controls };
+      });
+      console.log(`${theme} geometry: ${JSON.stringify(geometry)}`);
+      await captureNativeWindow(app, `checkout-header-native-720-${theme}`, { geometry, sha: fixture.sha, provider: "private synthetic check-runs and commit statuses", home: run.env.HOME, socket: herdr.socket, state: run.env.HIDE_STATE_DIR });
+      for (const [index, control] of geometry.controls.entries()) {
+        expect(control.hit, `${control.attribute} center reaches its own button`).toBe(true);
+        expect(control.contentRight, `${control.attribute} contents fit its button`).toBeLessThanOrEqual(control.right + 1);
+        const next = geometry.controls[index + 1];
+        if (next) expect(next.left - control.right, `${control.attribute} is separate from ${next.attribute}`).toBeGreaterThanOrEqual(2);
+      }
+      await page.locator('[data-checkout-ci]').click();
+      await expect(page.locator('[data-ci-sha]')).toHaveText(fixture.sha);
+      await page.keyboard.press("Escape");
+      await page.locator('[data-open-overview]').click();
+      await expect(page.locator('[data-overview-page]')).toBeVisible();
+      await page.locator('[data-open-overview]').click();
+      await page.locator('[data-open-server]').click();
+      await expect(page.getByRole('dialog', { name: 'Running servers' })).toBeVisible();
+      await page.keyboard.press("Escape");
     }
+  } catch (error) {
+    errors.push(error);
   } finally {
-    await app?.close(); run.cleanup(); herdr.stop();
+    try { await app?.close(); } catch (error) { errors.push(error); }
+    try { run?.cleanup(); } catch (error) { errors.push(error); }
+    try { herdr.stop(); } catch (error) { errors.push(error); }
   }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length) throw new AggregateError(errors, "private checkout header fixture failed; original and cleanup errors are retained");
 });
