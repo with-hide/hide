@@ -76,6 +76,9 @@ it.each([
       expect(container.querySelector("[data-graph-preview]")?.textContent).toContain("Session 400");
       expect(container.querySelector("[data-graph-session-list] > button")?.getAttribute("aria-pressed")).toBe("true");
       expect(events).toHaveLength(0);
+      await act(async () => useUiStore.getState().setOverview({ projectId: null }));
+      await act(async () => useUiStore.getState().setOverview({ projectId: "project-400" }));
+      expect(container.querySelector("[data-graph-preview]")).toBeNull();
       return;
     }
     await act(async () => container.querySelector<HTMLButtonElement>("[data-graph-session-list] button")!.click());

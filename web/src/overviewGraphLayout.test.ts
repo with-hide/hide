@@ -31,4 +31,13 @@ describe("project compounds", () => {
   it("rejects a compound beyond 400 including its parent group", async () => {
     await expect(placeCompoundGraph(new ELK(), [group("too-large", Array.from({ length: 400 }, (_, i) => `p${i}`))], spacing)).rejects.toThrow(/over the layout limit/);
   });
+
+  it.each([11, 48])("keeps all %i session rectangles clear of each other and the project center", async (count) => {
+    const input = group("project", Array.from({ length: count }, (_, index) => `session${index}`));
+    const placed = await placeCompoundGraph(new ELK(), [input], spacing);
+    const box = placed.groups.get(input.id)!;
+    const rectangles = [...placed.nodes.values()].map((point) => ({ x: point.x, y: point.y, width: 188, height: 184 }));
+    rectangles.push({ x: (box.width - input.width) / 2, y: (box.height - input.height) / 2, width: input.width, height: input.height });
+    for (const a of rectangles) for (const b of rectangles) if (a !== b) expect(a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y).toBe(true);
+  });
 });

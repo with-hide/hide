@@ -107,6 +107,12 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     const group = current ? layout.placement?.groups.get(current.projectId) : undefined;
     const point = current ? layout.placement?.nodes.get(current.id) : undefined;
     if (current && group && point && layout.size) {
+      const canvas = host.current?.querySelector(".og-canvas")?.getBoundingClientRect();
+      const zoom = canvas ? Math.min(0.95, canvas.width / (group.width + layout.size.spacing.padding * 2), canvas.height / (group.height + layout.size.spacing.padding * 2)) : 0.8;
+      if (zoom >= 0.6) {
+        void flow.setCenter(group.x + group.width / 2 + (offsets.get(current.projectId)?.x ?? 0), group.y + group.height / 2 + (offsets.get(current.projectId)?.y ?? 0), { zoom, duration: 0 });
+        return;
+      }
       void flow.setCenter(group.x + point.x + (offsets.get(current.projectId)?.x ?? 0) + (offsets.get(current.id)?.x ?? 0) + layout.size.rootWidth / 2,
         group.y + point.y + (offsets.get(current.projectId)?.y ?? 0) + (offsets.get(current.id)?.y ?? 0) + layout.size.rootHeight / 2, { zoom: 0.8, duration: 0 });
     } else if (model.projects[0]) centerProject(model.projects[0].id);
@@ -184,10 +190,11 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
       const point = placed.nodes.get(row.id) ?? (revealSlot ? placed.nodes.get(revealSlot) : undefined);
       if (!point) continue;
       const root = model.roots.has(row.id);
+      const compact = !model.projects.find((group) => group.id === row.projectId)?.expanded;
       // The layout owns these fixed dimensions. Retaining them also preserves React Flow's
       // measured handle bounds when hover/focus replaces a controlled node object.
-      const measured = { width: root ? size.rootWidth : size.childWidth, height: root ? size.rootHeight : size.childHeight };
-      const node: SessionNode = { id: row.id, parentId: row.projectId, type: "session", position: { x: point.x + (offsets.get(row.id)?.x ?? 0), y: point.y + (offsets.get(row.id)?.y ?? 0) }, ...measured, measured, selected: activeSession === row.id, data: { row, root, progress: progressFor(row), context: model.context.has(row.id), highlighted: related.has(row.id), current: current?.id === row.id, quietCount: model.quietBranches.get(row.id) ?? 0, folded: model.folded.has(row.id), fold, highlight, choose: chooseSession }, dragHandle: ".og-session-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 2 };
+      const measured = { width: compact ? size.compactWidth : root ? size.rootWidth : size.childWidth, height: compact ? size.compactHeight : root ? size.rootHeight : size.childHeight };
+      const node: SessionNode = { id: row.id, parentId: row.projectId, type: "session", position: { x: point.x + (offsets.get(row.id)?.x ?? 0), y: point.y + (offsets.get(row.id)?.y ?? 0) }, ...measured, measured, selected: activeSession === row.id, data: { row, root, compact, progress: progressFor(row), context: model.context.has(row.id), highlighted: related.has(row.id), current: current?.id === row.id, quietCount: model.quietBranches.get(row.id) ?? 0, folded: model.folded.has(row.id), fold, highlight, choose: chooseSession }, dragHandle: ".og-session-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 2 };
       nodes.push(node);
     }
   }
@@ -222,7 +229,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     const active = emphasized(edge.source) || emphasized(edge.target) || edgeHover === edge.id || edgeFocus === edge.id || selection?.kind === "letters" && selection.id === edge.id;
     const label = `${names.get(edge.source)} ${edge.directions.length > 1 ? "↔" : "→"} ${names.get(edge.target)}: ${t(edge.kind === "herdr_direct" ? "overviewGraph.directInputs" : "overviewGraph.letters", { count: edge.count })}`;
     const paired = directPairs.has(pairKey(edge)) && letterPairs.has(pairKey(edge));
-    const laneOffset = (size?.spacing.betweenNodes ?? 0) * (edge.kind === "herdr_direct" ? -1 : 1);
+    const laneOffset = (size ? Math.max(size.spacing.betweenNodes, size.compactHeight / 3) : 0) * (edge.kind === "herdr_direct" ? -1 : 1);
     return { id: edge.id, source: edge.source, target: edge.target, ...handles(edge.source, edge.target), type: "letters", className: `og-communication${edge.kind === "herdr_direct" ? " og-direct-input" : ""}${edgeClass(active)}`, ariaLabel: label, data: { bundle: edge, label, playback, emphasized: active, paired, laneOffset, highlight: highlightLetter, choose: chooseLetters }, markerEnd: edge.kind === "herdr_direct" ? { ...arrow, color: "var(--primary)" } : arrow, markerStart: edge.directions.length > 1 ? (edge.kind === "herdr_direct" ? { ...arrow, color: "var(--primary)" } : arrow) : undefined, selected: selection?.kind === "letters" && selection.id === edge.id, focusable: false, selectable: false, zIndex: 0 };
   }));
   const moveNodes = (changes: NodeChange[]) => {

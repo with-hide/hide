@@ -24,7 +24,7 @@ function useRevealNode(id: string) {
 }
 
 export type ProjectNode = Node<{ group: GraphProject; current: boolean; highlighted: boolean; highlight: (id: string | null, focus: boolean) => void; toggle: (id: string) => void }, "project">;
-export type SessionNode = Node<{ row: GraphAgent; root: boolean; progress: WorkProgress | null; context: boolean; highlighted: boolean; current: boolean; quietCount: number; folded: boolean; fold: (id: string) => void; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target: HTMLElement) => void }, "session">;
+export type SessionNode = Node<{ row: GraphAgent; root: boolean; compact: boolean; progress: WorkProgress | null; context: boolean; highlighted: boolean; current: boolean; quietCount: number; folded: boolean; fold: (id: string) => void; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target: HTMLElement) => void }, "session">;
 export type LetterEdge = Edge<{ bundle?: Communication; lineage?: { from: string; to: string; count: number }; label: string; playback: number; emphasized: boolean; paired: boolean; laneOffset: number; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target?: HTMLElement) => void }, "letters">;
 
 /** Handles are invisible routing anchors; no connection can be edited. */
@@ -64,7 +64,7 @@ export function SessionGraphNode({ id, data, selected }: NodeProps<SessionNode>)
   const { t } = useInterfaceTranslation();
   const { row, root, progress, choose, highlight } = data;
   const reveal = useRevealNode(id);
-  return <div className="og-session" data-root={root} data-state={row.bucket} data-selected={selected} data-current={data.current} data-context={data.context} data-highlighted={data.highlighted} data-graph-session={row.agent.pane_id}>
+  return <div className="og-session" data-root={root} data-compact={data.compact} data-state={row.bucket} data-selected={selected} data-current={data.current} data-context={data.context} data-highlighted={data.highlighted} data-graph-session={row.agent.pane_id}>
     <Ports />
     <button type="button" className="og-drag-handle og-session-drag nopan" aria-label={t("overviewGraph.dragSession", { session: row.agent.identity_label })}><GripIcon /></button>
     <button type="button" className="og-session-target nodrag nopan" aria-label={[row.agent.identity_label, data.context ? t("overviewGraph.context") : null, agentProductName(row.agent.agent_kind), markWords(t, row.agent), row.launchModel ? t("overviewGraph.launchModel", { model: row.launchModel }) : null].filter(Boolean).join(", ")} aria-pressed={selected} onPointerEnter={() => highlight(row.id, false)} onPointerLeave={() => highlight(null, false)} onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) reveal(event.currentTarget); highlight(row.id, true); }} onBlur={() => highlight(null, true)} onClick={(event) => choose(row.id, event.currentTarget)}>
@@ -81,6 +81,7 @@ export function SessionGraphNode({ id, data, selected }: NodeProps<SessionNode>)
 
 export function CommunicationGraphEdge(props: EdgeProps<LetterEdge>) {
   const { t } = useInterfaceTranslation();
+  const flow = useReactFlow();
   let [path, x, y] = getBezierPath(props);
   const bundle = props.data?.bundle;
   if (!props.data) return null;
@@ -96,6 +97,25 @@ export function CommunicationGraphEdge(props: EdgeProps<LetterEdge>) {
     path = `M ${props.sourceX},${props.sourceY} C ${startX},${startY} ${endX},${endY} ${props.targetX},${props.targetY}`;
     x = (props.sourceX + 3 * startX + 3 * endX + props.targetX) / 8;
     y = (props.sourceY + props.targetY) / 2 + offset;
+  }
+  // Labels may sit beside the curve, but never on either endpoint's task text.
+  // Only two endpoint rectangles are inspected, keeping this work constant per edge.
+  const endpoints = [props.source, props.target].map((id) => flow.getInternalNode(id)).filter((node) => node !== undefined);
+  const labelWidth = Math.min(...endpoints.map((node) => node.measured.width ?? 0));
+  const labelHeight = Math.min(...endpoints.map((node) => node.measured.height ?? 0)) / 5;
+  const bounds = endpoints.map((node) => {
+    const point = node.internals.positionAbsolute;
+    const left = point.x - labelWidth / 2;
+    const right = point.x + (node.measured.width ?? 0) + labelWidth / 2;
+    const top = point.y - labelHeight / 2;
+    const bottom = point.y + (node.measured.height ?? 0) + labelHeight / 2;
+    return { left, right, top, bottom };
+  });
+  const clear = (point: { x: number; y: number }) => bounds.every((box) => point.x <= box.left || point.x >= box.right || point.y <= box.top || point.y >= box.bottom);
+  if (!clear({ x, y })) {
+    const choices = bounds.flatMap((box) => [{ x: box.left, y }, { x: box.right, y }, { x, y: box.top }, { x, y: box.bottom }]).filter(clear);
+    const closest = choices.sort((a, b) => Math.hypot(a.x - x, a.y - y) - Math.hypot(b.x - x, b.y - y))[0]!;
+    x = closest.x; y = closest.y;
   }
   return <>
     <path className="og-edge-underlay" d={path} fill="none" />

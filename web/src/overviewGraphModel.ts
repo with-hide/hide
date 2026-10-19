@@ -184,9 +184,11 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
   const groups: GraphProject[] = [];
   let minimum = 0;
   for (const group of priority) {
-    if (minimum + 2 > LAYOUT_NODE_LIMIT) break;
+    const protectedCount = group.agents.filter((row) => pinned.has(row.id)).length;
+    const access = Math.min(group.agents.length, protectedCount + 1);
+    if (minimum + 1 + access > LAYOUT_NODE_LIMIT) break;
     groups.push({ ...group, shown: [], revealSlot: null, revealed: null });
-    minimum += 2;
+    minimum += 1 + access;
   }
   let room = LAYOUT_NODE_LIMIT - minimum;
   let hidden = all.length - groups.length;
@@ -195,15 +197,16 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
     group.roots = group.agents.filter((row) => !projectedParents.has(row.id)).length;
     const protectedRows = group.agents.filter((row) => pinned.has(row.id));
     const ordered = [...protectedRows, ...group.agents.filter((row) => !pinned.has(row.id))];
+    const reserved = Math.min(group.agents.length, protectedRows.length + 1);
     // One admission position is already reserved above. An open project needs
     // no reveal slot, while every summary can reveal any of its list rows.
-    if (group.expanded && group.agents.length > room + 1) group.expanded = false;
-    if (group.expanded || group.agents.length === 1) {
-      group.shown = ordered.slice(0, room + 1);
-      room -= group.shown.length - 1;
+    if (group.expanded && group.agents.length > room + reserved) group.expanded = false;
+    if (group.expanded || group.agents.length <= 1) {
+      group.shown = ordered.slice(0, room + reserved);
+      room -= group.shown.length - reserved;
     } else {
-      group.shown = ordered.slice(0, Math.min(6, room));
-      room -= group.shown.length;
+      group.shown = ordered.slice(0, Math.max(protectedRows.length, Math.min(6, room + reserved - 1)));
+      room -= group.shown.length + 1 - reserved;
       group.revealSlot = `${group.id}:reveal`;
       group.revealed = group.agents.find((row) => row.id === options.selected && !group.shown.some((shown) => shown.id === row.id))
         ?? protectedRows.find((row) => !group.shown.some((shown) => shown.id === row.id)) ?? null;

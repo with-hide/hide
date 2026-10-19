@@ -913,10 +913,12 @@ Projects form a radial map: each center shows the actual project name, matching-
 One-project scope retains its center and offers All projects to return.
 A collapsed project keeps up to six stable-ID representatives and a remaining-session count; an oversized expansion stays summarized within the shared 400-node budget.
 Each admitted center reserves an access position for a hidden selected member, and selecting a session whose project is outside that budget opens its project scope with that session selected.
+The current member has its own protected position, so choosing another member cannot displace it at the graph limit.
+Up to twelve sessions share the first ring; summarized projects use smaller centers and representative nodes showing task titles and state, with provider and proved launch model retained in their accessible names and details.
 Project search compares real names and counts and moves the camera to that center; the paged session list searches every matching session, including those outside the graph budget.
 A hidden selected session uses a reserved radial position without moving other nodes.
 When the confirmed focused device, pane and native session have a graph proof at entry, that exact session is highlighted without opening details; pane reuse cannot inherit the initial selection.
-The first camera centers the current project or a representative cluster at a readable zoom, and never automatically fits the entire map.
+The first camera shows the current project's whole ordinary cluster at a readable zoom; a cluster too large for that zoom centers the exact current member instead, and it never automatically fits the entire map.
 Fit graph, Current pane and Reset layout remain explicit keyboard-accessible controls.
 Session drag handles move only that session; a project's handle moves its entire relative-positioned group, including summarized members when expanded later.
 Offsets live only in this mounted view, edges follow the moved endpoints, and Reset layout clears offsets and restores the initial camera without dispatching pane moves.

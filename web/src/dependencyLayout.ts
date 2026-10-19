@@ -116,7 +116,7 @@ export type CompoundSpacing = Spacing & { padding: number; header: number; group
 
 /** Sessions occupy fixed radial slots; ELK packs their independent project footprints.
  * Fixed ring capacity leaves existing slots still when another session is revealed.
- * A ring's chord exceeds the diagonal of a session plus its gap, preventing overlap.
+ * Each ring clears the actual label rectangles, avoiding diagonal-sized empty space.
  */
 export async function placeCompoundGraph(elk: Pick<ELK, "layout">, groups: readonly CompoundGroup[], spacing: CompoundSpacing): Promise<CompoundPlacement> {
   const count = groups.reduce((sum, group) => sum + 1 + group.children.length, 0);
@@ -126,17 +126,28 @@ export async function placeCompoundGraph(elk: Pick<ELK, "layout">, groups: reado
     const width = Math.max(0, ...group.children.map((node) => node.width));
     const height = Math.max(0, ...group.children.map((node) => node.height));
     const diagonal = Math.hypot(width, height);
-    const step = Math.max(diagonal, (Math.hypot(group.width, group.height) + diagonal) / 2) + spacing.betweenNodes;
-    const points = group.children.map((node, index) => {
-      // Six on the first ring, twelve on the second, and so on.
-      let ring = 1;
-      let slot = index;
-      while (slot >= 6 * ring) { slot -= 6 * ring; ring += 1; }
-      const radius = step * ring;
-      const occupants = Math.min(6 * ring, group.children.length - index + slot);
-      const angle = -Math.PI / 2 + slot * Math.PI * 2 / occupants;
-      return { id: node.id, x: Math.cos(angle) * radius - node.width / 2, y: Math.sin(angle) * radius - node.height / 2, layer: ring };
-    });
+    const points: (PlacedNode & { id: string })[] = [];
+    let radius = 0;
+    let start = 0;
+    for (let ring = 1; start < group.children.length; ring += 1) {
+      // An ordinary ten/eleven-session project fits on one ring.
+      const members = group.children.slice(start, start + 12 * ring);
+      const angles = members.map((_, index) => -Math.PI / 2 + index * Math.PI * 2 / members.length);
+      let needed = ring === 1 ? 0 : radius + diagonal + spacing.betweenNodes;
+      const clearance = (dx: number, dy: number, w: number, h: number) => Math.min(w / Math.max(Math.abs(dx), Number.EPSILON), h / Math.max(Math.abs(dy), Number.EPSILON));
+      for (let i = 0; i < members.length; i += 1) {
+        const node = members[i]!;
+        const angle = angles[i]!;
+        needed = Math.max(needed, clearance(Math.cos(angle), Math.sin(angle), (group.width + node.width) / 2 + spacing.betweenNodes, (group.height + node.height) / 2 + spacing.betweenNodes));
+        for (let j = 0; j < i; j += 1) needed = Math.max(needed, clearance(Math.cos(angle) - Math.cos(angles[j]!), Math.sin(angle) - Math.sin(angles[j]!), (node.width + members[j]!.width) / 2 + spacing.betweenNodes, (node.height + members[j]!.height) / 2 + spacing.betweenNodes));
+      }
+      radius = needed;
+      for (let i = 0; i < members.length; i += 1) {
+        const node = members[i]!;
+        points.push({ id: node.id, x: Math.cos(angles[i]!) * radius - node.width / 2, y: Math.sin(angles[i]!) * radius - node.height / 2, layer: ring });
+      }
+      start += members.length;
+    }
     const extent = points.reduce((box, point, index) => ({
       left: Math.min(box.left, point.x), top: Math.min(box.top, point.y),
       right: Math.max(box.right, point.x + group.children[index]!.width), bottom: Math.max(box.bottom, point.y + group.children[index]!.height),

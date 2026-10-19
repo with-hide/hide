@@ -173,6 +173,21 @@ describe("current sessions in the Overview graph", () => {
     expect(protectedGraph.agents).toHaveLength(401);
   });
 
+  it("retains current and a different selected member simultaneously at the admission boundary", () => {
+    const projects = Array.from({ length: 200 }, (_, i) => project(`project${i}`, [agent(`current${i}`), agent(`other${i}`)]));
+    projects[0] = project("project0", [agent("current0"), agent("other0"), agent("selected0")]);
+    const all = overviewGraphModel(projects, undefined, new Set(), null);
+    const current = all.allAgents.find((row) => row.agent.pane_id === "current0")!.id;
+    const selected = all.allAgents.find((row) => row.agent.pane_id === "selected0")!.id;
+    const options = { focus: "all" as const, includeResting: false, pinned: [current] };
+    const before = overviewGraphModel(projects, undefined, new Set(), null, options);
+    const after = overviewGraphModel(projects, undefined, new Set(), null, { ...options, selected });
+    expect(after.visible.map((row) => row.id)).toEqual(expect.arrayContaining([current, selected]));
+    expect(after.structure).toBe(before.structure);
+    expect(after.projects.length + after.visible.length).toBeLessThanOrEqual(400);
+    expect(after.agents).toHaveLength(401);
+  });
+
   it("opens the chosen project, then the recent checkout, without using device display labels as identity", () => {
     const a = project("one", [agent("a")]);
     const b = project("two", [agent("b")]);
