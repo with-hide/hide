@@ -35,6 +35,11 @@ pub(super) const CHOICE_LANDING_TIMEOUT_MS: u64 = 15_000;
 /// let go of: a refusal or a lost answer, a later choice, the device
 /// leaving, the device's front moving to a third checkout, or its deadline
 /// each drop it.
+enum TerminalChoice {
+    Awaiting,
+    Created(String),
+}
+
 struct PendingChoice {
     device_id: String,
     request_id: String,
@@ -53,6 +58,7 @@ struct PendingChoice {
     /// A path the operator clicked in the chosen checkout, revealed once it
     /// is in front (`Runtime::reveal_when_in_front`).
     reveal: Option<super::RevealPathPayload>,
+    terminal: Option<TerminalChoice>,
 }
 
 impl PendingChoice {
@@ -518,7 +524,41 @@ impl Runtime {
                 acknowledged: false,
                 core_choice: false,
                 reveal: None,
+                terminal: None,
             });
+        }
+    }
+
+    pub(super) fn await_terminal_choice(&mut self, device: &str, request: &str) {
+        if let Some(pending) = self
+            .workspace_views
+            .as_mut()
+            .and_then(|store| store.pending_choice.as_mut())
+            && pending.device_id == device
+            && pending.request_id == request
+        {
+            pending.terminal = Some(TerminalChoice::Awaiting);
+        }
+    }
+
+    pub(super) fn note_terminal_choice(&mut self, device: &str, request: &str, tab: String) {
+        if let Some(pending) = self
+            .workspace_views
+            .as_mut()
+            .and_then(|store| store.pending_choice.as_mut())
+            && pending.device_id == device
+            && pending.request_id == request
+            && pending.terminal.is_some()
+        {
+            pending.terminal = Some(TerminalChoice::Created(tab));
+        }
+    }
+
+    pub(super) fn pending_terminal_focus(&self) -> Option<(WorkspaceKey, String)> {
+        let pending = self.workspace_views.as_ref()?.pending_choice.as_ref()?;
+        match pending.terminal.as_ref()? {
+            TerminalChoice::Created(tab) => Some((pending.key.clone(), tab.clone())),
+            TerminalChoice::Awaiting => None,
         }
     }
 
@@ -917,6 +957,7 @@ impl Runtime {
             let store = self.workspace_views.as_mut().expect("checked above");
             store.front = front.clone();
         }
+        let store = self.workspace_views.as_ref().expect("checked above");
         if let Some(key) = front.as_ref()
             && self
                 .workspace_views
@@ -925,6 +966,17 @@ impl Runtime {
                 .is_some_and(|pending| {
                     &pending.key == key
                         && (pending.memory_project.is_none() || pending.acknowledged)
+                        && match pending.terminal.as_ref() {
+                            None => true,
+                            Some(TerminalChoice::Awaiting) => false,
+                            Some(TerminalChoice::Created(tab)) => {
+                                !store.agent_placements.contains_key(tab)
+                                    && store
+                                        .views
+                                        .get(&key.0, &key.1)
+                                        .is_some_and(|view| view.agent_tab_group(tab).is_some())
+                            }
+                        }
                 })
         {
             let (memory_project, reveal) = self
@@ -1356,6 +1408,12 @@ impl Runtime {
             .workspaces
             .retain(|view| view.device_id != device_id);
         store.live.retain(|(device, _)| device != device_id);
+        store
+            .agent_admissions
+            .retain(|(device, _), _| device != device_id);
+        store
+            .agent_placements
+            .retain(|_, (key, _, _, _)| key.0 != device_id);
         store.remote_front.remove(device_id);
         store
             .lane_called

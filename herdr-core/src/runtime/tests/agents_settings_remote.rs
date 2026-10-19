@@ -56,7 +56,7 @@ fn duplicate_inflight_remote_tab_creation_is_observable_and_ignored() {
         "mini".to_owned(),
         "w1".to_owned(),
         "/tmp/hide-remote-tab".to_owned(),
-        "New tab".to_owned(),
+        RemoteTabCreationIdentity::Label("New tab".to_owned()),
     ));
 
     assert!(runtime.request_remote_control(RemoteControlPayload {
@@ -65,6 +65,7 @@ fn duplicate_inflight_remote_tab_creation_is_observable_and_ignored() {
         report_pane_focus_outcome: false,
         focus_device: false,
         request: RemoteControlRequest::CreateTab {
+            area_id: None,
             workspace_id: projected_workspace_id.to_owned(),
             checkout_id: None,
             cwd: "/tmp/hide-remote-tab".to_owned(),

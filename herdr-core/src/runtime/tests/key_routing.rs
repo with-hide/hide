@@ -353,6 +353,7 @@ fn keys_typed_before_a_new_tab_answers_reach_its_pane() {
             cwd: CHECKOUT.to_owned(),
             label: "2".to_owned(),
             area_id: None,
+            group_id: None,
             admission_id: Some(admission_id),
         },
         Ok(live::RemoteControlOutcome::Acknowledged {
@@ -416,6 +417,7 @@ fn keys_for_a_new_tab_survive_an_update_before_herdr_lays_out_its_pane() {
             cwd: CHECKOUT.to_owned(),
             label: "2".to_owned(),
             area_id: None,
+            group_id: None,
             admission_id: Some(admission_id),
         },
         Ok(live::RemoteControlOutcome::Acknowledged {

@@ -7,7 +7,7 @@ import { compositorPresents } from "../../web/e2e/wait";
 import { fitWindow, isolate, launchShell, test } from "./fixture";
 import { captureNativeWindow } from "./native-window";
 
-test("named groups and the independent terminal action render in the candidate window", async () => {
+test("named groups and new terminals render in the candidate window", async () => {
   const herdr = await startHerdr();
   const run = isolate(herdr, "group-tabs");
   let app: ElectronApplication | undefined;
@@ -32,13 +32,14 @@ test("named groups and the independent terminal action render in the candidate w
     if (!(await row.isVisible())) await page.locator("[data-checkout-toggle][aria-expanded=false]").click();
     await expect(row).toBeVisible();
     await page.locator("[data-new-agent-tab=true]").click();
-    await expect(page.locator("[data-agent-tab-start]")).toHaveAttribute("data-agent-tab-start", /^draft:/);
+    await expect(page.locator('[data-agent-tab-bar] [role=tab]')).toHaveCount(1);
+    await expect(page.locator("[data-agent-tab-start]")).toHaveCount(0);
+    await expect(page.locator("[data-pane-view]")).toBeVisible();
     await expect(row).toHaveAttribute("aria-current", "true");
     await expect(page.locator('[data-agent-open][aria-current="true"]')).toHaveCount(0);
-    await expect(page.locator("[data-group-start-terminal=true]")).toBeEnabled();
     await expect(page.locator("[data-new-agent-tab=true]")).toBeVisible();
     await compositorPresents(page);
-    await captureNativeWindow(app, "group-tabs-blank-native", facts);
+    await captureNativeWindow(app, "group-tabs-terminal-native", facts);
     await page.locator("[data-open-settings]").click();
     await page.locator('[data-settings-tab="general"]').click();
     await page.locator('[data-theme-option="light"]').click();
@@ -48,7 +49,7 @@ test("named groups and the independent terminal action render in the candidate w
     await expect(page.locator("html")).toHaveAttribute("lang", "ko");
     await page.keyboard.press("Escape");
     await fitWindow(app, { width: 920, height: 760 });
-    await expect(page.locator("[data-group-start-terminal=true]")).toBeVisible();
+    await expect(page.locator("[data-pane-view]")).toBeVisible();
     await expect(selector).toContainText("문서 검토와 다음 작업");
     await compositorPresents(page);
     await captureNativeWindow(app, "group-tabs-narrow-light-native", { ...facts, requestedWidth: 920 });

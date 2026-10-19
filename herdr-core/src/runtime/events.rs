@@ -449,6 +449,8 @@ pub(super) enum RemoteControlRequest {
         checkout_id: Option<String>,
         cwd: String,
         label: String,
+        #[serde(default)]
+        area_id: Option<String>,
     },
     CloseTab {
         tab_id: String,
@@ -2023,7 +2025,7 @@ impl Runtime {
         true
     }
 
-    fn apply_event(&mut self, event: Event) -> bool {
+    pub(super) fn apply_event(&mut self, event: Event) -> bool {
         match event {
             Event::WorkspaceView(payload) => self.apply_workspace_view(payload),
             Event::AgentLayout(payload) => self.apply_agent_layout(payload),
@@ -2367,17 +2369,15 @@ impl Runtime {
                     );
                     return true;
                 }
+                let Some(admission_id) = self.reserve_agent_creation(&key) else {
+                    return true;
+                };
                 self.snapshot.navigator.focused_workspace_id = Some(workspace_id.clone());
                 self.snapshot.navigator.focused_checkout_id = Some(checkout_id);
                 self.snapshot.navigator.root_path = Some(cwd.clone());
                 self.sync_changes_root_path();
                 self.yield_surface_to_terminal();
                 self.persist_current_ui_state();
-                self.next_async_operation_id = self
-                    .next_async_operation_id
-                    .saturating_add(1)
-                    .max(unix_milliseconds());
-                let admission_id = self.next_async_operation_id;
                 self.begin_op_timing(
                     &super::op_timing::tab_create_op_id(admission_id),
                     "tab.create",
@@ -2392,20 +2392,20 @@ impl Runtime {
                     );
                     self.sync_input_requests();
                 }
-                if let Some(store) = self.workspace_views.as_mut() {
-                    store
-                        .agent_admissions
-                        .entry(key)
-                        .or_default()
-                        .insert(format!("create:{admission_id}"));
-                }
                 let admission_path = cwd.clone();
+                let group_id = self
+                    .workspace_views
+                    .as_ref()
+                    .and_then(|store| store.views.get(self.node.as_str(), &cwd))
+                    .and_then(|view| view.agent_groups.selected.clone())
+                    .map(String::into_boxed_str);
                 let action = match host {
                     TabHost::Workspace(workspace_id) => RemoteControlAction::CreateTab {
                         workspace_id,
                         cwd,
                         label: label.to_owned(),
                         area_id,
+                        group_id,
                         admission_id: Some(admission_id),
                     },
                     TabHost::Open(owner) => RemoteControlAction::OpenOwner {
@@ -2413,6 +2413,7 @@ impl Runtime {
                         cwd,
                         label: label.to_owned(),
                         area_id,
+                        group_id,
                         admission_id: Some(admission_id),
                     },
                 };

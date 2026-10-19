@@ -2974,7 +2974,11 @@ impl Runtime {
                         self.remember_operator_tab_name(tab_id, Some(name));
                     }
                     if let Some(context) = context {
-                        match self.queue_restored_agent_tab(context, tab_id) {
+                        match self.queue_restored_agent_tab(
+                            context,
+                            tab_id,
+                            &format!("reopen:{key}"),
+                        ) {
                             Ok(()) => self.finish_agent_effect(
                                 &context.checkout_path,
                                 &format!("reopen:{key}"),

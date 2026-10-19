@@ -10,6 +10,407 @@ use serde_json::{Value, json};
 
 const DEVICE: &str = "group-device";
 
+// New tab must bypass the task form and keep its requesting group across a late answer.
+#[test]
+fn a_new_terminal_on_either_device_link_keeps_its_group_while_an_agent_start_is_busy() {
+    for (origin, same_group, reconnect) in origins()
+        .into_iter()
+        .flat_map(|origin| [false, true].map(move |same_group| (origin.clone(), same_group)))
+        .flat_map(|(origin, same_group)| {
+            [false, true].map(move |reconnect| (origin.clone(), same_group, reconnect))
+        })
+    {
+        let t = tree();
+        let (mut runtime, _saved) = setup(origin, &t.main);
+        let mut initial = raw(&t.main);
+        initial.workspaces[0].checkouts[0].owner_workspace_id = Some("w1".into());
+        runtime.ingest_remote_session(DEVICE, Ok(initial));
+        group(
+            &mut runtime,
+            &t.main,
+            "origin",
+            json!({"action":"create","name":"Origin"}),
+        );
+        let origin_group = layout(&runtime).group_id.clone();
+        if same_group {
+            for id in ["t2", "t1"] {
+                group(
+                    &mut runtime,
+                    &t.main,
+                    id,
+                    json!({"action":"move","tab_id":tab(id),"group_id":origin_group}),
+                );
+            }
+        }
+        runtime
+            .begin_task_operation("agent_start", None, None, None, None)
+            .unwrap();
+        let (arrived_tx, arrived_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let herdr = crate::fake_herdr::FakeHerdr::start(
+            "new-group-terminal",
+            move |method, params| {
+                if method == "tab.focus" {
+                    return json!({"type":"tab_info","tab":{
+                        "tab_id":params["tab_id"],"workspace_id":"w1","number":3,"label":"shell",
+                        "focused":true,"pane_count":1,"agent_status":"idle"
+                    }});
+                }
+                assert_eq!(method, "tab.create");
+                arrived_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                json!({"type":"tab_created","tab":{
+                    "tab_id":"t3","workspace_id":"w1","number":3,"label":"shell","focused":true,"pane_count":1,"agent_status":"idle"
+                },"root_pane":{
+                    "pane_id":"p3","terminal_id":"terminal3","workspace_id":"w1","tab_id":"t3","focused":true,"agent_status":"idle","revision":0
+                }})
+            },
+        );
+        let shared = Arc::new(Mutex::new(runtime));
+        shared
+            .lock()
+            .unwrap()
+            .install_remote_control(RemoteControlContext::new(
+                DEVICE,
+                Arc::new(herdr.connector()),
+                Arc::downgrade(&shared),
+                ChangeNotifier::noop(),
+            ));
+        {
+            let mut runtime = shared.lock().unwrap();
+            group(
+                &mut runtime,
+                &t.main,
+                "terminal",
+                json!({"action":"new_tab","terminal":true,"group_id":origin_group}),
+            );
+            assert!(layout(&runtime).drafts.is_empty());
+            assert!(layout(&runtime).start_receipts.is_empty());
+            assert_eq!(
+                runtime
+                    .workspace_views
+                    .as_ref()
+                    .unwrap()
+                    .agent_admissions
+                    .values()
+                    .map(HashSet::len)
+                    .sum::<usize>(),
+                1
+            );
+        }
+        arrived_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        if reconnect {
+            let mut runtime = shared.lock().unwrap();
+            runtime.ingest_remote_session(
+                DEVICE,
+                Err(SessionFetchError::Unreachable("fixture reconnect".into())),
+            );
+            let mut restored = raw(&t.main);
+            restored.workspaces[0].checkouts[0].owner_workspace_id = Some("w1".into());
+            runtime.ingest_remote_session(DEVICE, Ok(restored));
+            runtime.sync_workspace_view();
+        }
+        if same_group {
+            dispatch(
+                &mut shared.lock().unwrap(),
+                "agent_layout",
+                json!({
+                    "workspace":{"device_id":DEVICE,"path":t.main},"group_id":origin_group,
+                    "action":"focus","tab_id":tab("t2")
+                }),
+            );
+        } else {
+            group(
+                &mut shared.lock().unwrap(),
+                &t.main,
+                "leave",
+                json!({"action":"select"}),
+            );
+        }
+        release_tx.send(()).unwrap();
+        wait(&shared, "terminal creation answer", |runtime| {
+            runtime.remote_tab_creations_in_flight.is_empty()
+        });
+        let mut runtime = shared.lock().unwrap();
+        if reconnect {
+            // A stale ACK settles ownership without drawing a synthetic device tab.
+            assert_eq!(
+                runtime
+                    .workspace_views
+                    .as_ref()
+                    .unwrap()
+                    .views
+                    .get(DEVICE, &t.main)
+                    .unwrap()
+                    .agent_tab_count(),
+                2
+            );
+            assert!(
+                runtime
+                    .workspace_views
+                    .as_ref()
+                    .unwrap()
+                    .agent_admissions
+                    .is_empty()
+            );
+            assert!(
+                runtime
+                    .workspace_views
+                    .as_ref()
+                    .unwrap()
+                    .agent_placements
+                    .contains_key(&tab("t3"))
+            );
+        }
+        let mut landed = raw(&t.main);
+        let new_tab = herdr_workspace(DEVICE, "w1", &t.main, &[("t3", &t.main)])
+            .checkouts
+            .remove(0)
+            .tabs
+            .remove(0);
+        landed.workspaces[0].checkouts[0].tabs.push(new_tab);
+        runtime.ingest_remote_session(DEVICE, Ok(landed));
+        runtime.sync_workspace_view();
+        assert_eq!(
+            layout(&runtime).group_id,
+            if same_group {
+                origin_group.clone()
+            } else {
+                None
+            }
+        );
+        group(
+            &mut runtime,
+            &t.main,
+            "return",
+            json!({"action":"select","group_id":origin_group}),
+        );
+        assert_eq!(
+            active(&runtime),
+            Some(tab(if same_group { "t2" } else { "t3" }).as_str())
+        );
+        assert!(layout(&runtime).drafts.is_empty());
+        assert!(
+            runtime
+                .workspace_views
+                .as_ref()
+                .unwrap()
+                .agent_admissions
+                .is_empty()
+        );
+        assert_eq!(
+            herdr
+                .methods()
+                .iter()
+                .filter(|method| *method == "tab.create")
+                .count(),
+            1
+        );
+    }
+}
+
+// Distinct clicks create distinct shells; a pending effect owns the last display slot.
+#[test]
+fn remote_terminal_clicks_reserve_capacity_and_only_replays_are_deduplicated() {
+    for (full, pending_capacity) in [(false, false), (true, false), (false, true)] {
+        let one = full || pending_capacity;
+        let t = tree();
+        let (mut runtime, _saved) = setup(LinkOrigin::Inbound, &t.main);
+        let mut initial = raw(&t.main);
+        initial.workspaces[0].checkouts[0].owner_workspace_id = Some("w1".into());
+        runtime.ingest_remote_session(DEVICE, Ok(initial));
+        group(
+            &mut runtime,
+            &t.main,
+            "origin",
+            json!({"action":"create","name":"Origin"}),
+        );
+        let group_id = layout(&runtime).group_id.clone();
+        if full {
+            for index in 0..61 {
+                group(
+                    &mut runtime,
+                    &t.main,
+                    &format!("saved-{index}"),
+                    json!({"action":"new_tab","group_id":group_id}),
+                );
+            }
+        }
+        if pending_capacity {
+            let store = runtime.workspace_views.as_mut().unwrap();
+            for index in 0..63 {
+                store.agent_placements.insert(
+                    format!("other-pending-{index}"),
+                    (
+                        ("other-device".into(), "/other-checkout".into()),
+                        None,
+                        "other-area".into(),
+                        None,
+                    ),
+                );
+            }
+        }
+        let (arrived_tx, arrived_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let mut created = 0;
+        let herdr =
+            crate::fake_herdr::FakeHerdr::start("consecutive-terminals", move |method, _| {
+                assert_eq!(method, "tab.create");
+                created += 1;
+                if created == 1 {
+                    arrived_tx.send(()).unwrap();
+                    release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                }
+                terminal_created(created + 2)
+            });
+        let shared = Arc::new(Mutex::new(runtime));
+        shared
+            .lock()
+            .unwrap()
+            .install_remote_control(RemoteControlContext::new(
+                DEVICE,
+                Arc::new(herdr.connector()),
+                Arc::downgrade(&shared),
+                ChangeNotifier::noop(),
+            ));
+        group(
+            &mut shared.lock().unwrap(),
+            &t.main,
+            "first",
+            json!({"action":"new_tab","terminal":true,"group_id":group_id}),
+        );
+        arrived_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        {
+            let mut runtime = shared.lock().unwrap();
+            group(
+                &mut runtime,
+                &t.main,
+                "second",
+                json!({"action":"new_tab","terminal":true,"group_id":group_id}),
+            );
+            group(
+                &mut runtime,
+                &t.main,
+                "second",
+                json!({"action":"new_tab","terminal":true,"group_id":group_id}),
+            );
+            if pending_capacity {
+                assert!(!runtime.reserve_agent_effect("/other-checkout", "reopen:other"));
+                assert_eq!(
+                    runtime.snapshot.status.last_error.as_ref().unwrap().kind,
+                    "agent_layout.placement_limit"
+                );
+                let area = layout(&runtime).active_area.clone();
+                runtime.ingest_remote_control_result(
+                    DEVICE,
+                    "legacy-result",
+                    RemoteControlAction::CreateTab {
+                        workspace_id: "w1".into(),
+                        cwd: t.main.clone(),
+                        label: "legacy".into(),
+                        area_id: Some(area),
+                        group_id: group_id.clone().map(String::into_boxed_str),
+                        admission_id: None,
+                    },
+                    Ok(RemoteControlOutcome::Acknowledged {
+                        created_tab_id: Some("t99".into()),
+                        created_pane_id: Some("p99".into()),
+                    }),
+                    0,
+                );
+                let store = runtime.workspace_views.as_ref().unwrap();
+                assert_eq!(store.agent_placements.len(), 63);
+                assert!(!store.agent_placements.contains_key(&tab("t99")));
+            }
+            if full {
+                group(
+                    &mut runtime,
+                    &t.main,
+                    "draft-too",
+                    json!({"action":"new_tab","group_id":group_id}),
+                );
+                assert_eq!(layout(&runtime).drafts.len(), 61);
+                assert_eq!(
+                    runtime.snapshot.status.last_error.as_ref().unwrap().kind,
+                    "agent_layout.display_limit"
+                );
+            }
+            assert_eq!(
+                runtime.remote_tab_creations_in_flight.len(),
+                if one { 1 } else { 2 }
+            );
+            assert_eq!(
+                runtime
+                    .workspace_views
+                    .as_ref()
+                    .unwrap()
+                    .agent_admissions
+                    .values()
+                    .map(HashSet::len)
+                    .sum::<usize>(),
+                if one { 1 } else { 2 }
+            );
+        }
+        release_tx.send(()).unwrap();
+        wait(&shared, "all terminal answers", |runtime| {
+            runtime.remote_tab_creations_in_flight.is_empty()
+        });
+        let mut runtime = shared.lock().unwrap();
+        let mut landed = raw(&t.main);
+        let ids = if one {
+            vec![("t3", t.main.as_str())]
+        } else {
+            vec![("t3", t.main.as_str()), ("t4", t.main.as_str())]
+        };
+        landed.workspaces[0].checkouts[0].tabs.extend(
+            herdr_workspace(DEVICE, "w1", &t.main, &ids)
+                .checkouts
+                .remove(0)
+                .tabs,
+        );
+        runtime.ingest_remote_session(DEVICE, Ok(landed));
+        runtime.sync_workspace_view();
+        let store = runtime.workspace_views.as_ref().unwrap();
+        assert_eq!(
+            store.views.get(DEVICE, &t.main).unwrap().agent_tab_count(),
+            if full {
+                64
+            } else if pending_capacity {
+                3
+            } else {
+                4
+            }
+        );
+        assert!(store.agent_admissions.is_empty());
+        assert_eq!(
+            store.agent_placements.len(),
+            if pending_capacity { 63 } else { 0 }
+        );
+        let group = store.views.get(DEVICE, &t.main).unwrap();
+        assert_eq!(group.agent_tab_group(&tab("t3")), Some(group_id.as_deref()));
+        assert_eq!(
+            active(&runtime),
+            Some(tab(if one { "t3" } else { "t4" }).as_str())
+        );
+        assert_eq!(
+            herdr
+                .methods()
+                .iter()
+                .filter(|method| *method == "tab.create")
+                .count(),
+            if one { 1 } else { 2 }
+        );
+    }
+}
+
+fn terminal_created(number: usize) -> Value {
+    json!({"type":"tab_created","tab":{
+        "tab_id":format!("t{number}"),"workspace_id":"w1","number":number,"label":"shell","focused":true,"pane_count":1,"agent_status":"idle"
+    },"root_pane":{
+        "pane_id":format!("p{number}"),"terminal_id":format!("terminal{number}"),"workspace_id":"w1","tab_id":format!("t{number}"),"focused":true,"agent_status":"idle","revision":0
+    }})
+}
+
 fn tab(id: &str) -> String {
     format!("remote:{DEVICE}:tab:{id}")
 }

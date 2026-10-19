@@ -1039,30 +1039,47 @@ fn remote_terminal_pane_sets(
     (live_pane_ids, active_pane_ids)
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+enum RemoteTabCreationIdentity {
+    Label(String),
+    Admission(u64),
+}
+
 fn remote_tab_creation_key(
     target_id: &str,
     action: &RemoteControlAction,
-) -> Option<(String, String, String, String)> {
+) -> Option<(String, String, String, RemoteTabCreationIdentity)> {
     match action {
         RemoteControlAction::CreateTab {
             workspace_id,
             cwd,
             label,
+            admission_id,
             ..
         } => Some((
             target_id.to_owned(),
             workspace_id.clone(),
             cwd.clone(),
-            label.clone(),
+            admission_id.map_or_else(
+                || RemoteTabCreationIdentity::Label(label.clone()),
+                RemoteTabCreationIdentity::Admission,
+            ),
         )),
         // An owner being opened is keyed by its folder.
         RemoteControlAction::OpenOwner {
-            owner, cwd, label, ..
+            owner,
+            cwd,
+            label,
+            admission_id,
+            ..
         } => Some((
             target_id.to_owned(),
             owner.path().to_owned(),
             cwd.clone(),
-            label.clone(),
+            admission_id.map_or_else(
+                || RemoteTabCreationIdentity::Label(label.clone()),
+                RemoteTabCreationIdentity::Admission,
+            ),
         )),
         _ => None,
     }
@@ -1251,7 +1268,7 @@ pub struct Runtime {
     /// Advances when a remote target's session connects or drops, so a late
     /// answer from an older connection cannot settle a newer request.
     remote_connection_generations: HashMap<String, u64>,
-    remote_tab_creations_in_flight: HashSet<(String, String, String, String)>,
+    remote_tab_creations_in_flight: HashSet<(String, String, String, RemoteTabCreationIdentity)>,
     /// Every node's terminals (PRD core-host-node-terminal): the core tells
     /// them which panes attach and hears their state back; keys and output
     /// never pass here.

@@ -80,7 +80,7 @@ impl Runtime {
         let tab_id = shell;
         let in_projection = payload.tabs.iter().any(|tab| tab.tab_id == tab_id);
         let has_layout = payload.layouts.iter().any(|layout| layout.tab_id == tab_id);
-        self.queue_restored_agent_tab(context, tab_id)?;
+        self.queue_restored_agent_tab(context, tab_id, &format!("close:{}", request.key))?;
         self.finish_agent_effect(&context.checkout_path, &format!("close:{}", request.key));
         self.close_operations
             .get_mut(&request.key)
@@ -188,11 +188,13 @@ impl Runtime {
         &mut self,
         context: &ClosedContext,
         tab_id: &str,
+        claim: &str,
     ) -> Result<(), String> {
+        let key = (self.node.as_str().to_owned(), context.checkout_path.clone());
+        let placement_capacity = self.agent_placement_capacity(Some((&key, claim)));
         let Some(store) = self.workspace_views.as_mut() else {
             return Ok(());
         };
-        let key = (self.node.as_str().to_owned(), context.checkout_path.clone());
         let view = store.views.entry(&key.0, &key.1);
         let group = context
             .agent_group
@@ -211,7 +213,7 @@ impl Runtime {
         let Some((area, index)) = area else {
             return Ok(());
         };
-        if store.agent_placements.len() >= 64 && !store.agent_placements.contains_key(tab_id) {
+        if !placement_capacity && !store.agent_placements.contains_key(tab_id) {
             return Err("Agent placement queue is full".into());
         }
         store

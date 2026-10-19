@@ -1,6 +1,8 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
+import type { Daemon } from "./hided-fixture";
+import { sendEvent } from "./wire";
 import type { HerdrFixture } from "./herdr-fixture";
 import { fixtureProgram } from "./platform-fixture";
 
@@ -17,30 +19,28 @@ export async function executeTerminalCheck(page: Page, herdr: HerdrFixture, pane
   const command = process.platform === "win32" ? `& '${executable.replaceAll("'", "''")}'` : `'${executable.replaceAll("'", "'\\''")}'`;
   await page.keyboard.type(command);
   await page.keyboard.press("Enter");
-  await expect.poll(() => page.evaluate((id) => window.__hideProbe?.paneText(id), pane), { timeout }).toContain(marker);
+  await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe?: { paneText: (id: string) => string } }).__hideProbe?.paneText(id), pane), { timeout }).toContain(marker);
   await expect.poll(() => execFileSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 }), { timeout }).toContain(marker);
 }
 
-/** Explicitly starts a terminal in the selected draft and keeps its strip slot. */
-export async function startDraftTerminal(page: Page | Locator, expectedDraft?: string): Promise<string> {
-  const form = page.locator("[data-agent-tab-start]");
-  await expect(form).toHaveAttribute("data-agent-tab-start", expectedDraft ?? /^draft:/);
-  const draft = (await form.getAttribute("data-agent-tab-start"))!;
-  const tabs = page.locator("[data-agent-tab-bar] [role=tab][data-tab]");
-  await expect(page.locator(`[data-agent-tab-bar] [role=tab][data-tab="${draft}"]`)).toHaveAttribute("aria-selected", "true");
-  const before = await tabs.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-tab")!));
-  const slot = before.indexOf(draft);
-  expect(slot).toBeGreaterThanOrEqual(0);
-  await form.locator("[data-group-start-terminal=true]").click();
-  await expect(page.locator("[data-agent-tab-start]")).toHaveCount(0, { timeout: 30_000 });
-  await expect(tabs).toHaveCount(before.length);
-  await expect(tabs.nth(slot)).not.toHaveAttribute("data-tab", draft);
-  const tab = (await tabs.nth(slot).getAttribute("data-tab"))!;
-  await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", tab);
-  await expect(page.locator("[data-canvas]")).toBeVisible();
-  const after = [...before];
-  after[slot] = tab;
-  await expect.poll(() => tabs.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-tab")!))).toEqual(after);
-  await expect(tabs.nth(slot)).toHaveAttribute("aria-selected", "true");
+/** Observes a newly created terminal after the caller has awaited its tab. */
+export async function waitForTerminal(page: Page | Locator, expectedTab?: string): Promise<string> {
+  await expect(page.locator("[data-agent-tab-start]")).toHaveCount(0);
+  const selected = page.locator('[data-agent-tab-bar] [role=tab][aria-selected=true]').last();
+  await expect(selected).not.toHaveAttribute("data-tab", /^draft:/);
+  if (expectedTab) await expect(selected).toHaveAttribute("data-tab", expectedTab);
+  const tab = (await selected.getAttribute("data-tab"))!;
+  await expect(page.locator("[data-canvas]").last()).toHaveAttribute("data-canvas", tab);
+  await expect(page.locator("[data-pane-view]").last()).toBeVisible();
   return tab;
+}
+
+/** Compatibility fixture: an older client created a saved, unstarted draft. */
+export async function createLegacyDraft(page: Page, daemon: Daemon, checkoutPath: string): Promise<void> {
+  const group = await page.locator("[data-agent-group-selector]").getAttribute("data-agent-group-selector");
+  await sendEvent(page, daemon, "agent_group", {
+    workspace: { device_id: daemon.node, path: checkoutPath },
+    group_id: group === "ungrouped" ? null : group, action: "new_tab", request_id: `legacy-${Date.now()}`,
+  });
+  await expect(page.locator("[data-agent-tab-start]")).toHaveAttribute("data-agent-tab-start", /^draft:/);
 }

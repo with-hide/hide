@@ -1,3 +1,4 @@
+import { createLegacyDraft } from "./group-start-helper";
 // Approved group-tabs B3/B5-B10/B12/B18/B21/B23: real private Herdr
 // topology is the oracle for whether a blank tab starts anything.
 import { expect, test, type Page } from "@playwright/test";
@@ -47,11 +48,10 @@ async function createGroup(page: Page, name: string) {
 }
 
 async function establishOwner(page: Page) {
+  const before = await stripTabs(page).count();
   await page.locator("[data-new-agent-tab=true]").click();
-  await expect(blank(page)).toBeVisible();
-  const draft = await blank(page).getAttribute("data-agent-tab-start");
-  await terminal(page).click();
-  await expect(page.locator(`[data-agent-tab-start="${draft}"]`)).toHaveCount(0, { timeout: 30_000 });
+  await expect(stripTabs(page)).toHaveCount(before + 1);
+  await expect(blank(page)).toHaveCount(0);
   await expect(page.locator("[data-pane-view]")).toHaveCount(1);
 }
 
@@ -74,7 +74,7 @@ test("an empty group and draft survive navigation and restart without creating a
     await expect(stripTabs(page)).toHaveCount(0);
     await expect(blank(page)).toHaveAttribute("data-agent-tab-start", "empty");
     await expect(terminal(page)).toBeEnabled();
-    await page.locator("[data-new-agent-tab=true]").click();
+    await createLegacyDraft(page, daemon!, path.join(herdr.root, "fixture"));
     await expect(stripTabs(page)).toHaveCount(1);
     const draft = await blank(page).getAttribute("data-agent-tab-start");
     expect(draft).toMatch(/^draft:/);
@@ -117,7 +117,7 @@ test("terminal start fills the draft slot and duplicate intent delivery creates 
     await establishOwner(page);
     const original = topology(herdr);
     await createGroup(page, "Terminal work");
-    await page.locator("[data-new-agent-tab=true]").click();
+    await createLegacyDraft(page, daemon!, path.join(herdr.root, "fixture"));
     // Hide starts its integrated shell through layout.apply, including a
     // terminal-only request; tab.create is the raw Herdr shell path.
     const held = gate.arm("layout.apply");
@@ -155,7 +155,7 @@ test("a late global start stays behind after returning to an empty group or draf
       await createGroup(page, "Other");
       const origin = await createGroup(page, "Origin");
       if (draft) {
-        await page.locator("[data-new-agent-tab=true]").click();
+        await createLegacyDraft(page, daemon!, path.join(herdr.root, "fixture"));
         await expect(blank(page)).toHaveAttribute("data-agent-tab-start", /^draft:/);
       }
       const originalDraft = await blank(page).getAttribute("data-agent-tab-start");

@@ -503,6 +503,7 @@ fn malformed_create_ack_is_recovered_by_its_marker_without_repeating_the_effect(
             cwd: "/tmp".into(),
             label: "New".into(),
             area_id: Some("a1".into()),
+            group_id: None,
             admission_id: Some(91),
         },
     )

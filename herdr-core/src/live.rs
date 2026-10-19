@@ -387,6 +387,7 @@ pub enum RemoteControlAction {
         cwd: String,
         label: String,
         area_id: Option<String>,
+        group_id: Option<Box<str>>,
         admission_id: Option<u64>,
     },
     /// A new tab in a checkout whose owner Herdr workspace is not open: the
@@ -396,6 +397,7 @@ pub enum RemoteControlAction {
         cwd: String,
         label: String,
         area_id: Option<String>,
+        group_id: Option<Box<str>>,
         admission_id: Option<u64>,
     },
     CloseTab {
@@ -6293,6 +6295,7 @@ mod tests {
                 cwd: "/repo-feat".to_owned(),
                 label: "Tab 2".to_owned(),
                 area_id: None,
+                group_id: None,
                 admission_id: None,
             },
         )
@@ -6670,6 +6673,7 @@ mod tests {
                 cwd: "/tmp/hide-remote-tab".to_owned(),
                 label: "New tab".to_owned(),
                 area_id: None,
+                group_id: None,
                 admission_id: None,
             },
             RemoteControlAction::CloseTab {
@@ -6808,6 +6812,7 @@ mod tests {
                 cwd: cwd.clone(),
                 label: "Hide remote control probe".to_owned(),
                 area_id: None,
+                group_id: None,
                 admission_id: None,
             },
         )

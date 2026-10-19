@@ -1,3 +1,4 @@
+import { createLegacyDraft } from "./group-start-helper";
 // Unix account-shell regression: these cases intentionally select /bin/sh
 // and /bin/bash, rather than the fixture server's configured zsh. Windows
 // retains its separate PowerShell recipe and cannot exercise these shells.
@@ -197,7 +198,7 @@ for (const scenario of [
       });
       if (!scenario.blockIntegration) {
         await createGroup(page, "First plain agent");
-        await page.locator("[data-new-agent-tab=true]").click();
+        await createLegacyDraft(page, daemon!, path.join(herdr.root, "fixture"));
         await expect(blank(page)).toHaveAttribute("data-agent-tab-start", /^draft:/);
         const draft = await blank(page).getAttribute("data-agent-tab-start");
         const firstPrompt = "Plain shell first draft agent prompt";
