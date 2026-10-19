@@ -43,7 +43,6 @@ CHECKS = (
     ("desktop e2e size budget", "desktop", ["node", "../web/scripts/check-e2e-test-size.mjs", "e2e"]),
     ("rust fmt and clippy", ".", ["bash", "scripts/verify-cargo.sh", "lint"]),
     ("harness ignore anchor", ".", ["bash", "scripts/check-harness-ignore-anchor.sh"]),
-    ("agent asset committed", ".", ["bash", "scripts/check-agent-asset-committed.sh"]),
     ("capability readers off lock", ".", ["bash", "scripts/check-capability-readers-off-lock.sh"]),
     ("no workstation identity", ".", ["bash", "scripts/check-no-workstation-identity.sh"]),
     ("worktree removal boundary", ".", ["bash", "scripts/check-worktree-removal-boundary.sh"]),

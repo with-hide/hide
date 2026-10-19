@@ -33,6 +33,7 @@ export function laneToolOf(view: Pick<WorkspaceView, "tool"> | null, detail: Det
 export type WorkspaceView = {
   device_id: string;
   path: string;
+  git?: CheckoutGitHeader | null;
   /** The tool the lane shows, or null while the lane is closed. */
   tool: Tool | null;
   /** The tool the lane last showed, kept while it is closed; null when it never showed one. */
@@ -63,6 +64,30 @@ export type WorkspaceView = {
   agent_layout?: import("./agentLayout").AgentLayout | null;
   /** The operator's comments on this checkout's Views; absent while there are none and no Send to say. */
   feedback?: import("./snapshot").ViewFeedback;
+};
+
+/** Whole-checkout facts from its owning node, never Changes' scoped rows. */
+export type CheckoutGitHeader = {
+  state: "loading" | "fresh" | "stale" | "unavailable";
+  reason: string | null;
+  facts: {
+    head_sha: string | null;
+    subject: string | null;
+    commit_unix_seconds: number | null;
+    changed_files: number;
+    conflicts: number;
+    upstream: string | null;
+    upstream_state: "none" | "gone" | "tracked";
+    ahead: number | null;
+    behind: number | null;
+    last_fetch_unix_ms: number | null;
+  } | null;
+  ci: {
+    sha: string;
+    state: "loading" | "passing" | "pending" | "failed" | "none" | "unknown" | "unavailable" | "stale";
+    checked_at_unix_ms: number | null;
+    url: string | null;
+  } | null;
 };
 
 /** The pixel sizes the body is laid out with, read from their tokens. */

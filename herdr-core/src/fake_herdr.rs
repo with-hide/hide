@@ -80,16 +80,6 @@ impl FakeHerdr {
         Self::start_with_errors_mode(name, respond, false)
     }
 
-    /// A retained, still-unwritten control connection must not prevent a
-    /// fresh identity read on another connection, as in the real server.
-    /// Each connection still answers exactly one request.
-    pub(crate) fn start_concurrent_with_errors(
-        name: &str,
-        respond: impl FnMut(&str, &Value) -> Result<Value, (String, String)> + Send + 'static,
-    ) -> Self {
-        Self::start_with_errors_mode(name, respond, true)
-    }
-
     fn start_with_errors_mode(
         name: &str,
         respond: impl FnMut(&str, &Value) -> Result<Value, (String, String)> + Send + 'static,

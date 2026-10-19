@@ -177,9 +177,8 @@ class Selection(unittest.TestCase):
 
     def test_an_adapter_change_tests_its_real_consumers_and_compiles_on_windows(self):
         # These consumers follow the workspace manifests, independently of the planner.
-        # Factory reaches the adapter through its node-link request types too.
         consumers = [
-            "herdr-core", "hide-agent-adapter", "hide-agent-hooks", "hide-factory", "hide-host", "hide-kit",
+            "herdr-core", "hide-agent-adapter", "hide-agent-hooks", "hide-host", "hide-kit",
             "hide-node", "hide-node-link", "hide-session", "hided",
         ]
         for path in ("hide-agent-adapter/src/lib.rs", "hide-agent-adapter/Cargo.toml"):
@@ -445,7 +444,7 @@ class NamedPaths(unittest.TestCase):
 
     def test_a_contract_plans_the_tests_and_the_shell_that_read_it(self):
         expected = {
-            "contracts/hided-ws.schema.json": ({"policy", "rust"}, ["herdr-core", "hide-agent-adapter"]),
+            "contracts/hided-ws.schema.json": ({"policy", "rust"}, ["herdr-core"]),
             "contracts/snapshot-wire-enums.json": ({"policy", "rust", "checks"}, ["herdr-core"]),
             "contracts/agent-adapters.json": ({"policy", "rust", "checks", "web-e2e", "desktop-e2e"}, ["hide-agent-adapter"]),
             "contracts/hide-cli.json": ({"policy", "rust"}, ["hided"]),

@@ -260,7 +260,7 @@ pub(crate) struct WatchWork {
     pub state_change_seq: Option<u64>,
     pub status_changed_at_unix_ms: u64,
     pub source: ActivitySource,
-    /// The watching Factory's own stall window, when it set one.
+    /// The observer's own inactivity window, when it set one.
     pub inactivity_ms: Option<u64>,
     /// The target's own row says it stopped on a question.
     pub asking: bool,
@@ -816,7 +816,7 @@ fn run(
                     .map_err(|_| "delivery_unavailable".to_owned())
                     .and_then(|guard| {
                         if actor.code_owned() {
-                            // Only the core's Factory host and Hide itself
+                            // Only the core's code-owned callers
                             // hold this authority; neither has a pane to
                             // re-check.
                             return guard
@@ -886,7 +886,7 @@ fn run(
                                     target.actor.require_native_identity()?;
                                 }
                                 let current = if target.actor.code_owned() {
-                                    guard.factory_recipient_current(&target.actor)
+                                    false
                                 } else {
                                     guard.delivery_identity_current(&target.actor)
                                 };

@@ -1,5 +1,4 @@
 hide-memory/vendor/mem0/** -whitespace
-design/hide-screens.pen -diff linguist-generated=true
 *.cmd text eol=crlf
 # The OpenCode plugin's marker hashes its exact bytes; a CRLF checkout would change them.
 hide-agent-hooks/src/opencode/plugin.js text eol=lf

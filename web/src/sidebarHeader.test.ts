@@ -61,13 +61,3 @@ describe("the sidebar's Search row (B12)", () => {
     expect(header(null)).not.toContain("data-sidebar-search-chord");
   });
 });
-
-describe("the Factory row before the Factory opens (factory/launch.ts)", () => {
-  it("is its name with a Soon chip, and nothing in it can be pressed", () => {
-    const html = renderToStaticMarkup(createElement(TooltipProvider, null, createElement(SidebarHeader, { factory: "soon", searchChord: null, onSearch: () => undefined })));
-    expect(texts(html, "data-sidebar-factory-soon")).toEqual(["FactorySoon"]);
-    expect(tag(html, "data-sidebar-factory-soon")).toMatch(/^<div /);
-    expect(html.match(/<button/g)).toHaveLength(1);
-    expect(html).not.toContain("data-sidebar-factory=");
-  });
-});

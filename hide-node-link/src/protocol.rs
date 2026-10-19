@@ -98,10 +98,6 @@ use crate::error::HostError;
 /// node that owns the Herdr server, and terminal lines name the screen a
 /// view or a key came from. A node on 27 would refuse the first as unknown,
 /// so it is refused at Hello and reinstalled.
-/// A wire enum may gain a variant within 28 (`crate::factory::VerifyOutcome::Lost`)
-/// only because no peer of another build reads it: a node that dials its
-/// core links only on the core's exact build (PRD core-host-node-move B10,
-/// option C), and Factory runs never go to a device the core dials.
 /// An event may gain an optional field within 28 for the same reason:
 /// [`crate::panes::NodeEvent::StreamOpen`]'s `caller` is absent when the node
 /// proved nothing, and the core then checks the command with `pane_inspect`;
@@ -197,7 +193,10 @@ use crate::error::HostError;
 /// 49: the owning node's shell recipe declares Integrated or Plain readiness.
 /// Older helpers cannot preserve ordinary shell starts and their readiness;
 /// Hello refuses them until the existing helper replacement upgrades them.
-pub const PROTOCOL_VERSION: u32 = 49;
+/// 50: Memory worktree retirement is a regular machine operation.
+/// Factory operations are no longer part of the public protocol.
+/// An older helper cannot decode retirement and is upgraded at Hello.
+pub const PROTOCOL_VERSION: u32 = 50;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -295,6 +294,10 @@ pub struct RootRef {
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Call {
     Hello,
+    /// Read-only status and current commit for the front checkout's header.
+    CheckoutGit {
+        path: String,
+    },
     RootOpen {
         root: String,
     },
@@ -434,6 +437,13 @@ pub enum Call {
     /// (`hide_host::home::sync`).
     HomeSync {
         projects: Vec<String>,
+    },
+    /// Retires a worktree owned by a completed or discarded background task.
+    WorktreeRetire {
+        root: String,
+        checkout: String,
+        branch: String,
+        discard: bool,
     },
     /// Rechecks and removes one operator-confirmed linked worktree, forced
     /// only as far as the operator accepted
@@ -871,12 +881,6 @@ pub enum Call {
     Cancel {
         request: u64,
     },
-    /// The Software Factory's machine work on the core's own node
-    /// ([`crate::factory::FactoryCall`]). A git, `gh` or check run reports
-    /// while it runs, and a report answered with false stops it.
-    Factory {
-        call: crate::factory::FactoryCall,
-    },
     /// View feedback's files on this machine: a screen's staged screenshots
     /// and a letter's placed attachments ([`crate::feedback::FeedbackCall`]).
     Feedback {
@@ -917,10 +921,8 @@ impl Call {
     /// work on its own files, repositories, sessions, processes, kit and
     /// panes; what acts with the operator's own logins (GitHub, the AI
     /// providers and their usage), the files the operator picked on this
-    /// machine, and the Software Factory's work (D-01) are the core's own
-    /// node's, and a device refuses them unrun; a node that dialed its core
-    /// also does the Factory's work on its own projects
-    /// (`FactoryCall::answered_by_node`). The match names every request, so
+    /// machine, are the core's own node's, and a device refuses them unrun.
+    /// The match names every request, so
     /// a new one is decided here before it compiles.
     pub fn answered_by_device(&self) -> bool {
         match self {
@@ -942,10 +944,12 @@ impl Call {
             | Self::Changes { .. }
             | Self::Project { .. }
             | Self::Worktrees { .. }
+            | Self::CheckoutGit { .. }
             | Self::BranchCheck { .. }
             | Self::Directory { .. }
             | Self::Registrable { .. }
             | Self::HomeSync { .. }
+            | Self::WorktreeRetire { .. }
             | Self::WorktreeRemove { .. }
             | Self::WorktreeRemovalCheck { .. }
             | Self::Kit { .. }
@@ -1013,8 +1017,7 @@ impl Call {
             | Self::Gh { .. }
             | Self::ReadAttachments { .. }
             | Self::ReadDropped { .. }
-            | Self::RemoveClipboard { .. }
-            | Self::Factory { .. } => false,
+            | Self::RemoveClipboard { .. } => false,
         }
     }
 }

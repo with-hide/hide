@@ -280,6 +280,7 @@ Pick the layer first with [the table above](#choose-what-to-test-and-where), the
 The crate's own `AGENTS.md` says where the file goes; this section says how the test is built.
 An integration test is a module of its crate's one test binary, `tests/it/main.rs`, never a `tests/*.rs` file of its own: each file was a binary that linked every crate again ([BUILD.md: One integration test binary per crate](BUILD.md#one-integration-test-binary-per-crate)).
 Its tests share a process with the other modules' under `cargo test`, so a test that changes process-wide state, such as an environment variable its fake reads, holds the lock the binary's `main.rs` declares for it.
+A test whose assertion requires a pipe to have no readers creates and closes that pipe inside its own exact-test subprocess, owned and bounded with `OwnedChild`, so another test's concurrent spawn cannot inherit a reader (`hide-platform/tests/it/stdio.rs`).
 
 1. **Unit test the decision, runtime-test the rule that crosses components.**
    A function that takes values and returns a result is tested beside its module (`usage.rs`'s `can_attempt` and `record_failure`).
@@ -472,7 +473,7 @@ With `--no-deps` the order is still the config's: the one worker runs the projec
 What `--no-deps` gives up is the skip: a background test that fails its retry too no longer skips the shard's focus tests, which still run and report, while the lane fails as before.
 
 A table is its system's and suite's: per-test costs differ by system (symlinks, process and terminal tests), so a lane on another system that runs several shards records its own.
-Refresh a table when a shard's time drifts from the others in a run, when the plan warns, after tests were added or renamed in bulk, or when tests the table records at 0 because the lane skipped them start to run (the Factory specs while `FACTORY_OPEN` is off): no warning sees those.
+Refresh a table when a shard's time drifts from the others in a run, when the plan warns, after tests were added or renamed in bulk.
 Refresh it this way:
 
 1. Download the logs of the lane's jobs (the Linux `web e2e` shards, the macOS `desktop e2e` shards) of about twenty recent successful runs (`gh api repos/<owner>/<repo>/actions/jobs/<job id>/logs`) into a directory outside the repository.

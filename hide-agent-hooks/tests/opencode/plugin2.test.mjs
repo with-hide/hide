@@ -358,7 +358,7 @@ test("a letter due while the session works is written after a tool result and co
   assert.deepEqual(confirm.input, { session_id: "ses_a", letters: ["letter-2"] });
 });
 
-test("the spawn and Factory guards run in the pane showing the session, a subagent's question as its root's", async (t) => {
+test("the spawn guard uses the pane showing the session and native questions run normally", async (t) => {
   answer({ tool: { deny: "Not run: use hide agent spawn" } });
   const host = await opencode(t);
   host.create("ses_a");
@@ -375,15 +375,13 @@ test("the spawn and Factory guards run in the pane showing the session, a subage
   const [, relative] = await until("tool", 2);
   assert.equal(relative.input.cwd, path.join(PROJECT, "sub"));
 
-  assert.equal(await host.tool("ses_child", "question", { questions: [] }), "Not run: use hide agent spawn");
-  const [, , question] = await until("tool", 3);
-  assert.deepEqual(question.input, { tool: "question", session_id: "ses_a" });
+  assert.equal(await host.tool("ses_child", "question", { questions: [] }), null);
 
   // With no protection on, any other call runs without asking.
   assert.equal(await host.tool("ses_a", "shell", { command: "cargo test" }), null);
   assert.equal(await host.tool("ses_a", "read", { path: ".env" }), null);
   await sleep(100);
-  assert.equal(calls("tool").length, 3);
+  assert.equal(calls("tool").length, 2);
 });
 
 test("a subagent whose line OpenCode cannot tell in time is asked of the terminal showing its root", async (t) => {
@@ -397,10 +395,11 @@ test("a subagent whose line OpenCode cannot tell in time is asked of the termina
   const lookups = host.instances.get(PROJECT);
   const get = lookups.ctx.session.get;
   lookups.ctx.session.get = async ({ sessionID }) => (sessionID === "ses_late" ? new Promise(() => {}) : get({ sessionID }));
-  assert.equal(await host.tool("ses_late", "question", { questions: [] }), "Not run: use hide agent spawn");
+  assert.equal(await host.tool("ses_late", "shell", { command: "herdr agent start --kind claude" }), "Not run: use hide agent spawn");
   const [question] = await until("tool");
   assert.equal(question.env.HERDR_PANE_ID, "w1:p1");
-  assert.deepEqual(question.input, { tool: "question", session_id: "ses_late" });
+  assert.equal(question.input.tool, "shell");
+  assert.equal(question.input.session_id, "ses_late");
 });
 
 test("with no terminal for the session the server half only guards a protected project, outside any pane", async (t) => {

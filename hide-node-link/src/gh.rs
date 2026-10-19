@@ -459,6 +459,7 @@ pub fn allowed(arguments: &[&str]) -> bool {
         || is_conditional_read(arguments)
         || is_pull_digest_read(arguments)
         || is_checks_verdict_read(arguments)
+        || is_checks_summary_read(arguments)
         || matches!(
             arguments,
             ["pr", "list", "--state", "open", "--limit", PULL_REQUEST_LIMIT, "--json", OPEN_CHECK_FIELDS]
@@ -603,6 +604,51 @@ pub fn checks_verdict_arguments(
 /// The check runs list as the poll reads it: a hundred a page, so a commit
 /// with many jobs is not cut at GitHub's default thirty.
 pub const CHECK_RUNS_TAIL: &str = "check-runs?per_page=100";
+
+/// A bounded exact-SHA detail: never infer success from a truncated list.
+/// URLs are GitHub's returned values, not routes synthesized by the client.
+pub fn checks_summary_arguments(
+    repository: &str,
+    commit: &str,
+    list: ChecksList,
+) -> Option<Vec<String>> {
+    let mut arguments = checks_verdict_arguments(repository, commit, list)?;
+    arguments[2] = match list {
+        ChecksList::CheckRuns => format!(
+            "{{state:(({CHECK_RUNS_VERDICT_JQ}) as $state | if $state == \"failed\" then $state elif .total_count > (.check_runs|length) then \"unknown\" else $state end),url:([.check_runs[]|.details_url // .html_url|select(type==\"string\" and length>0)][0] // null)}}"
+        ),
+        ChecksList::Status => format!(
+            "{{state:({COMMIT_STATUS_VERDICT_JQ}),url:([.statuses[]|.target_url|select(type==\"string\" and length>0)][0] // null)}}"
+        ),
+    };
+    Some(arguments)
+}
+
+fn is_checks_summary_read(arguments: &[&str]) -> bool {
+    let ["api", "--jq", _, endpoint] = arguments else {
+        return false;
+    };
+    let Some((repository, rest)) = endpoint
+        .strip_prefix("repos/")
+        .and_then(|path| path.split_once("/commits/"))
+    else {
+        return false;
+    };
+    let Some((commit, tail)) = rest.split_once('/') else {
+        return false;
+    };
+    let list = match tail {
+        CHECK_RUNS_TAIL => ChecksList::CheckRuns,
+        "status" => ChecksList::Status,
+        _ => return false,
+    };
+    checks_summary_arguments(repository, commit, list).is_some_and(|expected| {
+        expected
+            .iter()
+            .map(String::as_str)
+            .eq(arguments.iter().copied())
+    })
+}
 
 fn is_checks_verdict_read(arguments: &[&str]) -> bool {
     let ["api", "--jq", filter, endpoint] = arguments else {
@@ -767,6 +813,24 @@ pub enum GhAnswer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn header_checks_allow_only_fixed_exact_sha_reads_with_real_detail_fields() {
+        for list in [ChecksList::CheckRuns, ChecksList::Status] {
+            let args = checks_summary_arguments("example/fixture", &"a".repeat(40), list).unwrap();
+            assert!(allowed(
+                &args.iter().map(String::as_str).collect::<Vec<_>>()
+            ));
+            let mut changed = args.clone();
+            changed[2] = ".body".into();
+            assert!(!allowed(
+                &changed.iter().map(String::as_str).collect::<Vec<_>>()
+            ));
+        }
+        assert!(
+            checks_summary_arguments("example/fixture", "main", ChecksList::CheckRuns).is_none()
+        );
+    }
 
     /// Detail paging may vary only its repository, issue and bounded cursor;
     /// a remote node never accepts an arbitrary query or write (B14).

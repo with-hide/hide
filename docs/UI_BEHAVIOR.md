@@ -2,7 +2,7 @@
 
 This document owns what Hide's UI does: the rules for how each screen and control behaves, independent of any platform's exact pixel values.
 It replaces the behavioral content of the retired `DESIGN.md`.
-Visual authority (what a control looks like) lives in the Pen library and `web/src/components/ui`/`web/src/components`, described in [DESIGN_WORKFLOW.md](DESIGN_WORKFLOW.md); numeric authority lives in `design/tokens.json`.
+Public component authority lives in `web/src/components/ui` and `web/src/components`, described in [DESIGN_WORKFLOW.md](DESIGN_WORKFLOW.md); numeric authority lives in `design/tokens.json`.
 Each rule below names the code that owns it: a web owner in `web/src/` and, where the behavior is core-decided, a core owner in `herdr-core/src/`.
 Interface wording is written here as the shipped Korean copy where that is what the screen carried when the rule was written (`요청`, `정리`, `맡기기`); every language, English included, reads its own text from the catalogs in `web/src/i18n/resources/`, and [LOCALIZATION.md](LOCALIZATION.md) owns that boundary.
 
@@ -13,7 +13,21 @@ Web owner: `web/src/WorkspaceScreen.tsx`, `web/src/workspace.ts`, `web/src/LaneD
 
 The Workspace's path and icons sit in the center of the window's top row (see [The window's top row](#the-windows-top-row)); there is no toolbar row under it.
 The path is `project / checkout`, where the project opens that project's panel on the Overview's Projects (PRD sidebar-task-lens B41), led by the device's colored band when the Workspace is not this Mac's; a tab in Home reads `~/hide`, since Home is no project.
-Its right end holds two icons and nothing else, in this order: Overview and `Open server`; the lane's tools are on the rail (see The right lane).
+After the path, a Git checkout shows a small neutral FileDiff and the whole checkout's uncommitted tracked/untracked status-record count; zero is hidden, and a rename can count as two records because rename folding is disabled.
+Clicking the count opens Changes idempotently and leaves terminal keyboard ownership in place; its tooltip explains the count, while a conflict, loading, unavailable or stale read has a distinct small mark and never claims a clean tree.
+Upstream differences use ↑/↓ counts against the tracking branch, with zero hidden and no-upstream/gone distinct; the small detail names the tracking ref and the last FETCH_HEAD time, which is the last local remote observation, not a live remote comparison.
+Only the ↑ arrow uses the existing success green and only the ↓ arrow uses warning orange; both counts and the file count remain neutral, including when the branch is ahead and behind at once.
+At the right, the current HEAD's subject and relative age open a compact detail with the full subject, short SHA and explicit local time; no commit is invented for an unborn branch.
+The adjacent CI mark describes only that exact SHA, combining its GitHub check-runs and commit statuses even on main without a PR, and distinguishes passing, pending, failed, none, unknown, unavailable and stale.
+Its detail names the target SHA and read time, excludes uncommitted edits explicitly, and opens only a URL actually returned by the provider in the existing Browser View.
+An incomplete check-run list beyond the bounded read is unknown, never a partial success.
+Changing device, checkout, connection or HEAD fences old results; the front checkout's file status refreshes independently of the Changes lane and stale data is labelled.
+On narrow widths the relative age disappears before the subject, then the subject contracts to the commit icon, preserving the path, count and trailing tools; details remain keyboard reachable and Escape returns to their triggers.
+Compact commit and CI buttons keep their own icon and text footprint even when the open sidebar leaves less space than the window width; they never overflow into Overview or Open server.
+When the shell disconnects, retained upstream claims disappear until the connection is live again, and a conflict count's accessible name identifies the total changed records before the conflicted subset.
+Home and ordinary folders carry no Git header.
+Web owners: `WorkspaceTitleBar` in `web/src/WorkspaceScreen.tsx` and `web/src/CheckoutGitHeader.tsx`; core owner: `herdr-core/src/runtime/checkout_git.rs`, read by `herdr-core/src/checkout_git.rs` on the existing Changes pump.
+Its right end holds two tool icons, in this order: Overview and `Open server`; the lane's tools are on the rail (see The right lane).
 `Open server` (a globe): one known listener opens directly as a page in the files tool, and multiple listeners open a compact keyboard picker.
 Its accessible name carries how many listeners are known (`Open server, 2 running`), so a screen reader tells a globe that opens a page at once from one that opens the picker; while the count is unknown (a remote Workspace, no connection, a discovery that is still reading or failed) the name is `Open server`, and the tooltip always says `Open server`.
 A Workspace of the machine the window runs on counts as local when that machine's core runs on another machine: the core reads that machine's listeners through its link, and its server opens in that window.
@@ -32,7 +46,7 @@ Web owner: `web/src/TitleRow.tsx`, `web/src/windowChrome.ts`, `WorkspaceTitle` i
 The macOS desktop app has no system title bar and no `hide` title: the window's first row, 32 high in the sidebar's fill over a hairline, is where macOS's title bar and the Workspace toolbar were, and the traffic lights sit in it, centered on its height.
 It opens with the sidebar's switch, the panel icon, which shows or hides the left sidebar as its chord does and names the chord in its tooltip (`사이드바 숨기기 ⌘B`, `사이드바 보기 ⌘B`); it stands at the same place whether the sidebar shows or not, so a hidden sidebar is one press away and a second press puts it back; like the chord, a click leaves the keyboard where it was, in a terminal above all, and Tab still reaches the switch.
 Over the rail and the sidebar, after the switch, it names the device in front, `This Mac` or the device's name, as the sidebar's top line did, with the `This Mac ⌄` menu while the rail is hidden; its right edge is the sidebar's edge, so the divider runs from the window's top.
-Over the center it carries the Workspace's path and icons while a Workspace is in front, and nothing on any other screen (Overview, Factory, a device that is not connected), whose own header stays under it as before.
+Over the center it carries the Workspace's path and icons while a Workspace is in front, and nothing on any other screen (Overview, a device that is not connected), whose own header stays under it as before.
 The switch's glyph starts a step after the traffic lights' space, where the device name used to; with the sidebar hidden the path follows the switch, and full screen, where macOS removes the lights, gives the space back so the row starts at its own inset.
 Dragging any empty part of the row moves the window and a double-click does what macOS's "Double-click a window's title bar" setting says; the switch, the path, the icons and the device menu take a press instead of a drag.
 The desktop page's connecting and failure states keep a drag strip of the same height, so no screen draws under the traffic lights.
@@ -287,6 +301,11 @@ The recorded keyboard owner alone gives one Agent or View area the user-accent s
 Every other area's tab bar uses the card background, and its selected tab keeps a foreground title and secondary background without the underline.
 The keyboard View area has a 2px accent content border outside any native page slot; the other areas reserve the same transparent border.
 The keyboard Agent pane has a 2px accent perimeter and a lightly accent-tinted header, in single, split and zoomed presentations.
+Adjacent terminal panes share a 1 CSS px `--border` hairline, vertical or horizontal, using the leading edge of the second side so nested splits never double it.
+The same hairline marks connected-device panes and their retained layout while disconnected, using each frame's internal leading edges.
+It overlays content without taking terminal space or pointer input, stays below the focus perimeter, and leaves the resize grab and guide unchanged.
+Single and zoomed panes have no internal hairlines; unzoom restores them.
+This reuses the `Component / Agent column` library's second-pane border and the existing `--size-hairline` token across Neutral and Hide, light and dark.
 Menus, search, tools and an inactive app show no canvas input emphasis; returning input restores it without changing selection or geometry.
 A View's address and path controls retain that View as the target of Close and New tab while suppressing its canvas emphasis.
 The content stays readable and unfiltered; focus adds no content blur, opacity reduction, capture loop or geometry change.
@@ -459,7 +478,7 @@ Send N sends every unsent comment for that agent, from every View, as one letter
 A View the operator opened opens its Send as `Send N comments to…`, a choice of agent.
 After Send the comments leave the View and the line says `Sent N to <agent> · delivered when it rests` with Go to pane for a moment, or that it is delivered when its device is back; a Send that could not go keeps the comments and says why with Retry, which sends again to the same agent and the same Views that Send asked for (`This view only` stays one View), and a letter that expired brings its comments back marked `Not delivered` with Send again.
 
-Web owners: `web/src/ViewComments.tsx`, `web/src/viewFeedback.ts`, `web/src/editor/comments.ts`, `web/src/editor/useLineComments.tsx`; core owner: `herdr-core/src/runtime/view_feedback.rs`; test owners: `web/src/viewFeedback.test.ts`, `web/e2e/view-feedback.spec.ts`; the boards are `Screen / Workspace`'s `vof-*` in `design/hide-screens.pen`.
+Web owners: `web/src/ViewComments.tsx`, `web/src/viewFeedback.ts`, `web/src/editor/comments.ts`, `web/src/editor/useLineComments.tsx`; core owner: `herdr-core/src/runtime/view_feedback.rs`; test owners: `web/src/viewFeedback.test.ts`, `web/e2e/view-feedback.spec.ts`; original visual boards are maintained separately.
 
 ### Narrow windows
 
@@ -472,8 +491,8 @@ Widening the window brings back what the Workspace stores, the lane's tool, pin,
 ### Library masters
 
 PRD right-lane B25 draws the lane, rail, pin and tree parts of its approved v3 boards in `Component / Workspace columns`, and the closed, over-the-agents, docked, tree-on, tree-only, expanded, Work and narrow states in `Screen / Workspace`.
-Delivery compares the board with actual captures in both themes through `scripts/design-review.mjs` and the `right-lane` target of `design/review-targets.json`.
-The View area masters in `design/hide-ui.lib.pen` are `Component / View tab`, `Component / View insertion line`, `Component / View split overlay`, `Component / View tab menu`, and `Component / View area message`.
+Delivery reviews actual captures in both themes through the public [design workflow](DESIGN_WORKFLOW.md).
+The production gallery and View components provide the public visual reference; original boards are maintained separately.
 Their sheets draw every state as refs: the View tab sheet draws preview, pinned, hover, active-in-the-active-area, active-in-another-area, dirty, unavailable, diff, a long title, and the floating drag copy; the placement sheet draws a reorder, a move into another area, a right and a down split, and an ineligible target; the tab menu sheet draws a preview's menu and a pinned view's menu with a disabled Split and its reason; the area states sheet draws each view's opening, waiting, and unavailable states.
 The browser display's toolbar and its loading, load failed, and plain browser tab states are on `Component / Browser file diff toolbars`.
 
@@ -490,7 +509,7 @@ A press while the lane already draws that record turns the lane back to its tool
 Whether the lane draws that record is read from the slot's front item and the lane's tool, both of which the core keeps.
 A plain shell, and an agent pane whose session is not known yet, keeps the plain head with nothing to press; the head becomes the button in place once the session is known, on a device's pane as on this Mac's (B24).
 Over a narrow window the record shows in the lane floating over the panes (`web/src/PaneHeaderBand.tsx`, `PaneRecordButton`).
-The provider logo is drawn on a pane's own header, and in the heads and places that are about the agent or its provider itself: the start picker, Settings, the footer's usage chips and the Usage pages, the session record's head, the tree popover's head, the last-words popover's head, the phone's detail head, the Memory tab's Hide AI chip, the Factory card, the first-run tiles, and the selected View's toolbar ([View openers and comments](#view-openers-and-comments)).
+The provider logo is drawn on a pane's own header, and in the heads and places that are about the agent or its provider itself: the start picker, Settings, the footer's usage chips and the Usage pages, the session record's head, the tree popover's head, the last-words popover's head, the phone's detail head, the Memory tab's Hide AI chip, the first-run tiles, and the selected View's toolbar ([View openers and comments](#view-openers-and-comments)).
 The sidebar's 프로젝트 and 태스크 rows and the Agent tabs draw it only by the operator's choice or while ⌥ is held ([Agent logo view mode](#agent-logo-view-mode)); ⌘K and the recent-pane list and the phone's list lead with the status mark alone in both modes (PRD agent-mark-quiet); a session record's children and the PR card's session rows draw the logo after the status mark in both modes (PRD record-card-readability D-06, D-09).
 A pane header draws exactly one logo, the pane's own agent, for each of the eight supported agents: Claude Code, Codex, Grok, OpenCode, Pi, omp, Cursor and Antigravity, the same logo Settings and the first-run choice draw.
 A row without a logo names its agent by product name (`Claude Code`, `Codex`, the adapter's label, never the raw kind) in its hover hint and its accessible name, and the pane header's logo and title say it the same way.
@@ -565,7 +584,7 @@ Its second row carries no ask while it sleeps, and typed input to the pane goes 
 Opening the pane's tab by a committed move (a row, a tab, a checkout, a relation) wakes it in the same pane with its conversation; a Recent Panels preview does not, and neither does a click inside the tab already on screen.
 Wake agent, Retry and Start new session take a mouse click as they take Enter: everything a pane draws over its terminal (these bodies, the reconnect caption, the attachment refusal, the header band) lies above every layer the terminal's renderer draws, so a click there never reaches the terminal (`web/src/terminals.ts` gives each terminal its own stacking context).
 The pane menu offers Sleep agent on an agent pane that is awake on this machine, or on the machine the window runs on when that machine's core runs on another machine, disabled with the core's reason when the agent is working, waiting for the operator, of another kind, or has no conversation Herdr reported; a device's pane offers none.
-Archive session (`세션 보관`, PRD session-archive) stands right under Sleep agent, or first in that group when the agent cannot sleep, on a root agent's pane; a delegated child's pane draws it disabled (`루트 세션과 함께 보관돼요`), as does an agent whose conversation Hide has not seen and a pane of a device that is not connected, each with its reason; a shell, a Factory worker and Hide AI's own agents offer none ([The sidebar's 태스크 list](#the-sidebars-태스크-list) says what it does).
+Archive session (`세션 보관`, PRD session-archive) stands right under Sleep agent, or first in that group when the agent cannot sleep, on a root agent's pane; a delegated child's pane draws it disabled (`루트 세션과 함께 보관돼요`), as does an agent whose conversation Hide has not seen and a pane of a device that is not connected, each with its reason; a shell and Hide AI's own agents offer none ([The sidebar's 태스크 list](#the-sidebars-태스크-list) says what it does).
 Fork agent and Fork agent to the side follow it in the same group (PRD fork-operator-root): both are offered on a local agent pane whose conversation Herdr reported (`fork.available`) and send `fork_pane` with the placement and the operator as its origin, which starts that conversation again as a new session the operator owns; on an agent that has a fork command but has not reported its conversation yet both are drawn disabled with the core's reason, and on a shell, an agent with no fork command or a device's pane there is neither.
 Fork agent opens the fork in a new tab immediately right of the source's tab in its Agent area, or at the end when the source's tab has closed meanwhile; Fork agent to the side splits the source's tab and puts the fork to the right of the source.
 A start command being accepted does not release held input: the fork must have its expected agent running in that pane and be ready, or use a kind that does not report readiness, as ordinary delivery permits.
@@ -597,7 +616,7 @@ Opened, its children follow most urgent first, joined to it by rails, and a chil
 Past five siblings the rest wait behind `N개 더`, which opens them in place.
 A tree row is one line with no branch line; a child on another device names that device on a second line, dimmed with `연결 안 됨` and not openable while it is not connected, and a child working in another worktree is not drawn again under that worktree.
 A worktree whose unresolved agents are all delegated children has no checkout line, no purpose line and no fold, because the children are reached from the root that owns them.
-An agent counts as a root when the core marks it so (`agent.state.root`): an orphan whose parent ended is a root, and a Factory worker is one too, since its spawn parent is the Factory's own identity and no pane in the list, so its worktree keeps its line.
+An agent counts as a root when the core marks it so (`agent.state.root`): an orphan whose parent ended is a root, so its worktree keeps its line.
 The primary, the focused checkout, a dirty or unpushed worktree and an Inactive or Cleanup one keep the line or fold they had.
 A row carries the PR mark (Purpose, pinning, and PR chrome) the 태스크 row of the same agent draws: a root with children gathers its own and every descendant's PRs, each once by URL, whether its children are folded, behind `N개 더`, or in another checkout or on another device, and a child or grandchild row, like a root without children, shows its own (PRD project-tree-pr-family).
 The mark is one PR's state and `#number`, or each state's count for several, dimmed while GitHub cannot be read; its hover shows the PR card for one PR, and for several lists each PR worst first with its state, its title and, on a root, the sessions that hold it, any of which opens, with the last read time while GitHub cannot be read.
@@ -1021,7 +1040,7 @@ Back restores the list's query, filters, page and scroll, and returns keyboard f
 ### Ways in, and the views it replaced
 
 The breadcrumb's project name, a cross-project chip and a Recent Panels project open the Overview's Projects on that project's device with the project's panel beside it (PRD sidebar-task-lens B41).
-An issue or a memo from ⌘K, a Factory card, a session record or a missed line's `· 백로그 #N` opens the item in 백로그 while it is not started, and once it is shows its task's row in the sidebar's 태스크 list with the root's record in the lane's 보기 slot, or in the Overview's panel at Home (PRD sidebar-task-lens B40); a pull request opens its card in the 보기 slot.
+An issue or a memo from ⌘K, a session record or a missed line's `· 백로그 #N` opens the item in 백로그 while it is not started, and once it is shows its task's row in the sidebar's 태스크 list with the root's record in the lane's 보기 slot, or in the Overview's panel at Home (PRD sidebar-task-lens B40); a pull request opens its card in the 보기 slot.
 A pane head's agent tree button shows that agent's row in the sidebar's 태스크 list, unfolded and selected, with its record in the 보기 slot, and no Overview opens (B40).
 A link panel's `대화 보기` and parent line open that session's record, in the 보기 slot when a Workspace is in front and otherwise in the Overview's panel (B58).
 `⇧⌘A` and the `Agents overview` command are gone, and no menu or shortcut list names them (B59).
@@ -1035,7 +1054,7 @@ The core owns the lens, the view option and the slot (`herdr-core/src/runtime/de
 
 ### The sidebar's 태스크 list
 
-Under the sidebar's head (search ⌘K, Overview ⇧⌘O, Factory), right above the list, a `프로젝트 | 태스크` switch picks the list (PRD sidebar-task-lens D-10, B1, B39): 프로젝트 is the projects tree as before, with its raised Needs You and Done, and 태스크 the device's tasks.
+Under the sidebar's head (search ⌘K, Overview ⇧⌘O), right above the list, a `프로젝트 | 태스크` switch picks the list (PRD sidebar-task-lens D-10, B1, B39): 프로젝트 is the projects tree as before, with its raised Needs You and Done, and 태스크 the device's tasks.
 ⌘B shows and hides the sidebar, and ⇧⌘B (`Switch Projects and Tasks`; Alt+Shift+B on Windows and Linux; in a browser tab ⌥⇧B on macOS, where Chrome keeps ⇧⌘B, and Ctrl+Alt+Shift+B on Windows and Linux, where it keeps Alt+Shift+B) turns the switch; with the sidebar hidden it shows the sidebar on the other list (B2).
 A window starts on 프로젝트, and then the last list and view option chosen stay, through a restart too (B3).
 
@@ -1052,7 +1071,7 @@ Archived sessions fold last, into `보관됨 N ›`: under 정리할 것 in each
 Where a project's rows change state, a small grey label names the band (`내 차례` in the warning colour, `읽을 것`, `일하는 중`, `대기`); it is skipped by the arrow keys and hidden from assistive technology, and each band's list carries the state's name instead; 상태별 draws no band labels, since its heads already name the state.
 Inside a group 내 차례 stands longest-waiting first and the others stand most recent first (B9).
 
-A row is one task, its root agent; descendants are its children only, and a memory question, a pull request with no session, a delegated child and a Factory worker are never rows of their own (B7).
+A row is one task, its root agent; descendants are its children only, and a memory question, a pull request with no session, a delegated child are never rows of their own (B7).
 Its first line is the row's own status mark (the sidebar's, status-marks D-12), the title, while folded no count of its children but `! N` in the warning colour when a hidden descendant asks the operator (status-marks D-24, B35), the PR mark and the elapsed time (B8, B10).
 In both 프로젝트 and 태스크, a session's elapsed time measures its latest actual native prompt, including a real request letter from another agent, rather than its latest state change.
 State changes and a daemon restart preserve that reference; a new session never inherits it, and an unknown prompt time leaves the slot empty until the native read succeeds.
@@ -1091,7 +1110,7 @@ The close chord (⌘W) is the slot's `✕` while the keyboard is in the lane or 
 While the slot holds something, the rail carries a fifth button above Memory with its mark, pressed while the lane draws the slot; calling a tool turns the lane to that tool and the button stays, so pressing it comes back to the slot (B46).
 A changed file pressed on a card opens its diff in the checkout's Files and the lane turns to Files, the slot staying on the rail (B49).
 At Home, with no Workspace in front, a record opens in the Overview's panel beside the tabs and a PR mark opens the pull request's Workspace with its card in the slot (B17).
-A pane head's agent-tree button and a started backlog item (from ⌘K, a Factory card, a record or a missed line's `· 백로그 #N`) show the sidebar on 태스크 with the row unfolded and selected, and open the agent's record in the slot, or in the Overview's panel at Home (B40).
+A pane head's agent-tree button and a started backlog item (from ⌘K, a record or a missed line's `· 백로그 #N`) show the sidebar on 태스크 with the row unfolded and selected, and open the agent's record in the slot, or in the Overview's panel at Home (B40).
 
 ### The session record
 
@@ -1705,7 +1724,7 @@ The startup's real connecting state draws one flying owl around the lowercase hi
 It shows no progress percentage and never delays the shell; failure stops and hides the loading scene so the existing Retry and Copy diagnostics remain primary.
 Reduced motion keeps a static owl and bar; hidden or offscreen decoration pauses, and leaving its screen releases its animation resources.
 The wizard's existing agents, notifications and project steps carry their matching brand owl without changing their actions or platform policies.
-The ready Home with no projects carries the ai owl, and the Factory's first-visit line or no-Factory state carries one factory owl while Factory remains Soon.
+The ready Home with no projects carries the ai owl.
 
 
 Core owner: `herdr-core/src/runtime/first_run.rs`, `herdr-core/src/runtime/kit.rs` (`apply_agent_onboarding`). Web owner: `web/src/FirstRunWizard.tsx`, `web/src/firstRun.ts`, `web/src/NotificationControls.tsx`, `web/src/agentNotices.ts`, `web/src/ScreenIntro.tsx`. Desktop owner: `desktop/src/main/notify.ts`, `desktop/src/main/notificationPermission.ts`, `desktop/src/main/host.ts` (`showBadge`, `openNotification`), `desktop/static/status.html`.
@@ -1747,135 +1766,14 @@ macOS draws it on the Dock once it lets Hide notify, Linux where the desktop sho
 With both switches off nothing is sent and the app icon has no count; with Done alone on, it counts unread Done.
 The phone's push follows its own settings whatever these switches say (B36, B38).
 
-The Factory screen shows one line under its title the first time it opens, saying what the screen does and its first step, and never again (`ui_state.screen_intros_seen`); it counts as seen once it has been drawn, so a visit that only showed loading or a Task page leaves it for the next; Settings > Devices keeps its own description instead, and both empty states are unchanged (D-18, B43).
+Settings > Devices keeps its own description.
+The persisted `screen_intros_seen` field remains readable for older builds; this release has no Factory introduction.
 
 ## Factory
 
-Core owner: `herdr-core/src/factory/screen.rs`, `herdr-core/src/runtime/factory.rs` (see ARCHITECTURE.md, The Factory host). Web owner: `web/src/factory/`, the Factory, project and secretary rows in `web/src/components/sidebar-header.tsx` and `web/src/sidebar.tsx`. Desktop owner of the macOS notifications: `desktop/src/main/notify.ts`.
-
-The Factory screens draw the Software Factory engine ([factory.md](factory.md)) and change nothing it decides.
-Every count, name, state, order and reason on them is a field of the engine's `FactorySummary` or `TaskDetail`, and every action they offer is one stage-1 command the engine may refuse.
-A refusal keeps the thing that was acted on in place with the engine's next action on one line beneath it, and the text typed into a form (a change request, a priority, a check) stays until the engine takes it, while a settings field goes back to the saved value; a taken answer is not sent again while its item is still drawn.
-An action the engine has not answered within 20 seconds reads as unanswered, says the Factory may still finish it, and still takes the engine's answer when it comes, because one `gh` call can outlast the wait.
-
-### The Factory place
-
-Until the Factory launches its screens are closed, and the rest of this section describes them as they will open (`web/src/factory/launch.ts`).
-While closed, the sidebar's Factory row is its name in the muted colour with a 'Soon' chip ('곧 출시'), and nothing in it can be pressed; no project or secretary row is drawn under it.
-Nothing else reaches the screen either: ⇧⌘F is not claimed and is absent from the shortcut sheet, Settings, Shortcuts, the View menu and the table under Every command, the ⌘K palette has no 'Factory 열기', and the Factory's macOS notifications are not shown.
-The engine, `hide factory` and the snapshot's `factory` section are unchanged, so opening the screens is that one value.
-
-The sidebar has a Factory row of its own under the Overview row, and its badge is the number of items in 결정 필요, with no badge at zero.
-Under it, once a Factory is open, each open Factory has a row with its project name, a pause mark while it is paused, and its own 결정 필요 number in the warning colour when above zero; the row opens the Factory screen filtered to that Factory, and the Factory row opens it for every Factory.
-The row, ⇧⌘F and the ⌘K command 'Factory 열기' open the Factory screen, except behind a dialog or another overlay (Settings, the find bar, a confirmation), where the Overview waits too; the screen is kept out of Recent Panels.
-With no open Factory the screen offers only '+ Factory 만들기'.
-Under the Factory row, once a Factory exists, is the secretary row: an ordinary agent tab in the core device's Home with the Factory's guide in its first prompt, which reads the board with `hide factory status` each time it answers, so closing the tab loses nothing.
-There is one secretary; the row and '비서에게 묻기' go to it, and when there is none they start one with the Factory's default runtime.
-The core remembers the secretary's pane in its UI state once a tab lists it, so a restart keeps the row on the same pane while that pane is listed.
-A start whose default-runtime read is refused, or that gets no answer within 20 seconds, starts nothing and goes to the diagnostic log; the next press tries again.
-
-### The screen
-
-The header holds the Factory name, the project filter, '+ Factory 만들기' and '비서에게 묻기'.
-With one Factory filtered the header also holds its pause: '일시정지' pauses the whole Factory (`pause --factory`), and a paused Factory shows the chip '일시정지됨' beside the filter and '다시 시작' in place of the button.
-The tabs are 라인 · 보드 · 그래프 · 설정, and the screen opens on 라인; the project filter applies to every tab.
-The 라인 tab's count and the sidebar badge are the engine's `my_turn`, of every Factory or of the one filtered, and are always the same number.
-The tab row ends with the Factory's state, each part only when it holds: 'main 깨짐' as a red chip, 'AI 판단 오늘 n/n · 남은 결정은 내가' once the day's Factory AI judgments are used up, and the GitHub read as 'GitHub 읽음 n분 전'.
-After three failed reads in a row the read dims to 'GitHub 마지막으로 읽음 HH:MM' and returns when a read succeeds; there is no banner, and a Factory without GitHub shows no read.
-Before the core's first summary arrives the screen draws its frame and no empty state.
-
-### 라인
-
-라인 is 결정 필요 on top and, beneath it, one row per Task, with the follow-up candidates and the Factory's own activity folded at the foot.
-결정 필요 holds only what a person moves, in the engine's order: questions that came to the person, merges waiting for the person, stops the recovery schedule could not clear, and to-dos (a GitHub sign-in, a command to run, a start that never showed, a hold on new workers).
-With nothing to decide the section is not drawn, and its heading is '결정 필요 N' in the warning colour.
-Every item is open and has one form: an icon for its kind, the question or to-do in one sentence, '멈춘 것' with what it holds up and the Tasks waiting on it, the Task's id (which opens the Task page) and a time cue at its right.
-A question then lists its two or three choices, each with what choosing it leads to and the recommended one marked '추천' and chosen, a field for another answer (a merge's field is the change request), the send button '이 답으로 보내기' and the default with its deadline, or '기본값 없음' and what waits meanwhile.
-A choice the engine made rather than a review reads in words ('이슈 그대로 시작', '다시 검토', 'Hide AI 켜기'), never as its command code.
-When the intake review could not run because Hide AI is off, the item offers 'Hide AI 켜기' and '이슈 그대로 시작'; while Hide AI is still off, the picked 'Hide AI 켜기' turns the send button into 'Hide AI 설정 열기', which opens Settings › Hide AI and holds the answer until Hide AI is on, then sends it once.
-A to-do or a stop the schedule gave up on has one button instead ('다시 확인', '했어요' or '다시 시작') with what pressing it does, and a to-do that needs a command shows it with '복사'.
-'근거' folds at the item's foot, reading folded as its first two parts: why the person decides it (the reason Factory AI did not, or the kind and the Factory's mode), Factory AI's reason, what holds a merge, what the recovery schedule already tried with each outcome, and the facts and links the engine attached.
-A digit picks a choice and ⏎ sends the picked one; ⏎ on the Task's id opens the Task instead, and ⏎ that finishes a Hangul syllable sends nothing.
-While an answer is sent its button shows sending; when the engine takes it the item leaves, and a refusal keeps it with the engine's next action.
-In a paused Factory an answer's line reads '다시 시작하면 작업자에게 전합니다', because the worker gets it when the Factory resumes.
-
-Each Task row shows its title, its id and PR, the four-cell track 접수 · 작업 · 검증 · 머지 with the current cell's word, what the Task does now in one sentence, how long since it last changed, and how many of its standing decisions Factory AI made.
-The rows go the person's turn first in 결정 필요's order, then the Tasks moving, the ones waiting on something else, the ones not started, and the completions the board still shows, newest first and dimmed; folded and archived completions and cancelled Tasks stay on the board.
-Only the person's rows carry the warning band, and their track, sentence and time take the warning colour; a running or verifying Task's current cell is the working colour, and a done Task's cells are filled.
-The sentence is the Task's turn ('답을 기다림 · ...', '검증 통과 · 위험 경로 변경 · 내 머지를 기다림'), its stop or recovery, its rest with the resume time, an outside PR closing its issue, its intake, its verification, or else its worker's last line.
-A row opens its Task page.
-A GitHub Factory that has not finished its first read draws the table with dim rows instead of an empty state that may be wrong, and a Factory with no Task shows how one arrives: ask the agent you are talking to, or put the `factory` label on a GitHub issue; there is no button that adds a Task.
-'후속 후보 N' folds the follow-up candidates workers found outside their Task, each with '이슈로 만들기', 'Factory에 넣기' and '버리기'.
-'Factory 활동' folds the Factory's own latest activity, newest first.
-Factory workers are left out of the Overview's yellow count.
-
-### Board and graph
-
-The board has four movement columns: 시작 전 · 진행 중 · 멈춤 · 완료, using the CLI's same classification.
-시작 전 and 완료 are narrower than 진행 중 and 멈춤 on a wide board.
-멈춤 contains 나를 기다림 above 다른 걸 기다림; person waits and stopped Tasks come first in the engine's order.
-A narrow board stacks its columns with 멈춤 first.
-A lane's name narrows the board to that lane, and the chip it leaves, or the name again, widens it back.
-An empty column keeps only its label and zero count; old completions still fold and cancelled Tasks keep their existing filter and revival behavior.
-
-One card component serves the board and graph, choosing its contents by its own width.
-Below 240 CSS pixels it shows only the state icon, a title capped at two lines, real issue and PR links at the top left, the worker runtime's existing logo at the top right, and a left band when a person is needed.
-GitHub numbers open their source URL; a local issue opens its Overview panel when the local catalog carries its identity, and otherwise stays a plain reference until that catalog read arrives.
-From 240 through 419 pixels it adds the one-line summary (at most 60 Unicode characters), elapsed time, the existing child-agent badge and popover, a four-cell stage bar, one problem line and the primary action.
-From 420 pixels it allows a two-line summary and adds the state word, the worker's existing status mark, secondary actions, and an existing AI label below a dashed rule with ✦, only when that label exists and summaries are enabled.
-Unknown runtime logos use the shared initial fallback.
-Color belongs only to the state icon, problem line and person band; the other information is small and gray, the title and question are bold, and done cards are dimmed.
-Korean wraps between words, long English identifiers may wrap anywhere, and excess title, summary and question lines truncate.
-The stage bar fills past cells, grays the current cell, hatches the current cell of a stuck Task and leaves future cells empty.
-A problem line explains one applicable failure, merge gate, stop reason, usage-hold resume time, predecessor wait or outside PR number.
-A resting Task has no action button and follows the engine's ordinary resume transition.
-
-The suggested answer, merge and retry buttons send the same commands as 결정 필요, with the same refusal and retry path and no duplicate send while sending or taken.
-다른 답 opens the 라인 with the corresponding 결정 필요 item taking the keyboard.
-Wide cards also expose the listed answers, PR link or history action as applicable.
-The card background opens Task detail; its links, action buttons and child-agent popover are independent keyboard controls.
-The graph uses these same small cards below 240 pixels at one fixed height, so arrows meet consistent node centers.
-The graph still reduces transitive edges and places unrelated Tasks below; folded and archived completions leave its drawing.
-
-### The Task page
-
-The Task page reads top to bottom in one column: what it is now, how it got there, and what it rests on.
-At the top are '← 라인', the title with its state, the actions the engine allows on the right, the sentence of what it does now (the 라인's), and its id, PR, branch and worker as agent · model · effort, with '작업자 보기' opening the worker's pane in its Workspace.
-Beneath them, each only when it applies: the stop in red with the Observer's diagnosis, the rest line, 되살리기, an open question with '결정 필요에서 답하기' (which opens the 라인 with that item taking the keyboard), and what holds a merge.
-The track follows: 접수 · 작업 · 검증 · 머지 with each step marked, past steps checked and the current one in the row's colour, and under each who decided there: '가정 n' and Factory AI's answers and send-backs with a sparkle, the person's decisions in the warning colour, 'n번 시도 · 실패 n/3' under 검증 (or '검증 없음'), and auto or manual merge under 머지.
-Then the chain (its predecessors → this Task → the Tasks waiting on it) and, before a worker starts in a Factory with more than one candidate, the worker select with Factory AI's pick marked; choosing another pins it (`hide factory worker`) and choosing Factory AI's pick again returns the choice to it.
-요약 is the card's summary, with the goal under it for a Task without an issue, then out of scope and attachments.
-완료 기준 lists each criterion with what the last check said, '충족', '미충족' or '판단 불가' with its reason, and a count of each beside the heading.
-결정 lists the standing decisions in three groups, '내가 정한 것', 'AI가 정한 것' and '작업자가 정한 것', each oldest first: the question in small text above the answer, Factory AI's reason, what the person changed it from, where it was made ('질문에 답', '가정 · 접수 리뷰', '되돌림 · 완료 후 검사' and the like) and when.
-A decision Factory AI made on an unfinished Task has '다른 답', which opens a field whose '이 답으로 바꾸기' records the person's answer in its place (`answer --decision R<n>`), moves it to the person's group and tells a running worker by letter.
-A decision the engine recorded with its question shortened has '전체 보기', which opens it in place to the whole question the Task still holds, and '접기' closes it; a muted '… (줄임)' stands where the engine shortened a text whose rest the store does not keep.
-활동 is the Task's timeline, oldest first, each line with its time: the intake (with how many criteria and assumptions), recoveries and what they freed, the worker's start, each report in its four parts (결과, 바뀐 것, 확인한 것, and 확인 못 한 것 in the warning colour) with '원문 펼치기' for the letter as written, the PR, send-backs, each verification with its CI link and a failed one's log tail, follow-up candidates, outside events and Factory AI's decisions; while the Task verifies, a last line says the attempt running now.
-원본 이슈 folds the issue as written, read as Markdown through the renderer an issue's body uses (`MarkdownText`), so its headings and lists stay.
-'이 Task의 후속 후보' lists what the worker found outside the Task, with '이슈로 만들기', 'Factory에 넣기' and '버리기' until it is settled.
-The page offers only the actions the engine allows in the Task's state: 정리 중 edit (which opens the secretary) and cancel, 대기 priority, removing a dependency and cancel, 실행 중 pause and cancel, 멈춤 retry and cancel, 머지 대기 merge, request changes and cancel, a blocked Task nothing but its answer, and a cancelled Task 되살리기 while it lasts.
-A detail the core could not read says so with '다시 읽기', and a Task whose Factory has left the summary reads as gone rather than loading.
-
-### Creating and configuring
-
-'+ Factory 만들기' asks three things: the project, the verification and the merge mode.
-The verification step shows the required checks and verify commands the engine detected for the project, with a loading mark while it detects, and the person picks the required checks, a set of verify commands, or none.
-The sheet first picks what the engine lists first, the required checks before the commands; when the engine refuses that first pick because the repository requires no checks, the sheet picks the detected commands instead, or none.
-The merge mode starts on auto; with no verification auto cannot be picked and says why in its place, and the Factory is made manual.
-A project with a GitHub remote shows, above the create button, the account, the repository and every GitHub read and write the engine will make; a project without one has no GitHub step.
-Nothing is written before the create button, which names the Factory it makes; cancelling leaves nothing, a failed project check shows the step that failed and the engine's next action as the engine wrote it (`gh auth login` for a logged-out `gh`), and a project that already has a Factory opens it.
-The settings tab for all Factories lists each open Factory on one line (its project, 돌고 있음 or 일시정지, the mode, the worker candidate count and its 결정 필요 number) with a pause or resume button and a button that opens that Factory's settings, and below them 이 Mac 전체 with the worker limit every Factory shares.
-A filtered Factory's settings tab has the groups AI에게 맡기기, 작업자, 머지 and 그 밖; a changed value applies from the engine's next decision, and a value the engine refuses, an emptied number or one the field cannot take goes back to the saved one.
-AI에게 맡기기 picks who answers from three choices, 직접 (모든 결정을 내가), 함께 (기술은 AI, 제품은 내가) and 맡김 (권한만 내가), with what each hands to Factory AI and what comes to the person beneath; then the agent Factory AI runs on, 'Hide AI 설정 따름' or an agent with its model and effort; then '오늘 AI 판단' against the daily limit, whose number turns the warning colour at the limit with a note that the rest of the day comes to the person.
-With Hide AI off the three choices dim, the agent reads '없음', today's count is hidden, and one note says every decision comes to the person until Hide AI is turned on.
-작업자 lists the one to five worker candidates, each an agent, model, effort and a line saying when to use it, the first marked 기본, with '후보 추가' up to five and '후보 빼기'; its caption says Factory AI picks one per Task, or with Hide AI off that the default starts, and that a candidate whose usage is used up hands over to the next.
-머지 holds the auto-merge switch, the verification as read-only text, and the risk paths, whose note says Factory AI approves a risk-path merge only in 맡김 with Hide AI on, and that the person merges it otherwise.
-그 밖 holds the macOS notifications (off by default), 고급 설정 and 'Factory 닫기'.
-'지난 7일' shows three numbers from the engine's last seven local days: the 결정 필요 items a person moved per finished Task, the median time from Ready to a worker's start, and how often a person changed Factory AI's decisions.
-고급 설정 is folded under a summary of its seven rows: 질문 기한, 멈춤 판단 시간 (stall and no-report minutes), AI 판단 상한, 점검 (interval and daily limit), 보관 기간 (cancel keep, done fold and list days), 복구 범위 as checkboxes, and 작업자 인자 for each agent Factory can start.
-Below them every other value keeps the control it had, under the subheads 검증 (the required checks or the verify commands, the failure limit and the time limit), 머지 (the merge method and the quick check), 실행 (the harness preset, the new-Task limit, the disk floor and the PRD in the issue), 점검 (the GitHub read interval, the natural-language checks and a form that adds one, whose text stays until the engine takes it) and 자율 처리 (each autonomy scope and the autonomous diff limit); the section ends saying every value can also be set with `hide factory config`.
-With the macOS notifications on and the desktop app running, an item that newly enters 결정 필요 (a question, a merge, a stop or a to-do) or a main that newly broke becomes one macOS notification titled with the project and the kind and carrying the item's sentence, in the interface language; nothing else does, and the app's first summary is the baseline, so opening the app announces nothing already waiting.
-Clicking a notification brings the window forward and opens the 라인 with its item taking the keyboard, or its Task when the item was answered meanwhile, or the Factory whose main broke.
-'Factory 닫기' can be pressed only while the 실행 중 column is empty, a paused, verifying or merge-waiting Task included, because the engine refuses to close the Factory until then.
+Factory is excluded from public source builds and official free app builds.
+There is no sidebar entry, command, engine, question interception or Factory snapshot section.
+Existing Factory stores and historical usage records are preserved as legacy data.
 
 ## Recent navigation
 
@@ -2720,4 +2618,4 @@ The command identities and their eligibility stay the same; a submenu whose choi
 Escape closes the innermost submenu first, returns focus to its trigger, then closes the root menu and restores the original target's focus.
 Close and archive stay neutral, while removing an archived session keeps the destructive color and existing confirmation.
 The Tasks action formerly labelled `pane으로` reads `터미널로 이동`; the four supported interface languages use the same structure.
-The approved B layout is recorded by `Component / Action menus` in the library, generated in `scripts/pen-system.mjs` from the shared System menu items.
+The approved B layout is implemented by the shared action-menu components; original visual boards are maintained separately.

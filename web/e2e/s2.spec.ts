@@ -17,7 +17,6 @@ import { startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { executeTerminalCheck, startDraftTerminal } from "./group-start-helper";
 import { startHided, type Daemon } from "./hided-fixture";
 import { projectRow } from "./overview-entry";
-import { FACTORY_OPEN } from "../src/factory/launch";
 import { countSent, screenshot, showProjectRow } from "./wire";
 import { chord, mod, SYSTEM } from "./chords";
 
@@ -307,6 +306,12 @@ test("⌘D splits the focused pane, a divider drag sends one resize_pane, and �
     const { sent } = flow;
     await splitShell(page, flow);
     await expect(page.locator("[data-split]")).toHaveCount(2);
+    const boundaries = page.locator("[data-pane-boundary]");
+    await expect(boundaries).toHaveCount(2);
+    for (const line of await boundaries.all()) {
+      const geometry = await line.evaluate((el) => ({ width: el.getBoundingClientRect().width, pointerEvents: getComputedStyle(el).pointerEvents }));
+      expect(geometry).toEqual({ width: 1, pointerEvents: "none" });
+    }
     await screenshot(page, "s2-two-splits");
 
     // A divider drag sends one resize_pane on release and the grid follows Herdr.
@@ -527,9 +532,11 @@ test("of three panes the focused one is outlined, and zoom hides the other two b
     // Of three panes, the one holding the keyboard is outlined, and only it.
     await expect(page.locator("[data-pane-focus-outline]")).toHaveCount(1);
     await expect(shellPane.locator("[data-pane-focus-outline]")).toBeVisible();
+    await expect(page.locator("[data-pane-boundary]")).toHaveCount(2);
 
     await page.keyboard.press(chord("toggle_zoom"));
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-zoomed", "true");
+    await expect(page.locator("[data-pane-boundary]")).toHaveCount(0);
     await expect.poll(() => sent.get("toggle_zoom")).toBe(1);
     // Zoom keeps the input perimeter and names the two panes it hides.
     await expect(page.locator("[data-pane-zoom]")).toHaveAttribute("data-pane-zoom", "2");
@@ -538,6 +545,7 @@ test("of three panes the focused one is outlined, and zoom hides the other two b
     await screenshot(page, "s2-zoom-chip");
     await page.locator("[data-pane-zoom]").click();
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-zoomed", "false");
+    await expect(page.locator("[data-pane-boundary]")).toHaveCount(2);
     await expect.poll(() => sent.get("toggle_zoom")).toBe(2);
     await expect(page.locator('[data-pane-zoom]:not([data-pane-zoom="false"])')).toHaveCount(0);
   } finally {
@@ -611,13 +619,12 @@ test("the shortcut sheet marks the moved chords and ⌘F reaches the agent's own
     await page.keyboard.press(chord("shortcuts"));
     await expect(page.locator("[data-shortcut-sheet]")).toBeVisible();
     // The complete command set includes the three direct Overview/sidebar commands
-    // and, once the Factory opens (src/factory/launch.ts), Open Factory (software-factory-ui B2).
     // The two numbered families each fold into one row and have no browser chord;
     // they never carry a Chrome move note (electron-digit-shortcuts-hints B3).
     // The two Explorer path copies and its Cut, Copy and Paste are rows too,
     // and so are the sidebar's Projects | Tasks switch (sidebar-task-lens D-19, D-32)
     // and Show task list (task-split-checklist D-06).
-    await expect(page.locator("[data-shortcut]")).toHaveCount(FACTORY_OPEN ? 55 : 54);
+    await expect(page.locator("[data-shortcut]")).toHaveCount(54);
     for (const title of ["Overview", "Focus sidebar", "Add to backlog"]) await expect(page.locator("[data-shortcut-sheet]")).toContainText(title);
     // Add to backlog moves in a macOS browser, where Chrome keeps ⌘⇧M for its profiles; Alt+Shift+M is free on Windows and Linux.
     // Assert the exact moved commands, including the unchanged platform exceptions.

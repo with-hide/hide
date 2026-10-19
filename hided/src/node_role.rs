@@ -1253,7 +1253,6 @@ fn serve(
             checkout_callers: true,
             opened_roots: Some(roots),
             browser,
-            factory: true,
             worktree_facts: identity.worktree_facts.clone(),
             // The core keeps this machine's kit through the link, from the
             // app or the build this node runs, for the home the node serves

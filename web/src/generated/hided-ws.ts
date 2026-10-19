@@ -5,7 +5,6 @@ export type HidedWs =
   | ServerFrame
   | ClientEvent
   | WorkspaceQuery
-  | FactoryQuestionGuard
   | WorkspaceAction
   | LinksQuery
   | MemoryHookAsk
@@ -429,15 +428,6 @@ export interface WorkspaceQuery {
   type: "workspace_query";
   request_id: WorkspaceRequestId;
   query: "info" | "view_list";
-}
-/**
- * One bounded readonly check against an already-open Factory. Only an attested pane on its issuing connection may ask. A successful workspace_result has result.deny true only for the current Task-held spawn joined to its fresh native execution; every unresolved identity or failure allows the hook tool.
- */
-export interface FactoryQuestionGuard {
-  type: "factory_question_guard";
-  request_id: WorkspaceRequestId;
-  session: string;
-  runtime: "claude-code" | "codex" | "opencode" | "omp" | "antigravity";
 }
 /**
  * One pane-scoped document or View transition. Repeating the same request ID and command returns its recorded result within the ten-minute retry window.

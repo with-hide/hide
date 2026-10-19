@@ -1238,12 +1238,6 @@ async fn screen_loop(
     client_gone(&state, connection, renderer, desktop);
 }
 
-/// A Factory card carries a goal, criteria and decisions; a PRD travels as
-/// a path, so the request stays small.
-const FACTORY_REQUEST_LIMIT: usize = 256 * 1024;
-/// `add` waits for its intake review up to 90 s (B11); the rest answer at once.
-const FACTORY_ANSWER_TIMEOUT: Duration = Duration::from_secs(100);
-
 /// What a refused delivery or agent command asks of its caller.
 pub(crate) fn delivery_next_action(code: &str) -> &'static str {
     match herdr_core::coordination::split_refusal(code).0 {
@@ -1303,36 +1297,6 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
     }
 }
 
-/// What a refused `hide factory` command asks of its caller: the codes the
-/// core answers before the engine does. A refusal the engine decides carries
-/// its own next step.
-pub(crate) fn factory_next_action(code: &str) -> &'static str {
-    match code {
-        "factory_local_only" => {
-            "Run the command from an agent on the machine that runs Hide, or on a machine that connects to Hide; a device that Hide connects to cannot use the Factory"
-        }
-        // A timed-out command may still apply: retrying blind can add a
-        // Task twice, so look first.
-        "factory_timeout" => {
-            "The command may still apply; check hide factory status before retrying"
-        }
-        "factory_busy" => "Try again in a moment",
-        "factory_unavailable" => {
-            "Hide's Factory is not running; tell the operator, the reason is in Hide's diagnostic log"
-        }
-        "caller_context_changed" => {
-            "This pane's checkout changed while the command ran; run hide workspace info, then retry"
-        }
-        "ambiguous_checkout" => "Register this checkout once in Hide and retry",
-        "pane_not_connected" | "ambiguous_pane" | "checkout_not_registered" => {
-            crate::pane_auth::refusal_next_action(code)
-        }
-        "link_down" => "Reconnect this device in Hide, then retry",
-        "unregistered" => "Register this device in Hide, then retry",
-        _ => "Retry; if it is refused again, the reason is in Hide's diagnostic log",
-    }
-}
-
 /// What the core knows of a display a `hide browser` command relays to:
 /// whether it is its area's selected View (the only one shown, so the CLI
 /// refuses input to any other before sending it) and `source_url`, the
@@ -1384,22 +1348,6 @@ fn valid_caller_hint(value: &serde_json::Value) -> bool {
     })
 }
 
-/// A Factory question guard request: a pane's native session, which Pi and
-/// omp name by its file, and a runtime whose adapter declares a question
-/// tool of its own.
-fn factory_question_guard(value: &serde_json::Value) -> Option<ScopedRequest> {
-    let session = value["session"]
-        .as_str()
-        .filter(|session| herdr_core::delivery::valid_session(session))?;
-    let runtime = value["runtime"]
-        .as_str()
-        .filter(|runtime| hide_agent_adapter::direct_ask_kind(runtime).is_some())?;
-    Some(ScopedRequest::FactoryQuestionGuard {
-        session: session.to_owned(),
-        runtime: runtime.to_owned(),
-    })
-}
-
 enum ScopedRequest {
     Query(herdr_core::workspace_control::Query),
     Action(herdr_core::workspace_control::Action),
@@ -1407,14 +1355,7 @@ enum ScopedRequest {
     /// `hide browser` page commands: the same checks as a display
     /// connection, then this socket carries the CDP frames.
     BrowserRelay(String),
-    Delivery(herdr_core::delivery::Command, Option<String>),
-    /// `hide factory`: the Factory engine answers; it needs no shell.
-    Factory(hide_factory::Command, Option<String>),
-    /// A readonly pane execution check, with no renderer or Factory startup.
-    FactoryQuestionGuard {
-        session: String,
-        runtime: String,
-    },
+    Delivery(Box<herdr_core::delivery::Command>, Option<String>),
     /// `hide links`: a read of the link record, which needs no shell.
     Links(herdr_core::links::query::LinksQuery),
     /// `hide memory`: Project Memory's own store, which needs no shell.
@@ -1430,12 +1371,7 @@ impl ScopedRequest {
     fn needs_renderer(&self) -> bool {
         !matches!(
             self,
-            Self::Delivery(..)
-                | Self::Factory(..)
-                | Self::FactoryQuestionGuard { .. }
-                | Self::Links(..)
-                | Self::Memory(..)
-                | Self::MemoryHook(..)
+            Self::Delivery(..) | Self::Links(..) | Self::Memory(..) | Self::MemoryHook(..)
         )
     }
 }
@@ -1516,38 +1452,23 @@ async fn scoped_client_loop(
                                 .filter(|_| valid_caller_hint(&value))
                                 .map(|command| {
                                     ScopedRequest::Delivery(
-                                        command,
+                                        Box::new(command),
                                         value["caller_pane"].as_str().map(str::to_owned),
                                     )
                                 })
                         }
-                        Some("factory") => serde_json::from_value::<hide_factory::Command>(
-                            value["command"].clone(),
-                        )
-                        .ok()
-                        .filter(|_| valid_caller_hint(&value))
-                        .map(|command| {
-                            ScopedRequest::Factory(
-                                command,
-                                value["caller_pane"].as_str().map(str::to_owned),
-                            )
-                        }),
                         Some("memory") => serde_json::from_value::<
                             herdr_core::memory_command::MemoryCommand,
                         >(value["command"].clone())
                         .ok()
                         .filter(herdr_core::memory_command::MemoryCommand::valid)
                         .map(ScopedRequest::Memory),
-                        Some("factory_question_guard") => factory_question_guard(&value),
                         Some("memory_hook") => herdr_core::memory_hook::Ask::from_wire(&value)
                             .map(ScopedRequest::MemoryHook),
                         _ => None,
                     };
                     if command.is_none()
-                        || (value["type"] != "delivery"
-                            && value["type"] != "factory"
-                            && text.len() > 16 * 1024)
-                        || (value["type"] == "factory" && text.len() > FACTORY_REQUEST_LIMIT)
+                        || (value["type"] != "delivery" && text.len() > 16 * 1024)
                         || request_id.is_empty()
                         || request_id.len() > 64
                         || !request_id
@@ -1576,25 +1497,13 @@ async fn scoped_client_loop(
                         let herdr_socket = state.herdr_socket.clone();
                         let query_token = token.clone();
                         let command_request_id = request_id.clone();
-                        // Includes executor queueing, pane proof, core admission,
-                        // fresh native read and engine reply. No stage renews it.
-                        let guard_deadline = std::time::Instant::now() + Duration::from_secs(2);
-                        let command_source = source.clone();
                         let caller_node = source.as_ref().map(|(node, _)| node.clone());
                         let command_relay = Arc::clone(&chosen);
                         let outcome = if let Some(Err((reason, next_action))) = &relay_slot {
                             Ok(Err(((*reason).to_owned(), *next_action)))
                         } else {
                             tokio::task::spawn_blocking(move || {
-                            let cap = if matches!(&command, ScopedRequest::FactoryQuestionGuard { .. }) {
-                                let binding = registry.get(&query_token).ok_or(("credential_expired".to_owned(), "Continue the tool call"))?;
-                                if !binding.question_guard_source_matches(command_source.as_ref().map(|(node, link)| (node.as_str(), link))) {
-                                    return Err(("factory_guard_connection_mismatch".to_owned(), "Continue the tool call"));
-                                }
-                                registry.validate_question_guard(&query_token, herdr_socket.as_deref(), &core, attested.as_deref(), guard_deadline)
-                            } else {
-                                registry.validate(&query_token, herdr_socket.as_deref(), &core, attested.as_deref())
-                            }
+                            let cap = registry.validate(&query_token, herdr_socket.as_deref(), &core, attested.as_deref())
                                 .map_err(|reason| (reason.to_owned(), crate::pane_auth::refusal_next_action(reason)))?;
                             if command.needs_renderer() && renderers.load(Ordering::SeqCst) == 0 {
                                 return Err((
@@ -1603,21 +1512,6 @@ async fn scoped_client_loop(
                                 ));
                             }
                             let result = match command {
-                                ScopedRequest::FactoryQuestionGuard { session, runtime } => {
-                                    let deny = core.prepare_factory_question_guard(
-                                        &cap.context.device_id, &cap.pane_id, &cap.context,
-                                        session, runtime,
-                                        cap.question_guard_terminal().ok_or(("agent_pane_required".to_owned(), "Continue the tool call"))?.to_owned(),
-                                        guard_deadline,
-                                    ).and_then(|prepared| prepared.run()).map_err(|code| {
-                                        herdr_core::diagnostic!(json!({"component":"factory","kind":"question_guard.unavailable","pane":cap.pane_id,"reason":code}));
-                                        (code, "Continue the tool call")
-                                    })?;
-                                    if registry.get(&query_token).is_none() || std::time::Instant::now() >= guard_deadline {
-                                        return Err(("factory_guard_expired".to_owned(), "Continue the tool call"));
-                                    }
-                                    json!({"deny":deny})
-                                }
                                 ScopedRequest::BrowserConnect(display_id) => {
                                     if desktop_renderers.load(Ordering::SeqCst) == 0 {
                                         return Err(("browser_unsupported".to_owned(), "Open the Hide desktop app and retry"));
@@ -1650,15 +1544,7 @@ async fn scoped_client_loop(
                                         .ok_or(("display_missing".to_owned(), "Run hide view list and retry"))?
                                 }
                                 ScopedRequest::Delivery(command, hint) => {
-                                    crate::hook_request::delivery(&core, &cap, command, hint)?
-                                }
-                                ScopedRequest::Factory(command, hint) => {
-                                    core.prepare_factory(&cap.context.device_id, &cap.pane_id, &cap.context, hint, command)
-                                        .and_then(|prepared| prepared.run(FACTORY_ANSWER_TIMEOUT))
-                                        .map_err(|code| {
-                                            let next = factory_next_action(&code);
-                                            (code, next)
-                                        })?
+                                    crate::hook_request::delivery(&core, &cap, *command, hint)?
                                 }
                                 ScopedRequest::MemoryHook(ask) => {
                                     crate::hook_request::memory(&core, &cap, &ask)?
@@ -4461,37 +4347,6 @@ mod tests {
         assert!(view(&too_long).is_err());
     }
 
-    /// Every runtime with a question tool of its own reaches the guard, the
-    /// ones with none or an unconfirmed one do not, and a session may be a
-    /// deep session file.
-    #[test]
-    fn the_question_guard_takes_each_runtime_with_a_question_tool_and_a_session_file() {
-        let deep = format!(
-            "/fixture-home/.omp/agent/sessions/-{}-/s.jsonl",
-            "segment".repeat(40)
-        );
-        let request = |session: &str, runtime: &str| {
-            factory_question_guard(&serde_json::json!({"session": session, "runtime": runtime}))
-                .map(|request| match request {
-                    ScopedRequest::FactoryQuestionGuard { session, runtime } => (session, runtime),
-                    _ => unreachable!(),
-                })
-        };
-        for runtime in ["claude-code", "codex", "opencode", "omp"] {
-            assert_eq!(
-                request(&deep, runtime),
-                Some((deep.clone(), runtime.to_owned())),
-                "{runtime}"
-            );
-        }
-        for runtime in ["pi", "grok", "cursor", "unknown"] {
-            assert!(request(&deep, runtime).is_none(), "{runtime}");
-        }
-        let past = "x".repeat(herdr_core::delivery::SESSION_LIMIT + 1);
-        assert!(request(&past, "omp").is_none());
-        assert!(request("--session", "omp").is_none());
-    }
-
     /// A refusal that lists the devices the caller could have named answers
     /// with that list; one without a list keeps the static advice.
     #[test]
@@ -4535,33 +4390,6 @@ mod tests {
             assert_eq!(reason, code);
             assert_ne!(next, delivery_next_action("other"), "{code}");
         }
-    }
-
-    /// An agent on a device Hide connects to is refused the Factory for good,
-    /// so its next step names where the Factory can be reached; every other
-    /// refusal before the engine keeps a step of its own.
-    #[test]
-    fn a_device_refused_the_factory_is_told_where_to_run_it() {
-        let next = factory_next_action("factory_local_only");
-        assert!(next.contains("machine that runs Hide"), "{next}");
-        assert!(!next.contains("is running and retry"), "{next}");
-        let fallback = factory_next_action("other");
-        for code in [
-            "factory_local_only",
-            "factory_timeout",
-            "factory_busy",
-            "factory_unavailable",
-            "caller_context_changed",
-            "ambiguous_checkout",
-            "pane_not_connected",
-            "ambiguous_pane",
-            "checkout_not_registered",
-            "link_down",
-            "unregistered",
-        ] {
-            assert_ne!(factory_next_action(code), fallback, "{code}");
-        }
-        assert!(factory_next_action("factory_timeout").contains("hide factory status"));
     }
 
     /// A caller refused for lacking an agent pane is told where to run the

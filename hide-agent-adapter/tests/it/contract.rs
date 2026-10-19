@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use hide_agent_adapter::{ADAPTERS, Capability, Feature, HookInstall, adapter};
+use hide_agent_adapter::{ADAPTERS, Feature, HookInstall, adapter};
 use serde_json::Value;
 
 fn root() -> PathBuf {
@@ -9,14 +9,6 @@ fn root() -> PathBuf {
         .parent()
         .unwrap()
         .to_owned()
-}
-
-fn state<T>(capability: Capability<T>) -> &'static str {
-    match capability {
-        Capability::Available(_) => "available",
-        Capability::Unavailable => "unavailable",
-        Capability::Unconfirmed => "unconfirmed",
-    }
 }
 
 #[test]
@@ -66,15 +58,6 @@ fn declarations_match_independent_support_samples_and_all_six_factory_facts() {
             row.id
         );
         assert!(
-            !row.prompt_hook.is_some_and(|hook| !hook.context)
-                || !matches!(
-                    row.factory.next_prompt_letters,
-                    hide_agent_adapter::Capability::Available(_)
-                ),
-            "{}: an observe-only prompt cannot hand letters over",
-            row.id
-        );
-        assert!(
             row.tool_letters.is_none() || !matches!(row.hook, HookInstall::None),
             "{}: tool letters need a hook to hand them over",
             row.id
@@ -113,21 +96,6 @@ fn declarations_match_independent_support_samples_and_all_six_factory_facts() {
             "{}: established feature matrix changed",
             row.id
         );
-        let factory = row.factory;
-        for (name, actual) in [
-            ("direct_ask", state(factory.direct_ask)),
-            ("user_turn", state(factory.user_turn)),
-            ("turn_end_and_answer", state(factory.turn_end_and_answer)),
-            ("startup_guidance", state(factory.startup_guidance)),
-            ("resume", state(factory.resume)),
-            ("next_prompt_letters", state(factory.next_prompt_letters)),
-        ] {
-            assert_eq!(
-                fixture["factory"][name], actual,
-                "{}: missing or changed Factory fact {name}",
-                row.id
-            );
-        }
     }
     assert!(adapter("future-agent").is_none());
 }
@@ -290,21 +258,6 @@ fn usage_coverage_is_generated_from_the_complete_registry() {
 }
 
 #[test]
-fn the_factory_question_guard_names_each_agent_with_a_refusable_question_tool_by_its_herdr_kind() {
-    use hide_agent_adapter::direct_ask_kind;
-    assert_eq!(direct_ask_kind("claude-code"), Some("claude"));
-    assert_eq!(direct_ask_kind("codex"), Some("codex"));
-    assert_eq!(direct_ask_kind("opencode"), Some("opencode"));
-    assert_eq!(direct_ask_kind("omp"), Some("omp"));
-    assert_eq!(direct_ask_kind("antigravity"), Some("agy"));
-    // The hook passes its canonical id; an alias or an agent with no refusable
-    // tool is not a runtime the guard answers for.
-    for runtime in ["claude", "grok", "cursor", "pi", ""] {
-        assert_eq!(direct_ask_kind(runtime), None, "{runtime}");
-    }
-}
-
-#[test]
 fn every_start_dialect_takes_only_the_model_and_effort_it_declares_and_refuses_unsafe_values() {
     use hide_agent_adapter::LaunchDialect;
     for row in ADAPTERS.iter().filter(|row| row.start.is_some()) {
@@ -427,27 +380,4 @@ fn a_launch_choice_reaches_each_agent_only_as_its_declared_options_take_it() {
             .unwrap(),
         ["--model", "gpt-6-luna", "-c", "model_reasoning_effort=low"]
     );
-}
-
-#[test]
-fn the_question_guard_wire_admits_exactly_the_agents_whose_direct_ask_is_declared() {
-    // hided admits a `factory_question_guard` runtime by `direct_ask_kind`,
-    // so the wire contract's enum is that table, not a copy that can drift.
-    let schema: Value = serde_json::from_slice(
-        &std::fs::read(root().join("contracts/hided-ws.schema.json")).unwrap(),
-    )
-    .unwrap();
-    let wire: BTreeSet<&str> =
-        schema["$defs"]["factoryQuestionGuard"]["properties"]["runtime"]["enum"]
-            .as_array()
-            .expect("factory_question_guard runtime enum")
-            .iter()
-            .map(|value| value.as_str().unwrap())
-            .collect();
-    let declared: BTreeSet<&str> = ADAPTERS
-        .iter()
-        .map(|row| row.id)
-        .filter(|id| hide_agent_adapter::direct_ask_kind(id).is_some())
-        .collect();
-    assert_eq!(wire, declared);
 }
