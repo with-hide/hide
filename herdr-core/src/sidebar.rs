@@ -192,6 +192,10 @@ pub struct AgentLabel {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct SessionAgentPayload {
+    /// The query failed while its topology subscription is still live.
+    /// Internal provenance, never supplied by Herdr or a shell client.
+    #[serde(skip)]
+    pub(crate) telemetry_stale: bool,
     #[serde(default)]
     pub id: Option<String>,
     /// The name Herdr knows the agent by (`agent.start --name`, `agent
@@ -642,6 +646,7 @@ fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, Str
     let title = manual_title.or(task).or(native_title);
     let identity_label = title.unwrap_or_else(|| provider_name(agent.agent.as_deref()));
     let projected = SidebarAgentSnapshot {
+        telemetry_stale: agent.telemetry_stale,
         close_session: agent.agent_session.clone(),
         state: Default::default(),
         resolved: None,

@@ -32,6 +32,9 @@ static NEXT_REPLICA_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic
 #[derive(Clone)]
 pub(crate) struct SessionReplica {
     generation: u64,
+    /// Query freshness is independent of the topology stream's lifetime.
+    /// A successful snapshot or agent list confirms telemetry again.
+    pub(crate) agents_confirmed: bool,
     pub(crate) state: ProjectionState,
     /// The last projection whose dependency ranges were confirmed. Pending
     /// topology is kept in `state`, while this copy is what the runtime is
@@ -155,6 +158,7 @@ impl SessionReplica {
         let tab_moves = crate::sidebar::SessionTabMoves::new(generation);
         let replica = Self {
             generation,
+            agents_confirmed: true,
             published_state: ProjectionState {
                 tab_moves: Some(tab_moves.clone()),
                 ..state.clone()
@@ -177,7 +181,17 @@ impl SessionReplica {
     }
 
     pub(crate) fn project(&self) -> SessionSnapshotPayload {
-        self.published_state.project()
+        let mut payload = self.published_state.project();
+        for agent in &mut payload.agents {
+            agent.telemetry_stale = !self.agents_confirmed;
+        }
+        payload
+    }
+
+    /// Returns true only on the transition, so repeated failed reads do not
+    /// rebuild a catalog or publish the same Unknown rows again.
+    pub(crate) fn invalidate_agents(&mut self) -> bool {
+        std::mem::replace(&mut self.agents_confirmed, false)
     }
 
     fn pending_workspace_ids(&self) -> HashSet<String> {
@@ -390,11 +404,19 @@ impl SessionReplica {
         payload: SessionSnapshotPayload,
     ) -> Result<(RemoteSessionSnapshot, Vec<crate::sidebar::AgentExclusion>), SessionFetchError>
     {
+        Self::project_remote_state(&self.published_state, target_id, payload)
+    }
+
+    pub(crate) fn project_remote_state(
+        state: &ProjectionState,
+        target_id: &str,
+        payload: SessionSnapshotPayload,
+    ) -> Result<(RemoteSessionSnapshot, Vec<crate::sidebar::AgentExclusion>), SessionFetchError>
+    {
         let issue_tokens = crate::wire::issue_tokens(&payload);
         let agent_projection = crate::sidebar::project_agents(payload);
         let mut agents = agent_projection.agents;
 
-        let state = &self.published_state;
         let mut pane_layouts = Vec::with_capacity(state.layouts.len());
         for layout in &state.layouts {
             let area_width = f64::from(layout.area.width);
@@ -923,6 +945,7 @@ impl SessionReplica {
     /// the list it was working in: a pane that has since closed is gone from
     /// the new list and its old record is the one that still says where.
     pub(crate) fn replace_agents(&mut self, agents: Vec<ProjectedAgent>) -> Vec<String> {
+        self.agents_confirmed = true;
         let stopped_in: Vec<String> = self
             .state
             .agents
