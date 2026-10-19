@@ -7,7 +7,7 @@
 //! the one search the install kit uses too. Nothing else in the
 //! workspace keeps a list of them; settings, the router and the core's
 //! Settings reader all iterate this one, in this order (D-06, D-18): Claude
-//! Code, Codex, Grok, OpenCode, Pi, Antigravity.
+//! Code, Codex, Grok, OpenCode, Pi, Oh My Pi, Antigravity.
 //!
 //! The id is a string the registry owns, not a closed enum, so a file written
 //! by a newer Hide that names an agent this build does not know is read, and
@@ -35,6 +35,7 @@ impl ProviderId {
     pub const GROK: Self = Self("grok");
     pub const OPENCODE: Self = Self("opencode");
     pub const PI: Self = Self("pi");
+    pub const OMP: Self = Self("omp");
     pub const ANTIGRAVITY: Self = Self("antigravity");
 
     pub fn as_str(self) -> &'static str {
@@ -118,6 +119,7 @@ pub const PROVIDERS: &[ProviderId] = &[
     ProviderId::GROK,
     ProviderId::OPENCODE,
     ProviderId::PI,
+    ProviderId::OMP,
     ProviderId::ANTIGRAVITY,
 ];
 
@@ -173,6 +175,13 @@ const DESCRIPTORS: &[ProviderDescriptor] = &[
         efforts: &[],
     },
     ProviderDescriptor {
+        id: ProviderId::OMP,
+        label: "Oh My Pi",
+        agent: "omp",
+        default_model: crate::omp::DEFAULT_MODEL,
+        efforts: &[],
+    },
+    ProviderDescriptor {
         id: ProviderId::ANTIGRAVITY,
         label: "Antigravity",
         agent: "antigravity",
@@ -203,6 +212,7 @@ pub fn build_backend(
         )),
         ProviderId::GROK => Arc::new(crate::GrokCliBackend::new(crate::TextCliConfig::new(model))),
         ProviderId::PI => Arc::new(crate::PiCliBackend::new(crate::TextCliConfig::new(model))),
+        ProviderId::OMP => Arc::new(crate::OmpSdkBackend::new(crate::OmpConfig::new(model))),
         ProviderId::ANTIGRAVITY => Arc::new(crate::AntigravityCliBackend::new(
             crate::TextCliConfig::new(model),
         )),
@@ -233,6 +243,7 @@ mod tests {
                 "Grok",
                 "OpenCode",
                 "Pi",
+                "Oh My Pi",
                 "Antigravity"
             ]
         );
