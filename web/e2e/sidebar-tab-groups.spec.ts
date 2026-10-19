@@ -56,7 +56,7 @@ test("a tab with two agents opens with a line that opens it, takes its name once
   } finally { daemon.stop(); herdr.stop(); }
 });
 
-test("2-1-2 tab segments keep every title under their group and share one root column with aligned guides", async ({ page }) => {
+test("2-1-2 tab segments keep every title on the checkout's own columns with aligned guides, and no collection header without a named group", async ({ page }) => {
   const herdr = await startHerdr();
   let daemon: Awaited<ReturnType<typeof startHided>> | undefined;
   try {
@@ -77,13 +77,15 @@ test("2-1-2 tab segments keep every title under their group and share one root c
     await expect(tabButton(page, paired.tab.tab_id)).toHaveAccessibleName("작업 묶음 B, 2 agents");
     await page.evaluate(() => document.fonts.ready);
 
-    const group = page.locator('[data-project-list] [data-sidebar-named-group="ungrouped"]');
-    const groupHeader = group.locator(":scope > div");
-    const groupSelect = group.locator('[data-sidebar-group-select="ungrouped"]');
-    await expect(groupSelect).toHaveText("Ungrouped");
-    // Every root's status mark stands on one column right of its group's
-    // disclosure, while each tab's guide follows that disclosure column.
-    const kind = await position(groupHeader.getByRole("button", { name: "Collapse Ungrouped", exact: true }).locator("svg"));
+    // This checkout holds no named group, so it draws no collection header at
+    // all (group-tabs D-14): its tabs and agents stand on the checkout's own
+    // columns, and every tab's guide hangs under the checkout's own glyph. The
+    // fixture's checkout is a plain folder, so its row is the project's.
+    const owner = page.locator("[data-project-list] [data-project-menu]").first();
+    const ownerRow = await position(page.locator("[data-project-list] [data-project-menu] > div").first());
+    await expect(page.locator("[data-project-list] [data-sidebar-named-group]")).toHaveCount(0);
+    await expect(page.locator("[data-project-list] [data-sidebar-group-select]")).toHaveCount(0);
+    const kind = await position(owner.locator("svg").first());
     const marks = await Promise.all((await page.locator("[data-project-list] li[data-pane][data-depth='0'] [data-agent-status-mark]").all()).map(position));
     expect(marks).toHaveLength(5);
     expect(new Set(marks.map((mark) => mark.x)).size).toBe(1);
@@ -92,8 +94,8 @@ test("2-1-2 tab segments keep every title under their group and share one root c
     const titles = await Promise.all((await page.locator("[data-project-list] li[data-pane][data-depth='0'] [data-agent-title]").all()).map(position));
     expect(titles.map((title) => title.x - marks[0]!.x)).toEqual(titles.map(() => 16));
 
-    // B12's group/title hierarchy draws a 1px guide for every tab,
-    // including the unnamed single-agent tab.
+    // B12's tab hierarchy draws a 1px guide for every tab, including the
+    // unnamed single-agent tab, under the checkout's own kind glyph.
     const center = kind.x + kind.width / 2;
     await expect(guide(page, single.tab.tab_id)).toHaveCount(1);
     for (const tab of [herdr.tab, single.tab.tab_id, paired.tab.tab_id]) {
@@ -114,12 +116,9 @@ test("2-1-2 tab segments keep every title under their group and share one root c
     const first = await position(segment(page, herdr.tab));
     const middle = await position(segment(page, single.tab.tab_id));
     const last = await position(segment(page, paired.tab.tab_id));
-    // The group hangs 2px under its checkout. The group's own header and
-    // every tab title now provide the boundaries, with contiguous segments.
-    const owner = await position(page.locator("[data-project-list] [data-project-menu] > div").first());
-    const header = await position(groupHeader);
-    expect(header.y - owner.y - owner.height).toBe(2);
-    expect(first.y - header.y - header.height).toBe(0);
+    // The first segment hangs 2px under its checkout, and segments are
+    // contiguous: the tab titles provide the boundaries.
+    expect(first.y - ownerRow.y - ownerRow.height).toBe(2);
     expect(middle.y - first.y - first.height).toBe(0);
     expect(last.y - middle.y - middle.height).toBe(0);
     expect((await position(segment(page, single.tab.tab_id).locator("li[data-pane]"))).height).toBe(28);
@@ -139,8 +138,6 @@ test("2-1-2 tab segments keep every title under their group and share one root c
     await page.keyboard.press("ArrowDown");
     await expect(tabButton(page, paired.tab.tab_id)).toBeFocused();
     await page.keyboard.press("Home");
-    await expect(groupSelect).toBeFocused();
-    await page.keyboard.press("ArrowDown");
     await expect(tabButton(page, herdr.tab)).toBeFocused();
     await page.keyboard.press("End");
     await expect(segment(page, paired.tab.tab_id).locator("[data-agent-open]").last()).toBeFocused();

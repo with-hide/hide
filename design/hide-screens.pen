@@ -106281,12 +106281,12 @@
                             {
                               "type": "frame",
                               "id": "psb-rs-weight-l",
-                              "name": "Working 600 · resting 400",
+                              "name": "Working: the label in the foreground · resting: the label muted",
                               "children": [
                                 {
                                   "type": "text",
                                   "id": "psb-rs-weight-l-l",
-                                  "name": "Working 600 · resting 400",
+                                  "name": "Working: the label in the foreground · resting: the label muted",
                                   "content": "Working 600 · resting 400",
                                   "fill": "$--muted-foreground",
                                   "fontFamily": "$--font-ui",
@@ -120093,12 +120093,12 @@
                             {
                               "type": "frame",
                               "id": "psb-rs-weight-d",
-                              "name": "Working 600 · resting 400",
+                              "name": "Working: the label in the foreground · resting: the label muted",
                               "children": [
                                 {
                                   "type": "text",
                                   "id": "psb-rs-weight-l-d",
-                                  "name": "Working 600 · resting 400",
+                                  "name": "Working: the label in the foreground · resting: the label muted",
                                   "content": "Working 600 · resting 400",
                                   "fill": "$--muted-foreground",
                                   "fontFamily": "$--font-ui",
@@ -543464,24 +543464,51 @@
                       "name": "Checkout groups",
                       "width": "fill_container",
                       "layout": "vertical",
-                      "gap": 6,
+                      "gap": 4,
                       "padding": [
                         4,
                         0,
                         0,
-                        14
+                        36
                       ],
                       "children": [
                         {
-                          "type": "text",
-                          "id": "IacBg",
-                          "name": "Group-less heading",
-                          "fill": "$--muted-foreground",
-                          "content": "그룹 없음",
-                          "lineHeight": 1.5,
-                          "fontFamily": "$--font-ui",
-                          "fontSize": 10,
-                          "fontWeight": "normal"
+                          "type": "frame",
+                          "name": "Group header",
+                          "width": "fill_container",
+                          "height": 24,
+                          "gap": 6,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "name": "Disclosure",
+                              "width": 12,
+                              "height": 12,
+                              "icon": "chevron-down",
+                              "library": "lucide",
+                              "fill": "$--muted-foreground"
+                            },
+                            {
+                              "type": "icon",
+                              "name": "Group",
+                              "width": 14,
+                              "height": 14,
+                              "icon": "briefcase-business",
+                              "library": "lucide",
+                              "fill": "$--muted-foreground"
+                            },
+                            {
+                              "type": "text",
+                              "name": "Group name",
+                              "fill": "$--foreground",
+                              "content": "그룹 없음",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$--font-ui",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
                         },
                         {
                           "type": "frame",
@@ -543493,7 +543520,7 @@
                             0,
                             0,
                             0,
-                            23
+                            0
                           ],
                           "children": [
                             {
@@ -543563,7 +543590,7 @@
                           "id": "ZSwNB",
                           "name": "Group / 로그인 개편",
                           "width": "fill_container",
-                          "height": 28,
+                          "height": 24,
                           "gap": 6,
                           "alignItems": "center",
                           "children": [
@@ -543614,7 +543641,7 @@
                             0,
                             0,
                             0,
-                            12
+                            18
                           ],
                           "children": [
                             {
@@ -543976,7 +544003,7 @@
                           "id": "O1PKO",
                           "name": "Group separation",
                           "width": "fill_container",
-                          "height": 2,
+                          "height": 8,
                           "layout": "vertical"
                         },
                         {
@@ -543984,7 +544011,7 @@
                           "id": "smGky",
                           "name": "Group / 릴리스 준비",
                           "width": "fill_container",
-                          "height": 28,
+                          "height": 24,
                           "gap": 6,
                           "alignItems": "center",
                           "children": [
@@ -544063,7 +544090,7 @@
                         0,
                         0,
                         0,
-                        23
+                        38
                       ],
                       "alignItems": "center",
                       "children": [
@@ -545014,24 +545041,51 @@
                       "name": "Checkout groups",
                       "width": "fill_container",
                       "layout": "vertical",
-                      "gap": 6,
+                      "gap": 4,
                       "padding": [
                         4,
                         0,
                         0,
-                        14
+                        36
                       ],
                       "children": [
                         {
-                          "type": "text",
-                          "id": "kuxfO",
-                          "name": "Group-less heading",
-                          "fill": "$--muted-foreground",
-                          "content": "그룹 없음",
-                          "lineHeight": 1.5,
-                          "fontFamily": "$--font-ui",
-                          "fontSize": 10,
-                          "fontWeight": "normal"
+                          "type": "frame",
+                          "name": "Group header",
+                          "width": "fill_container",
+                          "height": 24,
+                          "gap": 6,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "name": "Disclosure",
+                              "width": 12,
+                              "height": 12,
+                              "icon": "chevron-down",
+                              "library": "lucide",
+                              "fill": "$--muted-foreground"
+                            },
+                            {
+                              "type": "icon",
+                              "name": "Group",
+                              "width": 14,
+                              "height": 14,
+                              "icon": "briefcase-business",
+                              "library": "lucide",
+                              "fill": "$--muted-foreground"
+                            },
+                            {
+                              "type": "text",
+                              "name": "Group name",
+                              "fill": "$--foreground",
+                              "content": "그룹 없음",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$--font-ui",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
                         },
                         {
                           "type": "frame",
@@ -545043,7 +545097,7 @@
                             0,
                             0,
                             0,
-                            23
+                            0
                           ],
                           "children": [
                             {
@@ -545114,7 +545168,7 @@
                           "id": "Gbooz",
                           "name": "Group / 로그인 개편",
                           "width": "fill_container",
-                          "height": 28,
+                          "height": 24,
                           "gap": 6,
                           "alignItems": "center",
                           "children": [
@@ -545165,7 +545219,7 @@
                             0,
                             0,
                             0,
-                            12
+                            18
                           ],
                           "children": [
                             {
@@ -545535,7 +545589,7 @@
                           "id": "u4n3O7",
                           "name": "Group separation",
                           "width": "fill_container",
-                          "height": 2,
+                          "height": 8,
                           "layout": "vertical"
                         },
                         {
@@ -545543,7 +545597,7 @@
                           "id": "DAVZs",
                           "name": "Group / 릴리스 준비",
                           "width": "fill_container",
-                          "height": 28,
+                          "height": 24,
                           "gap": 6,
                           "alignItems": "center",
                           "children": [
@@ -545592,7 +545646,7 @@
                         0,
                         0,
                         0,
-                        23
+                        38
                       ],
                       "alignItems": "center",
                       "children": [
@@ -547011,24 +547065,51 @@
                       "name": "Checkout groups",
                       "width": "fill_container",
                       "layout": "vertical",
-                      "gap": 6,
+                      "gap": 4,
                       "padding": [
                         4,
                         0,
                         0,
-                        14
+                        36
                       ],
                       "children": [
                         {
-                          "type": "text",
-                          "id": "dDvNM",
-                          "name": "Group-less heading",
-                          "fill": "$--muted-foreground",
-                          "content": "그룹 없음",
-                          "lineHeight": 1.5,
-                          "fontFamily": "$--font-ui",
-                          "fontSize": 10,
-                          "fontWeight": "normal"
+                          "type": "frame",
+                          "name": "Group header",
+                          "width": "fill_container",
+                          "height": 24,
+                          "gap": 6,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "name": "Disclosure",
+                              "width": 12,
+                              "height": 12,
+                              "icon": "chevron-down",
+                              "library": "lucide",
+                              "fill": "$--muted-foreground"
+                            },
+                            {
+                              "type": "icon",
+                              "name": "Group",
+                              "width": 14,
+                              "height": 14,
+                              "icon": "briefcase-business",
+                              "library": "lucide",
+                              "fill": "$--muted-foreground"
+                            },
+                            {
+                              "type": "text",
+                              "name": "Group name",
+                              "fill": "$--foreground",
+                              "content": "그룹 없음",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$--font-ui",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
                         },
                         {
                           "type": "frame",
@@ -547040,7 +547121,7 @@
                             0,
                             0,
                             0,
-                            23
+                            0
                           ],
                           "children": [
                             {
@@ -547111,7 +547192,7 @@
                           "id": "faiXV",
                           "name": "Group / 로그인 개편",
                           "width": "fill_container",
-                          "height": 28,
+                          "height": 24,
                           "gap": 6,
                           "alignItems": "center",
                           "children": [
@@ -547162,7 +547243,7 @@
                             0,
                             0,
                             0,
-                            12
+                            18
                           ],
                           "children": [
                             {
@@ -547593,7 +547674,7 @@
                           "id": "iCzvO",
                           "name": "Group separation",
                           "width": "fill_container",
-                          "height": 2,
+                          "height": 8,
                           "layout": "vertical"
                         },
                         {
@@ -547601,7 +547682,7 @@
                           "id": "U3e0SJ",
                           "name": "Group / 릴리스 준비",
                           "width": "fill_container",
-                          "height": 28,
+                          "height": 24,
                           "gap": 6,
                           "alignItems": "center",
                           "children": [
@@ -547650,7 +547731,7 @@
                         0,
                         0,
                         0,
-                        23
+                        38
                       ],
                       "alignItems": "center",
                       "children": [
@@ -548757,24 +548838,51 @@
                       "name": "Checkout groups",
                       "width": "fill_container",
                       "layout": "vertical",
-                      "gap": 6,
+                      "gap": 4,
                       "padding": [
                         4,
                         0,
                         0,
-                        14
+                        36
                       ],
                       "children": [
                         {
-                          "type": "text",
-                          "id": "F4nog",
-                          "name": "Group-less heading",
-                          "fill": "$--muted-foreground",
-                          "content": "그룹 없음",
-                          "lineHeight": 1.5,
-                          "fontFamily": "$--font-ui",
-                          "fontSize": 10,
-                          "fontWeight": "normal"
+                          "type": "frame",
+                          "name": "Group header",
+                          "width": "fill_container",
+                          "height": 24,
+                          "gap": 6,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "name": "Disclosure",
+                              "width": 12,
+                              "height": 12,
+                              "icon": "chevron-down",
+                              "library": "lucide",
+                              "fill": "$--muted-foreground"
+                            },
+                            {
+                              "type": "icon",
+                              "name": "Group",
+                              "width": 14,
+                              "height": 14,
+                              "icon": "briefcase-business",
+                              "library": "lucide",
+                              "fill": "$--muted-foreground"
+                            },
+                            {
+                              "type": "text",
+                              "name": "Group name",
+                              "fill": "$--foreground",
+                              "content": "그룹 없음",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$--font-ui",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
                         },
                         {
                           "type": "frame",
@@ -548786,7 +548894,7 @@
                             0,
                             0,
                             0,
-                            23
+                            0
                           ],
                           "children": [
                             {
@@ -548857,7 +548965,7 @@
                           "id": "S9Hyh",
                           "name": "Group / 로그인·회원가입 흐름 개편",
                           "width": "fill_container",
-                          "height": 28,
+                          "height": 24,
                           "gap": 6,
                           "alignItems": "center",
                           "children": [
@@ -548908,7 +549016,7 @@
                             0,
                             0,
                             0,
-                            12
+                            18
                           ],
                           "children": [
                             {
@@ -549339,7 +549447,7 @@
                           "id": "ds1CP",
                           "name": "Group separation",
                           "width": "fill_container",
-                          "height": 2,
+                          "height": 8,
                           "layout": "vertical"
                         },
                         {
@@ -549347,7 +549455,7 @@
                           "id": "KqvHs",
                           "name": "Group / 릴리스 준비",
                           "width": "fill_container",
-                          "height": 28,
+                          "height": 24,
                           "gap": 6,
                           "alignItems": "center",
                           "children": [
@@ -549396,7 +549504,7 @@
                         0,
                         0,
                         0,
-                        23
+                        38
                       ],
                       "alignItems": "center",
                       "children": [
@@ -550452,28 +550560,17 @@
                     {
                       "type": "frame",
                       "id": "E8hPdA",
-                      "name": "Checkout groups",
+                      "name": "Ungrouped rows",
                       "width": "fill_container",
                       "layout": "vertical",
                       "gap": 6,
                       "padding": [
-                        4,
                         0,
                         0,
-                        14
+                        0,
+                        0
                       ],
                       "children": [
-                        {
-                          "type": "text",
-                          "id": "NUW7n",
-                          "name": "Group-less heading",
-                          "fill": "$--muted-foreground",
-                          "content": "그룹 없음",
-                          "lineHeight": 1.5,
-                          "fontFamily": "$--font-ui",
-                          "fontSize": 10,
-                          "fontWeight": "normal"
-                        },
                         {
                           "type": "frame",
                           "id": "uQ3qh",
@@ -550484,7 +550581,7 @@
                             0,
                             0,
                             0,
-                            23
+                            0
                           ],
                           "children": [
                             {
@@ -550550,476 +550647,6 @@
                               ]
                             }
                           ]
-                        },
-                        {
-                          "type": "frame",
-                          "id": "c5B2v",
-                          "name": "Group / 로그인 개편",
-                          "width": "fill_container",
-                          "height": 28,
-                          "gap": 6,
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "icon",
-                              "id": "G8Uy4B",
-                              "name": "Disclosure",
-                              "width": 12,
-                              "height": 12,
-                              "icon": "chevron-down",
-                              "library": "lucide",
-                              "fill": "$--muted-foreground"
-                            },
-                            {
-                              "type": "icon",
-                              "id": "beJN4",
-                              "name": "Group",
-                              "width": 14,
-                              "height": 14,
-                              "icon": "briefcase-business",
-                              "library": "lucide",
-                              "fill": "$--muted-foreground"
-                            },
-                            {
-                              "type": "text",
-                              "id": "fuRch",
-                              "name": "Group name",
-                              "fill": "$--muted-foreground",
-                              "content": "로그인 개편",
-                              "lineHeight": 1.5,
-                              "fontFamily": "$--font-ui",
-                              "fontSize": 12,
-                              "fontWeight": "500"
-                            }
-                          ]
-                        },
-                        {
-                          "type": "frame",
-                          "id": "xJdpE",
-                          "name": "Login group / tabs",
-                          "width": "fill_container",
-                          "stroke": "$--border",
-                          "strokeWidth": {
-                            "left": 1
-                          },
-                          "layout": "vertical",
-                          "padding": [
-                            0,
-                            0,
-                            0,
-                            12
-                          ],
-                          "children": [
-                            {
-                              "type": "frame",
-                              "id": "AmEM9",
-                              "name": "Tab heading / 구현",
-                              "width": "fill_container",
-                              "height": 26,
-                              "gap": 6,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "icon",
-                                  "id": "V0x9H",
-                                  "name": "Tab",
-                                  "width": 11,
-                                  "height": 11,
-                                  "icon": "panel-top",
-                                  "library": "lucide",
-                                  "fill": "$--muted-foreground"
-                                },
-                                {
-                                  "type": "text",
-                                  "id": "zf88s",
-                                  "name": "Tab name",
-                                  "context": "구현",
-                                  "fill": "$--muted-foreground",
-                                  "content": "구현",
-                                  "lineHeight": 1.5,
-                                  "fontFamily": "$--font-ui",
-                                  "fontSize": 10,
-                                  "fontWeight": "normal"
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "hOgTO",
-                              "name": "Agent / 로그인 화면 구현",
-                              "width": "fill_container",
-                              "height": 44,
-                              "cornerRadius": 6,
-                              "gap": 8,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "ellipse",
-                                  "id": "Vx3jp",
-                                  "name": "State / working",
-                                  "innerRadius": 0.72,
-                                  "sweepAngle": 292,
-                                  "width": 9,
-                                  "height": 9,
-                                  "stroke": "$--primary",
-                                  "strokeWidth": 1.2
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "kDaaq",
-                                  "name": "Agent identity",
-                                  "clip": true,
-                                  "width": "fill_container",
-                                  "layout": "vertical",
-                                  "gap": 1,
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "PEvVq",
-                                      "name": "Task title",
-                                      "context": "로그인 화면 구현",
-                                      "fill": "$--foreground",
-                                      "textGrowth": "fixed-width",
-                                      "width": "fill_container",
-                                      "content": "로그인 화면 구현",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "FhBYV",
-                                      "name": "Provider",
-                                      "fill": "$--muted-foreground",
-                                      "content": "Claude Code",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 10,
-                                      "fontWeight": "normal"
-                                    }
-                                  ]
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "iU0U6",
-                              "name": "Agent / 인증 API 구현",
-                              "width": "fill_container",
-                              "height": 44,
-                              "cornerRadius": 6,
-                              "gap": 8,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "ellipse",
-                                  "id": "Y86oT",
-                                  "name": "State / working",
-                                  "innerRadius": 0.72,
-                                  "sweepAngle": 292,
-                                  "width": 9,
-                                  "height": 9,
-                                  "stroke": "$--primary",
-                                  "strokeWidth": 1.2
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "SCHow",
-                                  "name": "Agent identity",
-                                  "clip": true,
-                                  "width": "fill_container",
-                                  "layout": "vertical",
-                                  "gap": 1,
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "JfWft",
-                                      "name": "Task title",
-                                      "context": "인증 API 구현",
-                                      "fill": "$--foreground",
-                                      "textGrowth": "fixed-width",
-                                      "width": "fill_container",
-                                      "content": "인증 API 구현",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "rGiy1",
-                                      "name": "Provider",
-                                      "fill": "$--muted-foreground",
-                                      "content": "Codex",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 10,
-                                      "fontWeight": "normal"
-                                    }
-                                  ]
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "Y40we",
-                              "name": "Tab heading / 테스트",
-                              "width": "fill_container",
-                              "height": 26,
-                              "gap": 6,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "icon",
-                                  "id": "D330fo",
-                                  "name": "Tab",
-                                  "width": 11,
-                                  "height": 11,
-                                  "icon": "panel-top",
-                                  "library": "lucide",
-                                  "fill": "$--muted-foreground"
-                                },
-                                {
-                                  "type": "text",
-                                  "id": "N98QmG",
-                                  "name": "Tab name",
-                                  "context": "테스트",
-                                  "fill": "$--muted-foreground",
-                                  "content": "테스트",
-                                  "lineHeight": 1.5,
-                                  "fontFamily": "$--font-ui",
-                                  "fontSize": 10,
-                                  "fontWeight": "normal"
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "DNi6n",
-                              "name": "Agent / 로그인 예외 상황 점검",
-                              "width": "fill_container",
-                              "height": 44,
-                              "cornerRadius": 6,
-                              "gap": 8,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "ellipse",
-                                  "id": "woy97",
-                                  "name": "State / idle",
-                                  "width": 9,
-                                  "height": 9,
-                                  "stroke": "$--muted-foreground",
-                                  "strokeWidth": 1.2
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "O8RBC",
-                                  "name": "Agent identity",
-                                  "clip": true,
-                                  "width": "fill_container",
-                                  "layout": "vertical",
-                                  "gap": 1,
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "e65OpX",
-                                      "name": "Task title",
-                                      "context": "로그인 예외 상황 점검",
-                                      "fill": "$--foreground",
-                                      "textGrowth": "fixed-width",
-                                      "width": "fill_container",
-                                      "content": "로그인 예외 상황 점검",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "U5gTI",
-                                      "name": "Provider",
-                                      "fill": "$--muted-foreground",
-                                      "content": "Claude Code",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 10,
-                                      "fontWeight": "normal"
-                                    }
-                                  ]
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "UhbWY",
-                              "name": "Tab heading / 리뷰",
-                              "width": "fill_container",
-                              "height": 26,
-                              "gap": 6,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "icon",
-                                  "id": "NWjai",
-                                  "name": "Tab",
-                                  "width": 11,
-                                  "height": 11,
-                                  "icon": "panel-top",
-                                  "library": "lucide",
-                                  "fill": "$--muted-foreground"
-                                },
-                                {
-                                  "type": "text",
-                                  "id": "w95Ni",
-                                  "name": "Tab name",
-                                  "context": "리뷰",
-                                  "fill": "$--muted-foreground",
-                                  "content": "리뷰",
-                                  "lineHeight": 1.5,
-                                  "fontFamily": "$--font-ui",
-                                  "fontSize": 10,
-                                  "fontWeight": "normal"
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "k7QTSQ",
-                              "name": "Agent / 변경 사항 검토",
-                              "width": "fill_container",
-                              "height": 44,
-                              "cornerRadius": 6,
-                              "gap": 8,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "ellipse",
-                                  "id": "cuetw",
-                                  "name": "State / done",
-                                  "fill": "$--primary",
-                                  "width": 6,
-                                  "height": 6,
-                                  "stroke": "$--primary"
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "XWCWh",
-                                  "name": "Agent identity",
-                                  "clip": true,
-                                  "width": "fill_container",
-                                  "layout": "vertical",
-                                  "gap": 1,
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "OWMha",
-                                      "name": "Task title",
-                                      "context": "변경 사항 검토",
-                                      "fill": "$--foreground",
-                                      "textGrowth": "fixed-width",
-                                      "width": "fill_container",
-                                      "content": "변경 사항 검토",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "b7SL6",
-                                      "name": "Provider",
-                                      "fill": "$--muted-foreground",
-                                      "content": "Codex",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 10,
-                                      "fontWeight": "normal"
-                                    }
-                                  ]
-                                }
-                              ]
-                            }
-                          ]
-                        },
-                        {
-                          "type": "frame",
-                          "id": "MwiAf",
-                          "name": "Group separation",
-                          "width": "fill_container",
-                          "height": 2,
-                          "layout": "vertical"
-                        },
-                        {
-                          "type": "frame",
-                          "id": "L7YwHr",
-                          "name": "Group / 릴리스 준비",
-                          "width": "fill_container",
-                          "height": 28,
-                          "gap": 6,
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "icon",
-                              "id": "AiSD1",
-                              "name": "Disclosure",
-                              "width": 12,
-                              "height": 12,
-                              "icon": "chevron-right",
-                              "library": "lucide",
-                              "fill": "$--muted-foreground"
-                            },
-                            {
-                              "type": "icon",
-                              "id": "hMqm7",
-                              "name": "Group",
-                              "width": 14,
-                              "height": 14,
-                              "icon": "briefcase-business",
-                              "library": "lucide",
-                              "fill": "$--muted-foreground"
-                            },
-                            {
-                              "type": "text",
-                              "id": "m8Ysr",
-                              "name": "Group name",
-                              "fill": "$--muted-foreground",
-                              "content": "릴리스 준비",
-                              "lineHeight": 1.5,
-                              "fontFamily": "$--font-ui",
-                              "fontSize": 12,
-                              "fontWeight": "500"
-                            }
-                          ]
                         }
                       ]
                     },
@@ -551033,7 +550660,7 @@
                         0,
                         0,
                         0,
-                        23
+                        38
                       ],
                       "alignItems": "center",
                       "children": [
@@ -552081,24 +551708,51 @@
                       "name": "Checkout groups",
                       "width": "fill_container",
                       "layout": "vertical",
-                      "gap": 6,
+                      "gap": 4,
                       "padding": [
                         4,
                         0,
                         0,
-                        14
+                        36
                       ],
                       "children": [
                         {
-                          "type": "text",
-                          "id": "Q1lVD",
-                          "name": "Group-less heading",
-                          "fill": "$--muted-foreground",
-                          "content": "그룹 없음",
-                          "lineHeight": 1.5,
-                          "fontFamily": "$--font-ui",
-                          "fontSize": 10,
-                          "fontWeight": "normal"
+                          "type": "frame",
+                          "name": "Group header",
+                          "width": "fill_container",
+                          "height": 24,
+                          "gap": 6,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "name": "Disclosure",
+                              "width": 12,
+                              "height": 12,
+                              "icon": "chevron-down",
+                              "library": "lucide",
+                              "fill": "$--muted-foreground"
+                            },
+                            {
+                              "type": "icon",
+                              "name": "Group",
+                              "width": 14,
+                              "height": 14,
+                              "icon": "briefcase-business",
+                              "library": "lucide",
+                              "fill": "$--muted-foreground"
+                            },
+                            {
+                              "type": "text",
+                              "name": "Group name",
+                              "fill": "$--foreground",
+                              "content": "그룹 없음",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$--font-ui",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
                         },
                         {
                           "type": "frame",
@@ -552110,7 +551764,7 @@
                             0,
                             0,
                             0,
-                            23
+                            0
                           ],
                           "children": [
                             {
@@ -552181,7 +551835,7 @@
                           "id": "iDGBv",
                           "name": "Group / 로그인 개편",
                           "width": "fill_container",
-                          "height": 28,
+                          "height": 24,
                           "gap": 6,
                           "alignItems": "center",
                           "children": [
@@ -552232,7 +551886,7 @@
                             0,
                             0,
                             0,
-                            12
+                            18
                           ],
                           "children": [
                             {
@@ -552602,7 +552256,7 @@
                           "id": "vNYBw",
                           "name": "Group separation",
                           "width": "fill_container",
-                          "height": 2,
+                          "height": 8,
                           "layout": "vertical"
                         },
                         {
@@ -552610,7 +552264,7 @@
                           "id": "JF1qa",
                           "name": "Group / 릴리스 준비",
                           "width": "fill_container",
-                          "height": 28,
+                          "height": 24,
                           "gap": 6,
                           "alignItems": "center",
                           "children": [
@@ -552659,7 +552313,7 @@
                         0,
                         0,
                         0,
-                        23
+                        38
                       ],
                       "alignItems": "center",
                       "children": [
@@ -554078,24 +553732,51 @@
                       "name": "Checkout groups",
                       "width": "fill_container",
                       "layout": "vertical",
-                      "gap": 6,
+                      "gap": 4,
                       "padding": [
                         4,
                         0,
                         0,
-                        14
+                        36
                       ],
                       "children": [
                         {
-                          "type": "text",
-                          "id": "aLLeM",
-                          "name": "Group-less heading",
-                          "fill": "$--muted-foreground",
-                          "content": "그룹 없음",
-                          "lineHeight": 1.5,
-                          "fontFamily": "$--font-ui",
-                          "fontSize": 10,
-                          "fontWeight": "normal"
+                          "type": "frame",
+                          "name": "Group header",
+                          "width": "fill_container",
+                          "height": 24,
+                          "gap": 6,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "name": "Disclosure",
+                              "width": 12,
+                              "height": 12,
+                              "icon": "chevron-down",
+                              "library": "lucide",
+                              "fill": "$--muted-foreground"
+                            },
+                            {
+                              "type": "icon",
+                              "name": "Group",
+                              "width": 14,
+                              "height": 14,
+                              "icon": "briefcase-business",
+                              "library": "lucide",
+                              "fill": "$--muted-foreground"
+                            },
+                            {
+                              "type": "text",
+                              "name": "Group name",
+                              "fill": "$--foreground",
+                              "content": "그룹 없음",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$--font-ui",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
                         },
                         {
                           "type": "frame",
@@ -554107,7 +553788,7 @@
                             0,
                             0,
                             0,
-                            23
+                            0
                           ],
                           "children": [
                             {
@@ -554178,7 +553859,7 @@
                           "id": "Ql1bY",
                           "name": "Group / 로그인 개편",
                           "width": "fill_container",
-                          "height": 28,
+                          "height": 24,
                           "gap": 6,
                           "alignItems": "center",
                           "children": [
@@ -554229,7 +553910,7 @@
                             0,
                             0,
                             0,
-                            12
+                            18
                           ],
                           "children": [
                             {
@@ -554598,7 +554279,7 @@
                           "id": "MlCqN",
                           "name": "Group separation",
                           "width": "fill_container",
-                          "height": 2,
+                          "height": 8,
                           "layout": "vertical"
                         },
                         {
@@ -554606,7 +554287,7 @@
                           "id": "i2bauw",
                           "name": "Group / 릴리스 준비",
                           "width": "fill_container",
-                          "height": 28,
+                          "height": 24,
                           "gap": 6,
                           "alignItems": "center",
                           "children": [
@@ -554685,7 +554366,7 @@
                         0,
                         0,
                         0,
-                        23
+                        38
                       ],
                       "alignItems": "center",
                       "children": [
@@ -555636,24 +555317,51 @@
                       "name": "Checkout groups",
                       "width": "fill_container",
                       "layout": "vertical",
-                      "gap": 6,
+                      "gap": 4,
                       "padding": [
                         4,
                         0,
                         0,
-                        14
+                        36
                       ],
                       "children": [
                         {
-                          "type": "text",
-                          "id": "HfGPl",
-                          "name": "Group-less heading",
-                          "fill": "$--muted-foreground",
-                          "content": "그룹 없음",
-                          "lineHeight": 1.5,
-                          "fontFamily": "$--font-ui",
-                          "fontSize": 10,
-                          "fontWeight": "normal"
+                          "type": "frame",
+                          "name": "Group header",
+                          "width": "fill_container",
+                          "height": 24,
+                          "gap": 6,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "name": "Disclosure",
+                              "width": 12,
+                              "height": 12,
+                              "icon": "chevron-down",
+                              "library": "lucide",
+                              "fill": "$--muted-foreground"
+                            },
+                            {
+                              "type": "icon",
+                              "name": "Group",
+                              "width": 14,
+                              "height": 14,
+                              "icon": "briefcase-business",
+                              "library": "lucide",
+                              "fill": "$--muted-foreground"
+                            },
+                            {
+                              "type": "text",
+                              "name": "Group name",
+                              "fill": "$--foreground",
+                              "content": "그룹 없음",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$--font-ui",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
                         },
                         {
                           "type": "frame",
@@ -555665,7 +555373,7 @@
                             0,
                             0,
                             0,
-                            23
+                            0
                           ],
                           "children": [
                             {
@@ -555736,7 +555444,7 @@
                           "id": "L1QQ1t",
                           "name": "Group / 로그인 개편",
                           "width": "fill_container",
-                          "height": 28,
+                          "height": 24,
                           "gap": 6,
                           "alignItems": "center",
                           "children": [
@@ -555787,7 +555495,7 @@
                             0,
                             0,
                             0,
-                            12
+                            18
                           ],
                           "children": [
                             {
@@ -556218,7 +555926,7 @@
                           "id": "DRQ2C",
                           "name": "Group separation",
                           "width": "fill_container",
-                          "height": 2,
+                          "height": 8,
                           "layout": "vertical"
                         },
                         {
@@ -556226,7 +555934,7 @@
                           "id": "pzrMB",
                           "name": "Group / 릴리스 준비",
                           "width": "fill_container",
-                          "height": 28,
+                          "height": 24,
                           "gap": 6,
                           "alignItems": "center",
                           "children": [
@@ -556275,7 +555983,7 @@
                         0,
                         0,
                         0,
-                        23
+                        38
                       ],
                       "alignItems": "center",
                       "children": [
@@ -557382,24 +557090,51 @@
                       "name": "Checkout groups",
                       "width": "fill_container",
                       "layout": "vertical",
-                      "gap": 6,
+                      "gap": 4,
                       "padding": [
                         4,
                         0,
                         0,
-                        14
+                        36
                       ],
                       "children": [
                         {
-                          "type": "text",
-                          "id": "Giqa7",
-                          "name": "Group-less heading",
-                          "fill": "$--muted-foreground",
-                          "content": "그룹 없음",
-                          "lineHeight": 1.5,
-                          "fontFamily": "$--font-ui",
-                          "fontSize": 10,
-                          "fontWeight": "normal"
+                          "type": "frame",
+                          "name": "Group header",
+                          "width": "fill_container",
+                          "height": 24,
+                          "gap": 6,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "name": "Disclosure",
+                              "width": 12,
+                              "height": 12,
+                              "icon": "chevron-down",
+                              "library": "lucide",
+                              "fill": "$--muted-foreground"
+                            },
+                            {
+                              "type": "icon",
+                              "name": "Group",
+                              "width": 14,
+                              "height": 14,
+                              "icon": "briefcase-business",
+                              "library": "lucide",
+                              "fill": "$--muted-foreground"
+                            },
+                            {
+                              "type": "text",
+                              "name": "Group name",
+                              "fill": "$--foreground",
+                              "content": "그룹 없음",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$--font-ui",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
                         },
                         {
                           "type": "frame",
@@ -557411,7 +557146,7 @@
                             0,
                             0,
                             0,
-                            23
+                            0
                           ],
                           "children": [
                             {
@@ -557482,7 +557217,7 @@
                           "id": "NnL29",
                           "name": "Group / 로그인·회원가입 흐름 개편",
                           "width": "fill_container",
-                          "height": 28,
+                          "height": 24,
                           "gap": 6,
                           "alignItems": "center",
                           "children": [
@@ -557533,7 +557268,7 @@
                             0,
                             0,
                             0,
-                            12
+                            18
                           ],
                           "children": [
                             {
@@ -557964,7 +557699,7 @@
                           "id": "xiCK1",
                           "name": "Group separation",
                           "width": "fill_container",
-                          "height": 2,
+                          "height": 8,
                           "layout": "vertical"
                         },
                         {
@@ -557972,7 +557707,7 @@
                           "id": "L6KNZj",
                           "name": "Group / 릴리스 준비",
                           "width": "fill_container",
-                          "height": 28,
+                          "height": 24,
                           "gap": 6,
                           "alignItems": "center",
                           "children": [
@@ -558021,7 +557756,7 @@
                         0,
                         0,
                         0,
-                        23
+                        38
                       ],
                       "alignItems": "center",
                       "children": [
@@ -559077,28 +558812,17 @@
                     {
                       "type": "frame",
                       "id": "JnsCX",
-                      "name": "Checkout groups",
+                      "name": "Ungrouped rows",
                       "width": "fill_container",
                       "layout": "vertical",
                       "gap": 6,
                       "padding": [
-                        4,
                         0,
                         0,
-                        14
+                        0,
+                        0
                       ],
                       "children": [
-                        {
-                          "type": "text",
-                          "id": "t03GXd",
-                          "name": "Group-less heading",
-                          "fill": "$--muted-foreground",
-                          "content": "그룹 없음",
-                          "lineHeight": 1.5,
-                          "fontFamily": "$--font-ui",
-                          "fontSize": 10,
-                          "fontWeight": "normal"
-                        },
                         {
                           "type": "frame",
                           "id": "o9AA9A",
@@ -559109,7 +558833,7 @@
                             0,
                             0,
                             0,
-                            23
+                            0
                           ],
                           "children": [
                             {
@@ -559175,476 +558899,6 @@
                               ]
                             }
                           ]
-                        },
-                        {
-                          "type": "frame",
-                          "id": "AqDI8",
-                          "name": "Group / 로그인 개편",
-                          "width": "fill_container",
-                          "height": 28,
-                          "gap": 6,
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "icon",
-                              "id": "XhH9C",
-                              "name": "Disclosure",
-                              "width": 12,
-                              "height": 12,
-                              "icon": "chevron-down",
-                              "library": "lucide",
-                              "fill": "$--muted-foreground"
-                            },
-                            {
-                              "type": "icon",
-                              "id": "zplat",
-                              "name": "Group",
-                              "width": 14,
-                              "height": 14,
-                              "icon": "briefcase-business",
-                              "library": "lucide",
-                              "fill": "$--muted-foreground"
-                            },
-                            {
-                              "type": "text",
-                              "id": "byvj6",
-                              "name": "Group name",
-                              "fill": "$--muted-foreground",
-                              "content": "로그인 개편",
-                              "lineHeight": 1.5,
-                              "fontFamily": "$--font-ui",
-                              "fontSize": 12,
-                              "fontWeight": "500"
-                            }
-                          ]
-                        },
-                        {
-                          "type": "frame",
-                          "id": "O2qDA",
-                          "name": "Login group / tabs",
-                          "width": "fill_container",
-                          "stroke": "$--border",
-                          "strokeWidth": {
-                            "left": 1
-                          },
-                          "layout": "vertical",
-                          "padding": [
-                            0,
-                            0,
-                            0,
-                            12
-                          ],
-                          "children": [
-                            {
-                              "type": "frame",
-                              "id": "LpR8r",
-                              "name": "Tab heading / 구현",
-                              "width": "fill_container",
-                              "height": 26,
-                              "gap": 6,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "icon",
-                                  "id": "OTCxE",
-                                  "name": "Tab",
-                                  "width": 11,
-                                  "height": 11,
-                                  "icon": "panel-top",
-                                  "library": "lucide",
-                                  "fill": "$--muted-foreground"
-                                },
-                                {
-                                  "type": "text",
-                                  "id": "eerqo",
-                                  "name": "Tab name",
-                                  "context": "구현",
-                                  "fill": "$--muted-foreground",
-                                  "content": "구현",
-                                  "lineHeight": 1.5,
-                                  "fontFamily": "$--font-ui",
-                                  "fontSize": 10,
-                                  "fontWeight": "normal"
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "xvjTB",
-                              "name": "Agent / 로그인 화면 구현",
-                              "width": "fill_container",
-                              "height": 44,
-                              "cornerRadius": 6,
-                              "gap": 8,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "ellipse",
-                                  "id": "upZFF",
-                                  "name": "State / working",
-                                  "innerRadius": 0.72,
-                                  "sweepAngle": 292,
-                                  "width": 9,
-                                  "height": 9,
-                                  "stroke": "$--primary",
-                                  "strokeWidth": 1.2
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "OLJ94",
-                                  "name": "Agent identity",
-                                  "clip": true,
-                                  "width": "fill_container",
-                                  "layout": "vertical",
-                                  "gap": 1,
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "sgqhy",
-                                      "name": "Task title",
-                                      "context": "로그인 화면 구현",
-                                      "fill": "$--foreground",
-                                      "textGrowth": "fixed-width",
-                                      "width": "fill_container",
-                                      "content": "로그인 화면 구현",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "c0Fc5",
-                                      "name": "Provider",
-                                      "fill": "$--muted-foreground",
-                                      "content": "Claude Code",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 10,
-                                      "fontWeight": "normal"
-                                    }
-                                  ]
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "p6zck1",
-                              "name": "Agent / 인증 API 구현",
-                              "width": "fill_container",
-                              "height": 44,
-                              "cornerRadius": 6,
-                              "gap": 8,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "ellipse",
-                                  "id": "QUJOE",
-                                  "name": "State / working",
-                                  "innerRadius": 0.72,
-                                  "sweepAngle": 292,
-                                  "width": 9,
-                                  "height": 9,
-                                  "stroke": "$--primary",
-                                  "strokeWidth": 1.2
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "vK5Bu",
-                                  "name": "Agent identity",
-                                  "clip": true,
-                                  "width": "fill_container",
-                                  "layout": "vertical",
-                                  "gap": 1,
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "AiQVA",
-                                      "name": "Task title",
-                                      "context": "인증 API 구현",
-                                      "fill": "$--foreground",
-                                      "textGrowth": "fixed-width",
-                                      "width": "fill_container",
-                                      "content": "인증 API 구현",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "whqR5",
-                                      "name": "Provider",
-                                      "fill": "$--muted-foreground",
-                                      "content": "Codex",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 10,
-                                      "fontWeight": "normal"
-                                    }
-                                  ]
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "oMgr6",
-                              "name": "Tab heading / 테스트",
-                              "width": "fill_container",
-                              "height": 26,
-                              "gap": 6,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "icon",
-                                  "id": "UOHC0",
-                                  "name": "Tab",
-                                  "width": 11,
-                                  "height": 11,
-                                  "icon": "panel-top",
-                                  "library": "lucide",
-                                  "fill": "$--muted-foreground"
-                                },
-                                {
-                                  "type": "text",
-                                  "id": "hzSlh",
-                                  "name": "Tab name",
-                                  "context": "테스트",
-                                  "fill": "$--muted-foreground",
-                                  "content": "테스트",
-                                  "lineHeight": 1.5,
-                                  "fontFamily": "$--font-ui",
-                                  "fontSize": 10,
-                                  "fontWeight": "normal"
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "TIBce",
-                              "name": "Agent / 로그인 예외 상황 점검",
-                              "width": "fill_container",
-                              "height": 44,
-                              "cornerRadius": 6,
-                              "gap": 8,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "ellipse",
-                                  "id": "RZjhi",
-                                  "name": "State / idle",
-                                  "width": 9,
-                                  "height": 9,
-                                  "stroke": "$--muted-foreground",
-                                  "strokeWidth": 1.2
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "r2rKyG",
-                                  "name": "Agent identity",
-                                  "clip": true,
-                                  "width": "fill_container",
-                                  "layout": "vertical",
-                                  "gap": 1,
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "MVq7q",
-                                      "name": "Task title",
-                                      "context": "로그인 예외 상황 점검",
-                                      "fill": "$--foreground",
-                                      "textGrowth": "fixed-width",
-                                      "width": "fill_container",
-                                      "content": "로그인 예외 상황 점검",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "Z7Sybv",
-                                      "name": "Provider",
-                                      "fill": "$--muted-foreground",
-                                      "content": "Claude Code",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 10,
-                                      "fontWeight": "normal"
-                                    }
-                                  ]
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "PzBCu",
-                              "name": "Tab heading / 리뷰",
-                              "width": "fill_container",
-                              "height": 26,
-                              "gap": 6,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "icon",
-                                  "id": "sK37d",
-                                  "name": "Tab",
-                                  "width": 11,
-                                  "height": 11,
-                                  "icon": "panel-top",
-                                  "library": "lucide",
-                                  "fill": "$--muted-foreground"
-                                },
-                                {
-                                  "type": "text",
-                                  "id": "lZdqW",
-                                  "name": "Tab name",
-                                  "context": "리뷰",
-                                  "fill": "$--muted-foreground",
-                                  "content": "리뷰",
-                                  "lineHeight": 1.5,
-                                  "fontFamily": "$--font-ui",
-                                  "fontSize": 10,
-                                  "fontWeight": "normal"
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "mM37l",
-                              "name": "Agent / 변경 사항 검토",
-                              "width": "fill_container",
-                              "height": 44,
-                              "cornerRadius": 6,
-                              "gap": 8,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "ellipse",
-                                  "id": "g9kCC9",
-                                  "name": "State / done",
-                                  "fill": "$--primary",
-                                  "width": 6,
-                                  "height": 6,
-                                  "stroke": "$--primary"
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "FxfUP",
-                                  "name": "Agent identity",
-                                  "clip": true,
-                                  "width": "fill_container",
-                                  "layout": "vertical",
-                                  "gap": 1,
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "GwoPm",
-                                      "name": "Task title",
-                                      "context": "변경 사항 검토",
-                                      "fill": "$--foreground",
-                                      "textGrowth": "fixed-width",
-                                      "width": "fill_container",
-                                      "content": "변경 사항 검토",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "wxlLS",
-                                      "name": "Provider",
-                                      "fill": "$--muted-foreground",
-                                      "content": "Codex",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 10,
-                                      "fontWeight": "normal"
-                                    }
-                                  ]
-                                }
-                              ]
-                            }
-                          ]
-                        },
-                        {
-                          "type": "frame",
-                          "id": "NZ6dD",
-                          "name": "Group separation",
-                          "width": "fill_container",
-                          "height": 2,
-                          "layout": "vertical"
-                        },
-                        {
-                          "type": "frame",
-                          "id": "CllxG",
-                          "name": "Group / 릴리스 준비",
-                          "width": "fill_container",
-                          "height": 28,
-                          "gap": 6,
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "icon",
-                              "id": "PkObd",
-                              "name": "Disclosure",
-                              "width": 12,
-                              "height": 12,
-                              "icon": "chevron-right",
-                              "library": "lucide",
-                              "fill": "$--muted-foreground"
-                            },
-                            {
-                              "type": "icon",
-                              "id": "XUgTn",
-                              "name": "Group",
-                              "width": 14,
-                              "height": 14,
-                              "icon": "briefcase-business",
-                              "library": "lucide",
-                              "fill": "$--muted-foreground"
-                            },
-                            {
-                              "type": "text",
-                              "id": "hEmoH",
-                              "name": "Group name",
-                              "fill": "$--muted-foreground",
-                              "content": "릴리스 준비",
-                              "lineHeight": 1.5,
-                              "fontFamily": "$--font-ui",
-                              "fontSize": 12,
-                              "fontWeight": "500"
-                            }
-                          ]
                         }
                       ]
                     },
@@ -559658,7 +558912,7 @@
                         0,
                         0,
                         0,
-                        23
+                        38
                       ],
                       "alignItems": "center",
                       "children": [
@@ -560703,28 +559957,17 @@
                     {
                       "type": "frame",
                       "id": "iarGX",
-                      "name": "Checkout groups",
+                      "name": "Ungrouped rows",
                       "width": "fill_container",
                       "layout": "vertical",
                       "gap": 6,
                       "padding": [
-                        4,
                         0,
                         0,
-                        14
+                        0,
+                        0
                       ],
                       "children": [
-                        {
-                          "type": "text",
-                          "id": "p9sjj",
-                          "name": "Group-less heading",
-                          "fill": "$--muted-foreground",
-                          "content": "그룹 없음",
-                          "lineHeight": 1.5,
-                          "fontFamily": "$--font-ui",
-                          "fontSize": 10,
-                          "fontWeight": "normal"
-                        },
                         {
                           "type": "frame",
                           "id": "f7HoG",
@@ -560735,7 +559978,7 @@
                             0,
                             0,
                             0,
-                            23
+                            0
                           ],
                           "children": [
                             {
@@ -560862,476 +560105,6 @@
                               ]
                             }
                           ]
-                        },
-                        {
-                          "type": "frame",
-                          "id": "QJJ5X",
-                          "name": "Group / 로그인 개편",
-                          "width": "fill_container",
-                          "height": 28,
-                          "gap": 6,
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "icon",
-                              "id": "nfp4Z",
-                              "name": "Disclosure",
-                              "width": 12,
-                              "height": 12,
-                              "icon": "chevron-down",
-                              "library": "lucide",
-                              "fill": "$--muted-foreground"
-                            },
-                            {
-                              "type": "icon",
-                              "id": "r5bS8f",
-                              "name": "Group",
-                              "width": 14,
-                              "height": 14,
-                              "icon": "briefcase-business",
-                              "library": "lucide",
-                              "fill": "$--muted-foreground"
-                            },
-                            {
-                              "type": "text",
-                              "id": "PTXAM",
-                              "name": "Group name",
-                              "fill": "$--muted-foreground",
-                              "content": "로그인 개편",
-                              "lineHeight": 1.5,
-                              "fontFamily": "$--font-ui",
-                              "fontSize": 12,
-                              "fontWeight": "500"
-                            }
-                          ]
-                        },
-                        {
-                          "type": "frame",
-                          "id": "sB50l",
-                          "name": "Login group / tabs",
-                          "width": "fill_container",
-                          "stroke": "$--border",
-                          "strokeWidth": {
-                            "left": 1
-                          },
-                          "layout": "vertical",
-                          "padding": [
-                            0,
-                            0,
-                            0,
-                            12
-                          ],
-                          "children": [
-                            {
-                              "type": "frame",
-                              "id": "YkVkz",
-                              "name": "Tab heading / 구현",
-                              "width": "fill_container",
-                              "height": 26,
-                              "gap": 6,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "icon",
-                                  "id": "Q2xHj9",
-                                  "name": "Tab",
-                                  "width": 11,
-                                  "height": 11,
-                                  "icon": "panel-top",
-                                  "library": "lucide",
-                                  "fill": "$--muted-foreground"
-                                },
-                                {
-                                  "type": "text",
-                                  "id": "l39Ra",
-                                  "name": "Tab name",
-                                  "context": "구현",
-                                  "fill": "$--muted-foreground",
-                                  "content": "구현",
-                                  "lineHeight": 1.5,
-                                  "fontFamily": "$--font-ui",
-                                  "fontSize": 10,
-                                  "fontWeight": "normal"
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "ZCAwz",
-                              "name": "Agent / 로그인 화면 구현",
-                              "width": "fill_container",
-                              "height": 44,
-                              "cornerRadius": 6,
-                              "gap": 8,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "ellipse",
-                                  "id": "A4ssGw",
-                                  "name": "State / working",
-                                  "innerRadius": 0.72,
-                                  "sweepAngle": 292,
-                                  "width": 9,
-                                  "height": 9,
-                                  "stroke": "$--primary",
-                                  "strokeWidth": 1.2
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "Y1G8SS",
-                                  "name": "Agent identity",
-                                  "clip": true,
-                                  "width": "fill_container",
-                                  "layout": "vertical",
-                                  "gap": 1,
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "n05lRy",
-                                      "name": "Task title",
-                                      "context": "로그인 화면 구현",
-                                      "fill": "$--foreground",
-                                      "textGrowth": "fixed-width",
-                                      "width": "fill_container",
-                                      "content": "로그인 화면 구현",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "m2KAs6",
-                                      "name": "Provider",
-                                      "fill": "$--muted-foreground",
-                                      "content": "Claude Code",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 10,
-                                      "fontWeight": "normal"
-                                    }
-                                  ]
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "BMtrN",
-                              "name": "Agent / 인증 API 구현",
-                              "width": "fill_container",
-                              "height": 44,
-                              "cornerRadius": 6,
-                              "gap": 8,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "ellipse",
-                                  "id": "E6iPql",
-                                  "name": "State / working",
-                                  "innerRadius": 0.72,
-                                  "sweepAngle": 292,
-                                  "width": 9,
-                                  "height": 9,
-                                  "stroke": "$--primary",
-                                  "strokeWidth": 1.2
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "b8mp6",
-                                  "name": "Agent identity",
-                                  "clip": true,
-                                  "width": "fill_container",
-                                  "layout": "vertical",
-                                  "gap": 1,
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "GrFL4",
-                                      "name": "Task title",
-                                      "context": "인증 API 구현",
-                                      "fill": "$--foreground",
-                                      "textGrowth": "fixed-width",
-                                      "width": "fill_container",
-                                      "content": "인증 API 구현",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "MwjT1",
-                                      "name": "Provider",
-                                      "fill": "$--muted-foreground",
-                                      "content": "Codex",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 10,
-                                      "fontWeight": "normal"
-                                    }
-                                  ]
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "YuOFK",
-                              "name": "Tab heading / 테스트",
-                              "width": "fill_container",
-                              "height": 26,
-                              "gap": 6,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "icon",
-                                  "id": "N8oRzt",
-                                  "name": "Tab",
-                                  "width": 11,
-                                  "height": 11,
-                                  "icon": "panel-top",
-                                  "library": "lucide",
-                                  "fill": "$--muted-foreground"
-                                },
-                                {
-                                  "type": "text",
-                                  "id": "ikBvS",
-                                  "name": "Tab name",
-                                  "context": "테스트",
-                                  "fill": "$--muted-foreground",
-                                  "content": "테스트",
-                                  "lineHeight": 1.5,
-                                  "fontFamily": "$--font-ui",
-                                  "fontSize": 10,
-                                  "fontWeight": "normal"
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "SoW4m",
-                              "name": "Agent / 로그인 예외 상황 점검",
-                              "width": "fill_container",
-                              "height": 44,
-                              "cornerRadius": 6,
-                              "gap": 8,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "ellipse",
-                                  "id": "Y1Bh7T",
-                                  "name": "State / idle",
-                                  "width": 9,
-                                  "height": 9,
-                                  "stroke": "$--muted-foreground",
-                                  "strokeWidth": 1.2
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "jIi5J",
-                                  "name": "Agent identity",
-                                  "clip": true,
-                                  "width": "fill_container",
-                                  "layout": "vertical",
-                                  "gap": 1,
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "IJUgJ",
-                                      "name": "Task title",
-                                      "context": "로그인 예외 상황 점검",
-                                      "fill": "$--foreground",
-                                      "textGrowth": "fixed-width",
-                                      "width": "fill_container",
-                                      "content": "로그인 예외 상황 점검",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "rNhur",
-                                      "name": "Provider",
-                                      "fill": "$--muted-foreground",
-                                      "content": "Claude Code",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 10,
-                                      "fontWeight": "normal"
-                                    }
-                                  ]
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "rCylm",
-                              "name": "Tab heading / 리뷰",
-                              "width": "fill_container",
-                              "height": 26,
-                              "gap": 6,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "icon",
-                                  "id": "PxcVB",
-                                  "name": "Tab",
-                                  "width": 11,
-                                  "height": 11,
-                                  "icon": "panel-top",
-                                  "library": "lucide",
-                                  "fill": "$--muted-foreground"
-                                },
-                                {
-                                  "type": "text",
-                                  "id": "Ja0iJ",
-                                  "name": "Tab name",
-                                  "context": "리뷰",
-                                  "fill": "$--muted-foreground",
-                                  "content": "리뷰",
-                                  "lineHeight": 1.5,
-                                  "fontFamily": "$--font-ui",
-                                  "fontSize": 10,
-                                  "fontWeight": "normal"
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "m1St5",
-                              "name": "Agent / 변경 사항 검토",
-                              "width": "fill_container",
-                              "height": 44,
-                              "cornerRadius": 6,
-                              "gap": 8,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "ellipse",
-                                  "id": "dbn0e",
-                                  "name": "State / done",
-                                  "fill": "$--primary",
-                                  "width": 6,
-                                  "height": 6,
-                                  "stroke": "$--primary"
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "Yttxv",
-                                  "name": "Agent identity",
-                                  "clip": true,
-                                  "width": "fill_container",
-                                  "layout": "vertical",
-                                  "gap": 1,
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "u9Szkv",
-                                      "name": "Task title",
-                                      "context": "변경 사항 검토",
-                                      "fill": "$--foreground",
-                                      "textGrowth": "fixed-width",
-                                      "width": "fill_container",
-                                      "content": "변경 사항 검토",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "tR7x2",
-                                      "name": "Provider",
-                                      "fill": "$--muted-foreground",
-                                      "content": "Codex",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 10,
-                                      "fontWeight": "normal"
-                                    }
-                                  ]
-                                }
-                              ]
-                            }
-                          ]
-                        },
-                        {
-                          "type": "frame",
-                          "id": "d7pPZ",
-                          "name": "Group separation",
-                          "width": "fill_container",
-                          "height": 2,
-                          "layout": "vertical"
-                        },
-                        {
-                          "type": "frame",
-                          "id": "cJjXi",
-                          "name": "Group / 릴리스 준비",
-                          "width": "fill_container",
-                          "height": 28,
-                          "gap": 6,
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "icon",
-                              "id": "feXhP",
-                              "name": "Disclosure",
-                              "width": 12,
-                              "height": 12,
-                              "icon": "chevron-right",
-                              "library": "lucide",
-                              "fill": "$--muted-foreground"
-                            },
-                            {
-                              "type": "icon",
-                              "id": "t6iGA",
-                              "name": "Group",
-                              "width": 14,
-                              "height": 14,
-                              "icon": "briefcase-business",
-                              "library": "lucide",
-                              "fill": "$--muted-foreground"
-                            },
-                            {
-                              "type": "text",
-                              "id": "k2QzB",
-                              "name": "Group name",
-                              "fill": "$--muted-foreground",
-                              "content": "릴리스 준비",
-                              "lineHeight": 1.5,
-                              "fontFamily": "$--font-ui",
-                              "fontSize": 12,
-                              "fontWeight": "500"
-                            }
-                          ]
                         }
                       ]
                     },
@@ -561345,7 +560118,7 @@
                         0,
                         0,
                         0,
-                        23
+                        38
                       ],
                       "alignItems": "center",
                       "children": [
@@ -562395,28 +561168,17 @@
                     {
                       "type": "frame",
                       "id": "dUjQf",
-                      "name": "Checkout groups",
+                      "name": "Ungrouped rows",
                       "width": "fill_container",
                       "layout": "vertical",
                       "gap": 6,
                       "padding": [
-                        4,
                         0,
                         0,
-                        14
+                        0,
+                        0
                       ],
                       "children": [
-                        {
-                          "type": "text",
-                          "id": "wg5o6",
-                          "name": "Group-less heading",
-                          "fill": "$--muted-foreground",
-                          "content": "그룹 없음",
-                          "lineHeight": 1.5,
-                          "fontFamily": "$--font-ui",
-                          "fontSize": 10,
-                          "fontWeight": "normal"
-                        },
                         {
                           "type": "frame",
                           "id": "FMvtB",
@@ -562427,7 +561189,7 @@
                             0,
                             0,
                             0,
-                            23
+                            0
                           ],
                           "children": [
                             {
@@ -562554,476 +561316,6 @@
                               ]
                             }
                           ]
-                        },
-                        {
-                          "type": "frame",
-                          "id": "VshvU",
-                          "name": "Group / 로그인 개편",
-                          "width": "fill_container",
-                          "height": 28,
-                          "gap": 6,
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "icon",
-                              "id": "GsP4R",
-                              "name": "Disclosure",
-                              "width": 12,
-                              "height": 12,
-                              "icon": "chevron-down",
-                              "library": "lucide",
-                              "fill": "$--muted-foreground"
-                            },
-                            {
-                              "type": "icon",
-                              "id": "fl8lv",
-                              "name": "Group",
-                              "width": 14,
-                              "height": 14,
-                              "icon": "briefcase-business",
-                              "library": "lucide",
-                              "fill": "$--muted-foreground"
-                            },
-                            {
-                              "type": "text",
-                              "id": "s1jpzU",
-                              "name": "Group name",
-                              "fill": "$--muted-foreground",
-                              "content": "로그인 개편",
-                              "lineHeight": 1.5,
-                              "fontFamily": "$--font-ui",
-                              "fontSize": 12,
-                              "fontWeight": "500"
-                            }
-                          ]
-                        },
-                        {
-                          "type": "frame",
-                          "id": "v1w6Ki",
-                          "name": "Login group / tabs",
-                          "width": "fill_container",
-                          "stroke": "$--border",
-                          "strokeWidth": {
-                            "left": 1
-                          },
-                          "layout": "vertical",
-                          "padding": [
-                            0,
-                            0,
-                            0,
-                            12
-                          ],
-                          "children": [
-                            {
-                              "type": "frame",
-                              "id": "x08gbH",
-                              "name": "Tab heading / 구현",
-                              "width": "fill_container",
-                              "height": 26,
-                              "gap": 6,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "icon",
-                                  "id": "M9qx4K",
-                                  "name": "Tab",
-                                  "width": 11,
-                                  "height": 11,
-                                  "icon": "panel-top",
-                                  "library": "lucide",
-                                  "fill": "$--muted-foreground"
-                                },
-                                {
-                                  "type": "text",
-                                  "id": "d2xKz",
-                                  "name": "Tab name",
-                                  "context": "구현",
-                                  "fill": "$--muted-foreground",
-                                  "content": "구현",
-                                  "lineHeight": 1.5,
-                                  "fontFamily": "$--font-ui",
-                                  "fontSize": 10,
-                                  "fontWeight": "normal"
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "qo6ZU",
-                              "name": "Agent / 로그인 화면 구현",
-                              "width": "fill_container",
-                              "height": 44,
-                              "cornerRadius": 6,
-                              "gap": 8,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "ellipse",
-                                  "id": "C6rSPI",
-                                  "name": "State / working",
-                                  "innerRadius": 0.72,
-                                  "sweepAngle": 292,
-                                  "width": 9,
-                                  "height": 9,
-                                  "stroke": "$--primary",
-                                  "strokeWidth": 1.2
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "Ga0DV",
-                                  "name": "Agent identity",
-                                  "clip": true,
-                                  "width": "fill_container",
-                                  "layout": "vertical",
-                                  "gap": 1,
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "M349wx",
-                                      "name": "Task title",
-                                      "context": "로그인 화면 구현",
-                                      "fill": "$--foreground",
-                                      "textGrowth": "fixed-width",
-                                      "width": "fill_container",
-                                      "content": "로그인 화면 구현",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "B5HaZ5",
-                                      "name": "Provider",
-                                      "fill": "$--muted-foreground",
-                                      "content": "Claude Code",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 10,
-                                      "fontWeight": "normal"
-                                    }
-                                  ]
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "D7f5aA",
-                              "name": "Agent / 인증 API 구현",
-                              "width": "fill_container",
-                              "height": 44,
-                              "cornerRadius": 6,
-                              "gap": 8,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "ellipse",
-                                  "id": "gXjoh",
-                                  "name": "State / working",
-                                  "innerRadius": 0.72,
-                                  "sweepAngle": 292,
-                                  "width": 9,
-                                  "height": 9,
-                                  "stroke": "$--primary",
-                                  "strokeWidth": 1.2
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "j6WRZF",
-                                  "name": "Agent identity",
-                                  "clip": true,
-                                  "width": "fill_container",
-                                  "layout": "vertical",
-                                  "gap": 1,
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "Q5ggnS",
-                                      "name": "Task title",
-                                      "context": "인증 API 구현",
-                                      "fill": "$--foreground",
-                                      "textGrowth": "fixed-width",
-                                      "width": "fill_container",
-                                      "content": "인증 API 구현",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "XB4im",
-                                      "name": "Provider",
-                                      "fill": "$--muted-foreground",
-                                      "content": "Codex",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 10,
-                                      "fontWeight": "normal"
-                                    }
-                                  ]
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "ohCtn",
-                              "name": "Tab heading / 테스트",
-                              "width": "fill_container",
-                              "height": 26,
-                              "gap": 6,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "icon",
-                                  "id": "P0D7F",
-                                  "name": "Tab",
-                                  "width": 11,
-                                  "height": 11,
-                                  "icon": "panel-top",
-                                  "library": "lucide",
-                                  "fill": "$--muted-foreground"
-                                },
-                                {
-                                  "type": "text",
-                                  "id": "cAKBr",
-                                  "name": "Tab name",
-                                  "context": "테스트",
-                                  "fill": "$--muted-foreground",
-                                  "content": "테스트",
-                                  "lineHeight": 1.5,
-                                  "fontFamily": "$--font-ui",
-                                  "fontSize": 10,
-                                  "fontWeight": "normal"
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "oywFT",
-                              "name": "Agent / 로그인 예외 상황 점검",
-                              "width": "fill_container",
-                              "height": 44,
-                              "cornerRadius": 6,
-                              "gap": 8,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "ellipse",
-                                  "id": "JYxcx",
-                                  "name": "State / idle",
-                                  "width": 9,
-                                  "height": 9,
-                                  "stroke": "$--muted-foreground",
-                                  "strokeWidth": 1.2
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "Ymr5X",
-                                  "name": "Agent identity",
-                                  "clip": true,
-                                  "width": "fill_container",
-                                  "layout": "vertical",
-                                  "gap": 1,
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "IyeLt",
-                                      "name": "Task title",
-                                      "context": "로그인 예외 상황 점검",
-                                      "fill": "$--foreground",
-                                      "textGrowth": "fixed-width",
-                                      "width": "fill_container",
-                                      "content": "로그인 예외 상황 점검",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "bM0hF",
-                                      "name": "Provider",
-                                      "fill": "$--muted-foreground",
-                                      "content": "Claude Code",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 10,
-                                      "fontWeight": "normal"
-                                    }
-                                  ]
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "SoZEt",
-                              "name": "Tab heading / 리뷰",
-                              "width": "fill_container",
-                              "height": 26,
-                              "gap": 6,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "icon",
-                                  "id": "PIwWq",
-                                  "name": "Tab",
-                                  "width": 11,
-                                  "height": 11,
-                                  "icon": "panel-top",
-                                  "library": "lucide",
-                                  "fill": "$--muted-foreground"
-                                },
-                                {
-                                  "type": "text",
-                                  "id": "A3XWU",
-                                  "name": "Tab name",
-                                  "context": "리뷰",
-                                  "fill": "$--muted-foreground",
-                                  "content": "리뷰",
-                                  "lineHeight": 1.5,
-                                  "fontFamily": "$--font-ui",
-                                  "fontSize": 10,
-                                  "fontWeight": "normal"
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "wya48",
-                              "name": "Agent / 변경 사항 검토",
-                              "width": "fill_container",
-                              "height": 44,
-                              "cornerRadius": 6,
-                              "gap": 8,
-                              "padding": [
-                                4,
-                                6
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "ellipse",
-                                  "id": "zsqSW",
-                                  "name": "State / done",
-                                  "fill": "$--primary",
-                                  "width": 6,
-                                  "height": 6,
-                                  "stroke": "$--primary"
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "C4Izn",
-                                  "name": "Agent identity",
-                                  "clip": true,
-                                  "width": "fill_container",
-                                  "layout": "vertical",
-                                  "gap": 1,
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "ifpqZ",
-                                      "name": "Task title",
-                                      "context": "변경 사항 검토",
-                                      "fill": "$--foreground",
-                                      "textGrowth": "fixed-width",
-                                      "width": "fill_container",
-                                      "content": "변경 사항 검토",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "RxXnd",
-                                      "name": "Provider",
-                                      "fill": "$--muted-foreground",
-                                      "content": "Codex",
-                                      "lineHeight": 1.5,
-                                      "fontFamily": "$--font-ui",
-                                      "fontSize": 10,
-                                      "fontWeight": "normal"
-                                    }
-                                  ]
-                                }
-                              ]
-                            }
-                          ]
-                        },
-                        {
-                          "type": "frame",
-                          "id": "poTLT",
-                          "name": "Group separation",
-                          "width": "fill_container",
-                          "height": 2,
-                          "layout": "vertical"
-                        },
-                        {
-                          "type": "frame",
-                          "id": "D4n4S",
-                          "name": "Group / 릴리스 준비",
-                          "width": "fill_container",
-                          "height": 28,
-                          "gap": 6,
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "icon",
-                              "id": "sBrnC",
-                              "name": "Disclosure",
-                              "width": 12,
-                              "height": 12,
-                              "icon": "chevron-right",
-                              "library": "lucide",
-                              "fill": "$--muted-foreground"
-                            },
-                            {
-                              "type": "icon",
-                              "id": "V8RC64",
-                              "name": "Group",
-                              "width": 14,
-                              "height": 14,
-                              "icon": "briefcase-business",
-                              "library": "lucide",
-                              "fill": "$--muted-foreground"
-                            },
-                            {
-                              "type": "text",
-                              "id": "uk7HM",
-                              "name": "Group name",
-                              "fill": "$--muted-foreground",
-                              "content": "릴리스 준비",
-                              "lineHeight": 1.5,
-                              "fontFamily": "$--font-ui",
-                              "fontSize": 12,
-                              "fontWeight": "500"
-                            }
-                          ]
                         }
                       ]
                     },
@@ -563037,7 +561329,7 @@
                         0,
                         0,
                         0,
-                        23
+                        38
                       ],
                       "alignItems": "center",
                       "children": [
