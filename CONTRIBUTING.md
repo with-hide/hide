@@ -138,7 +138,7 @@ A stack lets the later of two conflicting pull requests resolve the conflict onc
 
 In a stack, an upper layer merges only the layer directly below it, never main, and the bottom layer alone merges main.
 That keeps each layer's diff to its own change and resolves each conflict once, at the layer where it starts.
-The `merge-order` skill (`skills/merge-order/SKILL.md`) runs these steps for an agent and points back here.
+Maintainer skill wrappers may automate these steps; the public commands here remain the authority.
 
 ## Merging into main
 
@@ -245,11 +245,11 @@ It starts only private Herdr servers and a loopback SSH account, with no externa
 
 The additional gates that read an existing Herdr server, drive an installed app, or reach an external device are local steps and are not required in CI.
 They are listed under "Local gates" below; every script in `scripts/` is either a required gate above, a local gate there, or a generator named in [docs/DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md).
-The separate `design-contract.yml` workflow runs `node scripts/check-design-contract.mjs`, `node --test scripts/tests/pen-gallery.test.mjs`, `node --test scripts/tests/pen-transplant.test.mjs`, `node --test scripts/tests/design-scratch.test.mjs`, `node --test scripts/tests/design-review.test.mjs`, `node --test scripts/tests/hide-screens.test.mjs`, and `node --test scripts/tests/token-contrast.test.mjs`.
-The shared entrypoint runs `check-pen.mjs` (the Pen library against what the token generator would write: token values, the Foundations sheet, the `System /`/`Component /` sheet-naming band, and one id per node), `check-pen-gallery.mjs` (the library's `System /` sheets against `web/src/gallery/manifest.ts`, part by part and state by state), `check-web-tokens.mjs` (every web source reaching a color, size, or radius through a token rather than a literal), and `check-hide-screens.mjs` (`design/hide-screens.pen` against the library it imports: `Screen /` sheets with Light and Dark frames, resolving references, locally restated colors, and variables matching `design/tokens.json`); it performs static checks, not desktop interaction. See [docs/DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md) for what each one refuses.
-The gallery test exercises the comparison against fixtures; the screens test exercises each `check-hide-screens.mjs` refusal and a transplanted result; the transplant test exercises `pen-transplant.mjs` against fixture sheets for a clean move, a missing sheet id, and an untouched neighbour sheet.
-Scratch tests exercise the creator against a fake third-party Pen CLI: worktree-local linking, overwrite/path guards, failed imports and process cancellation.
-They do not prove Pen rendering; import, rendering and reopen verification with the real CLI stays a local step.
+The separate `design-contract.yml` workflow runs `node scripts/check-design-contract.mjs` and `node --test scripts/tests/token-contrast.test.mjs`.
+The shared entrypoint checks public web token usage, token contrast and bundled agent marks through `check-web-tokens.mjs`, `check-token-contrast.mjs` and `check-agent-logos.mjs`.
+Original design boards and their authoring tools are maintained separately with their own checks.
+Public builds and contribution checks require no private repository or design-tool login.
+These are static checks; [docs/DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md) owns visual review with the production gallery and isolated app captures.
 
 ### Local design hook
 
@@ -261,11 +261,11 @@ If an existing hook is already configured, retain it and call the shared staged 
 CI independently runs the same checks even when the local hook was not enabled.
 No branch-protection setting is changed by this repository patch.
 
-Stage the checker and affected sources together: staged verification executes the staged checker files and reads staged design and web sources (`design/hide-ui.lib.pen`, `design/tokens.json`, `web/src/**`), ignoring unstaged repairs or new violations.
+Stage the checker and affected sources together: staged verification executes staged checker files and reads public tokens, web sources, and agent registries, ignoring unstaged repairs or new violations.
 A missing script, conflict, non-ordinary source input or checker failure blocks the hook with its cause.
 The checker does not stage, stash, restore or modify files.
 When a check fails, reuse the documented owner (`web/src/components/ui` for a `System /` part, `web/src/components` for a `Component /`) or fix the source; see [docs/DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md) for the token/System-part/Component procedures.
-Keep visual acceptance separate: a passing check proves the Pen library, the gallery, and the tokens agree with each other, not that a composition looks right; human comparison against a gallery or app capture, recorded under `agents/runs/<slug>/`, is what proves that.
+Keep visual acceptance separate: a passing check proves the public source contracts, not that a composition looks right; human review of gallery or app captures, recorded under `agents/runs/<slug>/`, is what proves that.
 
 ## Local gates
 
@@ -284,8 +284,6 @@ A script that stops earning its place here is deleted rather than left unreferen
 | `python3 scripts/check-herdr-release.py <source\|asset>` | A Herdr release at its public and local source boundaries before the pin moves | A Herdr checkout or a reference binary |
 | `python3 scripts/check-worktree-performance-evidence.py [dir]` | A worktree performance run recorded what the guide requires | A completed native run directory |
 | `zsh scripts/install-local-runtime.sh --herdr-root PATH` | Not a gate: installs a locally built Herdr for runtime work | A Herdr checkout |
-| `node scripts/design-scratch.mjs <task-slug>` | Not a gate: creates an ignored scratch linked to this worktree's design library; see [docs/DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md) for editing and human review | The verified Pen CLI version and an existing Pen login |
-| `node scripts/design-review.mjs review <slug> --baseline <bundle>` | A design change's production screen against its reference bundle: the design contract, the bundle's layout rules measured in Chromium, and reference / current Pen / actual comparisons under matching conditions; see [docs/DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md#reference-bundle-and-review-run) | `pnpm --dir web install`; Pen and a Pen login for the current Pen column, otherwise the run is INCOMPLETE |
 
 ## Performance-sensitive changes
 
@@ -336,7 +334,7 @@ The gates:
 - The tagged commit's own `verify` push run on main must have passed; it ran every lane, the desktop and web end-to-end suites, Windows and the packages included.
   The release waits up to 90 minutes for it, and refuses a run that was cancelled or failed: rerun that run, or tag a later main commit whose run passed.
 - `verify-cargo.sh test` and `verify-web.sh` pass again on macOS.
-- The [agent journey](docs/VERIFICATION.md#agent-journey) passes on the release's commit: before the tag, on the Mac, with every declared cell and the signed-in agents (`skills/release/SKILL.md`), and in `release.yml` on Linux and macOS, on the stand-ins, against the fake model with the pinned CLIs, and signed in for each agent whose key is set (`HIDE_CLAUDE_API_KEY`, `HIDE_CODEX_API_KEY`, `HIDE_AGY_API_KEY`, `HIDE_GROK_API_KEY`, `HIDE_OPENCODE_API_KEY`, `HIDE_PI_API_KEY`, `HIDE_OMP_API_KEY`; agy on Linux only, within its key's daily quota).
+- The [agent journey](docs/VERIFICATION.md#agent-journey) passes on the release's commit: before the tag, on the Mac, with every declared cell and the signed-in agents, and in `release.yml` on Linux and macOS, on the stand-ins, against the fake model with the pinned CLIs, and signed in for each agent whose key is set (`HIDE_CLAUDE_API_KEY`, `HIDE_CODEX_API_KEY`, `HIDE_AGY_API_KEY`, `HIDE_GROK_API_KEY`, `HIDE_OPENCODE_API_KEY`, `HIDE_PI_API_KEY`, `HIDE_OMP_API_KEY`; agy on Linux only, within its key's daily quota).
   A failed cell stops the release; a `not measured` cell is shown in the version approval question with its reason, and neither a stand-in report nor a fake model report is the agents' evidence of a provider.
 - `package.yml` builds each package with `HIDE_VERSION=<version> pnpm --dir desktop package` on its own runner, installs it with its own installer and starts it.
   The macOS app and dmg are signed and notarized, the dmg is mounted and checked, and the app the update zip holds is opened by the packaged-app specs (`local-kit.spec.ts` and `server-picker.spec.ts`); on Windows `desktop/scripts/smoke-windows-installer.mjs` installs, reinstalls while a Herdr server runs from the runtime copy, and uninstalls; on Ubuntu the deb and in a Fedora container the rpm are installed; on both systems `node desktop/scripts/smoke-package.mjs` starts the installed app's daemon, installs the kit, resolves the command in a fresh shell and checks daemon replacement with a second complete package fixture; on Windows `desktop/e2e/packaged-window.spec.ts` opens the installed `hide.exe` with its window on a private HOME and keeps a screenshot of the shell it draws; and on Windows and Linux `desktop/e2e/packaged-update.spec.ts` installs a release-numbered build and updates it to the next one from a local feed.

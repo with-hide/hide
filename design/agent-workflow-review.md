@@ -1,6 +1,7 @@
 # Agent workflow UI contract
 
-This document maps the retained Agent workflow components in `design/hide-ui.lib.pen` to their code owners and behavioral contracts.
+This document maps retained Agent workflow components to their public code owners and behavioral contracts.
+Original design boards and their authoring resources are maintained separately.
 Product screens and historical candidates are not library content.
 The former Final, R2, R3, handoff candidates, and the Overview family-only comparison are historical and must not be reconstructed.
 The current contract is the approved v6 Sessions panel and v9 pane header, mapped to [UI_BEHAVIOR.md](../docs/UI_BEHAVIOR.md).
@@ -14,24 +15,6 @@ The current contract is the approved v6 Sessions panel and v9 pane header, mappe
 - The pane header distinguishes the pane shown by Hide from the terminal that owns keyboard focus.
 - Explorer decorates its existing file tree from the normalized Changes projection and does not own another Git reader.
 - Provider artwork, identity, status, ownership, work and lineage come from the same canonical projection on every surface.
-
-## Library component map
-
-| Board | ID |
-| --- | --- |
-| Component / Pane header and focus | `mR198` |
-| Component / Narrow and non-agent headers | `b6Nt3Q` |
-| Component / Shared agent identity | `ZjPJ6` |
-| Component / Hierarchy widths | `INj5G` |
-| Component / Workspace disclosure | `g7trZv` |
-| Component / Tree interaction states | `m0gZNn` |
-| Component / Browser file diff toolbars | `p0Do2` |
-| Component / Search and Recent Sessions identity | `dexoX` |
-| Component / Explorer Git states | `BMEZi` |
-| Component / Child navigation outcomes | `ZEwQt` |
-
-The deleted `Review / UI Handoff / 00 Start here` and `90 Shared dependencies` boards were navigation aids, not product masters.
-Their adopted reusable content lives in the library; product compositions are reviewed in task-local scratch and implemented in code.
 
 ## Master ownership
 
@@ -85,7 +68,7 @@ Retry starts a new request after the failed one has settled.
 The result remains visible in the retained canvas when navigation removes the source popover or header.
 The shell does not treat `lastError`, an inactive historical layout, or optimistic remote navigation as success or failure, and it emits no rollback focus event or UI-owned timeout.
 
-The inline child-navigation outcome sheet `ZEwQt` and its state references are retained in the committed library.
+The child-navigation outcome states remain part of the public behavior contract and its production gallery.
 The sidebar's inactive checkout/project states reuse the adopted row masters and retain the existing Project row as a maintained component.
 
 The header wash marks the pane currently shown by Hide.
@@ -129,7 +112,8 @@ Git loading or failure appears above the file tree and never erases usable file 
 
 ## Verification contract
 
-Static acceptance runs `node scripts/gen-pen.mjs`, `node scripts/check-pen.mjs`, and `node scripts/check-design-contract.mjs`.
+Public static acceptance runs `node scripts/check-design-contract.mjs`.
+Original board consistency is checked with the separately maintained authoring tools.
 Code acceptance runs the required Rust and web commands from the implementation worktree (`bash scripts/verify-cargo.sh test`, `bash scripts/verify-web.sh`).
 Manual acceptance in the desktop app uses exactly one identified candidate Hide app and one isolated Herdr server.
 Screenshots must compare the approved v6/v9 baselines with candidate Sessions and pane-header surfaces in Light and Dark, including long Korean titles, narrow widths, child navigation, shown/focus distinction and terminal geometry.

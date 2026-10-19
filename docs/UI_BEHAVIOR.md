@@ -2,7 +2,7 @@
 
 This document owns what Hide's UI does: the rules for how each screen and control behaves, independent of any platform's exact pixel values.
 It replaces the behavioral content of the retired `DESIGN.md`.
-Visual authority (what a control looks like) lives in the Pen library and `web/src/components/ui`/`web/src/components`, described in [DESIGN_WORKFLOW.md](DESIGN_WORKFLOW.md); numeric authority lives in `design/tokens.json`.
+Public component authority lives in `web/src/components/ui` and `web/src/components`, described in [DESIGN_WORKFLOW.md](DESIGN_WORKFLOW.md); numeric authority lives in `design/tokens.json`.
 Each rule below names the code that owns it: a web owner in `web/src/` and, where the behavior is core-decided, a core owner in `herdr-core/src/`.
 Interface wording is written here as the shipped Korean copy where that is what the screen carried when the rule was written (`요청`, `정리`, `맡기기`); every language, English included, reads its own text from the catalogs in `web/src/i18n/resources/`, and [LOCALIZATION.md](LOCALIZATION.md) owns that boundary.
 
@@ -459,7 +459,7 @@ Send N sends every unsent comment for that agent, from every View, as one letter
 A View the operator opened opens its Send as `Send N comments to…`, a choice of agent.
 After Send the comments leave the View and the line says `Sent N to <agent> · delivered when it rests` with Go to pane for a moment, or that it is delivered when its device is back; a Send that could not go keeps the comments and says why with Retry, which sends again to the same agent and the same Views that Send asked for (`This view only` stays one View), and a letter that expired brings its comments back marked `Not delivered` with Send again.
 
-Web owners: `web/src/ViewComments.tsx`, `web/src/viewFeedback.ts`, `web/src/editor/comments.ts`, `web/src/editor/useLineComments.tsx`; core owner: `herdr-core/src/runtime/view_feedback.rs`; test owners: `web/src/viewFeedback.test.ts`, `web/e2e/view-feedback.spec.ts`; the boards are `Screen / Workspace`'s `vof-*` in `design/hide-screens.pen`.
+Web owners: `web/src/ViewComments.tsx`, `web/src/viewFeedback.ts`, `web/src/editor/comments.ts`, `web/src/editor/useLineComments.tsx`; core owner: `herdr-core/src/runtime/view_feedback.rs`; test owners: `web/src/viewFeedback.test.ts`, `web/e2e/view-feedback.spec.ts`; original visual boards are maintained separately.
 
 ### Narrow windows
 
@@ -472,8 +472,8 @@ Widening the window brings back what the Workspace stores, the lane's tool, pin,
 ### Library masters
 
 PRD right-lane B25 draws the lane, rail, pin and tree parts of its approved v3 boards in `Component / Workspace columns`, and the closed, over-the-agents, docked, tree-on, tree-only, expanded, Work and narrow states in `Screen / Workspace`.
-Delivery compares the board with actual captures in both themes through `scripts/design-review.mjs` and the `right-lane` target of `design/review-targets.json`.
-The View area masters in `design/hide-ui.lib.pen` are `Component / View tab`, `Component / View insertion line`, `Component / View split overlay`, `Component / View tab menu`, and `Component / View area message`.
+Delivery reviews actual captures in both themes through the public [design workflow](DESIGN_WORKFLOW.md).
+The production gallery and View components provide the public visual reference; original boards are maintained separately.
 Their sheets draw every state as refs: the View tab sheet draws preview, pinned, hover, active-in-the-active-area, active-in-another-area, dirty, unavailable, diff, a long title, and the floating drag copy; the placement sheet draws a reorder, a move into another area, a right and a down split, and an ineligible target; the tab menu sheet draws a preview's menu and a pinned view's menu with a disabled Split and its reason; the area states sheet draws each view's opening, waiting, and unavailable states.
 The browser display's toolbar and its loading, load failed, and plain browser tab states are on `Component / Browser file diff toolbars`.
 
@@ -2709,4 +2709,4 @@ The command identities and their eligibility stay the same; a submenu whose choi
 Escape closes the innermost submenu first, returns focus to its trigger, then closes the root menu and restores the original target's focus.
 Close and archive stay neutral, while removing an archived session keeps the destructive color and existing confirmation.
 The Tasks action formerly labelled `pane으로` reads `터미널로 이동`; the four supported interface languages use the same structure.
-The approved B layout is recorded by `Component / Action menus` in the library, generated in `scripts/pen-system.mjs` from the shared System menu items.
+The approved B layout is implemented by the shared action-menu components; original visual boards are maintained separately.
