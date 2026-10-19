@@ -143,8 +143,8 @@ pub(crate) fn proves(
 /// What a read says of the agent's background tasks.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct WakeRead {
-    /// When each task proven alive expires on its own, if it does.
-    pub(crate) expiries: Vec<Option<u64>>,
+    pub(crate) executions:
+        hide_agent_adapter::work::WorkRead<hide_agent_adapter::work::WorkRecords>,
     pub(crate) vanished: bool,
 }
 
@@ -227,14 +227,28 @@ impl PaneRecord {
         Some((self.turns_seq?, self.turns.as_ref()?.waiting()))
     }
 
-    /// When each background task the session proves alive expires on its own,
-    /// with the Herdr state the read was made under.
+    /// Internal executions with the Herdr state the read was made under.
     pub(crate) fn wake_read(&self) -> Option<(u64, WakeRead)> {
+        use hide_agent_adapter::work::{WorkRead, WorkRecords, WorkSource};
         let turns = self.turns.as_ref()?;
         Some((
             self.turns_seq?,
             WakeRead {
-                expiries: turns.wake_expiries(),
+                executions: if turns.wake_loss().is_some() {
+                    WorkRead::Lost {
+                        source: WorkSource::Session,
+                    }
+                } else if turns.work_known() {
+                    WorkRead::Current {
+                        source: WorkSource::Session,
+                        value: WorkRecords {
+                            records: turns.work_records(0),
+                            history_truncated: turns.work_history_truncated(),
+                        },
+                    }
+                } else {
+                    WorkRead::Unknown
+                },
                 vanished: turns.wake_vanished(),
             },
         ))

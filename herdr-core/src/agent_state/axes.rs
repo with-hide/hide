@@ -394,7 +394,16 @@ pub(crate) fn background_left(agent: &SidebarAgentSnapshot) -> u32 {
     agent
         .row_facts
         .as_ref()
-        .map_or(0, |facts| facts.wake_devices)
+        .and_then(|facts| facts.executions.current())
+        .map_or(0, |work| {
+            u32::try_from(
+                work.records
+                    .iter()
+                    .filter(|record| record.state == hide_agent_adapter::work::WorkState::Running)
+                    .count(),
+            )
+            .unwrap_or(u32::MAX)
+        })
 }
 
 /// Whether the label read the turn's end as finished, before any wait is

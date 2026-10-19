@@ -28,13 +28,7 @@ const FINISHED_LIMIT: usize = 256;
 /// `blocked` is deliberately absent rather than zero: neither shipped runtime
 /// reports a blocked subagent, and drawing a zero would claim knowledge the
 /// adapter does not have (PRD B32, D-53).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PaneCounters {
-    #[serde(default)]
-    pub working: u32,
-    #[serde(default)]
-    pub done: u32,
-}
+pub use hide_agent_adapter::work::WorkCounts as PaneCounters;
 
 /// What the file of one pane holds: the counts, and who reported them.
 ///

@@ -13,6 +13,7 @@
 //! work are marked here, so the result of one that cannot be read is known to
 //! be one that may have started a device.
 
+use hide_agent_adapter::work::WorkKind;
 use serde_json::Value;
 
 use super::{NATIVE_ID_LIMIT_BYTES, StopOutcome, TurnMark, WakeMark, native::TOOL_MARK_LIMIT};
@@ -170,20 +171,21 @@ fn user(item: &Value, marks: &mut Vec<WakeMark>) {
             continue;
         }
         let failed = block.get("is_error").and_then(Value::as_bool) == Some(true);
-        // A call id too long to keep names no stop this tracker holds.
-        if let Some(call) = block
+        // Keep the call until starts have borrowed its native description.
+        let call = block
             .get("tool_use_id")
             .and_then(Value::as_str)
-            .and_then(id_of)
-        {
-            let outcome = if failed {
-                StopOutcome::Failed
-            } else {
-                StopOutcome::Succeeded
-            };
-            push(marks, Some(WakeMark::Answered { call, outcome }));
-        }
+            .and_then(id_of);
         if failed {
+            if let Some(call) = call {
+                push(
+                    marks,
+                    Some(WakeMark::Answered {
+                        call,
+                        outcome: StopOutcome::Failed,
+                    }),
+                );
+            }
             continue;
         }
         let texts: Vec<&str> = match block.get("content") {
@@ -192,7 +194,7 @@ fn user(item: &Value, marks: &mut Vec<WakeMark>) {
                 .iter()
                 .filter_map(|part| part.get("text").and_then(Value::as_str))
                 .collect(),
-            _ => continue,
+            _ => Vec::new(),
         };
         for text in texts {
             let timed_out =
@@ -205,6 +207,8 @@ fn user(item: &Value, marks: &mut Vec<WakeMark>) {
                     marks,
                     id_of(id).map(|id| WakeMark::Started {
                         id,
+                        kind: Some(WorkKind::Background),
+                        call: call.clone(),
                         expires_at_unix_ms: None,
                     }),
                 );
@@ -225,6 +229,8 @@ fn user(item: &Value, marks: &mut Vec<WakeMark>) {
                     marks,
                     id_of(id).map(|id| WakeMark::Started {
                         id,
+                        kind: Some(WorkKind::Background),
+                        call: call.clone(),
                         expires_at_unix_ms: expires,
                     }),
                 );
@@ -235,10 +241,21 @@ fn user(item: &Value, marks: &mut Vec<WakeMark>) {
                     marks,
                     id_of(id).map(|id| WakeMark::Started {
                         id,
+                        kind: Some(WorkKind::Subagent),
+                        call: call.clone(),
                         expires_at_unix_ms: None,
                     }),
                 );
             }
+        }
+        if let Some(call) = call {
+            push(
+                marks,
+                Some(WakeMark::Answered {
+                    call,
+                    outcome: StopOutcome::Succeeded,
+                }),
+            );
         }
     }
 }
@@ -273,7 +290,12 @@ fn assistant(item: &Value, marks: &mut Vec<WakeMark>) {
         };
         let call = || block.get("id").and_then(Value::as_str).and_then(id_of);
         if starts_work(name) {
-            push(marks, call().map(|call| WakeMark::Call { call }));
+            let name = block
+                .pointer("/input/description")
+                .and_then(Value::as_str)
+                .filter(|text| !text.chars().any(char::is_control))
+                .and_then(id_of);
+            push(marks, call().map(|call| WakeMark::Call { call, name }));
         } else if stops_work(name)
             && let Some(task) = block.pointer("/input/task_id").and_then(Value::as_str)
         {
@@ -317,6 +339,8 @@ mod tests {
     fn started(id: &str) -> WakeMark {
         WakeMark::Started {
             id: id.into(),
+            kind: Some(WorkKind::Background),
+            call: Some("t".into()),
             expires_at_unix_ms: None,
         }
     }
@@ -337,7 +361,72 @@ mod tests {
         );
         let launched = json!({"type": "user", "message": {"content": [{"type": "tool_result",
             "content": [{"type": "text", "text": "Async agent launched successfully. (internal)\nagentId: a7359e5355eca4579 (internal ID)\nThe agent is working"}]}]}});
-        assert_eq!(marks(launched), [started("a7359e5355eca4579")]);
+        assert_eq!(
+            marks(launched),
+            [WakeMark::Started {
+                id: "a7359e5355eca4579".into(),
+                kind: Some(WorkKind::Subagent),
+                call: None,
+                expires_at_unix_ms: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn internal_work_keeps_native_descriptions_and_execution_ends_only() {
+        use crate::turns::TurnTracker;
+        use hide_agent_adapter::work::WorkState;
+        let mut tracker = TurnTracker::default();
+        tracker.fold(0, &TurnMark::Wake(vec![WakeMark::Boot]));
+        let call = json!({"type":"assistant","message":{"content":[{
+            "type":"tool_use","name":"Agent","id":"t",
+            "input":{"description":"의존성 검토","prompt":"Private task body"}
+        }]}});
+        let start = result("Async agent launched successfully.\nagentId: child-1 (internal ID)");
+        for (offset, item) in [(1, &call), (2, &start), (2, &start)] {
+            tracker.fold(offset, &TurnMark::Wake(all_marks(item)));
+        }
+        let live = tracker.work_records(0);
+        assert_eq!(live.len(), 1, "a repeated read does not duplicate work");
+        assert_eq!(live[0].kind, Some(WorkKind::Subagent));
+        assert_eq!(live[0].name.as_deref(), Some("의존성 검토"));
+        assert_eq!(live[0].state, WorkState::Running);
+        let ended = json!({"type":"queue-operation","operation":"enqueue",
+            "content":"<task-notification><task-id>child-1</task-id><status>failed</status></task-notification>"});
+        tracker.fold(3, &TurnMark::Wake(all_marks(&ended)));
+        let restored: TurnTracker =
+            serde_json::from_str(&serde_json::to_string(&tracker).unwrap()).unwrap();
+        let records = restored.work_records(0);
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].state,
+            WorkState::Ended,
+            "failed execution is no assignment-success verdict"
+        );
+        assert_eq!(records[0].name.as_deref(), Some("의존성 검토"));
+
+        let mut unnamed = call;
+        unnamed["message"]["content"][0]["input"]["description"] =
+            json!("x".repeat(NATIVE_ID_LIMIT_BYTES + 1));
+        assert_eq!(
+            all_marks(&unnamed),
+            [WakeMark::Call {
+                call: "t".into(),
+                name: None
+            }]
+        );
+        unnamed["message"]["content"][0]["input"]
+            .as_object_mut()
+            .unwrap()
+            .remove("description");
+        assert_eq!(
+            all_marks(&unnamed),
+            [WakeMark::Call {
+                call: "t".into(),
+                name: None
+            }],
+            "a prompt is never a display name"
+        );
     }
 
     #[test]
@@ -349,6 +438,8 @@ mod tests {
             )),
             [WakeMark::Started {
                 id: "bcwkc73y4".into(),
+                kind: Some(WorkKind::Background),
+                call: Some("t".into()),
                 expires_at_unix_ms: Some(at + 30 * 60_000)
             }]
         );
@@ -438,7 +529,8 @@ mod tests {
             assert_eq!(
                 marks(call(name, json!("toolu_1"))),
                 [WakeMark::Call {
-                    call: "toolu_1".into()
+                    call: "toolu_1".into(),
+                    name: None,
                 }],
                 "{name}"
             );

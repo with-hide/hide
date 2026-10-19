@@ -2385,6 +2385,9 @@ pub struct PaneChildrenSnapshot {
     pub representative: Option<AgentChipSnapshot>,
     /// In-process subagents, summarised and never added to the chip count.
     pub subagents: SubagentCountsSnapshot,
+    /// Counts and native executions are separate observations with explicit
+    /// support and freshness. Neither creates registered agent descendants.
+    pub internal_work: hide_agent_adapter::work::InternalWork,
 }
 
 /// One agent in a line of them: a pane header chip, a breadcrumb step's

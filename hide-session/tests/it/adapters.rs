@@ -366,7 +366,15 @@ mod wake_devices {
     }
 
     fn live(answer: &LabelTranscript) -> Vec<Option<u64>> {
-        answer.turns.as_ref().unwrap().wake_expiries()
+        answer
+            .turns
+            .as_ref()
+            .unwrap()
+            .work_records(0)
+            .into_iter()
+            .filter(|record| record.state == hide_agent_adapter::work::WorkState::Running)
+            .map(|record| record.expires_at_unix_ms)
+            .collect()
     }
 
     #[test]

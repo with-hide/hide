@@ -1324,7 +1324,21 @@ mod row_tests {
         let facts = |end| {
             Some(crate::request_view::RowFacts {
                 end,
-                wake_devices: 2,
+                executions: hide_agent_adapter::work::WorkRead::Current {
+                    source: hide_agent_adapter::work::WorkSource::Session,
+                    value: hide_agent_adapter::work::WorkRecords {
+                        records: ["one", "two"]
+                            .map(|id| hide_agent_adapter::work::WorkRecord {
+                                id: id.into(),
+                                kind: None,
+                                name: None,
+                                state: hide_agent_adapter::work::WorkState::Running,
+                                expires_at_unix_ms: None,
+                            })
+                            .into(),
+                        history_truncated: false,
+                    },
+                },
                 ..Default::default()
             })
         };

@@ -914,6 +914,71 @@ fn claude_projection(status: &str, seq: u64) -> SessionSnapshotPayload {
     payload
 }
 
+#[test]
+fn internal_work_projection_keeps_zero_unknown_lost_and_stale_distinct() {
+    use hide_session::turns::WakeMark;
+    let work = |runtime: &Runtime| {
+        let snapshot = runtime.snapshot();
+        let children = crate::sidebar::project_pane_children(
+            &snapshot.navigator.agents,
+            PANE,
+            crate::agent_hooks::PaneHookTokens::default(),
+            &|_| None,
+        )
+        .unwrap();
+        serde_json::to_value(children.internal_work).unwrap()
+    };
+    let start = || WakeMark::Started {
+        id: "native-bg".into(),
+        kind: Some(hide_agent_adapter::work::WorkKind::Background),
+        call: None,
+        expires_at_unix_ms: None,
+    };
+    let mut runtime = runtime();
+    runtime.set_label_overlay(wake_overlay(4, &[WakeMark::Boot]));
+    runtime.ingest_session(Ok(claude_projection("done", 4)));
+    assert_eq!(
+        work(&runtime)["executions"],
+        serde_json::json!({
+            "state":"current", "source":"session", "value":{"records":[],"history_truncated":false}
+        })
+    );
+    assert_eq!(
+        work(&runtime)["subagents"]["state"],
+        "unknown",
+        "native zero does not invent hook totals"
+    );
+
+    runtime.set_label_overlay(wake_overlay(4, &[start()]));
+    runtime.ingest_session(Ok(claude_projection("done", 4)));
+    assert_eq!(work(&runtime)["executions"]["state"], "unknown");
+    runtime.set_label_overlay(wake_overlay(4, &[WakeMark::Boot, start(), WakeMark::Lost]));
+    runtime.ingest_session(Ok(claude_projection("done", 4)));
+    assert_eq!(work(&runtime)["executions"]["state"], "lost");
+    assert_eq!(row(&runtime)["wait"], serde_json::Value::Null);
+
+    runtime.set_label_overlay(wake_overlay(4, &[WakeMark::Boot, start()]));
+    runtime.ingest_session(Ok(claude_projection("done", 4)));
+    assert_eq!(
+        work(&runtime)["executions"]["value"]["records"][0]["id"],
+        "native-bg"
+    );
+    assert_eq!(row(&runtime)["wait"], "background");
+    runtime.ingest_session(Ok(claude_projection("done", 5)));
+    assert_eq!(
+        work(&runtime)["executions"],
+        serde_json::json!({"state":"stale","source":"session"})
+    );
+    assert_eq!(row(&runtime)["wait"], serde_json::Value::Null);
+
+    runtime.ingest_session(Ok(projection("99999999-2222-3333-4444-555555555555")));
+    assert_eq!(
+        work(&runtime)["executions"]["state"],
+        "unknown",
+        "another session inherits no work"
+    );
+}
+
 /// B18, D-26: a Claude Code session that proves a running background task
 /// keeps its stopped row waiting, in Working, for the Herdr state the read was
 /// made under; a read for another state, a finished task, or a new process
@@ -923,6 +988,8 @@ fn a_proven_background_task_keeps_a_stopped_claude_row_waiting() {
     use hide_session::turns::WakeMark;
     let started = || WakeMark::Started {
         id: "bg1".into(),
+        kind: Some(hide_agent_adapter::work::WorkKind::Background),
+        call: None,
         expires_at_unix_ms: None,
     };
     let mut runtime = runtime();
@@ -982,6 +1049,8 @@ fn a_proven_background_task_keeps_a_stopped_claude_row_waiting() {
             WakeMark::Boot,
             WakeMark::Started {
                 id: "mon".into(),
+                kind: Some(hide_agent_adapter::work::WorkKind::Background),
+                call: None,
                 expires_at_unix_ms: Some(1),
             },
         ],
@@ -999,6 +1068,8 @@ fn a_proven_background_task_keeps_a_stopped_claude_row_waiting() {
             WakeMark::Boot,
             WakeMark::Started {
                 id: "mon".into(),
+                kind: Some(hide_agent_adapter::work::WorkKind::Background),
+                call: None,
                 expires_at_unix_ms: Some(u64::MAX),
             },
         ],
@@ -1059,6 +1130,8 @@ fn a_turn_read_as_done_is_announced_done_past_the_background_task_it_left() {
             WakeMark::Boot,
             WakeMark::Started {
                 id: "bg1".into(),
+                kind: Some(hide_agent_adapter::work::WorkKind::Background),
+                call: None,
                 expires_at_unix_ms: None,
             },
         ],
@@ -1114,6 +1187,8 @@ fn a_turn_ending_with_a_background_task_is_never_announced_done() {
             WakeMark::Boot,
             WakeMark::Started {
                 id: "bg1".into(),
+                kind: Some(hide_agent_adapter::work::WorkKind::Background),
+                call: None,
                 expires_at_unix_ms: None,
             },
         ],

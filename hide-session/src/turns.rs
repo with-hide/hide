@@ -14,6 +14,7 @@ pub(crate) mod native;
 pub(crate) mod wake;
 pub use content::{UserTurnContent, UserTurnFact, UserTurnKind};
 
+use hide_agent_adapter::work::{WorkKind, WorkRecord, WorkState};
 use serde::{Deserialize, Serialize};
 
 /// What the last turn leaves the operator to do.
@@ -85,6 +86,9 @@ pub enum WakeMark {
     Boot,
     Started {
         id: String,
+        kind: Option<WorkKind>,
+        /// Correlates the native description carried by the tool call.
+        call: Option<String>,
         /// When the source says the task expires on its own.
         expires_at_unix_ms: Option<u64>,
     },
@@ -96,6 +100,7 @@ pub enum WakeMark {
     /// have started a device it cannot name.
     Call {
         call: String,
+        name: Option<String>,
     },
     /// A call asked to stop the task `id`. It ends the device only if the
     /// result of the call `call` says it stopped it.
@@ -150,6 +155,16 @@ struct WakeDevice {
     #[serde(deserialize_with = "content::deserialize_id")]
     id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    kind: Option<WorkKind>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "content::deserialize_optional_id"
+    )]
+    name: Option<String>,
+    #[serde(default)]
+    state: WorkState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     expires_at_unix_ms: Option<u64>,
 }
 
@@ -159,6 +174,12 @@ struct WakeDevice {
 struct WakeCall {
     #[serde(deserialize_with = "content::deserialize_id")]
     call: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "content::deserialize_optional_id"
+    )]
+    name: Option<String>,
     /// The task a `TaskStop` asked to stop; none for a call that starts work.
     #[serde(
         default,
@@ -296,13 +317,30 @@ pub struct TurnTracker {
     /// no device.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     booted: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_work"
+    )]
     wake: Vec<WakeDevice>,
+    /// A bounded recent execution history, not an unbounded transcript copy.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_work"
+    )]
+    ended_work: Vec<WakeDevice>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    work_history_truncated: bool,
     /// Calls whose result has not been read: a device ends when its stop
     /// succeeded, not when it was asked for, and a result this reader could
     /// not keep (`StopOutcome::Unreadable`) of a call that can start work
     /// loses the devices.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_work"
+    )]
     wake_calls: Vec<WakeCall>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     wake_loss: Option<WakeLoss>,
@@ -315,6 +353,37 @@ pub struct TurnTracker {
 
 fn is_zero(value: &u64) -> bool {
     *value == 0
+}
+
+fn deserialize_work<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct Work<T>(std::marker::PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Work<T> {
+        type Value = Vec<T>;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(
+                formatter,
+                "at most {WAKE_DEVICE_LIMIT} internal work entries"
+            )
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut sequence: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut values = Vec::new();
+            while let Some(value) = sequence.next_element()? {
+                if values.len() == WAKE_DEVICE_LIMIT {
+                    return Err(serde::de::Error::custom("internal_work_capacity"));
+                }
+                values.push(value);
+            }
+            Ok(values)
+        }
+    }
+    deserializer.deserialize_seq(Work(std::marker::PhantomData))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -443,17 +512,41 @@ impl TurnTracker {
         });
     }
 
-    /// When each device proven alive will expire on its own (`None` for one
-    /// that does not); empty when none is proven. Counting the ones left at a
-    /// time is the caller's, because the answer changes with the clock alone.
-    pub fn wake_expiries(&self) -> Vec<Option<u64>> {
-        if !self.booted || self.wake_loss.is_some() {
+    /// Only a read including the current process boundary proves absence.
+    pub fn work_known(&self) -> bool {
+        self.booted && self.wake_loss().is_none()
+    }
+
+    /// Native execution facts, scoped by the caller to this tracker's
+    /// proven session and read generation. Expiry is derived at observation
+    /// time and never converted into successful completion.
+    pub fn work_records(&self, now_unix_ms: u64) -> Vec<WorkRecord> {
+        if !self.work_known() {
             return Vec::new();
         }
-        self.wake
+        self.ended_work
             .iter()
-            .map(|device| device.expires_at_unix_ms)
+            .chain(&self.wake)
+            .map(|device| WorkRecord {
+                id: device.id.clone(),
+                kind: device.kind,
+                name: device.name.clone(),
+                state: if device.state == WorkState::Running
+                    && device
+                        .expires_at_unix_ms
+                        .is_some_and(|at| at <= now_unix_ms)
+                {
+                    WorkState::Expired
+                } else {
+                    device.state
+                },
+                expires_at_unix_ms: device.expires_at_unix_ms,
+            })
             .collect()
+    }
+
+    pub fn work_history_truncated(&self) -> bool {
+        self.work_history_truncated
     }
 
     /// The devices the agent waited for died with the process that ran them,
@@ -466,12 +559,14 @@ impl TurnTracker {
     /// for that reason: the first cause since the process started.
     pub fn wake_loss(&self) -> Option<WakeLoss> {
         self.wake_loss
+            .or_else(|| (self.tracked() > WAKE_DEVICE_LIMIT).then_some(WakeLoss::Capacity))
     }
 
     fn lose_wake(&mut self, cause: WakeLoss) {
         self.wake_loss.get_or_insert(cause);
         self.wake.clear();
         self.wake_calls.clear();
+        self.ended_work.clear();
     }
 
     /// What is tracked now: the devices and the calls waiting for a result
@@ -482,7 +577,7 @@ impl TurnTracker {
 
     /// A call to wait for the result of. Nothing is waited for before the
     /// process began or after devices were lost: there is none to lose.
-    fn open_call(&mut self, call: &str, stop: Option<&String>) {
+    fn open_call(&mut self, call: &str, stop: Option<&String>, name: Option<&String>) {
         if !self.booted
             || self.wake_loss.is_some()
             || self.wake_calls.iter().any(|open| open.call == call)
@@ -494,8 +589,21 @@ impl TurnTracker {
         } else {
             self.wake_calls.push(WakeCall {
                 call: call.to_owned(),
+                name: name.cloned(),
                 stop: stop.cloned(),
             });
+        }
+    }
+
+    fn end_work(&mut self, id: &str, state: WorkState) {
+        if let Some(at) = self.wake.iter().position(|device| device.id == id) {
+            let mut device = self.wake.remove(at);
+            device.state = state;
+            if self.ended_work.len() == WAKE_DEVICE_LIMIT {
+                self.ended_work.remove(0);
+                self.work_history_truncated = true;
+            }
+            self.ended_work.push(device);
         }
     }
 
@@ -504,6 +612,11 @@ impl TurnTracker {
             return;
         }
         self.wake_through = offset + 1;
+        // A restored checkpoint has individually bounded vectors; their
+        // combined live table must obey the same limit as new records.
+        if self.tracked() > WAKE_DEVICE_LIMIT {
+            self.lose_wake(WakeLoss::Capacity);
+        }
         for mark in marks {
             match mark {
                 WakeMark::Boot => {
@@ -512,32 +625,54 @@ impl TurnTracker {
                     // Boots in a row; the later ones find nothing left to lose.
                     self.wake_vanished |= !self.wake.is_empty();
                     self.wake.clear();
+                    // The new process is a new observation scope. Neither
+                    // live work nor history from its predecessor transfers.
+                    self.ended_work.clear();
+                    self.work_history_truncated = false;
                     // A call of the process before is never answered for this one.
                     self.wake_calls.clear();
                     self.wake_loss = None;
                 }
                 WakeMark::Started {
                     id,
+                    kind,
+                    call,
                     expires_at_unix_ms,
                 } => {
                     if !self.booted || self.wake_loss.is_some() {
                         continue;
                     }
                     self.wake_vanished = false;
+                    let name = call
+                        .as_ref()
+                        .and_then(|call| {
+                            self.wake_calls
+                                .iter()
+                                .position(|open| open.call == *call && open.stop.is_none())
+                        })
+                        .and_then(|at| self.wake_calls.remove(at).name);
+                    self.ended_work.retain(|device| device.id != *id);
                     if let Some(known) = self.wake.iter_mut().find(|device| device.id == *id) {
                         known.expires_at_unix_ms = *expires_at_unix_ms;
+                        known.kind = *kind;
+                        if name.is_some() {
+                            known.name = name;
+                        }
                     } else if self.tracked() >= WAKE_DEVICE_LIMIT {
                         self.lose_wake(WakeLoss::Capacity);
                     } else {
                         self.wake.push(WakeDevice {
                             id: id.clone(),
+                            kind: *kind,
+                            name,
+                            state: WorkState::Running,
                             expires_at_unix_ms: *expires_at_unix_ms,
                         });
                     }
                 }
-                WakeMark::Ended { id } => self.wake.retain(|device| device.id != *id),
-                WakeMark::Call { call } => self.open_call(call, None),
-                WakeMark::Stop { call, id } => self.open_call(call, Some(id)),
+                WakeMark::Ended { id } => self.end_work(id, WorkState::Ended),
+                WakeMark::Call { call, name } => self.open_call(call, None, name.as_ref()),
+                WakeMark::Stop { call, id } => self.open_call(call, Some(id), None),
                 WakeMark::Answered { call, outcome } => {
                     let Some(at) = self.wake_calls.iter().position(|open| open.call == *call)
                     else {
@@ -546,7 +681,7 @@ impl TurnTracker {
                     let open = self.wake_calls.remove(at);
                     match (outcome, open.stop) {
                         (StopOutcome::Succeeded, Some(id)) => {
-                            self.wake.retain(|device| device.id != id)
+                            self.end_work(&id, WorkState::Stopped)
                         }
                         (StopOutcome::Unreadable, _) => self.lose_wake(WakeLoss::Lost),
                         (StopOutcome::Succeeded | StopOutcome::Failed, _) => {}
@@ -988,6 +1123,8 @@ mod tests {
     fn started(id: &str) -> WakeMark {
         WakeMark::Started {
             id: id.into(),
+            kind: None,
+            call: None,
             expires_at_unix_ms: None,
         }
     }
@@ -1001,7 +1138,10 @@ mod tests {
 
     #[test]
     fn a_result_nobody_can_read_loses_the_devices_only_of_a_call_that_can_start_work() {
-        let call = |call: &str| WakeMark::Call { call: call.into() };
+        let call = |call: &str| WakeMark::Call {
+            call: call.into(),
+            name: None,
+        };
         let lost = |marks: &[WakeMark]| {
             let mut all = vec![WakeMark::Boot, started("bg1")];
             all.extend_from_slice(marks);
@@ -1037,7 +1177,10 @@ mod tests {
         let mut tracker = wake(&[
             WakeMark::Boot,
             started("bg1"),
-            WakeMark::Call { call: "c1".into() },
+            WakeMark::Call {
+                call: "c1".into(),
+                name: None,
+            },
             WakeMark::Stop {
                 call: "c2".into(),
                 id: "bg1".into(),
@@ -1050,7 +1193,11 @@ mod tests {
             10,
             &TurnMark::Wake(vec![answered("c2", StopOutcome::Succeeded)]),
         );
-        assert!(restored.wake_expiries().is_empty(), "the stop it saved");
+        assert_eq!(
+            restored.work_records(0)[0].state,
+            WorkState::Stopped,
+            "the stop it saved"
+        );
         restored.fold(
             20,
             &TurnMark::Wake(vec![answered("c1", StopOutcome::Unreadable)]),
@@ -1060,10 +1207,90 @@ mod tests {
         let calls: Vec<_> = (0..=WAKE_DEVICE_LIMIT)
             .map(|index| WakeMark::Call {
                 call: format!("c{index}"),
+                name: None,
             })
             .collect();
         tracker.fold(10, &TurnMark::Wake(calls));
         assert_eq!(tracker.wake_loss(), Some(WakeLoss::Capacity));
+    }
+
+    #[test]
+    fn internal_work_distinguishes_unknown_empty_loss_expiry_and_bounded_history() {
+        let mut tracker = TurnTracker::default();
+        assert!(
+            !tracker.work_known(),
+            "no process boundary is not a confirmed zero"
+        );
+        tracker.fold(0, &TurnMark::Wake(vec![WakeMark::Boot]));
+        assert!(tracker.work_known());
+        assert!(tracker.work_records(0).is_empty());
+        tracker.fold(
+            1,
+            &TurnMark::Wake(vec![WakeMark::Started {
+                id: "monitor".into(),
+                kind: Some(WorkKind::Background),
+                call: None,
+                expires_at_unix_ms: Some(10),
+            }]),
+        );
+        assert_eq!(tracker.work_records(9)[0].state, WorkState::Running);
+        assert_eq!(tracker.work_records(10)[0].state, WorkState::Expired);
+        tracker.fold(2, &TurnMark::Wake(vec![WakeMark::Boot]));
+        for offset in 0..=WAKE_DEVICE_LIMIT {
+            let id = format!("work-{offset}");
+            tracker.fold(
+                offset as u64 + 3,
+                &TurnMark::Wake(vec![started(&id), WakeMark::Ended { id }]),
+            );
+        }
+        let records = tracker.work_records(0);
+        assert_eq!(records.len(), WAKE_DEVICE_LIMIT);
+        assert_eq!(records[0].id, "work-1");
+        assert!(tracker.work_history_truncated());
+        tracker.fold(100, &TurnMark::Wake(vec![WakeMark::Lost]));
+        assert!(!tracker.work_known());
+        assert!(tracker.work_records(0).is_empty());
+        tracker.fold(101, &TurnMark::Wake(vec![WakeMark::Boot]));
+        assert!(tracker.work_known());
+        assert!(!tracker.work_history_truncated());
+        assert!(
+            tracker.work_records(0).is_empty(),
+            "another process inherits no execution history"
+        );
+    }
+
+    #[test]
+    fn restored_internal_work_obeys_the_live_table_and_per_vector_caps() {
+        let tracker = wake(&[WakeMark::Boot, started("bg1")]);
+        let mut saved = serde_json::to_value(tracker).unwrap();
+        saved["wake"] = serde_json::json!(
+            (0..WAKE_DEVICE_LIMIT)
+                .map(|n| serde_json::json!({"id":format!("bg{n}")}))
+                .collect::<Vec<_>>()
+        );
+        saved["wake_calls"] = serde_json::json!([{"call":"overflow"}]);
+        let mut restored: TurnTracker = serde_json::from_value(saved.clone()).unwrap();
+        assert_eq!(restored.wake_loss(), Some(WakeLoss::Capacity));
+        assert!(!restored.work_known());
+        restored.fold(
+            10,
+            &TurnMark::Wake(vec![WakeMark::Ended { id: "bg1".into() }]),
+        );
+        assert_eq!(
+            restored.wake_loss(),
+            Some(WakeLoss::Capacity),
+            "later records cannot revive an incomplete table"
+        );
+        saved["wake"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"id":"one-too-many"}));
+        assert!(
+            serde_json::from_value::<TurnTracker>(saved)
+                .unwrap_err()
+                .to_string()
+                .contains("internal_work_capacity")
+        );
     }
 
     /// Devices and the calls waiting for a result share one limit, so what is
@@ -1073,6 +1300,7 @@ mod tests {
         let calls = |count: usize| {
             (0..count).map(|index| WakeMark::Call {
                 call: format!("c{index}"),
+                name: None,
             })
         };
         let devices = |count: usize| (0..count).map(|index| started(&format!("bg{index}")));
@@ -1109,7 +1337,10 @@ mod tests {
         );
         // A result frees its call's place before the start it carries takes one.
         let mut all: Vec<_> = devices(WAKE_DEVICE_LIMIT - 1).collect();
-        all.push(WakeMark::Call { call: "c".into() });
+        all.push(WakeMark::Call {
+            call: "c".into(),
+            name: None,
+        });
         all.push(answered("c", StopOutcome::Succeeded));
         all.push(started("last"));
         assert_eq!(loss(all), None);

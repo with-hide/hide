@@ -211,7 +211,8 @@ An assistant record leaves the `Call` mark of each call it makes to a tool that 
 A user record answers each call its tool results name without saying how (`Answered` with `Unreadable`), and the tracker reads that by the call: the answer to an open call to one of those tools, whose output may have been a task's start, is `lost`, the answer to a stop whose result was discarded is `lost` rather than taken as stopped, and the answer to any other call (a screenshot a file read returned, nearly every record that large in real sessions) changes nothing.
 A result with no id the scan can keep is `lost`, because nothing says which call it answers.
 The worker writes one diagnostic when a session first loses its devices, `wake_devices.capacity` (with the limit) or `wake_devices.lost`, so the log says whether to raise the limit or look at the record.
-The count is laid as `RowFacts.wake_devices` by `LabelOverlay::apply`, only for the `state_change_seq` the read was made under, so a row never waits on a task a stale read proved.
+The read is laid as `RowFacts.executions` by `LabelOverlay::apply`, only for the `state_change_seq` the read was made under, so a row never waits on a task a stale read proved.
+The wait and `background_left` count only its current records whose execution state is `running`.
 When a process start finds devices that were proven alive, the tracker keeps `wake_vanished` until a turn or a device begins; a stopped row with a label then draws a plain dot to read with the word Stopped and its second line says, in the operator's language, that the work it waited for is gone (`line.mode: vanished`, text empty in the core; the web draws it, and only the sidebar row draws it).
 Hide or the daemon restarting is not a process boundary: the tracker is stored with the label record and continues.
 The declaration is `SessionFormat::reports_wake_devices` in `hide-agent-adapter`, true for Claude Code alone.
@@ -225,6 +226,39 @@ A session no read has proved yet carries no facts, so its first turn end is not 
 The wait before the label's own verdict (`stopped_unfinished`) is not this gap: that verdict comes from an AI request that takes seconds, and holding the row for it would delay every Done.
 
 Regression owners: `a_turn_end_is_not_a_stop_until_its_session_read_lands`, `a_read_that_finds_no_task_releases_the_turn_end_and_publishes_it`, `a_read_that_fails_releases_the_turn_end_and_says_so`, `a_stop_that_is_not_a_turn_just_ended_is_not_held`, `a_turn_ending_with_a_background_task_is_never_announced_done` and `a_turn_read_as_done_is_announced_done_past_the_background_task_it_left`, then `a_quiet_row_waits_on_children_then_a_proven_device_then_a_reply`, `a_quiet_root_waits_in_working_while_a_descendant_works_and_not_on_one_that_asks`, `a_root_with_finished_children_draws_its_own_state_past_a_request_a_stopped_child_took_in`, `a_child_asking_its_stopped_parent_by_letter_leaves_neither_row_waiting`, `a_letter_to_a_disconnected_device_holds_no_reply_wait`, `a_proven_background_task_keeps_a_stopped_claude_row_waiting`, `a_reply_is_awaited_until_answered_overdue_or_from_another_session`, the adapter contract `adapters::wake_devices` in `hide-session/tests/it` (the stop pairing, the discarded record that may carry a device, the one that cannot and the call too large to keep), the two `wake_devices.*` diagnostics in `herdr-core/src/labels/tests.rs`, and the web `agentRow.test.ts`.
+
+### Session-internal work is separate from agent lineage
+
+`hide-agent-adapter::work` declares shared values and collector support without starting a collector or owning state.
+`AgentAdapter::work_support` derives `unsupported`, `counts`, `records` or `counts_and_records` from the existing hook dialect and native session format.
+The hook or plugin owns subagent totals, `hide-session::TurnTracker` folds native asynchronous executions during the existing incremental read, and the core owns their session proof, projection and wait decisions.
+Local and device session reads use this same tracker and overlay; there is no second polling loop, subprocess or filesystem read for internal work.
+
+`PaneChildrenSnapshot.internal_work` carries two independent observations: `subagents`, totals from hooks, and `executions`, native asynchronous work records.
+They overlap, so they are never added together or converted into registered-agent children.
+The lineage chips still name only actual registered pane children.
+A hook total alone never holds a parent's wait.
+Totals may be partially known: each absent total stays unknown, and an observed zero is zero.
+
+Each observation says `unsupported`, `unknown`, `current`, `stale` or `lost`; a current observation names its `hooks` or `session` source and value.
+Unsupported means no implemented collector, unknown means no proven observation, stale means a read belongs to a different Herdr state, and lost means the native execution set could no longer be followed.
+No absent, stale or lost record set is a confirmed empty set or proof of running work.
+The native session reference must match before the overlay lays any execution fact, so replacing the session never transfers its predecessor's records.
+
+Native records carry their ID, `subagent` or `background` kind, optional native description, execution state and optional expiry.
+An older saved tracker may know an ID without its kind or description.
+Descriptions come only from the native tool call's `description`, never from its prompt, command or output; they are optional and bounded to the same 256-byte native-field limit.
+This record set describes asynchronous executions whose starts and ends the format proves, not every synchronous tool or subagent in that session.
+An execution becomes `ended`, `stopped` or `expired`; none means the parent's assignment succeeded.
+A finished parent keeps its finished verdict even when a proven execution remains running.
+
+Live executions and pending tool results share the existing 32-entry limit, including after checkpoint restore.
+The tracker retains at most 32 recent ended executions and reports `history_truncated` when it evicts one; this history limit never removes live execution proof.
+Repeated record offsets, IDs and notifications do not duplicate work.
+A native process start clears both live records and retained history, while a daemon restart restores them from the existing bounded checkpoint.
+Expiry changes only the projected execution state and does not manufacture a completion notification.
+
+Regression owners: `internal_work_keeps_native_descriptions_and_execution_ends_only`, `internal_work_distinguishes_unknown_empty_loss_expiry_and_bounded_history` and `restored_internal_work_obeys_the_live_table_and_per_vector_caps` in `hide-session`, and `internal_work_projection_keeps_zero_unknown_lost_and_stale_distinct` and `internal_work_counts_do_not_invent_execution_records_or_lineage` in the core.
 
 ## Where each axis comes from
 

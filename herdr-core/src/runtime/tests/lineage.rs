@@ -754,6 +754,113 @@ fn a_pane_with_children_lists_them_and_names_the_one_that_speaks_for_them() {
 }
 
 #[test]
+fn internal_work_counts_do_not_invent_execution_records_or_lineage() {
+    use hide_agent_adapter::work::{WorkRead, WorkSource, WorkTotals};
+    let installed = hook_status_of(Some(hide_agent_hooks::HookStatus::Installed {
+        version: hide_agent_hooks::HOOK_VERSION,
+    }));
+    for kind in ["claude", "codex", "grok", "opencode", "omp", "agy", "pi"] {
+        let rows = instrumented_rows(kind);
+        let counts = crate::sidebar::project_pane_children(
+            &rows,
+            "parent",
+            crate::agent_hooks::PaneHookTokens {
+                version: Some(hide_agent_hooks::HOOK_VERSION),
+                working: Some(7),
+                done: Some(3),
+                blocked: None,
+            },
+            &installed,
+        )
+        .unwrap();
+        if kind == "pi" {
+            assert_eq!(counts.internal_work.subagents, WorkRead::Unsupported);
+        } else {
+            assert_eq!(
+                counts.internal_work.subagents,
+                WorkRead::Current {
+                    source: WorkSource::Hooks,
+                    value: WorkTotals {
+                        working: Some(7),
+                        done: Some(3)
+                    },
+                },
+                "{kind}"
+            );
+        }
+        assert_eq!(
+            counts.internal_work.executions,
+            if kind == "claude" {
+                WorkRead::Unknown
+            } else {
+                WorkRead::Unsupported
+            },
+            "{kind}"
+        );
+        assert_eq!(
+            counts.chips.len(),
+            2,
+            "native work is never another pane child"
+        );
+        let absent = crate::sidebar::project_pane_children(
+            &rows,
+            "parent",
+            crate::agent_hooks::PaneHookTokens::default(),
+            &installed,
+        )
+        .unwrap();
+        assert_eq!(
+            absent.internal_work.subagents,
+            if kind == "pi" {
+                WorkRead::Unsupported
+            } else {
+                WorkRead::Unknown
+            }
+        );
+        let zero = crate::sidebar::project_pane_children(
+            &rows,
+            "parent",
+            crate::agent_hooks::PaneHookTokens {
+                version: Some(hide_agent_hooks::HOOK_VERSION),
+                working: Some(0),
+                done: Some(0),
+                blocked: None,
+            },
+            &installed,
+        )
+        .unwrap();
+        if kind != "pi" {
+            assert_eq!(
+                zero.internal_work.subagents.current(),
+                Some(&WorkTotals {
+                    working: Some(0),
+                    done: Some(0)
+                })
+            );
+            let partial = crate::sidebar::project_pane_children(
+                &rows,
+                "parent",
+                crate::agent_hooks::PaneHookTokens {
+                    version: Some(hide_agent_hooks::HOOK_VERSION),
+                    working: Some(0),
+                    done: None,
+                    blocked: None,
+                },
+                &installed,
+            )
+            .unwrap();
+            assert_eq!(
+                partial.internal_work.subagents.current(),
+                Some(&WorkTotals {
+                    working: Some(0),
+                    done: None
+                })
+            );
+        }
+    }
+}
+
+#[test]
 fn an_instrumented_pane_with_no_children_is_a_different_answer_from_one_hide_cannot_see() {
     let rows = instrumented_rows("claude");
     let installed = hook_status_of(Some(hide_agent_hooks::HookStatus::Installed {
@@ -2740,7 +2847,21 @@ fn a_quiet_row_waits_on_children_then_a_proven_device_then_a_reply() {
     );
 
     rows[child].row_facts = Some(crate::request_view::RowFacts {
-        wake_devices: 2,
+        executions: hide_agent_adapter::work::WorkRead::Current {
+            source: hide_agent_adapter::work::WorkSource::Session,
+            value: hide_agent_adapter::work::WorkRecords {
+                records: ["one", "two"]
+                    .map(|id| hide_agent_adapter::work::WorkRecord {
+                        id: id.into(),
+                        kind: None,
+                        name: None,
+                        state: hide_agent_adapter::work::WorkState::Running,
+                        expires_at_unix_ms: None,
+                    })
+                    .into(),
+                history_truncated: false,
+            },
+        },
         ..Default::default()
     });
     crate::agent_state::apply_lineage(&mut rows, &[], &[]);
