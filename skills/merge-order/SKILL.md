@@ -46,7 +46,8 @@ python3 scripts/merge-order.py
 ```
 
 It lists the green pull requests that may merge now, the one that breaks the fewest open pull requests first, with each stack's upper layers under the layer they sit on.
-Take them in that order, and for each run `python3 scripts/premerge-check.py <number>` and the `gh pr merge` command it prints, nothing else.
+Take them in that order and use the installed `ship` skill for each approved merge.
+Its merge command must run `python3 scripts/premerge-check.py <number>` as the final premerge check and pin the merge to the checked head, as `CONTRIBUTING.md` requires.
 
 - Rows that break as many: the more important work first; the script then puts the stack with more green layers first, then the one green longer.
 - A stack merges from the bottom up, as far as its layers are green; GitHub moves the next layer's base to main when the one below merges.
