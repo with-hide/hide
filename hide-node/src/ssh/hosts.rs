@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use hide_node_link::device::{
     SshAddress as Address, SshHostEntry as Entry, SshHostListing as Listing,
@@ -44,6 +44,9 @@ const MAX_INCLUDE_DEPTH: usize = 4;
 const MAX_CONFIG_FILES: usize = 16;
 /// The largest configuration file read; a bigger one is skipped.
 const MAX_CONFIG_BYTES: u64 = 256 * 1024;
+const MAX_INCLUDE_ENTRIES: usize = 1024;
+const MAX_INCLUDE_WORK: usize = 1024 * 1024;
+const MAX_INCLUDE_NAME_BYTES: usize = 4096;
 
 /// The concrete aliases a config names, in file order.
 #[derive(Debug, Default, Eq, PartialEq)]
@@ -52,6 +55,8 @@ pub(crate) struct ConfigAliases {
     /// More than [`MAX_HOSTS`] concrete aliases were named; the rest are not
     /// listed.
     pub(crate) truncated: bool,
+    /// Include refusal invalidates the entire listing, including extras.
+    include_failed: bool,
 }
 
 /// Reads `<home>/.ssh/config` and what it includes. A missing or unreadable
@@ -61,6 +66,7 @@ pub(crate) fn read_aliases(home: &Path) -> ConfigAliases {
         home,
         files: 0,
         found: ConfigAliases::default(),
+        includes: IncludeBudget::new(Instant::now() + RESOLVE_DEADLINE),
     };
     reader.file(&home.join(".ssh").join("config"), 0);
     reader.found
@@ -70,6 +76,7 @@ pub(super) struct Reader<'a> {
     pub(super) home: &'a Path,
     pub(super) files: usize,
     pub(super) found: ConfigAliases,
+    includes: IncludeBudget,
 }
 
 impl Reader<'_> {
@@ -97,8 +104,20 @@ impl Reader<'_> {
                 }
             } else if keyword.eq_ignore_ascii_case("include") && depth < MAX_INCLUDE_DEPTH {
                 for argument in arguments {
-                    for included in self.expand_include(&argument) {
+                    let included = match self.includes.expand(self.home, &argument) {
+                        Ok(included) => included,
+                        Err(_) => {
+                            self.found.aliases.clear();
+                            self.found.truncated = true;
+                            self.found.include_failed = true;
+                            return;
+                        }
+                    };
+                    for included in included {
                         self.file(&included, depth + 1);
+                        if self.found.include_failed {
+                            return;
+                        }
                     }
                 }
             }
@@ -122,59 +141,130 @@ impl Reader<'_> {
         }
         self.found.aliases.push(pattern);
     }
+}
+
+/// One shared allowance for every Include in a config read, including
+/// directory enumeration and wildcard comparisons before any file is read.
+pub(super) struct IncludeBudget {
+    deadline: Instant,
+    entries: usize,
+    work: usize,
+}
+
+impl IncludeBudget {
+    pub(super) fn new(deadline: Instant) -> Self {
+        Self {
+            deadline,
+            entries: 0,
+            work: MAX_INCLUDE_WORK,
+        }
+    }
+
+    fn consume(&mut self, work: usize) -> Result<(), String> {
+        if Instant::now() >= self.deadline {
+            return Err("SSH configuration Include deadline expired".to_owned());
+        }
+        self.work = self
+            .work
+            .checked_sub(work)
+            .ok_or_else(|| "SSH configuration Include work limit exceeded".to_owned())?;
+        Ok(())
+    }
 
     /// The files an `Include` argument names: `~` is the account's home, a
     /// relative path is under `~/.ssh`, and `*` or `?` in the last component
     /// match the folder's files, sorted by name as `ssh` reads them.
-    pub(super) fn expand_include(&self, argument: &str) -> Vec<PathBuf> {
+    pub(super) fn expand(&mut self, home: &Path, argument: &str) -> Result<Vec<PathBuf>, String> {
+        self.consume(argument.len())?;
+        if argument.len() > MAX_INCLUDE_NAME_BYTES {
+            return Err("SSH configuration Include pattern is too long".to_owned());
+        }
         let path = if let Some(rest) = argument.strip_prefix("~/") {
-            self.home.join(rest)
+            home.join(rest)
         } else if Path::new(argument).is_absolute() {
             PathBuf::from(argument)
         } else {
-            self.home.join(".ssh").join(argument)
+            home.join(".ssh").join(argument)
         };
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         if !name.contains(['*', '?']) {
-            return vec![path];
+            return Ok(vec![path]);
         }
         let Some(folder) = path.parent() else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
-        let Ok(entries) = std::fs::read_dir(folder) else {
-            return Vec::new();
+        let entries = match std::fs::read_dir(folder) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(format!(
+                    "SSH configuration Include could not be read: {error}"
+                ));
+            }
         };
-        let mut matched: Vec<PathBuf> = entries
-            .filter_map(Result::ok)
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_str()
-                    .is_some_and(|candidate| wildcard_match(name, candidate))
-            })
-            .map(|entry| entry.path())
-            .collect();
+        let mut matched = Vec::new();
+        for entry in entries {
+            self.consume(1)?;
+            self.entries += 1;
+            if self.entries > MAX_INCLUDE_ENTRIES {
+                return Err("SSH configuration Include directory entry limit exceeded".to_owned());
+            }
+            let entry = entry
+                .map_err(|error| format!("SSH configuration Include could not be read: {error}"))?;
+            let filename = entry.file_name();
+            if let Some(candidate) = filename.to_str() {
+                if wildcard_match(name, candidate, self)? {
+                    if matched.len() >= MAX_CONFIG_FILES {
+                        return Err("SSH configuration exceeds the Include file limit".to_owned());
+                    }
+                    matched.push(entry.path());
+                }
+            }
+        }
         matched.sort();
-        matched.truncate(MAX_CONFIG_FILES);
-        matched
+        Ok(matched)
     }
 }
 
 /// `*` (any run) and `?` (any one character) against a file name.
-fn wildcard_match(pattern: &str, candidate: &str) -> bool {
-    fn go(pattern: &[char], candidate: &[char]) -> bool {
-        match pattern.split_first() {
-            None => candidate.is_empty(),
-            Some(('*', rest)) => (0..=candidate.len()).any(|skip| go(rest, &candidate[skip..])),
-            Some(('?', rest)) => !candidate.is_empty() && go(rest, &candidate[1..]),
-            Some((head, rest)) => candidate.first() == Some(head) && go(rest, &candidate[1..]),
-        }
+fn wildcard_match(
+    pattern: &str,
+    candidate: &str,
+    budget: &mut IncludeBudget,
+) -> Result<bool, String> {
+    budget.consume(pattern.len() + candidate.len())?;
+    if pattern.len() > MAX_INCLUDE_NAME_BYTES || candidate.len() > MAX_INCLUDE_NAME_BYTES {
+        return Err("SSH configuration Include pattern is too long".to_owned());
     }
     let pattern: Vec<char> = pattern.chars().collect();
     let candidate: Vec<char> = candidate.chars().collect();
-    go(&pattern, &candidate)
+    let (mut p, mut c, mut star, mut retry) = (0, 0, None, 0);
+    while c < candidate.len() {
+        budget.consume(1)?;
+        if p < pattern.len()
+            && (pattern[p] == '?' || (pattern[p] != '*' && pattern[p] == candidate[c]))
+        {
+            p += 1;
+            c += 1;
+        } else if p < pattern.len() && pattern[p] == '*' {
+            star = Some(p);
+            p += 1;
+            retry = c;
+        } else if let Some(last_star) = star {
+            retry += 1;
+            c = retry;
+            p = last_star + 1;
+        } else {
+            return Ok(false);
+        }
+    }
+    while p < pattern.len() && pattern[p] == '*' {
+        budget.consume(1)?;
+        p += 1;
+    }
+    Ok(p == pattern.len())
 }
 
 /// One config line as `ssh` reads it: a keyword, then its arguments, which
@@ -338,6 +428,13 @@ pub(crate) fn list(
     stop: &AtomicBool,
 ) -> Listing {
     let config = read_aliases(home);
+    if config.include_failed {
+        return Listing {
+            entries: Vec::new(),
+            registered: Default::default(),
+            truncated: true,
+        };
+    }
     let mut wanted = config.aliases.clone();
     let extra: Vec<String> = registered
         .iter()
@@ -459,10 +556,58 @@ mod tests {
 
     #[test]
     fn a_wildcard_matches_names_the_way_ssh_reads_include() {
-        assert!(wildcard_match("*.conf", "a.conf"));
-        assert!(wildcard_match("a?.conf", "ab.conf"));
-        assert!(!wildcard_match("*.conf", "a.txt"));
-        assert!(!wildcard_match("a?.conf", "a.conf"));
+        let mut budget = IncludeBudget::new(Instant::now() + RESOLVE_DEADLINE);
+        assert!(wildcard_match("*.conf", "a.conf", &mut budget).unwrap());
+        assert!(wildcard_match("a?.conf", "ab.conf", &mut budget).unwrap());
+        assert!(!wildcard_match("*.conf", "a.txt", &mut budget).unwrap());
+        assert!(!wildcard_match("a?.conf", "a.conf", &mut budget).unwrap());
+        assert!(wildcard_match("*a?*b", "a한b", &mut budget).unwrap());
+        assert!(wildcard_match("*a", "*ba", &mut budget).unwrap());
+        assert!(wildcard_match("*한?", "*가한글", &mut budget).unwrap());
+    }
+
+    #[test]
+    fn refused_include_never_resolves_registered_routes_from_a_partial_config() {
+        let home = tempfile::tempdir().unwrap();
+        write(
+            &home.path().join(".ssh/config"),
+            "Host first\nInclude fragments/*\n",
+        );
+        for index in 0..=MAX_CONFIG_FILES {
+            write(
+                &home.path().join(format!(".ssh/fragments/{index}")),
+                "Host extra\n",
+            );
+        }
+        let resolve: Resolve = Arc::new(|_, _, _| panic!("refused Include must not resolve SSH"));
+        let listing = list(
+            &resolve,
+            home.path(),
+            &["registered".into()],
+            &AtomicBool::new(false),
+        );
+        assert!(listing.entries.is_empty());
+        assert!(listing.registered.is_empty());
+        assert!(listing.truncated);
+    }
+
+    #[test]
+    fn include_deadline_and_match_work_are_finite_before_enumeration() {
+        let home = tempfile::tempdir().unwrap();
+        let mut expired = IncludeBudget::new(Instant::now());
+        assert!(
+            expired
+                .expand(home.path(), "absent/*")
+                .unwrap_err()
+                .contains("deadline")
+        );
+        let mut budget = IncludeBudget::new(Instant::now() + RESOLVE_DEADLINE);
+        budget.work = 2;
+        assert!(
+            wildcard_match("*z", "aaaa", &mut budget)
+                .unwrap_err()
+                .contains("work limit")
+        );
     }
 
     /// Every alias is asked once and answered in the order given, and at most

@@ -198,6 +198,7 @@ pub(super) fn ssh_config(path: &Path) -> Result<String, String> {
         depth: usize,
         output: &mut String,
         deadline: Instant,
+        includes: &mut super::hosts::IncludeBudget,
     ) -> Result<(), String> {
         let expired = || "SSH configuration read deadline expired".to_owned();
         if Instant::now() >= deadline {
@@ -246,13 +247,16 @@ pub(super) fn ssh_config(path: &Path) -> Result<String, String> {
             };
             if key.eq_ignore_ascii_case("include") {
                 for argument in arguments {
-                    let reader = super::hosts::Reader {
-                        home,
-                        files: 0,
-                        found: Default::default(),
-                    };
-                    for included in reader.expand_include(&argument) {
-                        read(&included, home, count, depth + 1, output, deadline)?;
+                    for included in includes.expand(home, &argument)? {
+                        read(
+                            &included,
+                            home,
+                            count,
+                            depth + 1,
+                            output,
+                            deadline,
+                            includes,
+                        )?;
                     }
                 }
             } else if key.eq_ignore_ascii_case("match") {
@@ -271,13 +275,15 @@ pub(super) fn ssh_config(path: &Path) -> Result<String, String> {
         .and_then(Path::parent)
         .ok_or_else(|| "SSH configuration has no account home".to_owned())?;
     let mut output = String::new();
+    let deadline = Instant::now() + CONFIG_DEADLINE;
     read(
         path,
         home,
         &mut 0,
         0,
         &mut output,
-        Instant::now() + CONFIG_DEADLINE,
+        deadline,
+        &mut super::hosts::IncludeBudget::new(deadline),
     )?;
     Ok(output)
 }
@@ -286,6 +292,63 @@ pub(super) fn ssh_config(path: &Path) -> Result<String, String> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn include_wildcards_use_finite_work_and_retry_reads_the_corrected_route() {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".ssh/config");
+        let fragments = home.path().join(".ssh/fragments");
+        std::fs::create_dir_all(&fragments).unwrap();
+        std::fs::write(fragments.join("a".repeat(200)), "Host ignored\n").unwrap();
+        // A recursive suffix matcher explores exponentially many ways to
+        // split this ordinary filename between the repeated stars.
+        std::fs::write(&config, format!("Include fragments/{}z\n", "*".repeat(100))).unwrap();
+        assert_eq!(ssh_config(&config).unwrap(), "");
+        let costly = format!("Include fragments/*{}z\n", "a".repeat(190));
+        // Each file fits its allowance alone; the full config shares one
+        // budget instead of granting a fresh one to each included file.
+        for name in ["first", "second"] {
+            std::fs::write(config.with_file_name(name), costly.repeat(350)).unwrap();
+        }
+        std::fs::write(&config, "Host before\nInclude first second\n").unwrap();
+        assert!(ssh_config(&config).unwrap_err().contains("work limit"));
+        std::fs::write(
+            &config,
+            "Host corrected\n HostName correct.example\n User fixture\n",
+        )
+        .unwrap();
+        let corrected = ssh_config(&config).unwrap();
+        assert!(corrected.contains("correct.example"));
+        assert!(!corrected.contains("before"));
+    }
+
+    #[test]
+    fn include_enumeration_refuses_entry_and_match_limits_without_partial_config() {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".ssh/config");
+        let fragments = home.path().join(".ssh/fragments");
+        std::fs::create_dir_all(&fragments).unwrap();
+        for index in 0..1025 {
+            std::fs::write(fragments.join(format!("{index}.txt")), "Host ignored\n").unwrap();
+        }
+        std::fs::write(&config, "Host before\nInclude fragments/*.conf\n").unwrap();
+        assert!(ssh_config(&config).unwrap_err().contains("entry limit"));
+        std::fs::remove_dir_all(&fragments).unwrap();
+        std::fs::create_dir_all(&fragments).unwrap();
+        for index in 0..17 {
+            std::fs::write(fragments.join(format!("{index}.conf")), "Host ignored\n").unwrap();
+        }
+        assert!(
+            ssh_config(&config)
+                .unwrap_err()
+                .contains("Include file limit")
+        );
+        std::fs::write(&config, "Host retry\n HostName retry.example\n").unwrap();
+        assert_eq!(
+            ssh_config(&config).unwrap(),
+            "Host retry\n HostName retry.example\n"
+        );
+    }
 
     #[test]
     fn configuration_reads_refuse_non_regular_and_oversized_files() {
