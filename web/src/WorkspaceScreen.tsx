@@ -24,6 +24,7 @@ import { keyboardOwner, noteKeyboardOwner } from "./viewFocus";
 import { cn } from "./lib/utils";
 import { useInterfaceTranslation } from "./i18n/client";
 import "./laneCalls";
+import { CheckoutCommit, CheckoutFileCount, CheckoutUpstream } from "./CheckoutGitHeader";
 
 // A Workspace (PRD S6 D-01..D-05; S7 B12, B13; PRD right-lane D-01..D-07):
 // one checkout's path in the window's top row (PRD sidebar-titlebar-refresh
@@ -251,8 +252,8 @@ function LaneRow({ view, tool, frame, files, width, body, setBody, sizes, action
 /**
  * The Workspace's part of the window's top row (PRD sidebar-titlebar-refresh
  * D-15, D-16, B17, B18; PRD right-lane B1): a remote device's band, the
- * `project / checkout` path, and at the right end, icons only, Overview and
- * Open server; the lane's tools are on the rail. The project opens its
+ * `project / checkout` path, active Git facts, and Overview then Open server.
+ * The lane's tools are on the rail. The project opens its
  * Overview; a right-click on the path opens the Workspace's menu. Nothing
  * while a Workspace is not the screen in front.
  */
@@ -285,8 +286,11 @@ function WorkspaceTitleBar({ checkout, view, actions }: { checkout: Checkout; vi
     if (id === "copy_path") return void navigator.clipboard?.writeText(checkout.path).catch(() => undefined);
   };
   const home = project?.is_home === true;
+  const [headerElement, setHeaderElement] = useState<HTMLElement | null>(null);
+  const headerWidth = useWidth(headerElement);
+  const git = project?.is_git && !home;
   return (
-    <div className="flex h-full min-w-0 flex-1 items-center gap-sm pr-sm text-caption" data-workspace-toolbar="true">
+    <div ref={setHeaderElement} className="flex h-full min-w-0 flex-1 items-center gap-xs pr-sm text-caption" data-workspace-toolbar="true">
       {device ? (
         // The front thing is another machine's: its color and name lead the path, and the pane border wears the same color (PRD home-device-rail D-15).
         <span className="flex h-full max-w-(--size-recent-location-max) shrink-0 items-center gap-xs bg-device-remote px-sm font-medium text-primary-foreground" data-device-band={device.id}>
@@ -294,7 +298,7 @@ function WorkspaceTitleBar({ checkout, view, actions }: { checkout: Checkout; vi
           <span className="min-w-0 truncate">{deviceName}</span>
         </span>
       ) : null}
-      <EntryContextMenu label={t("panes.workspace.aria", { name })} items={menuItems} onSelect={select} className={cn("flex min-w-0 flex-1 self-stretch items-center", !device && "pl-sm")} data-workspace-menu="true">
+      <EntryContextMenu label={t("panes.workspace.aria", { name })} items={menuItems} onSelect={select} className={cn("flex min-w-0 shrink self-stretch items-center", !device && "pl-sm")} data-workspace-menu="true">
         <nav aria-label={t("panes.workspace.location")} className="flex min-w-0 items-center gap-xs">
           {project && !home ? (
             <>
@@ -320,6 +324,9 @@ function WorkspaceTitleBar({ checkout, view, actions }: { checkout: Checkout; vi
           </Hint>
         </nav>
       </EntryContextMenu>
+      {git ? <><CheckoutFileCount header={view.git} actions={actions} /><CheckoutUpstream header={view.git} /></> : null}
+      <div className="min-w-0 flex-1" data-window-drag="true" />
+      {git ? <CheckoutCommit key={`${view.device_id}:${view.path}`} header={view.git} view={view} actions={actions} title={headerWidth >= tokenPx("--size-checkout-header-commit-min")} time={headerWidth >= tokenPx("--size-checkout-header-time-min")} /> : null}
       <div className="flex shrink-0 items-center gap-xxs" data-workspace-actions="true">
         <OverviewButton actions={actions} />
         <RunningServers key={checkout.id} checkout={checkout} view={view} actions={actions} />

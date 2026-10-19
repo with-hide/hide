@@ -71,7 +71,7 @@ export function mountGallery(root: Root) {
       return;
     }
     // A scene seeds the app's own stores, so it is one document per scene.
-    if (scene === "workspace-servers") {
+    if (scene === "workspace-servers" || scene === "checkout-git") {
       root.render(<StrictMode><ServerSessionScene scene={scene} {...sceneParams(params)}/></StrictMode>);
       return;
     }

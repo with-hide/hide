@@ -8,6 +8,16 @@ The code is the executable authority: `herdr-core/src/` for the core, `hided/src
 
 ## State placement and publication
 
+The front Workspace's Git header is ephemeral core state (`runtime/checkout_git.rs`), projected only into that device/path's `workspace_view.git`, never persisted or inferred from visibility-gated Changes rows.
+The existing Changes pump drives two single-flight `BackgroundRead` readers (`checkout_git.rs`): one owning-node `Call::CheckoutGit` for the whole checkout, and one core-node exact-SHA GitHub read using fixed allowlisted arguments.
+Changing the target or channel advances a generation; ingests compare that identity and the CI repository/SHA before publishing, while a HEAD change immediately clears the preceding CI result.
+The core consumes the node's configured origin URL into a private validated provider repository identity and removes the raw URL before retaining or publishing header facts, so URL userinfo never reaches the renderer.
+The node performs one porcelain-v2 no-renames status and one log read of its captured exact HEAD, with no base comparison or inactive checkout scan; status output is capped at 8 MiB, the commit at 64 KiB, and overflow is unavailable, never clean.
+Git reads run off-lock at two-second intervals and a three-second node budget; only changed facts, failure/recovery, target changes or freshness transitions notify, and successful identical reads renew an internal deadline without publishing a frame.
+CI uses both check-runs and combined statuses, at most 100 check-runs per read, with an incomplete list remaining unknown; one request every 30 seconds is retained only for the front target, with each node `gh` command bounded at 15 seconds and each link wait at 20 seconds.
+The pump joins both admitted readers outside Runtime's mutex on shutdown; a superseded read may finish within that bound and its answer is discarded, with no additional job queued for each intermediate selection.
+Five seconds without a successful Git observation marks retained data stale; CI ages at 90 seconds and a disconnected shell also labels retained state stale locally.
+
 Choose the authority, publication need and durability of a value separately before adding a field, store or worker.
 `Mutex<Runtime>` serializes Hide's accepted domain and UI transitions; it is not the place to perform the reads, writes or analyses that produce them.
 An off-lock store remains core-owned and must name its scope, freshness rule, resource bound and shutdown owner; a second copy in the shell cannot become an authority.
