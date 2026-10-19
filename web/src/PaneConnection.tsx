@@ -148,7 +148,7 @@ function ConnectionPopover({
             </span>
           </div>
         ) : null}
-        {/* The answer outlives the reason it fixed: once the server is off, this pane reads "started before Hide was set up". */}
+        {/* The answer outlives the reason it fixed: turning the server off can leave this pane awaiting its own reports. */}
         {outcome ? (
           <span
             className={`text-caption ${outcome.phase === "failed" ? "text-destructive" : "text-muted-foreground"}`}
