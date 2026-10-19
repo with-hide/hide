@@ -1,6 +1,6 @@
 // Five-tab Overview screen documentation follows the approved HTML structure.
 // All names and amounts below are invented design examples, never runtime data.
-import {num} from './pen-system.mjs';
+import {markSlot, num} from './pen-system.mjs';
 
 export function overviewScreens(tokens, {frame, text, screenButton, screenInput}) {
   const FG = '$--foreground', SUB = '$--subtle-foreground', MUTED = '$--muted-foreground';
@@ -27,15 +27,23 @@ export function overviewScreens(tokens, {frame, text, screenButton, screenInput}
     ], {width, height, gap: 0, clip: true, fill: '$--background', stroke: '$--border', strokeWidth: hair});
   }
   function graph(id) {
-    const session = (key, name, state, child = false) => col(key, name, [label(`${key}-mark`, state === '내 차례' ? '!' : '◌', {size: '$--text-headline', fill: state === '내 차례' ? '$--warning' : '$--agent-working'}), label(`${key}-name`, name, {fill: FG, weight: '600'}), small(`${key}-state`, state), small(`${key}-agent`, child ? 'Codex' : 'Claude Code')], {width: num(tokens, child ? '--size-overview-graph-child-width' : '--size-overview-graph-root-width'), padding: md, cornerRadius: '$--radius-sm', fill: '$--card', stroke: '$--border', strokeWidth: hair});
-    return content(id, 'Work graph', [
-      row(`${id}-toolbar`, 'Graph controls', [title(`${id}-title`, '작업'), small(`${id}-count`, '세션 14'), spacer(`${id}-sp`), screenButton(`${id}-fit`, '화면에 맞추기', {variant: 'outline'}), screenButton(`${id}-letters`, '편지', {variant: 'outline'})]),
-      row(`${id}-groups`, 'Compound project groups', [
-        col(`${id}-hide`, 'hide expanded', [label(`${id}-hide-title`, 'hide · 세션 11', {fill: FG, weight: '600'}), row(`${id}-family`, 'Verified parent and children', [session(`${id}-root`, '사이드바 가독성 개선', '작업 중'), label(`${id}-lineage`, '→'), col(`${id}-children`, 'Children', [session(`${id}-c1`, '컴포넌트 구조 정리', '작업 중', true), session(`${id}-c2`, '한글 가독성 확인', '읽을 것', true)], {width: 'fit_content'})], {gap: xl}), small(`${id}-metadata`, '실제 편지 메타데이터 · 진행 2 · 요청 1')], {padding: xl, gap: xl, cornerRadius: '$--radius-md', stroke: '$--border', strokeWidth: hair}),
-        col(`${id}-collapsed`, 'Collapsed projects', ['billing-api', 'content-web', 'team-notes'].map((name, i) => row(`${id}-project-${i}`, name, [label(`${id}-pn-${i}`, name, {fill: FG, weight: '600'}), spacer(`${id}-ps-${i}`), small(`${id}-pc-${i}`, i === 2 ? '세션 0' : '세션 1'), label(`${id}-pe-${i}`, '›')], {padding: lg, cornerRadius: '$--radius-sm', stroke: '$--border', strokeWidth: hair})), {width: num(tokens, '--size-overview-graph-group-width'), gap: lg}),
-      ], {alignItems: 'start', gap: xxl}), small(`${id}-limits`, '최근 1일 · 편지 최대 2,000개 · 화면 최대 400개 노드'),
+    const session = (key, name, state, child = false, context = false) => {
+      const orb = num(tokens, child ? '--size-overview-graph-child-orb' : '--size-overview-graph-root-orb');
+      return col(key, name, [frame(`${key}-orb`, 'Circular provider node', {width: orb, height: orb, cornerRadius: orb / 2, fill: '$--secondary', stroke: state === '내 차례' ? '$--warning' : child ? '$--border' : '$--primary', strokeWidth: hair, layout: 'horizontal', alignItems: 'center', justifyContent: 'center'}, [frame(`${key}-provider`, child ? 'Codex logo' : 'Claude Code logo', {width: orb * 0.65, height: orb * 0.65, fill: {type: 'image', enabled: true, url: `../web/src/assets/agent-${child ? 'codex' : 'claude'}.png`, mode: 'fit'}}, []), {...markSlot(`${key}-status`, state === '내 차례' ? 'turn' : state === '읽을 것' ? 'done' : context ? 'quiet' : 'going'), layoutPosition: 'absolute', x: orb - 12, y: orb - 12}]), label(`${key}-name`, name, {fill: FG, weight: child ? '500' : '600'}), small(`${key}-agent`, child ? 'Codex · model-c' : 'Claude Code · model-a'), small(`${key}-state`, state), ...(context ? [small(`${key}-context`, '상위 세션 문맥')] : [])], {width: num(tokens, child ? '--size-overview-graph-child-width' : '--size-overview-graph-root-width'), alignItems: 'center', opacity: context ? num(tokens, '--opacity-dimmed') : 1, gap: sm});
+    };
+    return content(id, 'Work graph focus', [
+      row(`${id}-toolbar`, 'Graph controls', [title(`${id}-title`, '작업 그래프'), spacer(`${id}-sp`), screenButton(`${id}-collapse`, '모두 접기', {variant: 'ghost'}), screenButton(`${id}-graph`, '그래프', {variant: 'secondary'}), screenButton(`${id}-list`, '세션 목록', {variant: 'ghost'})]),
+      controls(`${id}-filters`, ['전체 10', '내 차례 2', '작업 중 5', '안 읽은 결과 2', '☐ 쉬는 세션 포함', '☑ 편지 관계']),
+      small(`${id}-omitted`, '▸ 접힌 프로젝트 2개 · 쉬는 세션뿐인 프로젝트 / 세션 없음'),
+      small(`${id}-legend`, '실선: 부모와 자식 · 점선: 편지 · 관련 노드에 머물 때만 편지 건수 표시'),
+      row(`${id}-groups`, 'Compound project groups at readable zoom', [
+        col(`${id}-hide`, 'hide expanded', [label(`${id}-hide-title`, 'hide · 세션 7', {fill: FG, weight: '600'}), row(`${id}-family`, 'Verified parent and children', [session(`${id}-root`, '사이드바 가독성 개선', '확인함', false, true), label(`${id}-lineage`, '→'), col(`${id}-children`, 'Children', [session(`${id}-c1`, '컴포넌트 구조 정리', '작업 중', true), session(`${id}-c2`, '한글 가독성 확인', '읽을 것', true)], {width: 'fit_content'})], {gap: xl})], {padding: xl, gap: xl, cornerRadius: '$--radius-xl', stroke: '$--border', strokeWidth: hair}),
+        col(`${id}-collapsed`, 'Collapsed active projects', ['billing-api', 'content-web'].map((name, i) => row(`${id}-project-${i}`, name, [label(`${id}-pn-${i}`, name, {fill: FG, weight: '600'}), spacer(`${id}-ps-${i}`), small(`${id}-pc-${i}`, i ? '세션 1' : '세션 2'), label(`${id}-pe-${i}`, '›')], {padding: lg, cornerRadius: '$--radius-xl', stroke: '$--border', strokeWidth: hair})), {width: num(tokens, '--size-overview-graph-group-width'), gap: lg}),
+      ], {alignItems: 'start', gap: xxl}),
+      small(`${id}-selection`, '선택한 세션 상세는 오른쪽에 · 좁은 화면은 기존 패널 · Escape로 닫기'),
     ]);
   }
+
   function backlog(id) {
     const rows = [['#163', '좁은 사이드바에서 긴 한국어 요청 줄바꿈 확인', 'GitHub', 'jules', 'mira', 'enhancement', '2시간 전'], ['#161', '프로세스 종료 뒤 남은 자식 정리', 'GitHub', 'mira', 'jules', 'bug', '어제'], ['L-2', '다음 검토에서 확인할 키보드 흐름', '메모', '-', '-', '-', '어제']];
     return content(id, 'Mixed backlog', [

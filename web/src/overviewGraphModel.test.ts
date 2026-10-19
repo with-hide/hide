@@ -89,9 +89,9 @@ describe("current sessions in the Overview graph", () => {
     const first = project("one", [agent("b"), agent("a")]);
     const second = project("two", [agent("c")]);
     const expanded = new Set([graphProjectId(first)]);
-    const before = overviewGraphModel([first, second], metadata([party("a"), party("b"), party("c")]), expanded, null);
+    const before = overviewGraphModel([first, second], metadata([party("a"), party("b"), party("c")]), expanded, null, { focus: "all", includeResting: true });
     const changed = project("one", [agent("a", { identity_label: "새 상태", group: "needs_you", demand: "question" }), agent("b", { group: "seen" })]);
-    const after = overviewGraphModel([second, changed], metadata([party("a"), party("b"), party("c")], [letter("new", party("a"), party("c"))]), expanded, null);
+    const after = overviewGraphModel([second, changed], metadata([party("a"), party("b"), party("c")], [letter("new", party("a"), party("c"))]), expanded, null, { focus: "all", includeResting: true });
     expect(after.structure).toBe(before.structure);
     expect(after.visible.find((row) => row.agent.pane_id === "a")?.bucket).toBe("turn");
   });
@@ -119,5 +119,78 @@ describe("current sessions in the Overview graph", () => {
     expect([...initialGraphExpansion([a, b], "one", ["two-main"])]).toEqual([graphProjectId(a)]);
     expect([...initialGraphExpansion([a, b], null, ["two-main"])]).toEqual([graphProjectId(b)]);
     expect(graphProjectId(project("one", [], "remote-1"))).not.toBe(graphProjectId(project("one", [], "remote-2")));
+  });
+});
+
+// Overview focus B2-B8, B17-B18: projection uses authoritative marks, not bucket.
+describe("Overview focus", () => {
+  const panes = (model: ReturnType<typeof overviewGraphModel>) => model.agents.map((row) => row.agent.pane_id);
+  it("keeps Seen demands, sleeping asks and unknown, with operator-first list order", () => {
+    const p = project("focus", [agent("rest", { mark: "quiet" }), agent("sleep", { mark: "asleep" }), agent("unknown", { mark: "unknown" }), agent("result", { mark: "unread" }), agent("worker", { mark: "waiting" }), agent("seen-ask", { mark: "turn", group: "seen" }), agent("sleep-ask", { mark: "turn" })]);
+    const all = overviewGraphModel([p], undefined, new Set([graphProjectId(p)]), null);
+    expect(panes(all)).toEqual(["seen-ask", "sleep-ask", "worker", "result", "unknown"]);
+    expect(all.counts).toEqual({ all: 5, turn: 2, working: 1, results: 1 });
+    for (const [focus, expected] of [["turn", ["seen-ask", "sleep-ask"]], ["working", ["worker"]], ["results", ["result"]]] as const) {
+      expect(panes(overviewGraphModel([p], undefined, new Set(), null, { focus, includeResting: false }))).toEqual(expected);
+    }
+    expect(panes(overviewGraphModel([p], undefined, new Set(), null, { focus: "all", includeResting: true })).slice(-2)).toEqual(["rest", "sleep"]);
+  });
+  it("retains resting ancestors as context without increasing matching counts", () => {
+    const p = project("family", [agent("root", { mark: "asleep" }), agent("middle", { mark: "quiet", lineage_parent_pane_id: "root" }), agent("child", { mark: "going", lineage_parent_pane_id: "middle" })]);
+    const graph = overviewGraphModel([p], undefined, new Set([graphProjectId(p)]), null, { focus: "working", includeResting: false });
+    expect(panes(graph)).toEqual(["child"]);
+    expect(graph.visible.map((row) => row.agent.pane_id).sort()).toEqual(["child", "middle", "root"]);
+    expect(graph.context.size).toBe(2);
+    expect(graph.projects[0]?.matches).toBe(1);
+    expect(graph.lineage).toHaveLength(2);
+    expect(graph.quietBranches.size).toBe(0);
+  });
+  it("counts collapsed families from the filtered projection without changing Projects totals", () => {
+    const p = project("several", [agent("first"), agent("ask", { mark: "turn" }), agent("rest", { mark: "quiet" })]);
+    const graph = overviewGraphModel([p], undefined, new Set(), null, { focus: "turn", includeResting: false });
+    expect(graph.projects[0]).toMatchObject({ roots: 1, matches: 1, expanded: false });
+    expect(graph.projects[0]?.agents).toHaveLength(1);
+    expect(overviewProjectGraphCounts([p], undefined).get(graphProjectId(p))).toEqual({ total: 3, roots: 3, children: 0 });
+  });
+  it("does not spend graph capacity on empty or resting-only projects", () => {
+    const projects = Array.from({ length: 450 }, (_, i) => project(`empty${i}`, []));
+    projects.push(project("rest", [agent("rest", { mark: "quiet" })]));
+    const active = project("active", [agent("active")]);
+    projects.push(active);
+    const graph = overviewGraphModel(projects, undefined, new Set([graphProjectId(active)]), null);
+    expect(graph.projects).toHaveLength(1);
+    expect(graph.visible).toHaveLength(1);
+    expect(graph.omitted).toHaveLength(451);
+    expect(graph.limited).toBe(false);
+  });
+  it("offers folds only for completely resting descendant branches, and releases a fold when a child starts", () => {
+    const rows = [agent("root"), agent("quiet", { mark: "quiet", lineage_parent_pane_id: "root" }), agent("leaf", { mark: "asleep", lineage_parent_pane_id: "quiet" })];
+    const p = project("family", rows);
+    const options = { focus: "all" as const, includeResting: true };
+    const before = overviewGraphModel([p], undefined, new Set([graphProjectId(p)]), null, options);
+    const root = before.agents.find((row) => row.agent.pane_id === "root")!.id;
+    expect(before.quietBranches.get(root)).toBe(2);
+    const folded = overviewGraphModel([p], undefined, new Set([graphProjectId(p)]), null, { ...options, folded: new Set([root]) });
+    expect(folded.visible.map((row) => row.agent.pane_id)).toEqual(["root"]);
+    expect(folded.agents).toHaveLength(3);
+    const changed = project("family", rows.map((row) => row.pane_id === "leaf" ? { ...row, mark: "turn" } : row));
+    const active = overviewGraphModel([changed], undefined, new Set([graphProjectId(changed)]), null, { ...options, folded: new Set([root]) });
+    expect(active.folded.size).toBe(0);
+    expect(active.visible).toHaveLength(3);
+  });
+  it("distinguishes empty, resting-only and filtered projects and recovers without mutating input", () => {
+    const projects = [project("empty", []), project("rest", [agent("sleep", { mark: "asleep" })]), project("busy", [agent("busy")])];
+    const before = JSON.stringify(projects);
+    const graph = overviewGraphModel(projects, undefined, new Set(), null, { focus: "turn", includeResting: false });
+    expect(graph.omitted.map((group) => [group.project.workspace.id, group.reason])).toEqual([["empty", "empty"], ["rest", "resting"], ["busy", "filtered"]]);
+    expect(graph.projects).toEqual([]);
+    expect(overviewGraphModel(projects, undefined, new Set(), null, { focus: "all", includeResting: true }).projects).toHaveLength(2);
+    expect(JSON.stringify(projects)).toBe(before);
+  });
+  it("terminates cyclic lineage and never offers an unsafe cyclic fold", () => {
+    const p = project("cycle", [agent("a", { mark: "quiet", lineage_parent_pane_id: "b" }), agent("b", { mark: "quiet", lineage_parent_pane_id: "a" })]);
+    const graph = overviewGraphModel([p], undefined, new Set([graphProjectId(p)]), null, { focus: "all", includeResting: true });
+    expect(graph.visible).toHaveLength(2);
+    expect(graph.quietBranches.size).toBe(0);
   });
 });

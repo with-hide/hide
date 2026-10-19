@@ -8,7 +8,7 @@
 .og-state-counts b { font-weight: 500; font-variant-numeric: tabular-nums; }
 .og-legend { display: flex; flex-wrap: wrap; gap: var(--spacing-lg); border-block: var(--size-hairline) solid var(--border); padding: var(--spacing-sm) var(--spacing-lg); color: var(--muted-foreground); font-size: var(--text-caption); }
 .og-notice { display: flex; align-items: center; flex-wrap: wrap; gap: var(--spacing-sm); padding: var(--spacing-sm) var(--spacing-lg); font-size: var(--text-body); color: var(--muted-foreground); }
-.og-stage { position: relative; height: min(70vh, var(--size-overview-sheet-h)); min-height: var(--size-panel-min); overflow: hidden; }
+.og-stage { display: flex; position: relative; height: min(70vh, var(--size-overview-sheet-h)); min-height: var(--size-panel-min); overflow: hidden; }
 .overview-graph .react-flow { background-image: radial-gradient(color-mix(in srgb, var(--border) 40%, transparent) var(--size-hairline), transparent var(--size-hairline)); background-size: var(--spacing-xl) var(--spacing-xl); }
 .overview-graph .react-flow__node { border: 0; background: transparent; border-radius: 0; font-family: inherit; color: inherit; }
 .overview-graph .react-flow__handle { opacity: 0; pointer-events: none; }
@@ -22,7 +22,7 @@
 .og-project-summary { padding-inline: var(--spacing-lg); }
 .og-project-footer { position: absolute; bottom: var(--spacing-lg); left: var(--spacing-lg); right: var(--spacing-lg); display: flex; align-items: end; justify-content: space-between; gap: var(--spacing-sm); font-size: var(--text-caption); color: var(--muted-foreground); }
 .og-empty-project { display: block; margin: var(--spacing-lg); font-size: var(--text-caption); color: var(--muted-foreground); }
-.og-session { --og-orb-size: var(--size-overview-graph-child-orb); width: 100%; height: 100%; }
+.og-session { position: relative; --og-orb-size: var(--size-overview-graph-child-orb); width: 100%; height: 100%; }
 .og-session[data-root="true"] { --og-orb-size: var(--size-overview-graph-root-orb); }
 .overview-graph .og-session .react-flow__handle-left { left: calc(50% - var(--og-orb-size) / 2); top: calc(var(--og-orb-size) / 2); }
 .overview-graph .og-session .react-flow__handle-right { right: calc(50% - var(--og-orb-size) / 2); top: calc(var(--og-orb-size) / 2); }
@@ -57,7 +57,7 @@
 .og-list-name strong { font-size: var(--text-body); font-weight: 500; color: var(--foreground); }
 .og-list-name small { font-size: var(--text-caption); }
 .og-pagination { display: flex; justify-content: center; align-items: center; gap: var(--spacing-sm); padding-block: var(--spacing-sm); font-size: var(--text-caption); color: var(--muted-foreground); }
-.og-details { position: absolute; z-index: 6; top: var(--spacing-md); right: var(--spacing-md); width: min(var(--issue-panel-min-width), calc(100% - var(--spacing-md) * 2)); max-height: calc(100% - var(--spacing-md) * 2); overflow-y: auto; border: var(--size-hairline) solid var(--border); border-radius: var(--radius-md); background: var(--popover); color: var(--popover-foreground); padding: var(--spacing-lg); font-size: var(--text-body); }
+.og-details { z-index: 6; flex-shrink: 0; width: min(var(--size-lane-min), 100%); height: 100%; overflow-y: auto; border: var(--size-hairline) solid var(--border); border-radius: var(--radius-md); background: var(--popover); color: var(--popover-foreground); padding: var(--spacing-lg); font-size: var(--text-body); }
 .og-details-head { display: flex; align-items: start; justify-content: space-between; gap: var(--spacing-sm); }
 .og-details-head strong { min-width: 0; overflow-wrap: anywhere; font-size: var(--text-subhead); font-weight: 600; }
 .og-detail-status { display: flex; align-items: center; gap: var(--spacing-xs); padding-block: var(--spacing-sm); color: var(--muted-foreground); }
@@ -76,3 +76,24 @@
 .og-details dd { text-align: right; font-variant-numeric: tabular-nums; }
 .og-empty { display: flex; align-items: center; gap: var(--spacing-md); padding: var(--spacing-lg); color: var(--muted-foreground); font-size: var(--text-body); }
 @media (prefers-reduced-motion: reduce) { .overview-graph .react-flow__edge.animated path { animation: none; } .overview-graph * { scroll-behavior: auto; } }
+
+.og-canvas { flex: 1; min-width: 0; height: 100%; }
+.og-filters, .og-filters > div, .og-filters label { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-sm); }
+.og-filters { padding: var(--spacing-sm) var(--spacing-lg); gap: var(--spacing-lg); font-size: var(--text-caption); }
+.og-filters button span { font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
+.og-filters input { accent-color: var(--primary); }
+.og-omitted { padding: var(--spacing-sm) var(--spacing-lg); color: var(--muted-foreground); font-size: var(--text-caption); }
+.og-omitted summary { cursor: pointer; }
+.og-omitted li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--spacing-sm); }
+.og-omitted li > span { min-width: 0; overflow-wrap: anywhere; }
+.og-project.og-project-frameless { background: transparent; border: 0; pointer-events: none; }
+.og-session[data-context="true"] .og-session-target { opacity: var(--opacity-dimmed); }
+.og-session[data-highlighted="true"] .og-orb { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
+.overview-graph .og-emphasized .react-flow__edge-path { opacity: 1; stroke-width: var(--graph-edge-flow-width); }
+.og-fold { position: absolute; top: 100%; left: 0; width: 100%; background: var(--background); color: var(--muted-foreground); border: var(--size-hairline) solid var(--border); border-radius: var(--radius-sm); font-size: var(--text-micro); cursor: pointer; pointer-events: auto; }
+.og-fold:focus-visible, .og-omitted summary:focus-visible { outline: var(--size-hairline) solid var(--ring); }
+.og-list > button[aria-pressed="true"] { background: var(--accent); }
+.og-toolbar-actions { flex-wrap: wrap; }
+.og-empty { flex-wrap: wrap; }
+
+.og-letter-label[data-emphasized="false"] { opacity: 0; pointer-events: none; }

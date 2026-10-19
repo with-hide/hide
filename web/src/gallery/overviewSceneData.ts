@@ -306,3 +306,30 @@ export function overviewWorld(now: number): OverviewWorld {
   };
   return { rest, agents, record, recordSession, recordPane: "h-a1", linkSummaries };
 }
+
+/** Focus fixtures change only this gallery route; other Overview tabs keep their reference world. */
+export function overviewFocusWorld(now: number, content: string): OverviewWorld {
+  const world = overviewWorld(now);
+  const agents = world.agents;
+  const get = (pane: string) => agents.find((row) => row.pane_id === pane)!;
+  Object.assign(get("h-a1"), { mark: "quiet", group: "seen", activity: "idle", state: { ...get("h-r1").state } });
+  Object.assign(get("h-a3"), { group: "seen", unread: false, state: { ...get("h-a3").state, needs_you: false, attention: false, mark_tone: { kind: "warning", read: true } } });
+  Object.assign(get("h-q2"), { mark: "unknown", identity_label: "상태 확인 중 · unknown" });
+  Object.assign(get("h-r2"), { mark: "asleep", identity_label: "잠든 릴리스 세션", lineage_parent_pane_id: "h-r1" });
+  if (content === "long") for (const row of agents) row.identity_label += " · 긴 한국어 제목과 English identifiers 줄바꿈 확인";
+  const extraProjects: Workspace[] = [];
+  const count = content === "many" ? 64 : 1;
+  for (let index = 0; index < count; index += 1) {
+    const id = `focus-project-${index}`;
+    const pane = `focus-pane-${index}`;
+    const row = agent({ pane, title: `쉬는 작업 ${index + 1}`, look: "idle", ago: MINUTE }, now);
+    if (content === "many" && index % 3 === 0) Object.assign(row, { mark: "going", group: "working", activity: "working", state: { ...get("h-a1c1").state, root: true } });
+    agents.push(row);
+    const one = checkout({ id: `${id}:main`, workspace: id, branch: "main", primary: true, panes: [pane] }, Math.floor(now / 1000));
+    extraProjects.push(workspace(id, { label: `실험 프로젝트 ${index + 1}`, checkouts: [one], agent_scope: scopeWith([card(pane, "working", [pane], [one.id], "0")]) }, REFERENCE_FOLDS));
+  }
+  world.rest.navigator!.workspaces!.push(...extraProjects);
+  if (content === "resting") for (const row of agents) Object.assign(row, { mark: "quiet", group: "seen", state: { ...get("h-r1").state } });
+  world.rest.overview_graph!.sessions = agents.map((row) => ({ device_id: "local", pane_id: row.pane_id, session_digest: `fixture-${row.pane_id}`, launch_model: row.agent_kind === "codex" ? "model-c" : "model-a" }));
+  return world;
+}

@@ -15,7 +15,7 @@ import { PALETTE_HIDE_CLASS } from "../theme";
 import { TitleRow } from "../TitleRow";
 import { OVERVIEW_ENTRY, useUiStore } from "../ui";
 import { WorkspaceScreen } from "../WorkspaceScreen";
-import { hideKey, overviewWorld } from "./overviewSceneData";
+import { hideKey, overviewFocusWorld, overviewWorld } from "./overviewSceneData";
 import { AGENT_ADAPTERS } from "../agentAdapters";
 import { ledgerScene } from "./usageHistorySceneData";
 import type { SessionRecord, SessionSearchOptions, SessionSearchStatus, WorkSession } from "../snapshot";
@@ -25,9 +25,9 @@ import { installKeyboard } from "../keyboard";
 import { Palette } from "../Palette";
 import { requireInterfaceLanguage, type InterfaceLanguage } from "../i18n/locale";
 
-const STATES = ["work", "backlog", "backlog-add", "backlog-detail", "projects", "history", "usage", "home-record", "record"] as const;
+const STATES = ["work", "focus", "backlog", "backlog-add", "backlog-detail", "projects", "history", "usage", "home-record", "record"] as const;
 type OverviewSceneState = (typeof STATES)[number];
-export type OverviewSceneParams = { state: OverviewSceneState; theme: "light" | "dark"; palette: "hide" | "neutral"; language: InterfaceLanguage; scale: number };
+export type OverviewSceneParams = { state: OverviewSceneState; theme: "light" | "dark"; palette: "hide" | "neutral"; language: InterfaceLanguage; scale: number; content?: string };
 
 export function overviewSceneParams(params: URLSearchParams): OverviewSceneParams {
   const state = params.get("state") ?? "work";
@@ -37,12 +37,12 @@ export function overviewSceneParams(params: URLSearchParams): OverviewSceneParam
   const language = requireInterfaceLanguage(params.get("lang") ?? "ko");
   const scale = Number(params.get("scale") ?? "1");
   if (!Number.isFinite(scale) || scale <= 0) throw new Error("Overview scene scale must be a positive number");
-  return { state: state as OverviewSceneState, theme: params.get("theme") === "light" ? "light" : "dark", palette, language, scale };
+  return { state: state as OverviewSceneState, theme: params.get("theme") === "light" ? "light" : "dark", palette, language, scale, content: params.get("content") ?? "reference" };
 }
 
-export function OverviewScene({ state, theme, palette, language, scale }: OverviewSceneParams) {
+export function OverviewScene({ state, theme, palette, language, scale, content = "reference" }: OverviewSceneParams) {
   useFollowInterfaceLanguage(language);
-  const world = useMemo(() => overviewWorld(Date.now()), []);
+  const world = useMemo(() => state === "focus" ? overviewFocusWorld(Date.now(), content) : overviewWorld(Date.now()), [state, content]);
   const history = useMemo(() => [
     { record: world.record, project: "/work/hide", status: "working" as SessionSearchStatus },
     ...[
@@ -123,7 +123,7 @@ export function OverviewScene({ state, theme, palette, language, scale }: Overvi
     useUiStore.setState({
       screen: state === "record" ? { kind: "workspace" } : { kind: "main" },
       overviewOpen: false,
-      mainView: state === "projects" ? "projects" : state === "work" ? "work" : state === "history" ? "history" : state === "usage" ? "usage" : "backlog",
+      mainView: state === "projects" ? "projects" : (state === "work" || state === "focus") ? "work" : state === "history" ? "history" : state === "usage" ? "usage" : "backlog",
       overview: { ...OVERVIEW_ENTRY, panel: state === "home-record" ? { kind: "record", session: world.recordSession } : state === "backlog-detail" ? { kind: "item", workspaceId: "hide", taskKey: hideKey(163) } : null },
       quickAdd: state === "backlog-add" ? { returnFocus: null } : null,
       laneShown: state === "record",
