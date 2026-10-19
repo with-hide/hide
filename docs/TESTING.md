@@ -280,6 +280,7 @@ Pick the layer first with [the table above](#choose-what-to-test-and-where), the
 The crate's own `AGENTS.md` says where the file goes; this section says how the test is built.
 An integration test is a module of its crate's one test binary, `tests/it/main.rs`, never a `tests/*.rs` file of its own: each file was a binary that linked every crate again ([BUILD.md: One integration test binary per crate](BUILD.md#one-integration-test-binary-per-crate)).
 Its tests share a process with the other modules' under `cargo test`, so a test that changes process-wide state, such as an environment variable its fake reads, holds the lock the binary's `main.rs` declares for it.
+A test whose assertion requires a pipe to have no readers creates and closes that pipe inside its own exact-test subprocess, owned and bounded with `OwnedChild`, so another test's concurrent spawn cannot inherit a reader (`hide-platform/tests/it/stdio.rs`).
 
 1. **Unit test the decision, runtime-test the rule that crosses components.**
    A function that takes values and returns a result is tested beside its module (`usage.rs`'s `can_attempt` and `record_failure`).

@@ -219,6 +219,16 @@ B27's bar is the no-protection call's p95 at or under 15 ms on macOS; report the
 
 ## Resident work cost review
 
+The active checkout Git header reuses the Changes pump's 250 ms wake, with one Git reader (two-second spacing after settlement) and one independent CI reader (30 seconds after settlement), never a reader per tab or repository.
+Each wake adds constant scalar/request comparisons and three short lock acquisitions; it does no machine work under the lock or on the input/session-sync thread.
+Only the front Git checkout with an attached UI is admitted; Home, plain folders, detached renderers and inactive checkouts read nothing.
+One Git job and one CI job may run, and only the latest target is pending; old generations and old SHAs cannot publish over their replacements.
+Git retains counts, one capped subject and one CI summary, not paths from its status scan or a per-checkout cache; the node bounds status output at 8 MiB and log output at 64 KiB and reports overflow as failure.
+Git's three-second budget and CI's two sequential 20-second link waits bound shutdown joins; underlying node `gh` work has its existing 15-second command timeout and no new authentication path.
+The existing gh pipe reader still lacks a retained-byte cap; this is a pre-existing boundary limitation, and the fixed new filters return only one state and one provider URL rather than raw check lists.
+Notifications fan out only on an actual target, fact, error/recovery or stale-state transition; identical status reads renew only the internal freshness deadline.
+Regression owners are `checkout_header_reads_file_edits_unborn_head_and_tracking_ref_changes`, `header_fences_late_git_ci_and_reconnect_results_and_ages_without_false_clean`, and `web/e2e/checkout-git-header.spec.ts`; browser/native timings and captures belong to the run record, not an inferred responsiveness verdict.
+
 Every change adding resident work or touching a high-frequency path must explain its cost in the PR's Review section, even when it claims no performance improvement.
 This is a review requirement, not a new CI benchmark or permission to change runtime behavior through documentation.
 Apply engineering principle #14 by naming the resource's owner and cleanup on success, failure, cancellation, owner exit and partial startup.

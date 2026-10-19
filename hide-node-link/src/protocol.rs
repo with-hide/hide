@@ -294,6 +294,10 @@ pub struct RootRef {
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Call {
     Hello,
+    /// Read-only status and current commit for the front checkout's header.
+    CheckoutGit {
+        path: String,
+    },
     RootOpen {
         root: String,
     },
@@ -940,6 +944,7 @@ impl Call {
             | Self::Changes { .. }
             | Self::Project { .. }
             | Self::Worktrees { .. }
+            | Self::CheckoutGit { .. }
             | Self::BranchCheck { .. }
             | Self::Directory { .. }
             | Self::Registrable { .. }
