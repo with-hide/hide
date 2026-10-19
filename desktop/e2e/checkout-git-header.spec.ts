@@ -60,7 +60,8 @@ test("checkout Git header fits the isolated native candidate at 720 by 480", asy
       await page.keyboard.press("Escape");
       await page.locator('[data-open-overview]').click();
       await expect(page.locator('[data-overview-page]')).toBeVisible();
-      await page.locator('[data-open-overview]').click();
+      await page.keyboard.press("Escape");
+      await expect(page.locator('[data-overview-page]')).toHaveCount(0);
       await page.locator('[data-open-server]').click();
       await expect(page.getByRole('dialog', { name: 'Running servers' })).toBeVisible();
       await page.keyboard.press("Escape");
