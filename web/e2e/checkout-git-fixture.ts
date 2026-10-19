@@ -6,13 +6,21 @@ import type { HerdrFixture } from "./herdr-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { git } from "./work-prs-fixture";
 
-export function checkoutGitFixture(herdr: HerdrFixture) {
+export function checkoutGitFixture(herdr: HerdrFixture, { divergedUpstream = false } = {}) {
   const root = fs.realpathSync(path.join(herdr.root, "fixture"));
   git(root, ["init"]);
   fs.writeFileSync(path.join(root, "tracked.txt"), "original\n");
   git(root, ["add", "."]);
   git(root, ["commit", "-m", "한글 commit subject on main"]);
   git(root, ["remote", "add", "origin", "https://github.com/example/header-fixture.git"]);
+  if (divergedUpstream) {
+    const base = git(root, ["rev-parse", "HEAD"]).trim();
+    const tree = git(root, ["rev-parse", "HEAD^{tree}"]).trim();
+    const remote = git(root, ["commit-tree", tree, "-p", base, "-m", "remote commit"]).trim();
+    git(root, ["update-ref", "refs/remotes/origin/main", remote]);
+    git(root, ["branch", "--set-upstream-to", "origin/main"]);
+    git(root, ["commit", "--allow-empty", "-m", "한글 local commit and English"]);
+  }
   const sha = git(root, ["rev-parse", "HEAD"]).trim();
   const log = path.join(herdr.root, "header-gh.jsonl");
   const executable = fixtureProgram(path.join(herdr.root, "bin"), "gh", `

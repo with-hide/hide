@@ -28177,7 +28177,7 @@
                   "height": 12,
                   "icon": "arrow-down",
                   "library": "lucide",
-                  "fill": "$--subtle-foreground"
+                  "fill": "$--warning"
                 },
                 {
                   "type": "text",
@@ -28265,6 +28265,597 @@
                 },
                 {
                   "id": "checkout-git-light-server",
+                  "type": "ref",
+                  "ref": "hideui:Nyvom",
+                  "name": "Icon",
+                  "width": 24,
+                  "height": 24,
+                  "descendants": {
+                    "hideui:ZIZFR": {
+                      "fill": "$--muted-foreground",
+                      "icon": "globe"
+                    }
+                  }
+                }
+              ],
+              "width": 1220,
+              "height": 32,
+              "layout": "horizontal",
+              "alignItems": "center",
+              "gap": "$--spacing-xs",
+              "padding": [
+                0,
+                "$--spacing-sm"
+              ],
+              "fill": "$--sidebar",
+              "stroke": "$--border",
+              "strokeWidth": {
+                "bottom": "$--size-hairline"
+              },
+              "clip": true
+            },
+            {
+              "type": "frame",
+              "id": "checkout-git-light-state-ahead",
+              "name": "Checkout Git / ahead",
+              "children": [
+                {
+                  "id": "checkout-git-light-state-ahead-project",
+                  "type": "ref",
+                  "ref": "hideui:btn-m",
+                  "name": "herdr-ide",
+                  "fill": "#00000000",
+                  "height": 24,
+                  "descendants": {
+                    "hideui:btn-ic": {
+                      "fill": "$--primary-foreground",
+                      "enabled": false
+                    },
+                    "hideui:btn-lb": {
+                      "fill": "$--subtle-foreground",
+                      "content": "herdr-ide"
+                    }
+                  }
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-ahead-slash",
+                  "name": "/",
+                  "content": "/",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-ahead-branch",
+                  "name": "main",
+                  "content": "main",
+                  "fill": "$--foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-light-state-ahead-files",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "file-diff",
+                  "library": "lucide",
+                  "fill": "$--subtle-foreground"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-ahead-count",
+                  "name": "5",
+                  "content": "5",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-light-state-ahead-ahead",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "arrow-up",
+                  "library": "lucide",
+                  "fill": "$--success"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-ahead-ahead-count",
+                  "name": "2",
+                  "content": "2",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "frame",
+                  "id": "checkout-git-light-state-ahead-space",
+                  "name": "Window drag space",
+                  "children": [],
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-light-state-ahead-commit",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "git-commit-horizontal",
+                  "library": "lucide",
+                  "fill": "$--subtle-foreground"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-ahead-subject",
+                  "name": "탭 전환 시 포커스 유지",
+                  "content": "탭 전환 시 포커스 유지",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-ahead-age",
+                  "name": "12분 전",
+                  "content": "12분 전",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-light-state-ahead-ci",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "check",
+                  "library": "lucide",
+                  "fill": "$--subtle-foreground"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-ahead-ci-label",
+                  "name": "CI",
+                  "content": "CI",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "id": "checkout-git-light-state-ahead-overview",
+                  "type": "ref",
+                  "ref": "hideui:Nyvom",
+                  "name": "Icon",
+                  "width": 24,
+                  "height": 24,
+                  "descendants": {
+                    "hideui:ZIZFR": {
+                      "fill": "$--muted-foreground",
+                      "icon": "layout-dashboard"
+                    }
+                  }
+                },
+                {
+                  "id": "checkout-git-light-state-ahead-server",
+                  "type": "ref",
+                  "ref": "hideui:Nyvom",
+                  "name": "Icon",
+                  "width": 24,
+                  "height": 24,
+                  "descendants": {
+                    "hideui:ZIZFR": {
+                      "fill": "$--muted-foreground",
+                      "icon": "globe"
+                    }
+                  }
+                }
+              ],
+              "width": 1220,
+              "height": 32,
+              "layout": "horizontal",
+              "alignItems": "center",
+              "gap": "$--spacing-xs",
+              "padding": [
+                0,
+                "$--spacing-sm"
+              ],
+              "fill": "$--sidebar",
+              "stroke": "$--border",
+              "strokeWidth": {
+                "bottom": "$--size-hairline"
+              },
+              "clip": true
+            },
+            {
+              "type": "frame",
+              "id": "checkout-git-light-state-behind",
+              "name": "Checkout Git / behind",
+              "children": [
+                {
+                  "id": "checkout-git-light-state-behind-project",
+                  "type": "ref",
+                  "ref": "hideui:btn-m",
+                  "name": "herdr-ide",
+                  "fill": "#00000000",
+                  "height": 24,
+                  "descendants": {
+                    "hideui:btn-ic": {
+                      "fill": "$--primary-foreground",
+                      "enabled": false
+                    },
+                    "hideui:btn-lb": {
+                      "fill": "$--subtle-foreground",
+                      "content": "herdr-ide"
+                    }
+                  }
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-behind-slash",
+                  "name": "/",
+                  "content": "/",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-behind-branch",
+                  "name": "main",
+                  "content": "main",
+                  "fill": "$--foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-light-state-behind-files",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "file-diff",
+                  "library": "lucide",
+                  "fill": "$--subtle-foreground"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-behind-count",
+                  "name": "5",
+                  "content": "5",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-light-state-behind-behind",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "arrow-down",
+                  "library": "lucide",
+                  "fill": "$--warning"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-behind-behind-count",
+                  "name": "3",
+                  "content": "3",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "frame",
+                  "id": "checkout-git-light-state-behind-space",
+                  "name": "Window drag space",
+                  "children": [],
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-light-state-behind-commit",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "git-commit-horizontal",
+                  "library": "lucide",
+                  "fill": "$--subtle-foreground"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-behind-subject",
+                  "name": "탭 전환 시 포커스 유지",
+                  "content": "탭 전환 시 포커스 유지",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-behind-age",
+                  "name": "12분 전",
+                  "content": "12분 전",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-light-state-behind-ci",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "check",
+                  "library": "lucide",
+                  "fill": "$--subtle-foreground"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-behind-ci-label",
+                  "name": "CI",
+                  "content": "CI",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "id": "checkout-git-light-state-behind-overview",
+                  "type": "ref",
+                  "ref": "hideui:Nyvom",
+                  "name": "Icon",
+                  "width": 24,
+                  "height": 24,
+                  "descendants": {
+                    "hideui:ZIZFR": {
+                      "fill": "$--muted-foreground",
+                      "icon": "layout-dashboard"
+                    }
+                  }
+                },
+                {
+                  "id": "checkout-git-light-state-behind-server",
+                  "type": "ref",
+                  "ref": "hideui:Nyvom",
+                  "name": "Icon",
+                  "width": 24,
+                  "height": 24,
+                  "descendants": {
+                    "hideui:ZIZFR": {
+                      "fill": "$--muted-foreground",
+                      "icon": "globe"
+                    }
+                  }
+                }
+              ],
+              "width": 1220,
+              "height": 32,
+              "layout": "horizontal",
+              "alignItems": "center",
+              "gap": "$--spacing-xs",
+              "padding": [
+                0,
+                "$--spacing-sm"
+              ],
+              "fill": "$--sidebar",
+              "stroke": "$--border",
+              "strokeWidth": {
+                "bottom": "$--size-hairline"
+              },
+              "clip": true
+            },
+            {
+              "type": "frame",
+              "id": "checkout-git-light-state-diverged",
+              "name": "Checkout Git / diverged",
+              "children": [
+                {
+                  "id": "checkout-git-light-state-diverged-project",
+                  "type": "ref",
+                  "ref": "hideui:btn-m",
+                  "name": "herdr-ide",
+                  "fill": "#00000000",
+                  "height": 24,
+                  "descendants": {
+                    "hideui:btn-ic": {
+                      "fill": "$--primary-foreground",
+                      "enabled": false
+                    },
+                    "hideui:btn-lb": {
+                      "fill": "$--subtle-foreground",
+                      "content": "herdr-ide"
+                    }
+                  }
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-diverged-slash",
+                  "name": "/",
+                  "content": "/",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-diverged-branch",
+                  "name": "main",
+                  "content": "main",
+                  "fill": "$--foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-light-state-diverged-files",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "file-diff",
+                  "library": "lucide",
+                  "fill": "$--subtle-foreground"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-diverged-count",
+                  "name": "5",
+                  "content": "5",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-light-state-diverged-ahead",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "arrow-up",
+                  "library": "lucide",
+                  "fill": "$--success"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-diverged-ahead-count",
+                  "name": "2",
+                  "content": "2",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-light-state-diverged-behind",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "arrow-down",
+                  "library": "lucide",
+                  "fill": "$--warning"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-diverged-behind-count",
+                  "name": "3",
+                  "content": "3",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "frame",
+                  "id": "checkout-git-light-state-diverged-space",
+                  "name": "Window drag space",
+                  "children": [],
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-light-state-diverged-commit",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "git-commit-horizontal",
+                  "library": "lucide",
+                  "fill": "$--subtle-foreground"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-diverged-subject",
+                  "name": "탭 전환 시 포커스 유지",
+                  "content": "탭 전환 시 포커스 유지",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-diverged-age",
+                  "name": "12분 전",
+                  "content": "12분 전",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-light-state-diverged-ci",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "check",
+                  "library": "lucide",
+                  "fill": "$--subtle-foreground"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-light-state-diverged-ci-label",
+                  "name": "CI",
+                  "content": "CI",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "id": "checkout-git-light-state-diverged-overview",
+                  "type": "ref",
+                  "ref": "hideui:Nyvom",
+                  "name": "Icon",
+                  "width": 24,
+                  "height": 24,
+                  "descendants": {
+                    "hideui:ZIZFR": {
+                      "fill": "$--muted-foreground",
+                      "icon": "layout-dashboard"
+                    }
+                  }
+                },
+                {
+                  "id": "checkout-git-light-state-diverged-server",
                   "type": "ref",
                   "ref": "hideui:Nyvom",
                   "name": "Icon",
@@ -29871,7 +30462,7 @@
                   "height": 12,
                   "icon": "arrow-down",
                   "library": "lucide",
-                  "fill": "$--subtle-foreground"
+                  "fill": "$--warning"
                 },
                 {
                   "type": "text",
@@ -54035,7 +54626,7 @@
                   "height": 12,
                   "icon": "arrow-down",
                   "library": "lucide",
-                  "fill": "$--subtle-foreground"
+                  "fill": "$--warning"
                 },
                 {
                   "type": "text",
@@ -54123,6 +54714,597 @@
                 },
                 {
                   "id": "checkout-git-dark-server",
+                  "type": "ref",
+                  "ref": "hideui:Nyvom",
+                  "name": "Icon",
+                  "width": 24,
+                  "height": 24,
+                  "descendants": {
+                    "hideui:ZIZFR": {
+                      "fill": "$--muted-foreground",
+                      "icon": "globe"
+                    }
+                  }
+                }
+              ],
+              "width": 1220,
+              "height": 32,
+              "layout": "horizontal",
+              "alignItems": "center",
+              "gap": "$--spacing-xs",
+              "padding": [
+                0,
+                "$--spacing-sm"
+              ],
+              "fill": "$--sidebar",
+              "stroke": "$--border",
+              "strokeWidth": {
+                "bottom": "$--size-hairline"
+              },
+              "clip": true
+            },
+            {
+              "type": "frame",
+              "id": "checkout-git-dark-state-ahead",
+              "name": "Checkout Git / ahead",
+              "children": [
+                {
+                  "id": "checkout-git-dark-state-ahead-project",
+                  "type": "ref",
+                  "ref": "hideui:btn-m",
+                  "name": "herdr-ide",
+                  "fill": "#00000000",
+                  "height": 24,
+                  "descendants": {
+                    "hideui:btn-ic": {
+                      "fill": "$--primary-foreground",
+                      "enabled": false
+                    },
+                    "hideui:btn-lb": {
+                      "fill": "$--subtle-foreground",
+                      "content": "herdr-ide"
+                    }
+                  }
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-ahead-slash",
+                  "name": "/",
+                  "content": "/",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-ahead-branch",
+                  "name": "main",
+                  "content": "main",
+                  "fill": "$--foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-dark-state-ahead-files",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "file-diff",
+                  "library": "lucide",
+                  "fill": "$--subtle-foreground"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-ahead-count",
+                  "name": "5",
+                  "content": "5",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-dark-state-ahead-ahead",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "arrow-up",
+                  "library": "lucide",
+                  "fill": "$--success"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-ahead-ahead-count",
+                  "name": "2",
+                  "content": "2",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "frame",
+                  "id": "checkout-git-dark-state-ahead-space",
+                  "name": "Window drag space",
+                  "children": [],
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-dark-state-ahead-commit",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "git-commit-horizontal",
+                  "library": "lucide",
+                  "fill": "$--subtle-foreground"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-ahead-subject",
+                  "name": "탭 전환 시 포커스 유지",
+                  "content": "탭 전환 시 포커스 유지",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-ahead-age",
+                  "name": "12분 전",
+                  "content": "12분 전",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-dark-state-ahead-ci",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "check",
+                  "library": "lucide",
+                  "fill": "$--subtle-foreground"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-ahead-ci-label",
+                  "name": "CI",
+                  "content": "CI",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "id": "checkout-git-dark-state-ahead-overview",
+                  "type": "ref",
+                  "ref": "hideui:Nyvom",
+                  "name": "Icon",
+                  "width": 24,
+                  "height": 24,
+                  "descendants": {
+                    "hideui:ZIZFR": {
+                      "fill": "$--muted-foreground",
+                      "icon": "layout-dashboard"
+                    }
+                  }
+                },
+                {
+                  "id": "checkout-git-dark-state-ahead-server",
+                  "type": "ref",
+                  "ref": "hideui:Nyvom",
+                  "name": "Icon",
+                  "width": 24,
+                  "height": 24,
+                  "descendants": {
+                    "hideui:ZIZFR": {
+                      "fill": "$--muted-foreground",
+                      "icon": "globe"
+                    }
+                  }
+                }
+              ],
+              "width": 1220,
+              "height": 32,
+              "layout": "horizontal",
+              "alignItems": "center",
+              "gap": "$--spacing-xs",
+              "padding": [
+                0,
+                "$--spacing-sm"
+              ],
+              "fill": "$--sidebar",
+              "stroke": "$--border",
+              "strokeWidth": {
+                "bottom": "$--size-hairline"
+              },
+              "clip": true
+            },
+            {
+              "type": "frame",
+              "id": "checkout-git-dark-state-behind",
+              "name": "Checkout Git / behind",
+              "children": [
+                {
+                  "id": "checkout-git-dark-state-behind-project",
+                  "type": "ref",
+                  "ref": "hideui:btn-m",
+                  "name": "herdr-ide",
+                  "fill": "#00000000",
+                  "height": 24,
+                  "descendants": {
+                    "hideui:btn-ic": {
+                      "fill": "$--primary-foreground",
+                      "enabled": false
+                    },
+                    "hideui:btn-lb": {
+                      "fill": "$--subtle-foreground",
+                      "content": "herdr-ide"
+                    }
+                  }
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-behind-slash",
+                  "name": "/",
+                  "content": "/",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-behind-branch",
+                  "name": "main",
+                  "content": "main",
+                  "fill": "$--foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-dark-state-behind-files",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "file-diff",
+                  "library": "lucide",
+                  "fill": "$--subtle-foreground"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-behind-count",
+                  "name": "5",
+                  "content": "5",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-dark-state-behind-behind",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "arrow-down",
+                  "library": "lucide",
+                  "fill": "$--warning"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-behind-behind-count",
+                  "name": "3",
+                  "content": "3",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "frame",
+                  "id": "checkout-git-dark-state-behind-space",
+                  "name": "Window drag space",
+                  "children": [],
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-dark-state-behind-commit",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "git-commit-horizontal",
+                  "library": "lucide",
+                  "fill": "$--subtle-foreground"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-behind-subject",
+                  "name": "탭 전환 시 포커스 유지",
+                  "content": "탭 전환 시 포커스 유지",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-behind-age",
+                  "name": "12분 전",
+                  "content": "12분 전",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-dark-state-behind-ci",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "check",
+                  "library": "lucide",
+                  "fill": "$--subtle-foreground"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-behind-ci-label",
+                  "name": "CI",
+                  "content": "CI",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "id": "checkout-git-dark-state-behind-overview",
+                  "type": "ref",
+                  "ref": "hideui:Nyvom",
+                  "name": "Icon",
+                  "width": 24,
+                  "height": 24,
+                  "descendants": {
+                    "hideui:ZIZFR": {
+                      "fill": "$--muted-foreground",
+                      "icon": "layout-dashboard"
+                    }
+                  }
+                },
+                {
+                  "id": "checkout-git-dark-state-behind-server",
+                  "type": "ref",
+                  "ref": "hideui:Nyvom",
+                  "name": "Icon",
+                  "width": 24,
+                  "height": 24,
+                  "descendants": {
+                    "hideui:ZIZFR": {
+                      "fill": "$--muted-foreground",
+                      "icon": "globe"
+                    }
+                  }
+                }
+              ],
+              "width": 1220,
+              "height": 32,
+              "layout": "horizontal",
+              "alignItems": "center",
+              "gap": "$--spacing-xs",
+              "padding": [
+                0,
+                "$--spacing-sm"
+              ],
+              "fill": "$--sidebar",
+              "stroke": "$--border",
+              "strokeWidth": {
+                "bottom": "$--size-hairline"
+              },
+              "clip": true
+            },
+            {
+              "type": "frame",
+              "id": "checkout-git-dark-state-diverged",
+              "name": "Checkout Git / diverged",
+              "children": [
+                {
+                  "id": "checkout-git-dark-state-diverged-project",
+                  "type": "ref",
+                  "ref": "hideui:btn-m",
+                  "name": "herdr-ide",
+                  "fill": "#00000000",
+                  "height": 24,
+                  "descendants": {
+                    "hideui:btn-ic": {
+                      "fill": "$--primary-foreground",
+                      "enabled": false
+                    },
+                    "hideui:btn-lb": {
+                      "fill": "$--subtle-foreground",
+                      "content": "herdr-ide"
+                    }
+                  }
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-diverged-slash",
+                  "name": "/",
+                  "content": "/",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-diverged-branch",
+                  "name": "main",
+                  "content": "main",
+                  "fill": "$--foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-dark-state-diverged-files",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "file-diff",
+                  "library": "lucide",
+                  "fill": "$--subtle-foreground"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-diverged-count",
+                  "name": "5",
+                  "content": "5",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-dark-state-diverged-ahead",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "arrow-up",
+                  "library": "lucide",
+                  "fill": "$--success"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-diverged-ahead-count",
+                  "name": "2",
+                  "content": "2",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-dark-state-diverged-behind",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "arrow-down",
+                  "library": "lucide",
+                  "fill": "$--warning"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-diverged-behind-count",
+                  "name": "3",
+                  "content": "3",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "frame",
+                  "id": "checkout-git-dark-state-diverged-space",
+                  "name": "Window drag space",
+                  "children": [],
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-dark-state-diverged-commit",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "git-commit-horizontal",
+                  "library": "lucide",
+                  "fill": "$--subtle-foreground"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-diverged-subject",
+                  "name": "탭 전환 시 포커스 유지",
+                  "content": "탭 전환 시 포커스 유지",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-diverged-age",
+                  "name": "12분 전",
+                  "content": "12분 전",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "type": "icon",
+                  "id": "checkout-git-dark-state-diverged-ci",
+                  "name": "Glyph",
+                  "enabled": true,
+                  "width": 12,
+                  "height": 12,
+                  "icon": "check",
+                  "library": "lucide",
+                  "fill": "$--subtle-foreground"
+                },
+                {
+                  "type": "text",
+                  "id": "checkout-git-dark-state-diverged-ci-label",
+                  "name": "CI",
+                  "content": "CI",
+                  "fill": "$--subtle-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-caption",
+                  "fontWeight": "400"
+                },
+                {
+                  "id": "checkout-git-dark-state-diverged-overview",
+                  "type": "ref",
+                  "ref": "hideui:Nyvom",
+                  "name": "Icon",
+                  "width": 24,
+                  "height": 24,
+                  "descendants": {
+                    "hideui:ZIZFR": {
+                      "fill": "$--muted-foreground",
+                      "icon": "layout-dashboard"
+                    }
+                  }
+                },
+                {
+                  "id": "checkout-git-dark-state-diverged-server",
                   "type": "ref",
                   "ref": "hideui:Nyvom",
                   "name": "Icon",
@@ -55729,7 +56911,7 @@
                   "height": 12,
                   "icon": "arrow-down",
                   "library": "lucide",
-                  "fill": "$--subtle-foreground"
+                  "fill": "$--warning"
                 },
                 {
                   "type": "text",

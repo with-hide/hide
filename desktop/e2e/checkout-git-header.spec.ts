@@ -14,7 +14,7 @@ test("checkout Git header fits the isolated native candidate at 720 by 480", asy
   let app: ElectronApplication | undefined;
   const errors: unknown[] = [];
   try {
-    const fixture = checkoutGitFixture(herdr);
+    const fixture = checkoutGitFixture(herdr, { divergedUpstream: true });
     git(fixture.root, ["branch", "-m", "feature/매우-긴-한글과-English-checkout-name"]);
     run = isolate(herdr, "checkout-header");
     const opened = await launchShell(run.env);
@@ -25,6 +25,7 @@ test("checkout Git header fits the isolated native candidate at 720 by 480", asy
     fs.writeFileSync(path.join(fixture.root, "new.txt"), "new\n");
     await expect(page.locator("[data-checkout-files]")).toHaveText("1", { timeout: 15_000 });
     await expect(page.locator('[data-checkout-ci="failed"]')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-checkout-upstream="tracked"]')).toHaveText("11");
     for (const theme of ["light", "dark"]) {
       await page.getByRole("button", { name: /^Settings \(/ }).click();
       await page.locator('[data-settings-tab="general"]').click();
@@ -48,7 +49,13 @@ test("checkout Git header fits the isolated native candidate at 720 by 480", asy
         return { toolbarWidth: node.getBoundingClientRect().width, controls };
       });
       console.log(`${theme} geometry: ${JSON.stringify(geometry)}`);
-      await captureNativeWindow(app, `checkout-header-native-720-${theme}`, { geometry, sha: fixture.sha, provider: "private synthetic check-runs and commit statuses", home: run.env.HOME, socket: herdr.socket, state: run.env.HIDE_STATE_DIR });
+      const upstream = await page.locator('[data-checkout-upstream="tracked"]').evaluate(node => ({
+        label: node.getAttribute("aria-label"),
+        color: getComputedStyle(node).color,
+        children: [...node.children].map(child => ({ tag: child.tagName, text: child.textContent, color: getComputedStyle(child).color })),
+      }));
+      console.log(`${theme} upstream: ${JSON.stringify(upstream)}`);
+      await captureNativeWindow(app, `checkout-header-native-720-${theme}`, { geometry, upstream, sha: fixture.sha, provider: "private synthetic check-runs and commit statuses; actual local Git diverged from origin/main", home: run.env.HOME, socket: herdr.socket, state: run.env.HIDE_STATE_DIR });
       for (const [index, control] of geometry.controls.entries()) {
         expect(control.hit, `${control.attribute} center reaches its own button`).toBe(true);
         expect(control.contentRight, `${control.attribute} contents fit its button`).toBeLessThanOrEqual(control.right + 1);

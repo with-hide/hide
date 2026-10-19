@@ -4,10 +4,14 @@ import {frame, text, icon, num} from './pen-system.mjs';
 export function checkoutHeader(tokens, {screenButton, screenIconButton}, id, {width = 1220, state = 'rest'} = {}) {
   const muted = '$--subtle-foreground';
   const label = (key, value, props = {}) => text(`${id}-${key}`, value, {size:'$--text-caption',fill:muted,...props});
-  const glyph = (key, name) => icon(`${id}-${key}`, name, {size:num(tokens,'--size-icon-sm'),fill:muted});
+  const glyph = (key, name, fill = muted) => icon(`${id}-${key}`, name, {size:num(tokens,'--size-icon-sm'),fill});
   const button = (key, value) => screenButton(`${id}-${key}`, value, {variant:'ghost',height:num(tokens,'--size-control-sm')});
   const children = [button('project','herdr-ide'),label('slash','/'),label('branch',state === 'long' ? '한글과-English의-긴-checkout' : 'main',{fill:'$--foreground'})];
-  if (state === 'rest' || state === 'long') children.push(glyph('files','file-diff'),label('count','5'),glyph('behind','arrow-down'),label('behind-count','3'));
+  if (['rest','long','ahead','behind','diverged'].includes(state)) {
+    children.push(glyph('files','file-diff'),label('count','5'));
+    if (['ahead','diverged'].includes(state)) children.push(glyph('ahead','arrow-up','$--success'),label('ahead-count','2'));
+    if (state !== 'ahead') children.push(glyph('behind','arrow-down','$--warning'),label('behind-count','3'));
+  }
   if (state === 'conflict') children.push(glyph('conflict','triangle-alert'),label('count','2'));
   if (['loading','unavailable','stale'].includes(state)) children.push(glyph('state',state === 'loading' ? 'loader-circle' : state === 'stale' ? 'clock' : 'triangle-alert'),label('unknown','?'));
   children.push(frame(`${id}-space`,'Window drag space',{width:'fill_container',height:1},[]));
@@ -22,5 +26,5 @@ export function checkoutHeader(tokens, {screenButton, screenIconButton}, id, {wi
 
 export function checkoutHeaderBoards(tokens, parts, suffix) {
   const theme = suffix === 'l' ? 'light' : 'dark';
-  return [checkoutHeader(tokens,parts,`checkout-git-${theme}`), ...['clean','conflict','loading','unavailable','stale','pending','failed','none','unknown','unborn','home','long'].map(state => checkoutHeader(tokens,parts,`checkout-git-${theme}-${state}`,{state,width:state === 'long' ? 720 : 1220}))];
+  return [checkoutHeader(tokens,parts,`checkout-git-${theme}`), ...['ahead','behind','diverged','clean','conflict','loading','unavailable','stale','pending','failed','none','unknown','unborn','home','long'].map(state => checkoutHeader(tokens,parts,`checkout-git-${theme}-${['ahead','behind','diverged'].includes(state) ? 'state-' : ''}${state}`,{state,width:state === 'long' ? 720 : 1220}))];
 }

@@ -35,7 +35,7 @@ export function CheckoutUpstream({ header }: { header: Header | null | undefined
   if (!live || !facts || header?.state !== "fresh") return null;
   const label = facts.upstream_state === "tracked" ? t("checkoutGit.sync", { target: facts.upstream, ahead: facts.ahead, behind: facts.behind }) : t(`checkoutGit.upstream.${facts.upstream_state}`);
   if (facts.upstream_state === "tracked" && facts.ahead === 0 && facts.behind === 0) return null;
-  return <Detail label={label} data-checkout-upstream={facts.upstream_state} mark={facts.upstream_state === "tracked" ? <>{facts.ahead ? <><ArrowUpIcon className={iconClass} /><span>{facts.ahead}</span></> : null}{facts.behind ? <><ArrowDownIcon className={iconClass} /><span>{facts.behind}</span></> : null}</> : <GitCompareArrowsIcon className={iconClass} />}>
+  return <Detail label={label} data-checkout-upstream={facts.upstream_state} mark={facts.upstream_state === "tracked" ? <>{facts.ahead ? <><ArrowUpIcon className={`${iconClass} text-success`} /><span>{facts.ahead}</span></> : null}{facts.behind ? <><ArrowDownIcon className={`${iconClass} text-warning`} /><span>{facts.behind}</span></> : null}</> : <GitCompareArrowsIcon className={iconClass} />}>
     <p>{label}</p>{facts.upstream ? <p className="font-mono">{facts.upstream}</p> : null}<p className="text-muted-foreground">{t("checkoutGit.fetched", { time: facts.last_fetch_unix_ms ? new Date(facts.last_fetch_unix_ms).toLocaleString(i18n.language) : t("checkoutGit.notKnown") })}</p>
   </Detail>;
 }
