@@ -7,7 +7,7 @@ export type GraphAgent = LensAgent & { id: string; projectId: string; deviceId: 
 export type GraphProject = { id: string; project: BoardProject; agents: GraphAgent[]; expanded: boolean; roots: number; matches: number };
 export type GraphFocus = "all" | "turn" | "working" | "results";
 export type GraphFocusOptions = { focus: GraphFocus; includeResting: boolean; folded?: ReadonlySet<string> };
-export type GraphActivity = Exclude<GraphFocus, "all"> | "unknown" | "resting";
+export type GraphActivity = Exclude<GraphFocus, "all"> | "unknown" | "idle" | "resting";
 export const GRAPH_FOCUS_DEFAULTS: GraphFocusOptions = { focus: "all", includeResting: false };
 
 /** Seen demands and sleeping raised asks still carry turn; bucket is not activity. */
@@ -16,11 +16,12 @@ export function graphActivity(agent: AgentRow): GraphActivity {
     case "turn": return "turn";
     case "going": case "waiting": return "working";
     case "done": case "unread": return "results";
-    case "quiet": case "asleep": return "resting";
+    case "quiet": return "idle";
+    case "asleep": return "resting";
     default: return "unknown";
   }
 }
-const PRIORITY: Record<GraphActivity, number> = { turn: 0, working: 1, results: 2, unknown: 3, resting: 4 };
+const PRIORITY: Record<GraphActivity, number> = { turn: 0, working: 1, results: 2, unknown: 3, idle: 4, resting: 5 };
 export type Communication = { id: string; source: string; target: string; count: number; latest: number; kinds: Record<string, number>; directions: { from: string; to: string; count: number }[] };
 export type OverviewGraphModel = {
   projects: GraphProject[]; agents: GraphAgent[]; allAgents: GraphAgent[]; visible: GraphAgent[];

@@ -885,11 +885,11 @@ The Overview reads the same tasks for the Projects tab's `지금` counts and the
 Web owners are `web/src/overviewGraphModel.ts`, `web/src/OverviewGraph.tsx`, `web/src/overviewGraphNodes.tsx` and `web/src/dependencyLayout.ts`.
 Work offers graph and list views over real live agents, grouped by project and explicit parentage, with local group folds.
 Both views share All, My turn, Working and Unread results, with counts from canonical marks: `turn`, `going|waiting` and `done|unread`.
-Include resting starts off and excludes only `quiet|asleep`; Seen demands and sleeping raised asks still marked `turn`, and `unknown`, remain available.
-The list orders My turn, Working, Unread results, unknown and resting, retaining fifty-row pagination.
+Include sleeping starts off and excludes only `asleep`; idle sessions marked `quiet`, Seen demands and sleeping raised asks still marked `turn`, and `unknown`, remain available.
+The list orders My turn, Working, Unread results, unknown, idle and sleeping, retaining fifty-row pagination.
 An excluded ancestor stays dim as relationship context without increasing match counts.
-Only branches whose every descendant rests offer a reversible subtree fold; a descendant becoming active releases that fold.
-Projects without matches move into a disclosure naming resting-only, no-session and filtered reasons, with a route to show each project and its resting sessions.
+Only branches whose every descendant sleeps offer a reversible subtree fold; a descendant becoming idle or active releases that fold.
+Projects without matches move into a disclosure naming sleeping-only, no-session and filtered reasons, with a route to show each project and its sleeping sessions.
 One-project scope draws no outer group border or duplicate heading.
 A filtered-empty view offers Show all sessions, distinct from no current sessions and layout failure.
 Each agent shows its canonical task identity, agent, state and actual current progress; a model is shown only when the current launch proves it.

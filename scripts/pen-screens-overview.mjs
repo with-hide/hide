@@ -33,8 +33,8 @@ export function overviewScreens(tokens, {frame, text, screenButton, screenInput}
     };
     return content(id, 'Work graph focus', [
       row(`${id}-toolbar`, 'Graph controls', [title(`${id}-title`, '작업 그래프'), spacer(`${id}-sp`), screenButton(`${id}-collapse`, '모두 접기', {variant: 'ghost'}), screenButton(`${id}-graph`, '그래프', {variant: 'secondary'}), screenButton(`${id}-list`, '세션 목록', {variant: 'ghost'})]),
-      controls(`${id}-filters`, ['전체 10', '내 차례 2', '작업 중 5', '안 읽은 결과 2', '☐ 쉬는 세션 포함', '☑ 편지 관계']),
-      small(`${id}-omitted`, '▸ 접힌 프로젝트 2개 · 쉬는 세션뿐인 프로젝트 / 세션 없음'),
+      controls(`${id}-filters`, ['전체 10', '내 차례 2', '작업 중 5', '안 읽은 결과 2', '☐ 잠든 세션 포함', '☑ 편지 관계']),
+      small(`${id}-omitted`, '▸ 접힌 프로젝트 2개 · 잠든 세션뿐인 프로젝트 / 세션 없음'),
       small(`${id}-legend`, '실선: 부모와 자식 · 점선: 편지 · 관련 노드에 머물 때만 편지 건수 표시'),
       row(`${id}-groups`, 'Compound project groups at readable zoom', [
         col(`${id}-hide`, 'hide expanded', [label(`${id}-hide-title`, 'hide · 세션 7', {fill: FG, weight: '600'}), row(`${id}-family`, 'Verified parent and children', [session(`${id}-root`, '사이드바 가독성 개선', '확인함', false, true), label(`${id}-lineage`, '→'), col(`${id}-children`, 'Children', [session(`${id}-c1`, '컴포넌트 구조 정리', '작업 중', true), session(`${id}-c2`, '한글 가독성 확인', '읽을 것', true)], {width: 'fit_content'})], {gap: xl})], {padding: xl, gap: xl, cornerRadius: '$--radius-xl', stroke: '$--border', strokeWidth: hair}),
