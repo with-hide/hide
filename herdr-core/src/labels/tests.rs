@@ -2560,11 +2560,7 @@ fn a_label_request_carries_its_language_and_that_languages_lengths() {
             assert_eq!(asked.answer, hide_ai::AnswerMode::PlainJson);
             assert_eq!(asked.output_schema["properties"]["goal"]["maxLength"], goal);
             assert!(asked.system.contains(&format!("8 to {goal} characters")));
-            assert!(
-                asked
-                    .system
-                    .contains(&format!("at most {line} characters"))
-            );
+            assert!(asked.system.contains(&format!("at most {line} characters")));
             for name in ["English", "Korean", "Chinese", "Japanese"] {
                 assert!(
                     !asked.system.contains(name),
