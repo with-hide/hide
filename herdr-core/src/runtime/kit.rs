@@ -1020,7 +1020,7 @@ impl Runtime {
                     .as_ref()
                     .and_then(|consent| consent.cli_dir.clone())
                     .unwrap_or_else(|| self.host_cli_dir.clone()),
-                herdr_socket: self.device_kit_socket(&registration),
+                herdr_socket: self.device_kit_socket(registration),
                 preserve_herdr_server: registration.herdr_session.is_some(),
                 retirement_projects: Vec::new(),
                 daemon_off_run: None,

@@ -315,13 +315,13 @@ impl Runtime {
                 registration
             }
         };
-        if self.remote_connections.contains_key(&registration.id) {
-            if let Some(status) = self.snapshot.status.remote.iter_mut().find(|status| {
+        if self.remote_connections.contains_key(&registration.id)
+            && let Some(status) = self.snapshot.status.remote.iter_mut().find(|status| {
                 status.target_id == registration.id && status.state == "not_connected"
-            }) {
-                status.state = "connecting".to_owned();
-                status.message = None;
-            }
+            })
+        {
+            status.state = "connecting".to_owned();
+            status.message = None;
         }
         // All aliases of this endpoint/session converge in the same frame.
         let same: Vec<usize> = self
