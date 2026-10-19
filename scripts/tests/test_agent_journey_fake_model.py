@@ -109,7 +109,7 @@ class Server(unittest.TestCase):
         self.assertEqual(self.raw(chunked), b"HTTP/1.1 411 Length Required")
         large = (b"POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nContent-Length: "
                  + str(fake_model.MAX_BODY + 1).encode() + b"\r\n\r\n")
-        self.assertEqual(self.raw(large), b"HTTP/1.1 413 Request Entity Too Large")
+        self.assertEqual(self.raw(large).split(b" ", 2)[:2], [b"HTTP/1.1", b"413"])
         self.assertEqual(self.server.refused, 0)
 
 

@@ -32,7 +32,6 @@ import { mobileSetupCatalogs, mobileSetupEnglish } from "./resources/mobileSetup
 import { coreMoveCatalogs, coreMoveEnglish } from "./resources/coreMove";
 import { nativeCatalogs, nativeEnglish } from "./resources/native";
 import { overviewCatalogs, overviewEnglish } from "./resources/overview";
-import { factoryCatalogs, factoryEnglish } from "./resources/factory";
 import { firstRunCatalogs, firstRunEnglish } from "./resources/firstRun";
 import { memoryCatalogs, memoryEnglish } from "./resources/memory";
 import { prWorkCatalogs, prWorkEnglish } from "./resources/prWork";
@@ -93,7 +92,6 @@ export const english = {
   ...linksEnglish,
   ...feedbackEnglish,
   ...overviewEnglish,
-  ...factoryEnglish,
   ...firstRunEnglish,
   ...memoryEnglish,
   ...projectSettingsEnglish,
@@ -148,7 +146,6 @@ export const catalogs = {
     ...linksCatalogs.ko,
     ...feedbackCatalogs.ko,
     ...overviewCatalogs.ko,
-    ...factoryCatalogs.ko,
     ...firstRunCatalogs.ko,
     ...memoryCatalogs.ko,
     ...projectSettingsCatalogs.ko,
@@ -198,7 +195,6 @@ export const catalogs = {
     ...linksCatalogs["zh-CN"],
     ...feedbackCatalogs["zh-CN"],
     ...overviewCatalogs["zh-CN"],
-    ...factoryCatalogs["zh-CN"],
     ...firstRunCatalogs["zh-CN"],
     ...memoryCatalogs["zh-CN"],
     ...projectSettingsCatalogs["zh-CN"],
@@ -248,7 +244,6 @@ export const catalogs = {
     ...linksCatalogs.ja,
     ...feedbackCatalogs.ja,
     ...overviewCatalogs.ja,
-    ...factoryCatalogs.ja,
     ...firstRunCatalogs.ja,
     ...memoryCatalogs.ja,
     ...projectSettingsCatalogs.ja,

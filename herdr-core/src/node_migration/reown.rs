@@ -20,9 +20,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::{
-    CORE_STATE, DELIVERY_LEDGER, FACTORY, KEYS, LABELS, LINKS, LOCAL_ISSUES, MARKER_FILE,
-    MARKER_VERSION, Marker, Moves, PROJECT_MEMORY, Refusal, SESSION_SEARCH, WORKSPACE_VIEWS,
-    read_json, read_marker, write,
+    CORE_STATE, DELIVERY_LEDGER, KEYS, LABELS, LINKS, LOCAL_ISSUES, MARKER_FILE, MARKER_VERSION,
+    Marker, Moves, PROJECT_MEMORY, Refusal, SESSION_SEARCH, WORKSPACE_VIEWS, read_json,
+    read_marker, write,
 };
 use crate::node::NodeId;
 
@@ -256,13 +256,6 @@ pub fn reown(staging: &Path, change: &OwnerChange, ids: &IdTable) -> Result<Reow
         {
             outcome.files.push(LINKS.to_owned());
         }
-    }
-
-    let factory = staging.join(FACTORY);
-    if factory.is_file()
-        && reown_factory(staging, change).map_err(|reason| refuse(&factory, reason))?
-    {
-        outcome.files.push(FACTORY.to_owned());
     }
 
     let marker = serde_json::to_vec(&Marker {
@@ -920,30 +913,6 @@ fn reown_links(path: &Path, change: &OwnerChange) -> Result<Links, String> {
     } else {
         Links::Unchanged
     })
-}
-
-/// The Factories and their workers on either machine (Q17): a Factory and a
-/// worker name their machine by node id, the owner's by none; a pane is
-/// Herdr-scoped like every other.
-fn reown_factory(staging: &Path, change: &OwnerChange) -> Result<bool, String> {
-    let mut store = hide_factory::store::Store::open(
-        &hide_kit::layout::factory_store(staging),
-        &hide_kit::layout::factory_files(staging),
-    )
-    .map_err(|error| error.to_string())?;
-    let machine = |node: Option<&str>| match node {
-        None => Some(change.old_owner_as.clone()),
-        Some(node) if node == change.new_owner_was => None,
-        Some(node) => Some(node.to_owned()),
-    };
-    let pane = |pane: &str| {
-        change
-            .scoped("pane", pane)
-            .unwrap_or_else(|| pane.to_owned())
-    };
-    store
-        .reown(&machine, &pane)
-        .map_err(|error| error.to_string())
 }
 
 /// Project Memory (PRD core-host-node-move): a Project is stored under the
@@ -1790,140 +1759,6 @@ mod tests {
                 && links.has_device(X).unwrap()
         );
         assert_eq!(read(&state.join(MARKER_FILE))["node"], json!(C));
-    }
-
-    /// A Factory row on `node` for `project`, with one Task whose worker
-    /// runs in `pane` on that machine and which `producer` added.
-    fn put_factory(
-        store: &mut hide_factory::store::Store,
-        project: &str,
-        node: Option<&str>,
-        pane: &str,
-        producer: &str,
-    ) {
-        use hide_factory::model::{Card, Factory, SourceKind, Task, WorkerRef};
-        store
-            .put_factory(&Factory {
-                id: project.into(),
-                project: project.into(),
-                node: node.map(str::to_owned),
-                project_name: "p".into(),
-                source: SourceKind::Local,
-                repo: None,
-                default_branch: "main".into(),
-                config: Default::default(),
-                closed: false,
-                created_at: 1,
-                next_task: 2,
-                next_local_issue: 1,
-                main: Default::default(),
-                outside_read_at: None,
-                outside_read_failures: 0,
-                watch_day: 0,
-                watch_sent_today: 0,
-                watch_last_at: None,
-                github_approval: None,
-                paused: false,
-                observer_day: 0,
-                observer_calls: 0,
-                observer_cap_notice_day: 0,
-                activity: Vec::new(),
-                github_block: None,
-                holds: Vec::new(),
-                commands: Vec::new(),
-                next_command: 0,
-            })
-            .unwrap();
-        let mut task = Task::draft(project, "t1", 1, Card::default(), 1);
-        task.producer_pane = Some(producer.into());
-        task.worker = Some(WorkerRef {
-            factory: project.into(),
-            node: node.map(str::to_owned),
-            agent: Some("agent-1".into()),
-            name: "w".into(),
-            pane: Some(pane.into()),
-            runtime: hide_factory::model::Runtime::CLAUDE,
-            worktree: format!("{project}.worktrees/t1"),
-            branch: "factory/t1".into(),
-            started_at: 1,
-            asleep: false,
-            model: None,
-            effort: None,
-        });
-        store.put_task(&task).unwrap();
-    }
-
-    /// Each Factory's machine and pane after the store was reowned, by project.
-    fn factory_machines(state: &Path) -> Vec<(String, Option<String>, Option<String>, String)> {
-        let store = hide_factory::store::Store::open(
-            &hide_kit::layout::factory_store(state),
-            &hide_kit::layout::factory_files(state),
-        )
-        .unwrap();
-        let loaded = store.load().unwrap();
-        loaded
-            .factories
-            .iter()
-            .map(|factory| {
-                let task = loaded
-                    .tasks
-                    .iter()
-                    .find(|task| task.factory == factory.id)
-                    .unwrap();
-                let worker = task.worker.as_ref().unwrap();
-                assert_eq!(worker.node, factory.node, "{}", factory.id);
-                (
-                    factory.id.clone(),
-                    factory.node.clone(),
-                    worker.pane.clone(),
-                    task.producer_pane.clone().unwrap(),
-                )
-            })
-            .collect()
-    }
-
-    #[test]
-    fn a_factory_and_its_worker_keep_the_machine_their_project_is_on_through_a_move_and_back() {
-        let dir = macbook_folder();
-        let state = dir.path();
-        {
-            let mut store = hide_factory::store::Store::open(
-                &hide_kit::layout::factory_store(state),
-                &hide_kit::layout::factory_files(state),
-            )
-            .unwrap();
-            // The MacBook's own project, and one on a node that links in to
-            // the MacBook's core, whose panes the folder qualifies.
-            put_factory(&mut store, M_ROOT, None, "w1:p1", "w1:p2");
-            put_factory(
-                &mut store,
-                X_ROOT,
-                Some(X),
-                &format!("remote:{X}:pane:w3:p1"),
-                &format!("remote:{X}:pane:w3:p2"),
-            );
-        }
-        let before = factory_machines(state);
-
-        let outcome = reown(state, &forward(), &forward_ids()).unwrap();
-        assert!(outcome.files.iter().any(|file| file == FACTORY));
-        // On the mini's core the MacBook is a node like any other: its
-        // Factory runs there, its worker's pane is under its node id.
-        assert_eq!(
-            factory_machines(state),
-            vec![
-                (
-                    M_ROOT.to_owned(),
-                    Some(M.to_owned()),
-                    Some(format!("remote:{M}:pane:w1:p1")),
-                    format!("remote:{M}:pane:w1:p2"),
-                ),
-                before[1].clone(),
-            ]
-        );
-
-        reown(state, &back(), &back_ids()).unwrap();
-        assert_eq!(factory_machines(state), before);
     }
 
     #[test]

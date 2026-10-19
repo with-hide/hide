@@ -63,7 +63,7 @@ impl Runtime {
         &self,
         agent: &SidebarAgentSnapshot,
     ) -> Option<(&'static str, String)> {
-        if agent.hide_ai.is_some() || self.factory_panes.contains_key(&agent.pane_id) {
+        if agent.hide_ai.is_some() {
             return Some((
                 "archive.not_offered",
                 "This agent's work is kept by its own home and is not archived".into(),

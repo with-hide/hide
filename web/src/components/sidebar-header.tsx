@@ -1,7 +1,5 @@
 import { useInterfaceTranslation } from "../i18n/client";
-import { ChevronDownIcon, CirclePauseIcon, FactoryIcon, FolderGit2Icon, LaptopIcon, LayoutDashboardIcon, PlusIcon, SearchIcon, ServerIcon, SparkleIcon } from "lucide-react";
-import type { ReactNode } from "react";
-import { Badge } from "./ui/badge";
+import { ChevronDownIcon, LaptopIcon, LayoutDashboardIcon, PlusIcon, SearchIcon, ServerIcon } from "lucide-react";
 import { Kbd } from "./ui/kbd";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Hint } from "./ui/tooltip";
@@ -9,8 +7,6 @@ import { Hint } from "./ui/tooltip";
 
 /** A device the hidden rail's menu lists. */
 
-/** One Factory under the Factory row: its project, its 내 차례 number and whether it is paused (PRD factory-observer B34). */
-export type FactoryProjectRow = { id: string; name: string; count: number; paused: boolean; selected: boolean; onOpen: () => void };
 export type MenuDevice = { id: string; label: string; remote: boolean; connected: boolean };
 
 /** What the top-line name opens while the rail is hidden: the way to every device and back to the rail. */
@@ -51,21 +47,12 @@ export function DeviceTitle({ rail, title, deviceMenu }: { rail: boolean; title:
  */
 export function SidebarHeader({
   overview,
-  factory,
   compact = false,
   searchChord,
   onSearch,
 }: {
   compact?: boolean;
   overview?: { selected: boolean; count: number; chord: string | null; onOpen: () => void };
-  /**
-   * The Factory place (PRD software-factory-ui D-02, B1, B12, B23): its row
-   * with the 내 차례 number, and the secretary's row under it once a Factory
-   * exists; `status` is the secretary agent's mark while its pane is listed.
-   * `soon` is the row before the Factory opens: its name and a 'Soon' chip,
-   * which opens nothing (`factory/launch.ts`).
-   */
-  factory?: "soon" | { selected: boolean; count: number; chord: string | null; onOpen: () => void; projects: FactoryProjectRow[]; secretary: { status: ReactNode; onOpen: () => void } | null };
   searchChord: string | null;
   onSearch: () => void;
 }) {
@@ -94,43 +81,6 @@ export function SidebarHeader({
             {overview.chord && !compact ? <Kbd className="sidebar-command-keycap">{overview.chord}</Kbd> : null}
           </button>
         </Hint>
-      ) : null}
-      {factory === "soon" ? (
-        <div data-sidebar-factory-soon="true" className="flex h-(--size-tab-strip) shrink-0 items-center gap-sm border-b border-border px-md text-body text-muted-foreground">
-          <FactoryIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />
-          <span className="min-w-0 flex-1 truncate">{t("factory.title")}</span>
-          <Badge>{t("factory.sidebar.soon")}</Badge>
-        </div>
-      ) : factory ? (
-        <>
-          <Hint label={factory.count > 0 ? t("factory.sidebar.turnHint", { count: factory.count }) : t("factory.title")} shortcut={factory.chord}>
-            <button type="button" aria-current={factory.selected ? "page" : undefined} data-sidebar-factory="true" onClick={factory.onOpen}
-              className={`flex h-(--size-tab-strip) shrink-0 items-center gap-sm px-md text-body outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${factory.secretary ? "" : "border-b border-border"} ${factory.selected ? "bg-selected text-foreground" : "text-subtle-foreground hover:bg-accent"}`}>
-              <FactoryIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />
-              <span className="min-w-0 flex-1 truncate text-left">{t("factory.title")}</span>
-              {factory.count > 0 ? <span data-factory-badge={factory.count} className="text-caption text-warning">{factory.count}</span> : null}
-              {factory.chord && !compact ? <Kbd className="sidebar-command-keycap">{factory.chord}</Kbd> : null}
-            </button>
-          </Hint>
-          {factory.projects.map((project) => (
-            <Hint key={project.id} label={project.paused ? `${project.name} · ${t("factory.pausedChip")}` : project.name}>
-              <button type="button" aria-current={project.selected ? "page" : undefined} data-sidebar-factory-project={project.id} data-factory-paused={project.paused ? "true" : undefined} onClick={project.onOpen}
-                className={`flex h-(--size-tab-strip) shrink-0 items-center gap-sm pr-md pl-xl text-body outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${project.selected ? "bg-selected text-foreground" : "text-subtle-foreground hover:bg-accent"}`}>
-                <FolderGit2Icon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-                <span className="min-w-0 flex-1 truncate text-left">{project.name}</span>
-                {project.paused ? <CirclePauseIcon aria-label={t("factory.pausedChip")} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" /> : null}
-                {project.count > 0 ? <span className="text-caption text-warning">{project.count}</span> : null}
-              </button>
-            </Hint>
-          ))}
-          {factory.secretary ? (
-            <button type="button" data-sidebar-secretary="true" onClick={factory.secretary.onOpen}
-              className="flex h-(--size-tab-strip) shrink-0 items-center gap-sm border-b border-border pr-md pl-xl text-body text-subtle-foreground outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring">
-              <span className="flex w-(--size-agent-mark) shrink-0 justify-center">{factory.secretary.status ?? <SparkleIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />}</span>
-              <span className="min-w-0 flex-1 truncate text-left">{t("factory.secretary.name")}</span>
-            </button>
-          ) : null}
-        </>
       ) : null}
 
     </>

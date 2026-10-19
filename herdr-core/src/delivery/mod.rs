@@ -47,10 +47,6 @@ pub struct Actor {
     pub session: Option<String>,
 }
 
-/// The kind of a code-owned recipient: a Software Factory's engine, which
-/// reads its own letters from the ledger with no pane, composer or doorbell
-/// (D-14). Only the core's Factory host constructs one.
-pub const FACTORY_KIND: &str = "factory";
 pub const FACTORY_PREFIX: &str = "factory:";
 /// The kind of Hide's own code-owned identity: the origin of the agents
 /// Hide starts for the operator rather than for a pane, such as a Memory
@@ -68,23 +64,8 @@ pub const OPERATOR_KIND: &str = "operator";
 pub const OPERATOR_PREFIX: &str = "operator:";
 /// The one operator identity: the person at the screen.
 pub const OPERATOR_NAME: &str = "operator";
-/// A watch whose observer is a Factory warns after this long (PRD
-/// software-factory, Technical structure: the window is per watch).
-pub const FACTORY_INACTIVITY_MS: u64 = 30 * 60_000;
 
 impl Actor {
-    /// The code-owned recipient `factory:<id>` on `node`, the core's own.
-    pub fn factory(id: &str, node: &str) -> Self {
-        let name = format!("{FACTORY_PREFIX}{id}");
-        Self {
-            pane_id: name.clone(),
-            name: name.clone(),
-            kind: FACTORY_KIND.into(),
-            device_id: node.into(),
-            session: crate::wire::session_digest(&name),
-        }
-    }
-
     /// Hide's own code-owned identity for `role` on `node`, the core's own.
     pub fn hide(role: &str, node: &str) -> Self {
         let name = format!("{HIDE_PREFIX}{role}");
@@ -110,12 +91,9 @@ impl Actor {
         }
     }
 
-    /// Whether this is a code-owned identity (a Factory's, Hide's own or the
-    /// operator's) rather than a pane's.
+    /// Whether this is Hide's or the operator's code-owned identity.
     pub fn code_owned(&self) -> bool {
-        (self.kind == FACTORY_KIND && self.pane_id.starts_with(FACTORY_PREFIX))
-            || (self.kind == HIDE_KIND && self.pane_id.starts_with(HIDE_PREFIX))
-            || self.operator_owned()
+        (self.kind == HIDE_KIND && self.pane_id.starts_with(HIDE_PREFIX)) || self.operator_owned()
     }
 
     /// Whether this is the operator's own identity.
@@ -124,7 +102,7 @@ impl Actor {
     }
 
     /// Whether this is Hide's own code-owned identity, the origin of the work
-    /// Hide starts itself, as opposed to a Factory's or a pane's.
+    /// Hide starts itself, as opposed to a pane's.
     pub fn hide_owned(&self) -> bool {
         self.kind == HIDE_KIND && self.pane_id.starts_with(HIDE_PREFIX)
     }
@@ -166,8 +144,8 @@ pub(crate) fn reserved_name(value: &str) -> bool {
         || operator == OPERATOR_NAME
 }
 
-/// A pane's native session as a letter pull or a Factory question guard names
-/// it: the helper's own rule, so the CLI, the daemon and the hook agree.
+/// A pane's native session as a letter pull names it: the helper's own
+/// rule, so the CLI, the daemon and the hook agree.
 pub use hide_agent_hooks::delivery::{
     SESSION_LIMIT, prompt_digest, valid_prompt_digest, valid_session,
 };

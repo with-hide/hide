@@ -17,7 +17,7 @@ A claim is verified by the check that observes what a caller of the behavior obs
 | A desktop app behavior: window, menu, native view, relaunch, a daemon that goes away | `pnpm --dir desktop e2e` | [BUILD.md: The desktop app](BUILD.md#the-desktop-app) |
 | A file the desktop host loads from its own bundle (the status page) | `desktop/e2e/status-page.spec.ts` with `HIDE_E2E_PACKAGED_APP` naming a package | [ARCHITECTURE.md: The desktop host](ARCHITECTURE.md#the-desktop-host) |
 | A browser display | The commands in its guide | [BROWSER_DISPLAYS.md: Verification](BROWSER_DISPLAYS.md#verification) |
-| A screen matches its design | `node scripts/design-review.mjs review <slug> --baseline <bundle>` | [DESIGN_WORKFLOW.md](DESIGN_WORKFLOW.md#reference-bundle-and-review-run) |
+| A screen matches its approved design | Gallery or isolated candidate captures under the approved conditions | [DESIGN_WORKFLOW.md](DESIGN_WORKFLOW.md#visual-review) |
 | Responsiveness, rendering, CPU, or memory | The layered procedure | [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md) |
 | The installed app carries the fix | A rebuilt package, then the identity checks | [dev-runtime.md](dev-runtime.md), [INSTALL.md](INSTALL.md#verify-the-installed-app) |
 | A remote device's behavior | A private Herdr on the device | [A device check](#a-device-check) |
@@ -142,7 +142,8 @@ osascript -l JavaScript -e 'ObjC.import("CoreGraphics"); ObjC.deepUnwrap(ObjC.ca
 `web/e2e/recent.spec.ts` commits an Agent pane in another project on a real isolated Herdr, opens the list from the sidebar, Explorer and Overview, and keeps focused files in their own View scope.
 `web/e2e/recent-agents-restart.spec.ts` restarts hided and reloads the page, then reaches an agent pane visited only before the restart from the same cycle.
 `desktop/e2e/keys.spec.ts` walks ⌃Tab over Agent panes in the desktop host, including from sidebar focus.
-The `area-focus` design-review target measures the production area renderer with Korean document fixtures in both themes and two widths, including unchanged geometry when keyboard ownership moves.
+The area renderer can be checked with Korean document fixtures in both themes and two widths, including unchanged geometry when keyboard ownership moves.
+Private design-review tooling is maintained separately from this public checkout.
 These checks do not prove native browser input or terminal readability.
 The `area cycle native` case in `desktop/e2e/browser.spec.ts` is tagged `@needs-focus`: it uses real macOS modifier input into the isolated candidate's page, counts core selection events, checks page key consumption and captures that exact native window.
 It covers the default chord and a rebound two-modifier chord, whose Control is released while Option is still down, and types into the page the release selected.
@@ -335,7 +336,7 @@ The scene preparation and overlay tests cover supported MCP formats, positive na
 ## Agent journey
 
 `python3 scripts/agent-journey-check.py` follows each supported agent through what an operator does with it in Hide, on an isolated candidate, and says per agent and step whether it worked.
-It is the check a release runs on the Mac before its tag ([skills/release/SKILL.md](../skills/release/SKILL.md), [CONTRIBUTING.md: Releases](../CONTRIBUTING.md#releases)), and the one to run after a change to how Hide starts, wakes or writes to an agent, after moving the pinned Herdr and after a substantial agent CLI update.
+It is the check a release runs on the Mac before its tag ([CONTRIBUTING.md: Releases](../CONTRIBUTING.md#releases)), and the one to run after a change to how Hide starts, wakes or writes to an agent, after moving the pinned Herdr and after a substantial agent CLI update.
 
 ### What it proves
 

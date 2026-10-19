@@ -46,8 +46,7 @@ mod checkout_start;
 #[path = "worktree_control.rs"]
 mod worktree_control;
 pub(crate) use worktree_control::{
-    CONFIRM_TIMEOUT, ProcessWait, close_checkout_panes, close_checkout_panes_checked,
-    prompt_argument,
+    CONFIRM_TIMEOUT, ProcessWait, close_checkout_panes, prompt_argument,
 };
 pub(crate) use worktree_control::{CheckoutStart, spawn_targeted_checkout_start};
 pub use worktree_control::{

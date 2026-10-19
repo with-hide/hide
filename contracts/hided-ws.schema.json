@@ -8,7 +8,6 @@
     { "$ref": "#/$defs/serverFrame" },
     { "$ref": "#/$defs/clientEvent" },
     { "$ref": "#/$defs/workspaceQuery" },
-    { "$ref": "#/$defs/factoryQuestionGuard" },
     { "$ref": "#/$defs/workspaceAction" },
     { "$ref": "#/$defs/linksQuery" },
     { "$ref": "#/$defs/memoryHookAsk" },
@@ -46,18 +45,6 @@
         "type": { "const": "workspace_query" },
         "request_id": { "$ref": "#/$defs/workspaceRequestId" },
         "query": { "enum": ["info", "view_list"] }
-      }
-    },
-    "factoryQuestionGuard": {
-      "description": "One bounded readonly check against an already-open Factory. Only an attested pane on its issuing connection may ask. A successful workspace_result has result.deny true only for the current Task-held spawn joined to its fresh native execution; every unresolved identity or failure allows the hook tool.",
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["type", "request_id", "session", "runtime"],
-      "properties": {
-        "type": { "const": "factory_question_guard" },
-        "request_id": { "$ref": "#/$defs/workspaceRequestId" },
-        "session": { "type": "string", "minLength": 1, "maxLength": 4096 },
-        "runtime": { "enum": ["claude-code", "codex", "opencode", "omp", "antigravity"] }
       }
     },
     "memoryHookAsk": {

@@ -21,24 +21,17 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # Production trees whose crates may build a Hide AI request.
-TREES = ["herdr-core/src", "hided/src", "hide-memory/src", "hide-factory/src", "hide-kit/src", "hide-host/src"]
+TREES = ["herdr-core/src", "hided/src", "hide-memory/src", "hide-kit/src", "hide-host/src"]
 
 # Files whose prompts another file sends, with that file.
 PROMPT_ONLY = {
-    "hide-factory/src/judgment.rs": "the Factory judgments' instructions, sent by herdr-core/src/factory.rs",
     "herdr-core/src/runtime/memory_promotion.rs": "the first prompt of a Memory promotion's agent, whose reasons the operator reads",
 }
 
 # Text in a prompt source that is not a Hide AI prompt, by the number of
 # findings it has and why, so a new one in the same file fails like one
 # anywhere else.
-NOT_PROMPTS = {
-    "herdr-core/src/factory.rs": (
-        1,
-        "the pointer that ends a Factory worker's first prompt, an agent's prompt "
-        "written in Korean (docs/factory.md, First prompt), not a Hide AI request",
-    ),
-}
+NOT_PROMPTS = {}
 
 CJK = re.compile(r"[\u1100-\u11ff\u3040-\u30ff\u3130-\u318f\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7a3]")
 LANGUAGES = r"(?:English|Korean|Japanese|Chinese|Simplified Chinese)"

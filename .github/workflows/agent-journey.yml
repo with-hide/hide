@@ -33,7 +33,7 @@
 # sign in builds and starts nothing and leaves a notice.
 # A CLI that answers another version than the pin fails the install and the lane.
 # Its report is never a release's agent evidence when it came from the
-# stand-ins (`skills/release/SKILL.md`).
+# stand-ins (CONTRIBUTING.md, Releases).
 name: agent journey
 
 on:

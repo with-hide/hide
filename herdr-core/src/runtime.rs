@@ -25,7 +25,6 @@ mod documents;
 mod drawn_ahead;
 mod editor;
 mod events;
-mod factory;
 mod first_run;
 mod github_poll;
 pub(crate) mod group_starts;
@@ -72,10 +71,6 @@ mod view_feedback;
 mod workspace_control;
 mod workspace_view;
 
-pub(crate) use factory::{
-    DormantState, DormantWorker, FactoryPane, FactoryWake, WorkerProbe, factory_herdr_pane,
-    factory_pane_id,
-};
 pub use hosts::WorkspaceRemoteRoute;
 pub(crate) use kit::{DeviceKitAnswer, DeviceKitCall, DeviceKitWork, KitJob};
 pub use snapshot_delta::serialize_snapshot_delta;
@@ -1118,17 +1113,6 @@ pub struct Runtime {
     /// When each observed pane's input was last traced (`delivery.input`).
     delivery_input_traced: HashMap<String, u64>,
     composer_store: Option<crate::composer_store::ComposerStore>,
-    /// Open Factories' code-owned recipients (`factory:<id>`), set by the
-    /// Factory host; a letter to any other `factory:` name has no recipient.
-    /// Each open Factory's id with its stall window (D-30, B24).
-    factory_recipients: std::collections::BTreeMap<String, u64>,
-    /// The panes the open Factories' workers run in, as the Factory host last
-    /// published them: a sleep that closes a pane keeps whose conversation it
-    /// holds (#857).
-    factory_panes: HashMap<String, factory::FactoryPane>,
-    /// The Factory screens' way to the engine thread; `None` when the host
-    /// did not start.
-    factory_screen: Option<crate::factory::ScreenPort>,
     delivery_overflow: HashSet<String>,
     delivery_connected: HashSet<String>,
     /// Each host's Herdr panes as its in-sync replica last published them.
@@ -1392,10 +1376,6 @@ pub struct Runtime {
     /// that as a failure is what put "terminal attach ended" on screen for one
     /// frame every time the operator closed a pane.
     panes_closing: HashSet<String>,
-    /// Closed panes the Factory engine has not taken yet: a worker there
-    /// reads as closing, never as gone, until the engine has paused its Task
-    /// (D-26). The engine takes them on its wake-up and before every tick.
-    factory_closes_sent: HashSet<String>,
     /// Closes of an agent together with its descendants, deepest first
     /// (`tree_close.rs`). At most `TREE_CLOSE_ACTIVE_LIMIT` at once.
     tree_closes: Vec<tree_close::TreeClose>,
@@ -2074,9 +2054,6 @@ impl Runtime {
             composer_marks: Vec::new(),
             delivery_input_traced: HashMap::new(),
             composer_store: None,
-            factory_recipients: std::collections::BTreeMap::new(),
-            factory_panes: HashMap::new(),
-            factory_screen: None,
             delivery_overflow: HashSet::new(),
             delivery_connected: HashSet::new(),
             delivery_panes: HashMap::new(),
@@ -2172,7 +2149,6 @@ impl Runtime {
             recent_visible_tabs: Vec::new(),
             pending_tab_rename: None,
             panes_closing: HashSet::new(),
-            factory_closes_sent: HashSet::new(),
             tree_closes: Vec::new(),
             next_tree_close_id: 0,
             recent_closed: VecDeque::new(),
@@ -2376,12 +2352,6 @@ impl Runtime {
         terminals: Arc<dyn hide_node_link::terminal::TerminalRoutes>,
     ) {
         self.terminals = terminals;
-    }
-
-    /// The hold on this core's outside effects, for a worker that waits on
-    /// it from a thread of its own.
-    pub(crate) fn effects(&self) -> Arc<crate::effects::EffectHold> {
-        Arc::clone(&self.effects)
     }
 
     /// Whether this core still waits for its move's link before it acts

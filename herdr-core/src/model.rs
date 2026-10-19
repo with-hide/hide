@@ -148,15 +148,6 @@ pub struct Snapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(serialize_with = "serialize_optional_shared")]
     pub session_work_search: Option<Arc<crate::links::ledger::SessionSearchSnapshot>>,
-    /// The Factory screens' summary and their actions' answers (PRD
-    /// software-factory-ui), absent until the Factory host first hands one
-    /// over. Its own revisioned section, stamped by edit number, so the
-    /// summary is never compared under the lock.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub factory: Option<Edited<crate::factory::screen::FactorySection>>,
-    /// The Task page a screen opened; its own revisioned section.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub factory_task: Option<Edited<crate::factory::screen::FactoryTaskSection>>,
 }
 
 /// A snapshot value that takes a new edit number whenever it may change, so
@@ -747,11 +738,6 @@ pub struct NavigatorSnapshot {
     /// D-09); a row whose root is live again only feeds that root's record.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub archived_sessions: Vec<crate::session_archive::ArchivedSessionSnapshot>,
-    /// The panes a Factory runs its workers in, sorted: their lifecycle is
-    /// the Factory's, so the shell offers no `세션 보관` there (PRD
-    /// session-archive D-25).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub factory_worker_panes: Vec<String>,
 }
 
 /// Hide AI started this agent, read from the coordination ledger's record of
@@ -3821,12 +3807,6 @@ pub struct UiStateSnapshot {
     /// existed, which loads empty.
     #[serde(default)]
     pub recent_pane_ids: Vec<String>,
-    /// The Home agent pane started as the Factory secretary (PRD
-    /// software-factory-ui D-10, B23): 비서에게 묻기 goes to it while it is
-    /// listed and starts a new one when it is not. A Herdr restart mints new
-    /// pane ids, so the next press starts a new secretary.
-    #[serde(default)]
-    pub factory_secretary_pane: Option<String>,
     /// The names the operator gave tabs through Rename, by tab id, at most
     /// `OPERATOR_TAB_NAME_LIMIT`: a tab is named, and outlives its agents,
     /// only while its label is still the name recorded here (Herdr keeps tab
@@ -4540,7 +4520,6 @@ impl Default for UiStateSnapshot {
             session_archive: crate::session_archive::SessionArchive::default(),
             recent_checkouts: Vec::new(),
             recent_pane_ids: Vec::new(),
-            factory_secretary_pane: None,
             operator_tab_names: BTreeMap::new(),
         }
     }
@@ -6114,7 +6093,6 @@ impl Snapshot {
                 hide_ai_checkouts: Vec::new(),
                 sleeping_sessions: Vec::new(),
                 archived_sessions: Vec::new(),
-                factory_worker_panes: Vec::new(),
             },
             overlay: OverlaySnapshot {
                 kind: None,
@@ -6218,8 +6196,6 @@ impl Snapshot {
             link_panel: None,
             session_record: None,
             session_work_search: None,
-            factory: None,
-            factory_task: None,
         }
     }
 }
@@ -6279,9 +6255,6 @@ pub struct SnapshotDeltaPayload {
     pub link_panel: Option<Arc<crate::links::LinkPanelSnapshot>>,
     pub session_record: Option<Arc<crate::links::ledger::SessionRecordSnapshot>>,
     pub session_work_search: Option<Arc<crate::links::ledger::SessionSearchSnapshot>>,
-    pub factory: Option<crate::factory::screen::FactorySection>,
-    /// `Some(None)`: the open Task page closed since the reader's revision.
-    pub factory_task: Option<Option<crate::factory::screen::FactoryTaskSection>>,
     pub find: PaneFindSnapshot,
 }
 
@@ -6331,11 +6304,6 @@ pub struct SnapshotDeltaWire<'a> {
     pub session_record: Option<&'a crate::links::ledger::SessionRecordSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_work_search: Option<&'a crate::links::ledger::SessionSearchSnapshot>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub factory: Option<&'a crate::factory::screen::FactorySection>,
-    /// `null` when the page closed since the reader's revision.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub factory_task: Option<Option<&'a crate::factory::screen::FactoryTaskSection>>,
     /// Find state rides top-level rather than in `rest`, because it changes on
     /// every keystroke while a search is open. In `rest` each keystroke would
     /// restamp that revision and resend the whole navigator, ui state, and pet
@@ -6383,8 +6351,6 @@ impl<'a> SnapshotDeltaWire<'a> {
             link_panel: payload.link_panel.as_deref(),
             session_record: payload.session_record.as_deref(),
             session_work_search: payload.session_work_search.as_deref(),
-            factory: payload.factory.as_ref(),
-            factory_task: payload.factory_task.as_ref().map(Option::as_ref),
             find: &payload.find,
         }
     }
@@ -7402,198 +7368,6 @@ mod wire_enum_tests {
             .collect::<Vec<_>>();
         assert_wire(&contract, "link_target_kind", &kinds);
         checked.insert("link_target_kind");
-
-        // The Factory screens (PRD software-factory-ui): the summary carries
-        // these as the engine's own strings.
-        use hide_factory::model::{
-            AttemptOutcome, AttemptStage, Column, DiscoveryClass, QuestionKind, QuestionOrigin,
-            TaskState,
-        };
-        for state in TaskState::ALL {
-            match state {
-                TaskState::Drafting
-                | TaskState::Waiting
-                | TaskState::Running
-                | TaskState::Paused
-                | TaskState::Blocked
-                | TaskState::Verifying
-                | TaskState::MergeWaiting
-                | TaskState::Landed
-                | TaskState::Done
-                | TaskState::Stopped
-                | TaskState::Relanding
-                | TaskState::Outside
-                | TaskState::Cancelled => {}
-            }
-        }
-        let states = TaskState::ALL.map(TaskState::as_str);
-        assert_wire(&contract, "factory_task_state", &states);
-        checked.insert("factory_task_state");
-
-        for column in Column::ALL {
-            match column {
-                Column::Before | Column::Moving | Column::Stuck | Column::Done => {}
-            }
-        }
-        let columns = Column::ALL.map(Column::as_str);
-        assert_wire(&contract, "factory_column", &columns);
-        checked.insert("factory_column");
-
-        // An internally tagged enum: its `kind` is the wire string.
-        let kinds = [
-            QuestionKind::Intake,
-            QuestionKind::Split { pieces: Vec::new() },
-            QuestionKind::Default,
-            QuestionKind::Blocking,
-            QuestionKind::ScopeChange { change: None },
-            QuestionKind::NewTaskCap,
-            QuestionKind::ProposedTask {
-                draft: Box::default(),
-                discovery: None,
-            },
-            QuestionKind::Action,
-            QuestionKind::ConfirmCard,
-        ]
-        .iter()
-        .map(|kind| {
-            match kind {
-                QuestionKind::Intake
-                | QuestionKind::Split { .. }
-                | QuestionKind::Default
-                | QuestionKind::Blocking
-                | QuestionKind::ScopeChange { .. }
-                | QuestionKind::NewTaskCap
-                | QuestionKind::ProposedTask { .. }
-                | QuestionKind::Action
-                | QuestionKind::ConfirmCard => {}
-            }
-            serde_json::to_value(kind).unwrap()["kind"].clone()
-        })
-        .collect::<Vec<_>>();
-        assert_wire(&contract, "factory_question_kind", &kinds);
-        checked.insert("factory_question_kind");
-
-        let origins = [
-            QuestionOrigin::Review,
-            QuestionOrigin::Worker,
-            QuestionOrigin::Check,
-            QuestionOrigin::Engine,
-        ];
-        for origin in origins {
-            match origin {
-                QuestionOrigin::Review
-                | QuestionOrigin::Worker
-                | QuestionOrigin::Check
-                | QuestionOrigin::Engine => {}
-            }
-        }
-        assert_wire(&contract, "factory_question_origin", &origins);
-        checked.insert("factory_question_origin");
-
-        let classes = [
-            DiscoveryClass::InScope,
-            DiscoveryClass::Decision,
-            DiscoveryClass::ScopeChange,
-            DiscoveryClass::Prerequisite,
-            DiscoveryClass::Unrelated,
-        ];
-        for class in classes {
-            match class {
-                DiscoveryClass::InScope
-                | DiscoveryClass::Decision
-                | DiscoveryClass::ScopeChange
-                | DiscoveryClass::Prerequisite
-                | DiscoveryClass::Unrelated => {}
-            }
-        }
-        assert_wire(&contract, "factory_discovery_class", &classes);
-        checked.insert("factory_discovery_class");
-
-        let stages = [AttemptStage::Task, AttemptStage::PreMerge];
-        for stage in stages {
-            match stage {
-                AttemptStage::Task | AttemptStage::PreMerge => {}
-            }
-        }
-        assert_wire(&contract, "factory_attempt_stage", &stages);
-        checked.insert("factory_attempt_stage");
-
-        // `AttemptView.outcome`: an outcome's tag, or `running` before one.
-        let outcomes = [
-            Some(AttemptOutcome::Passed),
-            Some(AttemptOutcome::Failed {
-                check: String::new(),
-                link: String::new(),
-            }),
-            Some(AttemptOutcome::Environment {
-                signal: String::new(),
-                check: String::new(),
-            }),
-            Some(AttemptOutcome::Cancelled),
-            None,
-        ]
-        .iter()
-        .map(|outcome| match outcome {
-            Some(
-                outcome @ (AttemptOutcome::Passed
-                | AttemptOutcome::Failed { .. }
-                | AttemptOutcome::Environment { .. }
-                | AttemptOutcome::Cancelled),
-            ) => serde_json::to_value(outcome).unwrap()["result"].clone(),
-            None => serde_json::json!("running"),
-        })
-        .collect::<Vec<_>>();
-        assert_wire(&contract, "factory_attempt_outcome", &outcomes);
-        checked.insert("factory_attempt_outcome");
-
-        // The codes beside the summary's sentences; `hide-factory`'s
-        // `every_summary_code_is_pinned` holds each `ALL` to every variant.
-        use hide_factory::model::{EnvHold, Gate, StopReason};
-        use hide_factory::summary::{ResultCode, WaitingFor};
-        assert_wire(&contract, "factory_waiting_for", &WaitingFor::ALL);
-        checked.insert("factory_waiting_for");
-        assert_wire(&contract, "factory_env_hold", &EnvHold::ALL);
-        checked.insert("factory_env_hold");
-        assert_wire(&contract, "factory_stop_reason", &StopReason::ALL);
-        checked.insert("factory_stop_reason");
-        assert_wire(&contract, "factory_gate", &Gate::ALL);
-        checked.insert("factory_gate");
-        assert_wire(&contract, "factory_result_code", &ResultCode::ALL);
-        checked.insert("factory_result_code");
-        use hide_factory::model::{
-            CriterionState, DecisionKind, DecisionSource, Fallback, FollowUpState, ObserverMode,
-            PauseReason, RecoveryAction, RecoveryOutcome,
-        };
-        use hide_factory::summary::{DecisionBy, Holding};
-        assert_wire(&contract, "factory_holding", &Holding::ALL);
-        checked.insert("factory_holding");
-        assert_wire(&contract, "factory_decision_by", &DecisionBy::ALL);
-        checked.insert("factory_decision_by");
-        assert_wire(&contract, "factory_decision_source", &DecisionSource::ALL);
-        checked.insert("factory_decision_source");
-        assert_wire(&contract, "factory_follow_up_state", &FollowUpState::ALL);
-        checked.insert("factory_follow_up_state");
-        assert_wire(&contract, "factory_criterion_state", &CriterionState::ALL);
-        checked.insert("factory_criterion_state");
-        assert_wire(&contract, "factory_recovery_outcome", &RecoveryOutcome::ALL);
-        checked.insert("factory_recovery_outcome");
-        assert_wire(&contract, "factory_fallback", &Fallback::ALL);
-        checked.insert("factory_fallback");
-        assert_wire(&contract, "factory_recovery_action", &RecoveryAction::ALL);
-        checked.insert("factory_recovery_action");
-        assert_wire(&contract, "factory_decision_kind", &DecisionKind::ALL);
-        checked.insert("factory_decision_kind");
-        assert_wire(&contract, "factory_pause_reason", &PauseReason::ALL);
-        checked.insert("factory_pause_reason");
-        assert_wire(&contract, "factory_observer_mode", &ObserverMode::ALL);
-        checked.insert("factory_observer_mode");
-        use hide_factory::judgment::WorkerTextSource;
-        assert_wire(
-            &contract,
-            "factory_diagnosis_source",
-            &WorkerTextSource::ALL,
-        );
-        checked.insert("factory_diagnosis_source");
 
         use crate::agent_state::tally::tasks::TaskState as OverviewTaskState;
         let task_states = [

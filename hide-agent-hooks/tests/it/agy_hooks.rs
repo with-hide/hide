@@ -370,30 +370,6 @@ fn a_guarded_file_is_refused_to_each_of_agys_file_tools_and_its_shell() {
 }
 
 #[test]
-fn a_factory_workers_question_is_refused_toward_hide_factory_ask() {
-    let machine = Machine::new();
-
-    let run = machine.run(
-        "PreToolUse",
-        &call(
-            &machine,
-            "ask_question",
-            json!({ "Question": "private-question-text" }),
-        ),
-        Some(PANE),
-    );
-
-    let denied = answer(&run);
-    assert_eq!(denied["decision"], "deny", "{denied}");
-    assert!(
-        denied["reason"]
-            .as_str()
-            .unwrap()
-            .contains("hide factory ask")
-    );
-}
-
-#[test]
 fn a_hide_that_never_answers_lets_the_call_run_well_inside_the_blocks_timeout() {
     let machine = Machine::with_hide(SILENT_HIDE);
     // The timeout agy is told, from the block Hide writes.
@@ -414,7 +390,7 @@ fn a_hide_that_never_answers_lets_the_call_run_well_inside_the_blocks_timeout() 
             .unwrap(),
     );
 
-    // The two calls that ask the daemon: a direct start and a question.
+    // A direct start has a bounded daemon check; a native question runs normally.
     for payload in [
         machine.shell(START),
         call(&machine, "ask_question", json!({ "Question": "q" })),
@@ -427,7 +403,5 @@ fn a_hide_that_never_answers_lets_the_call_run_well_inside_the_blocks_timeout() 
         assert!(took * 2 < timeout, "{took:?} of {timeout:?} for {payload}");
     }
     let asked = std::fs::read_to_string(machine.root.join("hide-calls")).unwrap();
-    for call in ["workspace bootstrap", "workspace factory-question-guard"] {
-        assert!(asked.contains(call), "{call} was not asked: {asked}");
-    }
+    assert!(asked.contains("workspace bootstrap"), "{asked}");
 }

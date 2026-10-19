@@ -21,7 +21,6 @@ pub mod demand;
 pub mod desktop_notices;
 pub mod ending;
 pub mod env;
-pub mod factory_cli;
 pub mod file_url;
 pub mod herdr_handoff;
 pub mod index;

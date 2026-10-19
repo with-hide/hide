@@ -45,37 +45,7 @@ export type PendingClose = {
  * (PRD home-device-rail D-13): `deviceId` names the device, and without one it
  * is the device in front.
  */
-export type Screen = { kind: "main"; deviceId?: string } | { kind: "workspace" } | { kind: "factory"; place: FactoryPlace };
-
-/** The Factory screen's tabs, left to right; it opens on 내 차례 (PRD software-factory-ui B7). */
-export type FactoryTab = "line" | "board" | "graph" | "settings";
-
-export const FACTORY_TABS: readonly FactoryTab[] = ["line", "board", "graph", "settings"];
-
-/**
- * The Factory screen's page state (PRD software-factory-ui B7, B15-B19): the
- * tab, the project filter every tab follows, the board's flow-bar column and
- * cancelled filters, the Task page open over the tabs, the inbox item to
- * expand, and the create sheet. Like an Overview's lens it is this page's
- * own; every value it draws is the engine's.
- */
-export type FactoryPlace = {
-  tab: FactoryTab;
-  /** The Factory the screen is filtered to, by id; null shows every Factory. */
-  factory: string | null;
-  /** The flow-bar cell the board is filtered to. */
-  column: import("./factory/model").Column | null;
-  /** The board shows the cancelled Tasks instead (B16). */
-  cancelled: boolean;
-  /** The Task page open over the tabs. */
-  task: { factory: string; task: string } | null;
-  /** The inbox item to expand, by `inboxKey`. */
-  focus: string | null;
-  /** The create sheet is open (B3). */
-  create: boolean;
-};
-
-export const FACTORY_ENTRY: FactoryPlace = { tab: "line", factory: null, column: null, cancelled: false, task: null, focus: null, create: false };
+export type Screen = { kind: "main"; deviceId?: string } | { kind: "workspace" };
 
 /**
  * The Overview's five tabs share the selected device and project, except
@@ -220,8 +190,6 @@ type UiStore = {
   raisedOpen: readonly string[];
   /** The 태스크 list's open folds (`rest:<group>`, `cleanup:<group>`, `archived:<group>`); page-local, opened by the operator or by entering a resting task (sidebar-task-lens B5). */
   taskFoldsOpen: readonly string[];
-  /** The Factory secretary being started (PRD software-factory-ui B23). */
-  secretaryStart: import("./factory/secretary").SecretaryStart | null;
   /** The Explorer row the operator last touched; the core owns the opened
    * document's `selected_path`, and a reveal syncs that into here. */
   explorerSelection: string | null;
@@ -323,13 +291,10 @@ type UiStore = {
   tooltips: (() => void)[];
   /** A way into a screen. */
   setScreen: (screen: Screen) => void;
-  /** Changes the Factory screen's page state; a no-op off the Factory screen. */
-  setFactoryPlace: (patch: Partial<FactoryPlace>) => void;
   /** A screen brought back as it was left (Recent Panels): Home keeps the view it had. */
   restoreScreen: (screen: Screen) => void;
   setMainView: (view: MainView) => void;
   setRelation: (relation: Relation | null) => void;
-  setSecretaryStart: (start: import("./factory/secretary").SecretaryStart | null) => void;
   toggleRaised: (group: string) => void;
   toggleTaskFold: (key: string) => void;
   setExplorerSelection: (path: string | null) => void;
@@ -399,7 +364,6 @@ export const useUiStore = create<UiStore>((set, get) => ({
   sidebarFocus: 0,
   raisedOpen: [],
   taskFoldsOpen: [],
-  secretaryStart: null,
   explorerSelection: null,
   editorFindRequest: 0,
   editorFindDisplay: null,
@@ -438,12 +402,10 @@ export const useUiStore = create<UiStore>((set, get) => ({
   tooltips: [],
   // Moving by hand drops an open still waiting for its Workspace, so a late
   // answer does not pull the screen away from where the operator went.
-  setFactoryPlace: (patch) => set((state) => (state.screen?.kind === "factory" ? { screen: { kind: "factory", place: { ...state.screen.place, ...patch } } } : {})),
   setScreen: (screen) => set({ screen, opening: null, overviewOpen: false }),
   restoreScreen: (screen) => set({ screen, opening: null, overviewOpen: false }),
   setMainView: (mainView) => set({ mainView }),
   setRelation: (relation) => set({ relation }),
-  setSecretaryStart: (secretaryStart) => set({ secretaryStart }),
   toggleRaised: (group) => {
     const open = get().raisedOpen;
     set({ raisedOpen: open.includes(group) ? open.filter((row) => row !== group) : [...open, group] });
