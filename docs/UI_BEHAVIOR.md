@@ -287,6 +287,11 @@ The recorded keyboard owner alone gives one Agent or View area the user-accent s
 Every other area's tab bar uses the card background, and its selected tab keeps a foreground title and secondary background without the underline.
 The keyboard View area has a 2px accent content border outside any native page slot; the other areas reserve the same transparent border.
 The keyboard Agent pane has a 2px accent perimeter and a lightly accent-tinted header, in single, split and zoomed presentations.
+Adjacent terminal panes share a 1 CSS px `--border` hairline, vertical or horizontal, using the leading edge of the second side so nested splits never double it.
+The same hairline marks connected-device panes and their retained layout while disconnected, using each frame's internal leading edges.
+It overlays content without taking terminal space or pointer input, stays below the focus perimeter, and leaves the resize grab and guide unchanged.
+Single and zoomed panes have no internal hairlines; unzoom restores them.
+This reuses the `Component / Agent column` library's second-pane border and the existing `--size-hairline` token across Neutral and Hide, light and dark.
 Menus, search, tools and an inactive app show no canvas input emphasis; returning input restores it without changing selection or geometry.
 A View's address and path controls retain that View as the target of Close and New tab while suppressing its canvas emphasis.
 The content stays readable and unfiltered; focus adds no content blur, opacity reduction, capture loop or geometry change.
