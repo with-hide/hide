@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { FACTORY_OPEN } from "./factory/launch";
 import {
   DIGITS,
   AREA_COMMANDS,
@@ -85,7 +84,6 @@ describe("shortcut registry", () => {
       // it on the sidebar switch, which has no chord here until one is bound.
       overview: "⇧⌘O",
       add_backlog: "⇧⌘M",
-      ...(FACTORY_OPEN ? { factory_open: "⇧⌘F" } : {}),
       sidebar_projects: "⇧⌘P",
       toggle_device_rail: "",
       toggle_lane: "⌘E",
@@ -425,7 +423,6 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
       toggle_sidebar_lens: "Alt+Shift+B",
       overview: "Alt+Shift+O",
       add_backlog: "Alt+Shift+M",
-      ...(FACTORY_OPEN ? { factory_open: "Alt+Shift+F" } : {}),
       sidebar_projects: "Alt+Shift+P",
       toggle_device_rail: "",
       toggle_lane: "Ctrl+Shift+E",

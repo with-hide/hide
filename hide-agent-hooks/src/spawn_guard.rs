@@ -149,7 +149,6 @@ struct GrokPayload {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AntigravityPayload {
-    conversation_id: Option<String>,
     tool_call: Option<AntigravityCall>,
 }
 
@@ -166,84 +165,6 @@ struct AntigravityArgs {
     #[serde(rename = "Cwd")]
     cwd: Option<String>,
 }
-
-/// A native question tool call. Its text is never sent to the guard or log.
-pub struct QuestionCall {
-    pub session: String,
-    pub tool: &'static str,
-}
-
-pub fn may_hold_question(payload: &[u8]) -> bool {
-    [
-        b"AskUserQuestion".as_slice(),
-        b"ExitPlanMode".as_slice(),
-        b"request_user_input".as_slice(),
-        b"ask_user_question".as_slice(),
-        b"exit_plan_mode".as_slice(),
-        b"ask_question".as_slice(),
-    ]
-    .iter()
-    .any(|tool| payload.windows(tool.len()).any(|window| window == *tool))
-}
-
-pub fn read_question(
-    payload: &[u8],
-    truncated: bool,
-    dialect: HookDialect,
-) -> Option<QuestionCall> {
-    if truncated {
-        return None;
-    }
-    #[derive(Deserialize)]
-    struct QuestionPayload {
-        tool_name: String,
-        session_id: String,
-    }
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct GrokQuestionPayload {
-        tool_name: String,
-        session_id: String,
-    }
-    let payload = match dialect {
-        HookDialect::Antigravity => serde_json::from_slice::<AntigravityPayload>(payload)
-            .ok()
-            .and_then(|payload| {
-                Some(QuestionPayload {
-                    tool_name: payload.tool_call?.name?,
-                    session_id: payload.conversation_id?,
-                })
-            })?,
-        HookDialect::Grok => serde_json::from_slice::<GrokQuestionPayload>(payload)
-            .ok()
-            .map(|payload| QuestionPayload {
-                tool_name: payload.tool_name,
-                session_id: payload.session_id,
-            })?,
-        _ => serde_json::from_slice::<QuestionPayload>(payload).ok()?,
-    };
-    // Cursor asks its questions in plain text: it has no question tool.
-    let tool = match (dialect, payload.tool_name.as_str()) {
-        (HookDialect::ClaudeCode, "AskUserQuestion") => "AskUserQuestion",
-        (HookDialect::ClaudeCode, "ExitPlanMode") => "ExitPlanMode",
-        (HookDialect::Codex, "request_user_input") => "request_user_input",
-        (HookDialect::Codex, "request_user_input_async") => "request_user_input_async",
-        (HookDialect::Grok, "ask_user_question") => "ask_user_question",
-        (HookDialect::Grok, "exit_plan_mode") => "exit_plan_mode",
-        (HookDialect::Antigravity, "ask_question") => "ask_question",
-        _ => return None,
-    };
-    if !crate::delivery::valid_session(&payload.session_id) {
-        return None;
-    }
-    Some(QuestionCall {
-        session: payload.session_id,
-        tool,
-    })
-}
-
-/// The fixed actionable reason contains no private question or plan text.
-pub const QUESTION_REASON: &str = "This pane is the current Software Factory worker. Ask the operator through hide factory ask so Factory can show the question and return the answer. Do not use the runtime's direct question or plan approval tool.";
 
 #[derive(Deserialize)]
 struct ToolInput {
@@ -1110,71 +1031,6 @@ pub enum Registration {
     Unreachable(&'static str),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum QuestionDecision {
-    Worker,
-    Allow,
-    Unreachable(&'static str),
-}
-
-/// One owned CLI child performs bootstrap and the authenticated readonly query.
-/// Its single capture deadline covers both, and Drop ends it on every path.
-pub fn question_decision(
-    program: &OsStr,
-    runtime: &str,
-    session: &str,
-    deadline: Instant,
-) -> QuestionDecision {
-    if Instant::now() >= deadline {
-        return QuestionDecision::Unreachable("deadline");
-    }
-    let mut command = Command::new(program);
-    if let Err(reason) = crate::route::apply(&mut command) {
-        return QuestionDecision::Unreachable(reason);
-    }
-    command
-        .args([
-            "workspace",
-            "factory-question-guard",
-            "--session",
-            session,
-            "--runtime",
-            runtime,
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let Ok(mut child) = OwnedChild::spawn(&mut command) else {
-        return QuestionDecision::Unreachable("cli");
-    };
-    let output = match child.capture_until(deadline, 16 * 1024) {
-        Ok(output) => output,
-        Err(failure) => {
-            return QuestionDecision::Unreachable(match failure.kind {
-                CaptureFailureKind::Deadline => "deadline",
-                _ => "cli",
-            });
-        }
-    };
-    if Instant::now() >= deadline {
-        return QuestionDecision::Unreachable("deadline");
-    }
-    if !output.status.success() {
-        return QuestionDecision::Unreachable("daemon");
-    }
-    match serde_json::from_slice::<serde_json::Value>(&output.stdout) {
-        Ok(answer) if answer["type"] == "workspace_result" && answer["ok"] == true => {
-            match answer["result"]["deny"].as_bool() {
-                Some(true) => QuestionDecision::Worker,
-                Some(false) => QuestionDecision::Allow,
-                _ => QuestionDecision::Unreachable("format"),
-            }
-        }
-        Ok(_) => QuestionDecision::Unreachable("daemon"),
-        Err(_) => QuestionDecision::Unreachable("format"),
-    }
-}
-
 /// Asks `hide workspace bootstrap`, the daemon-owned call a session start makes
 /// too: it needs no open window and succeeds only for a caller inside a
 /// registered checkout. A refusal with a reason is the daemon answering; a
@@ -1256,15 +1112,6 @@ pub fn record_refusal(home: &Path, runtime: &str, pane: &str, launch: &Launch) {
     })
     .to_string();
     eprintln!("{line}");
-    let _ = append_line(&log_path(home), &line);
-}
-
-pub fn record_question_refusal(home: &Path, runtime: &str, pane: &str, tool: &str) {
-    let line = serde_json::json!({
-        "component":"spawn_guard", "kind":"factory_question.refused",
-        "runtime":runtime, "pane":pane, "tool":tool, "at_unix_ms":now_ms(),
-    })
-    .to_string();
     let _ = append_line(&log_path(home), &line);
 }
 
@@ -1674,44 +1521,6 @@ mod tests {
                 HookDialect::Cursor
             ),
             None
-        );
-    }
-
-    #[test]
-    fn a_grok_question_tool_is_read_with_its_session_and_cursor_has_none() {
-        let question = read_question(
-            br#"{"toolName":"ask_user_question","sessionId":"s-1","toolInput":{}}"#,
-            false,
-            HookDialect::Grok,
-        )
-        .unwrap();
-        assert_eq!(
-            (question.tool, question.session.as_str()),
-            ("ask_user_question", "s-1")
-        );
-        let plan = read_question(
-            br#"{"toolName":"exit_plan_mode","sessionId":"s-1"}"#,
-            false,
-            HookDialect::Grok,
-        )
-        .unwrap();
-        assert_eq!(plan.tool, "exit_plan_mode");
-        assert!(may_hold_question(br#"{"toolName":"exit_plan_mode"}"#));
-        assert!(
-            read_question(
-                br#"{"toolName":"AskUserQuestion","sessionId":"s-1"}"#,
-                false,
-                HookDialect::Grok
-            )
-            .is_none()
-        );
-        assert!(
-            read_question(
-                br#"{"tool_name":"AskUserQuestion","session_id":"s-1"}"#,
-                false,
-                HookDialect::Cursor
-            )
-            .is_none()
         );
     }
 

@@ -27,7 +27,6 @@ case "$1 $2" in
   "observation --hook")
     cat > "${HOME%/*}/observation"
     echo '{"ok":true,"result":{"observed":true}}' ;;
-  "workspace factory-question-guard") echo '{"type":"workspace_result","ok":true,"result":{"deny":true}}' ;;
   "workspace memory")
     cat > "${HOME%/*}/memory-prompt-$4"
     if [ -f "${HOME%/*}/memory-off" ]; then
@@ -324,24 +323,6 @@ fn a_file_tool_on_a_protected_path_is_refused_for_opencode_pi_and_omp() {
     );
     assert_eq!(answer, json!({}));
     assert!(machine.calls().is_empty(), "no protection asks the daemon");
-}
-
-#[test]
-fn the_question_tool_asks_the_factory_guard_as_opencode() {
-    let machine = Machine::new();
-    let answer = machine.run(
-        "tool",
-        &json!({"session_id": "ses_root", "tool": "question"}),
-        true,
-    );
-    assert_eq!(
-        answer["deny"],
-        hide_agent_hooks::spawn_guard::QUESTION_REASON
-    );
-    assert_eq!(
-        machine.calls(),
-        ["workspace factory-question-guard --session ses_root --runtime opencode"]
-    );
 }
 
 #[test]

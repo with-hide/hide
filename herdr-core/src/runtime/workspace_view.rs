@@ -1162,6 +1162,7 @@ impl Runtime {
             WorkspaceViewSnapshot {
                 device_id: view.device_id.clone(),
                 path: view.path.clone(),
+                git: self.checkout_header_snapshot(key),
                 tool: view.tool,
                 last_tool: view.last_tool,
                 prs: view.prs,

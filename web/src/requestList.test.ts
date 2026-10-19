@@ -157,11 +157,6 @@ describe("the rows and groups (D-06, D-30, D-40)", () => {
     expect(childrenSummary(rows[1]!, t)).toBeNull();
   });
 
-  it("leaves out a Factory worker's question, which 내 차례 holds instead (software-factory-ui B13)", () => {
-    const rows = requestRows([lens(agent("worker", "answer")), lens(agent("own", "answer"))], [], new Set(["worker"]));
-    expect(rows.map((row) => row.lens.agent.pane_id)).toEqual(["own"]);
-  });
-
   it("reads a row the core has not laid a block on by its group", () => {
     const rows = requestRows([lens(agent("w", null, { group: "working" })), lens(agent("r", null))], []);
     expect(rows.map((row) => row.verb)).toEqual(["working", "idle"]);

@@ -120,9 +120,8 @@ pub fn valid_sha256_digest(digest: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-/// The longest native session a letter pull or a Factory question guard
-/// carries: Herdr takes an agent session of up to 4096 bytes, and Pi and omp
-/// report theirs as a session file path, which on a deep checkout passes 250
+/// The longest native session a letter pull carries: Herdr takes an agent
+/// session of up to 4096 bytes, and Pi and omp report theirs as a session file path, which on a deep checkout passes 250
 /// bytes (PRD pi-omp-extension D-05).
 pub const SESSION_LIMIT: usize = 4096;
 

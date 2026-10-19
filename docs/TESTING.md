@@ -103,6 +103,8 @@ When the behavior depends on the order of two events, the test fixes that order;
 
 - Set every fixture's `HOME` and Hide state folder to private paths before starting a candidate.
 - A restart fixture that requires completed native labels waits for the matching session, goal and end in the private `labels.json` before stopping the daemon; a rendered label alone does not prove its asynchronous save completed, and Windows fixture shutdown is forced.
+- The same boundary applies to Workspace views: `web/e2e/right-lane.spec.ts` waits for the expected tool, pin and active document in the private `workspace-views.json` before each restart, then checks the restored screen.
+  A rendered pin or selected document alone does not prove the save has landed; a missing save fails the persistence wait rather than racing the forced shutdown.
 - A retirement test injects its service-control boundary and uses private legacy folders and ledger fixtures.
   A real launchd call to the account's default retired-service label reaches the operator's service regardless of a private `HOME`, so it is never part of fixture teardown.
 - The private SSH mailbox fixture stages candidate executable copies without debug symbols, as shipped binaries are, and ad-hoc signs those copies on macOS.
@@ -473,7 +475,7 @@ With `--no-deps` the order is still the config's: the one worker runs the projec
 What `--no-deps` gives up is the skip: a background test that fails its retry too no longer skips the shard's focus tests, which still run and report, while the lane fails as before.
 
 A table is its system's and suite's: per-test costs differ by system (symlinks, process and terminal tests), so a lane on another system that runs several shards records its own.
-Refresh a table when a shard's time drifts from the others in a run, when the plan warns, after tests were added or renamed in bulk, or when tests the table records at 0 because the lane skipped them start to run (the Factory specs while `FACTORY_OPEN` is off): no warning sees those.
+Refresh a table when a shard's time drifts from the others in a run, when the plan warns, after tests were added or renamed in bulk.
 Refresh it this way:
 
 1. Download the logs of the lane's jobs (the Linux `web e2e` shards, the macOS `desktop e2e` shards) of about twenty recent successful runs (`gh api repos/<owner>/<repo>/actions/jobs/<job id>/logs`) into a directory outside the repository.

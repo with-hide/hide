@@ -82,7 +82,6 @@ pub struct Core {
     _links: Option<crate::links::worker::LinkWorker>,
     _usage_ledger: Option<crate::usage_ledger::worker::Worker>,
     labels: Option<Arc<crate::labels::LabelServices>>,
-    factory: Option<crate::factory::FactoryHost>,
     own_node: Arc<dyn crate::node_access::NodeLink>,
     runtime: Arc<Mutex<Runtime>>,
     notifier: ChangeNotifier,
@@ -91,11 +90,6 @@ pub struct Core {
 
 impl Drop for Core {
     fn drop(&mut self) {
-        // First: the Factory engine sends through delivery and ends the
-        // verify runs and judgments it started (rule 14).
-        if let Some(mut factory) = self.factory.take() {
-            factory.shutdown();
-        }
         self._delivery.take();
         // Reserve cancellation before any coordinator shutdown can wait: a
         // completing attachment must not enqueue input during destruction.
@@ -197,7 +191,6 @@ impl Core {
             _usage_ledger: None,
             _delivery: None,
             labels: None,
-            factory: None,
             runtime,
             notifier: notifier.clone(),
             owner_thread: thread::current().id(),
@@ -368,30 +361,6 @@ impl Core {
                 None
             }
         };
-        // The Software Factory engine; it opens its store only when a Factory
-        // exists or is asked for.
-        let factory = std::path::Path::new(&options.app_state_path)
-            .parent()
-            .filter(|directory| !directory.as_os_str().is_empty())
-            .and_then(|state_dir| {
-                crate::factory::FactoryHost::start(
-                    state_dir,
-                    environment_home.clone(),
-                    Arc::downgrade(&runtime),
-                    notifier.clone(),
-                    lock_recover(&runtime).effects(),
-                )
-                .map_err(|message| {
-                    crate::diagnostic!(
-                        serde_json::json!({"component":"factory","kind":"host.start_failed","message":message})
-                    );
-                })
-                .ok()
-            });
-        // The screens reach the engine through the same bounded queue.
-        if let Some(factory) = &factory {
-            lock_recover(&runtime).set_factory_screen_port(factory.screen_port());
-        }
         let session_sync = if let (Some(socket_path), Some(own_herdr)) =
             (options.herdr_socket_path.as_deref(), own_herdr)
         {
@@ -473,7 +442,6 @@ impl Core {
             _links: links,
             _usage_ledger: usage_ledger,
             labels,
-            factory,
             runtime,
             notifier,
             owner_thread: thread::current().id(),
@@ -509,27 +477,6 @@ impl Core {
             return Err("delivery_unavailable".into());
         }
         lock_recover(&self.runtime).prepare_delivery(device, caller, expected, hint, command)
-    }
-
-    /// A `hide factory` command from a pane or checkout capability: the
-    /// caller is checked as delivery checks it, and the engine decides the
-    /// role from its own record of workers (D-33).
-    pub fn prepare_factory(
-        &self,
-        device: &str,
-        caller: &str,
-        expected: &crate::workspace_control::Context,
-        hint: Option<&str>,
-        command: hide_factory::Command,
-    ) -> Result<crate::factory::PreparedFactory, String> {
-        if !check_owner_thread(self, "factory.prepare") {
-            return Err("factory_unavailable".into());
-        }
-        let runtime = lock_recover(&self.runtime);
-        let factory = self.factory.as_ref().ok_or("factory_unavailable")?;
-        let caller = runtime.factory_caller(device, caller, expected, hint)?;
-        drop(runtime);
-        Ok(factory.prepare(caller, command))
     }
 
     /// Checks a `hide memory` caller and takes what its command needs; the
@@ -572,42 +519,6 @@ impl Core {
         )?;
         prepared.runtime = std::sync::Arc::downgrade(&self.runtime);
         Ok(prepared)
-    }
-
-    /// Prepare one read against an already-open Factory, with pane-only
-    /// authority and a deadline supplied by the authenticated server route.
-    #[allow(clippy::too_many_arguments)] // each identity fact is supplied by the authenticated pane boundary
-    pub fn prepare_factory_question_guard(
-        &self,
-        device: &str,
-        caller: &str,
-        expected: &crate::workspace_control::Context,
-        session: &str,
-        agent_runtime: &str,
-        terminal_id: &str,
-        deadline: std::time::Instant,
-    ) -> Result<crate::factory::PreparedQuestionGuard, String> {
-        if !check_owner_thread(self, "factory.question_guard")
-            || std::time::Instant::now() >= deadline
-        {
-            return Err("factory_guard_expired".into());
-        }
-        let factory = self.factory.as_ref().ok_or("factory_guard_unavailable")?;
-        let runtime = self.runtime.try_lock().map_err(|_| "factory_guard_busy")?;
-        let caller = runtime.factory_question_caller(
-            device,
-            caller,
-            expected,
-            session,
-            agent_runtime,
-            terminal_id,
-        )?;
-        drop(runtime);
-        Ok(factory.prepare_question_guard(
-            caller,
-            std::sync::Arc::downgrade(&self.runtime),
-            deadline,
-        ))
     }
 
     pub fn prepare_delivery_human(&self) -> Result<crate::delivery::worker::PreparedHuman, String> {

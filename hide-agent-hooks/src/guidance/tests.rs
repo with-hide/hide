@@ -953,6 +953,10 @@ fn agy_tool_answer(script: Option<&str>) -> (std::process::Output, Value) {
         &fs::read_to_string(GuidanceAgent::Antigravity.config_path(home.path())).unwrap(),
     )
     .unwrap();
+    assert_eq!(
+        document["hide"]["PreToolUse"][0]["matcher"],
+        "run_command|view_file|write_to_file|replace_file_content|multi_replace_file_content"
+    );
     let command = document["hide"]["PreToolUse"][0]["hooks"][0]["command"]
         .as_str()
         .unwrap();

@@ -160,7 +160,7 @@ export class DesktopHost {
   private browserControlFlight: Promise<void> | null = null;
   private browserControlShutdown: Promise<void> | null = null;
   private browserControlClosed = false;
-  /** Shown Factory and agent notifications, kept so their click still reaches the shell. */
+  /** Shown agent notifications, kept so their click still reaches the shell. */
   private readonly notifications = new KeptNotifications<Notification>();
   private readonly permission: NotificationPermissionReader;
   /** Notification clicks, held until the shell reports its count, which it does once it holds a live snapshot to open them in. */
@@ -322,7 +322,7 @@ export class DesktopHost {
   }
 
   /**
-   * The Factory's macOS notifications (D-50): only this window's page on the
+   * System notifications: only this window's page on the
    * daemon origin is heard. A click brings the window forward and hands the
    * item's id to the shell, which opens it; the log records the outcome,
    * never the words.

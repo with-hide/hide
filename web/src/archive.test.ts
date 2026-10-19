@@ -48,9 +48,8 @@ describe("where 세션 보관 is offered", () => {
     expect(archiveOffer(rest(), agent("p1"))).toEqual({ kind: "offered", unavailable: null });
   });
 
-  it("offers nothing on Hide AI or a Factory worker", () => {
+  it("offers nothing on Hide AI", () => {
     expect(archiveOffer(rest(), agent("p1", { hide_ai: { kind: "secretary" } } as unknown as Partial<AgentRow>))).toEqual({ kind: "hidden" });
-    expect(archiveOffer(rest({ factory_worker_panes: ["p1"] }), agent("p1"))).toEqual({ kind: "hidden" });
   });
 
   it("draws it disabled with why on a child, an unknown conversation and a gone device", () => {

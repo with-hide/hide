@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleDotIcon, CircleHelpIcon, Clock3Icon, SquareIcon, GitPullRequestIcon, InfoIcon, LightbulbIcon, MessageSquareIcon, TriangleAlertIcon, HouseIcon, LoaderCircleIcon, SquareTerminalIcon } from "lucide-react";
+import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleDotIcon, CircleHelpIcon, Clock3Icon, SquareIcon, GitPullRequestIcon, InfoIcon, LightbulbIcon, MessageSquareIcon, TriangleAlertIcon, HouseIcon, LoaderCircleIcon, SquareTerminalIcon, RotateCcwIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -21,10 +21,12 @@ import { checklist, childOutputs, orderedOutputs, outputPrState, recordTitle, re
 import { boardProjects } from "./navigation";
 import { cardLine, cardOfPane, cardQuestion, everyAgent } from "./overviewTasks";
 import { destinationOf } from "./overviewBacklog";
-import { folderName } from "./linkPanel";
+import { folderName, resumeBlock, resumeProvider } from "./linkPanel";
+import { useSessionResume } from "./useSessionResume";
+import { recordDate } from "./sessionRecordTime";
 import { machineName } from "./screenMachine";
 import { localDeviceId } from "./snapshot";
-import type { AgentRow, AgentStatusCode, MissedWork, RowMark, SessionRecord as RecordValue, WorkEnd, WorkOutput, WorkSession } from "./snapshot";
+import type { AgentRow, AgentStatusCode, Checkout, MissedWork, RowMark, SessionRecord as RecordValue, WorkEnd, WorkOutput, WorkSession } from "./snapshot";
 import { statusText } from "./agentStatus";
 import { useShellStore } from "./store";
 import { summariesEnabled } from "./hideAi";
@@ -141,7 +143,7 @@ export function SessionRecord({ actions, target, frame }: { actions: Actions; ta
     {frame.note ? <p className="px-md pb-xs text-caption text-muted-foreground" data-record-note="true">{frame.note}</p> : null}
     {!own || own.loading ? <div className="space-y-md px-md py-sm" aria-busy="true" data-record-loading="true">{[0, 1, 2].map((key) => <div key={key} className="h-(--size-control-lg) rounded-sm bg-muted" />)}</div> : own.failure ? <div role="status" className="px-md py-sm text-caption"><p>{t("sessionWork.failed")}</p><Button size="sm" variant="ghost" onClick={frame.onRead}>{t("common.retry")}</Button></div> : shown ? <div className={cn("min-h-0 flex-1 overflow-y-auto px-lg pb-lg text-caption [word-break:keep-all]", !connected && "opacity-(--opacity-disabled)")} data-record-content="true">
       <h2 className="flex min-w-0 items-center gap-xs py-sm text-subhead font-semibold"><AgentMark kind={shown.session.agent} /><span className="min-w-0 whitespace-normal [overflow-wrap:anywhere]" title={recordTitle(shown, summaries)}>{recordTitle(shown, summaries)}</span></h2>
-      <RecordPlace record={shown} actions={actions} />
+      <RecordPlace key={workKey(shown.session)} record={shown} actions={actions} />
       <Work key={`work:${workKey(shown.session)}`} record={shown} summaries={summaries} onOpen={open} actions={actions} parent={parent ? recordTitle(parent, summaries) : liveParent} locator={workKey(shown.session) === workKey(target) ? frame.locator : undefined} />
     </div> : null}
   </div>;
@@ -172,9 +174,39 @@ function RecordPlace({ record, actions }: { record: RecordValue; actions: Action
       {checkouts.map((checkout) => <span key={checkout.id} className={cn("inline-flex min-w-0 items-center gap-xxs", !checkout.exists && "text-muted-foreground/70")} data-record-checkout={checkout.id} data-removed={checkout.exists ? undefined : "true"}>· <HouseIcon aria-hidden="true" className="size-(--size-icon-sm)" /><span className="truncate">{checkout.exists ? checkout.label : t("record.worktreeGone", { label: checkout.label })}</span></span>)}
     </p>
     {archived ? <ArchivedNow row={archived.row} member={archived.row.members[archived.index]!} own={archived.index > 0} connected={deviceConnected(rest, archived.row.device_id)} actions={actions} />
-      : root || place?.agent || record.ended_at_unix_ms !== null ? <NowBox record={record} agent={place?.agent ?? null} line={root ? cardLine(root, rows) : null} question={root ? cardQuestion(root, rows) : null} actions={actions} /> : null}
+      : <NowBox record={record} checkout={place?.checkout ?? null} agent={place?.agent ?? null} line={root ? cardLine(root, rows) : null} question={root ? cardQuestion(root, rows) : null} actions={actions} />}
     {left ? <ArchivedChildren row={left.row} members={left.members} connected={deviceConnected(rest, left.row.device_id)} actions={actions} /> : null}
   </>;
+}
+
+/** Uses the same device, checkout and native resume boundary as a PR's session line. */
+function RestoreSession({ record, checkout: original, actions }: { record: RecordValue; checkout: Checkout | null; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const rest = useShellStore((state) => state.rest);
+  const connected = useShellStore((state) => state.connection === "live");
+  const node = localDeviceId(rest);
+  const checkout = original?.exists ? original : null;
+  const blocked = resumeBlock({ ...record.session, file: record.path ? "present" : "missing" }, checkout, rest?.navigator?.devices, node);
+  const { resume, start } = useSessionResume();
+  const busy = resume.request !== null && !resume.uncertain;
+  const off = blocked !== null || !connected;
+  const reason = blocked ? "device" in blocked ? t(blocked.key, { device: blocked.device }) : t(blocked.key) : !connected ? t("devices.rail.notConnected") : null;
+  const restore = () => {
+    const provider = resumeProvider(record.session.agent);
+    if (off || busy || !provider || !checkout) return;
+    start((requestId, confirmOnly) => actions.startAgent({ target: { checkoutPath: checkout.path }, deviceId: record.session.device_id === node ? undefined : record.session.device_id, provider, resumeSessionId: record.session.session_id, resumeSessionPath: record.path ?? undefined, requestId, confirmOnly }));
+  };
+  return <div className="flex min-w-0 flex-col items-end gap-xs" data-record-restore="true">
+    <Button size="sm" disabled={off || busy} aria-busy={busy || undefined} onClick={restore} data-record-restore-button="true">
+      {busy ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : <RotateCcwIcon aria-hidden="true" />}{t(resume.uncertain ? "groups.confirm" : busy ? "recordCard.restoring" : "recordCard.restore")}
+    </Button>
+    {resume.uncertain ? <p role="status" className="text-micro text-muted-foreground [overflow-wrap:anywhere]">{t("links.resumeUnknown")}</p> : null}
+    {reason ? <p className="text-micro text-muted-foreground [overflow-wrap:anywhere]" data-record-restore-unavailable="true">{reason}</p> : null}
+    {resume.failure !== null ? <div role="alert" className="flex min-w-0 flex-wrap items-center gap-xs text-caption text-warning" data-record-restore-failed="true">
+      <span className="min-w-0 [overflow-wrap:anywhere]">{resume.uncertain ? resume.failure : resume.failure ? t("links.resumeFailed", { reason: resume.failure }) : t("links.resumeFailedPlain")}</span>
+      {!resume.uncertain ? <Button size="sm" variant="ghost" disabled={off || busy} onClick={restore}>{t("common.retry")}</Button> : null}
+    </div> : null}
+  </div>;
 }
 
 /** What the agent last reported, its newest line, while its pane is still known. */
@@ -182,29 +214,25 @@ function lastWords(agent: AgentRow | null): string | null {
   return agent?.message?.trim().split(/\r?\n/).filter((line) => line.trim()).at(-1) ?? null;
 }
 
-/**
- * The 지금 box (B14): the PR card's decision box part, edged in the state's
- * colour. Working: `작업 중 · <경과>`, the last words, `pane으로`. A
- * question: `질문 · <경과>`, its first line, `답하러 가기`. Blocked: the
- * reason and `pane 보기`. Ended: `끝남 · <경과>` and the last words, no button.
- */
-function NowBox({ record, agent, line, question, actions }: { record: RecordValue; agent: AgentRow | null; line: ReturnType<typeof cardLine> | null; question: string | null; actions: Actions }) {
+/** Native state and the action for this session: visit its pane or restore its conversation. */
+function NowBox({ record, checkout, agent, line, question, actions }: { record: RecordValue; checkout: Checkout | null; agent: AgentRow | null; line: ReturnType<typeof cardLine> | null; question: string | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const kind: "question" | "blocked" | "working" | "ended" = line?.kind === "needs_you" || agent?.status_code === "question" || agent?.status_code === "approval" ? "question" : line?.kind === "blocked" ? "blocked" : agent?.status_code === "working" ? "working" : "ended";
   const since = kind === "ended" ? record.ended_at_unix_ms ?? agent?.changed_at_unix_ms ?? null : agent?.changed_at_unix_ms ?? null;
   const word = kind === "working" ? t("agents.status.working") : kind === "question" ? t("agents.status.question") : kind === "blocked" ? t("agents.status.error") : agent && agent.status_code !== "done" ? statusText(t, agent.status_code) : t("sessionWork.done");
   const said = kind === "question" ? question ?? agent?.state.ask?.what ?? null : kind === "blocked" ? (line?.kind === "blocked" ? line.what : null) ?? lastWords(agent) : lastWords(agent);
   const pane = agent?.pane_id ?? null;
-  const button = pane === null || kind === "ended" ? null : kind === "question" ? (
+  const button = pane === null ? <RestoreSession record={record} checkout={checkout} actions={actions} /> : kind === "question" ? (
     <Button size="sm" onClick={() => actions.openAgent(pane)} data-record-now-button="answer"><CircleHelpIcon aria-hidden="true" />{t("links.answer")}</Button>
   ) : (
     <Button size="sm" variant="secondary" onClick={() => actions.openAgent(pane)} data-record-now-button="pane"><SquareTerminalIcon aria-hidden="true" />{t(kind === "blocked" ? "work.card.viewPane" : "record.toPane")}</Button>
   );
   return <div className="mb-sm flex min-w-0 flex-col gap-xs" aria-label={t("sessionWork.now")} data-record-now={kind}>
     <div className="flex min-w-0 flex-wrap items-center gap-sm">
-      <p className={cn("flex min-w-0 flex-1 items-center gap-xs font-medium", kind === "working" ? "text-agent-working" : kind === "question" ? "text-warning" : kind === "blocked" ? "text-destructive" : "text-foreground")}>
+      <p className={cn("flex min-w-0 flex-1 flex-wrap items-center gap-xs font-medium", kind === "working" ? "text-agent-working" : kind === "question" ? "text-warning" : kind === "blocked" ? "text-destructive" : "text-foreground")}>
         <span>{word}</span>
         {since !== null ? <Elapsed since={since} className="font-mono text-caption font-normal text-muted-foreground" data-record-now-elapsed="true" /> : null}
+        <span className="rounded-xs border border-border px-xs text-micro font-normal text-muted-foreground" data-record-pane={pane ? "open" : "closed"}>{t(pane ? "recordCard.paneOpen" : "recordCard.paneClosed")}</span>
       </p>
       {button}
     </div>
@@ -323,9 +351,9 @@ function useRecordAgent(record: RecordValue) {
   });
 }
 
-function RequestTime({ at }: { at: number }) {
+function RequestTime({ at, full = false }: { at: number; full?: boolean }) {
   const { i18n } = useInterfaceTranslation();
-  return <time className="shrink-0 font-mono text-micro text-muted-foreground" dateTime={new Date(at).toISOString()}>{formatDateTime(requireInterfaceLanguage(i18n.language), at, { hour: "2-digit", minute: "2-digit", hour12: false })}</time>;
+  return <time className="shrink-0 font-mono text-micro text-muted-foreground" dateTime={new Date(at).toISOString()}>{full ? `${recordDate(at)} ` : null}{formatDateTime(requireInterfaceLanguage(i18n.language), at, { hour: "2-digit", minute: "2-digit", hour12: false })}</time>;
 }
 
 function RequestedWork({ record, summaries }: { record: RecordValue; summaries: boolean }) {
@@ -337,9 +365,9 @@ function RequestedWork({ record, summaries }: { record: RecordValue; summaries: 
   return <section className="mt-lg min-w-0" data-record-work={summaries && list.tasks.length ? "true" : undefined}>
     <SectionHead label={t(summaries && list.tasks.length ? "sessionWork.tasks" : "recordCard.latestRequest")} summary={summaries && list.total ? t("recordCard.completed", { done: list.done, total: list.total }) : null} />
     {summaries ? list.tasks.map((item) => <TaskRow key={item.task.id} item={item} mark={agent?.mark ?? null} />) : null}
-    {(!summaries || !list.tasks.length) && latest ? <div className="whitespace-pre-wrap text-caption [overflow-wrap:anywhere]" data-record-raw-request="true"><p className="mb-xs text-micro text-muted-foreground">{t(summaries ? latest.judged ? "recordCard.request" : "recordCard.pending" : "recordCard.aiOff")} · <RequestTime at={latest.at_unix_ms} /></p>{latest.text}</div> : null}
+    {(!summaries || !list.tasks.length) && latest ? <div className="whitespace-pre-wrap text-caption [overflow-wrap:anywhere]" data-record-raw-request="true"><p className="mb-xs text-micro text-muted-foreground">{t(summaries ? latest.judged ? "recordCard.request" : "recordCard.pending" : "recordCard.aiOff")} · <RequestTime at={latest.at_unix_ms} full /></p>{latest.text}</div> : null}
     {!latest && !list.tasks.length ? <p className="text-micro text-muted-foreground">{t("sessionWork.empty")}</p> : null}
-    {summaries && list.tasks.length && list.latest ? <p className="mt-sm whitespace-pre-wrap text-caption [overflow-wrap:anywhere]" data-record-latest-request={list.latest.offset}><span className="mr-xs text-micro text-muted-foreground">{t("recordCard.pending")}</span>{list.latest.text}</p> : null}
+    {summaries && list.tasks.length && list.latest ? <p className="mt-sm whitespace-pre-wrap text-caption [overflow-wrap:anywhere]" data-record-latest-request={list.latest.offset}><span className="mr-xs text-micro text-muted-foreground">{t("recordCard.pending")} · <RequestTime at={list.latest.at_unix_ms} full /></span>{list.latest.text}</p> : null}
     {said && agent?.status_code === "working" ? <p className="mt-sm flex min-w-0 items-baseline gap-xs border-t border-border pt-sm text-caption" data-record-current="true"><span className="shrink-0 text-micro text-agent-working">{t("sessionWork.now")}</span><span className="min-w-0 whitespace-normal text-subtle-foreground [overflow-wrap:anywhere]">{said}</span></p> : null}
   </section>;
 }
@@ -494,7 +522,7 @@ function Words({ record, parent, locator }: { record: RecordValue; parent: strin
   const [all, setAll] = useState(false);
   const requests = useMemo(() => [...record.requests].sort((a, b) => a.at_unix_ms - b.at_unix_ms || a.offset - b.offset), [record.requests]);
   const hidden = all || locator ? 0 : Math.max(0, requests.length - FIRST_WORDS);
-  const target = useRef<HTMLLIElement>(null);
+  const target = useRef<HTMLDivElement>(null);
   const located = locator && requests.some((request) => request.offset === locator.request_offset);
   useEffect(() => {
     if (located && target.current) {
@@ -509,13 +537,18 @@ function Words({ record, parent, locator }: { record: RecordValue; parent: strin
     {!requests.length ? <p className="text-micro text-muted-foreground">{t("sessionWork.empty")}</p> : null}
     {hidden ? <button type="button" className={cn(ROW, "flex items-center gap-xxs py-xxs text-micro text-muted-foreground hover:text-foreground")} aria-expanded="false" onClick={() => setAll(true)} data-record-words-earlier={hidden}>{t("sessionWork.earlierTurns", { count: hidden })}<ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" /></button> : null}
     <ol className="min-w-0">
-      {requests.slice(hidden).map((request) => {
+      {requests.slice(hidden).map((request, index, shown) => {
         const who = request.author === "operator" ? t("sessionWork.me") : parent ?? t("sessionWork.parent");
         const matched = locator?.request_offset === request.offset;
-        return <li key={request.offset} ref={matched ? target : undefined} tabIndex={matched ? -1 : undefined} className={cn("flex min-w-0 flex-wrap items-baseline gap-sm py-sm", matched && "rounded-xs bg-accent/40 px-xs outline-none focus:ring-1 focus:ring-ring")} data-record-request={request.offset} data-record-request-match={matched ? "true" : undefined}>
+        const day = recordDate(request.at_unix_ms);
+        const first = index === 0 || recordDate(shown[index - 1]!.at_unix_ms) !== day;
+        return <li key={request.offset} className="min-w-0">
+          {first ? <div className="flex items-center gap-sm pt-sm pb-xs" data-record-date={day}><time dateTime={day} className="shrink-0 font-mono text-micro text-muted-foreground">{day}</time><span className="h-px min-w-0 flex-1 bg-border" aria-hidden="true" /></div> : null}
+          <div ref={matched ? target : undefined} tabIndex={matched ? -1 : undefined} className={cn("flex min-w-0 flex-wrap items-baseline gap-sm py-sm", matched && "rounded-xs bg-accent/40 px-xs outline-none focus:ring-1 focus:ring-ring")} data-record-request={request.offset} data-record-request-match={matched ? "true" : undefined}>
           <span className="w-(--size-control) shrink-0 truncate text-micro text-muted-foreground" title={who}>{who}</span>
           <span className="min-w-0 flex-1 whitespace-pre-wrap text-subtle-foreground [overflow-wrap:anywhere]" title={request.text}>{matched ? <HighlightedRequest text={request.text} query={locator.query ?? ""} /> : request.text}</span>
           <time className="shrink-0 font-mono text-micro text-muted-foreground" dateTime={new Date(request.at_unix_ms).toISOString()}>{formatDateTime(language, request.at_unix_ms, { hour: "2-digit", minute: "2-digit", hour12: false })}</time>
+          </div>
         </li>;
       })}
     </ol>

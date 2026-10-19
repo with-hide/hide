@@ -90,7 +90,7 @@ export function resumable(agent: string): boolean {
 }
 
 /** `Resume` (B12-B15, B20-B22): the agent, the file, the device and the worktree, in that order. */
-export function resumeBlock(line: LinkedSession, checkout: Checkout | null, devices: readonly Device[] | undefined, node: string): Blocked {
+export function resumeBlock(line: Pick<LinkedSession, "agent" | "file" | "device_id">, checkout: Checkout | null, devices: readonly Device[] | undefined, node: string): Blocked {
   if (!resumable(line.agent)) return { key: "links.why.agent" };
   if (line.file === "missing") return { key: "links.why.file" };
   if (!connected(devices, line.device_id, node)) return { key: "links.why.deviceOffline", device: deviceLabel(devices, line.device_id) };
@@ -107,7 +107,7 @@ function within(path: string, root: string): boolean {
  * holds the folder it worked in, the deepest one, else the one on the pull
  * request's branch; a checkout whose folder is gone is no place.
  */
-export function resumeCheckout(line: LinkedSession, workspaces: readonly Workspace[], branch: string | null, node: string): Checkout | null {
+export function resumeCheckout(line: Pick<LinkedSession, "device_id" | "cwd">, workspaces: readonly Workspace[], branch: string | null, node: string): Checkout | null {
   const here = workspaces.filter((workspace) => (workspace.device_id ?? node) === line.device_id).flatMap((workspace) => workspace.checkouts).filter((checkout) => checkout.exists);
   const cwd = line.cwd;
   const holding = cwd ? here.filter((checkout) => within(cwd, checkout.path)).sort((a, b) => b.path.length - a.path.length)[0] : undefined;

@@ -1,4 +1,4 @@
-// hide-opencode-plugin@8 sha256=b3a3c4a8d63ab8f3729751344b13b4d323184c3d849215dec71768767ea253ab
+// hide-opencode-plugin@9 sha256=e77b53ad20d267cdc9f17e259e456ddef63d4d02784177cce800772f74c775e2
 // Hide's OpenCode 1.x plugin, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane Hide manages, or when its helper is gone, it does nothing.
@@ -493,9 +493,6 @@ async function onTool(state, sessionID, directory, input, output) {
   } else if (FILE_TOOLS.has(tool)) {
     if (!guardrailsOn(state)) return null;
     request = { session_id: sessionID, tool, args: fileArgs(output?.args), cwd: directory };
-  } else if (tool === "question" && !state.guardOnly) {
-    // The core knows the pane by the root session Herdr's integration reports, also for a subagent's call.
-    request = { session_id: rootOf(state, sessionID) ?? sessionID, tool };
   } else {
     return null;
   }

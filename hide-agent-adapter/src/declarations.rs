@@ -1,5 +1,4 @@
 use super::*;
-use Capability::{Available, Unavailable, Unconfirmed};
 use usage::{
     AbsenceKind, Attribution, AttributionFrom, CostBasis, LimitDeclaration, LimitSource, ModelFrom,
     Support, TokenSource, UsageDeclaration, absent, not_built,
@@ -73,17 +72,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         doc_url: "https://code.claude.com/docs/en/skills",
         install_url: "https://code.claude.com/docs/en/setup",
         logo_id: "claude-code",
-        factory: FactoryCapabilities {
-            direct_ask: Available(DirectAsk {
-                tools: &["AskUserQuestion", "ExitPlanMode"],
-                denial: HookDialect::ClaudeCode,
-            }),
-            user_turn: Available(SessionFormat::Claude),
-            turn_end_and_answer: Available(SessionFormat::Claude),
-            startup_guidance: Available(HookInstall::Runtime(HookDialect::ClaudeCode)),
-            resume: Available(LaunchDialect::Claude),
-            next_prompt_letters: Available(HookDialect::ClaudeCode),
-        },
     },
     AgentAdapter {
         key: AgentId::Codex,
@@ -152,17 +140,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         doc_url: "https://learn.chatgpt.com/docs/build-skills",
         install_url: "https://learn.chatgpt.com/docs/codex/cli",
         logo_id: "codex",
-        factory: FactoryCapabilities {
-            direct_ask: Available(DirectAsk {
-                tools: &["request_user_input", "request_user_input_async"],
-                denial: HookDialect::Codex,
-            }),
-            user_turn: Available(SessionFormat::Codex),
-            turn_end_and_answer: Available(SessionFormat::Codex),
-            startup_guidance: Available(HookInstall::Runtime(HookDialect::Codex)),
-            resume: Available(LaunchDialect::Codex),
-            next_prompt_letters: Available(HookDialect::Codex),
-        },
     },
     AgentAdapter {
         key: AgentId::Grok,
@@ -240,14 +217,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         doc_url: "https://docs.x.ai/build/features/skills-plugins-marketplaces",
         install_url: "https://github.com/xai-org/grok-build",
         logo_id: "grok",
-        factory: FactoryCapabilities {
-            direct_ask: Unconfirmed,
-            user_turn: Unconfirmed,
-            turn_end_and_answer: Unconfirmed,
-            startup_guidance: Unavailable,
-            resume: Unconfirmed,
-            next_prompt_letters: Unavailable,
-        },
     },
     AgentAdapter {
         key: AgentId::OpenCode,
@@ -330,17 +299,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         doc_url: "https://opencode.ai/docs/skills/",
         install_url: "https://opencode.ai/docs/",
         logo_id: "opencode",
-        factory: FactoryCapabilities {
-            direct_ask: Available(DirectAsk {
-                tools: &["question"],
-                denial: HookDialect::OpenCode,
-            }),
-            user_turn: Unconfirmed,
-            turn_end_and_answer: Unconfirmed,
-            startup_guidance: Available(HookInstall::Plugin(PluginDialect::OpenCode)),
-            resume: Unconfirmed,
-            next_prompt_letters: Available(HookDialect::OpenCode),
-        },
     },
     AgentAdapter {
         key: AgentId::Pi,
@@ -425,15 +383,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         doc_url: "https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/skills.md",
         install_url: "https://pi.dev/",
         logo_id: "pi",
-        factory: FactoryCapabilities {
-            // Pi has no built-in tool that asks the operator.
-            direct_ask: Unavailable,
-            user_turn: Unconfirmed,
-            turn_end_and_answer: Unconfirmed,
-            startup_guidance: Available(HookInstall::Plugin(PluginDialect::Pi)),
-            resume: Unconfirmed,
-            next_prompt_letters: Available(HookDialect::Pi),
-        },
     },
     AgentAdapter {
         key: AgentId::Omp,
@@ -517,17 +466,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         doc_url: "https://omp.sh/docs/skills",
         install_url: "https://omp.sh/docs/quickstart",
         logo_id: "omp",
-        factory: FactoryCapabilities {
-            direct_ask: Available(DirectAsk {
-                tools: &["ask"],
-                denial: HookDialect::Omp,
-            }),
-            user_turn: Unconfirmed,
-            turn_end_and_answer: Unconfirmed,
-            startup_guidance: Available(HookInstall::Plugin(PluginDialect::Omp)),
-            resume: Unconfirmed,
-            next_prompt_letters: Available(HookDialect::Omp),
-        },
     },
     AgentAdapter {
         key: AgentId::Antigravity,
@@ -615,20 +553,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         doc_url: "https://antigravity.google/docs/skills/",
         install_url: "https://antigravity.google/docs/install?tab=cli",
         logo_id: "antigravity",
-        factory: FactoryCapabilities {
-            direct_ask: Available(DirectAsk {
-                tools: &["ask_question"],
-                denial: HookDialect::Antigravity,
-            }),
-            // agy's transcript names no call on a tool step and no record of
-            // a question still waiting was measured, so the wait cannot be
-            // read; Factory still gets the question through `direct_ask`.
-            user_turn: Unconfirmed,
-            turn_end_and_answer: Available(SessionFormat::Antigravity),
-            startup_guidance: Available(HookInstall::Guidance(GuidanceDialect::Antigravity)),
-            resume: Available(LaunchDialect::Antigravity),
-            next_prompt_letters: Available(HookDialect::Antigravity),
-        },
     },
 ];
 
@@ -725,12 +649,4 @@ pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
     doc_url: "https://cursor.com/docs/context/skills",
     install_url: "https://cursor.com/docs/cli/installation",
     logo_id: "cursor",
-    factory: FactoryCapabilities {
-        direct_ask: Unavailable,
-        user_turn: Unavailable,
-        turn_end_and_answer: Unavailable,
-        startup_guidance: Unavailable,
-        resume: Unavailable,
-        next_prompt_letters: Unavailable,
-    },
 };

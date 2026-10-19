@@ -823,7 +823,7 @@ fn guard_failed(arguments: &[String], cause: &str) {
 fn guard_refusal(
     dialect: HookDialect,
     runtime_id: &str,
-    started: Instant,
+    _started: Instant,
     payload: &[u8],
     truncated: bool,
 ) -> Option<String> {
@@ -846,33 +846,6 @@ fn guard_refusal(
     }
     // Outside a Herdr pane there is nothing to redirect.
     let pane = pane?;
-    // Question tools have no shell command and take their own readonly route,
-    // for an agent whose question tools are confirmed to reach this hook
-    // (Grok's are not yet, so its questions stay native).
-    if let Some(question) = (guard::may_hold_question(payload)
-        && hide_agent_adapter::direct_ask_kind(runtime_id).is_some())
-    .then(|| guard::read_question(payload, truncated, dialect))
-    .flatten()
-    {
-        let home = home_directory()?;
-        let program = workspace_context::cli_program()?;
-        return match guard::question_decision(
-            &program,
-            runtime_id,
-            &question.session,
-            started + GUARD_BUDGET,
-        ) {
-            guard::QuestionDecision::Worker => {
-                guard::record_question_refusal(&home, runtime_id, &pane, question.tool);
-                Some(guard::QUESTION_REASON.to_owned())
-            }
-            guard::QuestionDecision::Allow => None,
-            guard::QuestionDecision::Unreachable(cause) => {
-                guard::unreachable(&home, runtime_id, cause);
-                None
-            }
-        };
-    }
     // Every shell call comes through here: this one search decides the rest.
     if !guard::may_hold_launch(payload) {
         return None;

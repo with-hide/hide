@@ -1,4 +1,4 @@
-// hide-extension@9 sha256=cd81995e1f52cbeadc2d623ceadab48164e80574c5900370372f187dd29a0dc3
+// hide-extension@10 sha256=dcda365bd03e83e7750ef3a38771d30f4b42bded3d29fa814ae0aa7b18efc84a
 // Hide's extension for Pi and omp, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane, in an agent started from another Pi's or omp's shell, or when its helper is gone, it does
@@ -14,7 +14,7 @@ import path from "node:path";
 const HELPER = "/kit path/it's/hide-agent-hooks";
 const ROUTE = [];
 const AGENT = "pi";
-const VERSION = 9;
+const VERSION = 10;
 
 // The prompt budget is Claude Code's prompt hook's; the tool budget is the spawn guard's. Both hosts wait for
 // a handler far longer (omp gives up at 30 s and then blocks the tool), so these are the limits.
@@ -515,11 +515,6 @@ async function onTool(state, event, ctx) {
   } else if (FILE_TOOLS.has(tool)) {
     if (!guardrailsOn(state)) return null;
     request = { tool, args: fileArgs(event?.input), cwd: ctx?.cwd };
-  } else if (tool === "ask" && AGENT === "omp" && !state.guardOnly) {
-    // The core knows the pane by the root session Herdr's integration reports, also for a subagent's call.
-    const session = root(ctx) ? sessionFile(ctx) : shared.rootSession;
-    if (!session) return null;
-    request = { session_id: session, tool };
   } else {
     return null;
   }

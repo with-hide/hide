@@ -420,18 +420,12 @@ test("while a project has a protection on, file and shell calls ask the helper w
   }
 });
 
-test("the question tool is refused only when the helper says the pane is a Factory worker", async () => {
+test("native questions run without asking Hide's tool guard", async () => {
   const question = sample("tool.execute.before.question");
-  answer({ start: { context: "" }, tool: { deny: "Ask through hide factory ask" } });
-  let hooks = await plugin();
-  await assert.rejects(hooks["tool.execute.before"](question.input, question.output), {
-    message: "Ask through hide factory ask",
-  });
-  for (const tool_answer of [{}, { exit: 3 }, { delay_ms: 4000, deny: "late" }]) {
-    answer({ start: { context: "" }, tool: tool_answer });
-    hooks = await plugin();
-    await hooks["tool.execute.before"](question.input, question.output);
-  }
+  answer({ start: { context: "" }, tool: { deny: "Not run" } });
+  const hooks = await plugin();
+  await hooks["tool.execute.before"](question.input, question.output);
+  assert.deepEqual(calls().filter((call) => call.operation === "tool"), []);
 });
 
 test("child sessions move the pane's subagent counts, and a background child stays counted after the turn", async () => {
@@ -454,16 +448,6 @@ test("child sessions move the pane's subagent counts, and a background child sta
   await until("subagents", 1, (input) => input.working === 0 && input.done === 1);
 });
 
-test("a subagent's question call asks the Factory guard about the pane's root session", async () => {
-  answer({ start: { context: "" }, tool: {} });
-  const hooks = await plugin();
-  await hooks.event({ event: sample("session.created") });
-  await hooks.event({ event: sample("session.created.child") });
-  const question = sample("tool.execute.before.question");
-  await hooks["tool.execute.before"]({ ...question.input, sessionID: "ses_child" }, question.output);
-  const [call] = await until("tool");
-  assert.deepEqual(call.input, { session_id: "ses_root", tool: "question" });
-});
 
 test("past its session limit the plugin forgets finished children, keeps a running one counted and guides once", async () => {
   answer({ start: { context: "HIDE-GUIDANCE" }, prompt: { context: "", letters: [] }, subagents: { reported: true } });

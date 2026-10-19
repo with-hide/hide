@@ -359,12 +359,10 @@ fn a_private_hook_is_admitted_without_changing_an_unsigned_source() {
 }
 
 #[test]
-fn a_grok_question_tool_stays_native_until_its_tools_are_confirmed_to_reach_the_hook() {
-    // Grok's `direct_ask` is Unconfirmed in the adapter table (PRD D-14): the
-    // hook asks no Factory guard for it, even in the current worker pane.
-    assert_eq!(hide_agent_adapter::direct_ask_kind("grok"), None);
+fn a_grok_question_tool_stays_native_without_a_question_guard() {
+    // Native question and plan approval tools never ask Hide's shell spawn guard.
     for tool in ["ask_user_question", "exit_plan_mode"] {
-        let machine = Machine::new("worker");
+        let machine = Machine::new("registered");
         let payload = json!({
             "hook_event_name": "PreToolUse", "sessionId": "grok-session", "toolName": tool,
             "toolInput": { "questions": [{ "question": "private-question-text" }] },

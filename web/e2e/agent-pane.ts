@@ -26,7 +26,7 @@ export async function agentPane(herdr: HerdrFixture, stateDir: string, pane: str
   const runner = path.join(root, "worker-bin", fixtureExecutable("claude"));
   fs.mkdirSync(path.dirname(runner));
   copyFixtureShim("spawn-provider", runner);
-  fs.writeFileSync(path.join(root, "factory-question-runner.config"), runner);
+  fs.writeFileSync(path.join(root, "agent-pane-runner.config"), runner);
   const command = path.join(root, "agent-pane-command.json");
   const output = path.join(root, "agent-pane-output.json");
   const completed = path.join(root, "agent-pane-command.status");

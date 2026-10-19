@@ -1536,10 +1536,6 @@ pub(super) enum Event {
     BacklogUndo(super::backlog::BacklogItemPayload),
     BacklogOrigin(crate::links::ledger::BacklogOriginIdentity),
     BacklogOriginClose(crate::links::ledger::BacklogOriginIdentity),
-    FactoryAction(Box<super::factory::FactoryActionPayload>),
-    FactoryTaskOpen(super::factory::FactoryTaskOpenPayload),
-    FactoryTaskClose,
-    FactorySecretarySet(PaneTargetPayload),
     SessionsSetFilter(SessionsFilterPayload),
     ArchiveOpen(ArchiveOpenPayload),
     MemoryAction(MemoryActionPayload),
@@ -1808,12 +1804,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
             crate::links::ledger::BacklogOriginIdentity,
             BacklogOriginClose
         ),
-        "factory_action" => serde_json::from_value::<super::factory::FactoryActionPayload>(payload)
-            .map(|payload| Event::FactoryAction(Box::new(payload)))
-            .map_err(|_| invalid_payload(&kind)),
-        "factory_task_open" => decode!(super::factory::FactoryTaskOpenPayload, FactoryTaskOpen),
-        "factory_task_close" => Ok(Event::FactoryTaskClose),
-        "factory_secretary_set" => decode!(PaneTargetPayload, FactorySecretarySet),
+
         "links_close" => Ok(Event::LinksClose),
         "archive_open" => decode!(ArchiveOpenPayload, ArchiveOpen),
         "memory_action" => decode!(MemoryActionPayload, MemoryAction),
@@ -2045,10 +2036,6 @@ impl Runtime {
             Event::BacklogUndo(payload) => self.undo_backlog(payload),
             Event::BacklogOrigin(payload) => self.read_backlog_origin(payload),
             Event::BacklogOriginClose(payload) => self.close_backlog_origin(payload),
-            Event::FactoryAction(payload) => self.factory_action(*payload),
-            Event::FactoryTaskOpen(payload) => self.factory_task_open(payload),
-            Event::FactoryTaskClose => self.factory_task_close(),
-            Event::FactorySecretarySet(payload) => self.factory_secretary_set(payload.pane_id),
             Event::LinksClose => self.close_links(),
             Event::SessionsSetFilter(payload) => {
                 self.set_sessions_filter(&payload.provider, payload.query)
@@ -4163,8 +4150,6 @@ impl Runtime {
                     session_resolution_inputs: current.session_resolution_inputs,
                     session_collapsed_checkout_ids: current.session_collapsed_checkout_ids,
                     session_open_folds: current.session_open_folds,
-                    // The secretary belongs to `factory_secretary_set`.
-                    factory_secretary_pane: current.factory_secretary_pane,
                     // Recorded by the core when a Rename lands.
                     operator_tab_names: current.operator_tab_names,
                     expanded_paths: payload.expanded_paths,

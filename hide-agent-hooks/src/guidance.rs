@@ -86,7 +86,8 @@ impl GuidanceAgent {
     /// Antigravity commands encoded across its Windows Go-to-cmd boundary.
     pub const fn version(self) -> u32 {
         match self {
-            Self::Grok | Self::Antigravity => 9,
+            Self::Grok => 9,
+            Self::Antigravity => 10,
             Self::Cursor => 7,
             Self::Gemini
             | Self::Qwen
@@ -195,8 +196,8 @@ impl GuidanceAgent {
         // agy's events: the first prompt of a conversation, every model call
         // (the helper reads it as the prompt hook), the tool call and the
         // turn's end. The matcher is a regular expression on the whole tool
-        // name: the shell, the file tools the guardrails judge and the
-        // question a Factory worker is refused (agy 1.3.6's CLI toolset).
+        // name: the shell and the file tools the guardrails judge
+        // (agy 1.3.6's CLI toolset).
         const ANTIGRAVITY: &[Slot] = &[
             Slot::new(HookEvent::SessionStart, "SessionStart", None),
             Slot::new(HookEvent::UserPromptSubmit, "PreInvocation", None),
@@ -205,7 +206,7 @@ impl GuidanceAgent {
                 HookEvent::PreToolUse,
                 "PreToolUse",
                 Some(
-                    "run_command|view_file|write_to_file|replace_file_content|multi_replace_file_content|ask_question",
+                    "run_command|view_file|write_to_file|replace_file_content|multi_replace_file_content",
                 ),
             ),
             Slot::new(HookEvent::Stop, "Stop", None),

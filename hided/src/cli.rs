@@ -13,10 +13,6 @@ use crate::state_file::{self, DaemonState};
 #[derive(Debug, Eq, PartialEq)]
 pub enum CommandKind {
     Delivery(herdr_core::delivery::Command),
-    /// `hide factory ...`
-    Factory(crate::factory_cli::FactoryRequest),
-    /// `hide factory help`: every Factory command and its flags.
-    FactoryHelp,
     Help,
     AgentSpawnHelp,
     /// `hide version [--json]`: this build's version, commit and contract.
@@ -54,10 +50,6 @@ pub enum CommandKind {
     /// `hide browser help`: the agent guide for the page commands.
     BrowserHelp,
     WorkspaceBootstrap,
-    FactoryQuestionGuard {
-        session: String,
-        runtime: String,
-    },
     /// `hide workspace memory`: a hook's Project Memory from the core, with
     /// the prompt on stdin (PRD core-host-node-move B14).
     WorkspaceMemory {
@@ -157,24 +149,12 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 .map_err(|refusal| format!("{refusal}\n{}", crate::delivery_cli::USAGE))?;
             crate::delivery_cli::parse(topic, iter).map(CommandKind::Delivery)
         }
-        Some("factory") if args[2..] == ["help"] => Ok(CommandKind::FactoryHelp),
-        Some("factory") => crate::factory_cli::parse(iter).map(CommandKind::Factory),
         Some("browser") => parse_browser(iter),
         Some("observation") => match (iter.next().map(String::as_str), iter.next()) {
             (Some("--hook"), None) => Ok(CommandKind::ObservationHook),
             _ => Err("usage: hide observation --hook".into()),
         },
         Some("workspace") => match iter.next().map(String::as_str) {
-            Some("factory-question-guard") => {
-                let words: Vec<&str> = iter.map(String::as_str).collect();
-                match words.as_slice() {
-                    ["--session", session, "--runtime", runtime]
-                        if herdr_core::delivery::valid_session(session)
-                            && hide_agent_adapter::direct_ask_kind(runtime).is_some() =>
-                        Ok(CommandKind::FactoryQuestionGuard { session: (*session).to_owned(), runtime: (*runtime).to_owned() }),
-                    _ => Err("usage: hide workspace factory-question-guard --session <id> --runtime <claude-code|codex|opencode|omp>".into()),
-                }
-            }
             Some("memory") => {
                 let words: Vec<&str> = iter.map(String::as_str).collect();
                 parse_workspace_memory(&words)
@@ -478,10 +458,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         println!("{}", crate::cli_contract::document());
         return Ok(());
     }
-    if kind == CommandKind::FactoryHelp {
-        println!("{}", hide_factory::command::USAGE);
-        return Ok(());
-    }
+
     if kind == CommandKind::AgentSpawnHelp {
         println!("{}", crate::agent_cli::SPAWN_HELP);
         return Ok(());
@@ -490,7 +467,6 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         println!("hide version [--json]\nhide contract --json");
         println!("{}", crate::delivery_cli::USAGE);
         println!("{}", crate::agent_cli::USAGE);
-        println!("{}", hide_factory::command::USAGE);
         println!(
             "hide workspace info\nhide file open <path> [--beside] [--request-id <id>]\nhide diff open <path> [--beside] [--request-id <id>]\nhide browser open <url-or-path> [--wait] [--request-id <id>]\nhide browser connect [--display <id>]\nhide browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ...\nhide browser help\nhide view list\nhide view status <view-id>\nhide view select <view-id> [--request-id <id>]\nhide view close <view-id> [--request-id <id>]\nhide view split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>]\nhide view move <view-id> --area <area-id> --index <n> [--request-id <id>]\nhide links pr <number> | issue <number> | branch <name> | session <id> [--all-projects]\nhide memory show <card> | search <words> | add <text> | forget <card> | undo <card> | placed <card> <path> | building <card> <branch> <path> | unbuilt <card> <reason> | outdated <card> <reason> | skipped <card> <reason> | stale <card> <reason> | release <card>\nEach Workspace command requires a live Hide renderer and a caller Hide can bind to a checkout, an attested Herdr pane or a shell inside a registered checkout; it never starts Hide. hide links needs only the caller and a running Hide, and reads the caller's Project unless --all-projects is given. hide memory reads, adds to and forgets from the caller's Project Memory, which the core keeps in one store for the Projects of its own machine and every registered linked device with a Memory reader. hide memory release ends a hold an agent's stale report put on a card; run in a Hide shell pane with no agent, it also lets that card's text be reported stale once more."
         );
@@ -507,10 +483,8 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
             if matches!(
                 &kind,
                 CommandKind::WorkspaceBootstrap
-                    | CommandKind::FactoryQuestionGuard { .. }
                     | CommandKind::WorkspaceMemory { .. }
                     | CommandKind::Delivery(_)
-                    | CommandKind::Factory(_)
                     | CommandKind::WorkspaceInfo
                     | CommandKind::WorkspaceHookInfo
                     | CommandKind::ObservationHook
@@ -545,10 +519,8 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                 crate::delivery_cli::run(&env, command)
             }
         }
-        CommandKind::Factory(request) => crate::factory_cli::run(&env, request),
         CommandKind::Help
         | CommandKind::AgentSpawnHelp
-        | CommandKind::FactoryHelp
         | CommandKind::BrowserHelp
         | CommandKind::Version { .. }
         | CommandKind::Contract => unreachable!("handled above"),
@@ -611,16 +583,6 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     .unwrap_or("observation_unavailable")
                     .into())
             }
-        }
-        CommandKind::FactoryQuestionGuard { session, runtime } => {
-            let credential = crate::workspace_cli::Credential::acquire(&env)?;
-            let answer = crate::workspace_cli::request_factory_question_guard(
-                &credential,
-                &session,
-                &runtime,
-            )?;
-            println!("{answer}");
-            Ok(())
         }
         CommandKind::WorkspaceMemory {
             event,
@@ -2518,22 +2480,6 @@ mod tests {
     }
 
     #[test]
-    fn factory_help_prints_the_factory_commands_and_help_with_more_is_refused() {
-        let parse = |args: &[&str]| {
-            parse_args(&args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
-        };
-        assert_eq!(
-            parse(&["hide", "factory", "help"]).unwrap(),
-            CommandKind::FactoryHelp
-        );
-        assert!(parse(&["hide", "factory", "help", "done"]).is_err());
-        let usage = hide_factory::command::USAGE;
-        assert!(usage.contains("done --result"), "{usage}");
-        assert!(usage.contains("follow-up <task>"), "{usage}");
-        assert!(!usage.contains("ack-notices"), "{usage}");
-    }
-
-    #[test]
     fn parse_serve_keep_alive() {
         let args = ["hide", "serve", "--keep-alive"]
             .into_iter()
@@ -2646,70 +2592,6 @@ mod tests {
             crate::workspace_cli::read_memory_prompt("keep going".as_bytes()).unwrap(),
             "keep going"
         );
-    }
-
-    #[test]
-    fn factory_question_guard_requires_one_native_session_and_known_runtime() {
-        let parse = |args: &[&str]| {
-            parse_args(
-                &args
-                    .iter()
-                    .map(|word| (*word).to_owned())
-                    .collect::<Vec<_>>(),
-            )
-        };
-        for runtime in ["claude-code", "codex", "opencode", "omp"] {
-            assert_eq!(
-                parse(&[
-                    "hide",
-                    "workspace",
-                    "factory-question-guard",
-                    "--session",
-                    "native-1",
-                    "--runtime",
-                    runtime
-                ])
-                .unwrap(),
-                CommandKind::FactoryQuestionGuard {
-                    session: "native-1".into(),
-                    runtime: runtime.into()
-                }
-            );
-        }
-        for args in [
-            vec!["hide", "workspace", "factory-question-guard"],
-            vec![
-                "hide",
-                "workspace",
-                "factory-question-guard",
-                "--session",
-                "",
-                "--runtime",
-                "codex",
-            ],
-            vec![
-                "hide",
-                "workspace",
-                "factory-question-guard",
-                "--session",
-                "s1",
-                "--runtime",
-                "foreign",
-            ],
-            vec![
-                "hide",
-                "workspace",
-                "factory-question-guard",
-                "--session",
-                "s1",
-                "--runtime",
-                "codex",
-                "--pane",
-                "w1:p1",
-            ],
-        ] {
-            assert!(parse(&args).is_err(), "{args:?}");
-        }
     }
 
     #[test]

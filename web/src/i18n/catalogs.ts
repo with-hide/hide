@@ -32,7 +32,6 @@ import { mobileSetupCatalogs, mobileSetupEnglish } from "./resources/mobileSetup
 import { coreMoveCatalogs, coreMoveEnglish } from "./resources/coreMove";
 import { nativeCatalogs, nativeEnglish } from "./resources/native";
 import { overviewCatalogs, overviewEnglish } from "./resources/overview";
-import { factoryCatalogs, factoryEnglish } from "./resources/factory";
 import { firstRunCatalogs, firstRunEnglish } from "./resources/firstRun";
 import { memoryCatalogs, memoryEnglish } from "./resources/memory";
 import { prWorkCatalogs, prWorkEnglish } from "./resources/prWork";
@@ -43,6 +42,7 @@ import { feedbackCatalogs, feedbackEnglish } from "./resources/feedback";
 import { requestsCatalogs, requestsEnglish } from "./resources/requests";
 import { settingsCatalogs, settingsEnglish } from "./resources/settings";
 import { workspaceCatalogs, workspaceEnglish } from "./resources/workspace";
+import { checkoutGitCatalogs, checkoutGitEnglish } from "./resources/checkoutGit";
 import type { Catalogs } from "./schema";
 import { sessionWorkCatalogs, sessionWorkEnglish } from "./resources/sessionWork";
 import { deviceOverviewCatalogs, deviceOverviewEnglish } from "./resources/deviceOverview";
@@ -81,6 +81,7 @@ export const english = {
   ...mobileSetupEnglish,
   ...coreMoveEnglish,
   ...workspaceEnglish,
+  ...checkoutGitEnglish,
   ...issueSettingsEnglish,
   ...hideAiEnglish,
   ...agentsEnglish,
@@ -93,7 +94,6 @@ export const english = {
   ...linksEnglish,
   ...feedbackEnglish,
   ...overviewEnglish,
-  ...factoryEnglish,
   ...firstRunEnglish,
   ...memoryEnglish,
   ...projectSettingsEnglish,
@@ -136,6 +136,7 @@ export const catalogs = {
     ...mobileSetupCatalogs.ko,
     ...coreMoveCatalogs.ko,
     ...workspaceCatalogs.ko,
+    ...checkoutGitCatalogs.ko,
     ...issueSettingsCatalogs.ko,
     ...hideAiCatalogs.ko,
     ...agentsCatalogs.ko,
@@ -148,7 +149,6 @@ export const catalogs = {
     ...linksCatalogs.ko,
     ...feedbackCatalogs.ko,
     ...overviewCatalogs.ko,
-    ...factoryCatalogs.ko,
     ...firstRunCatalogs.ko,
     ...memoryCatalogs.ko,
     ...projectSettingsCatalogs.ko,
@@ -186,6 +186,7 @@ export const catalogs = {
     ...mobileSetupCatalogs["zh-CN"],
     ...coreMoveCatalogs["zh-CN"],
     ...workspaceCatalogs["zh-CN"],
+    ...checkoutGitCatalogs["zh-CN"],
     ...issueSettingsCatalogs["zh-CN"],
     ...hideAiCatalogs["zh-CN"],
     ...agentsCatalogs["zh-CN"],
@@ -198,7 +199,6 @@ export const catalogs = {
     ...linksCatalogs["zh-CN"],
     ...feedbackCatalogs["zh-CN"],
     ...overviewCatalogs["zh-CN"],
-    ...factoryCatalogs["zh-CN"],
     ...firstRunCatalogs["zh-CN"],
     ...memoryCatalogs["zh-CN"],
     ...projectSettingsCatalogs["zh-CN"],
@@ -236,6 +236,7 @@ export const catalogs = {
     ...mobileSetupCatalogs.ja,
     ...coreMoveCatalogs.ja,
     ...workspaceCatalogs.ja,
+    ...checkoutGitCatalogs.ja,
     ...issueSettingsCatalogs.ja,
     ...hideAiCatalogs.ja,
     ...agentsCatalogs.ja,
@@ -248,7 +249,6 @@ export const catalogs = {
     ...linksCatalogs.ja,
     ...feedbackCatalogs.ja,
     ...overviewCatalogs.ja,
-    ...factoryCatalogs.ja,
     ...firstRunCatalogs.ja,
     ...memoryCatalogs.ja,
     ...projectSettingsCatalogs.ja,

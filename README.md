@@ -206,7 +206,7 @@ pnpm --dir desktop dev              # the desktop app, unpackaged, against this 
 | `hide-agent-hooks/` | The only code that writes an agent's configuration file |
 | `hide-ai/` | Background AI features on the operator's own agent CLIs |
 | `hide-kit/` | The install kit and every path under `~/.hide` |
-| `hide-*/` | The other supporting crates: sessions, memory, devices, projects, the Factory |
+| `hide-*/` | The other supporting crates: sessions, memory, devices, projects |
 | `plugins/` | Herdr plugins shipped from this repository |
 | `contracts/` | The pinned Herdr API contract |
 | `design/` | The Pen design library and `tokens.json` |
