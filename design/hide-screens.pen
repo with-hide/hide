@@ -185170,7 +185170,7 @@
                               "id": "ov-work-l-content-filters-4",
                               "type": "ref",
                               "ref": "hideui:btn-m",
-                              "name": "☐ 쉬는 세션 포함",
+                              "name": "☐ 잠든 세션 포함",
                               "fill": "$--background",
                               "stroke": "$--border",
                               "strokeWidth": "$--size-hairline",
@@ -185182,7 +185182,7 @@
                                 },
                                 "hideui:btn-lb": {
                                   "fill": "$--foreground",
-                                  "content": "☐ 쉬는 세션 포함"
+                                  "content": "☐ 잠든 세션 포함"
                                 }
                               }
                             },
@@ -185215,8 +185215,8 @@
                         {
                           "type": "text",
                           "id": "ov-work-l-content-omitted",
-                          "name": "▸ 접힌 프로젝트 2개 · 쉬는 세션뿐인 프로젝트 ",
-                          "content": "▸ 접힌 프로젝트 2개 · 쉬는 세션뿐인 프로젝트 / 세션 없음",
+                          "name": "▸ 접힌 프로젝트 2개 · 잠든 세션뿐인 프로젝트 ",
+                          "content": "▸ 접힌 프로젝트 2개 · 잠든 세션뿐인 프로젝트 / 세션 없음",
                           "fill": "$--muted-foreground",
                           "fontFamily": "$--font-ui",
                           "fontSize": "$--text-caption",
@@ -191279,7 +191279,7 @@
                               "id": "ov-work-d-content-filters-4",
                               "type": "ref",
                               "ref": "hideui:btn-m",
-                              "name": "☐ 쉬는 세션 포함",
+                              "name": "☐ 잠든 세션 포함",
                               "fill": "$--background",
                               "stroke": "$--border",
                               "strokeWidth": "$--size-hairline",
@@ -191291,7 +191291,7 @@
                                 },
                                 "hideui:btn-lb": {
                                   "fill": "$--foreground",
-                                  "content": "☐ 쉬는 세션 포함"
+                                  "content": "☐ 잠든 세션 포함"
                                 }
                               }
                             },
@@ -191324,8 +191324,8 @@
                         {
                           "type": "text",
                           "id": "ov-work-d-content-omitted",
-                          "name": "▸ 접힌 프로젝트 2개 · 쉬는 세션뿐인 프로젝트 ",
-                          "content": "▸ 접힌 프로젝트 2개 · 쉬는 세션뿐인 프로젝트 / 세션 없음",
+                          "name": "▸ 접힌 프로젝트 2개 · 잠든 세션뿐인 프로젝트 ",
+                          "content": "▸ 접힌 프로젝트 2개 · 잠든 세션뿐인 프로젝트 / 세션 없음",
                           "fill": "$--muted-foreground",
                           "fontFamily": "$--font-ui",
                           "fontSize": "$--text-caption",

@@ -885,11 +885,11 @@ The Overview reads the same tasks for the Projects tab's `지금` counts and the
 Web owners are `web/src/overviewGraphModel.ts`, `web/src/OverviewGraph.tsx`, `web/src/overviewGraphNodes.tsx` and `web/src/dependencyLayout.ts`.
 Work offers graph and list views over real live agents, grouped by project and explicit parentage, with local group folds.
 Both views share All, My turn, Working and Unread results, with counts from canonical marks: `turn`, `going|waiting` and `done|unread`.
-Include resting starts off and excludes only `quiet|asleep`; Seen demands and sleeping raised asks still marked `turn`, and `unknown`, remain available.
-The list orders My turn, Working, Unread results, unknown and resting, retaining fifty-row pagination.
+Include sleeping starts off and excludes only `asleep`; idle sessions marked `quiet`, Seen demands and sleeping raised asks still marked `turn`, and `unknown`, remain available.
+The list orders My turn, Working, Unread results, unknown, idle and sleeping, retaining fifty-row pagination.
 An excluded ancestor stays dim as relationship context without increasing match counts.
-Only branches whose every descendant rests offer a reversible subtree fold; a descendant becoming active releases that fold.
-Projects without matches move into a disclosure naming resting-only, no-session and filtered reasons, with a route to show each project and its resting sessions.
+Only branches whose every descendant sleeps offer a reversible subtree fold; a descendant becoming idle or active releases that fold.
+Projects without matches move into a disclosure naming sleeping-only, no-session and filtered reasons, with a route to show each project and its sleeping sessions.
 One-project scope draws no outer group border or duplicate heading.
 A filtered-empty view offers Show all sessions, distinct from no current sessions and layout failure.
 Each agent shows its canonical task identity, agent, state and actual current progress; a model is shown only when the current launch proves it.
@@ -1052,6 +1052,8 @@ Its first line reads `태스크 N`, the open tasks, with a `상태별 | 프로�
 내 차례 holds the questions, approvals and blocks; a block is a task whose root agent errored (the core's `demand == "error"`), not a failed CI, and its line reads `막힘 · <cause>` in the warning colour.
 대기 holds the tasks in progress that wait on proven work (the core's task state `waiting`), 일하는 중 those whose agent works.
 Tasks that rest, those resolved included, fold into `쉬는 중 N ›`, and tasks whose pull requests all merged while a worktree remains into `정리할 것 N ›`, at the end; each opens in place and closes with `접기` (B5).
+Entering a resting task's pane, or a descendant's pane, opens its `쉬는 중` fold in either 상태별 or 프로젝트별 and brings the selected row into view; a focused task moving into rest opens that fold too.
+A manual collapse stays closed through snapshot updates while focus remains there; entering another pane in that fold or returning to it reveals it again.
 Archived sessions fold last, into `보관됨 N ›`: under 정리할 것 in each project of 프로젝트별, at the very bottom in 상태별, closed until opened, newest archived first, and a project whose sessions are all archived keeps its group (PRD session-archive B14, B15).
 프로젝트별 draws one group per project, the projects with a 내 차례 first, its head the project's name with its counts by state in the same order and names (`내 차례 1 · 일하는 중 2`), the same order inside and its own folds, and no project name on the rows.
 Where a project's rows change state, a small grey label names the band (`내 차례` in the warning colour, `읽을 것`, `일하는 중`, `대기`); it is skipped by the arrow keys and hidden from assistive technology, and each band's list carries the state's name instead; 상태별 draws no band labels, since its heads already name the state.

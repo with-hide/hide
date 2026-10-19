@@ -20,7 +20,7 @@ test('Overview selects explicitly, shares filters and preserves layout in a priv
     await openOverview(page, 'work');
     const graph = page.locator('[data-overview-graph]');
     await expect(graph).toHaveAttribute('data-graph-phase', 'ready', { timeout: 30_000 });
-    await expect(graph.getByRole('checkbox', { name: 'Include resting' })).not.toBeChecked();
+    await expect(graph.getByRole('checkbox', { name: 'Include sleeping' })).not.toBeChecked();
     const target = graph.locator('.og-session-target').first();
     await expect(target).toBeVisible();
     const positions = () => graph.locator('.react-flow__node').evaluateAll(nodes => nodes.map(node => [node.getAttribute('data-id'), (node as HTMLElement).style.transform]));

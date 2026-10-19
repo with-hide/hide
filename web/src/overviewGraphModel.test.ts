@@ -159,11 +159,11 @@ describe("current sessions in the Overview graph", () => {
 // Overview focus B2-B8, B17-B18: projection uses authoritative marks, not bucket.
 describe("Overview focus", () => {
   const panes = (model: ReturnType<typeof overviewGraphModel>) => model.agents.map((row) => row.agent.pane_id);
-  it("keeps Seen demands, sleeping asks and unknown, with operator-first list order", () => {
+  it("keeps idle sessions, Seen demands, sleeping asks and unknown, with operator-first list order", () => {
     const p = project("focus", [agent("rest", { mark: "quiet" }), agent("sleep", { mark: "asleep" }), agent("unknown", { mark: "unknown" }), agent("result", { mark: "unread" }), agent("worker", { mark: "waiting" }), agent("seen-ask", { mark: "turn", group: "seen" }), agent("sleep-ask", { mark: "turn" })]);
     const all = overviewGraphModel([p], undefined, new Set([graphProjectId(p)]), null);
-    expect(panes(all)).toEqual(["seen-ask", "sleep-ask", "worker", "result", "unknown"]);
-    expect(all.counts).toEqual({ all: 5, turn: 2, working: 1, results: 1 });
+    expect(panes(all)).toEqual(["seen-ask", "sleep-ask", "worker", "result", "unknown", "rest"]);
+    expect(all.counts).toEqual({ all: 6, turn: 2, working: 1, results: 1 });
     for (const [focus, expected] of [["turn", ["seen-ask", "sleep-ask"]], ["working", ["worker"]], ["results", ["result"]]] as const) {
       expect(panes(overviewGraphModel([p], undefined, new Set(), null, { focus, includeResting: false }))).toEqual(expected);
     }
@@ -186,9 +186,9 @@ describe("Overview focus", () => {
     expect(graph.projects[0]?.agents).toHaveLength(1);
     expect(overviewProjectGraphCounts([p], undefined).get(graphProjectId(p))).toEqual({ total: 3, roots: 3, children: 0 });
   });
-  it("does not spend graph capacity on empty or resting-only projects", () => {
+  it("does not spend graph capacity on empty or sleeping-only projects", () => {
     const projects = Array.from({ length: 450 }, (_, i) => project(`empty${i}`, []));
-    projects.push(project("rest", [agent("rest", { mark: "quiet" })]));
+    projects.push(project("rest", [agent("rest", { mark: "asleep" })]));
     const active = project("active", [agent("active")]);
     projects.push(active);
     const graph = overviewGraphModel(projects, undefined, new Set([graphProjectId(active)]), null);
@@ -197,8 +197,8 @@ describe("Overview focus", () => {
     expect(graph.omitted).toHaveLength(451);
     expect(graph.limited).toBe(false);
   });
-  it("offers folds only for completely resting descendant branches, and releases a fold when a child starts", () => {
-    const rows = [agent("root"), agent("quiet", { mark: "quiet", lineage_parent_pane_id: "root" }), agent("leaf", { mark: "asleep", lineage_parent_pane_id: "quiet" })];
+  it("offers folds only for completely sleeping descendant branches, and releases a fold when a child becomes idle", () => {
+    const rows = [agent("root"), agent("quiet", { mark: "asleep", lineage_parent_pane_id: "root" }), agent("leaf", { mark: "asleep", lineage_parent_pane_id: "quiet" })];
     const p = project("family", rows);
     const options = { focus: "all" as const, includeResting: true };
     const before = overviewGraphModel([p], undefined, new Set([graphProjectId(p)]), null, options);
@@ -207,10 +207,23 @@ describe("Overview focus", () => {
     const folded = overviewGraphModel([p], undefined, new Set([graphProjectId(p)]), null, { ...options, folded: new Set([root]) });
     expect(folded.visible.map((row) => row.agent.pane_id)).toEqual(["root"]);
     expect(folded.agents).toHaveLength(3);
-    const changed = project("family", rows.map((row) => row.pane_id === "leaf" ? { ...row, mark: "turn" } : row));
+    const changed = project("family", rows.map((row) => row.pane_id === "leaf" ? { ...row, mark: "quiet" } : row));
     const active = overviewGraphModel([changed], undefined, new Set([graphProjectId(changed)]), null, { ...options, folded: new Set([root]) });
     expect(active.folded.size).toBe(0);
     expect(active.visible).toHaveLength(3);
+  });
+  it("shows idle-only projects by default and restores sleeping sessions on request", () => {
+    const idle = project("idle", [agent("idle", { mark: "quiet" })]);
+    const sleeping = project("sleeping", [agent("sleeping", { mark: "asleep" })]);
+    const projects = [sleeping, idle];
+    const expanded = new Set(projects.map(graphProjectId));
+    const graph = overviewGraphModel(projects, undefined, expanded, null);
+    expect(graph.projects.map((group) => group.project.workspace.id)).toEqual(["idle"]);
+    expect(panes(graph)).toEqual(["idle"]);
+    expect(graph.visible.map((row) => row.agent.pane_id)).toEqual(["idle"]);
+    expect(graph.omitted.map((group) => group.project.workspace.id)).toEqual(["sleeping"]);
+    expect([...initialGraphExpansion(projects, null)]).toEqual([graphProjectId(idle)]);
+    expect(panes(overviewGraphModel(projects, undefined, expanded, null, { focus: "all", includeResting: true }))).toEqual(["idle", "sleeping"]);
   });
   it("distinguishes empty, resting-only and filtered projects and recovers without mutating input", () => {
     const projects = [project("empty", []), project("rest", [agent("sleep", { mark: "asleep" })]), project("busy", [agent("busy")])];
