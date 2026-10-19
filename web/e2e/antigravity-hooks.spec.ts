@@ -127,7 +127,7 @@ test("the agy switch writes Hide's block, skill and Hide AI folder beside the op
     const post = block.hide.PostToolUse![0] as { matcher: string; hooks: { command: string }[] };
     expect(post.matcher).toBe("run_command");
     expect(post.hooks[0]!.command).toContain("--event PostToolUse");
-    expect((block.hide.PreToolUse![0] as { matcher: string }).matcher).toBe("run_command|view_file|write_to_file|replace_file_content|multi_replace_file_content|ask_question");
+    expect((block.hide.PreToolUse![0] as { matcher: string }).matcher).toBe("run_command|view_file|write_to_file|replace_file_content|multi_replace_file_content");
     // D-12: the stub goes where agy's model reads skills, never into the operator's antigravity-cli folder.
     await expect.poll(() => read(stubFile(home)), { timeout: 60_000 }).toContain("hide browser help");
     expect(fs.readdirSync(operatorSkills(home))).toEqual(["mine"]);

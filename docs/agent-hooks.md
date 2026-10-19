@@ -697,7 +697,7 @@ The block holds five events in agy's own format (`{"hide": {"<Event>": [{"type":
 | --- | --- |
 | `SessionStart` (a conversation's first prompt, never a resume) | the guidance and the Memory index, as an injected system message (`injectSteps`) |
 | `PreInvocation` (every model call; `invocationNum` 0 is a prompt's first) | on the prompt's first call the prompt's Memory cards and the pane's letters, the same way; on a later call of the turn, the gap after a tool, the letters due while the agent works ([docs/delivery.md: Letters while the agent works](delivery.md#letters-while-the-agent-works)), the same way, confirmed once printed |
-| `PreToolUse` (matcher `run_command\|view_file\|write_to_file\|replace_file_content\|multi_replace_file_content\|ask_question`) | `{"decision":"deny","reason"}` for a refused call, `{"decision":"ask"}` on every other path |
+| `PreToolUse` (matcher `run_command\|view_file\|write_to_file\|replace_file_content\|multi_replace_file_content`) | `{"decision":"deny","reason"}` for a refused call, `{"decision":"ask"}` on every other path |
 | `PostToolUse` (matcher `run_command`) | no output; passive observation with unavailable result because the native event supplies no stdout |
 | `Stop` (one per turn of each conversation) | nothing; a subagent's own stop counts it done |
 
