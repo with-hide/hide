@@ -111,7 +111,7 @@ function ConnectionPopover({
         align="start"
         role="dialog"
         aria-label={t(copy.title)}
-        className="flex flex-col gap-sm"
+        className="flex flex-col gap-sm [&:lang(ko)]:break-keep"
         data-pane-connection-popover={connection.reason}
       >
         <strong className="text-subhead text-foreground">{t(copy.title)}</strong>

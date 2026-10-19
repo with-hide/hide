@@ -94,6 +94,9 @@ test("a session started before the hook wears the chip, Not now keeps it, and Re
     await expect(chip).toBeFocused();
     await chip.press("Enter");
     await expect(popover).toContainText("Reconnect this session to Hide");
+    await chip.press("Escape");
+    await chip.press("Space");
+    await expect(popover).toBeVisible();
     await screenshot(page, "pane-connection-popover");
     await popover.locator("[data-pane-connection-dismiss]").click();
     await expect(popover).toHaveCount(0);
