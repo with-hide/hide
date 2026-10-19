@@ -693,6 +693,7 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
                 .watches
                 .iter()
                 .filter(|watch| watch.parent.same_identity(actor))
+                .map(watch::Watch::inspection)
                 .collect::<Vec<_>>()
         )),
         // A tool event's ask carries the caller's own pane as its target,
@@ -730,6 +731,10 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
                 | Command::WatchAssign { .. }
                 | Command::Confirm { .. }
                 | Command::Ack { .. }
+                | Command::Reply {
+                    review: Some(_),
+                    ..
+                }
         ),
     ))
 }
@@ -1009,6 +1014,106 @@ mod tests {
     use super::*;
     use crate::runtime::delivery::tests::{authority, fixture, show_agents};
     use crate::sidebar::SessionSnapshotPayload;
+
+    #[test]
+    fn explicit_review_completion_immediately_updates_the_public_watch_snapshot() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, parent, target, path) = fixture(root.path());
+        let mut ledger = super::super::ledger::load(&path).unwrap();
+        watch::start(&mut ledger, &parent, &target.actor, 0).unwrap();
+        ledger.watches[0].review = Some(watch::PeriodicReview {
+            policy: watch::ReviewPolicy::Observer30m,
+            due_at_unix_ms: watch::REVIEW_INTERVAL_MS,
+            pending_letter: None,
+            completed_at_unix_ms: None,
+            assessment: None,
+            cycle: 0,
+            request_failed: false,
+        });
+        watch::tick(&mut ledger, &[], watch::REVIEW_INTERVAL_MS).unwrap();
+        let id = ledger.watches[0]
+            .review
+            .as_ref()
+            .unwrap()
+            .pending_letter
+            .clone()
+            .unwrap();
+        runtime
+            .lock()
+            .unwrap()
+            .publish_delivery(Arc::new(ledger.clone()), true);
+        let request = |command| Request {
+            effect: Effect::Command {
+                authority: authority(&parent),
+                actor: parent.clone(),
+                target: None,
+                command: Box::new(command),
+            },
+            reply: mpsc::sync_channel(1).0,
+        };
+        let reply = |review, intent: &str| Command::Reply {
+            id: id.clone(),
+            intent: intent.into(),
+            body: "Scope appropriate; continue the approved step.".into(),
+            review,
+        };
+        let (_, transitions) = apply(
+            &mut ledger,
+            &request(reply(None, "ordinary")),
+            watch::REVIEW_INTERVAL_MS + 1,
+        )
+        .unwrap();
+        assert!(!transitions);
+        runtime
+            .lock()
+            .unwrap()
+            .publish_delivery(Arc::new(ledger.clone()), transitions);
+        assert_eq!(
+            runtime.lock().unwrap().snapshot().delivery_watches[0]
+                .review
+                .as_ref()
+                .unwrap()
+                .pending_letter
+                .as_deref(),
+            Some(id.as_str())
+        );
+        let now = watch::REVIEW_INTERVAL_MS + 2;
+        let (_, transitions) = apply(
+            &mut ledger,
+            &request(reply(
+                Some(watch::ReviewAssessment::ScopeAppropriate),
+                "conclusion",
+            )),
+            now,
+        )
+        .unwrap();
+        assert!(transitions);
+        runtime
+            .lock()
+            .unwrap()
+            .publish_delivery(Arc::new(ledger.clone()), transitions);
+        let guard = runtime.lock().unwrap();
+        let review = guard.snapshot().delivery_watches[0]
+            .review
+            .as_ref()
+            .unwrap();
+        assert_eq!(review.pending_letter, None);
+        assert_eq!(review.completed_at_unix_ms, Some(now));
+        assert_eq!(review.due_at_unix_ms, now + watch::REVIEW_INTERVAL_MS);
+        drop(guard);
+        ledger.watches[0].review.as_mut().unwrap().request_failed = true;
+        let (answer, _) = apply(&mut ledger, &request(Command::WatchList), now).unwrap();
+        assert_eq!(
+            answer[0]["review_failure"]["reason"],
+            "review_request_unavailable"
+        );
+        assert!(
+            answer[0]["review_failure"]["next_action"]
+                .as_str()
+                .unwrap()
+                .contains("capacity")
+        );
+    }
 
     #[test]
     fn human_claims_only_undelivered_letters_once_across_restart() {

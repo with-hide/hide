@@ -104,7 +104,7 @@ pub fn answer_schemas() -> Value {
         "intake": schemars::schema_for!(Intake),
         "confirmed": schemars::schema_for!(Confirmed),
         "watch": schemars::schema_for!(Watch),
-        "watch_list": schemars::schema_for!(Vec<Watch>),
+        "watch_list": schemars::schema_for!(Vec<super::watch::Inspection<'static>>),
         "stopped": schemars::schema_for!(Stopped),
     });
     present(&mut schemas);
@@ -113,7 +113,13 @@ pub fn answer_schemas() -> Value {
 
 /// The fields an answer leaves out when they have no value
 /// (`skip_serializing_if`).
-const OMITTED: &[&str] = &["ack_command", "names", "review", "review_assessment"];
+const OMITTED: &[&str] = &[
+    "ack_command",
+    "names",
+    "review",
+    "review_assessment",
+    "review_failure",
+];
 
 /// Marks every property of every object schema in `schema` required, but
 /// those in `OMITTED`.

@@ -30,6 +30,24 @@ pub struct PeriodicReview {
     pub completed_at_unix_ms: Option<u64>,
     pub assessment: Option<ReviewAssessment>,
     pub cycle: u64,
+    /// Always serialized: false -> true shrinks by one byte, so even an
+    /// exactly full ledger can retain the failed admission without a letter.
+    #[serde(default)]
+    pub request_failed: bool,
+}
+
+#[derive(Serialize, JsonSchema)]
+pub struct Inspection<'a> {
+    #[serde(flatten)]
+    watch: &'a Watch,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    review_failure: Option<ReviewFailure>,
+}
+
+#[derive(Serialize, JsonSchema)]
+struct ReviewFailure {
+    reason: &'static str,
+    next_action: &'static str,
 }
 
 /// The inactivity episode and external notification reservation survive the
@@ -80,6 +98,16 @@ pub struct View {
 }
 
 impl Watch {
+    pub fn inspection(&self) -> Inspection<'_> {
+        Inspection {
+            watch: self,
+            review_failure: self.review.as_ref().filter(|review| review.request_failed).map(|_| ReviewFailure {
+                reason: "review_request_unavailable",
+                next_action: "Inspect open mailbox requests and delivery diagnostics; free capacity or resolve the recorded failure. The review stays due and the next watch tick retries it.",
+            }),
+        }
+    }
+
     pub fn view(&self) -> View {
         View {
             id: self.id.clone(),
@@ -264,6 +292,7 @@ pub fn assign(
         // recipient. The unchanged due time reissues it on the next tick.
         if let Some(review) = &mut watch.review {
             review.cycle = cycle.ok_or("ledger_unavailable")?;
+            review.request_failed = false;
             if let Some(id) = review.pending_letter.take()
                 && let Some(letter) = ledger.letters.iter_mut().find(|letter| letter.id == id)
             {
@@ -594,11 +623,12 @@ pub fn tick(ledger: &mut Ledger, readings: &[Reading], now: u64) -> Result<Tick,
                 .find(|stored| stored.id == letter.id)
                 .ok_or("ledger_unavailable")?
                 .immediate = true;
-            ledger.watches[index]
+            let review = ledger.watches[index]
                 .review
                 .as_mut()
-                .ok_or("ledger_unavailable")?
-                .pending_letter = Some(letter.id);
+                .ok_or("ledger_unavailable")?;
+            review.pending_letter = Some(letter.id);
+            review.request_failed = false;
             if full_before.is_some() {
                 return ledger.bytes().map(|bytes| bytes.len());
             }
@@ -627,6 +657,16 @@ pub fn tick(ledger: &mut Ledger, readings: &[Reading], now: u64) -> Result<Tick,
                     None => ledger.letters.truncate(letters_before),
                 }
                 ledger.next_id = sequence_before;
+                let review = ledger.watches[index]
+                    .review
+                    .as_mut()
+                    .ok_or("ledger_unavailable")?;
+                if !review.request_failed {
+                    review.request_failed = true;
+                    // No growth at the file cap, and no publish on repeated failure.
+                    size -= 1;
+                    result.transitions = true;
+                }
                 result
                     .rejections
                     .push((ledger.watches[index].id.clone(), code));
@@ -718,6 +758,7 @@ mod tests {
             completed_at_unix_ms: None,
             assessment: None,
             cycle: 0,
+            request_failed: false,
         });
         (ledger, parent, watch.id)
     }
@@ -959,16 +1000,43 @@ mod tests {
             )
             .unwrap();
         }
-        let before = ledger.clone();
+        let mut before = ledger.clone();
         let result = tick(&mut ledger, &[], REVIEW_INTERVAL_MS).unwrap();
         assert_eq!(
             result.rejections,
             [(ledger.watches[0].id.clone(), "capacity".into())]
         );
+        before.watches[0].review.as_mut().unwrap().request_failed = true;
         assert_eq!(ledger, before);
+        assert!(result.transitions);
+        let answer = serde_json::to_value(ledger.watches[0].inspection()).unwrap();
+        assert_eq!(
+            answer["review_failure"]["reason"],
+            "review_request_unavailable"
+        );
+        assert!(
+            answer["review_failure"]["next_action"]
+                .as_str()
+                .unwrap()
+                .contains("capacity")
+        );
+        let mut ledger: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
+        assert!(ledger.watches[0].review.as_ref().unwrap().request_failed);
+        assert!(
+            !tick(&mut ledger, &[], REVIEW_INTERVAL_MS)
+                .unwrap()
+                .transitions
+        );
         ledger.letters.clear();
         tick(&mut ledger, &[], REVIEW_INTERVAL_MS + 1).unwrap();
         assert_eq!(ledger.letters.len(), 1);
+        assert!(!ledger.watches[0].review.as_ref().unwrap().request_failed);
+        assert!(
+            serde_json::to_value(ledger.watches[0].inspection())
+                .unwrap()
+                .get("review_failure")
+                .is_none()
+        );
         assert!(
             ledger.watches[0]
                 .review
@@ -976,6 +1044,64 @@ mod tests {
                 .unwrap()
                 .pending_letter
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn an_exactly_full_file_retains_the_failed_review_without_growing() {
+        let (mut ledger, parent, _) = periodic();
+        let template = super::super::mailbox::send(
+            &mut ledger,
+            &parent,
+            &parent,
+            "padding",
+            "x",
+            "request",
+            None,
+            0,
+        )
+        .unwrap();
+        ledger.letters.clear();
+        for index in 0..1_000 {
+            let mut letter = template.clone();
+            letter.id = format!("letter-{}", index + 2);
+            letter.intent = format!("padding-{index}");
+            ledger.letters.push(letter);
+        }
+        ledger.next_id = 1_002;
+        let mut remaining = FILE_LIMIT - ledger.bytes().unwrap().len();
+        for letter in &mut ledger.letters {
+            let added = remaining.min(super::super::BODY_LIMIT - 1);
+            letter.body.push_str(&"x".repeat(added));
+            remaining -= added;
+        }
+        assert_eq!(remaining, 0);
+        assert_eq!(ledger.bytes().unwrap().len(), FILE_LIMIT);
+        let result = tick(&mut ledger, &[], REVIEW_INTERVAL_MS).unwrap();
+        assert_eq!(result.rejections[0].1, "capacity");
+        assert!(result.transitions);
+        assert_eq!(ledger.letters.len(), 1_000);
+        assert_eq!(ledger.bytes().unwrap().len(), FILE_LIMIT - 1);
+        let restored: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
+        assert!(
+            serde_json::to_value(restored.watches[0].inspection()).unwrap()["review_failure"]
+                .is_object()
+        );
+        assert_eq!(
+            restored.watches[0].review.as_ref().unwrap().due_at_unix_ms,
+            REVIEW_INTERVAL_MS
+        );
+        assert_eq!(
+            restored.watches[0]
+                .review
+                .as_ref()
+                .unwrap()
+                .completed_at_unix_ms,
+            None
+        );
+        assert_eq!(
+            restored.watches[0].review.as_ref().unwrap().pending_letter,
+            None
         );
     }
 

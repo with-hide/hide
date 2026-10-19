@@ -1096,6 +1096,7 @@ pub(crate) fn apply(
                             completed_at_unix_ms: None,
                             assessment: None,
                             cycle: 0,
+                            request_failed: false,
                         });
                     }
                     Some(watch.id)

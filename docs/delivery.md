@@ -452,6 +452,9 @@ An exact retry returns the same reply without advancing time again; a changed co
 `hide watch list` exposes the policy, due time, pending letter and last conclusion.
 
 The active cycle and pending identity persist across restart, and capacity refusal leaves the review due for the next tick.
+Admission failure persists as `review.request_failed`; `hide watch list` adds `review_failure` with a reason and next action to inspect mailbox capacity and delivery diagnostics.
+The failure flag can be saved even at the exact file cap because changing false to true needs no additional bytes; successful admission clears it.
+Explicit conclusion and failure/recovery transitions publish the changed watch state through the existing notifier.
 A pending letter is kept even after ordinary finished-letter retention, within the same 5000-letter and 16 MiB ledger limits.
 Reassignment invalidates the former Observer's pending request and reissues it to the new Observer without postponing its due time.
 Report receipt, target exit and explicit stop remove the watch and cancel its pending review letter in the same durable transition, preventing further review requests and new doorbell reservations; retrying a completed spawn never rearms it.

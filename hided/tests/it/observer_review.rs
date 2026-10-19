@@ -288,6 +288,7 @@ fn a_due_review_wakes_its_observer_and_only_explicit_review_advances_it() -> Res
             completed_at_unix_ms: None,
             assessment: None,
             cycle: 0,
+            request_failed: false,
         });
         fixture.save_ledger(&ledger)?;
         fixture.start_daemon()?;

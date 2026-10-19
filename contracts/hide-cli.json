@@ -102,6 +102,11 @@
                         },
                         "policy": {
                             "$ref": "#/definitions/ReviewPolicy"
+                        },
+                        "request_failed": {
+                            "default": false,
+                            "description": "Always serialized: false -> true shrinks by one byte, so even an exactly full ledger can retain the failed admission without a letter.",
+                            "type": "boolean"
                         }
                     },
                     "required": [
@@ -110,7 +115,8 @@
                         "pending_letter",
                         "completed_at_unix_ms",
                         "assessment",
-                        "cycle"
+                        "cycle",
+                        "request_failed"
                     ],
                     "type": "object"
                 },
@@ -508,6 +514,11 @@
                         },
                         "policy": {
                             "$ref": "#/definitions/ReviewPolicy"
+                        },
+                        "request_failed": {
+                            "default": false,
+                            "description": "Always serialized: false -> true shrinks by one byte, so even an exactly full ledger can retain the failed admission without a letter.",
+                            "type": "boolean"
                         }
                     },
                     "required": [
@@ -516,7 +527,8 @@
                         "pending_letter",
                         "completed_at_unix_ms",
                         "assessment",
-                        "cycle"
+                        "cycle",
+                        "request_failed"
                     ],
                     "type": "object"
                 },
@@ -1391,6 +1403,11 @@
                         },
                         "policy": {
                             "$ref": "#/definitions/ReviewPolicy"
+                        },
+                        "request_failed": {
+                            "default": false,
+                            "description": "Always serialized: false -> true shrinks by one byte, so even an exactly full ledger can retain the failed admission without a letter.",
+                            "type": "boolean"
                         }
                     },
                     "required": [
@@ -1399,7 +1416,8 @@
                         "pending_letter",
                         "completed_at_unix_ms",
                         "assessment",
-                        "cycle"
+                        "cycle",
+                        "request_failed"
                     ],
                     "type": "object"
                 },
@@ -1535,73 +1553,7 @@
                     ],
                     "type": "object"
                 },
-                "PeriodicReview": {
-                    "properties": {
-                        "assessment": {
-                            "anyOf": [
-                                {
-                                    "$ref": "#/definitions/ReviewAssessment"
-                                },
-                                {
-                                    "type": "null"
-                                }
-                            ]
-                        },
-                        "completed_at_unix_ms": {
-                            "format": "uint64",
-                            "minimum": 0.0,
-                            "type": [
-                                "integer",
-                                "null"
-                            ]
-                        },
-                        "cycle": {
-                            "format": "uint64",
-                            "minimum": 0.0,
-                            "type": "integer"
-                        },
-                        "due_at_unix_ms": {
-                            "format": "uint64",
-                            "minimum": 0.0,
-                            "type": "integer"
-                        },
-                        "pending_letter": {
-                            "type": [
-                                "string",
-                                "null"
-                            ]
-                        },
-                        "policy": {
-                            "$ref": "#/definitions/ReviewPolicy"
-                        }
-                    },
-                    "required": [
-                        "policy",
-                        "due_at_unix_ms",
-                        "pending_letter",
-                        "completed_at_unix_ms",
-                        "assessment",
-                        "cycle"
-                    ],
-                    "type": "object"
-                },
-                "ReviewAssessment": {
-                    "enum": [
-                        "scope-appropriate",
-                        "delay-justified",
-                        "reduce-scope",
-                        "diagnosis-needed"
-                    ],
-                    "type": "string"
-                },
-                "ReviewPolicy": {
-                    "description": "An explicit opt-in; ordinary delegation retains its inactivity-only watch.",
-                    "enum": [
-                        "observer-30m"
-                    ],
-                    "type": "string"
-                },
-                "Watch": {
+                "Inspection": {
                     "properties": {
                         "activity_failures": {
                             "format": "uint32",
@@ -1654,6 +1606,16 @@
                                 }
                             ]
                         },
+                        "review_failure": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/ReviewFailure"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ]
+                        },
                         "status_changed_at_unix_ms": {
                             "format": "uint64",
                             "minimum": 0.0,
@@ -1682,12 +1644,99 @@
                         "generation"
                     ],
                     "type": "object"
+                },
+                "PeriodicReview": {
+                    "properties": {
+                        "assessment": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/ReviewAssessment"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ]
+                        },
+                        "completed_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "cycle": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "due_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "pending_letter": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "policy": {
+                            "$ref": "#/definitions/ReviewPolicy"
+                        },
+                        "request_failed": {
+                            "default": false,
+                            "description": "Always serialized: false -> true shrinks by one byte, so even an exactly full ledger can retain the failed admission without a letter.",
+                            "type": "boolean"
+                        }
+                    },
+                    "required": [
+                        "policy",
+                        "due_at_unix_ms",
+                        "pending_letter",
+                        "completed_at_unix_ms",
+                        "assessment",
+                        "cycle",
+                        "request_failed"
+                    ],
+                    "type": "object"
+                },
+                "ReviewAssessment": {
+                    "enum": [
+                        "scope-appropriate",
+                        "delay-justified",
+                        "reduce-scope",
+                        "diagnosis-needed"
+                    ],
+                    "type": "string"
+                },
+                "ReviewFailure": {
+                    "properties": {
+                        "next_action": {
+                            "type": "string"
+                        },
+                        "reason": {
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "reason",
+                        "next_action"
+                    ],
+                    "type": "object"
+                },
+                "ReviewPolicy": {
+                    "description": "An explicit opt-in; ordinary delegation retains its inactivity-only watch.",
+                    "enum": [
+                        "observer-30m"
+                    ],
+                    "type": "string"
                 }
             },
             "items": {
-                "$ref": "#/definitions/Watch"
+                "$ref": "#/definitions/Inspection"
             },
-            "title": "Array_of_Watch",
+            "title": "Array_of_Inspection",
             "type": "array"
         }
     },
@@ -2356,7 +2405,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:ffc2390f5af05bb96111f048892ca29b40533f8fe9a126ab1fa39376853725bf",
+    "digest": "sha256:65ea7e80d8fcca0290c77a60d91babcc6603a89ee84380c341b1af7706c0519a",
     "envelopes": {
         "agent": {
             "answer": "value",
